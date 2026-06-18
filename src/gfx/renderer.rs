@@ -70,6 +70,7 @@ pub struct Renderer {
     camera_bind_group: wgpu::BindGroup,
 
     meshes: HashMap<MeshKind, GpuMesh>,
+    imported_gpu: Vec<GpuMesh>,
     objects_gpu: Vec<ObjectGpu>,
 
     gizmo_pipeline: wgpu::RenderPipeline,
@@ -276,6 +277,7 @@ impl Renderer {
             camera_buf,
             camera_bind_group,
             meshes,
+            imported_gpu: Vec::new(),
             objects_gpu: Vec::new(),
             gizmo_pipeline,
             gizmo_vbuf,
@@ -316,6 +318,14 @@ impl Renderer {
             self.objects_gpu.push(ObjectGpu { model_buf, bind_group });
         }
         self.objects_gpu.truncate(n);
+    }
+
+    /// Construit les `GpuMesh` des modèles importés pas encore chargés sur GPU.
+    fn sync_imported(&mut self, scene: &Scene) {
+        while self.imported_gpu.len() < scene.imported.len() {
+            let data = &scene.imported[self.imported_gpu.len()].data;
+            self.imported_gpu.push(GpuMesh::new(&self.device, data));
+        }
     }
 
     /// Pousse les uniforms (caméra + matrices modèle + surbrillance) depuis l'état.
@@ -370,11 +380,16 @@ impl Renderer {
         }
         if actions.load {
             app.load();
+            self.imported_gpu.clear(); // les meshes GPU seront reconstruits depuis les données rechargées
+        }
+        if let Some(path) = actions.import {
+            app.import_gltf(&path);
         }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
         app.advance_play();
         self.sync_objects(&app.scene);
+        self.sync_imported(&app.scene);
         self.write_uniforms(app);
 
         // Préparer le gizmo de l'objet sélectionné selon le mode courant.
@@ -455,10 +470,13 @@ impl Renderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
             for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
-                let mesh = &self.meshes[&obj.mesh];
+                let mesh = match obj.mesh {
+                    MeshKind::Imported(i) => &self.imported_gpu[i as usize],
+                    k => &self.meshes[&k],
+                };
                 pass.set_bind_group(1, &gpu.bind_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint16);
+                pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
             }
 

@@ -1,5 +1,7 @@
 //! Modèle de scène (sans ECS) : un Vec d'objets, chacun avec un Transform et un type de mesh.
 
+pub mod import;
+
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
@@ -32,30 +34,36 @@ pub enum MeshKind {
     Cube,
     Sphere,
     Plane,
+    /// Modèle glTF importé, index dans `Scene::imported`.
+    Imported(u32),
 }
 
 impl MeshKind {
+    /// Primitives générées par code (clés du cache de meshes GPU).
     pub const ALL: [MeshKind; 3] = [MeshKind::Cube, MeshKind::Sphere, MeshKind::Plane];
 
-    /// Données CPU du mesh, couleur par défaut selon le type.
+    /// Données CPU des primitives (pas valable pour `Imported`).
     pub fn mesh_data(self) -> MeshData {
         match self {
             MeshKind::Cube => mesh::cube([0.8, 0.45, 0.2]),
             MeshKind::Sphere => mesh::sphere([0.3, 0.55, 0.85]),
             MeshKind::Plane => mesh::plane([0.35, 0.4, 0.35]),
+            MeshKind::Imported(_) => MeshData::default(),
         }
     }
+}
 
-    /// AABB local du mesh (avant application du Transform).
-    pub fn local_aabb(self) -> (Vec3, Vec3) {
-        match self {
-            MeshKind::Cube | MeshKind::Sphere => {
-                (Vec3::splat(-0.5), Vec3::splat(0.5))
-            }
-            // plan fin : un peu d'épaisseur en Y pour faciliter le picking
-            MeshKind::Plane => (Vec3::new(-0.5, -0.02, -0.5), Vec3::new(0.5, 0.02, 0.5)),
-        }
-    }
+/// Géométrie importée d'un fichier glTF. `data`/`aabb` sont reconstruits au chargement.
+#[derive(Serialize, Deserialize, Default)]
+pub struct ImportedMesh {
+    pub name: String,
+    pub path: String,
+    #[serde(skip)]
+    pub data: MeshData,
+    #[serde(skip)]
+    pub aabb_min: Vec3,
+    #[serde(skip)]
+    pub aabb_max: Vec3,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,15 +73,44 @@ pub struct SceneObject {
     pub mesh: MeshKind,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Scene {
     pub objects: Vec<SceneObject>,
+    #[serde(default)]
+    pub imported: Vec<ImportedMesh>,
 }
 
 impl Scene {
+    /// AABB local d'un objet (primitive codée ou mesh importé).
+    pub fn local_aabb(&self, mesh: MeshKind) -> (Vec3, Vec3) {
+        match mesh {
+            MeshKind::Cube | MeshKind::Sphere => (Vec3::splat(-0.5), Vec3::splat(0.5)),
+            MeshKind::Plane => (Vec3::new(-0.5, -0.02, -0.5), Vec3::new(0.5, 0.02, 0.5)),
+            MeshKind::Imported(i) => {
+                let m = &self.imported[i as usize];
+                (m.aabb_min, m.aabb_max)
+            }
+        }
+    }
+
+    /// Recharge la géométrie des meshes importés depuis leurs fichiers (après désérialisation).
+    pub fn reload_imported(&mut self) {
+        for m in &mut self.imported {
+            match import::load_gltf(&m.path) {
+                Ok((data, min, max)) => {
+                    m.data = data;
+                    m.aabb_min = min;
+                    m.aabb_max = max;
+                }
+                Err(e) => log::error!("Rechargement de {} échoué : {e}", m.path),
+            }
+        }
+    }
+
     /// Scène de démonstration : un sol, un cube, une sphère.
     pub fn demo() -> Self {
         Scene {
+            imported: Vec::new(),
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),

@@ -19,6 +19,7 @@ pub struct Editor {
 pub struct UiActions {
     pub save: bool,
     pub load: bool,
+    pub import: Option<String>,
 }
 
 impl Editor {
@@ -163,6 +164,14 @@ fn build_ui(
             if ui.button("📂 Load").clicked() {
                 actions.load = true;
             }
+            if ui.button("📥 Importer glTF").clicked() {
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("glTF", &["glb", "gltf"])
+                    .pick_file()
+                {
+                    actions.import = Some(p.to_string_lossy().into_owned());
+                }
+            }
         });
     });
 
@@ -264,5 +273,6 @@ fn kind_label(kind: MeshKind) -> &'static str {
         MeshKind::Cube => "Cube",
         MeshKind::Sphere => "Sphère",
         MeshKind::Plane => "Plan",
+        MeshKind::Imported(_) => "Modèle",
     }
 }

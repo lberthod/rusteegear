@@ -329,11 +329,49 @@ impl AppState {
 
     pub fn load(&mut self) {
         match Scene::load(&scene_path()) {
-            Ok(s) => {
+            Ok(mut s) => {
+                s.reload_imported();
                 self.scene = s;
                 self.selection = None;
             }
             Err(e) => log::error!("Échec chargement : {e}"),
+        }
+    }
+
+    /// Importe un modèle glTF/GLB et ajoute un objet le référençant.
+    pub fn import_gltf(&mut self, path: &str) {
+        match crate::scene::import::load_gltf(path) {
+            Ok((data, min, max)) => {
+                let name = std::path::Path::new(path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Modèle")
+                    .to_string();
+                let idx = self.scene.imported.len() as u32;
+                self.scene.imported.push(crate::scene::ImportedMesh {
+                    name: name.clone(),
+                    path: path.to_string(),
+                    data,
+                    aabb_min: min,
+                    aabb_max: max,
+                });
+                // Recadrage auto : centrer le modèle à l'origine et le mettre à l'échelle ~2 u.
+                let size = max - min;
+                let s = 2.0 / size.max_element().max(1e-3);
+                let center = (min + max) * 0.5;
+                self.scene.objects.push(crate::scene::SceneObject {
+                    name,
+                    transform: crate::scene::Transform {
+                        position: -center * s,
+                        rotation: Quat::IDENTITY,
+                        scale: Vec3::splat(s),
+                    },
+                    mesh: MeshKind::Imported(idx),
+                });
+                self.selection = Some(self.scene.objects.len() - 1);
+                log::info!("Modèle importé : {path}");
+            }
+            Err(e) => log::error!("Import glTF échoué : {e}"),
         }
     }
 
@@ -343,7 +381,7 @@ impl AppState {
 
         let mut best: Option<(f32, usize)> = None;
         for (i, obj) in self.scene.objects.iter().enumerate() {
-            let (lmin, lmax) = obj.mesh.local_aabb();
+            let (lmin, lmax) = self.scene.local_aabb(obj.mesh);
             let m = obj.transform.matrix();
             let mut wmin = Vec3::splat(f32::INFINITY);
             let mut wmax = Vec3::splat(f32::NEG_INFINITY);

@@ -45,14 +45,15 @@
 - **Fichiers** : `src/gfx/shaders/gizmo.wgsl`, `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/main.rs`.
 - **Livrable** : manipulation complète translate/rotate/scale au gizmo. ✅
 
-### Sprint 9 — Import de modèles glTF
+### Sprint 9 — Import de modèles glTF ✅ FAIT
 **Objectif** : charger de vrais assets 3D.
-- [ ] Ajouter la crate `gltf`. Charger positions/normales/indices → `MeshData`.
-- [ ] Nouveau `MeshKind::Imported(handle)` + cache de meshes importés.
-- [ ] Bouton toolbar « Importer .gltf/.glb » (dialogue `rfd`).
-- **Fichiers** : `src/scene/import.rs` (nouveau), `scene/mod.rs`, `gfx/mesh.rs`, `editor/mod.rs`.
-- **Livrable** : importer un `.glb` l'affiche et il est éditable comme une primitive.
-- **Risque** : meshes multi-primitives / sous-objets → se limiter d'abord à 1 mesh, 1 matériau.
+- [x] Crate `gltf` ; lecture positions/normales/indices, toutes primitives fusionnées → `MeshData`.
+- [x] Indices passés en `u32` (modèles > 65535 sommets) ; `MeshKind::Imported(u32)` + registre `Scene::imported`.
+- [x] Bouton toolbar « 📥 Importer glTF » via dialogue `rfd`.
+- [x] Recadrage auto (centré à l'origine, mis à l'échelle ~2 u) ; rechargement depuis le chemin au Load.
+- [x] Message d'erreur explicite pour les `.gltf` sans leurs fichiers compagnons (préférer `.glb`).
+- **Fichiers** : `src/scene/import.rs`, `scene/mod.rs`, `gfx/mesh.rs`, `gfx/renderer.rs`, `app/mod.rs`, `editor/mod.rs`.
+- **Livrable** : importer un `.glb` l'affiche, recadré et éditable au gizmo. ✅
 
 ### Sprint 10 — Undo/Redo + multi-sélection + copier/coller
 **Objectif** : ergonomie d'édition de base.

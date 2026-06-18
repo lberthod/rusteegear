@@ -37,9 +37,10 @@ impl Vertex {
     }
 }
 
+#[derive(Default)]
 pub struct MeshData {
     pub vertices: Vec<Vertex>,
-    pub indices: Vec<u16>,
+    pub indices: Vec<u32>,
 }
 
 /// Mesh chargé côté GPU (buffers prêts à dessiner).
@@ -90,7 +91,7 @@ pub fn cube(color: [f32; 3]) -> MeshData {
     let mut vertices = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
     for (normal, corners) in faces {
-        let base = vertices.len() as u16;
+        let base = vertices.len() as u32;
         for pos in corners {
             vertices.push(Vertex { position: pos, normal, color });
         }
@@ -102,8 +103,8 @@ pub fn cube(color: [f32; 3]) -> MeshData {
 /// Sphère UV de rayon 0.5 centrée sur l'origine.
 pub fn sphere(color: [f32; 3]) -> MeshData {
     use std::f32::consts::PI;
-    let sectors = 24u16;
-    let stacks = 16u16;
+    let sectors = 24u32;
+    let stacks = 16u32;
     let radius = 0.5;
 
     let mut vertices = Vec::new();
