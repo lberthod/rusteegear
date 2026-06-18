@@ -21,8 +21,8 @@ winit · wgpu · egui — aucun moteur tiers.
 Motor3DeRust est un éditeur de jeu 3D léger et hackable. L'objectif n'est pas de
 remplacer Unity, mais d'offrir une base **comprenable de bout en bout** : chaque
 ligne du pipeline de rendu, de l'ECS-léger et de l'UI est écrite à la main, sans
-boîte noire. Le projet est pensé pour grandir vers le **mobile (iOS)** et la
-**réalité virtuelle (Oculus / Meta Quest)** grâce à la portabilité de `wgpu`.
+boîte noire. Le projet est pensé pour grandir vers le **mobile (iOS / Android)**
+grâce à la portabilité de `wgpu`.
 
 ---
 
@@ -56,7 +56,6 @@ boîte noire. Le projet est pensé pour grandir vers le **mobile (iOS)** et la
 | **A** — Fondations éditeur (refactor, gizmos, glTF, undo/dup) | 7 → 10 | ✅ |
 | **B** — Runtime de jeu (Lua, physique, audio) + optimisations | 11 → 13 | ✅ |
 | **C** — Portage mobile (Player, tactile, iOS, Android) | 14 → 17 | ⏳ en cours |
-| **D** — Réalité virtuelle (OpenXR, stéréo, Quest) | 18 → 21 | ⬜ à venir |
 
 > Détail sprint par sprint : voir **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
 
@@ -106,7 +105,7 @@ src/
 ```
 
 Le rendu repose entièrement sur `wgpu`, qui cible **Metal, Vulkan, DX12, OpenGL et
-WebGPU** — c'est la clé qui rend les portages mobile et VR ci-dessous réalistes
+WebGPU** — c'est la clé qui rend les portages mobile ci-dessous réalistes
 sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PLAN.md)**.
 
 ---
@@ -142,18 +141,6 @@ sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PL
 - _Note : « APK » concerne Android ; l'équivalent iOS est un `.ipa`. Un portage **Android**
   (`aarch64-linux-android`, backend Vulkan) suit exactement la même logique et est prévu en parallèle._
 
-### ⬜ 🥽 v2 — Réalité virtuelle (Oculus / Meta Quest) _(Phase D, sprints 18→21)_
-
-> La VR se branche via **OpenXR**, le standard ouvert que supportent les casques Meta Quest.
-> `wgpu` peut partager ses textures avec OpenXR (interop via `wgpu-hal` / `ash`).
-
-- [ ] Intégrer **OpenXR** (crate `openxr`) : création de session, espaces de référence, swapchains.
-- [ ] **Rendu stéréo** : une vue par œil, deux matrices view/projection fournies par le runtime XR (remplace la caméra orbitale).
-- [ ] Boucle XR : `xrWaitFrame` / `xrBeginFrame` / `xrEndFrame`, synchronisation avec la boucle wgpu.
-- [ ] Suivi des **contrôleurs** (poses + boutons) pour sélectionner/déplacer les objets en VR.
-- [ ] Cible **Meta Quest** (Android + OpenXR loader Oculus) ; cible PCVR via SteamVR/OpenXR sur desktop.
-- [ ] Confort VR : téléportation, vignettage anti-nausée.
-
 ---
 
 ## 🛠️ Stack technique
@@ -171,7 +158,6 @@ sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PL
 | Audio | `kira` |
 | Sélecteur de fichiers (desktop) | `rfd` |
 | Packaging macOS | `cargo-bundle` |
-| _(prévu)_ VR | `openxr` |
 
 ---
 

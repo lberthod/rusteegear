@@ -1,7 +1,7 @@
 # Motor3DeRust — Plan de sprints d'exécution (post-MVP)
 
 > Feuille de route **étape par étape** pour faire évoluer le moteur du MVP actuel
-> jusqu'au mobile (iOS/Android) et à la VR (Oculus/Quest).
+> jusqu'au mobile (iOS / Android).
 > Chaque sprint a : **Objectif · Tâches · Fichiers · Livrable vérifiable · Risques**.
 > Convention : un sprint ≈ 1 à 3 jours. On ne démarre un sprint que si le précédent
 > est « vert » (livrable validé).
@@ -17,10 +17,9 @@
 | **A — Fondations éditeur** | 7 → 10 | Rendre l'éditeur réellement utilisable (gizmos, glTF, undo, multi-objets) |
 | **B — Runtime de jeu** | 11 → 13 | Transformer la scène en « jeu » (scripting, physique, audio) |
 | **C — Portage mobile** | 14 → 17 | iOS d'abord, puis Android |
-| **D — Réalité virtuelle** | 18 → 21 | OpenXR, rendu stéréo, contrôleurs, cible Quest |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
-> Les faire avant C/D évite de réécrire des features sur 3 cibles.
+> Les faire avant C évite de réécrire des features sur plusieurs cibles.
 
 ---
 
@@ -143,68 +142,27 @@
 - **Fichiers** : `packaging/build_ios.sh`, `Cargo.toml`, `editor/mod.rs` (gates cfg).
 - **État** : la preuve technique est faite (le moteur compile et se package pour iOS) ; reste la signature Apple + l'intégration UIKit pour un lancement réel.
 
-### Sprint 17 — Build Android 🟡 PARTIEL (préparé, bloqué sur le NDK)
+### Sprint 17 — Build Android 🟢 cross-compilation OK (NDK résolu)
 **Objectif** : un `.apk` Android (backend Vulkan).
-- [x] Cible Rust `aarch64-linux-android` ajoutée.
-- [x] `winit` configuré avec la feature `android-native-activity` (ciblée Android).
+- [x] Cible Rust `aarch64-linux-android` ; `winit` feature `android-native-activity` (ciblée).
 - [x] Mode Player auto-activé sur Android ; desktop inchangé.
-- [x] `packaging/build_android.md` : marche à suivre complète.
-- [ ] **Bloqué ici** : NDK non installé (`aarch64-linux-android-clang` manquant → Lua/`mlua` + linker).
-- [ ] À faire ensuite : NDK, `cargo-ndk`/`cargo-apk`, point d'entrée `android_main` + `cdylib`.
-- **Fichiers** : `Cargo.toml`, `packaging/build_android.md`.
-- **État** : logique identique à iOS ; reste l'environnement (NDK) + l'entrée `android_main`.
-
----
-
-## PHASE D — Réalité virtuelle (Oculus / Meta Quest)
-
-> La VR passe par **OpenXR** (standard supporté par Meta Quest et PCVR/SteamVR).
-> On réutilise tout le moteur de rendu ; on remplace la caméra par les poses XR
-> et on rend **deux vues** (une par œil).
-
-### Sprint 18 — Bootstrap OpenXR (desktop d'abord)
-**Objectif** : ouvrir une session XR et présenter une image (même fixe).
-- [ ] Crate **`openxr`** : instance, system, session liée à `wgpu` (interop via `wgpu-hal`/`ash`).
-- [ ] Créer les **swapchains** XR ; boucle `xrWaitFrame`/`xrBeginFrame`/`xrEndFrame`.
-- **Fichiers** : `src/xr/mod.rs` (nouveau), `gfx/renderer.rs` (cible de rendu = textures XR).
-- **Livrable** : sur un casque PCVR (ou simulateur OpenXR), on voit un fond coloré stable.
-- **Risque** : ⚠️ interop wgpu↔OpenXR (récupérer le device Vulkan partagé) = point le plus technique du projet.
-
-### Sprint 19 — Rendu stéréo de la scène
-**Objectif** : voir la scène 3D en relief.
-- [ ] Récupérer du runtime XR les 2 poses + projections (par œil) → 2 matrices view/proj.
-- [ ] Rendre la scène une fois par œil dans la swapchain correspondante (ou multiview).
-- **Fichiers** : `xr/mod.rs`, `gfx/renderer.rs`, `gfx/camera.rs` (caméra pilotée par XR).
-- **Livrable** : la scène (sol + cube + sphère) apparaît en VR, suit les mouvements de tête.
-- **Risque** : justesse des matrices (sinon nausée) ; performances (2× le rendu).
-
-### Sprint 20 — Contrôleurs & interaction VR
-**Objectif** : sélectionner/déplacer des objets en VR.
-- [ ] Action sets OpenXR : poses des mains + boutons (gâchette, grip).
-- [ ] Rayon de pointage depuis la main → picking (réutilise ray/AABB existant) ; grab pour déplacer.
-- **Fichiers** : `xr/input.rs` (nouveau), `app/mod.rs`.
-- **Livrable** : pointer un objet et appuyer sur la gâchette le saisit et le déplace.
-- **Risque** : mapping des espaces (main → monde) ; ergonomie.
-
-### Sprint 21 — Cible Meta Quest (standalone)
-**Objectif** : APK VR autonome sur Quest.
-- [ ] Build Android + **OpenXR loader Oculus** ; manifeste VR (`com.oculus.intent.category.VR`).
-- [ ] Confort : téléportation, vignettage anti-nausée, plancher (stage space).
-- **Fichiers** : `gen/android/` (config VR), `xr/`.
-- **Livrable** : `.apk` installé sur un Quest, scène explorable en standalone.
-- **Risque** : combine les difficultés Android (Sprint 17) + VR (Sprints 18-20).
+- [x] **NDK 28.2.13676358 installé** via les command-line tools d'Android Studio (`sdkmanager`).
+- [x] **Compilation + linking complets** du moteur pour Android (Lua C, kira, rapier, wgpu, winit). ✅
+- [x] API **26 minimum** (AAudio) ; `packaging/android_env.sh` + `build_android.md`.
+- [ ] Reste pour l'`.apk` : `cdylib` + `android_main` + `cargo-apk` (aucun blocage moteur).
+- **Fichiers** : `Cargo.toml`, `packaging/android_env.sh`, `packaging/build_android.md`.
+- **État** : le moteur **compile et se lie pour Android** ; reste l'empaquetage `.apk`.
 
 ---
 
 ## ✅ Définition de « terminé » par phase
 
-- **A** : éditeur confortable — gizmos, import glTF, undo, multi-sélection fonctionnent.
+- **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
 - **B** : une scène devient un mini-jeu — script + physique + audio en mode Play.
 - **C** : la même scène tourne en mode Player sur iOS (et Android).
-- **D** : la même scène est explorable en VR sur Meta Quest, manettes en main.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
-2. **Garder le mode Player (Sprint 14) comme cible de test** mobile/VR — pas l'éditeur complet.
-3. **Tester sur device tôt** (Sprints 16/18) : les surprises GPU/cycle de vie viennent du matériel réel.
-4. Avancer **une plateforme à la fois** ; ne pas ouvrir C et D en parallèle.
+2. **Garder le mode Player (Sprint 14) comme cible de test** mobile — pas l'éditeur complet.
+3. **Tester sur device tôt** (Sprint 16) : les surprises GPU/cycle de vie viennent du matériel réel.
+4. Avancer **une plateforme à la fois**.
