@@ -17,7 +17,13 @@ xcodegen generate
 xcodebuild -project Motor3DeRust.xcodeproj -scheme Motor3DeRust -configuration Release \
   -destination "id=$DEV" -derivedDataPath build/dd -allowProvisioningUpdates build
 APP="build/dd/Build/Products/Release-iphoneos/Motor3DeRust.app"
+
+# Le binaire Rust est injecté APRÈS la signature Xcode → re-signer nous-mêmes
+# (sinon "No code signature found"). On réutilise les entitlements générés par Xcode.
+XCENT=$(find build/dd -name "Motor3DeRust.app.xcent" | head -1)
+IDENTITY=$(security find-identity -v -p codesigning | grep "Apple Development" | head -1 | sed -E 's/.*"(.*)"/\1/')
+codesign --force --sign "$IDENTITY" --entitlements "$XCENT" --generate-entitlement-der "$APP"
 codesign --verify --deep --strict "$APP"
 xcrun devicectl device install app --device "$DEV" "$APP"
-xcrun devicectl device process launch --device "$DEV" com.berthod.motor3derust
+xcrun devicectl device process launch --terminate-existing --device "$DEV" com.berthod.motor3derust
 echo "✅ Installée et lancée sur l'appareil."

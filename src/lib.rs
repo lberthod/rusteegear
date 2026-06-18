@@ -167,12 +167,13 @@ fn make_app(player: bool) -> App {
     app
 }
 
-/// Point d'entrée desktop.
+/// Point d'entrée desktop (et iOS via le bin).
 pub fn run() {
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
-    let player = std::env::args().any(|a| a == "--player");
+    // Mobile = mode Player (plein écran, sans éditeur) ; desktop via --player.
+    let player = std::env::args().any(|a| a == "--player") || cfg!(target_os = "ios");
     let mut app = make_app(player);
     event_loop.run_app(&mut app).unwrap();
 }
