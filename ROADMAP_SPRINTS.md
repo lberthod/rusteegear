@@ -34,14 +34,16 @@
 - **Fichiers** : `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/app/input.rs`, `src/main.rs`.
 - **Livrable** : comportement identique au MVP, build sans warning, 3 démarrages OK. ✅
 
-### Sprint 8 — Gizmo de manipulation à la souris ✅ FAIT (translation)
-**Objectif** : déplacer un objet directement dans la vue 3D.
-- [x] 3 axes X/Y/Z (lignes colorées) sur l'objet sélectionné, pipeline dédié sans depth-test.
-- [x] Picking de l'axe en espace écran (~10 px), drag → translation le long de l'axe (plan face-caméra).
-- [x] L'inspecteur reflète la position en direct ; priorité gizmo sur l'orbite.
-- [ ] À venir : bascule rotation / échelle (touches W/E/R).
-- **Fichiers** : `src/gfx/shaders/gizmo.wgsl`, `src/gfx/renderer.rs`, `src/app/mod.rs`.
-- **Livrable** : glisser un axe déplace l'objet, valeur live dans l'inspecteur. ✅
+### Sprint 8 — Gizmo de manipulation à la souris ✅ FAIT (complet)
+**Objectif** : déplacer / tourner / redimensionner un objet directement dans la vue 3D.
+- [x] 3 axes X/Y/Z (lignes colorées), pipeline dédié sans depth-test ; anneaux pour la rotation.
+- [x] Picking écran (~10 px) des axes (lignes) et des anneaux (polyligne projetée).
+- [x] **Translate** : drag le long de l'axe (plan face-caméra).
+- [x] **Rotate** : drag sur l'anneau → angle dans le plan perpendiculaire à l'axe.
+- [x] **Scale** : drag le long de l'axe → composante d'échelle (min 0.05).
+- [x] Bascule de mode : touches **W / E / R** + boutons toolbar ; inspecteur live.
+- **Fichiers** : `src/gfx/shaders/gizmo.wgsl`, `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/main.rs`.
+- **Livrable** : manipulation complète translate/rotate/scale au gizmo. ✅
 
 ### Sprint 9 — Import de modèles glTF
 **Objectif** : charger de vrais assets 3D.

@@ -5,6 +5,7 @@ use egui::ViewportId;
 use glam::{EulerRot, Quat, Vec3};
 use winit::window::Window;
 
+use crate::app::GizmoMode;
 use crate::scene::{MeshKind, Scene, SceneObject, Transform};
 
 pub struct Editor {
@@ -56,12 +57,13 @@ impl Editor {
         scene: &mut Scene,
         selection: &mut Option<usize>,
         playing: &mut bool,
+        gizmo_mode: &mut GizmoMode,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
 
         let output = self.ctx.run_ui(raw_input, |ui| {
-            build_ui(ui, scene, selection, playing, &mut actions);
+            build_ui(ui, scene, selection, playing, gizmo_mode, &mut actions);
         });
 
         self.winit_state
@@ -126,6 +128,7 @@ fn build_ui(
     scene: &mut Scene,
     selection: &mut Option<usize>,
     playing: &mut bool,
+    gizmo_mode: &mut GizmoMode,
     actions: &mut UiActions,
 ) {
     let mut to_add: Option<MeshKind> = None;
@@ -137,6 +140,11 @@ fn build_ui(
             if ui.button(play_label).clicked() {
                 *playing = !*playing;
             }
+            ui.separator();
+            ui.label("Gizmo :");
+            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "Déplacer (W)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "Tourner (E)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "Redim. (R)");
             ui.separator();
             ui.label("Ajouter :");
             if ui.button("Cube").clicked() {

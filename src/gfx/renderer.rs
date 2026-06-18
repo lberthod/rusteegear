@@ -8,7 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use super::mesh::{GpuMesh, Vertex};
-use crate::app::{axis_dir, AppState, GIZMO_LEN};
+use crate::app::{axis_basis, axis_dir, AppState, GizmoMode, GIZMO_LEN};
 use crate::editor::Editor;
 use crate::scene::{MeshKind, Scene};
 
@@ -246,10 +246,10 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        // 6 sommets (3 axes) mis à jour chaque frame
+        // capacité : 3 axes × 48 segments × 2 sommets (anneaux de rotation), arrondi.
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
-            size: (6 * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
+            size: (320 * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -363,6 +363,7 @@ impl Renderer {
             &mut app.scene,
             &mut app.selection,
             &mut app.playing,
+            &mut app.gizmo_mode,
         );
         if actions.save {
             app.save();
@@ -376,21 +377,41 @@ impl Renderer {
         self.sync_objects(&app.scene);
         self.write_uniforms(app);
 
-        // Préparer le gizmo de l'objet sélectionné (3 axes colorés).
-        let gizmo_visible = if let Some(sel) = app.selection {
+        // Préparer le gizmo de l'objet sélectionné selon le mode courant.
+        let gizmo_count = if let Some(sel) = app.selection {
             let o = app.scene.objects[sel].transform.position;
             let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
-            let mut verts = [GizmoVertex { position: [0.0; 3], color: [0.0; 3] }; 6];
-            for axis in 0..3 {
-                let end = o + axis_dir(axis) * GIZMO_LEN;
-                verts[axis * 2] = GizmoVertex { position: o.to_array(), color: colors[axis] };
-                verts[axis * 2 + 1] = GizmoVertex { position: end.to_array(), color: colors[axis] };
+            let mut verts: Vec<GizmoVertex> = Vec::new();
+            match app.gizmo_mode {
+                // Déplacer / Redimensionner : 3 segments d'axe.
+                GizmoMode::Translate | GizmoMode::Scale => {
+                    for axis in 0..3 {
+                        let end = o + axis_dir(axis) * GIZMO_LEN;
+                        verts.push(GizmoVertex { position: o.to_array(), color: colors[axis] });
+                        verts.push(GizmoVertex { position: end.to_array(), color: colors[axis] });
+                    }
+                }
+                // Tourner : 3 anneaux (un par axe).
+                GizmoMode::Rotate => {
+                    const N: usize = 48;
+                    for axis in 0..3 {
+                        let (u, w) = axis_basis(axis_dir(axis));
+                        for j in 0..N {
+                            let a0 = std::f32::consts::TAU * j as f32 / N as f32;
+                            let a1 = std::f32::consts::TAU * (j + 1) as f32 / N as f32;
+                            let p0 = o + (u * a0.cos() + w * a0.sin()) * GIZMO_LEN;
+                            let p1 = o + (u * a1.cos() + w * a1.sin()) * GIZMO_LEN;
+                            verts.push(GizmoVertex { position: p0.to_array(), color: colors[axis] });
+                            verts.push(GizmoVertex { position: p1.to_array(), color: colors[axis] });
+                        }
+                    }
+                }
             }
             self.queue
                 .write_buffer(&self.gizmo_vbuf, 0, bytemuck::cast_slice(&verts));
-            true
+            verts.len() as u32
         } else {
-            false
+            0
         };
 
         let view = frame
@@ -442,11 +463,11 @@ impl Renderer {
             }
 
             // Gizmo de l'objet sélectionné, par-dessus.
-            if gizmo_visible {
+            if gizmo_count > 0 {
                 pass.set_pipeline(&self.gizmo_pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.gizmo_vbuf.slice(..));
-                pass.draw(0..6, 0..1);
+                pass.draw(0..gizmo_count, 0..1);
             }
         }
 

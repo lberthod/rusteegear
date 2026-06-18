@@ -15,7 +15,7 @@ mod gfx;
 mod scene;
 
 use app::input::InputEvent;
-use app::AppState;
+use app::{AppState, GizmoMode};
 use gfx::renderer::Renderer;
 
 #[derive(Default)]
@@ -75,6 +75,19 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
                 };
                 self.state.handle_input(InputEvent::Scroll { delta: d });
+            }
+            WindowEvent::KeyboardInput { event: key_event, .. } => {
+                use winit::keyboard::{KeyCode, PhysicalKey};
+                if key_event.state == ElementState::Pressed {
+                    if let PhysicalKey::Code(code) = key_event.physical_key {
+                        match code {
+                            KeyCode::KeyW => self.state.set_gizmo_mode(GizmoMode::Translate),
+                            KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
+                            KeyCode::KeyR => self.state.set_gizmo_mode(GizmoMode::Scale),
+                            _ => {}
+                        }
+                    }
+                }
             }
             _ => {}
         }
