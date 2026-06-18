@@ -55,13 +55,17 @@
 - **Fichiers** : `src/scene/import.rs`, `scene/mod.rs`, `gfx/mesh.rs`, `gfx/renderer.rs`, `app/mod.rs`, `editor/mod.rs`.
 - **Livrable** : importer un `.glb` l'affiche, recadré et éditable au gizmo. ✅
 
-### Sprint 10 — Undo/Redo + multi-sélection + copier/coller
+### Sprint 10 — Undo/Redo + duplication ✅ FAIT
 **Objectif** : ergonomie d'édition de base.
-- [ ] Pile de commandes (pattern Command) : add/delete/transform/rename.
-- [ ] `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+D` (dupliquer), sélection multiple (Shift+clic).
-- **Fichiers** : `src/app/history.rs` (nouveau), `editor/mod.rs`, `app/mod.rs`.
-- **Livrable** : toute action s'annule/refait ; dupliquer crée une copie décalée.
-- **Risque** : cohérence sélection ↔ historique ; sérialiser les diffs proprement.
+- [x] Historique par snapshots de la liste d'objets (pile undo/redo, 50 niveaux).
+- [x] Couvre : add / delete / duplicate + déplacement-gizmo (1 snapshot par drag).
+- [x] Raccourcis **Cmd/Ctrl+Z**, **Cmd/Ctrl+Shift+Z**, **Cmd/Ctrl+D** + boutons toolbar.
+- [x] Actions d'édition centralisées dans `AppState` (passent par l'historique).
+- [ ] Reporté à un sprint dédié : multi-sélection (Shift+clic) ; undo des éditions inspecteur.
+- **Fichiers** : `src/app/mod.rs`, `editor/mod.rs`, `gfx/renderer.rs`, `main.rs`, `scene/mod.rs`.
+- **Livrable** : annuler/refaire + dupliquer, au clavier et à la souris. ✅
+
+> **Phase A — Fondations éditeur : terminée** (Sprints 7→10).
 
 ---
 

@@ -385,6 +385,21 @@ impl Renderer {
         if let Some(path) = actions.import {
             app.import_gltf(&path);
         }
+        if let Some(kind) = actions.add {
+            app.add_object(kind);
+        }
+        if let Some(i) = actions.delete {
+            app.delete_object(i);
+        }
+        if actions.duplicate {
+            app.duplicate_selected();
+        }
+        if actions.undo {
+            app.undo();
+        }
+        if actions.redo {
+            app.redo();
+        }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
         app.advance_play();

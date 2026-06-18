@@ -22,6 +22,7 @@ use gfx::renderer::Renderer;
 struct App {
     renderer: Option<Renderer>,
     state: AppState,
+    modifiers: winit::event::Modifiers,
 }
 
 impl ApplicationHandler for App {
@@ -76,14 +77,20 @@ impl ApplicationHandler for App {
                 };
                 self.state.handle_input(InputEvent::Scroll { delta: d });
             }
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m,
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 use winit::keyboard::{KeyCode, PhysicalKey};
                 if key_event.state == ElementState::Pressed {
                     if let PhysicalKey::Code(code) = key_event.physical_key {
+                        let st = self.modifiers.state();
+                        let cmd = st.control_key() || st.super_key();
                         match code {
                             KeyCode::KeyW => self.state.set_gizmo_mode(GizmoMode::Translate),
                             KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
-                            KeyCode::KeyR => self.state.set_gizmo_mode(GizmoMode::Scale),
+                            KeyCode::KeyR if !cmd => self.state.set_gizmo_mode(GizmoMode::Scale),
+                            KeyCode::KeyZ if cmd && st.shift_key() => self.state.redo(),
+                            KeyCode::KeyZ if cmd => self.state.undo(),
+                            KeyCode::KeyD if cmd => self.state.duplicate_selected(),
                             _ => {}
                         }
                     }

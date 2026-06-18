@@ -8,7 +8,7 @@ use std::time::Instant;
 use glam::{Quat, Vec3, Vec4};
 
 use crate::gfx::camera::OrbitCamera;
-use crate::scene::{MeshKind, Scene};
+use crate::scene::{MeshKind, Scene, SceneObject, Transform};
 use input::InputEvent;
 
 pub struct AppState {
@@ -34,6 +34,10 @@ pub struct AppState {
     drag_orig_pos: Vec3,
     drag_orig_rot: Quat,
     drag_orig_scale: Vec3,
+
+    // --- historique (snapshots de la liste d'objets) ---
+    undo_stack: Vec<Vec<SceneObject>>,
+    redo_stack: Vec<Vec<SceneObject>>,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -83,11 +87,74 @@ impl AppState {
             drag_orig_pos: Vec3::ZERO,
             drag_orig_rot: Quat::IDENTITY,
             drag_orig_scale: Vec3::ONE,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         self.gizmo_mode = mode;
+    }
+
+    // --- historique ---
+
+    /// Capture l'état courant des objets avant une modification (vide la pile redo).
+    pub fn push_undo(&mut self) {
+        self.undo_stack.push(self.scene.objects.clone());
+        if self.undo_stack.len() > 50 {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(self.scene.objects.clone());
+            self.scene.objects = prev;
+            self.selection = None;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.scene.objects.clone());
+            self.scene.objects = next;
+            self.selection = None;
+        }
+    }
+
+    // --- édition d'objets (avec historique) ---
+
+    pub fn add_object(&mut self, kind: MeshKind) {
+        self.push_undo();
+        let name = format!("{} {}", kind.label(), self.scene.objects.len());
+        self.scene.objects.push(SceneObject {
+            name,
+            transform: Transform::from_pos(Vec3::ZERO),
+            mesh: kind,
+        });
+        self.selection = Some(self.scene.objects.len() - 1);
+    }
+
+    pub fn delete_object(&mut self, i: usize) {
+        if i < self.scene.objects.len() {
+            self.push_undo();
+            self.scene.objects.remove(i);
+            self.selection = None;
+        }
+    }
+
+    pub fn duplicate_selected(&mut self) {
+        if let Some(i) = self.selection {
+            if i < self.scene.objects.len() {
+                self.push_undo();
+                let mut copy = self.scene.objects[i].clone();
+                copy.name = format!("{} (copie)", copy.name);
+                copy.transform.position += Vec3::new(0.6, 0.0, 0.6);
+                self.scene.objects.push(copy);
+                self.selection = Some(self.scene.objects.len() - 1);
+            }
+        }
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) {
@@ -113,6 +180,7 @@ impl AppState {
                                 if let Some(ang) =
                                     self.ring_drag_angle(origin, axis_dir(axis), cx, cy)
                                 {
+                                    self.push_undo(); // un seul snapshot par manipulation
                                     self.active_axis = Some(axis);
                                     self.drag_start_angle = ang;
                                     self.drag_orig_pos = origin;
@@ -125,6 +193,7 @@ impl AppState {
                             if let Some(axis) = self.pick_axis(sel, cx, cy) {
                                 if let Some(p) = self.axis_drag_param(origin, axis_dir(axis), cx, cy)
                                 {
+                                    self.push_undo();
                                     self.active_axis = Some(axis);
                                     self.drag_start_t = p;
                                     self.drag_orig_pos = origin;

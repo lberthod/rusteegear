@@ -2,11 +2,11 @@
 //! Encapsule toute la plomberie egui-winit / egui-wgpu.
 
 use egui::ViewportId;
-use glam::{EulerRot, Quat, Vec3};
+use glam::{EulerRot, Quat};
 use winit::window::Window;
 
 use crate::app::GizmoMode;
-use crate::scene::{MeshKind, Scene, SceneObject, Transform};
+use crate::scene::{MeshKind, Scene, Transform};
 
 pub struct Editor {
     ctx: egui::Context,
@@ -20,6 +20,11 @@ pub struct UiActions {
     pub save: bool,
     pub load: bool,
     pub import: Option<String>,
+    pub add: Option<MeshKind>,
+    pub delete: Option<usize>,
+    pub duplicate: bool,
+    pub undo: bool,
+    pub redo: bool,
 }
 
 impl Editor {
@@ -132,9 +137,6 @@ fn build_ui(
     gizmo_mode: &mut GizmoMode,
     actions: &mut UiActions,
 ) {
-    let mut to_add: Option<MeshKind> = None;
-    let mut to_delete: Option<usize> = None;
-
     egui::Panel::top("toolbar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
             let play_label = if *playing { "⏹ Stop" } else { "▶ Play" };
@@ -147,15 +149,25 @@ fn build_ui(
             ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "Tourner (E)");
             ui.selectable_value(gizmo_mode, GizmoMode::Scale, "Redim. (R)");
             ui.separator();
+            if ui.button("↩ Undo").clicked() {
+                actions.undo = true;
+            }
+            if ui.button("↪ Redo").clicked() {
+                actions.redo = true;
+            }
+            if ui.add_enabled(selection.is_some(), egui::Button::new("⧉ Dupliquer")).clicked() {
+                actions.duplicate = true;
+            }
+            ui.separator();
             ui.label("Ajouter :");
             if ui.button("Cube").clicked() {
-                to_add = Some(MeshKind::Cube);
+                actions.add = Some(MeshKind::Cube);
             }
             if ui.button("Sphère").clicked() {
-                to_add = Some(MeshKind::Sphere);
+                actions.add = Some(MeshKind::Sphere);
             }
             if ui.button("Plan").clicked() {
-                to_add = Some(MeshKind::Plane);
+                actions.add = Some(MeshKind::Plane);
             }
             ui.separator();
             if ui.button("💾 Save").clicked() {
@@ -204,7 +216,7 @@ fn build_ui(
                     transform_editor(ui, &mut obj.transform);
                     ui.separator();
                     if ui.button("🗑 Supprimer").clicked() {
-                        to_delete = Some(i);
+                        actions.delete = Some(i);
                     }
                 }
                 _ => {
@@ -212,23 +224,8 @@ fn build_ui(
                 }
             }
         });
-
-    // --- application des actions différées ---
-    if let Some(kind) = to_add {
-        let name = format!("{} {}", kind_label(kind), scene.objects.len());
-        scene.objects.push(SceneObject {
-            name,
-            transform: Transform::from_pos(Vec3::new(0.0, 0.0, 0.0)),
-            mesh: kind,
-        });
-        *selection = Some(scene.objects.len() - 1);
-    }
-    if let Some(i) = to_delete {
-        if i < scene.objects.len() {
-            scene.objects.remove(i);
-            *selection = None;
-        }
-    }
+    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
+    // après cette frame, afin de passer par l'historique.
 }
 
 fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
@@ -268,11 +265,3 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
     });
 }
 
-fn kind_label(kind: MeshKind) -> &'static str {
-    match kind {
-        MeshKind::Cube => "Cube",
-        MeshKind::Sphere => "Sphère",
-        MeshKind::Plane => "Plan",
-        MeshKind::Imported(_) => "Modèle",
-    }
-}

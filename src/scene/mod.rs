@@ -51,6 +51,15 @@ impl MeshKind {
             MeshKind::Imported(_) => MeshData::default(),
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MeshKind::Cube => "Cube",
+            MeshKind::Sphere => "Sphère",
+            MeshKind::Plane => "Plan",
+            MeshKind::Imported(_) => "Modèle",
+        }
+    }
 }
 
 /// Géométrie importée d'un fichier glTF. `data`/`aabb` sont reconstruits au chargement.
@@ -66,7 +75,7 @@ pub struct ImportedMesh {
     pub aabb_max: Vec3,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SceneObject {
     pub name: String,
     pub transform: Transform,
