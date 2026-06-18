@@ -119,7 +119,8 @@ impl Renderer {
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: caps.present_modes[0],
+            // Fifo (vsync) : cale le rendu sur l'écran, fluide et peu gourmand.
+            present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -399,6 +400,9 @@ impl Renderer {
         }
         if actions.redo {
             app.redo();
+        }
+        if let Some(clip) = actions.play_audio {
+            app.play_audio(&clip);
         }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.

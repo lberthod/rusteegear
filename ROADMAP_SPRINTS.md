@@ -91,13 +91,21 @@
 - **Fichiers** : `src/runtime/physics.rs`, `runtime/mod.rs`, `scene/mod.rs`, `app/mod.rs`, `editor/mod.rs`.
 - **Livrable** : en Play, la sphère tombe et rebondit sur le sol. ✅
 
-### Sprint 13 — Audio
+### Sprint 13 — Audio ✅ FAIT
 **Objectif** : sons et ambiance.
-- [ ] Crate **`kira`** (ou `rodio`). Composant `AudioSource { clip, autoplay }`.
-- [ ] Lecture déclenchée en Play / par script.
-- **Fichiers** : `src/runtime/audio.rs` (nouveau).
-- **Livrable** : un objet joue un son au lancement du mode Play.
-- **Risque** : latence/threads audio ; garder l'API minimale.
+- [x] Crate **`kira`** ; champs `audio_clip` + `audio_autoplay` sur `SceneObject`.
+- [x] Autoplay au lancement de Play, bouton « Tester », **stop des sons au Stop**.
+- [x] Décodage audio **en thread de fond** + **cache** (pas de re-décodage).
+- **Fichiers** : `src/runtime/audio.rs`, `scene/mod.rs`, `app/mod.rs`, `editor/mod.rs`.
+- **Livrable** : un objet joue un son au lancement du mode Play. ✅
+
+> **Phase B — Runtime de jeu : terminée** (Sprints 11→13).
+
+### Optimisations performance ✅ FAIT
+- [x] **Import glTF asynchrone** (thread de fond + canal) : plus de gel pendant le chargement.
+- [x] **Audio asynchrone + cache** : décodage hors du thread de rendu.
+- [x] **Présentation vsync (Fifo)** : rendu calé sur l'écran, fluide et peu gourmand.
+- [x] Rappel : toujours tester en `--release` (debug = stack non optimisée, très lente).
 
 ---
 

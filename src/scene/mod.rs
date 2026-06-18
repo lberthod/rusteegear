@@ -87,6 +87,12 @@ pub struct SceneObject {
     /// Type de corps physique en mode Play.
     #[serde(default = "default_physics")]
     pub physics: PhysicsKind,
+    /// Fichier son associé (vide = aucun).
+    #[serde(default)]
+    pub audio_clip: String,
+    /// Joue le son au lancement du mode Play.
+    #[serde(default)]
+    pub audio_autoplay: bool,
 }
 
 fn default_physics() -> PhysicsKind {
@@ -139,6 +145,8 @@ impl Scene {
                     mesh: MeshKind::Plane,
                     script: String::new(),
                     physics: PhysicsKind::Static,
+                    audio_clip: String::new(),
+                    audio_autoplay: false,
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -147,6 +155,8 @@ impl Scene {
                     // exemple : tourne autour de Y à 60°/s en mode Play
                     script: "obj.ry = obj.ry + dt * 60.0".into(),
                     physics: PhysicsKind::None,
+                    audio_clip: String::new(),
+                    audio_autoplay: false,
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -155,6 +165,8 @@ impl Scene {
                     script: String::new(),
                     // tombe et rebondit sur le sol en mode Play
                     physics: PhysicsKind::Dynamic,
+                    audio_clip: String::new(),
+                    audio_autoplay: false,
                 },
             ],
         }

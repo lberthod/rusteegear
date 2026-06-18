@@ -19,6 +19,7 @@ egui-winit = "0.34.3"
 env_logger = "0.11.10"
 glam = { version = "0.33.1", features = ["serde"] }
 gltf = "1.4.1"
+kira = "0.12.1"
 log = "0.4.32"
 mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
 pollster = "0.4.0"

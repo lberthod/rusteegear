@@ -26,6 +26,7 @@ pub struct UiActions {
     pub duplicate: bool,
     pub undo: bool,
     pub redo: bool,
+    pub play_audio: Option<String>,
 }
 
 impl Editor {
@@ -221,6 +222,34 @@ fn build_ui(
                         ui.selectable_value(&mut obj.physics, PhysicsKind::None, "Aucune");
                         ui.selectable_value(&mut obj.physics, PhysicsKind::Static, "Statique");
                         ui.selectable_value(&mut obj.physics, PhysicsKind::Dynamic, "Dynamique");
+                    });
+                    ui.separator();
+                    ui.collapsing("Audio", |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("Choisir un son…").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
+                                    .pick_file()
+                                {
+                                    obj.audio_clip = p.to_string_lossy().into_owned();
+                                }
+                            }
+                            if !obj.audio_clip.is_empty()
+                                && ui.button("▶ Tester").clicked()
+                            {
+                                actions.play_audio = Some(obj.audio_clip.clone());
+                            }
+                        });
+                        let label = if obj.audio_clip.is_empty() {
+                            "(aucun)".to_string()
+                        } else {
+                            std::path::Path::new(&obj.audio_clip)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                        };
+                        ui.label(label);
+                        ui.checkbox(&mut obj.audio_autoplay, "Jouer au lancement (Play)");
                     });
                     ui.separator();
                     ui.collapsing("Script (Lua)", |ui| {

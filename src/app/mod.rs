@@ -3,14 +3,19 @@
 
 pub mod input;
 
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
 
 use glam::{EulerRot, Quat, Vec3, Vec4};
 use mlua::Lua;
 
 use crate::gfx::camera::OrbitCamera;
-use crate::scene::{MeshKind, Scene, SceneObject, Transform};
+use crate::gfx::mesh::MeshData;
+use crate::scene::{ImportedMesh, MeshKind, Scene, SceneObject, Transform};
 use input::InputEvent;
+
+/// Résultat d'un import glTF effectué en thread de fond.
+type ImportResult = Result<(String, MeshData, Vec3, Vec3), String>;
 
 pub struct AppState {
     pub scene: Scene,
@@ -48,6 +53,11 @@ pub struct AppState {
     was_playing: bool,
     play_snapshot: Vec<SceneObject>,
     physics: Option<crate::runtime::physics::Physics>,
+    audio: crate::runtime::audio::Audio,
+
+    // --- import glTF asynchrone ---
+    import_tx: Sender<ImportResult>,
+    import_rx: Receiver<ImportResult>,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -80,6 +90,7 @@ pub fn axis_basis(a: Vec3) -> (Vec3, Vec3) {
 
 impl AppState {
     pub fn new() -> Self {
+        let (tx, rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -104,7 +115,15 @@ impl AppState {
             was_playing: false,
             play_snapshot: Vec::new(),
             physics: None,
+            audio: crate::runtime::audio::Audio::new(),
+            import_tx: tx,
+            import_rx: rx,
         }
+    }
+
+    /// Joue immédiatement un fichier son (bouton de test / scripts).
+    pub fn play_audio(&mut self, path: &str) {
+        self.audio.play(path);
     }
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
@@ -149,6 +168,8 @@ impl AppState {
             mesh: kind,
             script: String::new(),
             physics: crate::runtime::physics::PhysicsKind::None,
+            audio_clip: String::new(),
+            audio_autoplay: false,
         });
         self.selection = Some(self.scene.objects.len() - 1);
     }
@@ -393,6 +414,10 @@ impl AppState {
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
+        // chargements asynchrones (imports glTF, sons décodés) prêts cette frame
+        self.poll_imports();
+        self.audio.update();
+
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -401,10 +426,22 @@ impl AppState {
         if self.playing && !self.was_playing {
             self.play_snapshot = self.scene.objects.clone();
             self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+            // sons en autoplay
+            let clips: Vec<String> = self
+                .scene
+                .objects
+                .iter()
+                .filter(|o| o.audio_autoplay && !o.audio_clip.is_empty())
+                .map(|o| o.audio_clip.clone())
+                .collect();
+            for c in clips {
+                self.audio.play(&c);
+            }
         } else if !self.playing && self.was_playing {
             self.scene.objects = self.play_snapshot.clone();
             self.physics = None;
             self.selection = None;
+            self.audio.stop_all();
         }
         self.was_playing = self.playing;
 
@@ -449,43 +486,58 @@ impl AppState {
         }
     }
 
-    /// Importe un modèle glTF/GLB et ajoute un objet le référençant.
+    /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).
     pub fn import_gltf(&mut self, path: &str) {
-        match crate::scene::import::load_gltf(path) {
-            Ok((data, min, max)) => {
-                let name = std::path::Path::new(path)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Modèle")
-                    .to_string();
-                let idx = self.scene.imported.len() as u32;
-                self.scene.imported.push(crate::scene::ImportedMesh {
-                    name: name.clone(),
-                    path: path.to_string(),
-                    data,
-                    aabb_min: min,
-                    aabb_max: max,
-                });
-                // Recadrage auto : centrer le modèle à l'origine et le mettre à l'échelle ~2 u.
-                let size = max - min;
-                let s = 2.0 / size.max_element().max(1e-3);
-                let center = (min + max) * 0.5;
-                self.scene.objects.push(crate::scene::SceneObject {
-                    name,
-                    transform: crate::scene::Transform {
-                        position: -center * s,
-                        rotation: Quat::IDENTITY,
-                        scale: Vec3::splat(s),
-                    },
-                    mesh: MeshKind::Imported(idx),
-                    script: String::new(),
-                    physics: crate::runtime::physics::PhysicsKind::None,
-                });
-                self.selection = Some(self.scene.objects.len() - 1);
-                log::info!("Modèle importé : {path}");
+        let tx = self.import_tx.clone();
+        let p = path.to_string();
+        std::thread::spawn(move || {
+            let res = crate::scene::import::load_gltf(&p).map(|(d, mn, mx)| (p.clone(), d, mn, mx));
+            let _ = tx.send(res);
+        });
+    }
+
+    /// Récupère les imports terminés et les ajoute à la scène (appelé chaque frame).
+    fn poll_imports(&mut self) {
+        while let Ok(res) = self.import_rx.try_recv() {
+            match res {
+                Ok((path, data, min, max)) => self.finish_import(path, data, min, max),
+                Err(e) => log::error!("Import glTF échoué : {e}"),
             }
-            Err(e) => log::error!("Import glTF échoué : {e}"),
         }
+    }
+
+    fn finish_import(&mut self, path: String, data: MeshData, min: Vec3, max: Vec3) {
+        let name = std::path::Path::new(&path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Modèle")
+            .to_string();
+        let idx = self.scene.imported.len() as u32;
+        self.scene.imported.push(ImportedMesh {
+            name: name.clone(),
+            path,
+            data,
+            aabb_min: min,
+            aabb_max: max,
+        });
+        // Recadrage auto : centrer à l'origine, mise à l'échelle ~2 u.
+        let size = max - min;
+        let s = 2.0 / size.max_element().max(1e-3);
+        let center = (min + max) * 0.5;
+        self.scene.objects.push(SceneObject {
+            name,
+            transform: Transform {
+                position: -center * s,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::splat(s),
+            },
+            mesh: MeshKind::Imported(idx),
+            script: String::new(),
+            physics: crate::runtime::physics::PhysicsKind::None,
+            audio_clip: String::new(),
+            audio_autoplay: false,
+        });
+        self.selection = Some(self.scene.objects.len() - 1);
     }
 
     /// Lance un rayon depuis le curseur et renvoie l'objet le plus proche touché.
