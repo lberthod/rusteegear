@@ -179,6 +179,7 @@ fn build_ui(
                 actions.load = true;
             }
             if ui.button("📥 Importer glTF").clicked() {
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
                 if let Some(p) = rfd::FileDialog::new()
                     .add_filter("glTF", &["glb", "gltf"])
                     .pick_file()
@@ -227,6 +228,7 @@ fn build_ui(
                     ui.collapsing("Audio", |ui| {
                         ui.horizontal(|ui| {
                             if ui.button("Choisir un son…").clicked() {
+                                #[cfg(not(any(target_os = "ios", target_os = "android")))]
                                 if let Some(p) = rfd::FileDialog::new()
                                     .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
                                     .pick_file()

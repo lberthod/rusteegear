@@ -26,18 +26,39 @@ boîte noire. Le projet est pensé pour grandir vers le **mobile (iOS)** et la
 
 ---
 
-## 🎮 Fonctionnalités (MVP — disponible aujourd'hui)
+## 🎮 Fonctionnalités (disponibles aujourd'hui)
 
-- **Rendu 3D** temps réel via `wgpu` (Metal sur macOS), shaders WGSL, depth buffer,
-  éclairage Lambert (directionnel + ambiant).
-- **Caméra orbitale** : clic-glisser pour tourner, molette pour zoomer.
-- **Primitives** générées par code : cube, sphère (UV), plan.
+**Rendu & édition**
+- **Rendu 3D** temps réel via `wgpu` (Metal sur macOS), shaders WGSL, depth buffer, éclairage Lambert.
+- **Caméra orbitale** (clic-glisser / molette) ; présentation **vsync** (fluide).
+- **Primitives** cube / sphère / plan **+ import de modèles glTF / GLB** (chargement asynchrone).
 - **Éditeur `egui`** à 3 panneaux : toolbar · hiérarchie · inspecteur.
-- **Sélection** par la hiérarchie **ou par clic direct dans la vue 3D** (raycast ray/AABB).
-- **Édition** complète du `Transform` : position / rotation / échelle, renommage, suppression.
-- **Mode Play** (▶ / ⏹) : anime la scène en _delta-time_.
+- **Sélection** par hiérarchie ou clic 3D (raycast ray/AABB), surbrillance.
+- **Gizmos** translate / rotate / scale (**W / E / R**), manipulation à la souris.
+- **Undo / Redo** (Cmd+Z / Cmd+Shift+Z) et **duplication** (Cmd+D).
 - **Sérialisation** de la scène en JSON (Save / Load).
-- **Packaging macOS** : génération d'un `.dmg` distribuable.
+
+**Runtime de jeu** (mode Play ▶/⏹, aperçu réinitialisable)
+- **Scripting Lua** par objet (`mlua`) : `obj.x/y/z`, `obj.rx/ry/rz`, `obj.sx/sy/sz`, `dt`, `time`.
+- **Physique** `rapier3d` : corps Statique / Dynamique, gravité, collisions, rebond.
+- **Audio** `kira` : son par objet, autoplay au Play, décodage asynchrone + cache.
+
+**Distribution**
+- **Packaging macOS** : `.dmg` distribuable.
+
+---
+
+## 🗓️ Historique & avancement
+
+| Phase | Sprints | État |
+|---|---|---|
+| **MVP** — moteur + éditeur + `.dmg` | 0 → 6 | ✅ |
+| **A** — Fondations éditeur (refactor, gizmos, glTF, undo/dup) | 7 → 10 | ✅ |
+| **B** — Runtime de jeu (Lua, physique, audio) + optimisations | 11 → 13 | ✅ |
+| **C** — Portage mobile (Player, tactile, iOS, Android) | 14 → 17 | ⏳ en cours |
+| **D** — Réalité virtuelle (OpenXR, stéréo, Quest) | 18 → 21 | ⬜ à venir |
+
+> Détail sprint par sprint : voir **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
 
 ---
 

@@ -131,14 +131,17 @@
 - **Livrable** : sur desktop avec trackpad/simulateur, les gestes contrôlent la caméra.
 - **Risque** : gestion multi-touch (suivi des IDs de doigts).
 
-### Sprint 16 — Build & déploiement iOS
+### Sprint 16 — Build & déploiement iOS 🟡 PARTIEL (compile + .ipa non signé)
 **Objectif** : un `.ipa` qui tourne sur iPhone/iPad.
-- [ ] Cible `aarch64-apple-ios` (+ `aarch64-apple-ios-sim`). Outil : **`cargo-mobile2`** (génère le projet Xcode).
-- [ ] Boucle de rendu via `CADisplayLink` ; gérer suspend/resume → **recréer la surface wgpu** au retour au premier plan.
-- [ ] Icône + `Info.plist` iOS + signature (compte développeur Apple requis).
-- **Fichiers** : `gen/apple/` (généré), `app/mod.rs` (hooks cycle de vie).
-- **Livrable** : la scène en mode Player tourne sur un appareil iOS (ou simulateur).
-- **Risque** : ⚠️ le plus dur de la phase — perte de contexte GPU au background ; signature Apple.
+- [x] Cibles Rust `aarch64-apple-ios` (+ `-sim`) ajoutées.
+- [x] **Cross-compilation complète réussie** : wgpu, winit, egui, rapier, mlua (Lua C), kira → iOS arm64. ✅
+- [x] `rfd` rendu desktop-only (`[target.'cfg(not(ios/android))']`) — seul blocage de compilation.
+- [x] `packaging/build_ios.sh` : assemble `.app` + Info.plist → **`.ipa` (non signé)** (~6 Mo).
+- [ ] **Bloqué ici** : signature/provisioning (compte développeur Apple requis) pour installer sur device.
+- [ ] À faire ensuite : projet Xcode via **`cargo-mobile2`**, cycle de vie iOS (recréer la surface wgpu au resume), entrées tactiles (Sprint 15), mode Player (Sprint 14).
+- **Pré-requis build** : Xcode complet (`export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`).
+- **Fichiers** : `packaging/build_ios.sh`, `Cargo.toml`, `editor/mod.rs` (gates cfg).
+- **État** : la preuve technique est faite (le moteur compile et se package pour iOS) ; reste la signature Apple + l'intégration UIKit pour un lancement réel.
 
 ### Sprint 17 — Build Android (parallèle d'iOS)
 **Objectif** : un `.apk` Android (backend Vulkan).
