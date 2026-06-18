@@ -6,6 +6,7 @@ use glam::{EulerRot, Quat};
 use winit::window::Window;
 
 use crate::app::GizmoMode;
+use crate::runtime::physics::PhysicsKind;
 use crate::scene::{MeshKind, Scene, Transform};
 
 pub struct Editor {
@@ -214,6 +215,13 @@ fn build_ui(
                     });
                     ui.separator();
                     transform_editor(ui, &mut obj.transform);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Physique");
+                        ui.selectable_value(&mut obj.physics, PhysicsKind::None, "Aucune");
+                        ui.selectable_value(&mut obj.physics, PhysicsKind::Static, "Statique");
+                        ui.selectable_value(&mut obj.physics, PhysicsKind::Dynamic, "Dynamique");
+                    });
                     ui.separator();
                     ui.collapsing("Script (Lua)", |ui| {
                         ui.label("Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, dt, time");

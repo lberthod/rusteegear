@@ -6,6 +6,7 @@ use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::gfx::mesh::{self, MeshData};
+use crate::runtime::physics::PhysicsKind;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Transform {
@@ -83,6 +84,13 @@ pub struct SceneObject {
     /// Script Lua exécuté chaque frame en mode Play (vide = aucun).
     #[serde(default)]
     pub script: String,
+    /// Type de corps physique en mode Play.
+    #[serde(default = "default_physics")]
+    pub physics: PhysicsKind,
+}
+
+fn default_physics() -> PhysicsKind {
+    PhysicsKind::None
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -130,6 +138,7 @@ impl Scene {
                         .with_scale(Vec3::new(10.0, 1.0, 10.0)),
                     mesh: MeshKind::Plane,
                     script: String::new(),
+                    physics: PhysicsKind::Static,
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -137,12 +146,15 @@ impl Scene {
                     mesh: MeshKind::Cube,
                     // exemple : tourne autour de Y à 60°/s en mode Play
                     script: "obj.ry = obj.ry + dt * 60.0".into(),
+                    physics: PhysicsKind::None,
                 },
                 SceneObject {
                     name: "Sphère".into(),
-                    transform: Transform::from_pos(Vec3::new(1.2, -0.5, 0.0)),
+                    transform: Transform::from_pos(Vec3::new(1.2, 2.5, 0.0)),
                     mesh: MeshKind::Sphere,
                     script: String::new(),
+                    // tombe et rebondit sur le sol en mode Play
+                    physics: PhysicsKind::Dynamic,
                 },
             ],
         }

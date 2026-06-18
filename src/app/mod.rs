@@ -43,6 +43,11 @@ pub struct AppState {
     // --- scripting ---
     lua: Lua,
     time: f32,
+
+    // --- runtime Play ---
+    was_playing: bool,
+    play_snapshot: Vec<SceneObject>,
+    physics: Option<crate::runtime::physics::Physics>,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -96,6 +101,9 @@ impl AppState {
             redo_stack: Vec::new(),
             lua: Lua::new(),
             time: 0.0,
+            was_playing: false,
+            play_snapshot: Vec::new(),
+            physics: None,
         }
     }
 
@@ -140,6 +148,7 @@ impl AppState {
             transform: Transform::from_pos(Vec3::ZERO),
             mesh: kind,
             script: String::new(),
+            physics: crate::runtime::physics::PhysicsKind::None,
         });
         self.selection = Some(self.scene.objects.len() - 1);
     }
@@ -381,14 +390,29 @@ impl AppState {
         Some(v.dot(w).atan2(v.dot(u)))
     }
 
-    /// En mode Play, exécute le script Lua de chaque objet (delta-time).
+    /// En mode Play : scripts Lua + simulation physique (delta-time).
+    /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+
+        // transitions Edit <-> Play
+        if self.playing && !self.was_playing {
+            self.play_snapshot = self.scene.objects.clone();
+            self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        } else if !self.playing && self.was_playing {
+            self.scene.objects = self.play_snapshot.clone();
+            self.physics = None;
+            self.selection = None;
+        }
+        self.was_playing = self.playing;
+
         if !self.playing {
             return;
         }
+
+        // 1. scripts
         self.time += dt;
         let time = self.time;
         for obj in &mut self.scene.objects {
@@ -398,6 +422,11 @@ impl AppState {
             if let Err(e) = run_script(&self.lua, &mut obj.transform, &obj.script, dt, time) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
+        }
+
+        // 2. physique (écrase les poses des corps dynamiques)
+        if let Some(phys) = &mut self.physics {
+            phys.step(dt, &mut self.scene);
         }
     }
 
@@ -450,6 +479,7 @@ impl AppState {
                     },
                     mesh: MeshKind::Imported(idx),
                     script: String::new(),
+                    physics: crate::runtime::physics::PhysicsKind::None,
                 });
                 self.selection = Some(self.scene.objects.len() - 1);
                 log::info!("Modèle importé : {path}");

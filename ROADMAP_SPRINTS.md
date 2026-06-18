@@ -81,14 +81,15 @@
 - **Fichiers** : `src/app/mod.rs`, `scene/mod.rs`, `editor/mod.rs`.
 - **Livrable** : un cube tourne via script Lua, éditable en direct. ✅
 
-### Sprint 12 — Physique (collisions)
+### Sprint 12 — Physique (collisions) ✅ FAIT
 **Objectif** : gravité et collisions réelles en mode Play.
-- [ ] Intégrer **`rapier3d`** : un `RigidBody` + `Collider` par objet (box/sphère).
-- [ ] Step de simulation en Play ; recopier les poses rapier → `Transform`.
-- [ ] Inspecteur : type de corps (statique/dynamique), masse.
-- **Fichiers** : `src/runtime/physics.rs` (nouveau), `runtime/mod.rs`.
-- **Livrable** : en Play, une sphère tombe et rebondit sur le plan-sol.
-- **Risque** : conversion repères/échelle entre rapier et le moteur ; mapping AABB→collider.
+- [x] **`rapier3d`** : un `RigidBody` + `Collider` (cuboid/ball depuis l'AABB×échelle) par objet physique.
+- [x] Step de simulation en Play (dt clampé) ; recopie des poses rapier → `Transform`.
+- [x] Inspecteur : type de corps **Aucune / Statique / Dynamique**.
+- [x] Bonus : **Stop restaure la scène** (Play = aperçu réinitialisable, snapshot à l'entrée).
+- [x] rapier 0.33 utilise glam (parry/glamx) → conversion via composants f32.
+- **Fichiers** : `src/runtime/physics.rs`, `runtime/mod.rs`, `scene/mod.rs`, `app/mod.rs`, `editor/mod.rs`.
+- **Livrable** : en Play, la sphère tombe et rebondit sur le sol. ✅
 
 ### Sprint 13 — Audio
 **Objectif** : sons et ambiance.

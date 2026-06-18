@@ -12,6 +12,7 @@ use winit::window::{Window, WindowId};
 mod app;
 mod editor;
 mod gfx;
+mod runtime;
 mod scene;
 
 use app::input::InputEvent;

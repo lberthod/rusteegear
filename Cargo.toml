@@ -22,6 +22,7 @@ gltf = "1.4.1"
 log = "0.4.32"
 mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
 pollster = "0.4.0"
+rapier3d = "0.33.0"
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
