@@ -26,14 +26,13 @@
 
 ## PHASE A — Fondations éditeur
 
-### Sprint 7 — Refactor : séparer `App`, `Renderer` et `Scene`
+### Sprint 7 — Refactor : séparer `App`, `Renderer` et `Scene` ✅ FAIT
 **Objectif** : isoler la logique GPU de l'état applicatif pour préparer le multi-plateforme.
-- [ ] Extraire un `AppState` (scène, sélection, mode Play, caméra) hors de `State` (GPU).
-- [ ] `Renderer` ne connaît que : device/queue/surface/pipeline + « dessine cette scène avec cette caméra ».
-- [ ] Introduire un trait `Platform`/`InputSource` pour abstraire winit (utile mobile/VR).
-- **Fichiers** : `src/gfx/renderer.rs`, nouveau `src/app/mod.rs`, `src/main.rs`.
-- **Livrable** : comportement identique au MVP, mais `Renderer::render(&scene, &camera)` sans état métier.
-- **Risque** : régression UI/picking → tester chaque interaction après refactor.
+- [x] `AppState` (scène, sélection, mode Play, caméra, interaction, picking) dans `src/app/mod.rs`, sans GPU.
+- [x] `Renderer` (renommé depuis `State`) ne porte que le GPU + egui ; `render(&mut AppState)`.
+- [x] `InputEvent` agnostique (`src/app/input.rs`) ; `main.rs` traduit winit → `InputEvent`.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/app/input.rs`, `src/main.rs`.
+- **Livrable** : comportement identique au MVP, build sans warning, 3 démarrages OK. ✅
 
 ### Sprint 8 — Gizmos de manipulation à la souris
 **Objectif** : déplacer/tourner/redimensionner un objet directement dans la vue 3D.

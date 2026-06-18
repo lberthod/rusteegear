@@ -1,15 +1,14 @@
-//! Couche rendu wgpu : surface, pipeline, depth buffer, dessin de plusieurs objets.
+//! Couche **rendu pur** (wgpu + egui). Ne contient aucun état métier : la scène,
+//! la caméra et la sélection vivent dans `AppState` et sont passées à `render`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Quat, Vec3, Vec4};
 use winit::window::Window;
 
-use super::camera::OrbitCamera;
 use super::mesh::{GpuMesh, Vertex};
+use crate::app::AppState;
 use crate::editor::Editor;
 use crate::scene::{MeshKind, Scene};
 
@@ -35,7 +34,7 @@ struct ObjectGpu {
     bind_group: wgpu::BindGroup,
 }
 
-pub struct State {
+pub struct Renderer {
     pub window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -47,27 +46,17 @@ pub struct State {
     depth_view: wgpu::TextureView,
     model_layout: wgpu::BindGroupLayout,
 
-    camera: OrbitCamera,
     camera_buf: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 
     meshes: HashMap<MeshKind, GpuMesh>,
-    scene: Scene,
     objects_gpu: Vec<ObjectGpu>,
-    selection: Option<usize>,
 
     editor: Editor,
-    playing: bool,
-    last_frame: Instant,
-
-    // --- état d'interaction souris ---
-    dragging: bool,
-    last_cursor: Option<(f64, f64)>,
-    press_cursor: Option<(f64, f64)>,
 }
 
-impl State {
-    pub async fn new(window: Arc<Window>) -> State {
+impl Renderer {
+    pub async fn new(window: Arc<Window>) -> Renderer {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -114,7 +103,6 @@ impl State {
         surface.configure(&device, &config);
 
         // --- Caméra (bind group 0) ---
-        let camera = OrbitCamera::new(config.width as f32 / config.height as f32);
         let camera_buf = create_uniform(&device, "camera", std::mem::size_of::<CameraUniform>());
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera_layout"),
@@ -168,7 +156,7 @@ impl State {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // robuste pour toutes les primitives générées
+                cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -191,30 +179,10 @@ impl State {
             meshes.insert(kind, GpuMesh::new(&device, &kind.mesh_data()));
         }
 
-        // --- Scène + ressources GPU par objet ---
-        let scene = Scene::demo();
-        let objects_gpu = scene
-            .objects
-            .iter()
-            .map(|_| {
-                let model_buf =
-                    create_uniform(&device, "model", std::mem::size_of::<ModelUniform>());
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("model_bg"),
-                    layout: &model_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: model_buf.as_entire_binding(),
-                    }],
-                });
-                ObjectGpu { model_buf, bind_group }
-            })
-            .collect();
-
         let depth_view = create_depth_view(&device, &config);
         let editor = Editor::new(&device, config.format, &window);
 
-        State {
+        Renderer {
             window,
             surface,
             device,
@@ -224,25 +192,33 @@ impl State {
             pipeline,
             depth_view,
             model_layout,
-            camera,
             camera_buf,
             camera_bind_group,
             meshes,
-            scene,
-            objects_gpu,
-            selection: None,
+            objects_gpu: Vec::new(),
             editor,
-            playing: false,
-            last_frame: Instant::now(),
-            dragging: false,
-            last_cursor: None,
-            press_cursor: None,
         }
     }
 
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width == 0 || new_size.height == 0 {
+            return;
+        }
+        self.size = new_size;
+        self.config.width = new_size.width;
+        self.config.height = new_size.height;
+        self.surface.configure(&self.device, &self.config);
+        self.depth_view = create_depth_view(&self.device, &self.config);
+    }
+
+    /// Transmet l'événement à l'UI. Retourne `true` s'il a été consommé par egui.
+    pub fn on_ui_event(&mut self, event: &winit::event::WindowEvent) -> bool {
+        self.editor.on_window_event(&self.window, event)
+    }
+
     /// Ajuste le nombre de ressources GPU par objet pour qu'il corresponde à la scène.
-    fn sync_objects(&mut self) {
-        let n = self.scene.objects.len();
+    fn sync_objects(&mut self, scene: &Scene) {
+        let n = scene.objects.len();
         while self.objects_gpu.len() < n {
             let model_buf =
                 create_uniform(&self.device, "model", std::mem::size_of::<ModelUniform>());
@@ -259,120 +235,17 @@ impl State {
         self.objects_gpu.truncate(n);
     }
 
-    /// Transmet l'événement à l'UI. Retourne `true` s'il a été consommé par egui.
-    pub fn on_ui_event(&mut self, event: &winit::event::WindowEvent) -> bool {
-        self.editor.on_window_event(&self.window, event)
-    }
-
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 {
-            return;
-        }
-        self.size = new_size;
-        self.config.width = new_size.width;
-        self.config.height = new_size.height;
-        self.surface.configure(&self.device, &self.config);
-        self.depth_view = create_depth_view(&self.device, &self.config);
-        self.camera.aspect = new_size.width as f32 / new_size.height as f32;
-    }
-
-    // --- interaction souris ---
-
-    pub fn on_mouse_button(&mut self, pressed: bool) {
-        if pressed {
-            self.dragging = true;
-            self.press_cursor = self.last_cursor;
-        } else {
-            self.dragging = false;
-            // clic sans déplacement notable = sélection par picking
-            if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor) {
-                if (px - cx).hypot(py - cy) < 4.0 {
-                    self.selection = self.pick(cx, cy);
-                }
-            }
-            self.press_cursor = None;
-        }
-    }
-
-    /// Lance un rayon depuis le curseur et renvoie l'objet le plus proche touché.
-    fn pick(&self, px: f64, py: f64) -> Option<usize> {
-        let w = self.config.width as f32;
-        let h = self.config.height as f32;
-        let ndc_x = 2.0 * px as f32 / w - 1.0;
-        let ndc_y = 1.0 - 2.0 * py as f32 / h;
-
-        let inv = self.camera.view_proj().inverse();
-        let near = inv * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
-        let far = inv * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
-        let origin = near.truncate() / near.w;
-        let dir = (far.truncate() / far.w - origin).normalize();
-
-        let mut best: Option<(f32, usize)> = None;
-        for (i, obj) in self.scene.objects.iter().enumerate() {
-            let (lmin, lmax) = obj.mesh.local_aabb();
-            let m = obj.transform.matrix();
-            // AABB monde via les 8 coins transformés
-            let mut wmin = Vec3::splat(f32::INFINITY);
-            let mut wmax = Vec3::splat(f32::NEG_INFINITY);
-            for sx in [lmin.x, lmax.x] {
-                for sy in [lmin.y, lmax.y] {
-                    for sz in [lmin.z, lmax.z] {
-                        let p = (m * Vec3::new(sx, sy, sz).extend(1.0)).truncate();
-                        wmin = wmin.min(p);
-                        wmax = wmax.max(p);
-                    }
-                }
-            }
-            if let Some(t) = ray_aabb(origin, dir, wmin, wmax) {
-                if best.map_or(true, |(bt, _)| t < bt) {
-                    best = Some((t, i));
-                }
-            }
-        }
-        best.map(|(_, i)| i)
-    }
-
-    /// Applique les comportements du mode Play (rotation simple) selon le delta-time.
-    fn advance_play(&mut self) {
-        let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32();
-        self.last_frame = now;
-        if self.playing {
-            for obj in &mut self.scene.objects {
-                if obj.mesh != MeshKind::Plane {
-                    obj.transform.rotation =
-                        Quat::from_rotation_y(dt * 1.2) * obj.transform.rotation;
-                }
-            }
-        }
-    }
-
-    pub fn on_cursor_moved(&mut self, x: f64, y: f64) {
-        if self.dragging {
-            if let Some((lx, ly)) = self.last_cursor {
-                let dx = (x - lx) as f32;
-                let dy = (y - ly) as f32;
-                self.camera.yaw -= dx * 0.005;
-                self.camera.pitch += dy * 0.005;
-            }
-        }
-        self.last_cursor = Some((x, y));
-    }
-
-    pub fn on_scroll(&mut self, delta: f32) {
-        self.camera.distance = (self.camera.distance - delta * 0.5).clamp(1.5, 50.0);
-    }
-
-    pub fn update(&mut self) {
+    /// Pousse les uniforms (caméra + matrices modèle + surbrillance) depuis l'état.
+    fn write_uniforms(&self, app: &AppState) {
         let camera_uniform = CameraUniform {
-            view_proj: self.camera.view_proj().to_cols_array_2d(),
+            view_proj: app.camera.view_proj().to_cols_array_2d(),
         };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
 
-        for (i, (obj, gpu)) in self.scene.objects.iter().zip(&self.objects_gpu).enumerate() {
+        for (i, (obj, gpu)) in app.scene.objects.iter().zip(&self.objects_gpu).enumerate() {
             let model = obj.transform.matrix();
-            let highlight = if self.selection == Some(i) { 1.0 } else { 0.0 };
+            let highlight = if app.selection == Some(i) { 1.0 } else { 0.0 };
             let model_uniform = ModelUniform {
                 model: model.to_cols_array_2d(),
                 normal: model.inverse().transpose().to_cols_array_2d(),
@@ -383,10 +256,10 @@ impl State {
         }
     }
 
-    pub fn render(&mut self) {
-        // 0. Acquérir la surface EN PREMIER. Si elle n'est pas disponible, on sort
-        //    avant de lancer egui : sinon on jetterait le `textures_delta` de la frame
-        //    (atlas de police), ce qui désynchronise le renderer egui (panic).
+    pub fn render(&mut self, app: &mut AppState) {
+        // 0. Acquérir la surface EN PREMIER. Si indisponible, on sort avant de lancer
+        //    egui : sinon on jetterait le `textures_delta` de la frame (atlas de police),
+        //    ce qui désynchronise le renderer egui (panic).
         use wgpu::CurrentSurfaceTexture as C;
         let frame = match self.surface.get_current_texture() {
             C::Success(t) | C::Suboptimal(t) => t,
@@ -404,30 +277,21 @@ impl State {
         // 1. Construire l'UI (peut modifier la scène / la sélection).
         let (full_output, actions) = self.editor.run(
             &self.window,
-            &mut self.scene,
-            &mut self.selection,
-            &mut self.playing,
+            &mut app.scene,
+            &mut app.selection,
+            &mut app.playing,
         );
         if actions.save {
-            let path = scene_path();
-            match self.scene.save(&path) {
-                Ok(()) => log::info!("Scène sauvegardée dans {path}"),
-                Err(e) => log::error!("Échec sauvegarde : {e}"),
-            }
+            app.save();
         }
         if actions.load {
-            match Scene::load(&scene_path()) {
-                Ok(s) => {
-                    self.scene = s;
-                    self.selection = None;
-                }
-                Err(e) => log::error!("Échec chargement : {e}"),
-            }
+            app.load();
         }
-        // 2. Comportements (Play), sync GPU, puis push des uniforms.
-        self.advance_play();
-        self.sync_objects();
-        self.update();
+
+        // 2. Comportements (Play), sync GPU, push des uniforms.
+        app.advance_play();
+        self.sync_objects(&app.scene);
+        self.write_uniforms(app);
 
         let view = frame
             .texture
@@ -469,7 +333,7 @@ impl State {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            for (obj, gpu) in self.scene.objects.iter().zip(&self.objects_gpu) {
+            for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
                 let mesh = &self.meshes[&obj.mesh];
                 pass.set_bind_group(1, &gpu.bind_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
@@ -491,40 +355,6 @@ impl State {
         self.queue
             .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
         frame.present();
-    }
-}
-
-/// Chemin du fichier de scène, dans le dossier personnel (cwd vaut "/" en mode .app).
-fn scene_path() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    format!("{home}/motor3derust_scene.json")
-}
-
-/// Intersection rayon / AABB (méthode des slabs). Renvoie le t d'entrée si touché devant.
-fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
-    let o = origin.to_array();
-    let d = dir.to_array();
-    let mn = min.to_array();
-    let mx = max.to_array();
-    let mut tmin = f32::NEG_INFINITY;
-    let mut tmax = f32::INFINITY;
-    for i in 0..3 {
-        if d[i].abs() < 1e-8 {
-            if o[i] < mn[i] || o[i] > mx[i] {
-                return None;
-            }
-        } else {
-            let t1 = (mn[i] - o[i]) / d[i];
-            let t2 = (mx[i] - o[i]) / d[i];
-            let (t1, t2) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
-            tmin = tmin.max(t1);
-            tmax = tmax.min(t2);
-        }
-    }
-    if tmax >= tmin && tmax >= 0.0 {
-        Some(tmin.max(0.0))
-    } else {
-        None
     }
 }
 
