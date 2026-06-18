@@ -130,17 +130,15 @@
 - **Livrable** : gestes tactiles → caméra (validé matériellement sur device iOS au Sprint 16+). ✅
 - _Note : les events Touch ne se déclenchent que sur écran tactile ; test final sur iPhone._
 
-### Sprint 16 — Build & déploiement iOS 🟡 PARTIEL (compile + .ipa non signé)
+### Sprint 16 — Build & signature iOS 🟢 .ipa signé (reste le profil device)
 **Objectif** : un `.ipa` qui tourne sur iPhone/iPad.
-- [x] Cibles Rust `aarch64-apple-ios` (+ `-sim`) ajoutées.
-- [x] **Cross-compilation complète réussie** : wgpu, winit, egui, rapier, mlua (Lua C), kira → iOS arm64. ✅
-- [x] `rfd` rendu desktop-only (`[target.'cfg(not(ios/android))']`) — seul blocage de compilation.
-- [x] `packaging/build_ios.sh` : assemble `.app` + Info.plist → **`.ipa` (non signé)** (~6 Mo).
-- [ ] **Bloqué ici** : signature/provisioning (compte développeur Apple requis) pour installer sur device.
-- [ ] À faire ensuite : projet Xcode via **`cargo-mobile2`**, cycle de vie iOS (recréer la surface wgpu au resume), entrées tactiles (Sprint 15), mode Player (Sprint 14).
-- **Pré-requis build** : Xcode complet (`export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`).
-- **Fichiers** : `packaging/build_ios.sh`, `Cargo.toml`, `editor/mod.rs` (gates cfg).
-- **État** : la preuve technique est faite (le moteur compile et se package pour iOS) ; reste la signature Apple + l'intégration UIKit pour un lancement réel.
+- [x] Cross-compilation `aarch64-apple-ios` complète (wgpu, winit, egui, rapier, mlua, kira). ✅
+- [x] `rfd` desktop-only ; mode Player auto sur iOS.
+- [x] `packaging/build_ios.sh` : assemble `.app` + Info.plist → `.ipa` (~6 Mo).
+- [x] **`.ipa` signé** avec le certificat `Apple Development: lberthod@gmail.com` (Team `N668CK695Q`). ✅
+- [ ] Reste pour installer sur device : un **profil de provisioning** (Xcode auto / portail) — cf. `build_ios.md`.
+- **Fichiers** : `packaging/build_ios.sh`, `packaging/build_ios.md`, `Cargo.toml`.
+- **État** : compile, package **et se signe** pour iOS ; dernière étape = profil device (compte Apple présent).
 
 ### Sprint 17 — Build Android ✅ FAIT (APK signé)
 **Objectif** : un `.apk` Android (backend Vulkan).
