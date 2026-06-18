@@ -34,7 +34,11 @@ pub fn load_gltf(path: &str) -> Result<(MeshData, Vec3, Vec3), String> {
             let base = vertices.len() as u32;
             for (i, p) in positions.iter().enumerate() {
                 let n = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-                vertices.push(Vertex { position: *p, normal: n, color });
+                vertices.push(Vertex {
+                    position: *p,
+                    normal: n,
+                    color,
+                });
                 min = min.min(Vec3::from_array(*p));
                 max = max.max(Vec3::from_array(*p));
             }

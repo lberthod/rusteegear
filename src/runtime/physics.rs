@@ -6,7 +6,7 @@ use rapier3d::prelude::*;
 
 use crate::scene::{MeshKind, Scene};
 
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PhysicsKind {
     None,
     Static,

@@ -8,7 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use super::mesh::{GpuMesh, Vertex};
-use crate::app::{axis_basis, axis_dir, AppState, GizmoMode, GIZMO_LEN};
+use crate::app::{AppState, GIZMO_LEN, GizmoMode, RING_SEGMENTS, axis_basis, axis_dir};
 use crate::editor::Editor;
 use crate::scene::{MeshKind, Scene};
 
@@ -25,8 +25,16 @@ impl GizmoVertex {
             array_stride: std::mem::size_of::<GizmoVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
             ],
         }
     }
@@ -52,6 +60,9 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 struct ObjectGpu {
     model_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    /// Dernier état téléversé : évite de réécrire le buffer d'un objet immobile.
+    last_model: Option<glam::Mat4>,
+    last_highlight: f32,
 }
 
 pub struct Renderer {
@@ -80,10 +91,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Renderer {
+    pub async fn new(window: Arc<Window>) -> Result<Renderer, String> {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window.clone()).unwrap();
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("Création de la surface impossible : {e}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -92,7 +105,7 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("Aucun adaptateur GPU trouvé");
+            .map_err(|e| format!("Aucun adaptateur GPU trouvé : {e}"))?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -105,7 +118,7 @@ impl Renderer {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Échec création du device");
+            .map_err(|e| format!("Échec création du device : {e}"))?;
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps
@@ -249,10 +262,11 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        // capacité : 3 axes × 48 segments × 2 sommets (anneaux de rotation), arrondi.
+        // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation).
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
-            size: (320 * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
+            size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -266,7 +280,7 @@ impl Renderer {
         let depth_view = create_depth_view(&device, &config);
         let editor = Editor::new(&device, config.format, &window);
 
-        Renderer {
+        Ok(Renderer {
             window,
             surface,
             device,
@@ -284,7 +298,7 @@ impl Renderer {
             gizmo_pipeline,
             gizmo_vbuf,
             editor,
-        }
+        })
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -317,7 +331,12 @@ impl Renderer {
                     resource: model_buf.as_entire_binding(),
                 }],
             });
-            self.objects_gpu.push(ObjectGpu { model_buf, bind_group });
+            self.objects_gpu.push(ObjectGpu {
+                model_buf,
+                bind_group,
+                last_model: None,
+                last_highlight: -1.0,
+            });
         }
         self.objects_gpu.truncate(n);
     }
@@ -331,23 +350,39 @@ impl Renderer {
     }
 
     /// Pousse les uniforms (caméra + matrices modèle + surbrillance) depuis l'état.
-    fn write_uniforms(&self, app: &AppState) {
+    /// N'écrit le buffer d'un objet que si sa pose ou sa surbrillance a changé.
+    fn write_uniforms(&mut self, app: &AppState) {
         let camera_uniform = CameraUniform {
             view_proj: app.camera.view_proj().to_cols_array_2d(),
         };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
 
-        for (i, (obj, gpu)) in app.scene.objects.iter().zip(&self.objects_gpu).enumerate() {
+        for (i, (obj, gpu)) in app
+            .scene
+            .objects
+            .iter()
+            .zip(&mut self.objects_gpu)
+            .enumerate()
+        {
             let model = obj.transform.matrix();
             let highlight = if app.selection == Some(i) { 1.0 } else { 0.0 };
+            // Rien n'a bougé depuis la dernière frame : on saute l'upload.
+            if gpu.last_model == Some(model) && gpu.last_highlight == highlight {
+                continue;
+            }
+            // Matrice normale = inverse-transposée du bloc 3×3 (Mat3 bien moins
+            // coûteux qu'une inversion de Mat4, et correct même en scale non uniforme).
+            let normal3 = glam::Mat3::from_mat4(model).inverse().transpose();
             let model_uniform = ModelUniform {
                 model: model.to_cols_array_2d(),
-                normal: model.inverse().transpose().to_cols_array_2d(),
+                normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
                 params: [highlight, 0.0, 0.0, 0.0],
             };
             self.queue
                 .write_buffer(&gpu.model_buf, 0, bytemuck::bytes_of(&model_uniform));
+            gpu.last_model = Some(model);
+            gpu.last_highlight = highlight;
         }
     }
 
@@ -384,8 +419,7 @@ impl Renderer {
                 app.save();
             }
             if actions.load {
-                app.load();
-                self.imported_gpu.clear(); // reconstruits depuis les données rechargées
+                app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
             }
             if let Some(path) = actions.import {
                 app.import_gltf(&path);
@@ -413,6 +447,11 @@ impl Renderer {
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
         app.advance_play();
+        // Une scène chargée en fond vient peut-être de remplacer l'actuelle :
+        // reconstruire les meshes GPU importés depuis les nouvelles données.
+        if app.take_imported_dirty() {
+            self.imported_gpu.clear();
+        }
         self.sync_objects(&app.scene);
         self.sync_imported(&app.scene);
         self.write_uniforms(app);
@@ -427,24 +466,36 @@ impl Renderer {
             match app.gizmo_mode {
                 // Déplacer / Redimensionner : 3 segments d'axe.
                 GizmoMode::Translate | GizmoMode::Scale => {
-                    for axis in 0..3 {
+                    for (axis, color) in colors.iter().enumerate() {
                         let end = o + axis_dir(axis) * GIZMO_LEN;
-                        verts.push(GizmoVertex { position: o.to_array(), color: colors[axis] });
-                        verts.push(GizmoVertex { position: end.to_array(), color: colors[axis] });
+                        verts.push(GizmoVertex {
+                            position: o.to_array(),
+                            color: *color,
+                        });
+                        verts.push(GizmoVertex {
+                            position: end.to_array(),
+                            color: *color,
+                        });
                     }
                 }
                 // Tourner : 3 anneaux (un par axe).
                 GizmoMode::Rotate => {
-                    const N: usize = 48;
-                    for axis in 0..3 {
+                    const N: usize = RING_SEGMENTS;
+                    for (axis, color) in colors.iter().enumerate() {
                         let (u, w) = axis_basis(axis_dir(axis));
                         for j in 0..N {
                             let a0 = std::f32::consts::TAU * j as f32 / N as f32;
                             let a1 = std::f32::consts::TAU * (j + 1) as f32 / N as f32;
                             let p0 = o + (u * a0.cos() + w * a0.sin()) * GIZMO_LEN;
                             let p1 = o + (u * a1.cos() + w * a1.sin()) * GIZMO_LEN;
-                            verts.push(GizmoVertex { position: p0.to_array(), color: colors[axis] });
-                            verts.push(GizmoVertex { position: p1.to_array(), color: colors[axis] });
+                            verts.push(GizmoVertex {
+                                position: p0.to_array(),
+                                color: *color,
+                            });
+                            verts.push(GizmoVertex {
+                                position: p1.to_array(),
+                                color: *color,
+                            });
                         }
                     }
                 }
@@ -461,7 +512,9 @@ impl Renderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("encoder") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("encoder"),
+            });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -498,7 +551,10 @@ impl Renderer {
 
             for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
                 let mesh = match obj.mesh {
-                    MeshKind::Imported(i) => &self.imported_gpu[i as usize],
+                    MeshKind::Imported(i) => match self.imported_gpu.get(i as usize) {
+                        Some(m) => m,
+                        None => continue, // mesh importé pas encore (ou plus) chargé
+                    },
                     k => &self.meshes[&k],
                 };
                 pass.set_bind_group(1, &gpu.bind_group, &[]);

@@ -1,7 +1,7 @@
 //! Audio simple via kira : décodage en thread de fond + cache pour éviter tout lag.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Tween};
@@ -27,7 +27,14 @@ impl Audio {
                 None
             }
         };
-        Audio { manager, playing: Vec::new(), cache: HashMap::new(), pending: HashSet::new(), tx, rx }
+        Audio {
+            manager,
+            playing: Vec::new(),
+            cache: HashMap::new(),
+            pending: HashSet::new(),
+            tx,
+            rx,
+        }
     }
 
     /// Joue un fichier : instantané si en cache, sinon décodage en fond puis lecture à l'arrivée.

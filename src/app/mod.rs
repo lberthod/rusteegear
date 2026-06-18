@@ -3,10 +3,12 @@
 
 pub mod input;
 
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
-use glam::{EulerRot, Quat, Vec3, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};
 use mlua::Lua;
 
 use crate::gfx::camera::OrbitCamera;
@@ -44,11 +46,14 @@ pub struct AppState {
     drag_orig_scale: Vec3,
 
     // --- historique (snapshots de la liste d'objets) ---
-    undo_stack: Vec<Vec<SceneObject>>,
+    undo_stack: VecDeque<Vec<SceneObject>>,
     redo_stack: Vec<Vec<SceneObject>>,
 
     // --- scripting ---
     lua: Lua,
+    /// Chunks Lua déjà compilés, indexés par hash de la source (évite de re-parser
+    /// le même script à chaque frame).
+    script_cache: HashMap<u64, mlua::Function>,
     time: f32,
 
     // --- runtime Play ---
@@ -60,6 +65,12 @@ pub struct AppState {
     // --- import glTF asynchrone ---
     import_tx: Sender<ImportResult>,
     import_rx: Receiver<ImportResult>,
+
+    // --- chargement de scène asynchrone (Load) ---
+    scene_load_tx: Sender<Result<Scene, String>>,
+    scene_load_rx: Receiver<Result<Scene, String>>,
+    /// Vrai après remplacement de la scène : le renderer doit reconstruire les meshes GPU importés.
+    imported_dirty: bool,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -72,6 +83,10 @@ pub enum GizmoMode {
 
 /// Longueur (monde) des axes / rayon des anneaux du gizmo. Partagée picking ↔ rendu.
 pub const GIZMO_LEN: f32 = 1.0;
+
+/// Nombre de segments par anneau de rotation du gizmo. Partagé picking ↔ rendu
+/// pour garantir une géométrie identique des deux côtés.
+pub const RING_SEGMENTS: usize = 48;
 
 /// Direction unitaire d'un axe du gizmo.
 pub fn axis_dir(axis: usize) -> Vec3 {
@@ -93,6 +108,7 @@ pub fn axis_basis(a: Vec3) -> (Vec3, Vec3) {
 impl AppState {
     pub fn new() -> Self {
         let (tx, rx) = channel();
+        let (scene_tx, scene_rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -111,9 +127,10 @@ impl AppState {
             drag_orig_pos: Vec3::ZERO,
             drag_orig_rot: Quat::IDENTITY,
             drag_orig_scale: Vec3::ONE,
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             lua: Lua::new(),
+            script_cache: HashMap::new(),
             time: 0.0,
             was_playing: false,
             play_snapshot: Vec::new(),
@@ -121,7 +138,16 @@ impl AppState {
             audio: crate::runtime::audio::Audio::new(),
             import_tx: tx,
             import_rx: rx,
+            scene_load_tx: scene_tx,
+            scene_load_rx: scene_rx,
+            imported_dirty: false,
         }
+    }
+
+    /// Indique (et réinitialise) si la scène vient d'être remplacée par un Load :
+    /// le renderer s'en sert pour reconstruire ses meshes GPU importés.
+    pub fn take_imported_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.imported_dirty)
     }
 
     /// Joue immédiatement un fichier son (bouton de test / scripts).
@@ -137,15 +163,15 @@ impl AppState {
 
     /// Capture l'état courant des objets avant une modification (vide la pile redo).
     pub fn push_undo(&mut self) {
-        self.undo_stack.push(self.scene.objects.clone());
+        self.undo_stack.push_back(self.scene.objects.clone());
         if self.undo_stack.len() > 50 {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front(); // O(1), contrairement à Vec::remove(0)
         }
         self.redo_stack.clear();
     }
 
     pub fn undo(&mut self) {
-        if let Some(prev) = self.undo_stack.pop() {
+        if let Some(prev) = self.undo_stack.pop_back() {
             self.redo_stack.push(self.scene.objects.clone());
             self.scene.objects = prev;
             self.selection = None;
@@ -154,7 +180,7 @@ impl AppState {
 
     pub fn redo(&mut self) {
         if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(self.scene.objects.clone());
+            self.undo_stack.push_back(self.scene.objects.clone());
             self.scene.objects = next;
             self.selection = None;
         }
@@ -186,15 +212,15 @@ impl AppState {
     }
 
     pub fn duplicate_selected(&mut self) {
-        if let Some(i) = self.selection {
-            if i < self.scene.objects.len() {
-                self.push_undo();
-                let mut copy = self.scene.objects[i].clone();
-                copy.name = format!("{} (copie)", copy.name);
-                copy.transform.position += Vec3::new(0.6, 0.0, 0.6);
-                self.scene.objects.push(copy);
-                self.selection = Some(self.scene.objects.len() - 1);
-            }
+        if let Some(i) = self.selection
+            && i < self.scene.objects.len()
+        {
+            self.push_undo();
+            let mut copy = self.scene.objects[i].clone();
+            copy.name = format!("{} (copie)", copy.name);
+            copy.transform.position += Vec3::new(0.6, 0.0, 0.6);
+            self.scene.objects.push(copy);
+            self.selection = Some(self.scene.objects.len() - 1);
         }
     }
 
@@ -232,7 +258,8 @@ impl AppState {
                         }
                         _ => {
                             if let Some(axis) = self.pick_axis(sel, cx, cy) {
-                                if let Some(p) = self.axis_drag_param(origin, axis_dir(axis), cx, cy)
+                                if let Some(p) =
+                                    self.axis_drag_param(origin, axis_dir(axis), cx, cy)
                                 {
                                     self.push_undo();
                                     self.active_axis = Some(axis);
@@ -254,10 +281,10 @@ impl AppState {
                 }
                 self.dragging = false;
                 // appui sans déplacement notable = sélection
-                if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor) {
-                    if (px - cx).hypot(py - cy) < 4.0 {
-                        self.selection = self.pick(cx, cy);
-                    }
+                if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
+                    && (px - cx).hypot(py - cy) < 4.0
+                {
+                    self.selection = self.pick(cx, cy);
                 }
                 self.press_cursor = None;
             }
@@ -294,11 +321,11 @@ impl AppState {
                     }
                     self.last_cursor = Some((x, y));
                     return;
-                } else if self.dragging {
-                    if let Some((lx, ly)) = self.last_cursor {
-                        self.camera.yaw -= (x - lx) as f32 * 0.005;
-                        self.camera.pitch += (y - ly) as f32 * 0.005;
-                    }
+                } else if self.dragging
+                    && let Some((lx, ly)) = self.last_cursor
+                {
+                    self.camera.yaw -= (x - lx) as f32 * 0.005;
+                    self.camera.pitch += (y - ly) as f32 * 0.005;
                 }
                 self.last_cursor = Some((x, y));
             }
@@ -309,21 +336,27 @@ impl AppState {
     }
 
     /// Rayon monde (origine, direction) issu d'un point écran en pixels.
-    fn ray(&self, px: f64, py: f64) -> (Vec3, Vec3) {
+    /// `vp_inv` = inverse de la view-projection (calculée une fois par l'appelant).
+    fn ray_with(&self, vp_inv: Mat4, px: f64, py: f64) -> (Vec3, Vec3) {
         let (w, h) = self.viewport;
         let ndc_x = 2.0 * px as f32 / w - 1.0;
         let ndc_y = 1.0 - 2.0 * py as f32 / h;
-        let inv = self.camera.view_proj().inverse();
-        let near = inv * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
-        let far = inv * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+        let near = vp_inv * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+        let far = vp_inv * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
         let origin = near.truncate() / near.w;
         let dir = (far.truncate() / far.w - origin).normalize();
         (origin, dir)
     }
 
+    /// Variante pratique : recalcule l'inverse de la view-projection à la volée.
+    fn ray(&self, px: f64, py: f64) -> (Vec3, Vec3) {
+        self.ray_with(self.camera.view_proj().inverse(), px, py)
+    }
+
     /// Projette un point monde vers les coordonnées écran (pixels), si devant la caméra.
-    fn project(&self, world: Vec3) -> Option<(f64, f64)> {
-        let clip = self.camera.view_proj() * world.extend(1.0);
+    /// `vp` = view-projection (calculée une fois par l'appelant).
+    fn project_with(&self, vp: Mat4, world: Vec3) -> Option<(f64, f64)> {
+        let clip = vp * world.extend(1.0);
         if clip.w <= 0.0 {
             return None;
         }
@@ -338,15 +371,17 @@ impl AppState {
     /// Renvoie l'axe du gizmo sous le curseur (test écran à ~10 px), ou None.
     fn pick_axis(&self, sel: usize, px: f64, py: f64) -> Option<usize> {
         let origin = self.scene.objects[sel].transform.position;
+        let vp = self.camera.view_proj();
         let mut best: Option<(f64, usize)> = None;
         for axis in 0..3 {
-            let (Some(p0), Some(p1)) =
-                (self.project(origin), self.project(origin + axis_dir(axis) * GIZMO_LEN))
-            else {
+            let (Some(p0), Some(p1)) = (
+                self.project_with(vp, origin),
+                self.project_with(vp, origin + axis_dir(axis) * GIZMO_LEN),
+            ) else {
                 continue;
             };
             let d = point_segment_dist((px, py), p0, p1);
-            if d < 10.0 && best.map_or(true, |(bd, _)| d < bd) {
+            if d < 10.0 && best.is_none_or(|(bd, _)| d < bd) {
                 best = Some((d, axis));
             }
         }
@@ -373,8 +408,9 @@ impl AppState {
 
     /// Renvoie l'axe dont l'anneau de rotation est sous le curseur (~10 px), ou None.
     fn pick_ring(&self, sel: usize, px: f64, py: f64) -> Option<usize> {
-        const N: usize = 48;
+        const N: usize = RING_SEGMENTS;
         let origin = self.scene.objects[sel].transform.position;
+        let vp = self.camera.view_proj();
         let mut best: Option<(f64, usize)> = None;
         for axis in 0..3 {
             let (u, w) = axis_basis(axis_dir(axis));
@@ -384,7 +420,9 @@ impl AppState {
             for j in 0..=N {
                 let ang = std::f32::consts::TAU * j as f32 / N as f32;
                 let pt = origin + (u * ang.cos() + w * ang.sin()) * GIZMO_LEN;
-                let Some(sp) = self.project(pt) else { continue };
+                let Some(sp) = self.project_with(vp, pt) else {
+                    continue;
+                };
                 if first.is_none() {
                     first = Some(sp);
                 }
@@ -393,7 +431,7 @@ impl AppState {
                 }
                 prev = Some(sp);
             }
-            if min_d < 10.0 && best.map_or(true, |(bd, _)| min_d < bd) {
+            if min_d < 10.0 && best.is_none_or(|(bd, _)| min_d < bd) {
                 best = Some((min_d, axis));
             }
         }
@@ -459,7 +497,22 @@ impl AppState {
             if obj.script.trim().is_empty() {
                 continue;
             }
-            if let Err(e) = run_script(&self.lua, &mut obj.transform, &obj.script, dt, time) {
+            // Récupère (ou compile une seule fois) le chunk associé à cette source.
+            let key = script_key(&obj.script);
+            let func = match self.script_cache.get(&key) {
+                Some(f) => f.clone(),
+                None => match self.lua.load(&obj.script).into_function() {
+                    Ok(f) => {
+                        self.script_cache.insert(key, f.clone());
+                        f
+                    }
+                    Err(e) => {
+                        log::error!("Compilation du script '{}' : {e}", obj.name);
+                        continue;
+                    }
+                },
+            };
+            if let Err(e) = run_script(&self.lua, &func, &mut obj.transform, dt, time) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
@@ -478,15 +531,18 @@ impl AppState {
         }
     }
 
+    /// Lance le chargement de la scène (et le rechargement des meshes importés)
+    /// en thread de fond, sans bloquer le rendu. Le résultat est appliqué dans `poll_imports`.
     pub fn load(&mut self) {
-        match Scene::load(&scene_path()) {
-            Ok(mut s) => {
+        let tx = self.scene_load_tx.clone();
+        let path = scene_path();
+        std::thread::spawn(move || {
+            let res = Scene::load(&path).map_err(|e| e.to_string()).map(|mut s| {
                 s.reload_imported();
-                self.scene = s;
-                self.selection = None;
-            }
-            Err(e) => log::error!("Échec chargement : {e}"),
-        }
+                s
+            });
+            let _ = tx.send(res);
+        });
     }
 
     /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).
@@ -505,6 +561,17 @@ impl AppState {
             match res {
                 Ok((path, data, min, max)) => self.finish_import(path, data, min, max),
                 Err(e) => log::error!("Import glTF échoué : {e}"),
+            }
+        }
+        // scènes chargées en arrière-plan (Load) prêtes cette frame
+        while let Ok(res) = self.scene_load_rx.try_recv() {
+            match res {
+                Ok(s) => {
+                    self.scene = s;
+                    self.selection = None;
+                    self.imported_dirty = true;
+                }
+                Err(e) => log::error!("Échec chargement : {e}"),
             }
         }
     }
@@ -562,10 +629,10 @@ impl AppState {
                     }
                 }
             }
-            if let Some(t) = ray_aabb(origin, dir, wmin, wmax) {
-                if best.map_or(true, |(bt, _)| t < bt) {
-                    best = Some((t, i));
-                }
+            if let Some(t) = ray_aabb(origin, dir, wmin, wmax)
+                && best.is_none_or(|(bt, _)| t < bt)
+            {
+                best = Some((t, i));
             }
         }
         best.map(|(_, i)| i)
@@ -584,9 +651,22 @@ fn scene_path() -> String {
     format!("{home}/motor3derust_scene.json")
 }
 
-/// Exécute le script Lua d'un objet : expose `obj` (x,y,z, rx,ry,rz en °, sx,sy,sz),
-/// `dt` et `time`, puis relit les champs modifiés dans le Transform.
-fn run_script(lua: &Lua, t: &mut Transform, src: &str, dt: f32, time: f32) -> mlua::Result<()> {
+/// Hash stable d'une source de script, clé du cache de chunks compilés.
+fn script_key(src: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+/// Exécute le chunk Lua **déjà compilé** d'un objet : expose `obj` (x,y,z,
+/// rx,ry,rz en °, sx,sy,sz), `dt` et `time`, puis relit les champs modifiés.
+fn run_script(
+    lua: &Lua,
+    func: &mlua::Function,
+    t: &mut Transform,
+    dt: f32,
+    time: f32,
+) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
     obj.set("x", t.position.x)?;
@@ -603,7 +683,7 @@ fn run_script(lua: &Lua, t: &mut Transform, src: &str, dt: f32, time: f32) -> ml
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
     g.set("time", time)?;
-    lua.load(src).exec()?;
+    func.call::<()>(())?;
 
     t.position = Vec3::new(obj.get("x")?, obj.get("y")?, obj.get("z")?);
     let (rx, ry, rz): (f32, f32, f32) = (obj.get("rx")?, obj.get("ry")?, obj.get("rz")?);
@@ -660,5 +740,78 @@ fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
         Some(tmin.max(0.0))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ray_aabb_hit_in_front() {
+        // rayon partant de -10 sur Z+, visant le cube unité à l'origine
+        let t = ray_aabb(
+            Vec3::new(0.0, 0.0, -10.0),
+            Vec3::Z,
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+        );
+        assert!(t.is_some());
+        assert!((t.unwrap() - 9.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn ray_aabb_miss_to_the_side() {
+        let t = ray_aabb(
+            Vec3::new(5.0, 0.0, -10.0),
+            Vec3::Z,
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+        );
+        assert!(t.is_none());
+    }
+
+    #[test]
+    fn ray_aabb_behind_returns_none() {
+        // box derrière l'origine du rayon (qui regarde Z+)
+        let t = ray_aabb(
+            Vec3::new(0.0, 0.0, 10.0),
+            Vec3::Z,
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+        );
+        assert!(t.is_none());
+    }
+
+    #[test]
+    fn point_segment_dist_basics() {
+        // distance d'un point au milieu d'un segment horizontal
+        let d = point_segment_dist((1.0, 2.0), (0.0, 0.0), (2.0, 0.0));
+        assert!((d - 2.0).abs() < 1e-9);
+        // projection au-delà de l'extrémité => distance à l'extrémité
+        let d2 = point_segment_dist((5.0, 0.0), (0.0, 0.0), (2.0, 0.0));
+        assert!((d2 - 3.0).abs() < 1e-9);
+        // segment dégénéré (longueur nulle)
+        let d3 = point_segment_dist((3.0, 4.0), (0.0, 0.0), (0.0, 0.0));
+        assert!((d3 - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_basis_is_orthonormal() {
+        for axis in 0..3 {
+            let a = axis_dir(axis);
+            let (u, w) = axis_basis(a);
+            assert!((u.length() - 1.0).abs() < 1e-5);
+            assert!((w.length() - 1.0).abs() < 1e-5);
+            assert!(u.dot(a).abs() < 1e-5);
+            assert!(w.dot(a).abs() < 1e-5);
+            assert!(u.dot(w).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn script_key_stable_and_distinct() {
+        assert_eq!(script_key("obj.x = 1"), script_key("obj.x = 1"));
+        assert_ne!(script_key("obj.x = 1"), script_key("obj.x = 2"));
     }
 }

@@ -50,7 +50,11 @@ impl Editor {
                 predictable_texture_filtering: false,
             },
         );
-        Editor { ctx, winit_state, renderer }
+        Editor {
+            ctx,
+            winit_state,
+            renderer,
+        }
     }
 
     /// Transmet l'événement à egui. Retourne `true` si egui l'a consommé.
@@ -157,7 +161,10 @@ fn build_ui(
             if ui.button("↪ Redo").clicked() {
                 actions.redo = true;
             }
-            if ui.add_enabled(selection.is_some(), egui::Button::new("⧉ Dupliquer")).clicked() {
+            if ui
+                .add_enabled(selection.is_some(), egui::Button::new("⧉ Dupliquer"))
+                .clicked()
+            {
                 actions.duplicate = true;
             }
             ui.separator();
@@ -236,9 +243,7 @@ fn build_ui(
                                     obj.audio_clip = p.to_string_lossy().into_owned();
                                 }
                             }
-                            if !obj.audio_clip.is_empty()
-                                && ui.button("▶ Tester").clicked()
-                            {
+                            if !obj.audio_clip.is_empty() && ui.button("▶ Tester").clicked() {
                                 actions.play_audio = Some(obj.audio_clip.clone());
                             }
                         });
@@ -280,9 +285,21 @@ fn build_ui(
 fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
     ui.label("Position");
     ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut t.position.x).speed(0.05).prefix("x "));
-        ui.add(egui::DragValue::new(&mut t.position.y).speed(0.05).prefix("y "));
-        ui.add(egui::DragValue::new(&mut t.position.z).speed(0.05).prefix("z "));
+        ui.add(
+            egui::DragValue::new(&mut t.position.x)
+                .speed(0.05)
+                .prefix("x "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.position.y)
+                .speed(0.05)
+                .prefix("y "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.position.z)
+                .speed(0.05)
+                .prefix("z "),
+        );
     });
 
     // rotation éditée en degrés via les angles d'Euler
@@ -293,9 +310,15 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
     ui.label("Rotation (°)");
     let mut changed = false;
     ui.horizontal(|ui| {
-        changed |= ui.add(egui::DragValue::new(&mut rx).speed(1.0).prefix("x ")).changed();
-        changed |= ui.add(egui::DragValue::new(&mut ry).speed(1.0).prefix("y ")).changed();
-        changed |= ui.add(egui::DragValue::new(&mut rz).speed(1.0).prefix("z ")).changed();
+        changed |= ui
+            .add(egui::DragValue::new(&mut rx).speed(1.0).prefix("x "))
+            .changed();
+        changed |= ui
+            .add(egui::DragValue::new(&mut ry).speed(1.0).prefix("y "))
+            .changed();
+        changed |= ui
+            .add(egui::DragValue::new(&mut rz).speed(1.0).prefix("z "))
+            .changed();
     });
     if changed {
         t.rotation = Quat::from_euler(
@@ -308,9 +331,20 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
 
     ui.label("Échelle");
     ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut t.scale.x).speed(0.05).prefix("x "));
-        ui.add(egui::DragValue::new(&mut t.scale.y).speed(0.05).prefix("y "));
-        ui.add(egui::DragValue::new(&mut t.scale.z).speed(0.05).prefix("z "));
+        ui.add(
+            egui::DragValue::new(&mut t.scale.x)
+                .speed(0.05)
+                .prefix("x "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.scale.y)
+                .speed(0.05)
+                .prefix("y "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.scale.z)
+                .speed(0.05)
+                .prefix("z "),
+        );
     });
 }
-

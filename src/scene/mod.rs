@@ -17,7 +17,11 @@ pub struct Transform {
 
 impl Transform {
     pub fn from_pos(position: Vec3) -> Self {
-        Self { position, rotation: Quat::IDENTITY, scale: Vec3::ONE }
+        Self {
+            position,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+        }
     }
 
     pub fn with_scale(mut self, scale: Vec3) -> Self {
@@ -181,5 +185,37 @@ impl Scene {
         let json = std::fs::read_to_string(path)?;
         serde_json::from_str(&json)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transform_matrix_translates_point() {
+        let t = Transform::from_pos(Vec3::new(1.0, 2.0, 3.0));
+        let p = t.matrix() * Vec3::ZERO.extend(1.0);
+        assert!((p.truncate() - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn transform_matrix_applies_scale() {
+        let t = Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(2.0));
+        let p = t.matrix() * Vec3::new(1.0, 0.0, 0.0).extend(1.0);
+        assert!((p.truncate() - Vec3::new(2.0, 0.0, 0.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn scene_json_round_trip_preserves_objects() {
+        let scene = Scene::demo();
+        let json = serde_json::to_string(&scene).unwrap();
+        let back: Scene = serde_json::from_str(&json).unwrap();
+        assert_eq!(scene.objects.len(), back.objects.len());
+        assert_eq!(back.objects[1].name, "Cube");
+        assert_eq!(back.objects[1].physics, PhysicsKind::None);
+        let p0 = scene.objects[0].transform.position;
+        let p1 = back.objects[0].transform.position;
+        assert!((p0 - p1).length() < 1e-6);
     }
 }
