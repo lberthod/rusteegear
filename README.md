@@ -113,31 +113,36 @@ sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PL
 
 ## 🗺️ Roadmap
 
-### v1.1 — Confort éditeur
-- [ ] Gizmos de translation/rotation manipulables à la souris dans la vue 3D.
-- [ ] Import de modèles **glTF** (crate `gltf`).
-- [ ] Multi-sélection, copier/coller, undo/redo.
+> Légende : ✅ fait · 🟡 partiel · ⬜ à venir. Détail par sprint : [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
+
+### ✅ v1.1 — Confort éditeur _(Phase A, sprints 7→10)_
+- [x] **Gizmos translate / rotate / scale** manipulables à la souris (touches W/E/R).
+- [x] **Import de modèles glTF / GLB** (crate `gltf`, chargement asynchrone + recadrage auto).
+- [x] **Undo/redo** (Cmd+Z / Cmd+Shift+Z) et **duplication** (Cmd+D).
+- [ ] Multi-sélection, copier/coller (reporté à un sprint dédié).
 - [ ] Textures et matériaux PBR de base, ombres (shadow mapping).
 
-### v1.2 — Runtime & scripting
-- [ ] Système de composants / scripts (WASM ou Lua via `mlua`).
-- [ ] Physique simple (collisions AABB → intégration `rapier3d`).
-- [ ] Système audio (`kira` / `rodio`).
+### ✅ v1.2 — Runtime & scripting _(Phase B, sprints 11→13)_
+- [x] **Scripting Lua** par objet (`mlua`) : `obj.x/y/z`, `obj.rx/ry/rz`, `obj.sx/sy/sz`, `dt`, `time`.
+- [x] **Physique** `rapier3d` : corps Statique / Dynamique, gravité, collisions, rebond.
+- [x] **Système audio** `kira` : son par objet, autoplay, décodage asynchrone + cache.
+- [x] _Bonus_ : optimisations — chargement asynchrone, présentation vsync.
 
-### 📱 v2 — Portage iOS
+### 🟡 📱 v2 — Portage iOS _(Phase C, sprints 14→17 — en cours)_
 
 > `wgpu` tourne sur Metal-iOS et `winit` sait créer une surface iOS : le moteur de
 > rendu est déjà compatible. Le travail porte sur le _packaging_ et l'entrée tactile.
 
-- [ ] Cible `aarch64-apple-ios` + `cargo-xcodebuild` / `cargo-mobile2` pour générer le projet Xcode.
-- [ ] Adapter l'éditeur : l'UI `egui` reste, mais prévoir un **mode « player »** plein écran sans panneaux (un jeu, pas un éditeur, sur mobile).
+- [x] **Cible `aarch64-apple-ios`** : **cross-compilation complète réussie** (wgpu, winit, egui, rapier, mlua/Lua, kira → arm64).
+- [x] **Packaging `.ipa`** via `packaging/build_ios.sh` (assemble `.app` + `Info.plist`) — **non signé** pour l'instant.
+- [ ] Projet Xcode via `cargo-mobile2` + **signature/provisioning** (compte développeur Apple) pour installer sur device.
+- [ ] **Mode « player »** plein écran sans panneaux (un jeu, pas un éditeur, sur mobile).
 - [ ] **Entrées tactiles** : orbit à un doigt, pinch-to-zoom à deux doigts (events `Touch` de winit).
-- [ ] Boucle de rendu pilotée par `CADisplayLink`, gestion du cycle de vie iOS (suspend/resume → recréation de la surface wgpu).
-- [ ] Signature & déploiement via Xcode (compte développeur Apple requis).
+- [ ] Cycle de vie iOS (lancement UIKit, suspend/resume → recréation de la surface wgpu).
 - _Note : « APK » concerne Android ; l'équivalent iOS est un `.ipa`. Un portage **Android**
   (`aarch64-linux-android`, backend Vulkan) suit exactement la même logique et est prévu en parallèle._
 
-### 🥽 v2 — Réalité virtuelle (Oculus / Meta Quest)
+### ⬜ 🥽 v2 — Réalité virtuelle (Oculus / Meta Quest) _(Phase D, sprints 18→21)_
 
 > La VR se branche via **OpenXR**, le standard ouvert que supportent les casques Meta Quest.
 > `wgpu` peut partager ses textures avec OpenXR (interop via `wgpu-hal` / `ash`).
@@ -160,8 +165,13 @@ sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PL
 | Maths | `glam` |
 | UI éditeur | `egui` + `egui-wgpu` + `egui-winit` |
 | Sérialisation | `serde` + `serde_json` |
+| Import 3D | `gltf` |
+| Scripting | `mlua` (Lua 5.4) |
+| Physique | `rapier3d` |
+| Audio | `kira` |
+| Sélecteur de fichiers (desktop) | `rfd` |
 | Packaging macOS | `cargo-bundle` |
-| _(prévu)_ Import 3D · Physique · VR | `gltf` · `rapier3d` · `openxr` |
+| _(prévu)_ VR | `openxr` |
 
 ---
 
