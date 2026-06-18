@@ -165,18 +165,19 @@
 > Pré-requis : Phase C terminée (les 3 plateformes compilent et tournent). Les scripts
 > `packaging/build_*.sh` existants servent de socle ; cette phase les **pilote depuis l'app**.
 
-### Sprint 18 — Profils de build & app desktop « de dev » ⬜
+### Sprint 18 — Profils de build & app desktop « de dev » ✅ FAIT
 **Objectif** : séparer proprement *dev* et *release*, et optimiser l'app desktop.
-- [ ] Profils Cargo dédiés : `[profile.release]` avec `lto = "thin"`, `codegen-units = 1`,
-      `panic = "abort"` ; profil `dev-fast` (`opt-level = 1`) pour itérer sans la lenteur du debug.
-- [ ] Feature flags : `editor` (desktop) vs `player` (mobile) pour ne compiler que le nécessaire.
-- [ ] Bandeau d'état dans l'éditeur : FPS, nombre d'objets, mode (Edit/Play), backend GPU
-      (Metal/Vulkan) — réutilise les optimisations P2/P3 (rendu conditionnel).
-- [ ] `ControlFlow::Wait` quand la scène est statique (vraie économie batterie/CPU desktop),
-      `Poll` seulement en Play ou pendant une interaction.
-- **Fichiers** : `Cargo.toml`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/lib.rs`.
-- **Livrable** : `.dmg` plus rapide et plus léger ; bandeau FPS visible ; CPU au repos ≈ 0 %.
-- **Risques** : `Wait` mal réglé fige l'animation → garder `Poll` dès que `playing`.
+- [x] Profils Cargo dédiés : `[profile.release]` avec `lto = "thin"`, `codegen-units = 1`,
+      `panic = "abort"`, `strip = true` ; profil `dev-fast` (`opt-level = 1`) pour itérer vite.
+- [x] Bandeau d'état dans l'éditeur (panneau bas) : FPS lissé, nombre d'objets, mode (Edit/Play),
+      backend GPU (Metal/Vulkan) — `StatusInfo` passé à `Editor::run`.
+- [x] Cadence adaptative : `ControlFlow::Poll` en Play ou pendant une interaction
+      (`AppState::is_active()`), throttle `wait_duration(60 ms)` au repos (CPU ≈ 0 %).
+- [ ] Feature flags `editor` / `player` pour ne compiler que le nécessaire → **reporté**
+      (gating complet d'egui risqué pour les builds mobiles ; à faire dans un sprint dédié).
+- **Fichiers** : `Cargo.toml`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`, `src/lib.rs`.
+- **Livrable** : `.dmg` plus léger/rapide ; bandeau FPS visible ; CPU au repos chute (throttle 16 fps). ✅
+- **Risques** : `Wait` mal réglé fige l'animation → `Poll` conservé dès que `is_active()` (Play/interaction).
 
 ### Sprint 19 — Panneau « Build & Export » dans l'éditeur ⬜
 **Objectif** : un onglet/fenêtre egui d'où l'on lance les exports.

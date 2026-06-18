@@ -190,11 +190,20 @@ impl ApplicationHandler for App {
         }
     }
 
-    /// Redessine en continu (animation + reflet des entrées) sur toutes les plateformes,
-    /// y compris iOS où le RedrawRequested ne se ré-arme pas tout seul.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    /// Ré-arme le rendu (indispensable sur iOS) et ajuste la cadence : plein régime
+    /// (`Poll`) en Play ou pendant une interaction, throttle léger au repos pour
+    /// économiser CPU/batterie sur desktop tout en restant réactif aux entrées
+    /// et aux chargements asynchrones.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(renderer) = &self.renderer {
             renderer.window.request_redraw();
+        }
+        if self.state.is_active() {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            event_loop.set_control_flow(ControlFlow::wait_duration(
+                std::time::Duration::from_millis(60),
+            ));
         }
     }
 }

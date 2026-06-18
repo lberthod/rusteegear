@@ -88,6 +88,8 @@ pub struct Renderer {
     gizmo_vbuf: wgpu::Buffer,
 
     editor: Editor,
+    /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
+    backend: String,
 }
 
 impl Renderer {
@@ -119,6 +121,8 @@ impl Renderer {
             })
             .await
             .map_err(|e| format!("Échec création du device : {e}"))?;
+
+        let backend = format!("{:?}", adapter.get_info().backend);
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps
@@ -298,6 +302,7 @@ impl Renderer {
             gizmo_pipeline,
             gizmo_vbuf,
             editor,
+            backend,
         })
     }
 
@@ -408,12 +413,17 @@ impl Renderer {
         let full_output = if app.player {
             None
         } else {
+            let status = crate::editor::StatusInfo {
+                fps: app.fps(),
+                backend: &self.backend,
+            };
             let (full_output, actions) = self.editor.run(
                 &self.window,
                 &mut app.scene,
                 &mut app.selection,
                 &mut app.playing,
                 &mut app.gizmo_mode,
+                status,
             );
             if actions.save {
                 app.save();

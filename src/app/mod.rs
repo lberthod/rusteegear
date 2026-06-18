@@ -29,6 +29,8 @@ pub struct AppState {
 
     viewport: (f32, f32),
     last_frame: Instant,
+    /// Images par seconde lissées (moyenne mobile exponentielle), pour le bandeau d'état.
+    fps: f32,
 
     // --- état d'interaction pointeur ---
     dragging: bool,
@@ -117,6 +119,7 @@ impl AppState {
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
+            fps: 0.0,
             dragging: false,
             last_cursor: None,
             press_cursor: None,
@@ -148,6 +151,17 @@ impl AppState {
     /// le renderer s'en sert pour reconstruire ses meshes GPU importés.
     pub fn take_imported_dirty(&mut self) -> bool {
         std::mem::take(&mut self.imported_dirty)
+    }
+
+    /// Images par seconde lissées, pour le bandeau d'état de l'éditeur.
+    pub fn fps(&self) -> f32 {
+        self.fps
+    }
+
+    /// Vrai quand l'app doit rendre en continu (animation Play ou interaction en cours) :
+    /// la boucle d'événements reste en `Poll`. Sinon elle peut throttler (économie CPU).
+    pub fn is_active(&self) -> bool {
+        self.playing || self.dragging || self.active_axis.is_some()
     }
 
     /// Joue immédiatement un fichier son (bouton de test / scripts).
@@ -462,6 +476,16 @@ impl AppState {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+
+        // FPS lissé (EMA) ; ignore les dt aberrants (première frame, throttle au repos).
+        if dt > 1e-4 && dt < 0.5 {
+            let inst = 1.0 / dt;
+            self.fps = if self.fps == 0.0 {
+                inst
+            } else {
+                self.fps * 0.9 + inst * 0.1
+            };
+        }
 
         // transitions Edit <-> Play
         if self.playing && !self.was_playing {

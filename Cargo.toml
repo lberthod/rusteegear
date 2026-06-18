@@ -16,6 +16,20 @@ copyright = "© 2026 Berthod"
 name = "motor3derust"
 crate-type = ["rlib", "cdylib"]
 
+# Release optimisée pour les livrables (.dmg / .apk / .ipa) : binaire plus petit et rapide.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Itération rapide : compile bien plus vite que `release` tout en restant utilisable
+# (le profil `dev` non optimisé rend le rendu/physique trop lents pour tester).
+#   cargo run --profile dev-fast
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 1
+
 # Packaging APK (cargo-apk).
 [package.metadata.android]
 package = "com.berthod.motor3derust"

@@ -15,6 +15,12 @@ pub struct Editor {
     renderer: egui_wgpu::Renderer,
 }
 
+/// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
+pub struct StatusInfo<'a> {
+    pub fps: f32,
+    pub backend: &'a str,
+}
+
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
 #[derive(Default)]
 pub struct UiActions {
@@ -70,12 +76,21 @@ impl Editor {
         selection: &mut Option<usize>,
         playing: &mut bool,
         gizmo_mode: &mut GizmoMode,
+        status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
 
         let output = self.ctx.run_ui(raw_input, |ui| {
-            build_ui(ui, scene, selection, playing, gizmo_mode, &mut actions);
+            build_ui(
+                ui,
+                scene,
+                selection,
+                playing,
+                gizmo_mode,
+                &status,
+                &mut actions,
+            );
         });
 
         self.winit_state
@@ -141,8 +156,22 @@ fn build_ui(
     selection: &mut Option<usize>,
     playing: &mut bool,
     gizmo_mode: &mut GizmoMode,
+    status: &StatusInfo,
     actions: &mut UiActions,
 ) {
+    // Bandeau d'état (bas) : FPS, nombre d'objets, mode, backend GPU.
+    egui::Panel::bottom("status_bar").show_inside(root, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!("⏱ {:.0} FPS", status.fps));
+            ui.separator();
+            ui.label(format!("🧊 {} objets", scene.objects.len()));
+            ui.separator();
+            ui.label(if *playing { "▶ Play" } else { "⏸ Edit" });
+            ui.separator();
+            ui.label(format!("GPU : {}", status.backend));
+        });
+    });
+
     egui::Panel::top("toolbar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
             let play_label = if *playing { "⏹ Stop" } else { "▶ Play" };
