@@ -106,6 +106,13 @@ fn main() {
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
+
     let mut app = App::default();
+    // Mode player (plein écran, sans éditeur) : --player ou build mobile.
+    let player = std::env::args().any(|a| a == "--player") || cfg!(any(target_os = "ios", target_os = "android"));
+    if player {
+        app.state.player = true;
+        app.state.playing = true;
+    }
     event_loop.run_app(&mut app).unwrap();
 }

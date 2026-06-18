@@ -21,6 +21,8 @@ pub struct AppState {
     pub scene: Scene,
     pub selection: Option<usize>,
     pub playing: bool,
+    /// Mode « player » : pas d'éditeur (panneaux egui), démarre en Play.
+    pub player: bool,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -95,6 +97,7 @@ impl AppState {
             scene: Scene::demo(),
             selection: None,
             playing: false,
+            player: false,
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),

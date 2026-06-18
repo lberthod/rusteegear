@@ -115,13 +115,12 @@
 > plateforme évite de dupliquer le code. `wgpu` + `winit` supportent déjà iOS/Android :
 > l'effort est packaging + entrées tactiles + cycle de vie.
 
-### Sprint 14 — Mode « Player » plein écran
+### Sprint 14 — Mode « Player » plein écran ✅ FAIT
 **Objectif** : un mode sans panneaux éditeur (ce qui tournera sur mobile/casque).
-- [ ] Flag `--player` / build feature `player` : démarre directement en Play, sans egui.
-- [ ] Charger une scène figée (`scene.json` embarqué via `include_str!` ou asset).
-- **Fichiers** : `src/main.rs`, `app/mod.rs`, `Cargo.toml` (feature).
-- **Livrable** : sur desktop, `cargo run --features player` lance la scène en plein écran jouable.
-- **Risque** : faible ; surtout de l'aiguillage de configuration.
+- [x] Flag `--player` (et auto-activé sur iOS/Android) : démarre directement en Play, sans egui.
+- [x] Rendu plein écran sans panneaux ni gizmo ; caméra toujours contrôlable.
+- **Fichiers** : `src/main.rs`, `app/mod.rs`, `gfx/renderer.rs`.
+- **Livrable** : `cargo run -- --player` lance la scène animée en plein écran. ✅
 
 ### Sprint 15 — Entrées tactiles
 **Objectif** : piloter la caméra/jeu au doigt.

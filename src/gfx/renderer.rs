@@ -368,42 +368,47 @@ impl Renderer {
             }
         };
 
-        // 1. Construire l'UI (peut modifier la scène / la sélection).
-        let (full_output, actions) = self.editor.run(
-            &self.window,
-            &mut app.scene,
-            &mut app.selection,
-            &mut app.playing,
-            &mut app.gizmo_mode,
-        );
-        if actions.save {
-            app.save();
-        }
-        if actions.load {
-            app.load();
-            self.imported_gpu.clear(); // les meshes GPU seront reconstruits depuis les données rechargées
-        }
-        if let Some(path) = actions.import {
-            app.import_gltf(&path);
-        }
-        if let Some(kind) = actions.add {
-            app.add_object(kind);
-        }
-        if let Some(i) = actions.delete {
-            app.delete_object(i);
-        }
-        if actions.duplicate {
-            app.duplicate_selected();
-        }
-        if actions.undo {
-            app.undo();
-        }
-        if actions.redo {
-            app.redo();
-        }
-        if let Some(clip) = actions.play_audio {
-            app.play_audio(&clip);
-        }
+        // 1. Construire l'UI éditeur (sauf en mode player : plein écran, sans panneaux).
+        let full_output = if app.player {
+            None
+        } else {
+            let (full_output, actions) = self.editor.run(
+                &self.window,
+                &mut app.scene,
+                &mut app.selection,
+                &mut app.playing,
+                &mut app.gizmo_mode,
+            );
+            if actions.save {
+                app.save();
+            }
+            if actions.load {
+                app.load();
+                self.imported_gpu.clear(); // reconstruits depuis les données rechargées
+            }
+            if let Some(path) = actions.import {
+                app.import_gltf(&path);
+            }
+            if let Some(kind) = actions.add {
+                app.add_object(kind);
+            }
+            if let Some(i) = actions.delete {
+                app.delete_object(i);
+            }
+            if actions.duplicate {
+                app.duplicate_selected();
+            }
+            if actions.undo {
+                app.undo();
+            }
+            if actions.redo {
+                app.redo();
+            }
+            if let Some(clip) = actions.play_audio {
+                app.play_audio(&clip);
+            }
+            Some(full_output)
+        };
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
         app.advance_play();
@@ -411,8 +416,10 @@ impl Renderer {
         self.sync_imported(&app.scene);
         self.write_uniforms(app);
 
-        // Préparer le gizmo de l'objet sélectionné selon le mode courant.
-        let gizmo_count = if let Some(sel) = app.selection {
+        // Préparer le gizmo de l'objet sélectionné (jamais en mode player).
+        let gizmo_count = if app.player {
+            0
+        } else if let Some(sel) = app.selection {
             let o = app.scene.objects[sel].transform.position;
             let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
             let mut verts: Vec<GizmoVertex> = Vec::new();
@@ -508,15 +515,18 @@ impl Renderer {
             }
         }
 
-        // 3. Peindre l'UI egui par-dessus la scène.
-        let extra = self.editor.paint(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &view,
-            [self.config.width, self.config.height],
-            full_output,
-        );
+        // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
+        let extra = match full_output {
+            Some(output) => self.editor.paint(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &view,
+                [self.config.width, self.config.height],
+                output,
+            ),
+            None => Vec::new(),
+        };
 
         self.queue
             .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
