@@ -17,6 +17,7 @@
 | **A — Fondations éditeur** | 7 → 10 | Rendre l'éditeur réellement utilisable (gizmos, glTF, undo, multi-objets) |
 | **B — Runtime de jeu** | 11 → 13 | Transformer la scène en « jeu » (scripting, physique, audio) |
 | **C — Portage mobile** | 14 → 17 | iOS d'abord, puis Android |
+| **D — App de dev & exports 1-clic** | 18 → 23 | Optimiser l'app desktop (.dmg) et exporter APK/IPA depuis des boutons configurables |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
 > Les faire avant C évite de réécrire des features sur plusieurs cibles.
@@ -153,11 +154,91 @@
 
 ---
 
+## PHASE D — App de dev & exports 1-clic
+
+> **Objectif global.** Faire du `.dmg` macOS l'**atelier central** : on conçoit la
+> scène/le jeu dans l'app de dev, puis on **exporte un APK ou un IPA depuis un bouton**,
+> sans retoucher la ligne de commande. Toute la config de build (identité, certificat,
+> SDK, version) devient **éditable dans l'UI** et persistée. En parallèle, on professionnalise
+> l'app desktop (perf, profils de build, diagnostics) pour qu'elle serve de poste de travail.
+>
+> Pré-requis : Phase C terminée (les 3 plateformes compilent et tournent). Les scripts
+> `packaging/build_*.sh` existants servent de socle ; cette phase les **pilote depuis l'app**.
+
+### Sprint 18 — Profils de build & app desktop « de dev » ⬜
+**Objectif** : séparer proprement *dev* et *release*, et optimiser l'app desktop.
+- [ ] Profils Cargo dédiés : `[profile.release]` avec `lto = "thin"`, `codegen-units = 1`,
+      `panic = "abort"` ; profil `dev-fast` (`opt-level = 1`) pour itérer sans la lenteur du debug.
+- [ ] Feature flags : `editor` (desktop) vs `player` (mobile) pour ne compiler que le nécessaire.
+- [ ] Bandeau d'état dans l'éditeur : FPS, nombre d'objets, mode (Edit/Play), backend GPU
+      (Metal/Vulkan) — réutilise les optimisations P2/P3 (rendu conditionnel).
+- [ ] `ControlFlow::Wait` quand la scène est statique (vraie économie batterie/CPU desktop),
+      `Poll` seulement en Play ou pendant une interaction.
+- **Fichiers** : `Cargo.toml`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/lib.rs`.
+- **Livrable** : `.dmg` plus rapide et plus léger ; bandeau FPS visible ; CPU au repos ≈ 0 %.
+- **Risques** : `Wait` mal réglé fige l'animation → garder `Poll` dès que `playing`.
+
+### Sprint 19 — Panneau « Build & Export » dans l'éditeur ⬜
+**Objectif** : un onglet/fenêtre egui d'où l'on lance les exports.
+- [ ] Nouveau panneau **« Export »** (toolbar) : 3 cartes — macOS (.dmg), Android (.apk), iOS (.ipa).
+- [ ] Chaque carte affiche : cible, statut (prêt / config manquante), bouton **Exporter**.
+- [ ] Détection des pré-requis (toolchains/SDK) au lancement → coche verte ou message d'aide.
+- [ ] L'export s'exécute en **thread de fond** (comme l'import glTF) avec log streamé dans l'UI.
+- **Fichiers** : `src/editor/mod.rs`, nouveau `src/editor/export.rs`, `src/app/mod.rs`.
+- **Livrable** : cliquer « Exporter macOS » produit le `.dmg` sans quitter l'app, log visible.
+- **Risques** : lancer un build long depuis l'UI → toujours async + bouton « Annuler ».
+
+### Sprint 20 — Config de build persistée & éditable ⬜
+**Objectif** : rendre l'identité/version/certificats **configurables dans l'app**.
+- [ ] Struct `BuildConfig` (serde) : `app_name`, `bundle_id`, `version`, `build_number`,
+      chemins SDK/NDK, équipe Apple, alias keystore Android, etc.
+- [ ] Persistance dans `~/.motor3derust/build_config.json` ; formulaire egui d'édition.
+- [ ] Validation en direct (bundle id valide, certificat trouvé, keystore lisible).
+- [ ] Les scripts `packaging/*.sh` reçoivent ces valeurs via variables d'env (plus de constantes en dur).
+- **Fichiers** : nouveau `src/app/build_config.rs`, `src/editor/export.rs`, `packaging/*.sh`.
+- **Livrable** : changer la version + le bundle id dans l'UI se reflète dans l'`.ipa`/`.apk` exporté.
+- **Risques** : secrets (mots de passe keystore) → ne pas les versionner, champ masqué + stockage local.
+
+### Sprint 21 — Export APK 1-clic ⬜
+**Objectif** : bouton « Exporter Android » fiable et configurable.
+- [ ] `export.rs` invoque `cargo apk build --release` avec l'environnement issu de `BuildConfig`.
+- [ ] Pré-vol : NDK présent, cible `aarch64-linux-android` installée, keystore lisible → sinon message clair.
+- [ ] Choix du dossier de sortie (rfd) ; APK copié et **chemin affiché + bouton « Révéler dans Finder »**.
+- [ ] Option « installer sur device branché » (`adb install -r`) si `adb` détecté.
+- **Fichiers** : `src/editor/export.rs`, `packaging/build_apk.sh`, `packaging/android_env.sh`.
+- **Livrable** : un clic → `.apk` signé dans le dossier choisi (et installé si device branché). ✅ vérifiable `adb install`.
+- **Risques** : env Android fragile → centraliser la détection et logguer la commande exacte exécutée.
+
+### Sprint 22 — Export IPA 1-clic ⬜
+**Objectif** : bouton « Exporter iOS » avec signature configurable.
+- [ ] `export.rs` pilote `packaging/build_ios.sh` / `install_ios_device.sh` via `BuildConfig`
+      (équipe, certificat « Apple Development », profil de provisioning).
+- [ ] Pré-vol : Xcode/`xcodegen`, certificat dans le trousseau, device enregistré → coches/aides.
+- [ ] Deux modes : **Exporter `.ipa`** (fichier) et **Installer sur iPhone branché** (`devicectl`).
+- [ ] Sélecteur de profil de provisioning (auto Xcode ou fichier `.mobileprovision`).
+- **Fichiers** : `src/editor/export.rs`, `packaging/build_ios.sh`, `packaging/install_ios_device.sh`.
+- **Livrable** : un clic → `.ipa` signé, ou app installée et lancée sur l'iPhone branché. ✅
+- **Risques** : signature Apple capricieuse → surfacer le message d'erreur Xcode brut dans le log UI.
+
+### Sprint 23 — Finition, presets & CI de release ⬜
+**Objectif** : rendre les exports reproductibles et partageables.
+- [ ] **Presets** d'export sauvegardables (« Debug interne », « Démo », « Store ») = un `BuildConfig` nommé.
+- [ ] Incrément auto du `build_number` à chaque export ; horodatage + hash git dans l'« À propos ».
+- [ ] Bouton « Tout exporter » (dmg + apk + ipa) en file d'attente, avec barre de progression.
+- [ ] Workflow CI `release.yml` : sur tag `v*`, build les 3 artefacts et les attache à la Release GitHub.
+- [ ] Doc `packaging/EXPORT.md` : capture du panneau + table des pré-requis par plateforme.
+- **Fichiers** : `src/editor/export.rs`, `src/app/build_config.rs`, `.github/workflows/release.yml`, `packaging/EXPORT.md`.
+- **Livrable** : pousser un tag `v1.3` produit 3 artefacts signés en Release ; presets réutilisables dans l'app.
+- **Risques** : signatures en CI (secrets) → certificats/keystore en *GitHub Secrets*, jamais dans le repo.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
 - **B** : une scène devient un mini-jeu — script + physique + audio en mode Play.
 - **C** : la même scène tourne en mode Player sur iOS (et Android).
+- **D** : depuis l'app de dev (.dmg), on exporte `.dmg` / `.apk` / `.ipa` **en un clic**, avec une config (identité, version, signature) éditable et persistée.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
