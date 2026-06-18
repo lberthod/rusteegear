@@ -101,7 +101,12 @@ impl ApplicationHandler for App {
             return;
         };
 
-        let consumed = renderer.on_ui_event(&event);
+        // En mode player, egui ne doit pas intercepter le tactile.
+        let consumed = if self.state.player {
+            false
+        } else {
+            renderer.on_ui_event(&event)
+        };
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -154,6 +159,14 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Redessine en continu (animation + reflet des entrées) sur toutes les plateformes,
+    /// y compris iOS où le RedrawRequested ne se ré-arme pas tout seul.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(renderer) = &self.renderer {
+            renderer.window.request_redraw();
         }
     }
 }
