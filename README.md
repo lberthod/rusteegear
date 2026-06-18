@@ -7,10 +7,12 @@
 winit · wgpu · egui — aucun moteur tiers.
 
 ![langage](https://img.shields.io/badge/Rust-1.95-orange?logo=rust)
-![plateforme](https://img.shields.io/badge/macOS-.dmg-black?logo=apple)
-![rendu](https://img.shields.io/badge/wgpu-Metal%20%7C%20Vulkan%20%7C%20Metal--iOS-blue)
-![statut](https://img.shields.io/badge/MVP-complet-success)
+![plateformes](https://img.shields.io/badge/macOS%20·%20Android%20·%20iOS-qui%20tournent-success?logo=apple)
+![rendu](https://img.shields.io/badge/wgpu-Metal%20%7C%20Vulkan-blue)
 ![licence](https://img.shields.io/badge/licence-MIT-green)
+
+**Tourne réellement sur les 3 plateformes** : éditeur complet sur macOS,
+mode « player » tactile sur iPhone et Android.
 
 </div>
 
@@ -43,8 +45,8 @@ grâce à la portabilité de `wgpu`.
 - **Physique** `rapier3d` : corps Statique / Dynamique, gravité, collisions, rebond.
 - **Audio** `kira` : son par objet, autoplay au Play, décodage asynchrone + cache.
 
-**Distribution**
-- **Packaging macOS** : `.dmg` distribuable.
+**Plateformes**
+- **macOS** (éditeur, `.dmg`), **Android** (`.apk`), **iOS** (sur iPhone) — mode player tactile sur mobile.
 
 ---
 
@@ -55,25 +57,46 @@ grâce à la portabilité de `wgpu`.
 | **MVP** — moteur + éditeur + `.dmg` | 0 → 6 | ✅ |
 | **A** — Fondations éditeur (refactor, gizmos, glTF, undo/dup) | 7 → 10 | ✅ |
 | **B** — Runtime de jeu (Lua, physique, audio) + optimisations | 11 → 13 | ✅ |
-| **C** — Portage mobile (Player, tactile, iOS, Android) | 14 → 17 | ⏳ en cours |
+| **C** — Portage mobile (Player, tactile, iOS, Android) | 14 → 17 | ✅ |
 
 > Détail sprint par sprint : voir **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+
+### Plateformes — état honnête
+
+| Cible | Livrable | Statut |
+|---|---|---|
+| **macOS** | `.dmg` (éditeur complet) | ✅ fonctionne — non signé (clic droit ▸ Ouvrir) |
+| **Android** | `.apk` signé (arm64-v8a) | ✅ s'installe (`adb install`) et tourne en mode player |
+| **iOS** | app signée, installée sur iPhone | ✅ tourne (scène animée + tactile) — signature développeur **personnelle** (pas App Store) |
+
+L'**éditeur** (panneaux egui, gizmos, inspecteur) est **desktop**. Sur mobile, l'app
+démarre en **mode player** : la scène jouable plein écran, caméra au doigt (1 doigt =
+orbite, 2 doigts = zoom). iOS/Android ne sont pas signés pour une distribution store.
 
 ---
 
 ## 🚀 Démarrage rapide
 
 ```bash
-# Lancer en développement
-cargo run
-
-# Produire le .dmg macOS
-cargo install cargo-bundle      # une seule fois
-./packaging/build_dmg.sh
-# → target/release/bundle/dmg/Motor3DeRust.dmg
+cargo run                       # éditeur desktop
+cargo run -- --player           # mode player (scène plein écran)
 ```
 
-> ⚠️ Le `.dmg` n'est pas signé. Premier lancement : **clic droit ▸ Ouvrir** (Gatekeeper).
+### Builds par plateforme
+```bash
+# macOS (.dmg) — cargo install cargo-bundle
+./packaging/build_dmg.sh        # → target/release/bundle/dmg/Motor3DeRust.dmg
+
+# Android (.apk) — NDK + cargo install cargo-apk (voir packaging/build_android.md)
+./packaging/build_apk.sh        # → target/release/apk/motor3derust.apk
+
+# iPhone branché — Xcode + brew install xcodegen (voir packaging/build_ios.md)
+./packaging/install_ios_device.sh   # build + signature auto + install + lancement
+```
+
+> ⚠️ Aucune cible n'est signée pour distribution store. Le `.dmg` n'est pas signé
+> (clic droit ▸ Ouvrir) ; l'`.apk` est signé clé debug ; l'iOS utilise votre certificat
+> de développement personnel (installe sur un appareil enregistré).
 
 ### Commandes dans l'éditeur
 
@@ -93,20 +116,19 @@ cargo install cargo-bundle      # une seule fois
 
 ```
 src/
-├── main.rs        # event loop winit + routage des événements
-├── gfx/           # couche rendu wgpu
-│   ├── renderer.rs    # surface, pipeline, depth, passes, picking, mode Play
-│   ├── mesh.rs        # Vertex, GpuMesh, génération cube/sphère/plan
-│   ├── camera.rs      # caméra orbitale (matrices view/proj)
-│   └── shaders/main.wgsl
-├── scene/         # modèle de scène sans ECS lourd
-│   └── mod.rs         # Transform, MeshKind, SceneObject, Scene + sérialisation
-└── editor/        # UI egui (toolbar, hiérarchie, inspecteur)
+├── lib.rs         # event loop winit + run() (desktop) + android_main (cdylib)
+├── main.rs        # entrée desktop → motor3derust::run()
+├── app/           # logique sans GPU : AppState, entrées agnostiques, picking
+├── gfx/           # couche rendu wgpu (renderer, mesh, camera, gizmo, shaders WGSL)
+├── scene/         # Transform, MeshKind, Scene, import glTF, sérialisation
+├── runtime/       # mode Play : physics (rapier3d), audio (kira)
+└── editor/        # UI egui (toolbar, hiérarchie, inspecteur) — desktop
 ```
 
-Le rendu repose entièrement sur `wgpu`, qui cible **Metal, Vulkan, DX12, OpenGL et
-WebGPU** — c'est la clé qui rend les portages mobile ci-dessous réalistes
-sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PLAN.md)**.
+Séparation nette **logique (`app`) / rendu (`gfx`)** : l'état (scène, caméra, entrées)
+ne dépend pas du GPU, ce qui a rendu le portage mobile direct. Le rendu repose sur
+`wgpu` (Metal / Vulkan / DX12 / WebGPU) — la clé de la portabilité.
+Détails et journal : **[PLAN.md](PLAN.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
 
 ---
 
@@ -127,19 +149,17 @@ sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PL
 - [x] **Système audio** `kira` : son par objet, autoplay, décodage asynchrone + cache.
 - [x] _Bonus_ : optimisations — chargement asynchrone, présentation vsync.
 
-### 🟡 📱 v2 — Portage iOS _(Phase C, sprints 14→17 — en cours)_
+### ✅ 📱 v2 — Portage mobile _(Phase C, sprints 14→17)_
+- [x] **Mode « player »** plein écran sans panneaux (auto sur mobile).
+- [x] **Entrées tactiles** : orbit à un doigt, pinch-to-zoom à deux doigts.
+- [x] **iOS** : cross-compilation, signature développeur, **installé et lancé sur iPhone**.
+- [x] **Android** : NDK, `cdylib` + `android_main`, **`.apk` signé** via `cargo-apk`.
+- [ ] Reste : signature *distribution* (App Store / Play Store), icônes, écran de lancement.
 
-> `wgpu` tourne sur Metal-iOS et `winit` sait créer une surface iOS : le moteur de
-> rendu est déjà compatible. Le travail porte sur le _packaging_ et l'entrée tactile.
-
-- [x] **Cible `aarch64-apple-ios`** : **cross-compilation complète réussie** (wgpu, winit, egui, rapier, mlua/Lua, kira → arm64).
-- [x] **Packaging `.ipa`** via `packaging/build_ios.sh` (assemble `.app` + `Info.plist`) — **non signé** pour l'instant.
-- [ ] Projet Xcode via `cargo-mobile2` + **signature/provisioning** (compte développeur Apple) pour installer sur device.
-- [ ] **Mode « player »** plein écran sans panneaux (un jeu, pas un éditeur, sur mobile).
-- [ ] **Entrées tactiles** : orbit à un doigt, pinch-to-zoom à deux doigts (events `Touch` de winit).
-- [ ] Cycle de vie iOS (lancement UIKit, suspend/resume → recréation de la surface wgpu).
-- _Note : « APK » concerne Android ; l'équivalent iOS est un `.ipa`. Un portage **Android**
-  (`aarch64-linux-android`, backend Vulkan) suit exactement la même logique et est prévu en parallèle._
+### ⬜ Pistes futures
+- [ ] Multi-sélection, copier/coller.
+- [ ] Textures / matériaux PBR, ombres (shadow mapping).
+- [ ] Recréation de surface au resume mobile (suspend/resume).
 
 ---
 
@@ -157,7 +177,7 @@ sans réécrire le moteur. Détails et journal des sprints : voir **[PLAN.md](PL
 | Physique | `rapier3d` |
 | Audio | `kira` |
 | Sélecteur de fichiers (desktop) | `rfd` |
-| Packaging macOS | `cargo-bundle` |
+| Packaging | `cargo-bundle` (macOS) · `cargo-apk` (Android) · `xcodegen`+Xcode (iOS) |
 
 ---
 
