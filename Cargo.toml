@@ -1,0 +1,26 @@
+[package]
+name = "motor3derust"
+version = "0.1.0"
+edition = "2024"
+description = "Moteur de jeu 3D minimaliste (style Unity) en Rust"
+
+[package.metadata.bundle]
+name = "Motor3DeRust"
+identifier = "com.berthod.motor3derust"
+short_description = "Moteur de jeu 3D minimaliste"
+category = "public.app-category.developer-tools"
+copyright = "© 2026 Berthod"
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+egui = "0.34.3"
+egui-wgpu = "0.34.3"
+egui-winit = "0.34.3"
+env_logger = "0.11.10"
+glam = { version = "0.33.1", features = ["serde"] }
+log = "0.4.32"
+pollster = "0.4.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+wgpu = "29.0.3"
+winit = "0.30.13"
