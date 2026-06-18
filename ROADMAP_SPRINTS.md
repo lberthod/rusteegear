@@ -1,0 +1,188 @@
+# Motor3DeRust — Plan de sprints d'exécution (post-MVP)
+
+> Feuille de route **étape par étape** pour faire évoluer le moteur du MVP actuel
+> jusqu'au mobile (iOS/Android) et à la VR (Oculus/Quest).
+> Chaque sprint a : **Objectif · Tâches · Fichiers · Livrable vérifiable · Risques**.
+> Convention : un sprint ≈ 1 à 3 jours. On ne démarre un sprint que si le précédent
+> est « vert » (livrable validé).
+
+État de départ : **MVP complet** (Sprints 0→6, voir [PLAN.md](PLAN.md)).
+
+---
+
+## 🧭 Vue d'ensemble des phases
+
+| Phase | Sprints | But |
+|---|---|---|
+| **A — Fondations éditeur** | 7 → 10 | Rendre l'éditeur réellement utilisable (gizmos, glTF, undo, multi-objets) |
+| **B — Runtime de jeu** | 11 → 13 | Transformer la scène en « jeu » (scripting, physique, audio) |
+| **C — Portage mobile** | 14 → 17 | iOS d'abord, puis Android |
+| **D — Réalité virtuelle** | 18 → 21 | OpenXR, rendu stéréo, contrôleurs, cible Quest |
+
+> Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
+> Les faire avant C/D évite de réécrire des features sur 3 cibles.
+
+---
+
+## PHASE A — Fondations éditeur
+
+### Sprint 7 — Refactor : séparer `App`, `Renderer` et `Scene`
+**Objectif** : isoler la logique GPU de l'état applicatif pour préparer le multi-plateforme.
+- [ ] Extraire un `AppState` (scène, sélection, mode Play, caméra) hors de `State` (GPU).
+- [ ] `Renderer` ne connaît que : device/queue/surface/pipeline + « dessine cette scène avec cette caméra ».
+- [ ] Introduire un trait `Platform`/`InputSource` pour abstraire winit (utile mobile/VR).
+- **Fichiers** : `src/gfx/renderer.rs`, nouveau `src/app/mod.rs`, `src/main.rs`.
+- **Livrable** : comportement identique au MVP, mais `Renderer::render(&scene, &camera)` sans état métier.
+- **Risque** : régression UI/picking → tester chaque interaction après refactor.
+
+### Sprint 8 — Gizmos de manipulation à la souris
+**Objectif** : déplacer/tourner/redimensionner un objet directement dans la vue 3D.
+- [ ] Dessiner 3 axes (X/Y/Z) sur l'objet sélectionné (lignes colorées, pass dédiée sans depth-test).
+- [ ] Picking de l'axe (ray vs segment/cylindre), drag → translation le long de l'axe.
+- [ ] Bascule translation / rotation / échelle (touches W/E/R, façon Unity).
+- **Fichiers** : `src/gfx/gizmo.rs` (nouveau), `renderer.rs`, `editor/mod.rs`.
+- **Livrable** : glisser le gizmo déplace l'objet ; l'inspecteur reflète la valeur en direct.
+- **Risque** : maths de projection écran→axe ; commencer par la translation seule.
+
+### Sprint 9 — Import de modèles glTF
+**Objectif** : charger de vrais assets 3D.
+- [ ] Ajouter la crate `gltf`. Charger positions/normales/indices → `MeshData`.
+- [ ] Nouveau `MeshKind::Imported(handle)` + cache de meshes importés.
+- [ ] Bouton toolbar « Importer .gltf/.glb » (dialogue `rfd`).
+- **Fichiers** : `src/scene/import.rs` (nouveau), `scene/mod.rs`, `gfx/mesh.rs`, `editor/mod.rs`.
+- **Livrable** : importer un `.glb` l'affiche et il est éditable comme une primitive.
+- **Risque** : meshes multi-primitives / sous-objets → se limiter d'abord à 1 mesh, 1 matériau.
+
+### Sprint 10 — Undo/Redo + multi-sélection + copier/coller
+**Objectif** : ergonomie d'édition de base.
+- [ ] Pile de commandes (pattern Command) : add/delete/transform/rename.
+- [ ] `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+D` (dupliquer), sélection multiple (Shift+clic).
+- **Fichiers** : `src/app/history.rs` (nouveau), `editor/mod.rs`, `app/mod.rs`.
+- **Livrable** : toute action s'annule/refait ; dupliquer crée une copie décalée.
+- **Risque** : cohérence sélection ↔ historique ; sérialiser les diffs proprement.
+
+---
+
+## PHASE B — Runtime de jeu
+
+### Sprint 11 — Composants & scripting (WASM ou Lua)
+**Objectif** : attacher du comportement aux objets.
+- [ ] Choix techno : **`mlua`** (Lua, simple) recommandé pour démarrer ; WASM (`wasmtime`) en option.
+- [ ] Composant `Script { source }` ; API exposée : `transform`, `dt`, `input`.
+- [ ] En mode Play, exécuter `update(dt)` de chaque script.
+- **Fichiers** : `src/runtime/script.rs` (nouveau), `runtime/mod.rs`, `editor/inspector`.
+- **Livrable** : un script Lua faisant tourner un cube, éditable dans l'inspecteur.
+- **Risque** : sandboxing/erreurs script → capturer les erreurs sans crasher l'éditeur.
+
+### Sprint 12 — Physique (collisions)
+**Objectif** : gravité et collisions réelles en mode Play.
+- [ ] Intégrer **`rapier3d`** : un `RigidBody` + `Collider` par objet (box/sphère).
+- [ ] Step de simulation en Play ; recopier les poses rapier → `Transform`.
+- [ ] Inspecteur : type de corps (statique/dynamique), masse.
+- **Fichiers** : `src/runtime/physics.rs` (nouveau), `runtime/mod.rs`.
+- **Livrable** : en Play, une sphère tombe et rebondit sur le plan-sol.
+- **Risque** : conversion repères/échelle entre rapier et le moteur ; mapping AABB→collider.
+
+### Sprint 13 — Audio
+**Objectif** : sons et ambiance.
+- [ ] Crate **`kira`** (ou `rodio`). Composant `AudioSource { clip, autoplay }`.
+- [ ] Lecture déclenchée en Play / par script.
+- **Fichiers** : `src/runtime/audio.rs` (nouveau).
+- **Livrable** : un objet joue un son au lancement du mode Play.
+- **Risque** : latence/threads audio ; garder l'API minimale.
+
+---
+
+## PHASE C — Portage mobile
+
+> Pré-requis : Phase A (au moins Sprint 7, le refactor) terminée — l'abstraction
+> plateforme évite de dupliquer le code. `wgpu` + `winit` supportent déjà iOS/Android :
+> l'effort est packaging + entrées tactiles + cycle de vie.
+
+### Sprint 14 — Mode « Player » plein écran
+**Objectif** : un mode sans panneaux éditeur (ce qui tournera sur mobile/casque).
+- [ ] Flag `--player` / build feature `player` : démarre directement en Play, sans egui.
+- [ ] Charger une scène figée (`scene.json` embarqué via `include_str!` ou asset).
+- **Fichiers** : `src/main.rs`, `app/mod.rs`, `Cargo.toml` (feature).
+- **Livrable** : sur desktop, `cargo run --features player` lance la scène en plein écran jouable.
+- **Risque** : faible ; surtout de l'aiguillage de configuration.
+
+### Sprint 15 — Entrées tactiles
+**Objectif** : piloter la caméra/jeu au doigt.
+- [ ] Gérer `WindowEvent::Touch` de winit : 1 doigt = orbit, 2 doigts = pinch-zoom + pan.
+- [ ] Abstraire derrière le trait `InputSource` du Sprint 7 (souris ⇆ tactile).
+- **Fichiers** : `src/app/input.rs`, `gfx/camera.rs`.
+- **Livrable** : sur desktop avec trackpad/simulateur, les gestes contrôlent la caméra.
+- **Risque** : gestion multi-touch (suivi des IDs de doigts).
+
+### Sprint 16 — Build & déploiement iOS
+**Objectif** : un `.ipa` qui tourne sur iPhone/iPad.
+- [ ] Cible `aarch64-apple-ios` (+ `aarch64-apple-ios-sim`). Outil : **`cargo-mobile2`** (génère le projet Xcode).
+- [ ] Boucle de rendu via `CADisplayLink` ; gérer suspend/resume → **recréer la surface wgpu** au retour au premier plan.
+- [ ] Icône + `Info.plist` iOS + signature (compte développeur Apple requis).
+- **Fichiers** : `gen/apple/` (généré), `app/mod.rs` (hooks cycle de vie).
+- **Livrable** : la scène en mode Player tourne sur un appareil iOS (ou simulateur).
+- **Risque** : ⚠️ le plus dur de la phase — perte de contexte GPU au background ; signature Apple.
+
+### Sprint 17 — Build Android (parallèle d'iOS)
+**Objectif** : un `.apk` Android (backend Vulkan).
+- [ ] Cible `aarch64-linux-android` via `cargo-apk` / `cargo-mobile2` ; `winit` en mode `android-activity`.
+- [ ] Gérer `Resumed`/`Suspended` (recréation surface), permissions, `AndroidManifest`.
+- **Fichiers** : `gen/android/` (généré), `app/mod.rs`.
+- **Livrable** : `.apk` installable lançant la scène.
+- **Risque** : cycle de vie Android encore plus strict (surface détruite au pause).
+
+---
+
+## PHASE D — Réalité virtuelle (Oculus / Meta Quest)
+
+> La VR passe par **OpenXR** (standard supporté par Meta Quest et PCVR/SteamVR).
+> On réutilise tout le moteur de rendu ; on remplace la caméra par les poses XR
+> et on rend **deux vues** (une par œil).
+
+### Sprint 18 — Bootstrap OpenXR (desktop d'abord)
+**Objectif** : ouvrir une session XR et présenter une image (même fixe).
+- [ ] Crate **`openxr`** : instance, system, session liée à `wgpu` (interop via `wgpu-hal`/`ash`).
+- [ ] Créer les **swapchains** XR ; boucle `xrWaitFrame`/`xrBeginFrame`/`xrEndFrame`.
+- **Fichiers** : `src/xr/mod.rs` (nouveau), `gfx/renderer.rs` (cible de rendu = textures XR).
+- **Livrable** : sur un casque PCVR (ou simulateur OpenXR), on voit un fond coloré stable.
+- **Risque** : ⚠️ interop wgpu↔OpenXR (récupérer le device Vulkan partagé) = point le plus technique du projet.
+
+### Sprint 19 — Rendu stéréo de la scène
+**Objectif** : voir la scène 3D en relief.
+- [ ] Récupérer du runtime XR les 2 poses + projections (par œil) → 2 matrices view/proj.
+- [ ] Rendre la scène une fois par œil dans la swapchain correspondante (ou multiview).
+- **Fichiers** : `xr/mod.rs`, `gfx/renderer.rs`, `gfx/camera.rs` (caméra pilotée par XR).
+- **Livrable** : la scène (sol + cube + sphère) apparaît en VR, suit les mouvements de tête.
+- **Risque** : justesse des matrices (sinon nausée) ; performances (2× le rendu).
+
+### Sprint 20 — Contrôleurs & interaction VR
+**Objectif** : sélectionner/déplacer des objets en VR.
+- [ ] Action sets OpenXR : poses des mains + boutons (gâchette, grip).
+- [ ] Rayon de pointage depuis la main → picking (réutilise ray/AABB existant) ; grab pour déplacer.
+- **Fichiers** : `xr/input.rs` (nouveau), `app/mod.rs`.
+- **Livrable** : pointer un objet et appuyer sur la gâchette le saisit et le déplace.
+- **Risque** : mapping des espaces (main → monde) ; ergonomie.
+
+### Sprint 21 — Cible Meta Quest (standalone)
+**Objectif** : APK VR autonome sur Quest.
+- [ ] Build Android + **OpenXR loader Oculus** ; manifeste VR (`com.oculus.intent.category.VR`).
+- [ ] Confort : téléportation, vignettage anti-nausée, plancher (stage space).
+- **Fichiers** : `gen/android/` (config VR), `xr/`.
+- **Livrable** : `.apk` installé sur un Quest, scène explorable en standalone.
+- **Risque** : combine les difficultés Android (Sprint 17) + VR (Sprints 18-20).
+
+---
+
+## ✅ Définition de « terminé » par phase
+
+- **A** : éditeur confortable — gizmos, import glTF, undo, multi-sélection fonctionnent.
+- **B** : une scène devient un mini-jeu — script + physique + audio en mode Play.
+- **C** : la même scène tourne en mode Player sur iOS (et Android).
+- **D** : la même scène est explorable en VR sur Meta Quest, manettes en main.
+
+## 📌 Conseils d'exécution
+1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
+2. **Garder le mode Player (Sprint 14) comme cible de test** mobile/VR — pas l'éditeur complet.
+3. **Tester sur device tôt** (Sprints 16/18) : les surprises GPU/cycle de vie viennent du matériel réel.
+4. Avancer **une plateforme à la fois** ; ne pas ouvrir C et D en parallèle.
