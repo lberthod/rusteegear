@@ -1,0 +1,25 @@
+name: Motor3DeRust
+options:
+  bundleIdPrefix: com.berthod
+  deploymentTarget:
+    iOS: "13.0"
+targets:
+  Motor3DeRust:
+    type: application
+    platform: iOS
+    sources:
+      - Shell
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.berthod.motor3derust
+        PRODUCT_NAME: Motor3DeRust
+        DEVELOPMENT_TEAM: N668CK695Q
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+    postBuildScripts:
+      - name: Embed Rust binary
+        script: |
+          cp "$SRCROOT/../../target/aarch64-apple-ios/release/motor3derust" "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"

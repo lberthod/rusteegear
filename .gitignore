@@ -1,3 +1,5 @@
 /target
 .DS_Store
 /packaging/release.keystore
+packaging/ios-xcode/Motor3DeRust.xcodeproj/
+packaging/ios-xcode/build/
