@@ -143,13 +143,16 @@
 - **Fichiers** : `packaging/build_ios.sh`, `Cargo.toml`, `editor/mod.rs` (gates cfg).
 - **État** : la preuve technique est faite (le moteur compile et se package pour iOS) ; reste la signature Apple + l'intégration UIKit pour un lancement réel.
 
-### Sprint 17 — Build Android (parallèle d'iOS)
+### Sprint 17 — Build Android 🟡 PARTIEL (préparé, bloqué sur le NDK)
 **Objectif** : un `.apk` Android (backend Vulkan).
-- [ ] Cible `aarch64-linux-android` via `cargo-apk` / `cargo-mobile2` ; `winit` en mode `android-activity`.
-- [ ] Gérer `Resumed`/`Suspended` (recréation surface), permissions, `AndroidManifest`.
-- **Fichiers** : `gen/android/` (généré), `app/mod.rs`.
-- **Livrable** : `.apk` installable lançant la scène.
-- **Risque** : cycle de vie Android encore plus strict (surface détruite au pause).
+- [x] Cible Rust `aarch64-linux-android` ajoutée.
+- [x] `winit` configuré avec la feature `android-native-activity` (ciblée Android).
+- [x] Mode Player auto-activé sur Android ; desktop inchangé.
+- [x] `packaging/build_android.md` : marche à suivre complète.
+- [ ] **Bloqué ici** : NDK non installé (`aarch64-linux-android-clang` manquant → Lua/`mlua` + linker).
+- [ ] À faire ensuite : NDK, `cargo-ndk`/`cargo-apk`, point d'entrée `android_main` + `cdylib`.
+- **Fichiers** : `Cargo.toml`, `packaging/build_android.md`.
+- **État** : logique identique à iOS ; reste l'environnement (NDK) + l'entrée `android_main`.
 
 ---
 

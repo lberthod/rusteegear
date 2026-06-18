@@ -32,3 +32,7 @@ winit = "0.30.13"
 # Sélecteur de fichiers : desktop uniquement (pas d'équivalent sur iOS/Android).
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.17.2"
+
+# Android : winit a besoin d'un backend android-activity.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30.13", features = ["android-native-activity"] }
