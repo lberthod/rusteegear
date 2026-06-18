@@ -179,15 +179,17 @@
 - **Livrable** : `.dmg` plus léger/rapide ; bandeau FPS visible ; CPU au repos chute (throttle 16 fps). ✅
 - **Risques** : `Wait` mal réglé fige l'animation → `Poll` conservé dès que `is_active()` (Play/interaction).
 
-### Sprint 19 — Panneau « Build & Export » dans l'éditeur ⬜
+### Sprint 19 — Panneau « Build & Export » dans l'éditeur ✅ FAIT
 **Objectif** : un onglet/fenêtre egui d'où l'on lance les exports.
-- [ ] Nouveau panneau **« Export »** (toolbar) : 3 cartes — macOS (.dmg), Android (.apk), iOS (.ipa).
-- [ ] Chaque carte affiche : cible, statut (prêt / config manquante), bouton **Exporter**.
-- [ ] Détection des pré-requis (toolchains/SDK) au lancement → coche verte ou message d'aide.
-- [ ] L'export s'exécute en **thread de fond** (comme l'import glTF) avec log streamé dans l'UI.
-- **Fichiers** : `src/editor/mod.rs`, nouveau `src/editor/export.rs`, `src/app/mod.rs`.
-- **Livrable** : cliquer « Exporter macOS » produit le `.dmg` sans quitter l'app, log visible.
-- **Risques** : lancer un build long depuis l'UI → toujours async + bouton « Annuler ».
+- [x] Fenêtre flottante **« 📦 Build & Export »** (bouton toolbar) : 3 cartes — macOS (.dmg), Android (.apk), iOS (.ipa).
+- [x] Chaque carte affiche : cible, statut (✓ prêt / ⚠ config manquante + aide), bouton **Exporter**.
+- [x] Détection des pré-requis (`cargo-bundle`, `cargo-apk`, `xcodegen`, plateforme) au démarrage.
+- [x] L'export s'exécute en **thread de fond** (`std::process::Command` sur les scripts `packaging/*.sh`)
+      avec **log streamé** (stdout+stderr) dans une zone défilante, spinner pendant l'exécution.
+- [ ] Bouton « Annuler » + dossier de sortie configurable → reporté aux Sprints 20-21.
+- **Fichiers** : nouveau `src/editor/export.rs`, `src/editor/mod.rs`.
+- **Livrable** : cliquer « Exporter » lance le packaging sans quitter l'app, log visible en direct. ✅
+- **Risques** : build long depuis l'UI → async (un seul à la fois), bouton désactivé pendant l'exécution.
 
 ### Sprint 20 — Config de build persistée & éditable ⬜
 **Objectif** : rendre l'identité/version/certificats **configurables dans l'app**.

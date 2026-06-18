@@ -1,6 +1,8 @@
 //! UI de l'éditeur basée sur egui : toolbar, hiérarchie, inspecteur.
 //! Encapsule toute la plomberie egui-winit / egui-wgpu.
 
+pub mod export;
+
 use egui::ViewportId;
 use glam::{EulerRot, Quat};
 use winit::window::Window;
@@ -13,6 +15,7 @@ pub struct Editor {
     ctx: egui::Context,
     winit_state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    export: export::ExportPanel,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -60,6 +63,7 @@ impl Editor {
             ctx,
             winit_state,
             renderer,
+            export: export::ExportPanel::new(),
         }
     }
 
@@ -81,6 +85,7 @@ impl Editor {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
 
+        let export = &mut self.export;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -89,6 +94,7 @@ impl Editor {
                 playing,
                 gizmo_mode,
                 &status,
+                export,
                 &mut actions,
             );
         });
@@ -150,6 +156,7 @@ impl Editor {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // panneau d'UI : chaque paramètre est un état distinct à muter
 fn build_ui(
     root: &mut egui::Ui,
     scene: &mut Scene,
@@ -157,8 +164,12 @@ fn build_ui(
     playing: &mut bool,
     gizmo_mode: &mut GizmoMode,
     status: &StatusInfo,
+    export: &mut export::ExportPanel,
     actions: &mut UiActions,
 ) {
+    // Fenêtre flottante « Build & Export » (Sprint 19).
+    export.ui(root.ctx());
+
     // Bandeau d'état (bas) : FPS, nombre d'objets, mode, backend GPU.
     egui::Panel::bottom("status_bar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
@@ -222,6 +233,14 @@ fn build_ui(
                 {
                     actions.import = Some(p.to_string_lossy().into_owned());
                 }
+            }
+            ui.separator();
+            if ui
+                .selectable_label(export.open, "📦 Export")
+                .on_hover_text("Exporter .dmg / .apk / .ipa")
+                .clicked()
+            {
+                export.open = !export.open;
             }
         });
     });
