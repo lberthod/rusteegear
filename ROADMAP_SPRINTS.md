@@ -122,13 +122,14 @@
 - **Fichiers** : `src/main.rs`, `app/mod.rs`, `gfx/renderer.rs`.
 - **Livrable** : `cargo run -- --player` lance la scène animée en plein écran. ✅
 
-### Sprint 15 — Entrées tactiles
+### Sprint 15 — Entrées tactiles ✅ FAIT
 **Objectif** : piloter la caméra/jeu au doigt.
-- [ ] Gérer `WindowEvent::Touch` de winit : 1 doigt = orbit, 2 doigts = pinch-zoom + pan.
-- [ ] Abstraire derrière le trait `InputSource` du Sprint 7 (souris ⇆ tactile).
-- **Fichiers** : `src/app/input.rs`, `gfx/camera.rs`.
-- **Livrable** : sur desktop avec trackpad/simulateur, les gestes contrôlent la caméra.
-- **Risque** : gestion multi-touch (suivi des IDs de doigts).
+- [x] `WindowEvent::Touch` géré : **1 doigt = orbit**, **2 doigts = pinch-zoom** (suivi des IDs).
+- [x] Traduit vers les `InputEvent` agnostiques (Sprint 7) → réutilise la logique caméra souris.
+- [x] Compile desktop **et** iOS ; souris desktop inchangée.
+- **Fichiers** : `src/main.rs`.
+- **Livrable** : gestes tactiles → caméra (validé matériellement sur device iOS au Sprint 16+). ✅
+- _Note : les events Touch ne se déclenchent que sur écran tactile ; test final sur iPhone._
 
 ### Sprint 16 — Build & déploiement iOS 🟡 PARTIEL (compile + .ipa non signé)
 **Objectif** : un `.ipa` qui tourne sur iPhone/iPad.

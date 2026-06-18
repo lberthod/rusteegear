@@ -2,10 +2,11 @@
 //! `main` ne fait que : créer la fenêtre, traduire les événements winit en
 //! `InputEvent` agnostiques, et piloter `AppState` (logique) + `Renderer` (GPU).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -24,6 +25,62 @@ struct App {
     renderer: Option<Renderer>,
     state: AppState,
     modifiers: winit::event::Modifiers,
+
+    // --- état tactile ---
+    touches: HashMap<u64, (f64, f64)>,
+    orbiting: bool,
+    pinch: Option<f32>,
+}
+
+impl App {
+    /// Traduit les événements tactiles : 1 doigt = orbit, 2 doigts = pinch-zoom.
+    fn handle_touch(&mut self, touch: Touch) {
+        let (x, y) = (touch.location.x, touch.location.y);
+        match touch.phase {
+            TouchPhase::Started | TouchPhase::Moved => {
+                self.touches.insert(touch.id, (x, y));
+            }
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                self.touches.remove(&touch.id);
+            }
+        }
+
+        match self.touches.len() {
+            1 => {
+                let (px, py) = *self.touches.values().next().unwrap();
+                if self.orbiting {
+                    self.state.handle_input(InputEvent::PointerMove { x: px, y: py });
+                } else {
+                    // (re)démarrer l'orbite sur le doigt courant
+                    self.state.handle_input(InputEvent::PointerMove { x: px, y: py });
+                    self.state.handle_input(InputEvent::PointerDown);
+                    self.orbiting = true;
+                }
+                self.pinch = None;
+            }
+            2 => {
+                if self.orbiting {
+                    self.state.handle_input(InputEvent::PointerUp);
+                    self.orbiting = false;
+                }
+                let mut it = self.touches.values();
+                let a = *it.next().unwrap();
+                let b = *it.next().unwrap();
+                let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() as f32;
+                if let Some(prev) = self.pinch {
+                    self.state.handle_input(InputEvent::Scroll { delta: (d - prev) * 0.02 });
+                }
+                self.pinch = Some(d);
+            }
+            _ => {
+                if self.orbiting {
+                    self.state.handle_input(InputEvent::PointerUp);
+                    self.orbiting = false;
+                }
+                self.pinch = None;
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -78,6 +135,7 @@ impl ApplicationHandler for App {
                 };
                 self.state.handle_input(InputEvent::Scroll { delta: d });
             }
+            WindowEvent::Touch(touch) => self.handle_touch(touch),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m,
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 use winit::keyboard::{KeyCode, PhysicalKey};
