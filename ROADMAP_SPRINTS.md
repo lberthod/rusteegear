@@ -142,16 +142,16 @@
 - **Fichiers** : `packaging/build_ios.sh`, `Cargo.toml`, `editor/mod.rs` (gates cfg).
 - **État** : la preuve technique est faite (le moteur compile et se package pour iOS) ; reste la signature Apple + l'intégration UIKit pour un lancement réel.
 
-### Sprint 17 — Build Android 🟢 cross-compilation OK (NDK résolu)
+### Sprint 17 — Build Android ✅ FAIT (APK signé)
 **Objectif** : un `.apk` Android (backend Vulkan).
 - [x] Cible Rust `aarch64-linux-android` ; `winit` feature `android-native-activity` (ciblée).
+- [x] Crate restructuré en **lib + bin** ; `src/lib.rs` expose `run()` (desktop) + `android_main` (cdylib).
 - [x] Mode Player auto-activé sur Android ; desktop inchangé.
-- [x] **NDK 28.2.13676358 installé** via les command-line tools d'Android Studio (`sdkmanager`).
-- [x] **Compilation + linking complets** du moteur pour Android (Lua C, kira, rapier, wgpu, winit). ✅
-- [x] API **26 minimum** (AAudio) ; `packaging/android_env.sh` + `build_android.md`.
-- [ ] Reste pour l'`.apk` : `cdylib` + `android_main` + `cargo-apk` (aucun blocage moteur).
-- **Fichiers** : `Cargo.toml`, `packaging/android_env.sh`, `packaging/build_android.md`.
-- **État** : le moteur **compile et se lie pour Android** ; reste l'empaquetage `.apk`.
+- [x] **NDK 28.2.13676358** installé via Android Studio (`sdkmanager`) ; API 26 (AAudio).
+- [x] **APK release signé** via `cargo-apk` : `target/release/apk/motor3derust.apk` (~6.6 Mo, arm64-v8a). ✅
+- [x] Scripts `packaging/build_apk.sh` + `android_env.sh` ; doc `build_android.md`.
+- **Fichiers** : `src/lib.rs`, `src/main.rs`, `Cargo.toml`, `packaging/*`.
+- **Livrable** : APK installable (`adb install`) lançant la scène en mode Player. ✅
 
 ---
 

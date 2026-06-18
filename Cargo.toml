@@ -11,6 +11,28 @@ short_description = "Moteur de jeu 3D minimaliste"
 category = "public.app-category.developer-tools"
 copyright = "© 2026 Berthod"
 
+# Bibliothèque partagée : rlib pour le bin desktop, cdylib pour le .so Android.
+[lib]
+name = "motor3derust"
+crate-type = ["rlib", "cdylib"]
+
+# Packaging APK (cargo-apk).
+[package.metadata.android]
+package = "com.berthod.motor3derust"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 33
+
+[package.metadata.android.application]
+label = "Motor3DeRust"
+
+# Clé de signature release (générée par packaging/build_apk.sh, non versionnée).
+[package.metadata.android.signing.release]
+path = "packaging/release.keystore"
+keystore_password = "android"
+
 [dependencies]
 bytemuck = { version = "1.25.0", features = ["derive"] }
 egui = "0.34.3"
@@ -33,6 +55,7 @@ winit = "0.30.13"
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.17.2"
 
-# Android : winit a besoin d'un backend android-activity.
+# Android : winit a besoin d'un backend android-activity + logger natif.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30.13", features = ["android-native-activity"] }
+android_logger = "0.14"

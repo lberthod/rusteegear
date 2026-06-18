@@ -1,14 +1,21 @@
 # Build Android (`.apk`)
 
-État : **la cross-compilation Android fonctionne** ✅ (NDK installé). Reste à
-empaqueter en `.apk` (cdylib + `android_main` + cargo-apk).
+État : **APK Android construit, signé et installable** ✅
+
+## Construire l'APK
+```bash
+cargo install cargo-apk        # une seule fois
+./packaging/build_apk.sh       # génère la clé si besoin, produit l'APK release signé
+# → target/release/apk/motor3derust.apk  (~6.6 Mo, arm64-v8a)
+adb install -r target/release/apk/motor3derust.apk
+```
 
 ## Ce qui fonctionne
 - Cible Rust `aarch64-linux-android` ✅
-- `Cargo.toml` : winit avec la feature `android-native-activity` (ciblée Android) ✅
+- `src/lib.rs` : crate `cdylib` + point d'entrée `android_main` (winit `android-native-activity`) ✅
 - Mode **Player** auto-activé sur Android ✅
 - **NDK 28.2.13676358** installé via les command-line tools d'Android Studio ✅
-- **Compilation + linking complets** du moteur pour Android (Lua C, kira, rapier, wgpu, winit). ✅
+- **APK release signé** (NativeActivity, `libmotor3derust.so` ~19 Mo, signé clé debug-like). ✅
 
 ## Installation du NDK (faite, pour mémoire)
 ```bash
