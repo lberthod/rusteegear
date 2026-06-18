@@ -71,14 +71,15 @@
 
 ## PHASE B — Runtime de jeu
 
-### Sprint 11 — Composants & scripting (WASM ou Lua)
+### Sprint 11 — Scripting Lua ✅ FAIT
 **Objectif** : attacher du comportement aux objets.
-- [ ] Choix techno : **`mlua`** (Lua, simple) recommandé pour démarrer ; WASM (`wasmtime`) en option.
-- [ ] Composant `Script { source }` ; API exposée : `transform`, `dt`, `input`.
-- [ ] En mode Play, exécuter `update(dt)` de chaque script.
-- **Fichiers** : `src/runtime/script.rs` (nouveau), `runtime/mod.rs`, `editor/inspector`.
-- **Livrable** : un script Lua faisant tourner un cube, éditable dans l'inspecteur.
-- **Risque** : sandboxing/erreurs script → capturer les erreurs sans crasher l'éditeur.
+- [x] Crate **`mlua`** (Lua 5.4 vendored, aucune dépendance système).
+- [x] Champ `script: String` sur `SceneObject` ; runtime `Lua` dans `AppState`.
+- [x] API exposée : `obj.x/y/z`, `obj.rx/ry/rz` (°), `obj.sx/sy/sz`, `dt`, `time` + stdlib `math`.
+- [x] Exécution par objet en mode Play ; erreurs capturées et loguées (pas de crash).
+- [x] Éditeur de script (multiligne) dans l'inspecteur ; cube de démo scripté.
+- **Fichiers** : `src/app/mod.rs`, `scene/mod.rs`, `editor/mod.rs`.
+- **Livrable** : un cube tourne via script Lua, éditable en direct. ✅
 
 ### Sprint 12 — Physique (collisions)
 **Objectif** : gravité et collisions réelles en mode Play.

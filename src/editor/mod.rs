@@ -215,6 +215,16 @@ fn build_ui(
                     ui.separator();
                     transform_editor(ui, &mut obj.transform);
                     ui.separator();
+                    ui.collapsing("Script (Lua)", |ui| {
+                        ui.label("Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, dt, time");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut obj.script)
+                                .code_editor()
+                                .desired_rows(4)
+                                .hint_text("ex : obj.ry = obj.ry + dt * 90"),
+                        );
+                    });
+                    ui.separator();
                     if ui.button("🗑 Supprimer").clicked() {
                         actions.delete = Some(i);
                     }

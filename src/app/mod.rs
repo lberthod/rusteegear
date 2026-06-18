@@ -5,7 +5,8 @@ pub mod input;
 
 use std::time::Instant;
 
-use glam::{Quat, Vec3, Vec4};
+use glam::{EulerRot, Quat, Vec3, Vec4};
+use mlua::Lua;
 
 use crate::gfx::camera::OrbitCamera;
 use crate::scene::{MeshKind, Scene, SceneObject, Transform};
@@ -38,6 +39,10 @@ pub struct AppState {
     // --- historique (snapshots de la liste d'objets) ---
     undo_stack: Vec<Vec<SceneObject>>,
     redo_stack: Vec<Vec<SceneObject>>,
+
+    // --- scripting ---
+    lua: Lua,
+    time: f32,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -89,6 +94,8 @@ impl AppState {
             drag_orig_scale: Vec3::ONE,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            lua: Lua::new(),
+            time: 0.0,
         }
     }
 
@@ -132,6 +139,7 @@ impl AppState {
             name,
             transform: Transform::from_pos(Vec3::ZERO),
             mesh: kind,
+            script: String::new(),
         });
         self.selection = Some(self.scene.objects.len() - 1);
     }
@@ -373,17 +381,22 @@ impl AppState {
         Some(v.dot(w).atan2(v.dot(u)))
     }
 
-    /// Applique les comportements du mode Play (rotation simple) en delta-time.
+    /// En mode Play, exécute le script Lua de chaque objet (delta-time).
     pub fn advance_play(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
-        if self.playing {
-            for obj in &mut self.scene.objects {
-                if obj.mesh != MeshKind::Plane {
-                    obj.transform.rotation =
-                        Quat::from_rotation_y(dt * 1.2) * obj.transform.rotation;
-                }
+        if !self.playing {
+            return;
+        }
+        self.time += dt;
+        let time = self.time;
+        for obj in &mut self.scene.objects {
+            if obj.script.trim().is_empty() {
+                continue;
+            }
+            if let Err(e) = run_script(&self.lua, &mut obj.transform, &obj.script, dt, time) {
+                log::error!("Script '{}' : {e}", obj.name);
             }
         }
     }
@@ -436,6 +449,7 @@ impl AppState {
                         scale: Vec3::splat(s),
                     },
                     mesh: MeshKind::Imported(idx),
+                    script: String::new(),
                 });
                 self.selection = Some(self.scene.objects.len() - 1);
                 log::info!("Modèle importé : {path}");
@@ -483,6 +497,39 @@ impl Default for AppState {
 fn scene_path() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     format!("{home}/motor3derust_scene.json")
+}
+
+/// Exécute le script Lua d'un objet : expose `obj` (x,y,z, rx,ry,rz en °, sx,sy,sz),
+/// `dt` et `time`, puis relit les champs modifiés dans le Transform.
+fn run_script(lua: &Lua, t: &mut Transform, src: &str, dt: f32, time: f32) -> mlua::Result<()> {
+    let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
+    let obj = lua.create_table()?;
+    obj.set("x", t.position.x)?;
+    obj.set("y", t.position.y)?;
+    obj.set("z", t.position.z)?;
+    obj.set("rx", rx.to_degrees())?;
+    obj.set("ry", ry.to_degrees())?;
+    obj.set("rz", rz.to_degrees())?;
+    obj.set("sx", t.scale.x)?;
+    obj.set("sy", t.scale.y)?;
+    obj.set("sz", t.scale.z)?;
+
+    let g = lua.globals();
+    g.set("obj", &obj)?;
+    g.set("dt", dt)?;
+    g.set("time", time)?;
+    lua.load(src).exec()?;
+
+    t.position = Vec3::new(obj.get("x")?, obj.get("y")?, obj.get("z")?);
+    let (rx, ry, rz): (f32, f32, f32) = (obj.get("rx")?, obj.get("ry")?, obj.get("rz")?);
+    t.rotation = Quat::from_euler(
+        EulerRot::XYZ,
+        rx.to_radians(),
+        ry.to_radians(),
+        rz.to_radians(),
+    );
+    t.scale = Vec3::new(obj.get("sx")?, obj.get("sy")?, obj.get("sz")?);
+    Ok(())
 }
 
 /// Distance 2D (pixels) entre un point et un segment.

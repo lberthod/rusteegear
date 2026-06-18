@@ -80,6 +80,9 @@ pub struct SceneObject {
     pub name: String,
     pub transform: Transform,
     pub mesh: MeshKind,
+    /// Script Lua exécuté chaque frame en mode Play (vide = aucun).
+    #[serde(default)]
+    pub script: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -126,16 +129,20 @@ impl Scene {
                     transform: Transform::from_pos(Vec3::new(0.0, -1.0, 0.0))
                         .with_scale(Vec3::new(10.0, 1.0, 10.0)),
                     mesh: MeshKind::Plane,
+                    script: String::new(),
                 },
                 SceneObject {
                     name: "Cube".into(),
                     transform: Transform::from_pos(Vec3::new(-1.2, -0.5, 0.0)),
                     mesh: MeshKind::Cube,
+                    // exemple : tourne autour de Y à 60°/s en mode Play
+                    script: "obj.ry = obj.ry + dt * 60.0".into(),
                 },
                 SceneObject {
                     name: "Sphère".into(),
                     transform: Transform::from_pos(Vec3::new(1.2, -0.5, 0.0)),
                     mesh: MeshKind::Sphere,
+                    script: String::new(),
                 },
             ],
         }
