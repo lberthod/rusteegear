@@ -28,6 +28,104 @@ grâce à la portabilité de `wgpu`.
 
 ---
 
+## 🎯 Quel besoin Motor3DeRust adresse-t-il ?
+
+Les moteurs grand public (Unity, Unreal, Godot) sont extraordinairement complets,
+mais ce sont des **boîtes noires** : des millions de lignes, un runtime opaque, un
+modèle de licence et de télémétrie que l'on subit, et une courbe d'apprentissage qui
+porte sur *l'outil* plus que sur *les concepts*. Quand on veut **comprendre comment
+un moteur fonctionne réellement** — comment un vertex part d'un `Vec<f32>` pour finir
+en pixel à l'écran, comment un raycast sélectionne un objet, comment une boucle de
+simulation reste stable — ces moteurs cachent justement ce qui est intéressant.
+
+Motor3DeRust répond à un besoin précis :
+
+- **Pédagogique & maîtrise totale.** Chaque étage du pipeline (fenêtre → événements →
+  état → rendu GPU → UI) est écrit à la main, lisible en une après-midi, sans
+  abstraction magique. C'est un moteur que l'on peut **tenir entièrement dans sa tête**.
+- **Hackable et minimal.** ~2 500 lignes de Rust au total. Ajouter une primitive, un
+  type de collider ou une variable de script se fait en quelques lignes, sans se battre
+  contre un framework.
+- **Portable par conception.** La logique (scène, caméra, entrées, picking) ne dépend
+  **pas** du GPU ; seule la couche `gfx/` parle à `wgpu`. C'est ce découpage qui a permis
+  de porter l'app sur **iOS et Android** sans réécrire le cœur.
+- **Sans dépendance lourde ni runtime caché.** Pas de garbage collector, pas de moteur
+  embarqué, pas de licence à négocier — un seul binaire natif.
+
+Ce n'est **pas** un concurrent d'Unity. C'est un **socle compréhensible** pour
+apprendre, prototyper et expérimenter le rendu temps réel et l'architecture moteur.
+
+---
+
+## 🦀 Pourquoi Rust ?
+
+Un moteur de jeu cumule les contraintes que Rust adresse le mieux :
+
+- **Performance native, prévisible.** Le rendu temps réel et la physique exigent un
+  contrôle fin de la mémoire et zéro pause GC. Rust offre les performances du C/C++
+  (pas de runtime, pas de ramasse-miettes, *zero-cost abstractions*) tout en restant
+  expressif.
+- **Sécurité mémoire sans coût à l'exécution.** Le *borrow checker* élimine à la
+  compilation les classes de bugs qui hantent les moteurs C++ (use-after-free, data
+  races, pointeurs pendants). Sur un système concurrent (rendu + chargements async +
+  audio + physique), c'est décisif : ici, l'import glTF, le décodage audio et le
+  chargement de scène tournent **sur des threads de fond** en toute sûreté, garantie
+  par le type system (`Send`/`Sync`).
+- **Un écosystème graphique de premier plan.** L'essentiel de la stack est écrit *en*
+  Rust et de grande qualité : `wgpu` (abstraction GPU moderne : Metal / Vulkan / DX12 /
+  WebGPU), `winit` (fenêtrage multiplateforme), `egui` (UI immédiate), `glam` (maths
+  SIMD), `rapier3d` (physique), `kira` (audio). On bénéficie d'un alignement rare entre
+  le langage et ses bibliothèques.
+- **Portabilité réelle.** Un même cœur compile vers macOS, un `.so` Android (`cdylib` +
+  `android_main`) et un binaire iOS — `cargo` et l'abstraction `wgpu` font le gros du
+  travail.
+- **Outillage moderne.** `cargo` (build, dépendances, tests), `clippy` (lints),
+  `rustfmt` (format) et un système de modules clair rendent un projet de cette taille
+  agréable à maintenir — et faciles à valider en CI.
+
+En résumé : Rust permet d'écrire un moteur **bas niveau et performant** tout en gardant
+la **fiabilité** et le **confort de développement** qu'on attendrait d'un langage de
+plus haut niveau.
+
+---
+
+## ⚖️ From scratch sur Rust — et pas sur Bevy ?
+
+[Bevy](https://bevyengine.org/) est l'excellent moteur de jeu de l'écosystème Rust :
+ECS complet, ordonnanceur de systèmes, rendu PBR, plugins… Si l'objectif était de
+**produire un jeu** le plus vite possible, Bevy (ou Godot, Fyrox) serait un choix
+parfaitement légitime — et probablement supérieur.
+
+Mais l'objectif de Motor3DeRust est exactement l'inverse : **comprendre et maîtriser le
+moteur lui-même**. Or s'appuyer sur Bevy reviendrait à remplacer une boîte noire
+(Unity) par une autre, certes en Rust. On hériterait de son ECS, de son ordonnanceur,
+de son pipeline de rendu et de ses choix d'architecture — c'est-à-dire de précisément
+ce que ce projet cherche à écrire à la main pour l'apprendre.
+
+| Critère | Motor3DeRust (from scratch) | Bevy |
+|---|---|---|
+| **Objectif** | Comprendre/maîtriser un moteur | Produire des jeux efficacement |
+| **Taille du cœur** | ~2 500 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
+| **Architecture** | Scène = `Vec<SceneObject>`, explicite | ECS complet + ordonnanceur de systèmes |
+| **Rendu** | Pipeline `wgpu`/WGSL écrit à la main | Moteur de rendu intégré (PBR, etc.) |
+| **Courbe d'apprentissage** | On apprend *les concepts* | On apprend *le framework* |
+| **Contrôle** | Total (chaque ligne est à soi) | Cadré par les conventions du moteur |
+| **Productivité jeu** | Faible (tout est à construire) | Élevée |
+| **Boîte noire** | Aucune | Le moteur lui-même |
+
+Concrètement, Motor3DeRust ne s'appuie **que** sur des briques *ciblées et
+remplaçables* (`winit` pour la fenêtre, `wgpu` pour le GPU, `egui` pour l'UI,
+`rapier3d`/`kira`/`mlua` pour le runtime) et **assemble lui-même** la boucle
+d'événements, le pipeline de rendu, le picking, les gizmos, la sérialisation et le
+mode Play. C'est ce qui rend la **comparaison pertinente** : on choisit la dépendance
+pour *un problème précis et bien délimité*, jamais pour la structure générale du
+moteur — qui, elle, reste l'objet même de l'apprentissage.
+
+> En une phrase : **Bevy est un moteur ; Motor3DeRust est l'exercice consistant à en
+> écrire un.** Les deux sont en Rust ; seul le second t'apprend ce qu'il y a dedans.
+
+---
+
 ## 🎮 Fonctionnalités (disponibles aujourd'hui)
 
 **Rendu & édition**
