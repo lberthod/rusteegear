@@ -8,9 +8,29 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use super::mesh::{GpuMesh, Vertex};
-use crate::app::AppState;
+use crate::app::{axis_dir, AppState, GIZMO_LEN};
 use crate::editor::Editor;
 use crate::scene::{MeshKind, Scene};
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct GizmoVertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl GizmoVertex {
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GizmoVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
+            ],
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -51,6 +71,9 @@ pub struct Renderer {
 
     meshes: HashMap<MeshKind, GpuMesh>,
     objects_gpu: Vec<ObjectGpu>,
+
+    gizmo_pipeline: wgpu::RenderPipeline,
+    gizmo_vbuf: wgpu::Buffer,
 
     editor: Editor,
 }
@@ -173,6 +196,64 @@ impl Renderer {
             cache: None,
         });
 
+        // --- Pipeline gizmo (lignes, par-dessus la scène) ---
+        let gizmo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gizmo_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gizmo.wgsl").into()),
+        });
+        let gizmo_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gizmo_layout"),
+            bind_group_layouts: &[Some(&camera_layout)],
+            immediate_size: 0,
+        });
+        let gizmo_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gizmo_pipeline"),
+            layout: Some(&gizmo_layout),
+            vertex: wgpu::VertexState {
+                module: &gizmo_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[GizmoVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gizmo_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            // dessiné par-dessus : pas de test de profondeur
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        // 6 sommets (3 axes) mis à jour chaque frame
+        let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gizmo_vbuf"),
+            size: (6 * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // --- Meshes (un GpuMesh par type) ---
         let mut meshes = HashMap::new();
         for kind in MeshKind::ALL {
@@ -196,6 +277,8 @@ impl Renderer {
             camera_bind_group,
             meshes,
             objects_gpu: Vec::new(),
+            gizmo_pipeline,
+            gizmo_vbuf,
             editor,
         }
     }
@@ -293,6 +376,23 @@ impl Renderer {
         self.sync_objects(&app.scene);
         self.write_uniforms(app);
 
+        // Préparer le gizmo de l'objet sélectionné (3 axes colorés).
+        let gizmo_visible = if let Some(sel) = app.selection {
+            let o = app.scene.objects[sel].transform.position;
+            let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
+            let mut verts = [GizmoVertex { position: [0.0; 3], color: [0.0; 3] }; 6];
+            for axis in 0..3 {
+                let end = o + axis_dir(axis) * GIZMO_LEN;
+                verts[axis * 2] = GizmoVertex { position: o.to_array(), color: colors[axis] };
+                verts[axis * 2 + 1] = GizmoVertex { position: end.to_array(), color: colors[axis] };
+            }
+            self.queue
+                .write_buffer(&self.gizmo_vbuf, 0, bytemuck::cast_slice(&verts));
+            true
+        } else {
+            false
+        };
+
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -339,6 +439,14 @@ impl Renderer {
                 pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
                 pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
+            }
+
+            // Gizmo de l'objet sélectionné, par-dessus.
+            if gizmo_visible {
+                pass.set_pipeline(&self.gizmo_pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.gizmo_vbuf.slice(..));
+                pass.draw(0..6, 0..1);
             }
         }
 

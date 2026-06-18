@@ -34,14 +34,14 @@
 - **Fichiers** : `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/app/input.rs`, `src/main.rs`.
 - **Livrable** : comportement identique au MVP, build sans warning, 3 démarrages OK. ✅
 
-### Sprint 8 — Gizmos de manipulation à la souris
-**Objectif** : déplacer/tourner/redimensionner un objet directement dans la vue 3D.
-- [ ] Dessiner 3 axes (X/Y/Z) sur l'objet sélectionné (lignes colorées, pass dédiée sans depth-test).
-- [ ] Picking de l'axe (ray vs segment/cylindre), drag → translation le long de l'axe.
-- [ ] Bascule translation / rotation / échelle (touches W/E/R, façon Unity).
-- **Fichiers** : `src/gfx/gizmo.rs` (nouveau), `renderer.rs`, `editor/mod.rs`.
-- **Livrable** : glisser le gizmo déplace l'objet ; l'inspecteur reflète la valeur en direct.
-- **Risque** : maths de projection écran→axe ; commencer par la translation seule.
+### Sprint 8 — Gizmo de manipulation à la souris ✅ FAIT (translation)
+**Objectif** : déplacer un objet directement dans la vue 3D.
+- [x] 3 axes X/Y/Z (lignes colorées) sur l'objet sélectionné, pipeline dédié sans depth-test.
+- [x] Picking de l'axe en espace écran (~10 px), drag → translation le long de l'axe (plan face-caméra).
+- [x] L'inspecteur reflète la position en direct ; priorité gizmo sur l'orbite.
+- [ ] À venir : bascule rotation / échelle (touches W/E/R).
+- **Fichiers** : `src/gfx/shaders/gizmo.wgsl`, `src/gfx/renderer.rs`, `src/app/mod.rs`.
+- **Livrable** : glisser un axe déplace l'objet, valeur live dans l'inspecteur. ✅
 
 ### Sprint 9 — Import de modèles glTF
 **Objectif** : charger de vrais assets 3D.
