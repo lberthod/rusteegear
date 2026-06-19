@@ -6,10 +6,11 @@ description = "Moteur de jeu 3D minimaliste (style Unity) en Rust"
 
 [package.metadata.bundle]
 name = "RusteeGear"
-identifier = "com.berthod.motor3derust"
+identifier = "com.berthod.rusteegear"
 short_description = "Moteur de jeu 3D minimaliste"
 category = "public.app-category.developer-tools"
 copyright = "© 2026 Berthod"
+icon = ["assets/icon/icon.icns"]
 
 # Bibliothèque partagée : rlib pour le bin desktop, cdylib pour le .so Android.
 [lib]

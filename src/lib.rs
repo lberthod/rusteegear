@@ -97,6 +97,7 @@ impl ApplicationHandler for App {
         }
         let attrs = Window::default_attributes()
             .with_title("RusteeGear")
+            .with_window_icon(load_window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 720.0));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -223,6 +224,14 @@ impl ApplicationHandler for App {
             ));
         }
     }
+}
+
+/// Icône de fenêtre/dock, embarquée dans le binaire (PNG 64×64 décodé au lancement).
+fn load_window_icon() -> Option<winit::window::Icon> {
+    const PNG: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon/icon_64.png"));
+    let img = image::load_from_memory(PNG).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
 }
 
 fn make_app(player: bool) -> App {
