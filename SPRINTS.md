@@ -47,37 +47,63 @@
 
 ---
 
-## Sprints à venir — alignés sur l'analyse
+## Sprints à venir — maturité & robustesse (Sprints 36–37)
 
-Ces sprints sont conçus pour **implémenter tous les points importants** relevés dans
-[ANALYSE.md](ANALYSE.md) (§2 audit, §4 possibilités futures). Chaque ligne pointe vers
-la recommandation qu'elle adresse.
+Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4 possibilités futures).
 
 | # | Sprint | Objectif | Couvre (réf. analyse) | État |
 |---|---|---|---|---|
-| 35b | Pipeline d'assets (fin) | Gestionnaire `asset://`, **import mobile (P10)**, fusion de meshes statiques | Audit P10 · §4 import mobile | ⬜ |
-| 36 | Robustesse & boucle de simulation | Propager les `Result` d'init GPU/fenêtre + `log::error!` (anti-crash mobile) ; **découpler simulation et rendu** (boucle de mise à jour séparée, pas de temps fixe physique) | Audit P4 · « simulation pilotée par le rendu » · §2 reco 1–2 | ⬜ |
-| 37 | Validation device & tests | Valider sur appareil réel les chaînes récentes (**PBR, instancing, resume**, joystick→script→APK) ; **étendre les tests** (matériaux, round-trip sérialisation, culling) | §2 reco 3–4 · HANDOFF Sprint 28 | ⬜ |
-| 38 | Distribution signée | Override identité Android, **IPA signé en CI** (secrets), notarisation macOS, 3 artefacts signés par tag | Audit §6 · §4 distribution store | ⬜ |
-| 39 | Rendu : finitions | **Ombres** câblées (`shadow.wgsl`), **textures** PBR (normal/metallic-roughness maps), post-process (bloom emissive) | §4 ombres/textures/rendu | ⬜ |
-| 40 | Cible WebGPU / WASM | Export navigateur (`wgpu` le supporte déjà) — fort impact démonstration | §4 moyen terme | ⬜ |
-| 41 | IA avancée & confort | IA « Ajouter à la scène » + édition ciblée, historique de prompts, glisser-déposer hiérarchie, gizmo multi rotate/scale | §4 IA · confort d'édition | ⬜ |
-| 42 | (option) ECS léger | Migrer `Vec<SceneObject>` → entités typées si la complexité le justifie (à arbitrer contre la lisibilité) | §4 long terme | ⬜ |
+| 36 | Distribution signée & validation device | Override identité Android, **IPA signé en CI** (secrets), notarisation macOS ; valider sur appareil réel (**PBR, instancing, resume**, joystick→script→APK) | Audit §6 · §2 reco 3 · §4 distribution | ⬜ |
+| 37 | IA avancée & confort d'édition | IA « Ajouter à la scène » + édition ciblée, historique de prompts, glisser-déposer hiérarchie, gizmo multi rotate/scale | §4 IA · confort d'édition | ⬜ |
+
+> **Transversal (à intégrer dans 36–37 ou en sprint dédié)** : **découpler simulation et
+> rendu** (boucle de mise à jour séparée, pas de temps fixe physique), **durcir l'init**
+> (`Result` + `log::error!` anti-crash mobile, audit P4), **étendre les tests**, et lever
+> **P10** (import d'assets mobile). Pistes plus lointaines : **WebGPU/WASM**, **ECS léger**.
 
 ---
 
-## Correspondance analyse → sprint
+## PHASE G — Éditeur produit orienté Android (Sprints 38–42)
 
-| Point d'analyse | Sprint cible |
+Objectif : atteindre l'**UI cible** d'un éditeur 3D Rust orienté export Android natif.
+Promesse produit : *créer une scène → ajouter des contrôles mobiles → exporter un APK →
+tester sur téléphone*. Détail complet dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
+
+| # | Sprint | Apport principal | État |
+|---|---|---|---|
+| 38 | Menus complets & barre du haut | Fichier (Ouvrir/Sauver sous/Exporter APK/Paramètres projet…), Édition (Couper/Coller/Sélectionner tout/Grouper), toolbar (Pause/Stop/Snap/Grid/2D-3D/Build APK/Run Device), Aide (Guide APK, Diagnostic système) | ⬜ |
+| 39 | Build Panel Android | Fenêtre dédiée : Application (nom/package/version/orientation/SDK/icône/splash), Rendu (Vulkan/qualité/FPS/ombres/MSAA), Assets (compression/nettoyage), Signature (debug/release), Actions (Build/Install/Run/Logs ADB) + Readiness Check enrichi | ⬜ |
+| 40 | Menu Ajouter complet | Objet 3D (+ Terrain), Lumière (dir/point/spot/ambient), Caméra (principale/mobile), Physique (rigidbody/colliders/trigger), Audio (source/listener), UI (texte/bouton/joystick mobile/zone tactile/barre de vie) | ⬜ |
+| 41 | Composants inspecteur mobiles | Mesh Renderer, Material, Mobile Touch Area + composants Android : Input Receiver, Touch Button, Virtual Joystick, Gyroscope, Vibration Feedback, Screen Safe Area | ⬜ |
+| 42 | Menu Outils & optimisation mobile | Gestionnaire d'assets, Profiler mémoire, Gestionnaire scripts Lua, Bake lighting, Convertisseur textures ; Optimisation mobile complète (fusion meshes, LOD, occlusion culling, Mode performance Android) | ⬜ |
+
+> **Déjà acquis (Sprints 32–35)** : barre de menus, console, profiler FPS, **APK Readiness
+> Check**, contrôles tactiles, PBR, lumières multiples, caméra de jeu, réduction de textures.
+> La Phase G **complète** ces briques jusqu'à l'UI cible.
+
+**Boucle produit visée (sans ligne de commande) :**
+
+```
+Créer scène → Ajouter objets → Ajouter caméra → Ajouter joystick mobile
+→ Build Panel Android → APK Readiness Check → Build APK → Installer & lancer sur téléphone
+```
+
+---
+
+## Correspondance analyse / vision → sprint
+
+| Point | Sprint cible |
 |---|---|
-| P4 — panics d'init (crash mobile) | 36 |
-| P10 — import d'assets sur mobile | 35b |
-| Simulation pilotée par la cadence de rendu | 36 |
-| Validation bout-en-bout sur device (PBR/instancing/resume) | 37 |
-| Couverture de tests à étendre | 37 |
-| Ombres (shadow mapping) | 39 |
-| Textures PBR | 39 |
-| Distribution store signée | 38 |
-| WebGPU / WASM | 40 |
-| IA approfondie | 41 |
-| ECS léger | 42 (option) |
+| Distribution store signée (Android/iOS/macOS) | 36 |
+| Validation device (PBR / instancing / resume) | 36 |
+| P4 — panics d'init (crash mobile) | transversal (36) |
+| P10 — import d'assets sur mobile | transversal / 42 (gestionnaire d'assets) |
+| Simulation pilotée par la cadence de rendu | transversal |
+| Couverture de tests à étendre | transversal (36) |
+| IA approfondie + confort d'édition | 37 |
+| Menus & toolbar produit | 38 |
+| Build Panel Android (fenêtre dédiée) | 39 |
+| Menu Ajouter complet (UI mobile) | 40 |
+| Composants mobiles (gyroscope/vibration/safe area) | 41 |
+| Optimisation mobile (LOD / occlusion / mode perf) | 42 |
+| Ombres / textures PBR / WebGPU / ECS | pistes (voir ANALYSE §4) |

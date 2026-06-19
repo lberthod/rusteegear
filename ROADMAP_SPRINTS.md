@@ -480,6 +480,92 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+## PHASE G — Éditeur produit orienté Android
+
+> **But.** Transformer l'éditeur d'un démonstrateur technique en un **produit lisible
+> avec une promesse claire** : *créer une scène 3D en Rust → ajouter des contrôles mobiles
+> → exporter un APK → tester sur téléphone*. Stack confirmée : **Rust + winit
+> (`android-activity`) + wgpu (Vulkan)** + `cargo-apk`. La boucle d'usage cible :
+> `Créer scène → Ajouter objets → Ajouter caméra → Ajouter joystick mobile → Build APK → Installer sur Android`.
+>
+> Une partie de cette vision est **déjà en place** (Sprint 32 : barre de menus, console,
+> profiler FPS, **APK Readiness Check**, contrôles tactiles ; Sprints 33–35 : PBR,
+> lumières multiples, caméra de jeu, optimisation mobile). La Phase G **complète** les
+> menus, le panneau de build et les composants mobiles pour atteindre l'UI cible.
+
+### Sprint 38 — Menus complets & barre du haut « produit » ⬜
+**Objectif** : compléter la barre de menus et la toolbar pour couvrir la boucle d'usage.
+- [ ] **Fichier** : Nouveau projet, Ouvrir projet, Sauvegarder, **Sauvegarder sous…**,
+      Exporter scène, **Exporter projet Android APK** (ouvre le Build Panel, Sprint 39),
+      Exporter assets bundle, **Paramètres du projet**, Quitter.
+- [ ] **Édition** : compléter Couper, Coller, **Sélectionner tout**, Grouper, Dégrouper,
+      Préférences (les autres existent déjà : Annuler/Rétablir/Dupliquer/Supprimer/Aligner au sol/Reset transform).
+- [ ] **Barre du haut** enrichie : `▶ Play | ⏸ Pause | ■ Stop | Déplacer | Tourner | Redim. |
+      Local/Global | Snap | Grid | 2D/3D | Build APK | Run Device`.
+- [ ] **Aide** : Documentation, Raccourcis clavier, **Guide export APK**, Exemples de projets,
+      À propos, **Diagnostic système** (Rust/Cargo/SDK/NDK/ADB/cargo-apk/appareil/backend GPU).
+- **Fichiers** : `src/editor/mod.rs`, `src/app/mod.rs`.
+- **Livrable** : tous les menus de l'UI cible présents et branchés ; toolbar avec Pause/Stop/Snap/Grid/Build APK/Run Device.
+- **Risques** : Snap/Grid/2D-3D = vraie logique d'édition (pas que de l'UI) → prévoir l'état associé.
+
+### Sprint 39 — Build Panel Android (fenêtre dédiée) ⬜
+**Objectif** : remplacer un simple « Export APK » par un **panneau de build professionnel**.
+- [ ] Fenêtre **Build Android** structurée :
+  - **Application** : nom, package id (`com.loic.motor3derust.demo`), version, orientation
+    (Portrait/Paysage), Min SDK, Target SDK (auto), **icône APK**, **splash screen**.
+  - **Rendu** : backend (Vulkan), qualité (Low/Medium/High), FPS cible (30/60),
+    ombres On/Off, MSAA (Off/2×/4×).
+  - **Assets** : compresser textures, réduire audio, inclure scènes, nettoyer assets inutilisés.
+  - **Signature** : Debug / Release signed.
+  - **Actions** : Build APK, Installer sur téléphone, Lancer sur téléphone, Voir logs ADB.
+- [ ] **APK Readiness Check** intégré au panneau (déjà existant en Sprint 32, à enrichir :
+      icône manquante, package id invalide, objets dynamiques sans collider, ombres sur low-end).
+- **Fichiers** : `src/editor/{export,readiness,mod}.rs`, `src/app/build_config.rs`, `Cargo.toml`, `packaging/*`.
+- **Livrable** : un seul écran couvre identité + rendu + assets + signature + actions device.
+- **Risques** : icône/splash → injection dans `cargo-apk` (métadonnées Android) à valider.
+
+### Sprint 40 — Menu Ajouter complet (objets, lumières, caméras, physique, audio, UI mobile) ⬜
+**Objectif** : structurer le menu Ajouter façon Unity, en priorisant le mobile.
+- [ ] **Objet 3D** : Cube, Sphère, Capsule, Cylindre, Plan, **Terrain**.
+- [ ] **Lumière** : Directionnelle, Point Light, **Spot Light**, Ambient Light.
+- [ ] **Caméra** : Caméra principale, **Caméra mobile**.
+- [ ] **Physique** : Rigidbody, Collider Box, Collider Sphere, **Trigger Zone**.
+- [ ] **Audio** : Source audio, **Listener audio**.
+- [ ] **UI** : Texte, Bouton, **Joystick mobile**, **Bouton tactile**, **Zone tactile**, Barre de vie.
+- **Fichiers** : `src/scene/mod.rs`, `src/gfx/mesh.rs`, `src/editor/mod.rs`, `src/runtime/*`.
+- **Livrable** : tous les types d'objets de l'UI cible créables depuis le menu (mobile en priorité).
+- **Risques** : Terrain, Spot Light, Trigger Zone = nouveaux sous-systèmes → MVP minimal d'abord.
+
+### Sprint 41 — Composants d'inspecteur mobiles ⬜
+**Objectif** : exposer dans l'inspecteur les composants par objet, dont les composants mobiles.
+- [ ] Composants standards listés/édités : Transform, **Mesh Renderer**, **Material**,
+      Collider, Rigidbody, Script Lua, Audio Source, **Mobile Touch Area**.
+- [ ] Composants **Android** : Mobile Input Receiver, Touch Button, Virtual Joystick,
+      **Gyroscope Controller**, **Vibration Feedback** (durée 80 ms, intensité légère/moyenne/forte,
+      déclencheur collision/bouton/événement Lua), **Screen Safe Area**.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`, `src/runtime/*`, `src/app/mod.rs`.
+- **Livrable** : un objet peut recevoir vibration/gyroscope/safe-area et les scripts Lua les lisent.
+- **Risques** : gyroscope/vibration = **capteurs natifs** Android (JNI/`android-activity`) → repli no-op sur desktop.
+
+### Sprint 42 — Menu Outils & optimisation mobile complète ⬜
+**Objectif** : faire du menu Outils le centre de contrôle qualité/perf mobile (différenciateur).
+- [ ] **Outils** : Gestionnaire d'assets, Console, Profiler FPS, **Profiler mémoire**,
+      Build Android, **Gestionnaire de scripts Lua**, **Bake lighting**, Optimisation mobile,
+      **Convertisseur textures**, Contrôle qualité APK.
+- [ ] **Optimisation mobile** (étendre le panneau du Sprint 35) : réduire/compresser textures
+      (fait), **fusionner meshes statiques**, réduire ombres, limiter lumières (fait),
+      **activer LOD**, **activer occlusion culling**, **Mode performance Android**.
+- **Fichiers** : `src/editor/{mod,export}.rs`, `src/scene/mod.rs`, `src/gfx/renderer.rs`, `src/assets.rs`.
+- **Livrable** : un projet s'optimise et se diagnostique entièrement depuis le menu Outils.
+- **Risques** : LOD / occlusion culling = vrais sous-systèmes de rendu → planifier en incréments.
+
+> **Définition de « terminé » Phase G** : la boucle produit complète est réalisable
+> *sans ligne de commande* — créer une scène, ajouter un joystick mobile et une caméra,
+> ouvrir le Build Panel Android, passer le Readiness Check, builder, installer et lancer
+> l'APK sur un téléphone connecté.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
