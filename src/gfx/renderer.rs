@@ -728,6 +728,9 @@ impl Renderer {
             if actions.new_scene {
                 app.new_scene();
             }
+            if actions.load_demo {
+                app.load_mobile_demo();
+            }
             if actions.align_ground {
                 app.align_to_ground();
             }

@@ -397,6 +397,14 @@ impl AppState {
         self.should_quit = true;
     }
 
+    /// Charge la démo mobile prête à jouer (avec historique pour annuler).
+    pub fn load_mobile_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::mobile_demo();
+        self.imported_dirty = true;
+        self.clear_selection();
+    }
+
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
     pub fn new_scene(&mut self) {
         self.push_undo();

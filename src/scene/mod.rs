@@ -279,6 +279,53 @@ impl Scene {
         }
     }
 
+    /// Démo mobile « prête à jouer » : un sol, un personnage piloté au joystick
+    /// (avec saut au bouton) et contrôles tactiles activés. Démontre toute la
+    /// boucle joystick → script → rendu en mode Play.
+    pub fn mobile_demo() -> Self {
+        let player_script = "\
+local speed = 4.0
+obj.x = obj.x + input.jx * speed * dt
+obj.z = obj.z - input.jy * speed * dt
+if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
+        Scene {
+            imported: Vec::new(),
+            groups: Vec::new(),
+            light: Light::default(),
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into()],
+            },
+            objects: vec![
+                SceneObject {
+                    name: "Sol".into(),
+                    transform: Transform::from_pos(Vec3::new(0.0, 0.0, 0.0))
+                        .with_scale(Vec3::new(14.0, 1.0, 14.0)),
+                    mesh: MeshKind::Plane,
+                    script: String::new(),
+                    physics: PhysicsKind::Static,
+                    audio_clip: String::new(),
+                    audio_autoplay: false,
+                    group: String::new(),
+                    color: [0.4, 0.5, 0.45],
+                    texture: String::new(),
+                },
+                SceneObject {
+                    name: "Joueur".into(),
+                    transform: Transform::from_pos(Vec3::new(0.0, 0.5, 0.0)),
+                    mesh: MeshKind::Capsule,
+                    script: player_script.into(),
+                    physics: PhysicsKind::None,
+                    audio_clip: String::new(),
+                    audio_autoplay: false,
+                    group: String::new(),
+                    color: [0.95, 0.6, 0.25],
+                    texture: String::new(),
+                },
+            ],
+        }
+    }
+
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
         if let Some(dir) = std::path::Path::new(path).parent() {
@@ -310,6 +357,20 @@ mod tests {
         let t = Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(2.0));
         let p = t.matrix() * Vec3::new(1.0, 0.0, 0.0).extend(1.0);
         assert!((p.truncate() - Vec3::new(2.0, 0.0, 0.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn mobile_demo_is_playable() {
+        let s = Scene::mobile_demo();
+        // contrôles tactiles présents
+        assert!(s.mobile.joystick);
+        assert!(s.mobile.buttons.iter().any(|b| b == "Saut"));
+        // un personnage scripté qui lit le joystick
+        let player = s.objects.iter().find(|o| o.name == "Joueur").unwrap();
+        assert!(player.script.contains("input.jx"));
+        assert!(player.script.contains("input.btn.Saut"));
+        // et un sol
+        assert!(s.objects.iter().any(|o| matches!(o.mesh, MeshKind::Plane)));
     }
 
     #[test]

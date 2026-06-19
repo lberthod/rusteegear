@@ -67,6 +67,8 @@ pub struct UiActions {
     pub redo: bool,
     /// « Nouveau projet » : vide la scène.
     pub new_scene: bool,
+    /// « Démo mobile » : charge une scène jouable (joystick + saut).
+    pub load_demo: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -450,6 +452,14 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
     ui.menu_button("Fichier", |ui| {
         if ui.button("✨  Nouveau projet").clicked() {
             actions.new_scene = true;
+            ui.close();
+        }
+        if ui
+            .button("🎮  Démo mobile (jouable)")
+            .on_hover_text("Charge une scène : joystick + bouton Saut + personnage scripté")
+            .clicked()
+        {
+            actions.load_demo = true;
             ui.close();
         }
         ui.separator();
