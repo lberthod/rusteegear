@@ -1449,6 +1449,21 @@ fn build_ui(
                                 "En Play, un tap dessus expose obj.tapped au script (ex. couleur)",
                             );
                         ui.separator();
+                        ui.collapsing("Matériau", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Métallique");
+                                ui.add(egui::Slider::new(&mut obj.metallic, 0.0..=1.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Rugosité");
+                                ui.add(egui::Slider::new(&mut obj.roughness, 0.04..=1.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Émission");
+                                ui.add(egui::Slider::new(&mut obj.emissive, 0.0..=3.0));
+                            });
+                        });
+                        ui.separator();
                         ui.collapsing("Audio", |ui| {
                             ui.horizontal(|ui| {
                                 if ui.button("Choisir un son…").clicked() {

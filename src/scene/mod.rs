@@ -122,6 +122,19 @@ pub struct SceneObject {
     /// au script pendant une frame (interaction tactile, ex. changer de couleur).
     #[serde(default)]
     pub tappable: bool,
+    /// Aspect métallique (0 = diélectrique, 1 = métal).
+    #[serde(default)]
+    pub metallic: f32,
+    /// Rugosité de surface (0 = miroir, 1 = mat).
+    #[serde(default = "default_roughness")]
+    pub roughness: f32,
+    /// Intensité d'émission (0 = aucune ; l'objet « brille » de sa propre couleur).
+    #[serde(default)]
+    pub emissive: f32,
+}
+
+fn default_roughness() -> f32 {
+    0.6
 }
 
 fn white() -> [f32; 3] {
@@ -296,6 +309,9 @@ impl Scene {
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
                     tappable: false,
+                    metallic: 0.0,
+                    roughness: 0.6,
+                    emissive: 0.0,
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -310,6 +326,9 @@ impl Scene {
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
                     tappable: false,
+                    metallic: 0.0,
+                    roughness: 0.6,
+                    emissive: 0.0,
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -324,6 +343,9 @@ impl Scene {
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
                     tappable: false,
+                    metallic: 0.0,
+                    roughness: 0.6,
+                    emissive: 0.0,
                 },
             ],
         }
@@ -361,6 +383,9 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     color: [0.4, 0.5, 0.45],
                     texture: String::new(),
                     tappable: false,
+                    metallic: 0.0,
+                    roughness: 0.6,
+                    emissive: 0.0,
                 },
                 SceneObject {
                     name: "Joueur".into(),
@@ -374,6 +399,9 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     color: [0.95, 0.6, 0.25],
                     texture: String::new(),
                     tappable: false,
+                    metallic: 0.0,
+                    roughness: 0.6,
+                    emissive: 0.0,
                 },
                 SceneObject {
                     name: "Bouton couleur".into(),
@@ -388,6 +416,9 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     color: [0.3, 0.6, 0.9],
                     texture: String::new(),
                     tappable: true,
+                    metallic: 0.0,
+                    roughness: 0.6,
+                    emissive: 0.0,
                 },
             ],
         }
@@ -422,6 +453,9 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 color: o.color,
                 texture: String::new(),
                 tappable: o.tappable,
+                metallic: 0.0,
+                roughness: 0.6,
+                emissive: 0.0,
             })
             .collect();
         if objects.is_empty() {

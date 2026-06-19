@@ -44,6 +44,8 @@ impl GizmoVertex {
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    /// Position de la caméra (xyz), pour le terme spéculaire. w inutilisé.
+    eye: [f32; 4],
 }
 
 #[repr(C)]
@@ -77,6 +79,8 @@ struct ObjectGpu {
     last_model: Option<glam::Mat4>,
     last_highlight: f32,
     last_color: [f32; 3],
+    /// Dernier matériau téléversé : (metallic, roughness, emissive).
+    last_material: [f32; 3],
 }
 
 pub struct Renderer {
@@ -536,6 +540,7 @@ impl Renderer {
                 last_model: None,
                 last_highlight: -1.0,
                 last_color: [-1.0, -1.0, -1.0],
+                last_material: [-1.0, -1.0, -1.0],
             });
         }
         self.objects_gpu.truncate(n);
@@ -586,8 +591,10 @@ impl Renderer {
     /// Pousse les uniforms (caméra + matrices modèle + surbrillance) depuis l'état.
     /// N'écrit le buffer d'un objet que si sa pose ou sa surbrillance a changé.
     fn write_uniforms(&mut self, app: &AppState) {
+        let eye = app.camera.eye();
         let camera_uniform = CameraUniform {
             view_proj: app.camera.view_proj().to_cols_array_2d(),
+            eye: [eye.x, eye.y, eye.z, 1.0],
         };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
@@ -626,10 +633,12 @@ impl Renderer {
         {
             let model = obj.transform.matrix();
             let highlight = app.highlight_of(i);
+            let material = [obj.metallic, obj.roughness, obj.emissive];
             // Rien n'a changé depuis la dernière frame : on saute l'upload.
             if gpu.last_model == Some(model)
                 && gpu.last_highlight == highlight
                 && gpu.last_color == obj.color
+                && gpu.last_material == material
             {
                 continue;
             }
@@ -639,7 +648,7 @@ impl Renderer {
             let model_uniform = ModelUniform {
                 model: model.to_cols_array_2d(),
                 normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
-                params: [highlight, 0.0, 0.0, 0.0],
+                params: [highlight, obj.metallic, obj.roughness, obj.emissive],
                 color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
             };
             self.queue
@@ -647,6 +656,7 @@ impl Renderer {
             gpu.last_model = Some(model);
             gpu.last_highlight = highlight;
             gpu.last_color = obj.color;
+            gpu.last_material = material;
         }
     }
 

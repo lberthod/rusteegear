@@ -465,6 +465,9 @@ impl AppState {
             color: [1.0, 1.0, 1.0],
             texture: String::new(),
             tappable: false,
+            metallic: 0.0,
+            roughness: 0.6,
+            emissive: 0.0,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -1070,6 +1073,9 @@ impl AppState {
             color: [1.0, 1.0, 1.0],
             texture: String::new(),
             tappable: false,
+            metallic: 0.0,
+            roughness: 0.6,
+            emissive: 0.0,
         });
         self.select_single(self.scene.objects.len() - 1);
     }

@@ -2,6 +2,7 @@
 
 struct Camera {
     view_proj: mat4x4<f32>,
+    eye: vec4<f32>, // position caméra (xyz) pour le spéculaire
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -41,6 +42,7 @@ struct VsOut {
     @location(2) highlight: f32,
     @location(3) world_pos: vec3<f32>,
     @location(4) uv: vec2<f32>,
+    @location(5) material: vec3<f32>, // metallic, roughness, emissive
 };
 
 @vertex
@@ -53,6 +55,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.highlight = model.params.x;
     out.world_pos = world.xyz;
     out.uv = in.uv;
+    out.material = model.params.yzw;
     return out;
 }
 
@@ -84,10 +87,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     let diffuse = max(dot(n, light_dir), 0.0);
     let shadow = shadow_factor(in.world_pos);
-    let intensity = light.ambient.x + diffuse * (1.0 - light.ambient.x) * shadow;
     let tex = textureSample(albedo_tex, albedo_samp, in.uv).rgb;
-    var color = in.color * tex * light.color.rgb * intensity;
-    // surbrillance jaune additive pour l'objet sélectionné
+    let albedo = in.color * tex;
+
+    let metallic = clamp(in.material.x, 0.0, 1.0);
+    let roughness = clamp(in.material.y, 0.04, 1.0);
+    let emissive = in.material.z;
+
+    // Diffuse : atténuée pour les métaux (qui réfléchissent au lieu de diffuser).
+    let kd = 1.0 - metallic;
+    let lit = light.ambient.x + diffuse * (1.0 - light.ambient.x) * shadow;
+    var color = albedo * kd * light.color.rgb * lit;
+
+    // Spéculaire Blinn-Phong (puissance pilotée par la rugosité ; teinte = blanc
+    // pour un diélectrique, albédo pour un métal). Approximation PBR légère, mobile-friendly.
+    let v = normalize(camera.eye.xyz - in.world_pos);
+    let h = normalize(light_dir + v);
+    let spec_power = mix(8.0, 256.0, 1.0 - roughness);
+    let spec = pow(max(dot(n, h), 0.0), spec_power) * diffuse * shadow * (1.0 - roughness);
+    let spec_col = mix(vec3<f32>(1.0), albedo, metallic);
+    color = color + spec * spec_col * light.color.rgb;
+
+    // Émission (l'objet brille de sa propre couleur) + surbrillance de sélection.
+    color = color + albedo * emissive;
     color = color + in.highlight * vec3<f32>(0.35, 0.3, 0.0);
     return vec4<f32>(color, 1.0);
 }
