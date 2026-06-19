@@ -697,6 +697,7 @@ impl Renderer {
                 &mut app.input_state,
                 &mut app.device_preview,
                 &mut app.device_portrait,
+                &mut app.view_rect_px,
                 status,
             );
             if actions.save {
@@ -766,7 +767,16 @@ impl Renderer {
         let sw = self.config.width as f32;
         let sh = self.config.height as f32;
         let (dx, dy, dw, dh) = if app.device_preview {
-            crate::app::device_rect(sw, sh, app.device_portrait)
+            // Base : région centrale (hors panneaux) remontée par l'éditeur ; sinon plein écran.
+            let (bx, by, bw, bh) = app.view_rect_px;
+            let (bx, by, bw, bh) = if bw > 1.0 && bh > 1.0 {
+                (bx, by, bw, bh)
+            } else {
+                (0.0, 0.0, sw, sh)
+            };
+            // Le viewport GPU est en Y depuis le haut, comme les coordonnées egui : pas d'inversion.
+            let (rx, ry, rw, rh) = crate::app::device_rect(bw, bh, app.device_portrait);
+            (bx + rx, by + ry, rw, rh)
         } else {
             (0.0, 0.0, sw, sh)
         };

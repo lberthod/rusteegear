@@ -125,7 +125,7 @@ impl Editor {
         let mobile = &scene.mobile;
         let output = self.ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
-            let area = play_area_rect(ctx, device_preview, device_portrait);
+            let area = play_area_rect(ctx.content_rect(), device_preview, device_portrait);
             if device_preview {
                 device_bezel(ctx, area);
             }
@@ -159,6 +159,7 @@ impl Editor {
         input_state: &mut crate::app::PlayerInput,
         device_preview: &mut bool,
         device_portrait: &mut bool,
+        view_rect: &mut (f32, f32, f32, f32),
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -180,6 +181,7 @@ impl Editor {
                 input_state,
                 device_preview,
                 device_portrait,
+                view_rect,
                 &status,
                 export,
                 hier_filter,
@@ -860,18 +862,14 @@ fn tool_windows(
         });
 }
 
-/// Rectangle (points egui) de la zone de jeu : écran de téléphone centré si
-/// l'aperçu mobile est actif, sinon tout l'écran.
-fn play_area_rect(ctx: &egui::Context, preview: bool, portrait: bool) -> egui::Rect {
-    let full = ctx.content_rect();
+/// Rectangle (points egui) de la zone de jeu : écran de téléphone centré dans la
+/// région `central` si l'aperçu mobile est actif, sinon `central` en entier.
+fn play_area_rect(central: egui::Rect, preview: bool, portrait: bool) -> egui::Rect {
     if !preview {
-        return full;
+        return central;
     }
-    let (x, y, w, h) = crate::app::device_rect(full.width(), full.height(), portrait);
-    egui::Rect::from_min_size(
-        egui::pos2(full.left() + x, full.top() + y),
-        egui::vec2(w, h),
-    )
+    let (x, y, w, h) = crate::app::device_rect(central.width(), central.height(), portrait);
+    egui::Rect::from_min_size(central.min + egui::vec2(x, y), egui::vec2(w, h))
 }
 
 /// Dessine le cadre « téléphone » (biseau arrondi + encoche) autour de la zone de jeu.
@@ -980,6 +978,7 @@ fn build_ui(
     input_state: &mut crate::app::PlayerInput,
     device_preview: &mut bool,
     device_portrait: &mut bool,
+    view_rect: &mut (f32, f32, f32, f32),
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -988,18 +987,6 @@ fn build_ui(
     panels: &mut Panels,
     actions: &mut UiActions,
 ) {
-    // Cadre « téléphone » + overlay des contrôles tactiles dans la zone de jeu.
-    let play_rect = play_area_rect(root.ctx(), *device_preview, *device_portrait);
-    if *device_preview {
-        device_bezel(root.ctx(), play_rect);
-    }
-    if *playing && scene.mobile.any() {
-        mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);
-    } else {
-        input_state.joy = (0.0, 0.0);
-        input_state.buttons.clear();
-    }
-
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
@@ -1241,6 +1228,29 @@ fn build_ui(
                 }
             }
         });
+
+    // Région centrale 3D (ce qui reste après les panneaux) : base de l'aperçu mobile.
+    let central = root.available_rect_before_wrap();
+    let ppp = root.ctx().pixels_per_point();
+    *view_rect = (
+        central.left() * ppp,
+        central.top() * ppp,
+        central.width() * ppp,
+        central.height() * ppp,
+    );
+
+    // Cadre « téléphone » + contrôles tactiles, confinés à la zone de jeu.
+    let play_rect = play_area_rect(central, *device_preview, *device_portrait);
+    if *device_preview {
+        device_bezel(root.ctx(), play_rect);
+    }
+    if *playing && scene.mobile.any() {
+        mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);
+    } else {
+        input_state.joy = (0.0, 0.0);
+        input_state.buttons.clear();
+    }
+
     // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
     // après cette frame, afin de passer par l'historique.
 }

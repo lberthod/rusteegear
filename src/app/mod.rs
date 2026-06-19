@@ -67,6 +67,9 @@ pub struct AppState {
     pub device_preview: bool,
     /// Orientation de l'aperçu mobile (portrait par défaut).
     pub device_portrait: bool,
+    /// Région centrale 3D (hors panneaux) en pixels physiques `(x, y, w, h)`,
+    /// remontée par l'éditeur ; base de l'aperçu mobile. `(0,0,0,0)` = plein écran.
+    pub view_rect_px: (f32, f32, f32, f32),
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -168,6 +171,7 @@ impl AppState {
             input_state: PlayerInput::default(),
             device_preview: false,
             device_portrait: true,
+            view_rect_px: (0.0, 0.0, 0.0, 0.0),
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
