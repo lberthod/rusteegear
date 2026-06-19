@@ -1118,6 +1118,13 @@ fn build_ui(
                     *device_portrait = !*device_portrait;
                 }
             }
+            if ui
+                .selectable_label(scene.camera_follow, "🎥 Suivi")
+                .on_hover_text("En Play, la caméra suit le joueur (objet scripté)")
+                .clicked()
+            {
+                scene.camera_follow = !scene.camera_follow;
+            }
             // Build APK : différenciateur du moteur, mis en avant à droite.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui

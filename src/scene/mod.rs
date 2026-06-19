@@ -142,6 +142,9 @@ pub struct Scene {
     /// Contrôles tactiles mobiles (joystick + boutons), exposés aux scripts Lua.
     #[serde(default)]
     pub mobile: MobileControls,
+    /// En mode Play, la caméra suit le premier objet scripté (« joueur »).
+    #[serde(default)]
+    pub camera_follow: bool,
 }
 
 /// Configuration des contrôles tactiles affichés en mode Play / Player.
@@ -235,6 +238,7 @@ impl Scene {
             groups: Vec::new(),
             light: Light::default(),
             mobile: MobileControls::default(),
+            camera_follow: false,
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -296,6 +300,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 joystick: true,
                 buttons: vec!["Saut".into()],
             },
+            camera_follow: true,
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),

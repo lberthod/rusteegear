@@ -764,6 +764,12 @@ impl AppState {
             for c in clips {
                 self.audio.play(&c);
             }
+            // Caméra de suivi : se cale d'emblée sur le joueur (pas de panoramique initial).
+            if self.scene.camera_follow
+                && let Some(p) = self.player_position()
+            {
+                self.camera.target = p;
+            }
         } else if !self.playing && self.was_playing {
             self.scene.objects = self.play_snapshot.clone();
             self.physics = None;
@@ -817,6 +823,24 @@ impl AppState {
         if let Some(phys) = &mut self.physics {
             phys.step(dt, &mut self.scene);
         }
+
+        // 3. caméra qui suit le joueur (premier objet scripté) en douceur.
+        if self.scene.camera_follow
+            && let Some(p) = self.player_position()
+        {
+            let t = (dt * 6.0).min(1.0);
+            self.camera.target = self.camera.target.lerp(p, t);
+        }
+    }
+
+    /// Position du « joueur » : premier objet scripté, sinon premier objet.
+    fn player_position(&self) -> Option<Vec3> {
+        self.scene
+            .objects
+            .iter()
+            .find(|o| !o.script.trim().is_empty())
+            .or_else(|| self.scene.objects.first())
+            .map(|o| o.transform.position)
     }
 
     /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
