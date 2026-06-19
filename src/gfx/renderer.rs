@@ -686,6 +686,7 @@ impl Renderer {
             let status = crate::editor::StatusInfo {
                 fps: app.fps(),
                 backend: &self.backend,
+                ai_busy: app.ai_busy,
             };
             let (full_output, actions) = self.editor.run(
                 &self.window,
@@ -751,6 +752,9 @@ impl Renderer {
             }
             if let Some(down) = actions.move_in_list {
                 app.move_selected_in_list(down);
+            }
+            if let Some((idx, prompt, key)) = actions.ai_generate {
+                app.request_ai_script(idx, prompt, key);
             }
             Some(full_output)
         };

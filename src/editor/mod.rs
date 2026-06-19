@@ -25,6 +25,10 @@ pub struct Editor {
     hier_rename: Option<(usize, String)>,
     /// État des fenêtres flottantes (Aide + Outils).
     panels: Panels,
+    /// Réglages utilisateur (clé API DeepSeek…), persistés sur disque.
+    settings: crate::app::settings::Settings,
+    /// Consigne en langage naturel pour la génération de script par IA.
+    ai_prompt: String,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -42,12 +46,16 @@ struct Panels {
     readiness: bool,
     /// Résultats du dernier « APK Readiness Check » (vide tant qu'on n'a pas analysé).
     readiness_results: Vec<readiness::Check>,
+    /// Fenêtre « Paramètres » (clé API…).
+    settings: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
 pub struct StatusInfo<'a> {
     pub fps: f32,
     pub backend: &'a str,
+    /// Une génération de script par IA est en cours.
+    pub ai_busy: bool,
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
@@ -78,6 +86,8 @@ pub struct UiActions {
     pub play_audio: Option<String>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
+    /// Génération IA d'un script : `(index objet, consigne, clé API)`.
+    pub ai_generate: Option<(usize, String, String)>,
 }
 
 impl Editor {
@@ -110,6 +120,8 @@ impl Editor {
             hier_new_group: String::new(),
             hier_rename: None,
             panels: Panels::default(),
+            settings: crate::app::settings::Settings::load(),
+            ai_prompt: String::new(),
         }
     }
 
@@ -174,6 +186,8 @@ impl Editor {
         let hier_new_group = &mut self.hier_new_group;
         let hier_rename = &mut self.hier_rename;
         let panels = &mut self.panels;
+        let settings = &mut self.settings;
+        let ai_prompt = &mut self.ai_prompt;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -193,6 +207,8 @@ impl Editor {
                 hier_new_group,
                 hier_rename,
                 panels,
+                settings,
+                ai_prompt,
                 &mut actions,
             );
         });
@@ -649,6 +665,11 @@ fn menu_outils(
             panels.diagnostic = true;
             ui.close();
         }
+        ui.separator();
+        if ui.button("⚙  Paramètres").clicked() {
+            panels.settings = true;
+            ui.close();
+        }
     });
 }
 
@@ -917,6 +938,41 @@ fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
     painter.rect_filled(notch, 7.0, Color32::from_rgb(20, 20, 24));
 }
 
+/// Fenêtre « Paramètres » : clé API DeepSeek (persistée à chaque modification).
+fn settings_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    settings: &mut crate::app::settings::Settings,
+) {
+    let mut open = panels.settings;
+    egui::Window::new("⚙  Paramètres")
+        .open(&mut open)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.heading("IA — génération de scripts");
+            ui.label("Clé API DeepSeek");
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut settings.deepseek_api_key)
+                    .password(true)
+                    .hint_text("sk-…")
+                    .desired_width(280.0),
+            );
+            if resp.lost_focus() || resp.changed() {
+                settings.save();
+            }
+            ui.label(if settings.deepseek_api_key.trim().is_empty() {
+                "❌ Aucune clé : génération IA désactivée"
+            } else {
+                "✅ Clé enregistrée"
+            });
+            ui.hyperlink_to(
+                "Obtenir une clé DeepSeek",
+                "https://platform.deepseek.com/api_keys",
+            );
+        });
+    panels.settings = open;
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -1024,8 +1080,13 @@ fn build_ui(
     hier_new_group: &mut String,
     hier_rename: &mut Option<(usize, String)>,
     panels: &mut Panels,
+    settings: &mut crate::app::settings::Settings,
+    ai_prompt: &mut String,
     actions: &mut UiActions,
 ) {
+    // Fenêtre « Paramètres » (clé API DeepSeek…).
+    settings_window(root.ctx(), panels, settings);
+
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
@@ -1306,6 +1367,37 @@ fn build_ui(
                                     .desired_rows(4)
                                     .hint_text("ex : obj.ry = obj.ry + dt * 90"),
                             );
+                            // --- Génération par IA (DeepSeek) ---
+                            ui.separator();
+                            ui.label("✨ Générer par IA");
+                            ui.add(
+                                egui::TextEdit::multiline(ai_prompt)
+                                    .desired_rows(2)
+                                    .hint_text(
+                                        "Décris le comportement, ex : « tourne lentement et \
+                                         grossit quand on le touche »",
+                                    ),
+                            );
+                            let has_key = !settings.deepseek_api_key.trim().is_empty();
+                            let can = has_key && !status.ai_busy && !ai_prompt.trim().is_empty();
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(can, egui::Button::new("✨ Générer le script"))
+                                    .clicked()
+                                {
+                                    actions.ai_generate = Some((
+                                        i,
+                                        ai_prompt.clone(),
+                                        settings.deepseek_api_key.clone(),
+                                    ));
+                                }
+                                if status.ai_busy {
+                                    ui.spinner();
+                                    ui.label("génération…");
+                                } else if !has_key {
+                                    ui.label("clé API requise (⚙ Paramètres)");
+                                }
+                            });
                         });
                         ui.separator();
                         if ui.button("🗑 Supprimer").clicked() {

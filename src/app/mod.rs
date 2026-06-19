@@ -1,8 +1,10 @@
 //! État applicatif **sans dépendance GPU** : scène, sélection, caméra, mode Play,
 //! interaction pointeur. Le `Renderer` consomme cet état pour dessiner.
 
+pub mod ai;
 pub mod build_config;
 pub mod input;
+pub mod settings;
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -126,6 +128,12 @@ pub struct AppState {
     scene_load_rx: Receiver<Result<Scene, String>>,
     /// Vrai après remplacement de la scène : le renderer doit reconstruire les meshes GPU importés.
     imported_dirty: bool,
+
+    // --- génération de script par IA (asynchrone) ---
+    ai_tx: Sender<(usize, Result<String, String>)>,
+    ai_rx: Receiver<(usize, Result<String, String>)>,
+    /// Une génération IA est en cours (désactive le bouton, affiche l'état).
+    pub ai_busy: bool,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -164,6 +172,7 @@ impl AppState {
     pub fn new() -> Self {
         let (tx, rx) = channel();
         let (scene_tx, scene_rx) = channel();
+        let (ai_tx, ai_rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -208,6 +217,38 @@ impl AppState {
             scene_load_tx: scene_tx,
             scene_load_rx: scene_rx,
             imported_dirty: false,
+            ai_tx,
+            ai_rx,
+            ai_busy: false,
+        }
+    }
+
+    /// Lance une génération de script Lua par IA (thread de fond) pour l'objet `idx`.
+    pub fn request_ai_script(&mut self, idx: usize, prompt: String, api_key: String) {
+        if self.ai_busy {
+            return;
+        }
+        self.ai_busy = true;
+        let tx = self.ai_tx.clone();
+        std::thread::spawn(move || {
+            let result = ai::generate_lua(&api_key, &prompt);
+            let _ = tx.send((idx, result));
+        });
+    }
+
+    /// Applique un script généré par IA s'il est prêt (à appeler chaque frame).
+    fn poll_ai(&mut self) {
+        while let Ok((idx, result)) = self.ai_rx.try_recv() {
+            self.ai_busy = false;
+            match result {
+                Ok(script) if idx < self.scene.objects.len() => {
+                    self.push_undo();
+                    self.scene.objects[idx].script = script;
+                    log::info!("Script généré par IA appliqué à l'objet {idx}");
+                }
+                Ok(_) => {} // l'objet a disparu entre-temps
+                Err(e) => log::error!("Génération IA : {e}"),
+            }
         }
     }
 
@@ -782,8 +823,9 @@ impl AppState {
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
-        // chargements asynchrones (imports glTF, sons décodés) prêts cette frame
+        // chargements asynchrones (imports glTF, sons décodés, script IA) prêts cette frame
         self.poll_imports();
+        self.poll_ai();
         self.audio.update();
 
         let now = Instant::now();
