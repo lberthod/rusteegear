@@ -17,10 +17,11 @@ struct Light {
 struct Model {
     model: mat4x4<f32>,
     normal: mat4x4<f32>,
-    params: vec4<f32>, // x = surbrillance
+    params: vec4<f32>, // x = surbrillance, yzw = metallic/roughness/emissive
     color: vec4<f32>,  // teinte (albédo)
 };
-@group(1) @binding(0) var<uniform> model: Model;
+// Tableau d'instances : indexé par @builtin(instance_index).
+@group(1) @binding(0) var<storage, read> models: array<Model>;
 
 @group(2) @binding(0) var shadow_map: texture_depth_2d;
 @group(2) @binding(1) var shadow_samp: sampler_comparison;
@@ -29,6 +30,7 @@ struct Model {
 @group(3) @binding(1) var albedo_samp: sampler;
 
 struct VsIn {
+    @builtin(instance_index) instance: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
@@ -48,6 +50,7 @@ struct VsOut {
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
+    let model = models[in.instance];
     let world = model.model * vec4<f32>(in.position, 1.0);
     out.clip_position = camera.view_proj * world;
     out.world_normal = (model.normal * vec4<f32>(in.normal, 0.0)).xyz;

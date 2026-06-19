@@ -15,9 +15,12 @@ struct Model {
     params: vec4<f32>,
     color: vec4<f32>,
 };
-@group(1) @binding(0) var<uniform> model: Model;
+@group(1) @binding(0) var<storage, read> models: array<Model>;
 
 @vertex
-fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
-    return light.light_vp * model.model * vec4<f32>(position, 1.0);
+fn vs_main(
+    @builtin(instance_index) instance: u32,
+    @location(0) position: vec3<f32>,
+) -> @builtin(position) vec4<f32> {
+    return light.light_vp * models[instance].model * vec4<f32>(position, 1.0);
 }

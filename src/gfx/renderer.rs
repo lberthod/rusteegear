@@ -71,16 +71,12 @@ const SHADOW_SIZE: u32 = 1024;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// Ressources GPU par objet de la scène (une matrice modèle propre).
-struct ObjectGpu {
-    model_buf: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    /// Dernier état téléversé : évite de réécrire le buffer d'un objet immobile.
-    last_model: Option<glam::Mat4>,
-    last_highlight: f32,
-    last_color: [f32; 3],
-    /// Dernier matériau téléversé : (metallic, roughness, emissive).
-    last_material: [f32; 3],
+/// Descripteur d'une instance dans le plan de rendu (ordre = index dans le buffer storage).
+struct InstanceDraw {
+    mesh: MeshKind,
+    texture: String,
+    /// Visible par la caméra (frustum culling) — la passe d'ombre l'ignore.
+    visible: bool,
 }
 
 pub struct Renderer {
@@ -101,7 +97,12 @@ pub struct Renderer {
 
     meshes: HashMap<MeshKind, GpuMesh>,
     imported_gpu: Vec<GpuMesh>,
-    objects_gpu: Vec<ObjectGpu>,
+    /// Données d'instances de tous les objets (groupe 1, storage), indexées par `instance_index`.
+    models_buf: wgpu::Buffer,
+    models_bind_group: wgpu::BindGroup,
+    models_capacity: usize,
+    /// Plan de rendu de la frame : un descripteur par objet, dans l'ordre du buffer d'instances.
+    draw_plan: Vec<InstanceDraw>,
 
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
@@ -197,11 +198,23 @@ impl Renderer {
             ],
         });
 
-        // --- Layout des objets (bind group 1) ---
+        // --- Layout des objets (bind group 1) : tableau d'instances (storage, lecture) ---
         let model_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("model_layout"),
-            entries: &[uniform_entry(0)],
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
         });
+        let models_capacity = 64usize;
+        let (models_buf, models_bind_group) =
+            create_models_buffer(&device, &model_layout, models_capacity);
 
         // --- Carte d'ombre (shadow map) ---
         let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -490,7 +503,10 @@ impl Renderer {
             camera_bind_group,
             meshes,
             imported_gpu: Vec::new(),
-            objects_gpu: Vec::new(),
+            models_buf,
+            models_bind_group,
+            models_capacity,
+            draw_plan: Vec::new(),
             gizmo_pipeline,
             gizmo_vbuf,
             shadow_view,
@@ -520,30 +536,24 @@ impl Renderer {
         self.editor.on_window_event(&self.window, event)
     }
 
-    /// Ajuste le nombre de ressources GPU par objet pour qu'il corresponde à la scène.
+    /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();
-        while self.objects_gpu.len() < n {
-            let model_buf =
-                create_uniform(&self.device, "model", std::mem::size_of::<ModelUniform>());
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("model_bg"),
-                layout: &self.model_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: model_buf.as_entire_binding(),
-                }],
-            });
-            self.objects_gpu.push(ObjectGpu {
-                model_buf,
-                bind_group,
-                last_model: None,
-                last_highlight: -1.0,
-                last_color: [-1.0, -1.0, -1.0],
-                last_material: [-1.0, -1.0, -1.0],
-            });
+        if n > self.models_capacity {
+            let cap = n.next_power_of_two().max(64);
+            let (buf, bg) = create_models_buffer(&self.device, &self.model_layout, cap);
+            self.models_buf = buf;
+            self.models_bind_group = bg;
+            self.models_capacity = cap;
         }
-        self.objects_gpu.truncate(n);
+    }
+
+    /// Résout le `GpuMesh` d'un type de mesh (None si un modèle importé n'est pas encore chargé).
+    fn resolve_mesh(&self, mesh: MeshKind) -> Option<&GpuMesh> {
+        match mesh {
+            MeshKind::Imported(i) => self.imported_gpu.get(i as usize),
+            k => self.meshes.get(&k),
+        }
     }
 
     /// Construit les `GpuMesh` des modèles importés pas encore chargés sur GPU.
@@ -624,39 +634,42 @@ impl Renderer {
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
 
-        for (i, (obj, gpu)) in app
-            .scene
-            .objects
-            .iter()
-            .zip(&mut self.objects_gpu)
-            .enumerate()
-        {
+        // Instances ordonnées par (mesh, texture) pour permettre des draws groupés.
+        // On bâtit en parallèle le buffer storage et le plan de rendu (même ordre).
+        let planes = frustum_planes(app.camera.view_proj());
+        let mut order: Vec<usize> = (0..app.scene.objects.len()).collect();
+        order.sort_by(|&a, &b| {
+            let oa = &app.scene.objects[a];
+            let ob = &app.scene.objects[b];
+            mesh_key(oa.mesh)
+                .cmp(&mesh_key(ob.mesh))
+                .then_with(|| oa.texture.cmp(&ob.texture))
+        });
+
+        let mut models: Vec<ModelUniform> = Vec::with_capacity(order.len());
+        self.draw_plan.clear();
+        for &i in &order {
+            let obj = &app.scene.objects[i];
             let model = obj.transform.matrix();
             let highlight = app.highlight_of(i);
-            let material = [obj.metallic, obj.roughness, obj.emissive];
-            // Rien n'a changé depuis la dernière frame : on saute l'upload.
-            if gpu.last_model == Some(model)
-                && gpu.last_highlight == highlight
-                && gpu.last_color == obj.color
-                && gpu.last_material == material
-            {
-                continue;
-            }
-            // Matrice normale = inverse-transposée du bloc 3×3 (Mat3 bien moins
-            // coûteux qu'une inversion de Mat4, et correct même en scale non uniforme).
+            // Matrice normale = inverse-transposée du bloc 3×3 (correct en scale non uniforme).
             let normal3 = glam::Mat3::from_mat4(model).inverse().transpose();
-            let model_uniform = ModelUniform {
+            models.push(ModelUniform {
                 model: model.to_cols_array_2d(),
                 normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
                 params: [highlight, obj.metallic, obj.roughness, obj.emissive],
                 color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
-            };
+            });
+            let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
+            self.draw_plan.push(InstanceDraw {
+                mesh: obj.mesh,
+                texture: obj.texture.clone(),
+                visible: aabb_visible(&planes, model, lmin, lmax),
+            });
+        }
+        if !models.is_empty() {
             self.queue
-                .write_buffer(&gpu.model_buf, 0, bytemuck::bytes_of(&model_uniform));
-            gpu.last_model = Some(model);
-            gpu.last_highlight = highlight;
-            gpu.last_color = obj.color;
-            gpu.last_material = material;
+                .write_buffer(&self.models_buf, 0, bytemuck::cast_slice(&models));
         }
     }
 
@@ -883,18 +896,24 @@ impl Renderer {
             });
             spass.set_pipeline(&self.shadow_pipeline);
             spass.set_bind_group(0, &self.camera_bind_group, &[]);
-            for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
-                let mesh = match obj.mesh {
-                    MeshKind::Imported(i) => match self.imported_gpu.get(i as usize) {
-                        Some(m) => m,
-                        None => continue,
-                    },
-                    k => &self.meshes[&k],
-                };
-                spass.set_bind_group(1, &gpu.bind_group, &[]);
-                spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                spass.draw_indexed(0..mesh.num_indices, 0, 0..1);
+            spass.set_bind_group(1, &self.models_bind_group, &[]);
+            // La passe d'ombre rend TOUT (ombres d'objets hors champ), groupé par mesh.
+            let plan = &self.draw_plan;
+            let mut i = 0;
+            while i < plan.len() {
+                let mut j = i + 1;
+                while j < plan.len()
+                    && plan[j].mesh == plan[i].mesh
+                    && plan[j].texture == plan[i].texture
+                {
+                    j += 1;
+                }
+                if let Some(mesh) = self.resolve_mesh(plan[i].mesh) {
+                    spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                    spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    spass.draw_indexed(0..mesh.num_indices, 0, i as u32..j as u32);
+                }
+                i = j;
             }
         }
 
@@ -936,31 +955,44 @@ impl Renderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+            pass.set_bind_group(1, &self.models_bind_group, &[]);
 
-            // Frustum culling : on ne soumet que les objets potentiellement visibles
-            // (la passe d'ombre, elle, garde tout pour des ombres correctes hors champ).
-            let planes = frustum_planes(app.camera.view_proj());
-            for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
-                let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
-                if !aabb_visible(&planes, obj.transform.matrix(), lmin, lmax) {
-                    continue;
+            // Rendu instancié : un draw par lot (mesh+texture), scindé en sous-plages
+            // d'instances visibles consécutives (frustum culling).
+            let plan = &self.draw_plan;
+            let mut i = 0;
+            while i < plan.len() {
+                let tex_key = &plan[i].texture;
+                let mut group_end = i + 1;
+                while group_end < plan.len()
+                    && plan[group_end].mesh == plan[i].mesh
+                    && &plan[group_end].texture == tex_key
+                {
+                    group_end += 1;
                 }
-                let mesh = match obj.mesh {
-                    MeshKind::Imported(i) => match self.imported_gpu.get(i as usize) {
-                        Some(m) => m,
-                        None => continue, // mesh importé pas encore (ou plus) chargé
-                    },
-                    k => &self.meshes[&k],
-                };
-                let tex = self
-                    .textures
-                    .get(&obj.texture)
-                    .unwrap_or_else(|| &self.textures[""]);
-                pass.set_bind_group(1, &gpu.bind_group, &[]);
-                pass.set_bind_group(3, tex, &[]);
-                pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
+                if let Some(mesh) = self.resolve_mesh(plan[i].mesh) {
+                    let tex = self
+                        .textures
+                        .get(tex_key)
+                        .unwrap_or_else(|| &self.textures[""]);
+                    pass.set_bind_group(3, tex, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                    pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    // Plages contiguës d'instances visibles dans le lot.
+                    let mut k = i;
+                    while k < group_end {
+                        if !plan[k].visible {
+                            k += 1;
+                            continue;
+                        }
+                        let run = k;
+                        while k < group_end && plan[k].visible {
+                            k += 1;
+                        }
+                        pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    }
+                }
+                i = group_end;
             }
 
             // Gizmo de l'objet sélectionné, par-dessus.
@@ -1122,6 +1154,42 @@ fn aabb_visible(
         }
     }
     true
+}
+
+/// Clé d'ordonnancement stable d'un type de mesh (pour grouper les instances).
+fn mesh_key(m: MeshKind) -> u32 {
+    match m {
+        MeshKind::Cube => 0,
+        MeshKind::Sphere => 1,
+        MeshKind::Plane => 2,
+        MeshKind::Cylinder => 3,
+        MeshKind::Capsule => 4,
+        MeshKind::Imported(i) => 100 + i,
+    }
+}
+
+/// Crée le buffer storage d'instances + son bind group (groupe 1) pour `capacity` objets.
+fn create_models_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let size = (capacity * std::mem::size_of::<ModelUniform>()) as wgpu::BufferAddress;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("models_storage"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("models_bg"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buf.as_entire_binding(),
+        }],
+    });
+    (buf, bg)
 }
 
 fn create_uniform(device: &wgpu::Device, label: &str, size: usize) -> wgpu::Buffer {

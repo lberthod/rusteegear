@@ -412,7 +412,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [x] Shader PBR léger (diffuse atténuée métal + spéculaire Blinn-Phong piloté rugosité + émission).
 - [x] **Frustum culling** CPU (plans Gribb-Hartmann + test AABB monde) avant la passe caméra.
 - [ ] Shader PBR (BRDF Cook-Torrance simplifié) + uniforms matériau (bind group dédié).
-- [ ] Rendu **instancié** des objets partageant mesh+matériau (1 draw call par lot) → perf.
+- [x] Rendu instancié : buffer storage d'instances (groupe 1) indexé par instance_index,
+      draws groupés par mesh+texture (1 draw par lot, scindé en plages visibles).
+- [x] **Sprint 33 terminé.**
 - [ ] **Frustum culling** CPU (AABB monde déjà calculées) avant soumission.
 - **Fichiers** : `src/gfx/{renderer,shaders/*}.rs`, `src/scene/mod.rs`, `src/editor/mod.rs`.
 - **Livrable** : objets métal/plastique réalistes, draw calls réduits, FPS stable sur grosses scènes.
