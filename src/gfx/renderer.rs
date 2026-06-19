@@ -481,8 +481,8 @@ impl Renderer {
             cache: None,
         });
         // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
-        // + un marqueur 3 axes (6 sommets) par lumière ponctuelle.
-        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 6;
+        // + un marqueur 3 axes (6 sommets) par lumière ponctuelle + 6 pour la caméra de jeu.
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 6 + 6;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
             size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
@@ -813,6 +813,12 @@ impl Renderer {
             if let Some(req) = actions.ai_generate_scene {
                 app.request_ai_scene(req);
             }
+            if actions.set_game_camera {
+                app.set_game_camera();
+            }
+            if actions.clear_game_camera {
+                app.clear_game_camera();
+            }
             Some(full_output)
         };
 
@@ -866,6 +872,29 @@ impl Renderer {
                     });
                     verts.push(GizmoVertex {
                         position: [c[0] + d.x, c[1] + d.y, c[2] + d.z],
+                        color: col,
+                    });
+                }
+            }
+            // Marqueur cyan à la position de la caméra de jeu (si définie).
+            if let Some(gc) = app.scene.game_camera {
+                let pitch = gc.pitch.clamp(-1.54, 1.54);
+                let eye = glam::Vec3::from_array(gc.target)
+                    + glam::Vec3::new(
+                        gc.distance * pitch.cos() * gc.yaw.sin(),
+                        gc.distance * pitch.sin(),
+                        gc.distance * pitch.cos() * gc.yaw.cos(),
+                    );
+                let col = [0.2, 0.85, 0.95];
+                let s = 0.4;
+                for axis in 0..3 {
+                    let d = axis_dir(axis) * s;
+                    verts.push(GizmoVertex {
+                        position: [eye.x - d.x, eye.y - d.y, eye.z - d.z],
+                        color: col,
+                    });
+                    verts.push(GizmoVertex {
+                        position: [eye.x + d.x, eye.y + d.y, eye.z + d.z],
                         color: col,
                     });
                 }

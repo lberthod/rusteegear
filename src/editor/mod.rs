@@ -96,6 +96,10 @@ pub struct UiActions {
     pub ai_generate_scene: Option<crate::app::ai::AiRequest>,
     /// Demande d'ouverture de la fenêtre « Générer une scène (IA) ».
     pub open_ai_scene: bool,
+    /// Définir la caméra de jeu sur la vue actuelle.
+    pub set_game_camera: bool,
+    /// Retirer la caméra de jeu.
+    pub clear_game_camera: bool,
 }
 
 impl Editor {
@@ -656,7 +660,14 @@ fn menu_ajouter(ui: &mut egui::Ui, scene: &mut Scene, actions: &mut UiActions) {
             scene.point_lights.push(crate::scene::PointLight::default());
             ui.close();
         }
-        ui.add_enabled(false, egui::Button::new("🎥  Caméra  (à venir)"));
+        if ui
+            .button("🎥  Caméra principale (vue actuelle)")
+            .on_hover_text("Fige le point de vue de jeu sur la caméra actuelle (utilisé en Play)")
+            .clicked()
+        {
+            actions.set_game_camera = true;
+            ui.close();
+        }
     });
 }
 
@@ -1442,6 +1453,27 @@ fn build_ui(
                         },
                     );
                 }
+                ui.horizontal(|ui| {
+                    if scene.game_camera.is_some() {
+                        ui.label("🎥 Caméra de jeu définie");
+                        if ui.small_button("✕").on_hover_text("Retirer").clicked() {
+                            actions.clear_game_camera = true;
+                        }
+                        if ui
+                            .small_button("⟳")
+                            .on_hover_text("Recadrer sur la vue")
+                            .clicked()
+                        {
+                            actions.set_game_camera = true;
+                        }
+                    } else if ui
+                        .button("🎥 Définir la caméra de jeu")
+                        .on_hover_text("Fige la vue actuelle comme point de vue de Play")
+                        .clicked()
+                    {
+                        actions.set_game_camera = true;
+                    }
+                });
                 ui.separator();
                 match *selection {
                     Some(i) if i < scene.objects.len() => {

@@ -165,6 +165,18 @@ pub struct Scene {
     /// En mode Play, la caméra suit le premier objet scripté (« joueur »).
     #[serde(default)]
     pub camera_follow: bool,
+    /// Caméra de jeu : point de vue appliqué à l'entrée en mode Play (None = orbite éditeur).
+    #[serde(default)]
+    pub game_camera: Option<GameCamera>,
+}
+
+/// Point de vue de jeu (mêmes paramètres que la caméra orbitale), appliqué en Play.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct GameCamera {
+    pub target: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub distance: f32,
 }
 
 /// Configuration des contrôles tactiles affichés en mode Play / Player.
@@ -322,6 +334,7 @@ impl Scene {
             point_lights: Vec::new(),
             mobile: MobileControls::default(),
             camera_follow: false,
+            game_camera: None,
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -397,6 +410,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 buttons: vec!["Saut".into()],
             },
             camera_follow: true,
+            game_camera: None,
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -500,6 +514,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 buttons: spec.buttons,
             },
             camera_follow: spec.camera_follow,
+            game_camera: None,
         })
     }
 

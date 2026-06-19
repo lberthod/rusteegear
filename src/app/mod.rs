@@ -16,7 +16,7 @@ use mlua::Lua;
 
 use crate::gfx::camera::OrbitCamera;
 use crate::gfx::mesh::MeshData;
-use crate::scene::{ImportedMesh, MeshKind, Scene, SceneObject, Transform};
+use crate::scene::{GameCamera, ImportedMesh, MeshKind, Scene, SceneObject, Transform};
 use input::InputEvent;
 
 /// Résultat d'un import glTF effectué en thread de fond.
@@ -485,6 +485,24 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Définit la caméra de jeu depuis le point de vue actuel (orbite éditeur).
+    pub fn set_game_camera(&mut self) {
+        self.push_undo();
+        self.scene.game_camera = Some(GameCamera {
+            target: self.camera.target.to_array(),
+            yaw: self.camera.yaw,
+            pitch: self.camera.pitch,
+            distance: self.camera.distance,
+        });
+        log::info!("Caméra de jeu définie sur la vue actuelle");
+    }
+
+    /// Retire la caméra de jeu (la vue Play repart de l'orbite éditeur).
+    pub fn clear_game_camera(&mut self) {
+        self.push_undo();
+        self.scene.game_camera = None;
+    }
+
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
     pub fn new_scene(&mut self) {
         self.push_undo();
@@ -897,6 +915,15 @@ impl AppState {
                 && let Some(p) = self.player_position()
             {
                 self.camera.target = p;
+            }
+            // Caméra de jeu : applique le point de vue défini pour la scène.
+            if let Some(gc) = self.scene.game_camera {
+                self.camera.yaw = gc.yaw;
+                self.camera.pitch = gc.pitch;
+                self.camera.distance = gc.distance;
+                if !self.scene.camera_follow {
+                    self.camera.target = Vec3::from_array(gc.target);
+                }
             }
         } else if !self.playing && self.was_playing {
             self.scene.objects = self.play_snapshot.clone();

@@ -425,7 +425,11 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] `SceneObject` typé (enum `kind`: Mesh / Light(point|dir|spot) / Camera) ou composants.
 - [x] Plusieurs lumières ponctuelles (Scene.point_lights, max 8) : uniform std140 + shader,
       marqueurs en croix colorés dans l'éditeur, ajout via menu + édition inspecteur.
-- [ ] Entités typées (Light/Camera comme objets) + caméra de jeu + migration JSON → reporté.
+- [x] Caméra de jeu (Scene.game_camera) : « Ajouter → Caméra principale » fige la vue, appliquée
+      à l'entrée en Play, marqueur cyan dans l'éditeur, édition/suppression dans l'inspecteur.
+- [x] Migration JSON : tous les champs additifs sont #[serde(default)] (anciennes scènes OK).
+- **Sprint 34 terminé** (lumières multiples + caméra de jeu ; entités pleinement typées = évolution future).
+- [ ] (évolution) ECS/entités typées Light/Camera dans la liste d'objets, sélection 3D dédiée → ultérieur.
 - [ ] Caméra de jeu comme objet : la vue Play utilise la caméra active (pas l'orbite éditeur).
 - [ ] Migration JSON rétro-compatible (anciennes scènes : lumière globale → objet lumière).
 - **Fichiers** : `src/scene/mod.rs`, `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/editor/mod.rs`.
