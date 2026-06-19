@@ -18,6 +18,7 @@
 | **B — Runtime de jeu** | 11 → 13 | Transformer la scène en « jeu » (scripting, physique, audio) |
 | **C — Portage mobile** | 14 → 17 | iOS d'abord, puis Android |
 | **D — App de dev & exports 1-clic** | 18 → 23 | Optimiser l'app desktop (.dmg) et exporter APK/IPA depuis des boutons configurables |
+| **E — Player complet & maturité éditeur** | 24 → 27 | Embarquer les assets, enrichir l'édition, monter en qualité de rendu, durcir |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
 > Les faire avant C évite de réécrire des features sur plusieurs cibles.
@@ -242,6 +243,54 @@
 
 ---
 
+## PHASE E — Player complet & maturité éditeur
+
+> Issue de l'audit post-Phase D. Objectif : que le **jeu exporté tourne réellement
+> partout** (assets compris), que l'**édition** rivalise avec un éditeur sérieux, et
+> que le rendu et la robustesse montent d'un cran.
+
+### Sprint 24 — Assets embarqués dans le player ⬜
+**Objectif** : un `.dmg`/`.apk`/`.ipa` qui contient **tout le jeu** (modèles + sons), jouable hors développement.
+- [ ] Bundle d'assets : copier les fichiers glTF/sons référencés dans `assets/bundle/` + réécrire les chemins de la scène en chemins relatifs au bundle.
+- [ ] Player : résoudre les assets depuis le bundle (`include_dir!` ou dossier `Resources` du `.app`/APK) au lieu de chemins disque absolus.
+- [ ] Décodage glTF/sons depuis mémoire (octets) et plus seulement depuis un chemin.
+- [ ] Le panneau Export embarque la scène **et** ses assets ; avertir si un asset est introuvable.
+- **Fichiers** : `src/scene/import.rs`, `src/runtime/audio.rs`, `src/editor/export.rs`, `packaging/*.sh`.
+- **Livrable** : exporter une scène avec un modèle importé + un son → le player les joue sur un autre poste/appareil. ✅
+- **Risques** : tailles d'APK/IPA ; chemins relatifs cross-platform → tests sur device.
+
+### Sprint 25 — Édition avancée & hiérarchie ⬜
+**Objectif** : multi-sélection, copier/coller, renommage et réorganisation.
+- [ ] **Multi-sélection** (Cmd/Maj+clic) ; gizmo et inspecteur agissant sur la sélection multiple.
+- [ ] **Copier/Coller/Dupliquer** un ensemble (Cmd+C/V), avec historique undo.
+- [ ] **Renommage inline** dans la hiérarchie (double-clic) ; **réordonnancement** par glisser-déposer.
+- [ ] **Sous-groupes** (groupes imbriqués) + repli mémorisé.
+- **Fichiers** : `src/app/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : sélectionner 3 objets, les grouper, les déplacer ensemble, renommer un groupe. ✅
+- **Risques** : invariants d'index lors des suppressions multiples → travailler par identifiants stables.
+
+### Sprint 26 — Rendu : matériaux & ombres ⬜
+**Objectif** : sortir du Lambert uni — texture/couleur par objet et ombres.
+- [ ] **Matériau par objet** : couleur albédo éditable dans l'inspecteur (+ métallique/rugosité simples).
+- [ ] **Textures** : charger une image et l'échantillonner (UV des primitives + glTF).
+- [ ] **Ombres** : shadow mapping directionnel (depth pass + comparaison).
+- [ ] Réglages de scène : direction/couleur de lumière, couleur ambiante.
+- **Fichiers** : `src/gfx/*`, `shaders/*.wgsl`, `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : un objet texturé projette une ombre sur le sol ; couleur éditable en direct. ✅
+- **Risques** : coût GPU mobile (carte d'ombre) → résolution adaptative, limites `wgpu`.
+
+### Sprint 27 — Identité, cycle de vie mobile & durcissement ⬜
+**Objectif** : finir l'override d'identité, gérer le resume mobile, durcir/tester.
+- [ ] **Override bundle id/version** macOS (patch Info.plist du `.app`) et Android (manifest cargo-apk).
+- [ ] **Resume mobile** : recréation de la surface `wgpu` sur `suspended`/`resumed` (évite l'écran noir au retour d'app).
+- [ ] **IPA signé en CI** (certificat + profil en *GitHub Secrets*) ; artefact attaché à la Release.
+- [ ] **Tests d'intégration** : round-trip scène avec groupes/assets, sérialisation des nouveaux champs ; réduire les `unwrap()` restants.
+- **Fichiers** : `packaging/*.sh`, `src/lib.rs`, `.github/workflows/release.yml`, tests.
+- **Livrable** : un tag `v*` produit `.dmg`+`.apk`+`.ipa` signés à la bonne identité ; l'app mobile survit au passage en arrière-plan. ✅
+- **Risques** : secrets CI → jamais dans le repo ; signature Apple capricieuse → logs bruts.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
@@ -249,6 +298,8 @@
 - **C** : la même scène tourne en mode Player sur iOS (et Android).
 - **D** ✅ : depuis l'app de dev (.dmg), on exporte un **player** du jeu créé en `.dmg` / `.apk` / `.ipa`
   **en un clic** (scène embarquée), avec config éditable/persistée, presets, install device et CI de release.
+- **E** : le jeu exporté tourne partout **assets compris** ; édition avancée (multi-sélection, sous-groupes,
+  renommage) ; rendu avec matériaux/ombres ; identité de bundle et cycle de vie mobile durcis.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
