@@ -1379,10 +1379,14 @@ fn build_ui(
                                     ),
                             );
                             let has_key = !settings.deepseek_api_key.trim().is_empty();
-                            let can = has_key && !status.ai_busy && !ai_prompt.trim().is_empty();
+                            let can_gen =
+                                has_key && !status.ai_busy && !ai_prompt.trim().is_empty();
+                            let can_opt =
+                                has_key && !status.ai_busy && !obj.script.trim().is_empty();
                             ui.horizontal(|ui| {
                                 if ui
-                                    .add_enabled(can, egui::Button::new("✨ Générer le script"))
+                                    .add_enabled(can_gen, egui::Button::new("✨ Générer"))
+                                    .on_hover_text("Crée un script à partir de la consigne")
                                     .clicked()
                                 {
                                     actions.ai_generate = Some((
@@ -1391,9 +1395,29 @@ fn build_ui(
                                         settings.deepseek_api_key.clone(),
                                     ));
                                 }
+                                if ui
+                                    .add_enabled(can_opt, egui::Button::new("🔧 Optimiser"))
+                                    .on_hover_text("Améliore/corrige le script actuel")
+                                    .clicked()
+                                {
+                                    let extra = ai_prompt.trim();
+                                    let consigne = if extra.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" Tiens compte de : {extra}.")
+                                    };
+                                    let prompt = format!(
+                                        "Améliore et optimise ce script Lua (corrige les bugs, \
+                                         simplifie, garde le même comportement).{consigne}\n\n\
+                                         Script actuel :\n{}",
+                                        obj.script
+                                    );
+                                    actions.ai_generate =
+                                        Some((i, prompt, settings.deepseek_api_key.clone()));
+                                }
                                 if status.ai_busy {
                                     ui.spinner();
-                                    ui.label("génération…");
+                                    ui.label("IA…");
                                 } else if !has_key {
                                     ui.label("clé API requise (⚙ Paramètres)");
                                 }
