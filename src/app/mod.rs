@@ -20,6 +20,25 @@ use input::InputEvent;
 /// Résultat d'un import glTF effectué en thread de fond.
 type ImportResult = Result<(String, MeshData, Vec3, Vec3), String>;
 
+/// Rectangle `(x, y, largeur, hauteur)` d'un écran de téléphone (ratio 1080×2340,
+/// ≈ 19.5:9) centré dans une zone `width × height`, avec une petite marge.
+/// Sert à l'« Aperçu mobile » : même calcul en pixels (viewport GPU) et en points (UI egui).
+pub fn device_rect(width: f32, height: f32, portrait: bool) -> (f32, f32, f32, f32) {
+    let ar = if portrait {
+        1080.0 / 2340.0
+    } else {
+        2340.0 / 1080.0
+    };
+    let margin = 0.94;
+    let mut w = width * margin;
+    let mut h = w / ar;
+    if h > height * margin {
+        h = height * margin;
+        w = h * ar;
+    }
+    ((width - w) * 0.5, (height - h) * 0.5, w, h)
+}
+
 /// État des contrôles tactiles produit par l'overlay UI et lu par les scripts Lua.
 #[derive(Default)]
 pub struct PlayerInput {
@@ -44,6 +63,10 @@ pub struct AppState {
     pub player: bool,
     /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
     pub input_state: PlayerInput,
+    /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
+    pub device_preview: bool,
+    /// Orientation de l'aperçu mobile (portrait par défaut).
+    pub device_portrait: bool,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -143,6 +166,8 @@ impl AppState {
             should_quit: false,
             player: false,
             input_state: PlayerInput::default(),
+            device_preview: false,
+            device_portrait: true,
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),

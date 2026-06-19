@@ -672,10 +672,13 @@ impl Renderer {
         //    dessine quand même les contrôles tactiles (joystick + boutons).
         let full_output = if app.player {
             if app.scene.mobile.any() {
-                Some(
-                    self.editor
-                        .run_player_overlay(&self.window, &app.scene, &mut app.input_state),
-                )
+                Some(self.editor.run_player_overlay(
+                    &self.window,
+                    &app.scene,
+                    &mut app.input_state,
+                    app.device_preview,
+                    app.device_portrait,
+                ))
             } else {
                 None
             }
@@ -692,6 +695,8 @@ impl Renderer {
                 &mut app.playing,
                 &mut app.gizmo_mode,
                 &mut app.input_state,
+                &mut app.device_preview,
+                &mut app.device_portrait,
                 status,
             );
             if actions.save {
@@ -755,6 +760,17 @@ impl Renderer {
         self.sync_objects(&app.scene);
         self.sync_imported(&app.scene);
         self.sync_textures(&app.scene);
+
+        // Aperçu mobile : restreint la vue 3D à un écran de téléphone (letterbox).
+        // L'aspect caméra doit suivre ce rectangle (sinon l'image serait étirée).
+        let sw = self.config.width as f32;
+        let sh = self.config.height as f32;
+        let (dx, dy, dw, dh) = if app.device_preview {
+            crate::app::device_rect(sw, sh, app.device_portrait)
+        } else {
+            (0.0, 0.0, sw, sh)
+        };
+        app.camera.aspect = dw / dh.max(1.0);
         self.write_uniforms(app);
 
         // Préparer le gizmo de l'objet sélectionné (jamais en mode player).
@@ -880,6 +896,11 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            // Aperçu mobile : la scène ne se dessine que dans le rectangle « téléphone ».
+            // (Le clear remplit toute la surface → bandes sombres autour = letterbox.)
+            pass.set_viewport(dx, dy, dw, dh, 0.0, 1.0);
+            pass.set_scissor_rect(dx as u32, dy as u32, dw as u32, dh as u32);
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);

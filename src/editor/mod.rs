@@ -118,12 +118,19 @@ impl Editor {
         window: &Window,
         scene: &Scene,
         input_state: &mut crate::app::PlayerInput,
+        device_preview: bool,
+        device_portrait: bool,
     ) -> egui::FullOutput {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
         let output = self.ctx.run_ui(raw_input, |ui| {
+            let ctx = ui.ctx();
+            let area = play_area_rect(ctx, device_preview, device_portrait);
+            if device_preview {
+                device_bezel(ctx, area);
+            }
             if mobile.any() {
-                mobile_overlay(ui.ctx(), mobile, input_state);
+                mobile_overlay(ctx, area, mobile, input_state);
             } else {
                 input_state.joy = (0.0, 0.0);
                 input_state.buttons.clear();
@@ -150,6 +157,8 @@ impl Editor {
         playing: &mut bool,
         gizmo_mode: &mut GizmoMode,
         input_state: &mut crate::app::PlayerInput,
+        device_preview: &mut bool,
+        device_portrait: &mut bool,
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -169,6 +178,8 @@ impl Editor {
                 playing,
                 gizmo_mode,
                 input_state,
+                device_preview,
+                device_portrait,
                 &status,
                 export,
                 hier_filter,
@@ -849,24 +860,70 @@ fn tool_windows(
         });
 }
 
-/// Dessine les contrôles tactiles (joystick virtuel + boutons) en surimpression
-/// et met à jour l'état d'entrée lu par les scripts Lua.
+/// Rectangle (points egui) de la zone de jeu : écran de téléphone centré si
+/// l'aperçu mobile est actif, sinon tout l'écran.
+fn play_area_rect(ctx: &egui::Context, preview: bool, portrait: bool) -> egui::Rect {
+    let full = ctx.content_rect();
+    if !preview {
+        return full;
+    }
+    let (x, y, w, h) = crate::app::device_rect(full.width(), full.height(), portrait);
+    egui::Rect::from_min_size(
+        egui::pos2(full.left() + x, full.top() + y),
+        egui::vec2(w, h),
+    )
+}
+
+/// Dessine le cadre « téléphone » (biseau arrondi + encoche) autour de la zone de jeu.
+fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
+    use egui::{Color32, Stroke};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("device_bezel"),
+    ));
+    // Contour épais arrondi, façon châssis de smartphone.
+    painter.rect_stroke(
+        rect.expand(6.0),
+        22.0,
+        Stroke::new(10.0, Color32::from_rgb(20, 20, 24)),
+        egui::StrokeKind::Outside,
+    );
+    painter.rect_stroke(
+        rect,
+        16.0,
+        Stroke::new(1.5, Color32::from_white_alpha(40)),
+        egui::StrokeKind::Inside,
+    );
+    // Encoche centrale en haut.
+    let notch = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.top() + 9.0),
+        egui::vec2(rect.width().min(160.0) * 0.45, 14.0),
+    );
+    painter.rect_filled(notch, 7.0, Color32::from_rgb(20, 20, 24));
+}
+
+/// Dessine les contrôles tactiles (joystick virtuel + boutons) à l'intérieur de
+/// `area` et met à jour l'état d'entrée lu par les scripts Lua.
 fn mobile_overlay(
     ctx: &egui::Context,
+    area: egui::Rect,
     cfg: &crate::scene::MobileControls,
     input: &mut crate::app::PlayerInput,
 ) {
-    use egui::{Align2, Color32, Sense, Stroke, Vec2};
+    use egui::{Color32, Sense, Stroke, Vec2};
 
     input.joy = (0.0, 0.0);
     input.buttons.clear();
 
-    // --- Joystick (bas-gauche) ---
+    let margin = 32.0;
+
+    // --- Joystick (bas-gauche de la zone de jeu) ---
     if cfg.joystick {
+        let radius = 55.0;
+        let pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
         egui::Area::new("mobile_joystick".into())
-            .anchor(Align2::LEFT_BOTTOM, Vec2::new(40.0, -40.0))
+            .fixed_pos(pos)
             .show(ctx, |ui| {
-                let radius = 55.0;
                 let (rect, resp) = ui.allocate_exact_size(Vec2::splat(radius * 2.0), Sense::drag());
                 let center = rect.center();
                 let painter = ui.painter();
@@ -889,15 +946,19 @@ fn mobile_overlay(
             });
     }
 
-    // --- Boutons (bas-droite) ---
+    // --- Boutons (bas-droite de la zone de jeu) ---
     if !cfg.buttons.is_empty() {
+        let btn = 64.0;
+        let spacing = 8.0;
+        let width = cfg.buttons.len() as f32 * (btn + spacing);
+        let pos = egui::pos2(area.right() - margin - width, area.bottom() - margin - btn);
         egui::Area::new("mobile_buttons".into())
-            .anchor(Align2::RIGHT_BOTTOM, Vec2::new(-40.0, -40.0))
+            .fixed_pos(pos)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     for name in &cfg.buttons {
                         let resp =
-                            ui.add_sized([64.0, 64.0], egui::Button::new(name).corner_radius(32.0));
+                            ui.add_sized([btn, btn], egui::Button::new(name).corner_radius(32.0));
                         // Bouton « maintenu » : actif tant que le pointeur est enfoncé dessus.
                         if resp.is_pointer_button_down_on() {
                             input.buttons.insert(name.clone());
@@ -917,6 +978,8 @@ fn build_ui(
     playing: &mut bool,
     gizmo_mode: &mut GizmoMode,
     input_state: &mut crate::app::PlayerInput,
+    device_preview: &mut bool,
+    device_portrait: &mut bool,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -925,9 +988,13 @@ fn build_ui(
     panels: &mut Panels,
     actions: &mut UiActions,
 ) {
-    // Overlay des contrôles tactiles (joystick + boutons) en mode Play.
+    // Cadre « téléphone » + overlay des contrôles tactiles dans la zone de jeu.
+    let play_rect = play_area_rect(root.ctx(), *device_preview, *device_portrait);
+    if *device_preview {
+        device_bezel(root.ctx(), play_rect);
+    }
     if *playing && scene.mobile.any() {
-        mobile_overlay(root.ctx(), &scene.mobile, input_state);
+        mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);
     } else {
         input_state.joy = (0.0, 0.0);
         input_state.buttons.clear();
@@ -1003,6 +1070,29 @@ fn build_ui(
                 .clicked()
             {
                 actions.delete = *selection;
+            }
+            ui.separator();
+            // Aperçu mobile : cadre téléphone + orientation.
+            if ui
+                .selectable_label(*device_preview, "📱 Aperçu mobile")
+                .on_hover_text("Affiche la scène dans un écran de téléphone")
+                .clicked()
+            {
+                *device_preview = !*device_preview;
+            }
+            if *device_preview {
+                let label = if *device_portrait {
+                    "⟳ Portrait"
+                } else {
+                    "⟳ Paysage"
+                };
+                if ui
+                    .button(label)
+                    .on_hover_text("Basculer l'orientation")
+                    .clicked()
+                {
+                    *device_portrait = !*device_portrait;
+                }
             }
             // Build APK : différenciateur du moteur, mis en avant à droite.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
