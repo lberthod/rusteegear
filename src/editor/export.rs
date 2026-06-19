@@ -208,15 +208,35 @@ fn detect(target: Target) -> Result<(), String> {
     }
 }
 
-/// Vrai si une commande est trouvable dans le PATH.
+/// Dossiers où chercher les outils, même quand l'app est lancée depuis le Finder
+/// (PATH minimal hérité, sans `~/.cargo/bin` ni Homebrew).
+fn search_dirs() -> Vec<String> {
+    let mut dirs = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(format!("{home}/.cargo/bin"));
+    }
+    dirs.push("/opt/homebrew/bin".into()); // Homebrew Apple Silicon
+    dirs.push("/usr/local/bin".into()); // Homebrew Intel / installs manuels
+    if let Ok(path) = std::env::var("PATH") {
+        dirs.extend(path.split(':').map(str::to_string));
+    }
+    dirs
+}
+
+/// `PATH` augmenté à transmettre aux scripts de build (sinon `cargo`/`xcodegen` introuvables).
+fn augmented_path() -> String {
+    search_dirs().join(":")
+}
+
+/// Vrai si une commande exécutable existe dans l'un des dossiers de recherche.
 fn has_cmd(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    use std::os::unix::fs::PermissionsExt;
+    search_dirs().iter().any(|dir| {
+        let p = std::path::Path::new(dir).join(name);
+        p.metadata()
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
 }
 
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log.
@@ -227,6 +247,7 @@ fn run(target: Target) -> Receiver<LogMsg> {
         let mut child = match Command::new("bash")
             .arg(script)
             .current_dir(PROJECT_ROOT)
+            .env("PATH", augmented_path())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
