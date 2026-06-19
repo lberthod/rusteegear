@@ -502,7 +502,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] **Fichier** : Nouveau projet, Ouvrir projet, Sauvegarder, **Sauvegarder sous…**,
       Exporter scène, **Exporter projet Android APK** (ouvre le Build Panel, Sprint 39),
       Exporter assets bundle, **Paramètres du projet**, Quitter.
-- [ ] **Édition** : compléter Couper, Coller, **Sélectionner tout**, Grouper, Dégrouper,
+- [x] Édition : Couper (Cmd+X), Copier, Coller, Tout sélectionner (Cmd+A), Grouper, Dégrouper (menu + raccourcis),
       Préférences (les autres existent déjà : Annuler/Rétablir/Dupliquer/Supprimer/Aligner au sol/Reset transform).
 - [ ] **Barre du haut** enrichie : `▶ Play | ⏸ Pause | ■ Stop | Déplacer | Tourner | Redim. |
       Local/Global | Snap | Grid | 2D/3D | Build APK | Run Device`.

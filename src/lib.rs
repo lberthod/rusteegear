@@ -206,6 +206,8 @@ impl ApplicationHandler for App {
                         KeyCode::KeyD if cmd => self.state.duplicate_selected(),
                         KeyCode::KeyC if cmd => self.state.copy_selected(),
                         KeyCode::KeyV if cmd => self.state.paste(),
+                        KeyCode::KeyX if cmd => self.state.cut_selected(),
+                        KeyCode::KeyA if cmd => self.state.select_all(),
                         KeyCode::Backspace | KeyCode::Delete => self.state.delete_selected(),
                         _ => {}
                     }

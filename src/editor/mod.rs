@@ -114,6 +114,13 @@ pub struct UiActions {
     pub limit_lights: Option<usize>,
     /// Rassembler les assets externes dans le dossier projet (asset://).
     pub collect_assets: bool,
+    /// Édition : couper / copier / coller / tout sélectionner / grouper / dégrouper.
+    pub cut: bool,
+    pub copy: bool,
+    pub paste: bool,
+    pub select_all: bool,
+    pub group: bool,
+    pub ungroup: bool,
 }
 
 impl Editor {
@@ -590,6 +597,24 @@ fn menu_edition(ui: &mut egui::Ui, selection: &Option<usize>, actions: &mut UiAc
         ui.separator();
         let has = selection.is_some();
         if ui
+            .add_enabled(has, egui::Button::new("✂  Couper"))
+            .clicked()
+        {
+            actions.cut = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(has, egui::Button::new("⧉  Copier"))
+            .clicked()
+        {
+            actions.copy = true;
+            ui.close();
+        }
+        if ui.button("📋  Coller").clicked() {
+            actions.paste = true;
+            ui.close();
+        }
+        if ui
             .add_enabled(has, egui::Button::new("⧉  Dupliquer"))
             .clicked()
         {
@@ -601,6 +626,25 @@ fn menu_edition(ui: &mut egui::Ui, selection: &Option<usize>, actions: &mut UiAc
             .clicked()
         {
             actions.delete = *selection;
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("☑  Tout sélectionner").clicked() {
+            actions.select_all = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(has, egui::Button::new("🗂  Grouper"))
+            .clicked()
+        {
+            actions.group = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(has, egui::Button::new("🗂  Dégrouper"))
+            .clicked()
+        {
+            actions.ungroup = true;
             ui.close();
         }
         ui.separator();

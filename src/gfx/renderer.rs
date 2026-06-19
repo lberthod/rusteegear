@@ -830,6 +830,24 @@ impl Renderer {
                 let n = app.collect_assets();
                 log::info!("Assets rassemblés : {n} chemin(s) → asset://");
             }
+            if actions.cut {
+                app.cut_selected();
+            }
+            if actions.copy {
+                app.copy_selected();
+            }
+            if actions.paste {
+                app.paste();
+            }
+            if actions.select_all {
+                app.select_all();
+            }
+            if actions.group {
+                app.group_selected();
+            }
+            if actions.ungroup {
+                app.ungroup_selected();
+            }
             Some(full_output)
         };
 

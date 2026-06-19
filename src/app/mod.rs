@@ -422,6 +422,48 @@ impl AppState {
             .collect();
     }
 
+    /// Couper : copie la sélection puis la supprime.
+    pub fn cut_selected(&mut self) {
+        self.copy_selected();
+        self.delete_selected();
+    }
+
+    /// Sélectionne tous les objets de la scène.
+    pub fn select_all(&mut self) {
+        self.selected = (0..self.scene.objects.len()).collect();
+        self.selection = self.selected.last().copied();
+    }
+
+    /// Regroupe les objets sélectionnés dans un nouveau groupe nommé automatiquement.
+    pub fn group_selected(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        self.push_undo();
+        let name = format!("Groupe {}", self.scene.groups.len() + 1);
+        for &i in &self.selected {
+            if let Some(o) = self.scene.objects.get_mut(i) {
+                o.group = name.clone();
+            }
+        }
+        if !self.scene.groups.contains(&name) {
+            self.scene.groups.push(name);
+        }
+    }
+
+    /// Retire les objets sélectionnés de leur groupe (« Sans groupe »).
+    pub fn ungroup_selected(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        self.push_undo();
+        for &i in &self.selected {
+            if let Some(o) = self.scene.objects.get_mut(i) {
+                o.group.clear();
+            }
+        }
+    }
+
     /// Colle le presse-papiers (décalé), et sélectionne les nouveaux objets.
     pub fn paste(&mut self) {
         if self.clipboard.is_empty() {
