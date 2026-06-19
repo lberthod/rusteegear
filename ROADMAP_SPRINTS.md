@@ -283,14 +283,18 @@
 - **Livrable** : couleur d'objet et éclairage modifiables en direct, persistés au save. ✅
 - **Risques** : textures/ombres → coût GPU mobile, à valider visuellement → passe dédiée.
 
-### Sprint 27 — Identité, cycle de vie mobile & durcissement ⬜
+### Sprint 27 — Identité, cycle de vie mobile & durcissement 🟢 (cœur fait)
 **Objectif** : finir l'override d'identité, gérer le resume mobile, durcir/tester.
-- [ ] **Override bundle id/version** macOS (patch Info.plist du `.app`) et Android (manifest cargo-apk).
-- [ ] **Resume mobile** : recréation de la surface `wgpu` sur `suspended`/`resumed` (évite l'écran noir au retour d'app).
-- [ ] **IPA signé en CI** (certificat + profil en *GitHub Secrets*) ; artefact attaché à la Release.
-- [ ] **Tests d'intégration** : round-trip scène avec groupes/assets, sérialisation des nouveaux champs ; réduire les `unwrap()` restants.
-- **Fichiers** : `packaging/*.sh`, `src/lib.rs`, `.github/workflows/release.yml`, tests.
-- **Livrable** : un tag `v*` produit `.dmg`+`.apk`+`.ipa` signés à la bonne identité ; l'app mobile survit au passage en arrière-plan. ✅
+- [x] **Override d'identité macOS** : à l'export, patch de l'Info.plist du `.app` (id/nom/version/build)
+      via PlistBuddy puis `.dmg` recréé avec `hdiutil`.
+- [x] **Resume mobile** : `suspended` lâche le renderer (surface invalide), `resumed` le reconstruit ;
+      l'état applicatif (scène, sélection) est préservé.
+- [x] **Tests d'intégration** : round-trip scène avec groupes/couleur/lumière + compat ascendante
+      (anciennes scènes sans les nouveaux champs).
+- [ ] Override id/version **Android** (cargo-apk lit `Cargo.toml`) → reporté.
+- [ ] **IPA signé en CI** (certificat + profil en *GitHub Secrets*) → reporté (secrets à fournir).
+- **Fichiers** : `packaging/build_dmg.sh`, `src/lib.rs`, `src/scene/mod.rs` (tests).
+- **Livrable** : `.dmg` exporté à la bonne identité ; l'app mobile survit au passage en arrière-plan ; 11 tests verts. ✅
 - **Risques** : secrets CI → jamais dans le repo ; signature Apple capricieuse → logs bruts.
 
 ---

@@ -280,4 +280,38 @@ mod tests {
         let p1 = back.objects[0].transform.position;
         assert!((p0 - p1).length() < 1e-6);
     }
+
+    #[test]
+    fn scene_round_trip_preserves_groups_color_light() {
+        let mut scene = Scene::demo();
+        scene.groups = vec!["Décor".into(), "Acteurs".into()];
+        scene.objects[0].group = "Décor".into();
+        scene.objects[1].color = [0.2, 0.4, 0.8];
+        scene.light.ambient = 0.5;
+        scene.light.color = [1.0, 0.5, 0.25];
+
+        let json = serde_json::to_string(&scene).unwrap();
+        let back: Scene = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.groups,
+            vec!["Décor".to_string(), "Acteurs".to_string()]
+        );
+        assert_eq!(back.objects[0].group, "Décor");
+        assert_eq!(back.objects[1].color, [0.2, 0.4, 0.8]);
+        assert!((back.light.ambient - 0.5).abs() < 1e-6);
+        assert_eq!(back.light.color, [1.0, 0.5, 0.25]);
+    }
+
+    #[test]
+    fn old_scene_without_new_fields_loads_with_defaults() {
+        // Scène d'une version antérieure : ni group, ni color, ni light, ni groups.
+        let json = r#"{"objects":[{"name":"X","transform":{"position":[0,0,0],
+            "rotation":[0,0,0,1],"scale":[1,1,1]},"mesh":"Cube"}]}"#;
+        let s: Scene = serde_json::from_str(json).unwrap();
+        assert_eq!(s.objects.len(), 1);
+        assert_eq!(s.objects[0].color, [1.0, 1.0, 1.0]);
+        assert_eq!(s.objects[0].group, "");
+        assert!(s.groups.is_empty());
+        assert!((s.light.ambient - 0.25).abs() < 1e-6);
+    }
 }

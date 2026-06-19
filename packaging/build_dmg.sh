@@ -17,13 +17,23 @@ else
 fi
 cargo bundle --release $FEATURES
 
-SRC="target/release/bundle/dmg/Motor3DeRust.dmg"
 if [ "$OUTPUT_NAME" != "Motor3DeRust" ]; then
+    # Export : applique l'identité (id/nom/version) au .app puis (re)crée le .dmg.
+    APP="target/release/bundle/osx/Motor3DeRust.app"
+    PLIST="$APP/Contents/Info.plist"
+    PB=/usr/libexec/PlistBuddy
+    "$PB" -c "Set :CFBundleIdentifier ${BUNDLE_ID:-com.berthod.motor3derust}" "$PLIST" 2>/dev/null || true
+    "$PB" -c "Set :CFBundleName $OUTPUT_NAME" "$PLIST" 2>/dev/null || true
+    "$PB" -c "Set :CFBundleDisplayName $OUTPUT_NAME" "$PLIST" 2>/dev/null || true
+    [ -n "${APP_VERSION:-}" ] && "$PB" -c "Set :CFBundleShortVersionString $APP_VERSION" "$PLIST" 2>/dev/null || true
+    [ -n "${BUILD_NUMBER:-}" ] && "$PB" -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST" 2>/dev/null || true
+
     mkdir -p target/export
     DMG="target/export/${OUTPUT_NAME}.dmg"
-    cp "$SRC" "$DMG"
+    rm -f "$DMG"
+    hdiutil create -volname "$OUTPUT_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG" >/dev/null
 else
-    DMG="$SRC"
+    DMG="target/release/bundle/dmg/Motor3DeRust.dmg"
 fi
 echo "✅ DMG créé : $DMG"
 echo "   Taille : $(du -h "$DMG" | cut -f1)"

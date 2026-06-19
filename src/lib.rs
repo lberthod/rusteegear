@@ -116,6 +116,12 @@ impl ApplicationHandler for App {
         }
     }
 
+    /// Mobile : la surface GPU devient invalide quand l'app passe en arrière-plan.
+    /// On lâche le renderer ; `resumed` le reconstruira (l'état applicatif est préservé).
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.renderer = None;
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
