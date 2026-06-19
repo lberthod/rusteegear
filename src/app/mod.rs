@@ -52,6 +52,10 @@ pub struct AppState {
     drag_orig_pos: Vec3,
     drag_orig_rot: Quat,
     drag_orig_scale: Vec3,
+    /// Positions d'origine de tous les objets sélectionnés (gizmo translate multi).
+    drag_orig_positions: Vec<(usize, Vec3)>,
+    /// Le prochain clic ajoute/retire de la sélection (Cmd/Maj enfoncé).
+    additive: bool,
 
     // --- historique (snapshots de la liste d'objets) ---
     undo_stack: VecDeque<Vec<SceneObject>>,
@@ -138,6 +142,8 @@ impl AppState {
             drag_orig_pos: Vec3::ZERO,
             drag_orig_rot: Quat::IDENTITY,
             drag_orig_scale: Vec3::ONE,
+            drag_orig_positions: Vec::new(),
+            additive: false,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             lua: Lua::new(),
@@ -185,6 +191,31 @@ impl AppState {
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         self.gizmo_mode = mode;
+    }
+
+    /// Le prochain clic de sélection sera additif (Cmd/Maj enfoncé), positionné par la plateforme.
+    pub fn set_additive(&mut self, additive: bool) {
+        self.additive = additive;
+    }
+
+    /// Décale tous les objets sélectionnés (échange d'ordre) — réordonnancement simple.
+    pub fn move_selected_in_list(&mut self, down: bool) {
+        let Some(i) = self.selection else { return };
+        let n = self.scene.objects.len();
+        let j = if down {
+            if i + 1 >= n {
+                return;
+            }
+            i + 1
+        } else {
+            if i == 0 {
+                return;
+            }
+            i - 1
+        };
+        self.push_undo();
+        self.scene.objects.swap(i, j);
+        self.select_single(j);
     }
 
     // --- sélection (primaire + ensemble) ---
@@ -383,6 +414,17 @@ impl AppState {
                                     self.drag_start_t = p;
                                     self.drag_orig_pos = origin;
                                     self.drag_orig_scale = orig_scale;
+                                    // mémorise les positions de toute la sélection (translate multi)
+                                    self.drag_orig_positions = self
+                                        .selected
+                                        .iter()
+                                        .filter_map(|&i| {
+                                            self.scene
+                                                .objects
+                                                .get(i)
+                                                .map(|o| (i, o.transform.position))
+                                        })
+                                        .collect();
                                 }
                                 return;
                             }
@@ -402,8 +444,11 @@ impl AppState {
                     && (px - cx).hypot(py - cy) < 4.0
                 {
                     match self.pick(cx, cy) {
+                        // Cmd/Maj : ajoute/retire de la sélection ; sinon sélection simple.
+                        Some(i) if self.additive => self.toggle_select(i),
                         Some(i) => self.select_single(i),
-                        None => self.clear_selection(),
+                        None if !self.additive => self.clear_selection(),
+                        None => {}
                     }
                 }
                 self.press_cursor = None;
@@ -415,8 +460,18 @@ impl AppState {
                     match self.gizmo_mode {
                         GizmoMode::Translate => {
                             if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y) {
-                                self.scene.objects[sel].transform.position =
-                                    self.drag_orig_pos + a * (t - self.drag_start_t);
+                                let delta = a * (t - self.drag_start_t);
+                                if self.drag_orig_positions.len() > 1 {
+                                    // déplace toute la sélection en bloc
+                                    for (i, orig) in &self.drag_orig_positions {
+                                        if let Some(o) = self.scene.objects.get_mut(*i) {
+                                            o.transform.position = *orig + delta;
+                                        }
+                                    }
+                                } else {
+                                    self.scene.objects[sel].transform.position =
+                                        self.drag_orig_pos + delta;
+                                }
                             }
                         }
                         GizmoMode::Scale => {

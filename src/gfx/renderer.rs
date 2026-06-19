@@ -489,6 +489,9 @@ impl Renderer {
             if let Some(clip) = actions.play_audio {
                 app.play_audio(&clip);
             }
+            if let Some(down) = actions.move_in_list {
+                app.move_selected_in_list(down);
+            }
             Some(full_output)
         };
 

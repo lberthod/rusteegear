@@ -155,6 +155,10 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 let ev = if btn_state == ElementState::Pressed {
+                    // Cmd/Maj enfoncé au clic = sélection additive (multi-sélection 3D).
+                    let st = self.modifiers.state();
+                    self.state
+                        .set_additive(st.control_key() || st.super_key() || st.shift_key());
                     InputEvent::PointerDown
                 } else {
                     InputEvent::PointerUp

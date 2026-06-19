@@ -321,16 +321,17 @@
 - **Livrable** : player `.dmg` produit à la bonne identité ; tests verts élargis. ✅ (reste : run GUI + device).
 - **Risques** : surprises runtime (alignement uniformes GPU mobile, chemins) → corriger dès observation.
 
-### Sprint 29 — Édition complète (ce qui a été reporté du Sprint 25) ⬜
+### Sprint 29 — Édition complète (reporté du Sprint 25) 🟢 (cœur fait)
 **Objectif** : finir la sélection et la hiérarchie pour un vrai confort d'édition.
-- [ ] **Multi-sélection au clic 3D** (Cmd/Maj) : faire passer les modificateurs via `InputEvent`
-      (ajouter une variante ou un champ) puis `toggle_select` dans `handle_input`.
-- [ ] **Réordonnancement** des objets dans la hiérarchie par glisser-déposer (au-delà de l'assignation de groupe).
-- [ ] **Sous-groupes** (groupes imbriqués, ex. chemins `Parent/Enfant`) + repli mémorisé.
-- [ ] **Gizmo multi-objets** : déplacer/tourner toute la sélection autour d'un pivot commun.
-- **Fichiers** : `src/app/{mod.rs,input.rs}`, `src/editor/mod.rs`.
-- **Livrable** : Cmd+clic 3D pour multi-sélectionner, réordonner et imbriquer des groupes, déplacer un groupe au gizmo. ✅
-- **Risques** : invariants d'index → couvrir par les tests du Sprint 28.
+- [x] **Multi-sélection au clic 3D** (Cmd/Maj) : `App::set_additive` depuis les modificateurs winit,
+      `toggle_select` vs `select_single` dans `handle_input`.
+- [x] **Gizmo multi-objets (translate)** : déplace toute la sélection en bloc (positions d'origine mémorisées).
+- [x] **Réordonnancement** : boutons ▲/▼ dans l'inspecteur (`move_selected_in_list`, avec undo).
+- [ ] Gizmo multi en **rotate/scale** (pivot commun) → reporté.
+- [ ] **Réordonnancement par glisser-déposer** et **sous-groupes** imbriqués → reportés.
+- **Fichiers** : `src/app/mod.rs`, `src/lib.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`.
+- **Livrable** : Cmd+clic 3D multi-sélectionne, le gizmo déplace le groupe, ▲/▼ réordonnent. ✅
+- **Risques** : invariants d'index → couverts par les tests du Sprint 28.
 
 ### Sprint 30 — Rendu : ombres & textures (reporté du Sprint 26) ⬜
 **Objectif** : passer d'un rendu plat à un rendu crédible. **Itérer visuellement** (lancer l'app souvent).

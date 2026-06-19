@@ -42,6 +42,8 @@ pub struct UiActions {
     pub undo: bool,
     pub redo: bool,
     pub play_audio: Option<String>,
+    /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
+    pub move_in_list: Option<bool>,
 }
 
 impl Editor {
@@ -502,6 +504,12 @@ fn build_ui(
                     ui.horizontal(|ui| {
                         ui.label("Nom");
                         ui.text_edit_singleline(&mut obj.name);
+                        if ui.small_button("▲").on_hover_text("Monter").clicked() {
+                            actions.move_in_list = Some(false);
+                        }
+                        if ui.small_button("▼").on_hover_text("Descendre").clicked() {
+                            actions.move_in_list = Some(true);
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.label("Couleur (teinte)");
