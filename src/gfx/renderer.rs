@@ -787,8 +787,8 @@ impl Renderer {
         app.camera.aspect = dw / dh.max(1.0);
         self.write_uniforms(app);
 
-        // Préparer le gizmo de l'objet sélectionné (jamais en mode player).
-        let gizmo_count = if app.player {
+        // Préparer le gizmo de l'objet sélectionné (jamais en mode player ni en aperçu mobile).
+        let gizmo_count = if app.player || app.device_preview {
             0
         } else if let Some(sel) = app.selection {
             let o = app.scene.objects[sel].transform.position;

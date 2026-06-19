@@ -1099,10 +1099,15 @@ fn build_ui(
             // Aperçu mobile : cadre téléphone + orientation.
             if ui
                 .selectable_label(*device_preview, "📱 Aperçu mobile")
-                .on_hover_text("Affiche la scène dans un écran de téléphone")
+                .on_hover_text("Affiche la scène dans un écran de téléphone (mode jeu tactile)")
                 .clicked()
             {
                 *device_preview = !*device_preview;
+                if *device_preview {
+                    // On passe en « mode jeu » : pas d'objet sélectionné/gizmo.
+                    *selection = None;
+                    selected.clear();
+                }
             }
             if *device_preview {
                 let label = if *device_portrait {

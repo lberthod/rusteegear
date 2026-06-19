@@ -485,6 +485,11 @@ impl AppState {
         match event {
             InputEvent::PointerDown => {
                 self.press_cursor = self.last_cursor;
+                // Aperçu mobile : on joue au tactile, pas d'édition (ni gizmo, ni sélection).
+                if self.device_preview {
+                    self.dragging = true;
+                    return;
+                }
                 // priorité au gizmo : si une poignée est cliquée, on démarre la manipulation.
                 if let (Some(sel), Some((cx, cy))) = (self.selection, self.last_cursor) {
                     let origin = self.scene.objects[sel].transform.position;
@@ -540,6 +545,11 @@ impl AppState {
                     return;
                 }
                 self.dragging = false;
+                // Aperçu mobile : pas de sélection au clic (on joue, on n'édite pas).
+                if self.device_preview {
+                    self.press_cursor = None;
+                    return;
+                }
                 // appui sans déplacement notable = sélection
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
