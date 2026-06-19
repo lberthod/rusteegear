@@ -22,7 +22,12 @@ type ImportResult = Result<(String, MeshData, Vec3, Vec3), String>;
 
 pub struct AppState {
     pub scene: Scene,
+    /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
+    /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
+    pub selected: Vec<usize>,
+    /// Presse-papiers d'objets (copier/coller).
+    clipboard: Vec<SceneObject>,
     pub playing: bool,
     /// Mode « player » : pas d'éditeur (panneaux egui), démarre en Play.
     pub player: bool,
@@ -115,6 +120,8 @@ impl AppState {
         AppState {
             scene: Scene::demo(),
             selection: None,
+            selected: Vec::new(),
+            clipboard: Vec::new(),
             playing: false,
             player: false,
             camera: OrbitCamera::new(1.0),
@@ -180,6 +187,86 @@ impl AppState {
         self.gizmo_mode = mode;
     }
 
+    // --- sélection (primaire + ensemble) ---
+
+    /// Sélectionne un seul objet (remplace l'ensemble).
+    pub fn select_single(&mut self, i: usize) {
+        self.selection = Some(i);
+        self.selected = vec![i];
+    }
+
+    /// Vide toute la sélection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selected.clear();
+    }
+
+    /// Ajoute/retire un objet de l'ensemble sélectionné (clic Cmd/Maj).
+    pub fn toggle_select(&mut self, i: usize) {
+        if let Some(pos) = self.selected.iter().position(|&x| x == i) {
+            self.selected.remove(pos);
+            self.selection = self.selected.last().copied();
+        } else {
+            self.selected.push(i);
+            self.selection = Some(i);
+        }
+    }
+
+    /// Facteur de surbrillance d'un objet : primaire = 1.0, autre sélectionné = 0.55.
+    pub fn highlight_of(&self, i: usize) -> f32 {
+        if self.selection == Some(i) {
+            1.0
+        } else if self.selected.contains(&i) {
+            0.55
+        } else {
+            0.0
+        }
+    }
+
+    /// Copie les objets sélectionnés dans le presse-papiers.
+    pub fn copy_selected(&mut self) {
+        self.clipboard = self
+            .selected
+            .iter()
+            .filter_map(|&i| self.scene.objects.get(i).cloned())
+            .collect();
+    }
+
+    /// Colle le presse-papiers (décalé), et sélectionne les nouveaux objets.
+    pub fn paste(&mut self) {
+        if self.clipboard.is_empty() {
+            return;
+        }
+        self.push_undo();
+        let start = self.scene.objects.len();
+        let clips = self.clipboard.clone();
+        for o in clips {
+            let mut c = o.clone();
+            c.name = format!("{} (copie)", c.name);
+            c.transform.position += Vec3::new(0.6, 0.0, 0.6);
+            self.scene.objects.push(c);
+        }
+        self.selected = (start..self.scene.objects.len()).collect();
+        self.selection = self.selected.last().copied();
+    }
+
+    /// Supprime tous les objets sélectionnés (indices décroissants).
+    pub fn delete_selected(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        self.push_undo();
+        let mut idx = self.selected.clone();
+        idx.sort_unstable();
+        idx.dedup();
+        for &i in idx.iter().rev() {
+            if i < self.scene.objects.len() {
+                self.scene.objects.remove(i);
+            }
+        }
+        self.clear_selection();
+    }
+
     // --- historique ---
 
     /// Capture l'état courant des objets avant une modification (vide la pile redo).
@@ -195,7 +282,7 @@ impl AppState {
         if let Some(prev) = self.undo_stack.pop_back() {
             self.redo_stack.push(self.scene.objects.clone());
             self.scene.objects = prev;
-            self.selection = None;
+            self.clear_selection();
         }
     }
 
@@ -203,7 +290,7 @@ impl AppState {
         if let Some(next) = self.redo_stack.pop() {
             self.undo_stack.push_back(self.scene.objects.clone());
             self.scene.objects = next;
-            self.selection = None;
+            self.clear_selection();
         }
     }
 
@@ -222,28 +309,35 @@ impl AppState {
             audio_autoplay: false,
             group: String::new(),
         });
-        self.selection = Some(self.scene.objects.len() - 1);
+        self.select_single(self.scene.objects.len() - 1);
     }
 
     pub fn delete_object(&mut self, i: usize) {
         if i < self.scene.objects.len() {
             self.push_undo();
             self.scene.objects.remove(i);
-            self.selection = None;
+            self.clear_selection();
         }
     }
 
     pub fn duplicate_selected(&mut self) {
-        if let Some(i) = self.selection
-            && i < self.scene.objects.len()
-        {
-            self.push_undo();
+        let mut idx = self.selected.clone();
+        idx.sort_unstable();
+        idx.dedup();
+        idx.retain(|&i| i < self.scene.objects.len());
+        if idx.is_empty() {
+            return;
+        }
+        self.push_undo();
+        let start = self.scene.objects.len();
+        for i in idx {
             let mut copy = self.scene.objects[i].clone();
             copy.name = format!("{} (copie)", copy.name);
             copy.transform.position += Vec3::new(0.6, 0.0, 0.6);
             self.scene.objects.push(copy);
-            self.selection = Some(self.scene.objects.len() - 1);
         }
+        self.selected = (start..self.scene.objects.len()).collect();
+        self.selection = self.selected.last().copied();
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) {
@@ -306,7 +400,10 @@ impl AppState {
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
                 {
-                    self.selection = self.pick(cx, cy);
+                    match self.pick(cx, cy) {
+                        Some(i) => self.select_single(i),
+                        None => self.clear_selection(),
+                    }
                 }
                 self.press_cursor = None;
             }
@@ -513,7 +610,7 @@ impl AppState {
         } else if !self.playing && self.was_playing {
             self.scene.objects = self.play_snapshot.clone();
             self.physics = None;
-            self.selection = None;
+            self.clear_selection();
             self.audio.stop_all();
         }
         self.was_playing = self.playing;
@@ -600,7 +697,7 @@ impl AppState {
             match res {
                 Ok(s) => {
                     self.scene = s;
-                    self.selection = None;
+                    self.clear_selection();
                     self.imported_dirty = true;
                 }
                 Err(e) => log::error!("Échec chargement : {e}"),
@@ -640,7 +737,7 @@ impl AppState {
             audio_autoplay: false,
             group: String::new(),
         });
-        self.selection = Some(self.scene.objects.len() - 1);
+        self.select_single(self.scene.objects.len() - 1);
     }
 
     /// Lance un rayon depuis le curseur et renvoie l'objet le plus proche touché.

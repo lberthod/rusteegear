@@ -371,7 +371,7 @@ impl Renderer {
             .enumerate()
         {
             let model = obj.transform.matrix();
-            let highlight = if app.selection == Some(i) { 1.0 } else { 0.0 };
+            let highlight = app.highlight_of(i);
             // Rien n'a bougé depuis la dernière frame : on saute l'upload.
             if gpu.last_model == Some(model) && gpu.last_highlight == highlight {
                 continue;
@@ -421,6 +421,7 @@ impl Renderer {
                 &self.window,
                 &mut app.scene,
                 &mut app.selection,
+                &mut app.selected,
                 &mut app.playing,
                 &mut app.gizmo_mode,
                 status,

@@ -183,6 +183,9 @@ impl ApplicationHandler for App {
                         KeyCode::KeyZ if cmd && st.shift_key() => self.state.redo(),
                         KeyCode::KeyZ if cmd => self.state.undo(),
                         KeyCode::KeyD if cmd => self.state.duplicate_selected(),
+                        KeyCode::KeyC if cmd => self.state.copy_selected(),
+                        KeyCode::KeyV if cmd => self.state.paste(),
+                        KeyCode::Backspace | KeyCode::Delete => self.state.delete_selected(),
                         _ => {}
                     }
                 }

@@ -260,15 +260,17 @@
 - **Livrable** : exporter une scène avec un modèle importé + un son → le player les joue sur un autre poste/appareil. ✅
 - **Risques** : tailles d'APK/IPA ; `.gltf` à références externes → préférer `.glb` (autonome).
 
-### Sprint 25 — Édition avancée & hiérarchie ⬜
+### Sprint 25 — Édition avancée & hiérarchie 🟢 (cœur fait)
 **Objectif** : multi-sélection, copier/coller, renommage et réorganisation.
-- [ ] **Multi-sélection** (Cmd/Maj+clic) ; gizmo et inspecteur agissant sur la sélection multiple.
-- [ ] **Copier/Coller/Dupliquer** un ensemble (Cmd+C/V), avec historique undo.
-- [ ] **Renommage inline** dans la hiérarchie (double-clic) ; **réordonnancement** par glisser-déposer.
-- [ ] **Sous-groupes** (groupes imbriqués) + repli mémorisé.
-- **Fichiers** : `src/app/mod.rs`, `src/editor/mod.rs`.
-- **Livrable** : sélectionner 3 objets, les grouper, les déplacer ensemble, renommer un groupe. ✅
-- **Risques** : invariants d'index lors des suppressions multiples → travailler par identifiants stables.
+- [x] **Multi-sélection** dans la hiérarchie (Cmd/Maj+clic) ; surbrillance primaire (1.0) + autres (0.55) ;
+      gizmo/inspecteur sur la primaire.
+- [x] **Copier/Coller** (Cmd+C/V) + **Dupliquer** (Cmd+D) en lot ; **Suppr/Backspace** supprime la sélection ; undo.
+- [x] **Renommage inline** dans la hiérarchie (double-clic → champ, validation à la perte de focus).
+- [ ] Multi-sélection au clic 3D (modificateurs via `InputEvent`) → reporté.
+- [ ] **Réordonnancement** par glisser-déposer et **sous-groupes** imbriqués → reportés (Sprint dédié).
+- **Fichiers** : `src/app/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`, `src/lib.rs`.
+- **Livrable** : Cmd+clic pour sélectionner plusieurs objets, Cmd+C/V/D et Suppr en lot, double-clic pour renommer. ✅
+- **Risques** : invariants d'index sur suppressions multiples → suppression par indices décroissants.
 
 ### Sprint 26 — Rendu : matériaux & ombres ⬜
 **Objectif** : sortir du Lambert uni — texture/couleur par objet et ombres.

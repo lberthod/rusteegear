@@ -20,6 +20,8 @@ pub struct Editor {
     hier_filter: String,
     /// Nom saisi pour créer un nouveau groupe.
     hier_new_group: String,
+    /// Renommage inline en cours : (index objet, texte en édition).
+    hier_rename: Option<(usize, String)>,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -70,6 +72,7 @@ impl Editor {
             export: export::ExportPanel::new(),
             hier_filter: String::new(),
             hier_new_group: String::new(),
+            hier_rename: None,
         }
     }
 
@@ -79,11 +82,13 @@ impl Editor {
     }
 
     /// Construit l'UI (mutant la scène et la sélection) et renvoie la sortie egui à peindre.
+    #[allow(clippy::too_many_arguments)] // états distincts à muter
     pub fn run(
         &mut self,
         window: &Window,
         scene: &mut Scene,
         selection: &mut Option<usize>,
+        selected: &mut Vec<usize>,
         playing: &mut bool,
         gizmo_mode: &mut GizmoMode,
         status: StatusInfo,
@@ -94,17 +99,20 @@ impl Editor {
         let export = &mut self.export;
         let hier_filter = &mut self.hier_filter;
         let hier_new_group = &mut self.hier_new_group;
+        let hier_rename = &mut self.hier_rename;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
                 scene,
                 selection,
+                selected,
                 playing,
                 gizmo_mode,
                 &status,
                 export,
                 hier_filter,
                 hier_new_group,
+                hier_rename,
                 &mut actions,
             );
         });
@@ -195,12 +203,15 @@ fn object_badges(obj: &crate::scene::SceneObject) -> String {
 
 /// Hiérarchie ergonomique : recherche, **groupes définis par l'utilisateur** avec
 /// glisser-déposer des objets, icônes et badges (physique/script/audio).
+#[allow(clippy::too_many_arguments)] // panneau d'UI : états distincts à muter
 fn hierarchy_panel(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     selection: &mut Option<usize>,
+    selected: &mut Vec<usize>,
     filter: &mut String,
     new_group: &mut String,
+    rename: &mut Option<(usize, String)>,
 ) {
     ui.horizontal(|ui| {
         ui.heading("Hiérarchie");
@@ -236,6 +247,7 @@ fn hierarchy_panel(
     // Mutations différées (appliquées après l'UI pour éviter les conflits d'emprunt).
     let mut moves: Vec<(usize, String)> = Vec::new();
     let mut delete_group: Option<String> = None;
+    let mut commit_rename: Vec<(usize, String)> = Vec::new();
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -265,7 +277,22 @@ fn hierarchy_panel(
                             .show(ui, |ui| {
                                 for (i, obj) in &items {
                                     let i = *i;
-                                    let selected = *selection == Some(i);
+                                    // Mode renommage inline pour cette ligne.
+                                    if let Some((ri, buf)) =
+                                        rename.as_mut().filter(|(ri, _)| *ri == i)
+                                    {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(buf)
+                                                .desired_width(f32::INFINITY),
+                                        );
+                                        r.request_focus();
+                                        // Valide à la perte de focus (Entrée ou clic ailleurs).
+                                        if r.lost_focus() {
+                                            commit_rename.push((*ri, buf.clone()));
+                                        }
+                                        continue;
+                                    }
+                                    let is_sel = selected.contains(&i);
                                     let label = format!(
                                         "{} {}{}",
                                         mesh_category(obj.mesh).1,
@@ -274,11 +301,27 @@ fn hierarchy_panel(
                                     );
                                     let resp = ui
                                         .dnd_drag_source(egui::Id::new(("obj", i)), i, |ui| {
-                                            let _ = ui.selectable_label(selected, label);
+                                            let _ = ui.selectable_label(is_sel, label);
                                         })
                                         .response;
                                     if resp.clicked() {
-                                        *selection = Some(i);
+                                        let m = ui.input(|inp| inp.modifiers);
+                                        if m.command || m.shift {
+                                            // toggle dans l'ensemble
+                                            if let Some(p) = selected.iter().position(|&x| x == i) {
+                                                selected.remove(p);
+                                                *selection = selected.last().copied();
+                                            } else {
+                                                selected.push(i);
+                                                *selection = Some(i);
+                                            }
+                                        } else {
+                                            *selection = Some(i);
+                                            *selected = vec![i];
+                                        }
+                                    }
+                                    if resp.double_clicked() {
+                                        *rename = Some((i, obj.name.clone()));
                                     }
                                 }
                                 if items.is_empty() {
@@ -314,6 +357,13 @@ fn hierarchy_panel(
             }
         }
     }
+    // Renommage validé.
+    if let Some((idx, name)) = commit_rename.into_iter().next() {
+        if let Some(o) = scene.objects.get_mut(idx) {
+            o.name = name;
+        }
+        *rename = None;
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // panneau d'UI : chaque paramètre est un état distinct à muter
@@ -321,12 +371,14 @@ fn build_ui(
     root: &mut egui::Ui,
     scene: &mut Scene,
     selection: &mut Option<usize>,
+    selected: &mut Vec<usize>,
     playing: &mut bool,
     gizmo_mode: &mut GizmoMode,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
     hier_new_group: &mut String,
+    hier_rename: &mut Option<(usize, String)>,
     actions: &mut UiActions,
 ) {
     // Fenêtre flottante « Build & Export » (Sprint 19).
@@ -410,7 +462,15 @@ fn build_ui(
     egui::Panel::left("hierarchy")
         .default_size(200.0)
         .show_inside(root, |ui| {
-            hierarchy_panel(ui, scene, selection, hier_filter, hier_new_group);
+            hierarchy_panel(
+                ui,
+                scene,
+                selection,
+                selected,
+                hier_filter,
+                hier_new_group,
+                hier_rename,
+            );
         });
 
     egui::Panel::right("inspector")
