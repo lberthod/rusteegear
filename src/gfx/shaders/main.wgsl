@@ -9,6 +9,7 @@ struct Camera {
 struct PointLight {
     pos_range: vec4<f32>, // xyz = position, w = portée
     color_int: vec4<f32>, // rgb = couleur, w = intensité
+    spot: vec4<f32>,      // xyz = direction du cône, w = cos(demi-angle) ou -1 (point)
 };
 
 struct Light {
@@ -127,7 +128,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let ld = to_light / max(dist, 0.001);
         // atténuation : 1 au centre, 0 au-delà de la portée (clamp lissé).
         let att = clamp(1.0 - dist / pl.pos_range.w, 0.0, 1.0);
-        let atten = att * att * pl.color_int.w;
+        // Cône (spot) : atténuation douce du bord ; w < 0 → lumière ponctuelle (cône = 1).
+        var cone = 1.0;
+        if pl.spot.w >= 0.0 {
+            let aligned = dot(-ld, normalize(pl.spot.xyz));
+            cone = smoothstep(pl.spot.w, mix(pl.spot.w, 1.0, 0.5), aligned);
+        }
+        let atten = att * att * pl.color_int.w * cone;
         let d = max(dot(n, ld), 0.0);
         let ph = normalize(ld + v);
         let s = pow(max(dot(n, ph), 0.0), spec_power) * d * (1.0 - roughness);

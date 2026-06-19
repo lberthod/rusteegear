@@ -63,6 +63,7 @@ struct ModelUniform {
 struct PointLightU {
     pos_range: [f32; 4], // xyz = position, w = portée
     color_int: [f32; 4], // rgb = couleur, w = intensité
+    spot: [f32; 4],      // xyz = direction du cône, w = cos(demi-angle) ou -1 (point)
 }
 
 /// Éclairage de la scène (groupe 0, binding 1).
@@ -639,6 +640,7 @@ impl Renderer {
         let mut points = [PointLightU {
             pos_range: [0.0; 4],
             color_int: [0.0; 4],
+            spot: [0.0, -1.0, 0.0, -1.0],
         }; crate::scene::MAX_POINT_LIGHTS];
         let count = app
             .scene
@@ -653,6 +655,19 @@ impl Renderer {
                 pl.range.max(0.01),
             ];
             slot.color_int = [pl.color[0], pl.color[1], pl.color[2], pl.intensity];
+            // Spot : direction normalisée + cos(demi-angle) ; w = -1 → lumière ponctuelle.
+            let d = glam::Vec3::from_array(pl.spot_dir);
+            let dir = if d.length_squared() > 1e-6 {
+                d.normalize()
+            } else {
+                glam::Vec3::NEG_Y
+            };
+            let cos_cut = if pl.spot_angle > 0.0 {
+                pl.spot_angle.to_radians().cos()
+            } else {
+                -1.0
+            };
+            slot.spot = [dir.x, dir.y, dir.z, cos_cut];
         }
         let scene_uniform = SceneUniform {
             light_dir: [l.dir[0], l.dir[1], l.dir[2], 0.0],

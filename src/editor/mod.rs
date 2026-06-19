@@ -1669,6 +1669,30 @@ fn build_ui(
                                         .text("intensité"),
                                 );
                                 ui.add(egui::Slider::new(&mut pl.range, 0.5..=30.0).text("portée"));
+                                ui.add(
+                                    egui::Slider::new(&mut pl.spot_angle, 0.0..=89.0)
+                                        .text("cône (0 = point)"),
+                                );
+                                if pl.spot_angle > 0.0 {
+                                    ui.horizontal(|ui| {
+                                        ui.label("dir");
+                                        ui.add(
+                                            egui::DragValue::new(&mut pl.spot_dir[0])
+                                                .speed(0.02)
+                                                .prefix("x "),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut pl.spot_dir[1])
+                                                .speed(0.02)
+                                                .prefix("y "),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut pl.spot_dir[2])
+                                                .speed(0.02)
+                                                .prefix("z "),
+                                        );
+                                    });
+                                }
                                 ui.separator();
                             }
                             if let Some(i) = remove {

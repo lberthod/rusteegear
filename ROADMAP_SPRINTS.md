@@ -531,7 +531,8 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 ### Sprint 40 — Menu Ajouter complet (objets, lumières, caméras, physique, audio, UI mobile) ⬜
 **Objectif** : structurer le menu Ajouter façon Unity, en priorisant le mobile.
 - [ ] **Objet 3D** : Cube, Sphère, Capsule, Cylindre, Plan, **Terrain**.
-- [ ] **Lumière** : Directionnelle, Point Light, **Spot Light**, Ambient Light.
+- [x] Lumière : Directionnelle (globale), Point Light, Spot Light (cône) ; Ambiante (Light.ambient).
+- [ ] **Ambient Light** comme objet dédié → couvert par Light.ambient global.
 - [ ] **Caméra** : Caméra principale, **Caméra mobile**.
 - [x] Trigger Zone : SceneObject.trigger expose obj.triggered au script quand le joueur entre dans l'AABB.
 - [ ] **Physique** : Collider Box/Sphere explicites (auto depuis l'AABB pour l'instant).

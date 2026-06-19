@@ -257,13 +257,23 @@ impl Default for Light {
     }
 }
 
-/// Lumière ponctuelle (omnidirectionnelle) avec atténuation par la distance.
+/// Lumière ponctuelle, ou **spot** (cône) si `spot_angle > 0`.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct PointLight {
     pub position: [f32; 3],
     pub color: [f32; 3],
     pub intensity: f32,
     pub range: f32,
+    /// Direction du cône (spot). Ignorée si `spot_angle == 0`.
+    #[serde(default = "spot_dir_default")]
+    pub spot_dir: [f32; 3],
+    /// Demi-angle du cône en degrés (0 = lumière ponctuelle omnidirectionnelle).
+    #[serde(default)]
+    pub spot_angle: f32,
+}
+
+fn spot_dir_default() -> [f32; 3] {
+    [0.0, -1.0, 0.0]
 }
 
 impl Default for PointLight {
@@ -273,6 +283,8 @@ impl Default for PointLight {
             color: [1.0, 0.9, 0.7],
             intensity: 1.0,
             range: 8.0,
+            spot_dir: spot_dir_default(),
+            spot_angle: 0.0,
         }
     }
 }
