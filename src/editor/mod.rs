@@ -515,6 +515,30 @@ fn build_ui(
                         ui.label("Couleur (teinte)");
                         ui.color_edit_button_rgb(&mut obj.color);
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Texture");
+                        if ui.button("Choisir…").clicked() {
+                            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                            if let Some(p) = rfd::FileDialog::new()
+                                .add_filter("Image", &["png", "jpg", "jpeg"])
+                                .pick_file()
+                            {
+                                obj.texture = p.to_string_lossy().into_owned();
+                            }
+                        }
+                        if !obj.texture.is_empty() && ui.button("✕").clicked() {
+                            obj.texture.clear();
+                        }
+                        let t = if obj.texture.is_empty() {
+                            "(aucune)".to_string()
+                        } else {
+                            std::path::Path::new(&obj.texture)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                        };
+                        ui.label(t);
+                    });
                     ui.separator();
                     transform_editor(ui, &mut obj.transform);
                     ui.separator();

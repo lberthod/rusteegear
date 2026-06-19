@@ -107,6 +107,12 @@ pub struct Renderer {
     shadow_bind_group: wgpu::BindGroup,
     shadow_pipeline: wgpu::RenderPipeline,
 
+    // --- textures (groupe 3) ---
+    tex_layout: wgpu::BindGroupLayout,
+    tex_sampler: wgpu::Sampler,
+    /// Bind groups de texture par chemin ; "" = texture blanche par défaut.
+    textures: HashMap<String, wgpu::BindGroup>,
+
     editor: Editor,
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
     backend: String,
@@ -252,6 +258,41 @@ impl Renderer {
             ],
         });
 
+        // --- Textures (bind group 3) ---
+        let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tex_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tex_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let mut textures = HashMap::new();
+        // texture blanche 1×1 par défaut (objets sans texture).
+        let white = make_texture(&device, &queue, &tex_layout, &tex_sampler, &[255, 255, 255, 255], 1, 1);
+        textures.insert(String::new(), white);
+
         // --- Pipeline ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("main_shader"),
@@ -259,7 +300,12 @@ impl Renderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline_layout"),
-            bind_group_layouts: &[Some(&camera_layout), Some(&model_layout), Some(&shadow_bgl)],
+            bind_group_layouts: &[
+                Some(&camera_layout),
+                Some(&model_layout),
+                Some(&shadow_bgl),
+                Some(&tex_layout),
+            ],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -438,6 +484,9 @@ impl Renderer {
             shadow_view,
             shadow_bind_group,
             shadow_pipeline,
+            tex_layout,
+            tex_sampler,
+            textures,
             editor,
             backend,
         })
@@ -489,6 +538,26 @@ impl Renderer {
         while self.imported_gpu.len() < scene.imported.len() {
             let data = &scene.imported[self.imported_gpu.len()].data;
             self.imported_gpu.push(GpuMesh::new(&self.device, data));
+        }
+    }
+
+    /// Charge les textures référencées par la scène pas encore en cache.
+    fn sync_textures(&mut self, scene: &Scene) {
+        for obj in &scene.objects {
+            if obj.texture.is_empty() || self.textures.contains_key(&obj.texture) {
+                continue;
+            }
+            let bg = match load_rgba(&obj.texture) {
+                Some((rgba, w, h)) => {
+                    make_texture(&self.device, &self.queue, &self.tex_layout, &self.tex_sampler, &rgba, w, h)
+                }
+                None => {
+                    log::error!("Texture illisible : {}", obj.texture);
+                    // repli : réutilise la blanche pour ne pas réessayer en boucle
+                    make_texture(&self.device, &self.queue, &self.tex_layout, &self.tex_sampler, &[255, 255, 255, 255], 1, 1)
+                }
+            };
+            self.textures.insert(obj.texture.clone(), bg);
         }
     }
 
@@ -636,6 +705,7 @@ impl Renderer {
         }
         self.sync_objects(&app.scene);
         self.sync_imported(&app.scene);
+        self.sync_textures(&app.scene);
         self.write_uniforms(app);
 
         // Préparer le gizmo de l'objet sélectionné (jamais en mode player).
@@ -774,7 +844,12 @@ impl Renderer {
                     },
                     k => &self.meshes[&k],
                 };
+                let tex = self
+                    .textures
+                    .get(&obj.texture)
+                    .unwrap_or_else(|| &self.textures[""]);
                 pass.set_bind_group(1, &gpu.bind_group, &[]);
+                pass.set_bind_group(3, tex, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
                 pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
@@ -819,6 +894,75 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         },
         count: None,
     }
+}
+
+/// Décode une image (disque ou `bundle://`) en RGBA8 + dimensions.
+fn load_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let bytes: Vec<u8> = if let Some(key) = crate::assets::strip_scheme(path) {
+        crate::assets::bundle_bytes(key)?.to_vec()
+    } else {
+        std::fs::read(path).ok()?
+    };
+    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    Some((img.into_raw(), w, h))
+}
+
+/// Crée une texture RGBA8 + son bind group (groupe 3) prêt à lier.
+fn make_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> wgpu::BindGroup {
+    let size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("albedo"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: Some(height),
+        },
+        size,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("tex_bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }
 
 fn create_uniform(device: &wgpu::Device, label: &str, size: usize) -> wgpu::Buffer {

@@ -525,6 +525,13 @@ fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
                     Err(e) => warns.push(e),
                 }
             }
+            if let Some(p) = o.get("texture").and_then(|v| v.as_str()).map(str::to_string) {
+                match copy_to_bundle(&dir, &p, &format!("t{i}")) {
+                    Ok(Some(key)) => o["texture"] = serde_json::Value::String(key),
+                    Ok(None) => {}
+                    Err(e) => warns.push(e),
+                }
+            }
         }
     }
 

@@ -47,6 +47,10 @@ fn build_from(
                 .read_normals()
                 .map(|n| n.collect())
                 .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+            let uvs: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .map(|t| t.into_f32().collect())
+                .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
             let base = vertices.len() as u32;
             for (i, p) in positions.iter().enumerate() {
@@ -55,6 +59,7 @@ fn build_from(
                     position: *p,
                     normal: n,
                     color,
+                    uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
                 });
                 min = min.min(Vec3::from_array(*p));
                 max = max.max(Vec3::from_array(*p));

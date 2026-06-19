@@ -333,17 +333,18 @@
 - **Livrable** : Cmd+clic 3D multi-sélectionne, le gizmo déplace le groupe, ▲/▼ réordonnent. ✅
 - **Risques** : invariants d'index → couverts par les tests du Sprint 28.
 
-### Sprint 30 — Rendu : ombres & textures (reporté du Sprint 26) 🟢 (ombres faites)
+### Sprint 30 — Rendu : ombres & textures (reporté du Sprint 26) 🟢 (ombres + textures faites)
 **Objectif** : passer d'un rendu plat à un rendu crédible. **Itérer visuellement** (lancer l'app souvent).
-- [x] **Shadow mapping** directionnel : passe de profondeur 1024² depuis la lumière (`shadow.wgsl`),
-      sampler de comparaison + PCF 3×3, biais de profondeur + cull des faces avant (anti-acné).
-      **Validé à l'écran** (sphère/cube projettent une ombre nette sur le sol, sans acné).
-- [ ] **Textures** (image albédo + UV primitives/glTF, bind group texture) → étape suivante.
-- [ ] Matériau étendu (métallique/rugosité) → étape suivante.
-- [ ] Réglage du coût mobile (résolution d'ombre réduite, repli si limites `wgpu`) → à valider sur device.
-- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/{main,shadow}.wgsl`, `src/scene/mod.rs`.
-- **Livrable** : ombres portées rendues desktop (validé). Reste : textures + validation mobile. 🟢
-- **Risques** : non vérifiable sans GPU réel → itéré à l'écran (capture utilisateur).
+- [x] **Shadow mapping** directionnel : passe de profondeur 1024² (`shadow.wgsl`), PCF 3×3,
+      biais + cull faces avant (anti-acné). **Validé à l'écran** (ombres nettes, sans acné).
+- [x] **Textures** albédo par objet : UV sur primitives (cube/sphère/plan) + glTF (`read_tex_coords`),
+      `Vertex.uv`, bind group 3 (texture+sampler), texture blanche par défaut, décodage `image`
+      (disque ou `bundle://`), embarquées à l'export. **Validé à l'écran** (cube texturé + ombre).
+- [ ] Matériau étendu (métallique/rugosité) → étape suivante (PBR).
+- [ ] Réglage du coût mobile (résolution d'ombre, repli `wgpu`) → à valider sur device.
+- **Fichiers** : `src/gfx/{renderer.rs,mesh.rs,shaders/*}`, `src/scene/{mod,import}.rs`, `src/editor/{mod,export}.rs`.
+- **Livrable** : objet texturé qui projette une ombre, rendu desktop (validé). Reste : PBR + validation mobile. 🟢
+- **Risques** : non vérifiable sans GPU réel → itéré à l'écran (captures utilisateur).
 
 ### Sprint 31 — Distribution complète ⬜
 **Objectif** : livrables signés et reproductibles pour les stores.

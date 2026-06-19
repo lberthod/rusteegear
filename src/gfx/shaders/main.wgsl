@@ -24,10 +24,14 @@ struct Model {
 @group(2) @binding(0) var shadow_map: texture_depth_2d;
 @group(2) @binding(1) var shadow_samp: sampler_comparison;
 
+@group(3) @binding(0) var albedo_tex: texture_2d<f32>;
+@group(3) @binding(1) var albedo_samp: sampler;
+
 struct VsIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
+    @location(3) uv: vec2<f32>,
 };
 
 struct VsOut {
@@ -36,6 +40,7 @@ struct VsOut {
     @location(1) color: vec3<f32>,
     @location(2) highlight: f32,
     @location(3) world_pos: vec3<f32>,
+    @location(4) uv: vec2<f32>,
 };
 
 @vertex
@@ -47,6 +52,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.color = in.color * model.color.rgb;
     out.highlight = model.params.x;
     out.world_pos = world.xyz;
+    out.uv = in.uv;
     return out;
 }
 
@@ -79,7 +85,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let diffuse = max(dot(n, light_dir), 0.0);
     let shadow = shadow_factor(in.world_pos);
     let intensity = light.ambient.x + diffuse * (1.0 - light.ambient.x) * shadow;
-    var color = in.color * light.color.rgb * intensity;
+    let tex = textureSample(albedo_tex, albedo_samp, in.uv).rgb;
+    var color = in.color * tex * light.color.rgb * intensity;
     // surbrillance jaune additive pour l'objet sélectionné
     color = color + in.highlight * vec3<f32>(0.35, 0.3, 0.0);
     return vec4<f32>(color, 1.0);

@@ -103,6 +103,9 @@ pub struct SceneObject {
     /// Teinte (albédo) appliquée à l'objet ; blanc = couleur du mesh inchangée.
     #[serde(default = "white")]
     pub color: [f32; 3],
+    /// Texture albédo (chemin disque ou `bundle://`) ; vide = aucune.
+    #[serde(default)]
+    pub texture: String,
 }
 
 fn white() -> [f32; 3] {
@@ -209,6 +212,7 @@ impl Scene {
                     audio_autoplay: false,
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
+                    texture: String::new(),
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -221,6 +225,7 @@ impl Scene {
                     audio_autoplay: false,
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
+                    texture: String::new(),
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -233,6 +238,7 @@ impl Scene {
                     audio_autoplay: false,
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
+                    texture: String::new(),
                 },
             ],
         }

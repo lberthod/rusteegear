@@ -1778,6 +1778,7 @@ dependencies = [
  "env_logger",
  "glam 0.33.1",
  "gltf",
+ "image",
  "include_dir",
  "kira",
  "log",

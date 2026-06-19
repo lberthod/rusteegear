@@ -9,6 +9,7 @@ pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub color: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 impl Vertex {
@@ -31,6 +32,11 @@ impl Vertex {
                     offset: 24,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 36,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }
@@ -136,15 +142,18 @@ pub fn cube(color: [f32; 3]) -> MeshData {
         ),
     ];
 
+    // UV des 4 coins de chaque face (repère trigonométrique).
+    let face_uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     let mut vertices = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
     for (normal, corners) in faces {
         let base = vertices.len() as u32;
-        for pos in corners {
+        for (k, pos) in corners.into_iter().enumerate() {
             vertices.push(Vertex {
                 position: pos,
                 normal,
                 color,
+                uv: face_uv[k],
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -171,6 +180,7 @@ pub fn sphere(color: [f32; 3]) -> MeshData {
                 position: [radius * n[0], radius * n[1], radius * n[2]],
                 normal: n,
                 color,
+                uv: [j as f32 / sectors as f32, i as f32 / stacks as f32],
             });
         }
     }
@@ -195,21 +205,25 @@ pub fn plane(color: [f32; 3]) -> MeshData {
             position: [-0.5, 0.0, -0.5],
             normal: n,
             color,
+            uv: [0.0, 0.0],
         },
         Vertex {
             position: [0.5, 0.0, -0.5],
             normal: n,
             color,
+            uv: [1.0, 0.0],
         },
         Vertex {
             position: [0.5, 0.0, 0.5],
             normal: n,
             color,
+            uv: [1.0, 1.0],
         },
         Vertex {
             position: [-0.5, 0.0, 0.5],
             normal: n,
             color,
+            uv: [0.0, 1.0],
         },
     ];
     let indices = vec![0, 1, 2, 0, 2, 3];
