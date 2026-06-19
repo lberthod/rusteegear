@@ -52,6 +52,16 @@ struct ModelUniform {
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
     params: [f32; 4], // x = surbrillance (sélection)
+    color: [f32; 4],  // teinte (albédo) de l'objet
+}
+
+/// Éclairage de la scène (groupe 0, binding 1).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct SceneUniform {
+    light_dir: [f32; 4],
+    light_color: [f32; 4],
+    ambient: [f32; 4], // x = intensité ambiante
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -63,6 +73,7 @@ struct ObjectGpu {
     /// Dernier état téléversé : évite de réécrire le buffer d'un objet immobile.
     last_model: Option<glam::Mat4>,
     last_highlight: f32,
+    last_color: [f32; 3],
 }
 
 pub struct Renderer {
@@ -78,6 +89,7 @@ pub struct Renderer {
     model_layout: wgpu::BindGroupLayout,
 
     camera_buf: wgpu::Buffer,
+    light_buf: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 
     meshes: HashMap<MeshKind, GpuMesh>,
@@ -145,19 +157,26 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        // --- Caméra (bind group 0) ---
+        // --- Caméra + lumière (bind group 0) ---
         let camera_buf = create_uniform(&device, "camera", std::mem::size_of::<CameraUniform>());
+        let light_buf = create_uniform(&device, "light", std::mem::size_of::<SceneUniform>());
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera_layout"),
-            entries: &[uniform_entry(0)],
+            entries: &[uniform_entry(0), uniform_entry(1)],
         });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera_bg"),
             layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buf.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_buf.as_entire_binding(),
+                },
+            ],
         });
 
         // --- Layout des objets (bind group 1) ---
@@ -295,6 +314,7 @@ impl Renderer {
             depth_view,
             model_layout,
             camera_buf,
+            light_buf,
             camera_bind_group,
             meshes,
             imported_gpu: Vec::new(),
@@ -341,6 +361,7 @@ impl Renderer {
                 bind_group,
                 last_model: None,
                 last_highlight: -1.0,
+                last_color: [-1.0, -1.0, -1.0],
             });
         }
         self.objects_gpu.truncate(n);
@@ -363,6 +384,16 @@ impl Renderer {
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
 
+        // Éclairage de la scène.
+        let l = &app.scene.light;
+        let scene_uniform = SceneUniform {
+            light_dir: [l.dir[0], l.dir[1], l.dir[2], 0.0],
+            light_color: [l.color[0], l.color[1], l.color[2], 0.0],
+            ambient: [l.ambient, 0.0, 0.0, 0.0],
+        };
+        self.queue
+            .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
+
         for (i, (obj, gpu)) in app
             .scene
             .objects
@@ -372,8 +403,11 @@ impl Renderer {
         {
             let model = obj.transform.matrix();
             let highlight = app.highlight_of(i);
-            // Rien n'a bougé depuis la dernière frame : on saute l'upload.
-            if gpu.last_model == Some(model) && gpu.last_highlight == highlight {
+            // Rien n'a changé depuis la dernière frame : on saute l'upload.
+            if gpu.last_model == Some(model)
+                && gpu.last_highlight == highlight
+                && gpu.last_color == obj.color
+            {
                 continue;
             }
             // Matrice normale = inverse-transposée du bloc 3×3 (Mat3 bien moins
@@ -383,11 +417,13 @@ impl Renderer {
                 model: model.to_cols_array_2d(),
                 normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
                 params: [highlight, 0.0, 0.0, 0.0],
+                color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
             };
             self.queue
                 .write_buffer(&gpu.model_buf, 0, bytemuck::bytes_of(&model_uniform));
             gpu.last_model = Some(model);
             gpu.last_highlight = highlight;
+            gpu.last_color = obj.color;
         }
     }
 

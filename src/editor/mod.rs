@@ -478,12 +478,34 @@ fn build_ui(
         .show_inside(root, |ui| {
             ui.heading("Inspecteur");
             ui.separator();
+            ui.collapsing("🔆 Éclairage (scène)", |ui| {
+                let l = &mut scene.light;
+                ui.label("Direction");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut l.dir[0]).speed(0.02).prefix("x "));
+                    ui.add(egui::DragValue::new(&mut l.dir[1]).speed(0.02).prefix("y "));
+                    ui.add(egui::DragValue::new(&mut l.dir[2]).speed(0.02).prefix("z "));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Couleur");
+                    ui.color_edit_button_rgb(&mut l.color);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Ambiante");
+                    ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.0));
+                });
+            });
+            ui.separator();
             match *selection {
                 Some(i) if i < scene.objects.len() => {
                     let obj = &mut scene.objects[i];
                     ui.horizontal(|ui| {
                         ui.label("Nom");
                         ui.text_edit_singleline(&mut obj.name);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Couleur (teinte)");
+                        ui.color_edit_button_rgb(&mut obj.color);
                     });
                     ui.separator();
                     transform_editor(ui, &mut obj.transform);

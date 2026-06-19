@@ -100,6 +100,13 @@ pub struct SceneObject {
     /// Groupe (dossier) défini par l'utilisateur ; vide = « Sans groupe ».
     #[serde(default)]
     pub group: String,
+    /// Teinte (albédo) appliquée à l'objet ; blanc = couleur du mesh inchangée.
+    #[serde(default = "white")]
+    pub color: [f32; 3],
+}
+
+fn white() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
 }
 
 fn default_physics() -> PhysicsKind {
@@ -114,6 +121,27 @@ pub struct Scene {
     /// Groupes (dossiers) créés par l'utilisateur, y compris vides (ordre conservé).
     #[serde(default)]
     pub groups: Vec<String>,
+    /// Éclairage de la scène (direction, couleur, ambiante).
+    #[serde(default)]
+    pub light: Light,
+}
+
+/// Lumière directionnelle de la scène + lumière ambiante.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct Light {
+    pub dir: [f32; 3],
+    pub color: [f32; 3],
+    pub ambient: f32,
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Self {
+            dir: [0.5, 1.0, 0.3],
+            color: [1.0, 1.0, 1.0],
+            ambient: 0.25,
+        }
+    }
 }
 
 impl Scene {
@@ -168,6 +196,7 @@ impl Scene {
         Scene {
             imported: Vec::new(),
             groups: Vec::new(),
+            light: Light::default(),
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -179,6 +208,7 @@ impl Scene {
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
+                    color: [1.0, 1.0, 1.0],
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -190,6 +220,7 @@ impl Scene {
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
+                    color: [1.0, 1.0, 1.0],
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -201,6 +232,7 @@ impl Scene {
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
+                    color: [1.0, 1.0, 1.0],
                 },
             ],
         }

@@ -308,6 +308,7 @@ impl AppState {
             audio_clip: String::new(),
             audio_autoplay: false,
             group: String::new(),
+            color: [1.0, 1.0, 1.0],
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -736,6 +737,7 @@ impl AppState {
             audio_clip: String::new(),
             audio_autoplay: false,
             group: String::new(),
+            color: [1.0, 1.0, 1.0],
         });
         self.select_single(self.scene.objects.len() - 1);
     }

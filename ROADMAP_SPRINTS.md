@@ -272,15 +272,16 @@
 - **Livrable** : Cmd+clic pour sélectionner plusieurs objets, Cmd+C/V/D et Suppr en lot, double-clic pour renommer. ✅
 - **Risques** : invariants d'index sur suppressions multiples → suppression par indices décroissants.
 
-### Sprint 26 — Rendu : matériaux & ombres ⬜
+### Sprint 26 — Rendu : matériaux & ombres 🟢 (matériaux + lumière faits)
 **Objectif** : sortir du Lambert uni — texture/couleur par objet et ombres.
-- [ ] **Matériau par objet** : couleur albédo éditable dans l'inspecteur (+ métallique/rugosité simples).
-- [ ] **Textures** : charger une image et l'échantillonner (UV des primitives + glTF).
-- [ ] **Ombres** : shadow mapping directionnel (depth pass + comparaison).
-- [ ] Réglages de scène : direction/couleur de lumière, couleur ambiante.
-- **Fichiers** : `src/gfx/*`, `shaders/*.wgsl`, `src/scene/mod.rs`, `src/editor/mod.rs`.
-- **Livrable** : un objet texturé projette une ombre sur le sol ; couleur éditable en direct. ✅
-- **Risques** : coût GPU mobile (carte d'ombre) → résolution adaptative, limites `wgpu`.
+- [x] **Couleur (teinte/albédo) par objet** éditable dans l'inspecteur (color picker), via `ModelUniform`.
+- [x] **Éclairage de scène** éditable (direction, couleur, ambiante) via `SceneUniform` (groupe 0, binding 1) ;
+      shader Lambert paramétré ; persisté dans la scène (`Scene::light`).
+- [ ] **Textures** (chargement image + UV) → reporté (nécessite UV des primitives + bind group texture).
+- [ ] **Ombres** (shadow mapping directionnel) → reporté (depth pass + sampler comparaison, à itérer sur GPU).
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/main.wgsl`, `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : couleur d'objet et éclairage modifiables en direct, persistés au save. ✅
+- **Risques** : textures/ombres → coût GPU mobile, à valider visuellement → passe dédiée.
 
 ### Sprint 27 — Identité, cycle de vie mobile & durcissement ⬜
 **Objectif** : finir l'override d'identité, gérer le resume mobile, durcir/tester.
