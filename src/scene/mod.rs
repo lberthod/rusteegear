@@ -118,6 +118,10 @@ pub struct SceneObject {
     /// Texture albédo (chemin disque ou `bundle://`) ; vide = aucune.
     #[serde(default)]
     pub texture: String,
+    /// Objet « tactile » : un tap dessus en mode Play expose `obj.tapped = true`
+    /// au script pendant une frame (interaction tactile, ex. changer de couleur).
+    #[serde(default)]
+    pub tappable: bool,
 }
 
 fn white() -> [f32; 3] {
@@ -252,6 +256,7 @@ impl Scene {
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
+                    tappable: false,
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -265,6 +270,7 @@ impl Scene {
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
+                    tappable: false,
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -278,6 +284,7 @@ impl Scene {
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
+                    tappable: false,
                 },
             ],
         }
@@ -314,6 +321,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     group: String::new(),
                     color: [0.4, 0.5, 0.45],
                     texture: String::new(),
+                    tappable: false,
                 },
                 SceneObject {
                     name: "Joueur".into(),
@@ -326,6 +334,21 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     group: String::new(),
                     color: [0.95, 0.6, 0.25],
                     texture: String::new(),
+                    tappable: false,
+                },
+                SceneObject {
+                    name: "Bouton couleur".into(),
+                    transform: Transform::from_pos(Vec3::new(2.5, 0.5, -1.0)),
+                    mesh: MeshKind::Cube,
+                    // Tap → couleur aléatoire (changeante) via le temps.
+                    script: "if obj.tapped then\n  obj.r = (time * 0.7) % 1.0\n  obj.g = (time * 1.3) % 1.0\n  obj.b = (time * 1.9) % 1.0\nend".into(),
+                    physics: PhysicsKind::None,
+                    audio_clip: String::new(),
+                    audio_autoplay: false,
+                    group: String::new(),
+                    color: [0.3, 0.6, 0.9],
+                    texture: String::new(),
+                    tappable: true,
                 },
             ],
         }

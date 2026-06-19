@@ -130,6 +130,7 @@ impl Editor {
             let area = play_area_rect(ctx.content_rect(), device_preview, device_portrait);
             if device_preview {
                 device_bezel(ctx, area);
+                touch_feedback(ctx, area);
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
@@ -916,6 +917,27 @@ fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
     painter.rect_filled(notch, 7.0, Color32::from_rgb(20, 20, 24));
 }
 
+/// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
+fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
+    use egui::{Color32, Stroke};
+    let down = ctx.input(|i| i.pointer.primary_down());
+    if !down {
+        return;
+    }
+    let Some(p) = ctx.pointer_interact_pos() else {
+        return;
+    };
+    if !area.contains(p) {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("touch_feedback"),
+    ));
+    painter.circle_stroke(p, 24.0, Stroke::new(3.0, Color32::from_white_alpha(150)));
+    painter.circle_filled(p, 7.0, Color32::from_white_alpha(90));
+}
+
 /// Dessine les contrôles tactiles (joystick virtuel + boutons) à l'intérieur de
 /// `area` et met à jour l'état d'entrée lu par les scripts Lua.
 fn mobile_overlay(
@@ -1241,6 +1263,10 @@ fn build_ui(
                                 "Dynamique",
                             );
                         });
+                        ui.checkbox(&mut obj.tappable, "👆 Tactile (cliquable)")
+                            .on_hover_text(
+                                "En Play, un tap dessus expose obj.tapped au script (ex. couleur)",
+                            );
                         ui.separator();
                         ui.collapsing("Audio", |ui| {
                             ui.horizontal(|ui| {
@@ -1271,7 +1297,8 @@ fn build_ui(
                         ui.separator();
                         ui.collapsing("Script (Lua)", |ui| {
                             ui.label(
-                                "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, dt, time",
+                                "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
+                                 obj.r/g/b, obj.tapped, dt, time, input.jx/jy, input.btn.<nom>",
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut obj.script)
@@ -1306,6 +1333,7 @@ fn build_ui(
     let play_rect = play_area_rect(central, *device_preview, *device_portrait);
     if *device_preview {
         device_bezel(root.ctx(), play_rect);
+        touch_feedback(root.ctx(), play_rect);
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);

@@ -65,6 +65,8 @@ pub struct AppState {
     pub player: bool,
     /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
     pub input_state: PlayerInput,
+    /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
+    tapped_obj: Option<usize>,
     /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
     pub device_preview: bool,
     /// Orientation de l'aperçu mobile (portrait par défaut).
@@ -172,6 +174,7 @@ impl AppState {
             should_quit: false,
             player: false,
             input_state: PlayerInput::default(),
+            tapped_obj: None,
             device_preview: false,
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
@@ -388,6 +391,7 @@ impl AppState {
             group: String::new(),
             color: [1.0, 1.0, 1.0],
             texture: String::new(),
+            tappable: false,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -545,12 +549,27 @@ impl AppState {
                     return;
                 }
                 self.dragging = false;
-                // Aperçu mobile : pas de sélection au clic (on joue, on n'édite pas).
+                // Tap (appui sans déplacement notable) ?
+                let tap = matches!(
+                    (self.press_cursor, self.last_cursor),
+                    (Some((px, py)), Some((cx, cy))) if (px - cx).hypot(py - cy) < 4.0
+                );
+                // En mode Play : un tap sur un objet « tactile » le notifie à son script.
+                if self.playing
+                    && !self.paused
+                    && tap
+                    && let Some((cx, cy)) = self.last_cursor
+                    && let Some(i) = self.pick(cx, cy)
+                    && self.scene.objects[i].tappable
+                {
+                    self.tapped_obj = Some(i);
+                }
+                // Aperçu mobile : pas de sélection éditeur au clic (on joue, on n'édite pas).
                 if self.device_preview {
                     self.press_cursor = None;
                     return;
                 }
-                // appui sans déplacement notable = sélection
+                // appui sans déplacement notable = sélection éditeur
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
                 {
@@ -627,10 +646,28 @@ impl AppState {
 
     /// Rayon monde (origine, direction) issu d'un point écran en pixels.
     /// `vp_inv` = inverse de la view-projection (calculée une fois par l'appelant).
+    /// Convertit un point écran (pixels) en NDC, en tenant compte du rectangle
+    /// letterboxé de l'aperçu mobile (sinon : tout le viewport).
+    fn screen_to_ndc(&self, px: f64, py: f64) -> (f32, f32) {
+        let (ox, oy, w, h) = if self.device_preview {
+            let (bx, by, bw, bh) = if self.view_rect_px.2 > 1.0 {
+                self.view_rect_px
+            } else {
+                (0.0, 0.0, self.viewport.0, self.viewport.1)
+            };
+            let (rx, ry, rw, rh) = device_rect(bw, bh, self.device_portrait);
+            (bx + rx, by + ry, rw, rh)
+        } else {
+            (0.0, 0.0, self.viewport.0, self.viewport.1)
+        };
+        (
+            2.0 * (px as f32 - ox) / w - 1.0,
+            1.0 - 2.0 * (py as f32 - oy) / h,
+        )
+    }
+
     fn ray_with(&self, vp_inv: Mat4, px: f64, py: f64) -> (Vec3, Vec3) {
-        let (w, h) = self.viewport;
-        let ndc_x = 2.0 * px as f32 / w - 1.0;
-        let ndc_y = 1.0 - 2.0 * py as f32 / h;
+        let (ndc_x, ndc_y) = self.screen_to_ndc(px, py);
         let near = vp_inv * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
         let far = vp_inv * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
         let origin = near.truncate() / near.w;
@@ -802,7 +839,7 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
-        for obj in &mut self.scene.objects {
+        for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             if obj.script.trim().is_empty() {
                 continue;
             }
@@ -821,17 +858,22 @@ impl AppState {
                     }
                 },
             };
+            let tapped = self.tapped_obj == Some(idx);
             if let Err(e) = run_script(
                 &self.lua,
                 &func,
                 &mut obj.transform,
+                &mut obj.color,
                 dt,
                 time,
                 &self.input_state,
+                tapped,
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
+        // Le tap n'est exposé qu'une frame.
+        self.tapped_obj = None;
 
         // 2. physique (écrase les poses des corps dynamiques)
         if let Some(phys) = &mut self.physics {
@@ -953,6 +995,7 @@ impl AppState {
             group: String::new(),
             color: [1.0, 1.0, 1.0],
             texture: String::new(),
+            tappable: false,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -1006,14 +1049,18 @@ fn script_key(src: &str) -> u64 {
 }
 
 /// Exécute le chunk Lua **déjà compilé** d'un objet : expose `obj` (x,y,z,
-/// rx,ry,rz en °, sx,sy,sz), `dt` et `time`, puis relit les champs modifiés.
+/// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped), `dt`, `time` et `input`, puis relit
+/// les champs modifiés.
+#[allow(clippy::too_many_arguments)] // contexte d'exécution d'un script : champs distincts
 fn run_script(
     lua: &Lua,
     func: &mlua::Function,
     t: &mut Transform,
+    color: &mut [f32; 3],
     dt: f32,
     time: f32,
     input: &PlayerInput,
+    tapped: bool,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -1026,6 +1073,10 @@ fn run_script(
     obj.set("sx", t.scale.x)?;
     obj.set("sy", t.scale.y)?;
     obj.set("sz", t.scale.z)?;
+    obj.set("r", color[0])?;
+    obj.set("g", color[1])?;
+    obj.set("b", color[2])?;
+    obj.set("tapped", tapped)?;
 
     // Contrôles tactiles : `input.jx`, `input.jy` (joystick) et `input.btn.<nom>` (booléens).
     let input_tbl = lua.create_table()?;
@@ -1053,6 +1104,7 @@ fn run_script(
         rz.to_radians(),
     );
     t.scale = Vec3::new(obj.get("sx")?, obj.get("sy")?, obj.get("sz")?);
+    *color = [obj.get("r")?, obj.get("g")?, obj.get("b")?];
     Ok(())
 }
 
@@ -1167,21 +1219,39 @@ mod tests {
         let src = "obj.x = obj.x + input.jx; if input.btn.B1 then obj.y = 5 end";
         let func = lua.load(src).into_function().unwrap();
         let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
         let mut input = PlayerInput {
             joy: (0.5, 0.0),
             buttons: std::collections::HashSet::new(),
         };
         input.buttons.insert("B1".into());
-        run_script(&lua, &func, &mut t, 0.016, 0.0, &input).unwrap();
+        run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false).unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
         assert!((t.position.y - 5.0).abs() < 1e-5);
 
         // Sans bouton ni joystick : aucun mouvement.
         let mut t2 = Transform::from_pos(Vec3::ZERO);
         let empty = PlayerInput::default();
-        run_script(&lua, &func, &mut t2, 0.016, 0.0, &empty).unwrap();
+        run_script(&lua, &func, &mut t2, &mut col, 0.016, 0.0, &empty, false).unwrap();
         assert!((t2.position.x).abs() < 1e-5);
         assert!((t2.position.y).abs() < 1e-5);
+    }
+
+    #[test]
+    fn script_reacts_to_tap_and_changes_color() {
+        // Au tap, l'objet vire au rouge.
+        let lua = Lua::new();
+        let src = "if obj.tapped then obj.r = 1.0; obj.g = 0.0; obj.b = 0.0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [0.5, 0.5, 0.5];
+        let input = PlayerInput::default();
+        // pas de tap : couleur inchangée
+        run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false).unwrap();
+        assert_eq!(col, [0.5, 0.5, 0.5]);
+        // tap : passe au rouge
+        run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true).unwrap();
+        assert_eq!(col, [1.0, 0.0, 0.0]);
     }
 
     #[test]
