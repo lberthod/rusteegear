@@ -18,7 +18,9 @@ if [ ! -f "$KS" ]; then
 fi
 
 echo "▶ Build APK (release)…"
-cargo apk build --release
+# --lib : l'app Android est le cdylib (android_main). Sans ça, cargo-apk voit aussi
+# le bin desktop (main.rs) et panique (« Bin is not compatible with Cdylib »).
+cargo apk build --release --lib
 
 APK="target/release/apk/motor3derust.apk"
 echo "✅ APK : $APK ($(du -h "$APK" | cut -f1))"
