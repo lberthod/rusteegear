@@ -810,8 +810,8 @@ impl Renderer {
             if let Some((idx, req)) = actions.ai_generate {
                 app.request_ai_script(idx, req);
             }
-            if let Some(req) = actions.ai_generate_scene {
-                app.request_ai_scene(req);
+            if let Some((req, replace)) = actions.ai_generate_scene {
+                app.request_ai_scene(req, replace);
             }
             if actions.set_game_camera {
                 app.set_game_camera();

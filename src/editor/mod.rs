@@ -31,6 +31,10 @@ pub struct Editor {
     ai_prompt: String,
     /// Consigne pour la génération de scène entière par IA.
     ai_scene_prompt: String,
+    /// Mode de génération de scène : remplacer (true) ou ajouter (false).
+    ai_scene_replace: bool,
+    /// Historique des consignes IA récentes (scène), pour ré-exécution rapide.
+    ai_history: Vec<String>,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -96,8 +100,8 @@ pub struct UiActions {
     pub move_in_list: Option<bool>,
     /// Génération IA d'un script : `(index objet, requête DeepSeek)`.
     pub ai_generate: Option<(usize, crate::app::ai::AiRequest)>,
-    /// Génération IA d'une scène entière.
-    pub ai_generate_scene: Option<crate::app::ai::AiRequest>,
+    /// Génération IA d'une scène : `(requête, remplacer ?)` (sinon ajout à la scène).
+    pub ai_generate_scene: Option<(crate::app::ai::AiRequest, bool)>,
     /// Demande d'ouverture de la fenêtre « Générer une scène (IA) ».
     pub open_ai_scene: bool,
     /// Définir la caméra de jeu sur la vue actuelle.
@@ -145,6 +149,8 @@ impl Editor {
             settings: crate::app::settings::Settings::load(),
             ai_prompt: String::new(),
             ai_scene_prompt: String::new(),
+            ai_scene_replace: true,
+            ai_history: Vec::new(),
         }
     }
 
@@ -212,6 +218,8 @@ impl Editor {
         let settings = &mut self.settings;
         let ai_prompt = &mut self.ai_prompt;
         let ai_scene_prompt = &mut self.ai_scene_prompt;
+        let ai_scene_replace = &mut self.ai_scene_replace;
+        let ai_history = &mut self.ai_history;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -234,6 +242,8 @@ impl Editor {
                 settings,
                 ai_prompt,
                 ai_scene_prompt,
+                ai_scene_replace,
+                ai_history,
                 &mut actions,
             );
         });
@@ -1067,12 +1077,15 @@ fn settings_window(
     panels.settings = open;
 }
 
-/// Fenêtre « Générer une scène (IA) » : consigne → scène complète via DeepSeek.
+/// Fenêtre « Générer une scène (IA) » : consigne → scène (remplacer ou ajouter) via DeepSeek.
+#[allow(clippy::too_many_arguments)]
 fn ai_scene_window(
     ctx: &egui::Context,
     panels: &mut Panels,
     settings: &crate::app::settings::Settings,
     prompt: &mut String,
+    replace: &mut bool,
+    history: &mut Vec<String>,
     status: &StatusInfo,
     actions: &mut UiActions,
 ) {
@@ -1092,19 +1105,33 @@ fn ai_scene_window(
                          tactiles colorés et une caméra qui suit »",
                     ),
             );
+            ui.horizontal(|ui| {
+                ui.selectable_value(replace, true, "Remplacer");
+                ui.selectable_value(replace, false, "Ajouter à la scène");
+            });
             let has_key = !settings.deepseek_api_key.trim().is_empty();
             let can = has_key && !status.ai_busy && !prompt.trim().is_empty();
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(can, egui::Button::new("✨ Générer la scène"))
-                    .clicked()
-                {
-                    actions.ai_generate_scene = Some(crate::app::ai::AiRequest {
-                        api_key: settings.deepseek_api_key.clone(),
-                        model: settings.deepseek_model.clone(),
-                        temperature: settings.deepseek_temperature,
-                        prompt: prompt.clone(),
-                    });
+                let label = if *replace {
+                    "✨ Générer (remplace)"
+                } else {
+                    "✨ Générer (ajoute)"
+                };
+                if ui.add_enabled(can, egui::Button::new(label)).clicked() {
+                    let p = prompt.trim().to_string();
+                    // Historique : consigne en tête, sans doublon, max 8.
+                    history.retain(|h| h != &p);
+                    history.insert(0, p.clone());
+                    history.truncate(8);
+                    actions.ai_generate_scene = Some((
+                        crate::app::ai::AiRequest {
+                            api_key: settings.deepseek_api_key.clone(),
+                            model: settings.deepseek_model.clone(),
+                            temperature: settings.deepseek_temperature,
+                            prompt: p,
+                        },
+                        *replace,
+                    ));
                 }
                 if status.ai_busy {
                     ui.spinner();
@@ -1113,7 +1140,20 @@ fn ai_scene_window(
                     ui.label("clé API requise (⚙ Paramètres)");
                 }
             });
-            ui.small("⚠ Remplace la scène actuelle (annulable avec Cmd+Z).");
+            if !history.is_empty() {
+                ui.separator();
+                ui.label("Consignes récentes :");
+                egui::ScrollArea::vertical()
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        for h in history.iter() {
+                            let short: String = h.chars().take(60).collect();
+                            if ui.selectable_label(false, short).clicked() {
+                                *prompt = h.clone();
+                            }
+                        }
+                    });
+            }
         });
     panels.ai_scene = open;
 }
@@ -1322,6 +1362,8 @@ fn build_ui(
     settings: &mut crate::app::settings::Settings,
     ai_prompt: &mut String,
     ai_scene_prompt: &mut String,
+    ai_scene_replace: &mut bool,
+    ai_history: &mut Vec<String>,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -1332,6 +1374,8 @@ fn build_ui(
         panels,
         settings,
         ai_scene_prompt,
+        ai_scene_replace,
+        ai_history,
         status,
         actions,
     );

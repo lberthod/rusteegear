@@ -137,6 +137,8 @@ pub struct AppState {
     // --- génération de scène entière par IA (asynchrone) ---
     ai_scene_tx: Sender<Result<Scene, String>>,
     ai_scene_rx: Receiver<Result<Scene, String>>,
+    /// Mode de la génération de scène en cours : `true` = remplacer, `false` = ajouter.
+    ai_scene_replace: bool,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -226,15 +228,18 @@ impl AppState {
             ai_busy: false,
             ai_scene_tx,
             ai_scene_rx,
+            ai_scene_replace: true,
         }
     }
 
-    /// Lance une génération de scène complète par IA (thread de fond).
-    pub fn request_ai_scene(&mut self, req: ai::AiRequest) {
+    /// Lance une génération de scène par IA (thread de fond). `replace` = remplace la
+    /// scène ; sinon ajoute les objets générés à la scène actuelle.
+    pub fn request_ai_scene(&mut self, req: ai::AiRequest, replace: bool) {
         if self.ai_busy {
             return;
         }
         self.ai_busy = true;
+        self.ai_scene_replace = replace;
         let tx = self.ai_scene_tx.clone();
         std::thread::spawn(move || {
             let result = ai::generate_scene_json(&req).and_then(|j| Scene::from_ai_json(&j));
@@ -272,12 +277,20 @@ impl AppState {
         while let Ok(result) = self.ai_scene_rx.try_recv() {
             self.ai_busy = false;
             match result {
-                Ok(scene) => {
+                Ok(mut scene) => {
                     self.push_undo();
-                    self.scene = scene;
+                    if self.ai_scene_replace {
+                        self.scene = scene;
+                        log::info!("Scène générée par IA appliquée");
+                    } else {
+                        // Ajout : on intègre les objets et lumières générés à la scène actuelle.
+                        let n = scene.objects.len();
+                        self.scene.objects.append(&mut scene.objects);
+                        self.scene.point_lights.append(&mut scene.point_lights);
+                        log::info!("{n} objet(s) ajouté(s) par IA à la scène");
+                    }
                     self.imported_dirty = true;
                     self.clear_selection();
-                    log::info!("Scène générée par IA appliquée");
                 }
                 Err(e) => log::error!("Génération de scène IA : {e}"),
             }

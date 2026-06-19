@@ -470,7 +470,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ### Sprint 37 — IA avancée & confort d'édition ⬜
 **Objectif** : capitaliser sur l'IA et combler les manques d'ergonomie de l'éditeur.
-- [ ] IA « **Ajouter à la scène** » (au lieu de remplacer) + édition ciblée (« rends ce cube rebondissant »).
+- [x] IA « Ajouter à la scène » (vs remplacer) : objets + lumières générés ajoutés à la scène.
+- [x] Historique des prompts IA (8 récents, ré-exécution en un clic).
+- [ ] Glisser-déposer hiérarchie + sous-groupes ; gizmo multi rotate/scale → reste du sprint.
 - [ ] **Historique des prompts** par projet ; ré-exécution en un clic.
 - [ ] Hiérarchie : **glisser-déposer** pour réordonner/regrouper, **sous-groupes** imbriqués.
 - [ ] Gizmo **multi-objets en rotate/scale** (pivot commun) ; raccourcis d'alignement/distribution.
