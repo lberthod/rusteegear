@@ -47,6 +47,11 @@ label = "Motor3DeRust"
 path = "packaging/release.keystore"
 keystore_password = "android"
 
+[features]
+# Force le mode Player dès le lancement (sans --player) : utilisé pour exporter un
+# « player » jouable du jeu créé (.dmg/.app double-cliquable qui démarre sur la scène).
+player_build = []
+
 [dependencies]
 bytemuck = { version = "1.25.0", features = ["derive"] }
 egui = "0.34.3"

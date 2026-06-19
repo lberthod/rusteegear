@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 
+use crate::scene::Scene;
+
 /// Racine du projet, figée à la compilation : les scripts `packaging/*.sh` y résident,
 /// quel que soit le répertoire courant (qui vaut « / » quand l'app tourne en `.app`).
 const PROJECT_ROOT: &str = env!("CARGO_MANIFEST_DIR");
@@ -45,6 +47,8 @@ enum LogMsg {
 /// État persistant du panneau (vit dans `Editor`).
 pub struct ExportPanel {
     pub open: bool,
+    /// Nom du fichier de sortie (sans extension), saisi par l'utilisateur.
+    name: String,
     log: Vec<String>,
     rx: Option<Receiver<LogMsg>>,
     running: Option<Target>,
@@ -62,6 +66,7 @@ impl ExportPanel {
     pub fn new() -> Self {
         ExportPanel {
             open: false,
+            name: "MonJeu".into(),
             log: Vec::new(),
             rx: None,
             running: None,
@@ -81,17 +86,48 @@ impl ExportPanel {
             .unwrap_or(Ok(()))
     }
 
+    /// Nom de fichier nettoyé (alphanumérique, `-`, `_`) ; défaut « MonJeu ».
+    fn safe_name(&self) -> String {
+        let n: String = self
+            .name
+            .trim()
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if n.is_empty() { "MonJeu".into() } else { n }
+    }
+
     /// Démarre un export en arrière-plan (un seul à la fois).
-    fn start(&mut self, target: Target) {
+    /// Écrit d'abord la scène courante dans le binaire à embarquer (le jeu jouable).
+    fn start(&mut self, target: Target, scene: &Scene) {
         self.log.clear();
-        self.log
-            .push(format!("▶ Export {} en cours…", target.label()));
-        self.rx = Some(run(target));
+        let name = self.safe_name();
+        let scene_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let written = serde_json::to_string_pretty(scene)
+            .map_err(|e| e.to_string())
+            .and_then(|j| std::fs::write(scene_path, j).map_err(|e| e.to_string()));
+        if let Err(e) = written {
+            self.log
+                .push(format!("❌ Impossible d'embarquer la scène : {e}"));
+            return;
+        }
+        self.log.push("✓ Scène du jeu embarquée.".into());
+        self.log.push(format!(
+            "▶ Export « {name} » ({}) en cours…",
+            target.label()
+        ));
+        self.rx = Some(run(target, name));
         self.running = Some(target);
     }
 
     /// Construit la fenêtre egui (à appeler chaque frame avec le contexte).
-    pub fn ui(&mut self, ctx: &egui::Context) {
+    pub fn ui(&mut self, ctx: &egui::Context, scene: &Scene) {
         // Récupère les lignes de log produites par le thread de build.
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
@@ -123,11 +159,15 @@ impl ExportPanel {
             .resizable(true)
             .default_width(440.0)
             .show(ctx, |ui| {
-                ui.label("Génère un livrable signé pour chaque plateforme.");
+                ui.label("Exporte un player jouable du jeu créé (scène embarquée).");
+                ui.horizontal(|ui| {
+                    ui.label("Nom du fichier :");
+                    ui.text_edit_singleline(&mut self.name);
+                });
                 ui.add_space(4.0);
                 let targets = [Target::Macos, Target::Android, Target::Ios];
                 for t in targets {
-                    self.card(ui, t);
+                    self.card(ui, t, scene);
                 }
                 ui.separator();
                 ui.label("Journal :");
@@ -147,9 +187,10 @@ impl ExportPanel {
         self.open = open;
     }
 
-    fn card(&mut self, ui: &mut egui::Ui, target: Target) {
+    fn card(&mut self, ui: &mut egui::Ui, target: Target, scene: &Scene) {
         let prereq = self.prereq(target);
         let busy = self.running.is_some();
+        let mut launch = false;
         ui.horizontal(|ui| {
             ui.strong(target.label());
             match &prereq {
@@ -165,12 +206,15 @@ impl ExportPanel {
                 .add_enabled(enabled, egui::Button::new("Exporter"))
                 .clicked()
             {
-                self.start(target);
+                launch = true;
             }
             if self.running == Some(target) {
                 ui.spinner();
             }
         });
+        if launch {
+            self.start(target, scene);
+        }
     }
 }
 
@@ -240,7 +284,8 @@ fn has_cmd(name: &str) -> bool {
 }
 
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log.
-fn run(target: Target) -> Receiver<LogMsg> {
+/// `name` = nom du fichier de sortie souhaité (transmis via `OUTPUT_NAME`).
+fn run(target: Target, name: String) -> Receiver<LogMsg> {
     let (tx, rx) = channel();
     let script = target.script();
     std::thread::spawn(move || {
@@ -248,6 +293,8 @@ fn run(target: Target) -> Receiver<LogMsg> {
             .arg(script)
             .current_dir(PROJECT_ROOT)
             .env("PATH", augmented_path())
+            .env("OUTPUT_NAME", &name)
+            .env("PLAYER_BUILD", "1") // exporte un player jouable (cf. build_dmg.sh)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

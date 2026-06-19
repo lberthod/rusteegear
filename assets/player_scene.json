@@ -1,0 +1,83 @@
+{
+  "objects": [
+    {
+      "name": "Sol",
+      "transform": {
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          10.0,
+          1.0,
+          10.0
+        ]
+      },
+      "mesh": "Plane",
+      "script": "",
+      "physics": "Static",
+      "audio_clip": "",
+      "audio_autoplay": false
+    },
+    {
+      "name": "Cube",
+      "transform": {
+        "position": [
+          -1.2,
+          -0.5,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Cube",
+      "script": "obj.ry = obj.ry + dt * 60.0",
+      "physics": "None",
+      "audio_clip": "",
+      "audio_autoplay": false
+    },
+    {
+      "name": "Sphère",
+      "transform": {
+        "position": [
+          1.2,
+          2.5,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "Dynamic",
+      "audio_clip": "",
+      "audio_autoplay": false
+    }
+  ],
+  "imported": []
+}

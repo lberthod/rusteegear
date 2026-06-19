@@ -164,6 +164,12 @@ impl AppState {
         self.playing || self.dragging || self.active_axis.is_some()
     }
 
+    /// Charge la scène embarquée (jeu exporté) à la place de la démo : appelé en mode Player.
+    pub fn use_embedded_scene(&mut self) {
+        self.scene = Scene::embedded_player();
+        self.selection = None;
+    }
+
     /// Joue immédiatement un fichier son (bouton de test / scripts).
     pub fn play_audio(&mut self, path: &str) {
         self.audio.play(path);

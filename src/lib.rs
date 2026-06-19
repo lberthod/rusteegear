@@ -213,6 +213,8 @@ fn make_app(player: bool) -> App {
     if player {
         app.state.player = true;
         app.state.playing = true;
+        // En mode Player on joue le jeu exporté (scène embarquée), pas la démo de l'éditeur.
+        app.state.use_embedded_scene();
     }
     app
 }
@@ -228,8 +230,11 @@ pub fn run() {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
-    // Mobile = mode Player (plein écran, sans éditeur) ; desktop via --player.
-    let player = std::env::args().any(|a| a == "--player") || cfg!(target_os = "ios");
+    // Mobile = mode Player (plein écran, sans éditeur) ; desktop via --player ou
+    // via la feature `player_build` (utilisée pour exporter un .app jouable).
+    let player = std::env::args().any(|a| a == "--player")
+        || cfg!(target_os = "ios")
+        || cfg!(feature = "player_build");
     let mut app = make_app(player);
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Boucle d'événements terminée sur erreur : {e}");

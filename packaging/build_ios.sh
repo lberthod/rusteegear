@@ -63,5 +63,12 @@ ENT
 fi
 
 ( cd "$OUT" && rm -f "$APP_NAME.ipa" && zip -qr "$APP_NAME.ipa" Payload )
-echo "✅ IPA : $OUT/$APP_NAME.ipa ($(du -h "$OUT/$APP_NAME.ipa" | cut -f1))"
+IPA="$OUT/$APP_NAME.ipa"
+# Renomme selon OUTPUT_NAME (fourni par le panneau Export).
+if [ -n "${OUTPUT_NAME:-}" ] && [ "${OUTPUT_NAME}" != "$APP_NAME" ]; then
+    mkdir -p target/export
+    cp "$IPA" "target/export/${OUTPUT_NAME}.ipa"
+    IPA="target/export/${OUTPUT_NAME}.ipa"
+fi
+echo "✅ IPA : $IPA ($(du -h "$IPA" | cut -f1))"
 [ -z "${PROFILE:-}" ] && echo "⚠️ Sans PROFILE (.mobileprovision), l'app ne s'installe pas sur un appareil."

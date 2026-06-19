@@ -23,5 +23,12 @@ echo "▶ Build APK (release)…"
 cargo apk build --release --lib
 
 APK="target/release/apk/motor3derust.apk"
+# Renomme selon OUTPUT_NAME (fourni par le panneau Export) ; sinon garde le nom par défaut.
+OUTPUT_NAME="${OUTPUT_NAME:-}"
+if [ -n "$OUTPUT_NAME" ] && [ "$OUTPUT_NAME" != "motor3derust" ]; then
+    mkdir -p target/export
+    cp "$APK" "target/export/${OUTPUT_NAME}.apk"
+    APK="target/export/${OUTPUT_NAME}.apk"
+fi
 echo "✅ APK : $APK ($(du -h "$APK" | cut -f1))"
 echo "   Installer : adb install -r $APK"

@@ -168,7 +168,7 @@ fn build_ui(
     actions: &mut UiActions,
 ) {
     // Fenêtre flottante « Build & Export » (Sprint 19).
-    export.ui(root.ctx());
+    export.ui(root.ctx(), scene);
 
     // Bandeau d'état (bas) : FPS, nombre d'objets, mode, backend GPU.
     egui::Panel::bottom("status_bar").show_inside(root, |ui| {

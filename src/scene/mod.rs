@@ -137,6 +137,26 @@ impl Scene {
         }
     }
 
+    /// Scène **embarquée dans le binaire** (figée à la compilation depuis
+    /// `assets/player_scene.json`, réécrite à chaque export). C'est le jeu que joue
+    /// le mode Player d'un `.dmg`/`.apk`/`.ipa` exporté.
+    pub fn embedded_player() -> Self {
+        const JSON: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/player_scene.json"
+        ));
+        match serde_json::from_str::<Scene>(JSON) {
+            Ok(mut s) => {
+                s.reload_imported();
+                s
+            }
+            Err(e) => {
+                log::error!("Scène embarquée invalide ({e}) — retour à la démo.");
+                Scene::demo()
+            }
+        }
+    }
+
     /// Scène de démonstration : un sol, un cube, une sphère.
     pub fn demo() -> Self {
         Scene {
