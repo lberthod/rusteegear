@@ -408,7 +408,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ### Sprint 33 — Matériaux PBR & rendu avancé ⬜
 **Objectif** : passer d'un rendu plat à un rendu crédible, sans casser le coût mobile.
-- [ ] Matériau par objet : `metallic`, `roughness`, `emissive` (champs `SceneObject`, UI inspecteur).
+- [x] Matériau par objet : metallic, roughness, emissive (champs SceneObject + sliders inspecteur).
+- [x] Shader PBR léger (diffuse atténuée métal + spéculaire Blinn-Phong piloté rugosité + émission).
+- [x] **Frustum culling** CPU (plans Gribb-Hartmann + test AABB monde) avant la passe caméra.
 - [ ] Shader PBR (BRDF Cook-Torrance simplifié) + uniforms matériau (bind group dédié).
 - [ ] Rendu **instancié** des objets partageant mesh+matériau (1 draw call par lot) → perf.
 - [ ] **Frustum culling** CPU (AABB monde déjà calculées) avant soumission.

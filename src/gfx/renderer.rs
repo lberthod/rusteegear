@@ -937,7 +937,14 @@ impl Renderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
 
+            // Frustum culling : on ne soumet que les objets potentiellement visibles
+            // (la passe d'ombre, elle, garde tout pour des ombres correctes hors champ).
+            let planes = frustum_planes(app.camera.view_proj());
             for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
+                let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
+                if !aabb_visible(&planes, obj.transform.matrix(), lmin, lmax) {
+                    continue;
+                }
                 let mesh = match obj.mesh {
                     MeshKind::Imported(i) => match self.imported_gpu.get(i as usize) {
                         Some(m) => m,
@@ -1064,6 +1071,57 @@ fn make_texture(
             },
         ],
     })
+}
+
+/// Les 6 plans du frustum (méthode de Gribb-Hartmann) extraits de la view-projection.
+/// Chaque plan `(a,b,c,d)` : un point `p` est dans le frustum si `a·px+b·py+c·pz+d ≥ 0`.
+fn frustum_planes(vp: glam::Mat4) -> [glam::Vec4; 6] {
+    let m = vp.to_cols_array_2d(); // m[col][row]
+    let row = |r: usize| glam::Vec4::new(m[0][r], m[1][r], m[2][r], m[3][r]);
+    let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
+    [
+        r3 + r0, // gauche
+        r3 - r0, // droite
+        r3 + r1, // bas
+        r3 - r1, // haut
+        r3 + r2, // près
+        r3 - r2, // loin
+    ]
+}
+
+/// Teste si l'AABB locale `[lmin, lmax]` (transformée par `model`) est au moins
+/// partiellement dans le frustum. Conservateur : peut garder un objet juste hors champ.
+fn aabb_visible(
+    planes: &[glam::Vec4; 6],
+    model: glam::Mat4,
+    lmin: glam::Vec3,
+    lmax: glam::Vec3,
+) -> bool {
+    // AABB monde à partir des 8 coins transformés.
+    let mut wmin = glam::Vec3::splat(f32::INFINITY);
+    let mut wmax = glam::Vec3::splat(f32::NEG_INFINITY);
+    for sx in [lmin.x, lmax.x] {
+        for sy in [lmin.y, lmax.y] {
+            for sz in [lmin.z, lmax.z] {
+                let p = (model * glam::Vec3::new(sx, sy, sz).extend(1.0)).truncate();
+                wmin = wmin.min(p);
+                wmax = wmax.max(p);
+            }
+        }
+    }
+    // Pour chaque plan, on teste le coin « positif » (le plus avancé vers le plan).
+    for pl in planes {
+        let n = pl.truncate();
+        let positive = glam::Vec3::new(
+            if n.x >= 0.0 { wmax.x } else { wmin.x },
+            if n.y >= 0.0 { wmax.y } else { wmin.y },
+            if n.z >= 0.0 { wmax.z } else { wmin.z },
+        );
+        if n.dot(positive) + pl.w < 0.0 {
+            return false; // entièrement du mauvais côté d'un plan → hors champ
+        }
+    }
+    true
 }
 
 fn create_uniform(device: &wgpu::Device, label: &str, size: usize) -> wgpu::Buffer {
