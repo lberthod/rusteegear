@@ -216,16 +216,16 @@
 - **Livrable** : un clic → `.apk` signé dans `target/export/` (et installé sur device si coché). ✅
 - **Risques** : env Android fragile → détection centralisée (`find_ndk`, `rust_target_installed`), log streamé.
 
-### Sprint 22 — Export IPA 1-clic ⬜
+### Sprint 22 — Export IPA 1-clic ✅ FAIT
 **Objectif** : bouton « Exporter iOS » avec signature configurable.
-- [ ] `export.rs` pilote `packaging/build_ios.sh` / `install_ios_device.sh` via `BuildConfig`
-      (équipe, certificat « Apple Development », profil de provisioning).
-- [ ] Pré-vol : Xcode/`xcodegen`, certificat dans le trousseau, device enregistré → coches/aides.
-- [ ] Deux modes : **Exporter `.ipa`** (fichier) et **Installer sur iPhone branché** (`devicectl`).
-- [ ] Sélecteur de profil de provisioning (auto Xcode ou fichier `.mobileprovision`).
-- **Fichiers** : `src/editor/export.rs`, `packaging/build_ios.sh`, `packaging/install_ios_device.sh`.
-- **Livrable** : un clic → `.ipa` signé, ou app installée et lancée sur l'iPhone branché. ✅
-- **Risques** : signature Apple capricieuse → surfacer le message d'erreur Xcode brut dans le log UI.
+- [x] `export.rs` pilote `build_ios.sh` (fichier `.ipa`) / `install_ios_device.sh` (device) via `BuildConfig`
+      (Team ID, identité « Apple Development », profil `.mobileprovision`), surchargés seulement si renseignés.
+- [x] Pré-vol iOS : `xcodegen`, cible `aarch64-apple-ios`, **identité de signature** présente (`security find-identity`).
+- [x] Deux modes selon la case : **Exporter `.ipa`** (build_ios.sh) ou **Installer sur iPhone** (`devicectl`).
+- [x] Sélecteur de profil de provisioning (`.mobileprovision`) via rfd dans la section « Signature iOS ».
+- **Fichiers** : `src/editor/export.rs`, `src/app/build_config.rs`, `packaging/build_ios.sh`.
+- **Livrable** : un clic → `.ipa` signé dans `target/export/`, ou app installée/lancée sur l'iPhone branché. ✅
+- **Risques** : signature Apple capricieuse → log Xcode brut streamé dans l'UI.
 
 ### Sprint 23 — Finition, presets & CI de release ⬜
 **Objectif** : rendre les exports reproductibles et partageables.

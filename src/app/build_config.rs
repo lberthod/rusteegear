@@ -16,6 +16,17 @@ pub struct BuildConfig {
     pub version: String,
     /// Numéro de build interne, incrémenté à chaque export.
     pub build_number: u32,
+
+    // --- Signature iOS (vide = défauts du script `build_ios.sh`) ---
+    /// Team identifier Apple (ex. `N668CK695Q`).
+    #[serde(default)]
+    pub ios_team_id: String,
+    /// Nom de l'identité de signature (« Apple Development: … »).
+    #[serde(default)]
+    pub ios_identity: String,
+    /// Chemin d'un profil de provisioning `.mobileprovision` (pour installer sur device).
+    #[serde(default)]
+    pub ios_profile: String,
 }
 
 impl Default for BuildConfig {
@@ -25,6 +36,9 @@ impl Default for BuildConfig {
             bundle_id: "com.exemple.monjeu".into(),
             version: "1.0.0".into(),
             build_number: 1,
+            ios_team_id: String::new(),
+            ios_identity: String::new(),
+            ios_profile: String::new(),
         }
     }
 }

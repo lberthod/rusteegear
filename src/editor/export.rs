@@ -129,8 +129,13 @@ impl ExportPanel {
             cfg.build_number,
             target.label()
         ));
-        // installation device : Android + case cochée + adb dispo.
-        let install = target == Target::Android && self.install_device && self.adb_available;
+        // installation device : case cochée (Android requiert adb, iOS devicectl/Xcode).
+        let install = self.install_device
+            && match target {
+                Target::Android => self.adb_available,
+                Target::Ios => true,
+                Target::Macos => false,
+            };
         self.rx = Some(run(target, cfg, install));
         self.running = Some(target);
         self.last_ok = false;
@@ -192,6 +197,35 @@ impl ExportPanel {
                 if let Err(e) = self.config.validate() {
                     ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("⚠ {e}"));
                 }
+                ui.collapsing("Signature iOS (optionnel)", |ui| {
+                    egui::Grid::new("ios_sign").num_columns(2).show(ui, |ui| {
+                        ui.label("Team ID");
+                        ui.text_edit_singleline(&mut self.config.ios_team_id);
+                        ui.end_row();
+                        ui.label("Identité");
+                        ui.text_edit_singleline(&mut self.config.ios_identity);
+                        ui.end_row();
+                        ui.label("Profil");
+                        ui.horizontal(|ui| {
+                            if ui.button("Choisir .mobileprovision…").clicked() {
+                                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .add_filter("Profil", &["mobileprovision"])
+                                    .pick_file()
+                                {
+                                    self.config.ios_profile = p.to_string_lossy().into_owned();
+                                }
+                            }
+                            let prof = std::path::Path::new(&self.config.ios_profile)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "(aucun)".into());
+                            ui.label(prof);
+                        });
+                        ui.end_row();
+                    });
+                    ui.weak("Vides = identité/équipe par défaut du script. Profil requis pour installer sur device.");
+                });
                 ui.add_space(4.0);
                 let targets = [Target::Macos, Target::Android, Target::Ios];
                 for t in targets {
@@ -247,18 +281,27 @@ impl ExportPanel {
                 ui.spinner();
             }
         });
-        // Android : option d'installation directe sur l'appareil branché.
-        if target == Target::Android {
-            ui.indent("adb_opt", |ui| {
-                ui.add_enabled_ui(self.adb_available, |ui| {
-                    ui.checkbox(&mut self.install_device, "Installer sur l'appareil (adb)");
+        // Android / iOS : option d'installation directe sur l'appareil branché.
+        match target {
+            Target::Android => {
+                ui.indent("adb_opt", |ui| {
+                    ui.add_enabled_ui(self.adb_available, |ui| {
+                        ui.checkbox(&mut self.install_device, "Installer sur l'appareil (adb)");
+                    });
+                    if !self.adb_available {
+                        ui.weak("adb introuvable — installe les Platform-Tools Android.");
+                    }
                 });
-                if !self.adb_available {
-                    ui.weak(
-                        "adb introuvable — branche un appareil et installe les Platform-Tools.",
+            }
+            Target::Ios => {
+                ui.indent("ios_opt", |ui| {
+                    ui.checkbox(
+                        &mut self.install_device,
+                        "Installer sur l'iPhone branché (devicectl)",
                     );
-                }
-            });
+                });
+            }
+            Target::Macos => {}
         }
         if launch {
             self.start(target, scene);
@@ -300,6 +343,12 @@ fn detect(target: Target) -> Result<(), String> {
             }
             if !has_cmd("xcodegen") {
                 return Err("brew install xcodegen".into());
+            }
+            if !rust_target_installed("aarch64-apple-ios") {
+                return Err("rustup target add aarch64-apple-ios".into());
+            }
+            if !has_signing_identity() {
+                return Err("aucune identité « Apple Development » dans le trousseau".into());
             }
             Ok(())
         }
@@ -354,6 +403,15 @@ fn find_ndk() -> Option<String> {
     Some(first.path().to_string_lossy().into_owned())
 }
 
+/// Vrai si le trousseau contient au moins une identité de signature de code Apple.
+fn has_signing_identity() -> bool {
+    Command::new("security")
+        .args(["find-identity", "-v", "-p", "codesigning"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Apple Development"))
+        .unwrap_or(false)
+}
+
 /// Vrai si la cible Rust est installée (`rustup target list --installed`).
 fn rust_target_installed(target: &str) -> bool {
     Command::new("rustup")
@@ -372,10 +430,15 @@ fn rust_target_installed(target: &str) -> bool {
 /// La `BuildConfig` est transmise via variables d'environnement.
 fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
     let (tx, rx) = channel();
-    let script = target.script();
+    // iOS + installation = chemin xcodebuild/devicectl dédié (build + signature + install).
+    let script = if target == Target::Ios && install {
+        "packaging/install_ios_device.sh"
+    } else {
+        target.script()
+    };
     std::thread::spawn(move || {
-        let mut child = match Command::new("bash")
-            .arg(script)
+        let mut cmd = Command::new("bash");
+        cmd.arg(script)
             .current_dir(PROJECT_ROOT)
             .env("PATH", augmented_path())
             .env("OUTPUT_NAME", cfg.safe_name())
@@ -385,9 +448,18 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             .env("INSTALL_DEVICE", if install { "1" } else { "0" })
             .env("PLAYER_BUILD", "1") // exporte un player jouable (cf. build_dmg.sh)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+        // Signature iOS : ne surcharge que les champs renseignés.
+        if !cfg.ios_team_id.is_empty() {
+            cmd.env("TEAM_ID", &cfg.ios_team_id);
+        }
+        if !cfg.ios_identity.is_empty() {
+            cmd.env("IDENTITY", &cfg.ios_identity);
+        }
+        if !cfg.ios_profile.is_empty() {
+            cmd.env("PROFILE", &cfg.ios_profile);
+        }
+        let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
                 let _ = tx.send(LogMsg::Line(format!(
