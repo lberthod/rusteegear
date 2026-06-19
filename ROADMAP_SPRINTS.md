@@ -441,7 +441,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] Gestionnaire d'assets : copie/normalisation dans un dossier projet, chemins relatifs (`asset://`).
 - [ ] Chargement de fichiers sur mobile (P10) : remplaçant de `rfd` (picker natif ou navigateur d'assets intégré).
 - [ ] Compression/réduction de textures à l'export (taille max, mipmaps, formats GPU mobiles).
-- [ ] Panneau **Optimisation mobile** câblé : réduire textures, limiter lumières/ombres, fusion meshes statiques.
+- [x] Panneau « Optimisation mobile » câblé : réduction réelle des textures (resize Lanczos3
+      → copies _optN.png, objets mis à jour, undo) + limite de lumières.
+- [ ] Gestionnaire d'assets (asset://), chargement mobile (P10), fusion meshes statiques → reste du sprint.
 - **Fichiers** : `src/assets.rs`, `src/scene/{mod,import}.rs`, `src/editor/{export,mod}.rs`, `packaging/*`.
 - **Livrable** : un projet s'exporte avec ses assets optimisés ; le Readiness Check reflète les gains.
 - **Risques** : formats de texture GPU mobiles (ASTC/ETC2) → commencer par redimensionnement + PNG/mipmaps.

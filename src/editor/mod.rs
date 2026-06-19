@@ -52,6 +52,8 @@ struct Panels {
     settings: bool,
     /// Fenêtre « Générer une scène (IA) ».
     ai_scene: bool,
+    /// Fenêtre « Optimisation mobile ».
+    optimize: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -100,6 +102,10 @@ pub struct UiActions {
     pub set_game_camera: bool,
     /// Retirer la caméra de jeu.
     pub clear_game_camera: bool,
+    /// Optimisation mobile : réduire les textures au-delà de N px.
+    pub optimize_textures: Option<u32>,
+    /// Optimisation mobile : limiter le nombre de lumières ponctuelles.
+    pub limit_lights: Option<usize>,
 }
 
 impl Editor {
@@ -696,6 +702,10 @@ fn menu_outils(
             export.open = true;
             ui.close();
         }
+        if ui.button("🪶  Optimisation mobile").clicked() {
+            panels.optimize = true;
+            ui.close();
+        }
         if ui.button("✔  Contrôle qualité APK").clicked() {
             panels.readiness = true;
             panels.readiness_results.clear(); // forcer une nouvelle analyse à l'ouverture
@@ -1100,6 +1110,47 @@ fn ai_scene_window(
     panels.ai_scene = open;
 }
 
+/// Fenêtre « Optimisation mobile » : actions concrètes pour alléger la scène.
+fn optimize_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &Scene,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.optimize;
+    egui::Window::new("🪶  Optimisation mobile")
+        .open(&mut open)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let n_tex = scene
+                .objects
+                .iter()
+                .filter(|o| !o.texture.is_empty())
+                .count();
+            ui.label(format!(
+                "{n_tex} objet(s) texturé(s), {} lumière(s) ponctuelle(s)",
+                scene.point_lights.len()
+            ));
+            ui.separator();
+            ui.label("Réduire les textures (côté le plus long) :");
+            ui.horizontal(|ui| {
+                for max in [1024u32, 2048, 4096] {
+                    if ui.button(format!("≤ {max} px")).clicked() {
+                        actions.optimize_textures = Some(max);
+                    }
+                }
+            });
+            ui.small("Écrit des copies …_optN.png et met à jour les objets (annulable).");
+            ui.separator();
+            if scene.point_lights.len() > 4 && ui.button("Limiter à 4 lumières").clicked() {
+                actions.limit_lights = Some(4);
+            }
+            ui.separator();
+            ui.label("💡 Astuce : utilise « Contrôle qualité APK » pour vérifier les gains.");
+        });
+    panels.optimize = open;
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -1223,6 +1274,7 @@ fn build_ui(
         status,
         actions,
     );
+    optimize_window(root.ctx(), panels, scene, actions);
 
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);

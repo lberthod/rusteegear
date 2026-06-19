@@ -503,6 +503,66 @@ impl AppState {
         self.scene.game_camera = None;
     }
 
+    /// Réduit sur disque les textures dépassant `max_px` (côté le plus long), écrit
+    /// une copie `…_opt.png` et met à jour les objets. Renvoie le nombre de textures réduites.
+    pub fn optimize_textures(&mut self, max_px: u32) -> usize {
+        use std::collections::HashMap;
+        // chemins uniques utilisés par la scène
+        let mut paths: Vec<String> = self
+            .scene
+            .objects
+            .iter()
+            .map(|o| o.texture.clone())
+            .filter(|t| !t.is_empty())
+            .collect();
+        paths.sort();
+        paths.dedup();
+
+        let mut remap: HashMap<String, String> = HashMap::new();
+        for path in paths {
+            match image::open(&path) {
+                Ok(img) => {
+                    let (w, h) = (img.width(), img.height());
+                    if w <= max_px && h <= max_px {
+                        continue;
+                    }
+                    let scale = max_px as f32 / w.max(h) as f32;
+                    let (nw, nh) = (
+                        ((w as f32 * scale) as u32).max(1),
+                        ((h as f32 * scale) as u32).max(1),
+                    );
+                    let resized = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
+                    let out = optimized_path(&path, max_px);
+                    if let Err(e) = resized.save(&out) {
+                        log::error!("Échec écriture texture optimisée {out} : {e}");
+                        continue;
+                    }
+                    log::info!("Texture {path} ({w}×{h}) → {out} ({nw}×{nh})");
+                    remap.insert(path, out);
+                }
+                Err(e) => log::error!("Texture illisible {path} : {e}"),
+            }
+        }
+        if remap.is_empty() {
+            return 0;
+        }
+        self.push_undo();
+        for o in &mut self.scene.objects {
+            if let Some(new) = remap.get(&o.texture) {
+                o.texture = new.clone();
+            }
+        }
+        remap.len()
+    }
+
+    /// Limite le nombre de lumières ponctuelles (optimisation mobile).
+    pub fn limit_point_lights(&mut self, max: usize) {
+        if self.scene.point_lights.len() > max {
+            self.push_undo();
+            self.scene.point_lights.truncate(max);
+        }
+    }
+
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
     pub fn new_scene(&mut self) {
         self.push_undo();
@@ -1146,6 +1206,19 @@ impl Default for AppState {
 fn scene_path() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     format!("{home}/motor3derust_scene.json")
+}
+
+/// Chemin de la copie optimisée d'une texture (`foo.png` → `foo_opt2048.png`).
+fn optimized_path(path: &str, max_px: u32) -> String {
+    let p = std::path::Path::new(path);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("texture");
+    let parent = p.parent().and_then(|s| s.to_str()).unwrap_or("");
+    let name = format!("{stem}_opt{max_px}.png");
+    if parent.is_empty() {
+        name
+    } else {
+        format!("{parent}/{name}")
+    }
 }
 
 /// Hash stable d'une source de script, clé du cache de chunks compilés.

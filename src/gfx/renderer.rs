@@ -819,6 +819,13 @@ impl Renderer {
             if actions.clear_game_camera {
                 app.clear_game_camera();
             }
+            if let Some(max) = actions.optimize_textures {
+                let n = app.optimize_textures(max);
+                log::info!("Optimisation : {n} texture(s) réduite(s) à ≤ {max} px");
+            }
+            if let Some(max) = actions.limit_lights {
+                app.limit_point_lights(max);
+            }
             Some(full_output)
         };
 
