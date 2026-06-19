@@ -851,6 +851,9 @@ impl Renderer {
             if let Some(axis) = actions.align_axis {
                 app.align_selection_axis(axis);
             }
+            if let Some(axis) = actions.distribute_axis {
+                app.distribute_selection_axis(axis);
+            }
             Some(full_output)
         };
 

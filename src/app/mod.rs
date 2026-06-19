@@ -434,6 +434,44 @@ impl AppState {
         self.selection = self.selected.last().copied();
     }
 
+    /// Répartit les objets sélectionnés à intervalles égaux le long d'un axe
+    /// (extrémités conservées). Nécessite au moins 3 objets.
+    pub fn distribute_selection_axis(&mut self, axis: usize) {
+        let comp = |p: Vec3| match axis {
+            0 => p.x,
+            1 => p.y,
+            _ => p.z,
+        };
+        // (index, valeur sur l'axe), triés par valeur.
+        let mut items: Vec<(usize, f32)> = self
+            .selected
+            .iter()
+            .filter_map(|&i| {
+                self.scene
+                    .objects
+                    .get(i)
+                    .map(|o| (i, comp(o.transform.position)))
+            })
+            .collect();
+        if items.len() < 3 {
+            return;
+        }
+        items.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let (min, max) = (items[0].1, items[items.len() - 1].1);
+        let step = (max - min) / (items.len() - 1) as f32;
+        self.push_undo();
+        for (rank, (idx, _)) in items.iter().enumerate() {
+            let v = min + step * rank as f32;
+            if let Some(o) = self.scene.objects.get_mut(*idx) {
+                match axis {
+                    0 => o.transform.position.x = v,
+                    1 => o.transform.position.y = v,
+                    _ => o.transform.position.z = v,
+                }
+            }
+        }
+    }
+
     /// Aligne la position des objets sélectionnés sur celle de la primaire, le long
     /// d'un axe (0 = X, 1 = Y, 2 = Z).
     pub fn align_selection_axis(&mut self, axis: usize) {
@@ -1680,6 +1718,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
+    }
+
+    #[test]
+    fn distribute_spaces_evenly() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        for x in [0.0, 1.0, 9.0] {
+            app.scene.objects.push(SceneObject {
+                name: "o".into(),
+                transform: Transform::from_pos(Vec3::new(x, 0.0, 0.0)),
+                mesh: MeshKind::Cube,
+                script: String::new(),
+                physics: crate::runtime::physics::PhysicsKind::None,
+                audio_clip: String::new(),
+                audio_autoplay: false,
+                group: String::new(),
+                color: [1.0; 3],
+                texture: String::new(),
+                tappable: false,
+                metallic: 0.0,
+                roughness: 0.6,
+                emissive: 0.0,
+                trigger: false,
+            });
+        }
+        app.selected = vec![0, 1, 2];
+        app.distribute_selection_axis(0);
+        // extrémités conservées (0 et 9), celui du milieu recalé à 4.5
+        let xs: Vec<f32> = app
+            .scene
+            .objects
+            .iter()
+            .map(|o| o.transform.position.x)
+            .collect();
+        assert!((xs[0] - 0.0).abs() < 1e-5);
+        assert!((xs[1] - 4.5).abs() < 1e-5);
+        assert!((xs[2] - 9.0).abs() < 1e-5);
     }
 
     #[test]
