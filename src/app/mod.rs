@@ -1,6 +1,7 @@
 //! État applicatif **sans dépendance GPU** : scène, sélection, caméra, mode Play,
 //! interaction pointeur. Le `Renderer` consomme cet état pour dessiner.
 
+pub mod build_config;
 pub mod input;
 
 use std::collections::{HashMap, VecDeque};

@@ -191,16 +191,19 @@
 - **Livrable** : cliquer « Exporter » lance le packaging sans quitter l'app, log visible en direct. ✅
 - **Risques** : build long depuis l'UI → async (un seul à la fois), bouton désactivé pendant l'exécution.
 
-### Sprint 20 — Config de build persistée & éditable ⬜
-**Objectif** : rendre l'identité/version/certificats **configurables dans l'app**.
-- [ ] Struct `BuildConfig` (serde) : `app_name`, `bundle_id`, `version`, `build_number`,
-      chemins SDK/NDK, équipe Apple, alias keystore Android, etc.
-- [ ] Persistance dans `~/.motor3derust/build_config.json` ; formulaire egui d'édition.
-- [ ] Validation en direct (bundle id valide, certificat trouvé, keystore lisible).
-- [ ] Les scripts `packaging/*.sh` reçoivent ces valeurs via variables d'env (plus de constantes en dur).
-- **Fichiers** : nouveau `src/app/build_config.rs`, `src/editor/export.rs`, `packaging/*.sh`.
-- **Livrable** : changer la version + le bundle id dans l'UI se reflète dans l'`.ipa`/`.apk` exporté.
-- **Risques** : secrets (mots de passe keystore) → ne pas les versionner, champ masqué + stockage local.
+### Sprint 20 — Config de build persistée & éditable ✅ FAIT
+**Objectif** : rendre l'identité/version **configurables dans l'app**.
+- [x] Struct `BuildConfig` (serde) : `app_name`, `bundle_id`, `version`, `build_number`.
+- [x] Persistance dans `~/.motor3derust/build_config.json` (`load`/`save`) ; formulaire egui (grille) dans le panneau Export.
+- [x] Validation en direct (bundle id : segments alphanumériques séparés par points ; nom/version non vides) affichée sous le formulaire.
+- [x] Numéro de build **auto-incrémenté et persisté** à chaque export.
+- [x] Scripts `packaging/*.sh` reçoivent `OUTPUT_NAME` / `BUNDLE_ID` / `APP_VERSION` / `BUILD_NUMBER` via env.
+      **iOS** : Info.plist entièrement piloté (id, version, build, nom). **macOS/Android** : nom de fichier renommé.
+- [ ] Chemins SDK/NDK, équipe Apple, keystore éditables → reporté (Sprint 23, avec presets/secrets).
+- **Fichiers** : `src/app/build_config.rs`, `src/editor/export.rs`, `packaging/build_ios.sh`.
+- **Livrable** : changer nom/bundle id/version dans l'UI se reflète dans l'`.ipa` exporté ; config persistée entre sessions. ✅
+- **Note** : l'override du bundle id/version interne sur **macOS** (cargo-bundle) et **Android** (cargo-apk)
+  est limité — ils lisent `Cargo.toml` ; seul le nom de fichier est renommé. Override complet = Sprint 23.
 
 ### Sprint 21 — Export APK 1-clic ⬜
 **Objectif** : bouton « Exporter Android » fiable et configurable.

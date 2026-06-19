@@ -14,7 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-APP_NAME="Motor3DeRust"; BIN="motor3derust"; BID="com.berthod.motor3derust"
+BIN="motor3derust"
+# Identité du bundle : surchargée par le panneau Export (BuildConfig), sinon défauts.
+APP_NAME="${OUTPUT_NAME:-Motor3DeRust}"
+BID="${BUNDLE_ID:-com.berthod.motor3derust}"
+APP_VERSION="${APP_VERSION:-0.1.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
 TEAM_ID="${TEAM_ID:-N668CK695Q}"
 IDENTITY="${IDENTITY:-Apple Development: lberthod@gmail.com (32AA99MN7M)}"
 
@@ -34,8 +39,8 @@ cat > "$APP/Info.plist" <<PLIST
 <key>CFBundleName</key><string>$APP_NAME</string>
 <key>CFBundleDisplayName</key><string>$APP_NAME</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+<key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
 <key>MinimumOSVersion</key><string>13.0</string>
 <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
 <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
@@ -64,8 +69,8 @@ fi
 
 ( cd "$OUT" && rm -f "$APP_NAME.ipa" && zip -qr "$APP_NAME.ipa" Payload )
 IPA="$OUT/$APP_NAME.ipa"
-# Renomme selon OUTPUT_NAME (fourni par le panneau Export).
-if [ -n "${OUTPUT_NAME:-}" ] && [ "${OUTPUT_NAME}" != "$APP_NAME" ]; then
+# Range la sortie dans target/export/ quand un nom est fourni par le panneau Export.
+if [ -n "${OUTPUT_NAME:-}" ]; then
     mkdir -p target/export
     cp "$IPA" "target/export/${OUTPUT_NAME}.ipa"
     IPA="target/export/${OUTPUT_NAME}.ipa"

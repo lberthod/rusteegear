@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 
+use crate::app::build_config::BuildConfig;
 use crate::scene::Scene;
 
 /// Racine du projet, figée à la compilation : les scripts `packaging/*.sh` y résident,
@@ -47,8 +48,8 @@ enum LogMsg {
 /// État persistant du panneau (vit dans `Editor`).
 pub struct ExportPanel {
     pub open: bool,
-    /// Nom du fichier de sortie (sans extension), saisi par l'utilisateur.
-    name: String,
+    /// Config de build éditable, persistée dans `~/.motor3derust/`.
+    config: BuildConfig,
     log: Vec<String>,
     rx: Option<Receiver<LogMsg>>,
     running: Option<Target>,
@@ -66,7 +67,7 @@ impl ExportPanel {
     pub fn new() -> Self {
         ExportPanel {
             open: false,
-            name: "MonJeu".into(),
+            config: BuildConfig::load(),
             log: Vec::new(),
             rx: None,
             running: None,
@@ -86,28 +87,16 @@ impl ExportPanel {
             .unwrap_or(Ok(()))
     }
 
-    /// Nom de fichier nettoyé (alphanumérique, `-`, `_`) ; défaut « MonJeu ».
-    fn safe_name(&self) -> String {
-        let n: String = self
-            .name
-            .trim()
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if n.is_empty() { "MonJeu".into() } else { n }
-    }
-
     /// Démarre un export en arrière-plan (un seul à la fois).
-    /// Écrit d'abord la scène courante dans le binaire à embarquer (le jeu jouable).
+    /// Valide la config, l'incrémente/persiste, écrit la scène à embarquer, puis build.
     fn start(&mut self, target: Target, scene: &Scene) {
         self.log.clear();
-        let name = self.safe_name();
+        if let Err(e) = self.config.validate() {
+            self.log.push(format!("❌ Config invalide : {e}"));
+            return;
+        }
+
+        // Embarque la scène courante dans le binaire (le jeu jouable).
         let scene_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
         let written = serde_json::to_string_pretty(scene)
             .map_err(|e| e.to_string())
@@ -118,11 +107,20 @@ impl ExportPanel {
             return;
         }
         self.log.push("✓ Scène du jeu embarquée.".into());
+
+        // Incrémente le numéro de build et persiste la config.
+        self.config.build_number += 1;
+        self.config.save();
+
+        let cfg = self.config.clone();
         self.log.push(format!(
-            "▶ Export « {name} » ({}) en cours…",
+            "▶ Export « {} » v{} (build {}) — {}…",
+            cfg.safe_name(),
+            cfg.version,
+            cfg.build_number,
             target.label()
         ));
-        self.rx = Some(run(target, name));
+        self.rx = Some(run(target, cfg));
         self.running = Some(target);
     }
 
@@ -160,10 +158,27 @@ impl ExportPanel {
             .default_width(440.0)
             .show(ctx, |ui| {
                 ui.label("Exporte un player jouable du jeu créé (scène embarquée).");
-                ui.horizontal(|ui| {
-                    ui.label("Nom du fichier :");
-                    ui.text_edit_singleline(&mut self.name);
-                });
+                ui.add_space(4.0);
+                egui::Grid::new("build_cfg")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Nom de l'app");
+                        ui.text_edit_singleline(&mut self.config.app_name);
+                        ui.end_row();
+                        ui.label("Bundle id");
+                        ui.text_edit_singleline(&mut self.config.bundle_id);
+                        ui.end_row();
+                        ui.label("Version");
+                        ui.text_edit_singleline(&mut self.config.version);
+                        ui.end_row();
+                        ui.label("Build #");
+                        ui.label(self.config.build_number.to_string());
+                        ui.end_row();
+                    });
+                if let Err(e) = self.config.validate() {
+                    ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("⚠ {e}"));
+                }
                 ui.add_space(4.0);
                 let targets = [Target::Macos, Target::Android, Target::Ios];
                 for t in targets {
@@ -284,8 +299,8 @@ fn has_cmd(name: &str) -> bool {
 }
 
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log.
-/// `name` = nom du fichier de sortie souhaité (transmis via `OUTPUT_NAME`).
-fn run(target: Target, name: String) -> Receiver<LogMsg> {
+/// La `BuildConfig` est transmise via variables d'environnement.
+fn run(target: Target, cfg: BuildConfig) -> Receiver<LogMsg> {
     let (tx, rx) = channel();
     let script = target.script();
     std::thread::spawn(move || {
@@ -293,7 +308,10 @@ fn run(target: Target, name: String) -> Receiver<LogMsg> {
             .arg(script)
             .current_dir(PROJECT_ROOT)
             .env("PATH", augmented_path())
-            .env("OUTPUT_NAME", &name)
+            .env("OUTPUT_NAME", cfg.safe_name())
+            .env("BUNDLE_ID", &cfg.bundle_id)
+            .env("APP_VERSION", &cfg.version)
+            .env("BUILD_NUMBER", cfg.build_number.to_string())
             .env("PLAYER_BUILD", "1") // exporte un player jouable (cf. build_dmg.sh)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
