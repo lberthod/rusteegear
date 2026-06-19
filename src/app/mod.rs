@@ -99,6 +99,10 @@ pub struct AppState {
     drag_orig_scale: Vec3,
     /// Positions d'origine de tous les objets sélectionnés (gizmo translate multi).
     drag_orig_positions: Vec<(usize, Vec3)>,
+    /// Transforms d'origine de la sélection (gizmo rotate/scale multi, autour d'un pivot).
+    drag_orig_transforms: Vec<(usize, Transform)>,
+    /// Pivot commun (centroïde de la sélection) pour rotate/scale multi.
+    drag_pivot: Vec3,
     /// Le prochain clic ajoute/retire de la sélection (Cmd/Maj enfoncé).
     additive: bool,
 
@@ -208,6 +212,8 @@ impl AppState {
             drag_orig_rot: Quat::IDENTITY,
             drag_orig_scale: Vec3::ONE,
             drag_orig_positions: Vec::new(),
+            drag_orig_transforms: Vec::new(),
+            drag_pivot: Vec3::ZERO,
             additive: false,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
@@ -355,6 +361,23 @@ impl AppState {
     }
 
     // --- sélection (primaire + ensemble) ---
+
+    /// Mémorise les transforms d'origine de la sélection + leur centroïde (pivot),
+    /// pour les manipulations multi-objets rotate/scale.
+    fn capture_drag_selection(&mut self) {
+        self.drag_orig_transforms = self
+            .selected
+            .iter()
+            .filter_map(|&i| self.scene.objects.get(i).map(|o| (i, o.transform)))
+            .collect();
+        let n = self.drag_orig_transforms.len().max(1) as f32;
+        let sum: Vec3 = self
+            .drag_orig_transforms
+            .iter()
+            .map(|(_, t)| t.position)
+            .sum();
+        self.drag_pivot = sum / n;
+    }
 
     /// Sélectionne un seul objet (remplace l'ensemble).
     pub fn select_single(&mut self, i: usize) {
@@ -725,6 +748,7 @@ impl AppState {
                                     self.drag_start_angle = ang;
                                     self.drag_orig_pos = origin;
                                     self.drag_orig_rot = orig_rot;
+                                    self.capture_drag_selection();
                                 }
                                 return;
                             }
@@ -750,6 +774,7 @@ impl AppState {
                                                 .map(|o| (i, o.transform.position))
                                         })
                                         .collect();
+                                    self.capture_drag_selection();
                                 }
                                 return;
                             }
@@ -822,20 +847,32 @@ impl AppState {
                         GizmoMode::Scale => {
                             if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y) {
                                 let d = t - self.drag_start_t;
-                                let mut s = self.drag_orig_scale;
-                                match axis {
-                                    0 => s.x = (s.x + d).max(0.05),
-                                    1 => s.y = (s.y + d).max(0.05),
-                                    _ => s.z = (s.z + d).max(0.05),
+                                // Même delta appliqué à chaque objet sélectionné (multi-scale).
+                                for (i, t0) in &self.drag_orig_transforms {
+                                    if let Some(o) = self.scene.objects.get_mut(*i) {
+                                        let mut s = t0.scale;
+                                        match axis {
+                                            0 => s.x = (s.x + d).max(0.05),
+                                            1 => s.y = (s.y + d).max(0.05),
+                                            _ => s.z = (s.z + d).max(0.05),
+                                        }
+                                        o.transform.scale = s;
+                                    }
                                 }
-                                self.scene.objects[sel].transform.scale = s;
                             }
                         }
                         GizmoMode::Rotate => {
                             if let Some(ang) = self.ring_drag_angle(self.drag_orig_pos, a, x, y) {
                                 let delta = ang - self.drag_start_angle;
-                                self.scene.objects[sel].transform.rotation =
-                                    Quat::from_axis_angle(a, delta) * self.drag_orig_rot;
+                                let rot = Quat::from_axis_angle(a, delta);
+                                // Rotation autour du pivot commun (position + orientation).
+                                let pivot = self.drag_pivot;
+                                for (i, t0) in &self.drag_orig_transforms {
+                                    if let Some(o) = self.scene.objects.get_mut(*i) {
+                                        o.transform.rotation = rot * t0.rotation;
+                                        o.transform.position = pivot + rot * (t0.position - pivot);
+                                    }
+                                }
                             }
                         }
                     }

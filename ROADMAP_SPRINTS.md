@@ -472,7 +472,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 **Objectif** : capitaliser sur l'IA et combler les manques d'ergonomie de l'éditeur.
 - [x] IA « Ajouter à la scène » (vs remplacer) : objets + lumières générés ajoutés à la scène.
 - [x] Historique des prompts IA (8 récents, ré-exécution en un clic).
-- [ ] Glisser-déposer hiérarchie + sous-groupes ; gizmo multi rotate/scale → reste du sprint.
+- [x] Gizmo multi-objets en rotate/scale autour d'un pivot commun (centroïde de la sélection).
+- [ ] (évolution) Glisser-déposer hiérarchie + sous-groupes imbriqués → ultérieur (DnD egui).
+- **Sprint 37 : cœur livré (IA itérative + historique + gizmo multi) ; DnD hiérarchie = évolution.**
 - [ ] **Historique des prompts** par projet ; ré-exécution en un clic.
 - [ ] Hiérarchie : **glisser-déposer** pour réordonner/regrouper, **sous-groupes** imbriqués.
 - [ ] Gizmo **multi-objets en rotate/scale** (pivot commun) ; raccourcis d'alignement/distribution.
