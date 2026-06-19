@@ -246,6 +246,9 @@ impl Scene {
 
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
+        if let Some(dir) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         std::fs::write(path, json)
     }
 

@@ -709,19 +709,29 @@ impl AppState {
         }
     }
 
+    /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
     pub fn save(&self) {
-        let path = scene_path();
-        match self.scene.save(&path) {
+        self.save_to(&scene_path());
+    }
+
+    /// Sauvegarde la scène en JSON vers un chemin donné (« Enregistrer sous »).
+    pub fn save_to(&self, path: &str) {
+        match self.scene.save(path) {
             Ok(()) => log::info!("Scène sauvegardée dans {path}"),
             Err(e) => log::error!("Échec sauvegarde : {e}"),
         }
     }
 
-    /// Lance le chargement de la scène (et le rechargement des meshes importés)
-    /// en thread de fond, sans bloquer le rendu. Le résultat est appliqué dans `poll_imports`.
+    /// Charge la scène depuis l'emplacement par défaut.
     pub fn load(&mut self) {
+        self.load_from(&scene_path());
+    }
+
+    /// Charge une scène depuis un chemin JSON donné, en thread de fond (sans bloquer
+    /// le rendu). Le résultat est appliqué dans `poll_imports`.
+    pub fn load_from(&mut self, path: &str) {
         let tx = self.scene_load_tx.clone();
-        let path = scene_path();
+        let path = path.to_string();
         std::thread::spawn(move || {
             let res = Scene::load(&path).map_err(|e| e.to_string()).map(|mut s| {
                 s.reload_imported();

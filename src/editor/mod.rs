@@ -35,6 +35,10 @@ pub struct StatusInfo<'a> {
 pub struct UiActions {
     pub save: bool,
     pub load: bool,
+    /// « Enregistrer sous » : chemin JSON choisi.
+    pub save_path: Option<String>,
+    /// « Ouvrir » : chemin JSON choisi.
+    pub load_path: Option<String>,
     pub import: Option<String>,
     pub add: Option<MeshKind>,
     pub delete: Option<usize>,
@@ -435,11 +439,33 @@ fn build_ui(
                 actions.add = Some(MeshKind::Plane);
             }
             ui.separator();
+            // Sauvegarde rapide (emplacement par défaut).
             if ui.button("💾 Save").clicked() {
                 actions.save = true;
             }
+            // Enregistrer sous… (choix du fichier JSON).
+            if ui.button("💾 Save as…").clicked() {
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Scène JSON", &["json"])
+                    .set_file_name("scene.json")
+                    .save_file()
+                {
+                    actions.save_path = Some(p.to_string_lossy().into_owned());
+                }
+            }
             if ui.button("📂 Load").clicked() {
-                actions.load = true;
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Scène JSON", &["json"])
+                    .pick_file()
+                {
+                    actions.load_path = Some(p.to_string_lossy().into_owned());
+                }
+                #[cfg(any(target_os = "ios", target_os = "android"))]
+                {
+                    actions.load = true;
+                }
             }
             if ui.button("📥 Importer glTF").clicked() {
                 #[cfg(not(any(target_os = "ios", target_os = "android")))]

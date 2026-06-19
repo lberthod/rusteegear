@@ -290,7 +290,15 @@ impl Renderer {
         });
         let mut textures = HashMap::new();
         // texture blanche 1×1 par défaut (objets sans texture).
-        let white = make_texture(&device, &queue, &tex_layout, &tex_sampler, &[255, 255, 255, 255], 1, 1);
+        let white = make_texture(
+            &device,
+            &queue,
+            &tex_layout,
+            &tex_sampler,
+            &[255, 255, 255, 255],
+            1,
+            1,
+        );
         textures.insert(String::new(), white);
 
         // --- Pipeline ---
@@ -548,13 +556,27 @@ impl Renderer {
                 continue;
             }
             let bg = match load_rgba(&obj.texture) {
-                Some((rgba, w, h)) => {
-                    make_texture(&self.device, &self.queue, &self.tex_layout, &self.tex_sampler, &rgba, w, h)
-                }
+                Some((rgba, w, h)) => make_texture(
+                    &self.device,
+                    &self.queue,
+                    &self.tex_layout,
+                    &self.tex_sampler,
+                    &rgba,
+                    w,
+                    h,
+                ),
                 None => {
                     log::error!("Texture illisible : {}", obj.texture);
                     // repli : réutilise la blanche pour ne pas réessayer en boucle
-                    make_texture(&self.device, &self.queue, &self.tex_layout, &self.tex_sampler, &[255, 255, 255, 255], 1, 1)
+                    make_texture(
+                        &self.device,
+                        &self.queue,
+                        &self.tex_layout,
+                        &self.tex_sampler,
+                        &[255, 255, 255, 255],
+                        1,
+                        1,
+                    )
                 }
             };
             self.textures.insert(obj.texture.clone(), bg);
@@ -666,8 +688,14 @@ impl Renderer {
             if actions.save {
                 app.save();
             }
+            if let Some(path) = actions.save_path {
+                app.save_to(&path);
+            }
             if actions.load {
                 app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
+            }
+            if let Some(path) = actions.load_path {
+                app.load_from(&path);
             }
             if let Some(path) = actions.import {
                 app.import_gltf(&path);
