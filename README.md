@@ -167,6 +167,7 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 | **E** — Player complet & maturité (assets embarqués, multi-sélection, matériaux, resume) | 24 → 27 | 🟢 cœur |
 
 > Détail sprint par sprint : voir **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+> Reprise du projet par un nouveau développeur : voir **[HANDOFF.md](HANDOFF.md)**.
 
 ### Plateformes — état honnête
 
