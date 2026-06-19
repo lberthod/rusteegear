@@ -356,6 +356,41 @@
 - **Livrable** : un tag produit `.dmg` notarisé + `.apk` + `.ipa` signés, prêts à distribuer. ✅
 - **Risques** : secrets → *GitHub Secrets* uniquement, jamais dans le repo ; comptes développeur requis.
 
+### Sprint 32 — Outils produit & barre de menus pro 🟢 (cœur fait)
+**Objectif** : transformer l'éditeur en *produit* orienté export Android, pas seulement
+un démonstrateur technique. Barre de menus complète + outils de contrôle qualité.
+- [x] **Barre de menus repensée** (`src/editor/mod.rs`) : Fichier (Nouveau projet, Quitter…),
+      Édition (Aligner au sol, Réinitialiser transform), Ajouter (sous-menu « Objet 3D » +
+      catégories à venir grisées), Outils, Aide.
+- [x] **Actions d'édition 3D** (`src/app/mod.rs`) : `new_scene`, `align_to_ground` (base sur y=0
+      via AABB×échelle), `reset_transform` (rotation/échelle), `request_quit`.
+- [x] **Toolbar** : Dupliquer/Supprimer rapides + bouton **🤖 Build APK** mis en avant à droite.
+- [x] **Console intégrée** (`src/log_buffer.rs`) : logger qui *tee* vers `env_logger` + tampon
+      circulaire (500 lignes) affiché dans une fenêtre, avec « Effacer ».
+- [x] **Profiler FPS** : sparkline 120 frames (vert/orange/rouge), min/moy/max + nb d'objets.
+- [x] **Contrôle qualité APK / APK Readiness Check** (`src/editor/readiness.rs`) : analyse réelle
+      de la scène + config de build (scène vide, sol, lumière, scripts, colliders manquants,
+      textures introuvables/ > 4096 px, nom/package id/version) → verdict ✅/⚠/❌ + « prêt à exporter ».
+- [x] **Diagnostic système** : Rust, `ANDROID_HOME`/`ANDROID_NDK_HOME`, backend graphique.
+- [x] **Aide** : raccourcis clavier, guide export APK, à propos.
+- [ ] **Optimisation mobile** (compresser/réduire textures, fusion meshes, LOD, occlusion) → reporté
+      (nécessite un pipeline d'assets).
+- [x] **Primitives Cylindre & Capsule** (`src/gfx/mesh.rs`, `src/scene/mod.rs`) : meshes générés,
+      AABB, colliders dédiés (`cylinder`/`capsule_y` dans `physics.rs`), entrées de menu + catégories.
+- [x] **Contrôles tactiles mobiles** (`Scene::mobile` = joystick + boutons nommés, sérialisés) :
+      overlay egui (joystick draggable bas-gauche, boutons ronds bas-droite) en mode **Play** *et*
+      **Player** (exporté), routage d'évènements adapté en player. Exposés aux scripts Lua via
+      `input.jx`, `input.jy`, `input.btn.<nom>` (test `script_reads_mobile_input`). Configurés
+      depuis Ajouter → Contrôles mobiles.
+- [ ] **Boucle complète vérifiée sur device** (joystick → script → APK) → à faire sur appareil réel.
+- [ ] **Terrain**, **Lumières/Caméras comme objets**, **Gyroscope/Vibration** → reporté
+      (nouveaux sous-systèmes : ECS, capteurs natifs).
+- **Fichiers** : `src/editor/{mod,readiness,export}.rs`, `src/log_buffer.rs`, `src/app/{mod,build_config}.rs`,
+  `src/gfx/renderer.rs`, `src/lib.rs`.
+- **Livrable** : menus complets + Console / Profiler / Contrôle qualité APK fonctionnels, branchés sur
+  l'état réel ; build + clippy + tests verts. 🟢
+- **Risques** : items reportés = vrais sous-systèmes, pas de l'UI → à planifier en sprints dédiés.
+
 ---
 
 ## ✅ Définition de « terminé » par phase

@@ -14,6 +14,7 @@ pub mod app;
 pub mod assets;
 pub mod editor;
 pub mod gfx;
+pub mod log_buffer;
 pub mod runtime;
 pub mod scene;
 
@@ -131,8 +132,10 @@ impl ApplicationHandler for App {
             return;
         };
 
-        // En mode player, egui ne doit pas intercepter le tactile.
-        let consumed = if self.state.player {
+        // En mode player sans contrôles tactiles, egui n'intercepte rien. Mais si la
+        // scène a un joystick/boutons, on laisse egui traiter l'évènement (et il
+        // n'est « consommé » pour le jeu que si un contrôle l'a effectivement utilisé).
+        let consumed = if self.state.player && !self.state.scene.mobile.any() {
             false
         } else {
             renderer.on_ui_event(&event)
@@ -146,6 +149,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 renderer.render(&mut self.state);
+                // Fermeture demandée par le menu Fichier → Quitter.
+                if self.state.should_quit {
+                    event_loop.exit();
+                }
                 // Le ré-armement du redraw est centralisé dans `about_to_wait`
                 // (indispensable sur iOS) : pas de double demande ici.
             }
@@ -228,7 +235,10 @@ impl ApplicationHandler for App {
 
 /// Icône de fenêtre/dock, embarquée dans le binaire (PNG 64×64 décodé au lancement).
 fn load_window_icon() -> Option<winit::window::Icon> {
-    const PNG: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon/icon_64.png"));
+    const PNG: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/icon/icon_64.png"
+    ));
     let img = image::load_from_memory(PNG).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
@@ -247,7 +257,7 @@ fn make_app(player: bool) -> App {
 
 /// Point d'entrée desktop (et iOS via le bin).
 pub fn run() {
-    env_logger::init();
+    crate::log_buffer::install();
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
         Err(e) => {

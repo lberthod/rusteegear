@@ -668,9 +668,17 @@ impl Renderer {
             }
         };
 
-        // 1. Construire l'UI éditeur (sauf en mode player : plein écran, sans panneaux).
+        // 1. Construire l'UI éditeur. En mode player : pas de panneaux, mais on
+        //    dessine quand même les contrôles tactiles (joystick + boutons).
         let full_output = if app.player {
-            None
+            if app.scene.mobile.any() {
+                Some(
+                    self.editor
+                        .run_player_overlay(&self.window, &app.scene, &mut app.input_state),
+                )
+            } else {
+                None
+            }
         } else {
             let status = crate::editor::StatusInfo {
                 fps: app.fps(),
@@ -683,6 +691,7 @@ impl Renderer {
                 &mut app.selected,
                 &mut app.playing,
                 &mut app.gizmo_mode,
+                &mut app.input_state,
                 status,
             );
             if actions.save {
@@ -708,6 +717,18 @@ impl Renderer {
             }
             if actions.duplicate {
                 app.duplicate_selected();
+            }
+            if actions.new_scene {
+                app.new_scene();
+            }
+            if actions.align_ground {
+                app.align_to_ground();
+            }
+            if actions.reset_transform {
+                app.reset_transform();
+            }
+            if actions.quit {
+                app.request_quit();
             }
             if actions.undo {
                 app.undo();

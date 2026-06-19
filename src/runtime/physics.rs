@@ -63,6 +63,15 @@ impl Physics {
             let he = (lmax - lmin) * 0.5 * t.scale;
             let collider = match obj.mesh {
                 MeshKind::Sphere => ColliderBuilder::ball(he.x.abs().max(0.01)),
+                MeshKind::Capsule => {
+                    // demi-hauteur de la partie cylindrique (hors capuchons sphériques)
+                    let r = he.x.abs().max(he.z.abs()).max(0.01);
+                    let half = (he.y.abs() - r).max(0.01);
+                    ColliderBuilder::capsule_y(half, r)
+                }
+                MeshKind::Cylinder => {
+                    ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(0.01))
+                }
                 _ => ColliderBuilder::cuboid(
                     he.x.abs().max(0.01),
                     he.y.abs().max(0.01),

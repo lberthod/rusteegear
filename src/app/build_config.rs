@@ -149,7 +149,7 @@ impl BuildConfig {
 
 /// Identifiant valide : au moins deux segments, chacun commençant par une lettre,
 /// composé de lettres/chiffres/`-`, séparés par des points.
-fn valid_bundle_id(id: &str) -> bool {
+pub fn valid_bundle_id(id: &str) -> bool {
     let segs: Vec<&str> = id.split('.').collect();
     segs.len() >= 2
         && segs.iter().all(|s| {

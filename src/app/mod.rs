@@ -20,6 +20,15 @@ use input::InputEvent;
 /// Résultat d'un import glTF effectué en thread de fond.
 type ImportResult = Result<(String, MeshData, Vec3, Vec3), String>;
 
+/// État des contrôles tactiles produit par l'overlay UI et lu par les scripts Lua.
+#[derive(Default)]
+pub struct PlayerInput {
+    /// Axe du joystick virtuel, chaque composante dans [-1, 1].
+    pub joy: (f32, f32),
+    /// Boutons actuellement pressés (par nom).
+    pub buttons: std::collections::HashSet<String>,
+}
+
 pub struct AppState {
     pub scene: Scene,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
@@ -29,8 +38,12 @@ pub struct AppState {
     /// Presse-papiers d'objets (copier/coller).
     clipboard: Vec<SceneObject>,
     pub playing: bool,
+    /// Demande de fermeture de l'application (menu Fichier → Quitter).
+    pub should_quit: bool,
     /// Mode « player » : pas d'éditeur (panneaux egui), démarre en Play.
     pub player: bool,
+    /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
+    pub input_state: PlayerInput,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -127,7 +140,9 @@ impl AppState {
             selected: Vec::new(),
             clipboard: Vec::new(),
             playing: false,
+            should_quit: false,
             player: false,
+            input_state: PlayerInput::default(),
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
@@ -343,6 +358,51 @@ impl AppState {
             texture: String::new(),
         });
         self.select_single(self.scene.objects.len() - 1);
+    }
+
+    /// Demande la fermeture de l'application (traitée par la boucle d'événements).
+    pub fn request_quit(&mut self) {
+        self.should_quit = true;
+    }
+
+    /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
+    pub fn new_scene(&mut self) {
+        self.push_undo();
+        self.scene.objects.clear();
+        self.scene.imported.clear();
+        self.scene.groups.clear();
+        self.clear_selection();
+    }
+
+    /// Pose la base des objets sélectionnés sur le plan du sol (y = 0).
+    pub fn align_to_ground(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        self.push_undo();
+        for &i in &self.selected.clone() {
+            if let Some(o) = self.scene.objects.get(i) {
+                let (lmin, _) = self.scene.local_aabb(o.mesh);
+                let base_offset = lmin.y * o.transform.scale.y;
+                if let Some(o) = self.scene.objects.get_mut(i) {
+                    o.transform.position.y = -base_offset;
+                }
+            }
+        }
+    }
+
+    /// Réinitialise rotation et échelle des objets sélectionnés (position conservée).
+    pub fn reset_transform(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        self.push_undo();
+        for &i in &self.selected.clone() {
+            if let Some(o) = self.scene.objects.get_mut(i) {
+                o.transform.rotation = Quat::IDENTITY;
+                o.transform.scale = Vec3::ONE;
+            }
+        }
     }
 
     pub fn delete_object(&mut self, i: usize) {
@@ -698,7 +758,14 @@ impl AppState {
                     }
                 },
             };
-            if let Err(e) = run_script(&self.lua, &func, &mut obj.transform, dt, time) {
+            if let Err(e) = run_script(
+                &self.lua,
+                &func,
+                &mut obj.transform,
+                dt,
+                time,
+                &self.input_state,
+            ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
@@ -865,6 +932,7 @@ fn run_script(
     t: &mut Transform,
     dt: f32,
     time: f32,
+    input: &PlayerInput,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -878,10 +946,21 @@ fn run_script(
     obj.set("sy", t.scale.y)?;
     obj.set("sz", t.scale.z)?;
 
+    // Contrôles tactiles : `input.jx`, `input.jy` (joystick) et `input.btn.<nom>` (booléens).
+    let input_tbl = lua.create_table()?;
+    input_tbl.set("jx", input.joy.0)?;
+    input_tbl.set("jy", input.joy.1)?;
+    let btns = lua.create_table()?;
+    for name in &input.buttons {
+        btns.set(name.as_str(), true)?;
+    }
+    input_tbl.set("btn", btns)?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
     g.set("time", time)?;
+    g.set("input", input_tbl)?;
     func.call::<()>(())?;
 
     t.position = Vec3::new(obj.get("x")?, obj.get("y")?, obj.get("z")?);
@@ -998,6 +1077,30 @@ mod tests {
         assert_eq!(app.highlight_of(1), 1.0); // primaire
         assert_eq!(app.highlight_of(0), 0.55); // autre sélectionné
         assert_eq!(app.highlight_of(2), 0.0); // non sélectionné
+    }
+
+    #[test]
+    fn script_reads_mobile_input() {
+        // Le script déplace l'objet selon le joystick et saute si le bouton « B1 » est pressé.
+        let lua = Lua::new();
+        let src = "obj.x = obj.x + input.jx; if input.btn.B1 then obj.y = 5 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut input = PlayerInput {
+            joy: (0.5, 0.0),
+            buttons: std::collections::HashSet::new(),
+        };
+        input.buttons.insert("B1".into());
+        run_script(&lua, &func, &mut t, 0.016, 0.0, &input).unwrap();
+        assert!((t.position.x - 0.5).abs() < 1e-5);
+        assert!((t.position.y - 5.0).abs() < 1e-5);
+
+        // Sans bouton ni joystick : aucun mouvement.
+        let mut t2 = Transform::from_pos(Vec3::ZERO);
+        let empty = PlayerInput::default();
+        run_script(&lua, &func, &mut t2, 0.016, 0.0, &empty).unwrap();
+        assert!((t2.position.x).abs() < 1e-5);
+        assert!((t2.position.y).abs() < 1e-5);
     }
 
     #[test]

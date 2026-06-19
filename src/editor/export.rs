@@ -69,6 +69,13 @@ pub struct ExportPanel {
     queue: Vec<Target>,
 }
 
+impl ExportPanel {
+    /// Configuration de build courante (lecture seule), pour le contrôle qualité APK.
+    pub fn config(&self) -> &BuildConfig {
+        &self.config
+    }
+}
+
 impl Default for ExportPanel {
     fn default() -> Self {
         Self::new()

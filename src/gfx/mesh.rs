@@ -229,3 +229,118 @@ pub fn plane(color: [f32; 3]) -> MeshData {
     let indices = vec![0, 1, 2, 0, 2, 3];
     MeshData { vertices, indices }
 }
+
+/// Cylindre unitaire : rayon 0.5, hauteur 1 (y de -0.5 à 0.5), axe +Y.
+pub fn cylinder(color: [f32; 3]) -> MeshData {
+    use std::f32::consts::PI;
+    let sectors = 24u32;
+    let radius = 0.5;
+    let half = 0.5;
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    // Paroi latérale : deux anneaux (bas/haut) avec normales radiales.
+    for j in 0..=sectors {
+        let theta = 2.0 * PI * j as f32 / sectors as f32;
+        let (st, ct) = theta.sin_cos();
+        let n = [ct, 0.0, st];
+        let u = j as f32 / sectors as f32;
+        vertices.push(Vertex {
+            position: [radius * ct, -half, radius * st],
+            normal: n,
+            color,
+            uv: [u, 1.0],
+        });
+        vertices.push(Vertex {
+            position: [radius * ct, half, radius * st],
+            normal: n,
+            color,
+            uv: [u, 0.0],
+        });
+    }
+    for j in 0..sectors {
+        let a = j * 2;
+        let b = a + 1;
+        let c = a + 2;
+        let d = a + 3;
+        indices.extend_from_slice(&[a, c, b, b, c, d]);
+    }
+
+    // Capuchons (centre + couronne) en haut (+Y) et en bas (-Y).
+    for &(y, ny) in &[(half, 1.0f32), (-half, -1.0f32)] {
+        let center = vertices.len() as u32;
+        vertices.push(Vertex {
+            position: [0.0, y, 0.0],
+            normal: [0.0, ny, 0.0],
+            color,
+            uv: [0.5, 0.5],
+        });
+        let ring_start = vertices.len() as u32;
+        for j in 0..=sectors {
+            let theta = 2.0 * PI * j as f32 / sectors as f32;
+            let (st, ct) = theta.sin_cos();
+            vertices.push(Vertex {
+                position: [radius * ct, y, radius * st],
+                normal: [0.0, ny, 0.0],
+                color,
+                uv: [0.5 + 0.5 * ct, 0.5 + 0.5 * st],
+            });
+        }
+        for j in 0..sectors {
+            let a = ring_start + j;
+            let b = ring_start + j + 1;
+            // Orientation pour que la normale pointe vers l'extérieur.
+            if ny > 0.0 {
+                indices.extend_from_slice(&[center, b, a]);
+            } else {
+                indices.extend_from_slice(&[center, a, b]);
+            }
+        }
+    }
+    MeshData { vertices, indices }
+}
+
+/// Capsule unitaire : rayon 0.25, hauteur totale 1 (cylindre + deux demi-sphères), axe +Y.
+pub fn capsule(color: [f32; 3]) -> MeshData {
+    use std::f32::consts::PI;
+    let sectors = 24u32;
+    let cap_stacks = 8u32; // anneaux par demi-sphère
+    let radius = 0.25;
+    let cyl_half = 0.5 - radius; // partie cylindrique : 0.25 de chaque côté
+
+    let mut vertices = Vec::new();
+    // Une grille (stack, sector) d'un pôle à l'autre, en décalant le centre des
+    // hémisphères de ±cyl_half pour insérer le tube central.
+    let rows = cap_stacks * 2 + 1;
+    for i in 0..=rows {
+        // phi : 0 (pôle haut) → π (pôle bas)
+        let t = i as f32 / rows as f32;
+        let phi = PI * t;
+        let (sp, cp) = phi.sin_cos();
+        // décalage vertical : hémisphère haut centré en +cyl_half, bas en -cyl_half
+        let y_off = if cp >= 0.0 { cyl_half } else { -cyl_half };
+        for j in 0..=sectors {
+            let theta = 2.0 * PI * j as f32 / sectors as f32;
+            let (st, ct) = theta.sin_cos();
+            let n = [sp * ct, cp, sp * st];
+            vertices.push(Vertex {
+                position: [radius * n[0], radius * cp + y_off, radius * n[2]],
+                normal: n,
+                color,
+                uv: [j as f32 / sectors as f32, t],
+            });
+        }
+    }
+
+    let mut indices = Vec::new();
+    let row = sectors + 1;
+    for i in 0..rows {
+        for j in 0..sectors {
+            let a = i * row + j;
+            let b = a + row;
+            indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    MeshData { vertices, indices }
+}
