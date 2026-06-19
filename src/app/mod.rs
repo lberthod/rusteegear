@@ -57,6 +57,8 @@ pub struct AppState {
     /// Presse-papiers d'objets (copier/coller).
     clipboard: Vec<SceneObject>,
     pub playing: bool,
+    /// En pause : reste en mode Play mais gèle la simulation (scripts, physique, temps).
+    pub paused: bool,
     /// Demande de fermeture de l'application (menu Fichier → Quitter).
     pub should_quit: bool,
     /// Mode « player » : pas d'éditeur (panneaux egui), démarre en Play.
@@ -166,6 +168,7 @@ impl AppState {
             selected: Vec::new(),
             clipboard: Vec::new(),
             playing: false,
+            paused: false,
             should_quit: false,
             player: false,
             input_state: PlayerInput::default(),
@@ -219,7 +222,7 @@ impl AppState {
     /// Vrai quand l'app doit rendre en continu (animation Play ou interaction en cours) :
     /// la boucle d'événements reste en `Poll`. Sinon elle peut throttler (économie CPU).
     pub fn is_active(&self) -> bool {
-        self.playing || self.dragging || self.active_axis.is_some()
+        (self.playing && !self.paused) || self.dragging || self.active_axis.is_some()
     }
 
     /// Charge la scène embarquée (jeu exporté) à la place de la démo : appelé en mode Player.
@@ -756,12 +759,15 @@ impl AppState {
         } else if !self.playing && self.was_playing {
             self.scene.objects = self.play_snapshot.clone();
             self.physics = None;
+            self.paused = false;
             self.clear_selection();
             self.audio.stop_all();
         }
         self.was_playing = self.playing;
 
-        if !self.playing {
+        // En pause : on reste en mode Play (snapshot conservé) mais on gèle la
+        // simulation (ni scripts, ni physique, ni avance du temps).
+        if !self.playing || self.paused {
             return;
         }
 

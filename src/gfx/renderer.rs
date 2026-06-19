@@ -693,6 +693,7 @@ impl Renderer {
                 &mut app.selection,
                 &mut app.selected,
                 &mut app.playing,
+                &mut app.paused,
                 &mut app.gizmo_mode,
                 &mut app.input_state,
                 &mut app.device_preview,

@@ -155,6 +155,7 @@ impl Editor {
         selection: &mut Option<usize>,
         selected: &mut Vec<usize>,
         playing: &mut bool,
+        paused: &mut bool,
         gizmo_mode: &mut GizmoMode,
         input_state: &mut crate::app::PlayerInput,
         device_preview: &mut bool,
@@ -177,6 +178,7 @@ impl Editor {
                 selection,
                 selected,
                 playing,
+                paused,
                 gizmo_mode,
                 input_state,
                 device_preview,
@@ -978,6 +980,7 @@ fn build_ui(
     selection: &mut Option<usize>,
     selected: &mut Vec<usize>,
     playing: &mut bool,
+    paused: &mut bool,
     gizmo_mode: &mut GizmoMode,
     input_state: &mut crate::app::PlayerInput,
     device_preview: &mut bool,
@@ -1003,7 +1006,11 @@ fn build_ui(
             ui.separator();
             ui.label(format!("🧊 {} objets", scene.objects.len()));
             ui.separator();
-            ui.label(if *playing { "▶ Play" } else { "⏸ Edit" });
+            ui.label(match (*playing, *paused) {
+                (true, true) => "⏸ Pause",
+                (true, false) => "▶ Play",
+                _ => "✎ Edit",
+            });
             ui.separator();
             ui.label(format!("GPU : {}", status.backend));
         });
@@ -1023,9 +1030,25 @@ fn build_ui(
     // --- Barre d'outils rapide ---
     egui::Panel::top("toolbar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
-            let play_label = if *playing { "⏹ Stop" } else { "▶ Play" };
-            if ui.button(play_label).clicked() {
-                *playing = !*playing;
+            // Play / Pause / Stop distincts (style lecteur).
+            if !*playing {
+                if ui.button("▶ Play").clicked() {
+                    *playing = true;
+                    *paused = false;
+                }
+            } else {
+                let pause_label = if *paused {
+                    "▶ Reprendre"
+                } else {
+                    "⏸ Pause"
+                };
+                if ui.button(pause_label).clicked() {
+                    *paused = !*paused;
+                }
+                if ui.button("⏹ Stop").clicked() {
+                    *playing = false;
+                    *paused = false;
+                }
             }
             ui.separator();
             ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔ Déplacer");
