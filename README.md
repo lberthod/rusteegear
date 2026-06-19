@@ -285,6 +285,32 @@ Détails et journal : **[PLAN.md](PLAN.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_S
 
 ---
 
+## 🧭 La suite — analyse & sprints
+
+Le projet a été construit par **sprints incrémentaux** (MVP → Sprint 35). Une analyse
+transversale (compréhension, audit, pertinence technologique, possibilités futures) et le
+plan des prochains sprints sont documentés à part :
+
+- **[ANALYSE.md](ANALYSE.md)** — analyse complète : compréhension du projet, audit
+  technique synthétisé, pertinence des choix technologiques, et **possibilités futures**
+  (court / moyen / long terme).
+- **[SPRINTS.md](SPRINTS.md)** — **tableau récapitulatif** de tous les sprints réalisés
+  (MVP → 35) et des **sprints à venir**, conçus pour implémenter chacun des points
+  importants de l'analyse (avec correspondance analyse ↔ sprint).
+- **[AUDIT.md](AUDIT.md)** — audit technique détaillé (P1→P10, correctifs et restant).
+
+**Prochains chantiers prioritaires** (issus de l'analyse) :
+
+| Priorité | Chantier | Détail |
+|---|---|---|
+| 🔴 | **Découpler simulation & rendu** | boucle de mise à jour séparée, pas de temps fixe physique (aujourd'hui `advance_play` est piloté par la cadence de rendu) |
+| 🟠 | **Durcir l'initialisation** | propager les `Result` d'init GPU/fenêtre + `log::error!` — éviter les crashs froids sur mobile (audit P4) |
+| 🟠 | **Valider sur device** | PBR, rendu instancié, resume mobile : verts en CI, à éprouver sur appareil réel |
+| 🟡 | **Import d'assets mobile** | lever P10 (`rfd` désactivé sur mobile, sans remplacement) |
+| 🟢 | **Rendu** | câbler les ombres (`shadow.wgsl`), textures PBR, puis piste **WebGPU / WASM** |
+
+---
+
 ## 🛠️ Stack technique
 
 | Besoin | Crate |
