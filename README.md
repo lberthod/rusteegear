@@ -129,22 +129,29 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 ## 🎮 Fonctionnalités (disponibles aujourd'hui)
 
 **Rendu & édition**
-- **Rendu 3D** temps réel via `wgpu` (Metal sur macOS), shaders WGSL, depth buffer, éclairage Lambert.
-- **Caméra orbitale** (clic-glisser / molette) ; présentation **vsync** (fluide).
+- **Rendu 3D** temps réel via `wgpu` (Metal sur macOS), shaders WGSL, depth buffer, éclairage Lambert paramétré.
+- **Matériaux** : teinte (albédo) par objet + **éclairage de scène éditable** (direction, couleur, ambiante).
+- **Caméra orbitale** (clic-glisser / molette) ; présentation **vsync** + cadence adaptative (throttle CPU au repos).
 - **Primitives** cube / sphère / plan **+ import de modèles glTF / GLB** (chargement asynchrone).
-- **Éditeur `egui`** à 3 panneaux : toolbar · hiérarchie · inspecteur.
-- **Sélection** par hiérarchie ou clic 3D (raycast ray/AABB), surbrillance.
+- **Éditeur `egui`** : toolbar · hiérarchie · inspecteur · bandeau d'état (FPS, objets, mode, backend GPU).
+- **Hiérarchie ergonomique** : **groupes définis par l'utilisateur** (glisser-déposer), filtre de recherche, icônes & badges (physique/script/audio).
+- **Sélection** par hiérarchie ou clic 3D ; **multi-sélection** (Cmd/Maj+clic), **renommage inline** (double-clic).
 - **Gizmos** translate / rotate / scale (**W / E / R**), manipulation à la souris.
-- **Undo / Redo** (Cmd+Z / Cmd+Shift+Z) et **duplication** (Cmd+D).
-- **Sérialisation** de la scène en JSON (Save / Load).
+- **Undo / Redo** (Cmd+Z / Cmd+Shift+Z), **copier/coller** (Cmd+C/V), **dupliquer** (Cmd+D), **supprimer** (Suppr) — en lot.
+- **Sérialisation** de la scène en JSON (Save / Load asynchrone).
 
 **Runtime de jeu** (mode Play ▶/⏹, aperçu réinitialisable)
-- **Scripting Lua** par objet (`mlua`) : `obj.x/y/z`, `obj.rx/ry/rz`, `obj.sx/sy/sz`, `dt`, `time`.
+- **Scripting Lua** par objet (`mlua`, chunks compilés en cache) : `obj.x/y/z`, `obj.rx/ry/rz`, `obj.sx/sy/sz`, `dt`, `time`.
 - **Physique** `rapier3d` : corps Statique / Dynamique, gravité, collisions, rebond.
 - **Audio** `kira` : son par objet, autoplay au Play, décodage asynchrone + cache.
 
+**Build & Export 1-clic** (panneau 📦 dans l'éditeur)
+- Exporte un **player jouable du jeu créé** en `.dmg` / `.apk` / `.ipa` — **scène et assets embarqués** dans le binaire.
+- **Config persistée** (nom, bundle id, version, build #) + **préréglages** ; identité appliquée au bundle macOS.
+- **Pré-vol** des toolchains (cargo-bundle / cargo-apk+NDK / Xcode), **install sur device** (adb / devicectl), log streamé, « Tout exporter ».
+
 **Plateformes**
-- **macOS** (éditeur, `.dmg`), **Android** (`.apk`), **iOS** (sur iPhone) — mode player tactile sur mobile.
+- **macOS** (éditeur, `.dmg`), **Android** (`.apk`), **iOS** (sur iPhone) — mode player tactile sur mobile (avec resume).
 
 ---
 
@@ -156,6 +163,8 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 | **A** — Fondations éditeur (refactor, gizmos, glTF, undo/dup) | 7 → 10 | ✅ |
 | **B** — Runtime de jeu (Lua, physique, audio) + optimisations | 11 → 13 | ✅ |
 | **C** — Portage mobile (Player, tactile, iOS, Android) | 14 → 17 | ✅ |
+| **D** — App de dev & exports 1-clic (perf, panneau Export, config, presets, CI) | 18 → 23 | ✅ |
+| **E** — Player complet & maturité (assets embarqués, multi-sélection, matériaux, resume) | 24 → 27 | 🟢 cœur |
 
 > Détail sprint par sprint : voir **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
 
@@ -214,13 +223,14 @@ cargo run -- --player           # mode player (scène plein écran)
 
 ```
 src/
-├── lib.rs         # event loop winit + run() (desktop) + android_main (cdylib)
+├── lib.rs         # event loop winit + run() (desktop) + android_main (cdylib) + resume mobile
 ├── main.rs        # entrée desktop → motor3derust::run()
-├── app/           # logique sans GPU : AppState, entrées agnostiques, picking
+├── assets.rs      # assets embarqués (include_dir, schéma bundle://) pour le player exporté
+├── app/           # logique sans GPU : AppState, picking, sélection, build_config
 ├── gfx/           # couche rendu wgpu (renderer, mesh, camera, gizmo, shaders WGSL)
-├── scene/         # Transform, MeshKind, Scene, import glTF, sérialisation
+├── scene/         # Transform, MeshKind, Scene, groupes, lumière, import glTF, sérialisation
 ├── runtime/       # mode Play : physics (rapier3d), audio (kira)
-└── editor/        # UI egui (toolbar, hiérarchie, inspecteur) — desktop
+└── editor/        # UI egui (toolbar, hiérarchie, inspecteur, panneau export) — desktop
 ```
 
 Séparation nette **logique (`app`) / rendu (`gfx`)** : l'état (scène, caméra, entrées)
@@ -254,10 +264,23 @@ Détails et journal : **[PLAN.md](PLAN.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_S
 - [x] **Android** : NDK, `cdylib` + `android_main`, **`.apk` signé** via `cargo-apk`.
 - [ ] Reste : signature *distribution* (App Store / Play Store), icônes, écran de lancement.
 
+### ✅ 🛠️ v2.5 — App de dev & exports 1-clic _(Phase D, sprints 18→23)_
+- [x] **Optimisations app** : profils Cargo (LTO), bandeau d'état FPS/GPU, cadence adaptative.
+- [x] **Panneau « Build & Export »** : `.dmg`/`.apk`/`.ipa` depuis des boutons, log streamé, pré-vol.
+- [x] **Config persistée** (nom, bundle id, version, build #) + **préréglages** + install device.
+- [x] **CI de release** : tag `v*` → artefacts macOS/Android attachés à la Release.
+
+### 🟢 🎮 v3 — Player complet & maturité _(Phase E, sprints 24→27)_
+- [x] **Assets embarqués** dans le player (glTF + sons) → jouable hors développement.
+- [x] **Édition** : multi-sélection (Cmd/Maj), copier/coller en lot, renommage inline.
+- [x] **Matériaux** : couleur par objet + éclairage de scène éditable.
+- [x] **Resume mobile** (recréation de surface) + **identité de bundle macOS**.
+- [ ] Reste : textures & **ombres** (shadow mapping), multi-sélection au clic 3D, sous-groupes.
+
 ### ⬜ Pistes futures
-- [ ] Multi-sélection, copier/coller.
-- [ ] Textures / matériaux PBR, ombres (shadow mapping).
-- [ ] Recréation de surface au resume mobile (suspend/resume).
+- [ ] Textures / matériaux PBR, **ombres** (shadow mapping).
+- [ ] Multi-sélection au clic 3D, réordonnancement & sous-groupes dans la hiérarchie.
+- [ ] Override d'identité Android, **IPA signé en CI** (secrets), signature *distribution* store.
 
 ---
 
@@ -274,8 +297,11 @@ Détails et journal : **[PLAN.md](PLAN.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_S
 | Scripting | `mlua` (Lua 5.4) |
 | Physique | `rapier3d` |
 | Audio | `kira` |
+| Assets embarqués (player) | `include_dir` |
 | Sélecteur de fichiers (desktop) | `rfd` |
 | Packaging | `cargo-bundle` (macOS) · `cargo-apk` (Android) · `xcodegen`+Xcode (iOS) |
+
+> Export depuis l'éditeur : voir **[packaging/EXPORT.md](packaging/EXPORT.md)**.
 
 ---
 
