@@ -48,7 +48,9 @@ impl App {
 
         match self.touches.len() {
             1 => {
-                let (px, py) = *self.touches.values().next().unwrap();
+                let Some(&(px, py)) = self.touches.values().next() else {
+                    return;
+                };
                 if self.orbiting {
                     self.state
                         .handle_input(InputEvent::PointerMove { x: px, y: py });
@@ -66,8 +68,9 @@ impl App {
                     self.orbiting = false;
                 }
                 let mut it = self.touches.values();
-                let a = *it.next().unwrap();
-                let b = *it.next().unwrap();
+                let (Some(&a), Some(&b)) = (it.next(), it.next()) else {
+                    return;
+                };
                 let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() as f32;
                 if let Some(prev) = self.pinch {
                     self.state.handle_input(InputEvent::Scroll {

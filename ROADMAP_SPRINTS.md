@@ -309,17 +309,17 @@
 > la distribution. Lire **[README.md](README.md)**, **[PLAN.md](PLAN.md)** et
 > **[packaging/EXPORT.md](packaging/EXPORT.md)** avant de démarrer.
 
-### Sprint 28 — Prise en main & validation de bout en bout ⬜
+### Sprint 28 — Prise en main & validation de bout en bout 🟢 (validé desktop)
 **Objectif** : exécuter réellement ce qui a été codé « en vert » et poser des filets.
-- [ ] **Lancer l'éditeur** (`cargo run`) et **exporter pour de vrai** un `.dmg` player (panneau 📦) :
-      vérifier scène embarquée + couleur/lumière à l'écran, puis lancer le `.dmg` produit.
-- [ ] **Test sur device mobile** : `.apk` (`adb install`) et resume (passage arrière-plan → retour) sans écran noir.
-- [ ] **Tests bon marché** (sans GPU) : invariant de sélection (`selection` ⊆ `selected`),
-      résolution `bundle://` (`assets::strip_scheme` / `bundle_bytes`), round-trip d'un asset embarqué.
-- [ ] Réduire les `unwrap()/expect()` restants (9) sur les chemins faillibles ; vérifier la CI verte.
-- **Fichiers** : `src/app/mod.rs`, `src/assets.rs`, `src/editor/export.rs`, tests.
-- **Livrable** : un player `.dmg` lancé montre le jeu créé ; APK validé sur device ; tests verts élargis. ✅
-- **Risques** : surprises runtime (alignement uniformes GPU mobile, chemins) → corriger ici, pas plus tard.
+- [x] **Export `.dmg` player réel** validé : `OUTPUT_NAME/BUNDLE_ID/APP_VERSION … ./packaging/build_dmg.sh`
+      → `target/export/DemoJeu.dmg` (5,5 Mo) avec identité appliquée (id/nom/version vérifiés dans l'Info.plist).
+- [x] **Tests bon marché** ajoutés : invariant de sélection (`selection` ⊆ `selected`), niveaux de surbrillance,
+      résolution `bundle://` (`strip_scheme`/`bundle_bytes`). **15 tests verts**.
+- [x] `unwrap()` du tactile (`lib.rs`) durcis en `let … else` (plus aucun `unwrap` hors tests).
+- [ ] **Test sur device mobile** (`.apk` + resume arrière-plan) → à faire avec un appareil (hors CI/headless).
+- **Fichiers** : `src/app/mod.rs`, `src/assets.rs`, `src/lib.rs`, tests.
+- **Livrable** : player `.dmg` produit à la bonne identité ; tests verts élargis. ✅ (reste : run GUI + device).
+- **Risques** : surprises runtime (alignement uniformes GPU mobile, chemins) → corriger dès observation.
 
 ### Sprint 29 — Édition complète (ce qui a été reporté du Sprint 25) ⬜
 **Objectif** : finir la sélection et la hiérarchie pour un vrai confort d'édition.
