@@ -15,30 +15,43 @@ script peut lire/écrire ces variables globales :
 - input.btn.NOM : booléen d'un bouton tactile
 Réponds UNIQUEMENT avec le code Lua, sans explication ni balises Markdown.";
 
+/// Paramètres d'un appel de génération de script.
+#[derive(Clone)]
+pub struct AiRequest {
+    pub api_key: String,
+    pub model: String,
+    pub temperature: f32,
+    pub prompt: String,
+}
+
 /// Appelle DeepSeek pour produire un script Lua à partir d'une consigne en langage
 /// naturel. Bloquant : à lancer dans un thread de fond.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-pub fn generate_lua(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
-    if api_key.trim().is_empty() {
+pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
+    if req.api_key.trim().is_empty() {
         return Err("Clé API DeepSeek manquante (Outils → Paramètres)".into());
     }
-    let model = if model.trim().is_empty() {
+    let model = if req.model.trim().is_empty() {
         "deepseek-chat"
     } else {
-        model.trim()
+        req.model.trim()
     };
+    log::info!(
+        "Génération IA via « {model} » (température {:.1})",
+        req.temperature
+    );
     let body = serde_json::json!({
         "model": model,
-        "temperature": 0.2,
+        "temperature": req.temperature,
         "stream": false,
         "messages": [
             { "role": "system", "content": SYSTEM_PROMPT },
-            { "role": "user", "content": prompt },
+            { "role": "user", "content": req.prompt },
         ],
     });
 
     let resp = ureq::post("https://api.deepseek.com/chat/completions")
-        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Authorization", &format!("Bearer {}", req.api_key))
         .timeout(std::time::Duration::from_secs(30))
         .send_json(body)
         .map_err(|e| format!("Requête DeepSeek échouée : {e}"))?;
@@ -55,7 +68,7 @@ pub fn generate_lua(api_key: &str, model: &str, prompt: &str) -> Result<String, 
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn generate_lua(_api_key: &str, _model: &str, _prompt: &str) -> Result<String, String> {
+pub fn generate_lua(_req: &AiRequest) -> Result<String, String> {
     Err("Génération IA indisponible sur mobile".into())
 }
 

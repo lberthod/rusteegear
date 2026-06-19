@@ -753,8 +753,8 @@ impl Renderer {
             if let Some(down) = actions.move_in_list {
                 app.move_selected_in_list(down);
             }
-            if let Some((idx, prompt, key, model)) = actions.ai_generate {
-                app.request_ai_script(idx, prompt, key, model);
+            if let Some((idx, req)) = actions.ai_generate {
+                app.request_ai_script(idx, req);
             }
             Some(full_output)
         };

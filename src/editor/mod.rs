@@ -86,8 +86,8 @@ pub struct UiActions {
     pub play_audio: Option<String>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
-    /// Génération IA d'un script : `(index objet, consigne, clé API, modèle)`.
-    pub ai_generate: Option<(usize, String, String, String)>,
+    /// Génération IA d'un script : `(index objet, requête DeepSeek)`.
+    pub ai_generate: Option<(usize, crate::app::ai::AiRequest)>,
 }
 
 impl Editor {
@@ -990,6 +990,17 @@ fn settings_window(
                 "« deepseek-chat » pointe vers la dernière version. Saisis un id précis au besoin.",
             );
             ui.add_space(6.0);
+            ui.label("Température (0 = précis, 1 = créatif)");
+            if ui
+                .add(egui::Slider::new(
+                    &mut settings.deepseek_temperature,
+                    0.0..=1.0,
+                ))
+                .drag_stopped()
+            {
+                settings.save();
+            }
+            ui.add_space(6.0);
             ui.hyperlink_to(
                 "Obtenir une clé DeepSeek",
                 "https://platform.deepseek.com/api_keys",
@@ -1416,9 +1427,12 @@ fn build_ui(
                                 {
                                     actions.ai_generate = Some((
                                         i,
-                                        ai_prompt.clone(),
-                                        settings.deepseek_api_key.clone(),
-                                        settings.deepseek_model.clone(),
+                                        crate::app::ai::AiRequest {
+                                            api_key: settings.deepseek_api_key.clone(),
+                                            model: settings.deepseek_model.clone(),
+                                            temperature: settings.deepseek_temperature,
+                                            prompt: ai_prompt.clone(),
+                                        },
                                     ));
                                 }
                                 if ui
@@ -1440,9 +1454,12 @@ fn build_ui(
                                     );
                                     actions.ai_generate = Some((
                                         i,
-                                        prompt,
-                                        settings.deepseek_api_key.clone(),
-                                        settings.deepseek_model.clone(),
+                                        crate::app::ai::AiRequest {
+                                            api_key: settings.deepseek_api_key.clone(),
+                                            model: settings.deepseek_model.clone(),
+                                            temperature: settings.deepseek_temperature,
+                                            prompt,
+                                        },
                                     ));
                                 }
                                 if status.ai_busy {

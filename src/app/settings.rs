@@ -13,10 +13,17 @@ pub struct Settings {
     /// Modèle DeepSeek à utiliser (`deepseek-chat`, `deepseek-reasoner`, ou un id précis).
     #[serde(default = "default_model")]
     pub deepseek_model: String,
+    /// Température de génération (0 = déterministe, 1 = créatif).
+    #[serde(default = "default_temperature")]
+    pub deepseek_temperature: f32,
 }
 
 fn default_model() -> String {
     "deepseek-chat".to_string()
+}
+
+fn default_temperature() -> f32 {
+    0.2
 }
 
 impl Default for Settings {
@@ -24,6 +31,7 @@ impl Default for Settings {
         Self {
             deepseek_api_key: String::new(),
             deepseek_model: default_model(),
+            deepseek_temperature: default_temperature(),
         }
     }
 }
