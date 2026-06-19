@@ -19,6 +19,7 @@
 | **C — Portage mobile** | 14 → 17 | iOS d'abord, puis Android |
 | **D — App de dev & exports 1-clic** | 18 → 23 | Optimiser l'app desktop (.dmg) et exporter APK/IPA depuis des boutons configurables |
 | **E — Player complet & maturité éditeur** | 24 → 27 | Embarquer les assets, enrichir l'édition, monter en qualité de rendu, durcir |
+| **F — Reprise, finitions & distribution** | 28 → 31 | Onboarding/validation, finir l'édition & le rendu, distribuer proprement |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
 > Les faire avant C évite de réécrire des features sur plusieurs cibles.
@@ -299,6 +300,60 @@
 
 ---
 
+## PHASE F — Reprise, finitions & distribution
+
+> **Contexte de reprise.** Projet transmis à un nouveau développeur. Les Phases A→E
+> sont en place (cœur), mais plusieurs nouveautés n'ont **jamais été exécutées de bout
+> en bout** (cf. audit Phase E) et certains demi-sprints restent à finir. Cette phase
+> sécurise d'abord la reprise (validation + tests), puis termine l'édition, le rendu et
+> la distribution. Lire **[README.md](README.md)**, **[PLAN.md](PLAN.md)** et
+> **[packaging/EXPORT.md](packaging/EXPORT.md)** avant de démarrer.
+
+### Sprint 28 — Prise en main & validation de bout en bout ⬜
+**Objectif** : exécuter réellement ce qui a été codé « en vert » et poser des filets.
+- [ ] **Lancer l'éditeur** (`cargo run`) et **exporter pour de vrai** un `.dmg` player (panneau 📦) :
+      vérifier scène embarquée + couleur/lumière à l'écran, puis lancer le `.dmg` produit.
+- [ ] **Test sur device mobile** : `.apk` (`adb install`) et resume (passage arrière-plan → retour) sans écran noir.
+- [ ] **Tests bon marché** (sans GPU) : invariant de sélection (`selection` ⊆ `selected`),
+      résolution `bundle://` (`assets::strip_scheme` / `bundle_bytes`), round-trip d'un asset embarqué.
+- [ ] Réduire les `unwrap()/expect()` restants (9) sur les chemins faillibles ; vérifier la CI verte.
+- **Fichiers** : `src/app/mod.rs`, `src/assets.rs`, `src/editor/export.rs`, tests.
+- **Livrable** : un player `.dmg` lancé montre le jeu créé ; APK validé sur device ; tests verts élargis. ✅
+- **Risques** : surprises runtime (alignement uniformes GPU mobile, chemins) → corriger ici, pas plus tard.
+
+### Sprint 29 — Édition complète (ce qui a été reporté du Sprint 25) ⬜
+**Objectif** : finir la sélection et la hiérarchie pour un vrai confort d'édition.
+- [ ] **Multi-sélection au clic 3D** (Cmd/Maj) : faire passer les modificateurs via `InputEvent`
+      (ajouter une variante ou un champ) puis `toggle_select` dans `handle_input`.
+- [ ] **Réordonnancement** des objets dans la hiérarchie par glisser-déposer (au-delà de l'assignation de groupe).
+- [ ] **Sous-groupes** (groupes imbriqués, ex. chemins `Parent/Enfant`) + repli mémorisé.
+- [ ] **Gizmo multi-objets** : déplacer/tourner toute la sélection autour d'un pivot commun.
+- **Fichiers** : `src/app/{mod.rs,input.rs}`, `src/editor/mod.rs`.
+- **Livrable** : Cmd+clic 3D pour multi-sélectionner, réordonner et imbriquer des groupes, déplacer un groupe au gizmo. ✅
+- **Risques** : invariants d'index → couvrir par les tests du Sprint 28.
+
+### Sprint 30 — Rendu : ombres & textures (reporté du Sprint 26) ⬜
+**Objectif** : passer d'un rendu plat à un rendu crédible. **Itérer visuellement** (lancer l'app souvent).
+- [ ] **Shadow mapping** directionnel : depth pass depuis la lumière, sampler de comparaison, biais anti-acné.
+- [ ] **Textures** : charger une image (albédo), UV sur les primitives + glTF, bind group texture.
+- [ ] Matériau étendu : métallique/rugosité simples, exposés dans l'inspecteur.
+- [ ] Adapter le coût sur mobile (résolution d'ombre réduite, repli si limites `wgpu`).
+- **Fichiers** : `src/gfx/*`, `src/gfx/shaders/*.wgsl`, `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : un objet texturé projette une ombre sur le sol ; validé à l'écran desktop **et** mobile. ✅
+- **Risques** : non vérifiable sans GPU réel → ne jamais committer « à l'aveugle », tester chaque étape.
+
+### Sprint 31 — Distribution complète ⬜
+**Objectif** : livrables signés et reproductibles pour les stores.
+- [ ] **Override d'identité Android** (bundle id/version) : injecter dans `cargo-apk` (génération du manifeste).
+- [ ] **IPA signé en CI** : certificat + profil en *GitHub Secrets*, job iOS dans `release.yml`.
+- [ ] **Signature de distribution** : notarisation macOS, App Store / Play Store (icônes, écran de lancement).
+- [ ] Versionnement : tag `v*` → 3 artefacts signés attachés à la Release, `build_number` cohérent.
+- **Fichiers** : `packaging/*.sh`, `.github/workflows/release.yml`, `Cargo.toml`, `packaging/EXPORT.md`.
+- **Livrable** : un tag produit `.dmg` notarisé + `.apk` + `.ipa` signés, prêts à distribuer. ✅
+- **Risques** : secrets → *GitHub Secrets* uniquement, jamais dans le repo ; comptes développeur requis.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
@@ -308,6 +363,8 @@
   **en un clic** (scène embarquée), avec config éditable/persistée, presets, install device et CI de release.
 - **E** : le jeu exporté tourne partout **assets compris** ; édition avancée (multi-sélection, sous-groupes,
   renommage) ; rendu avec matériaux/ombres ; identité de bundle et cycle de vie mobile durcis.
+- **F** : reprise sécurisée (exports/devices validés, tests élargis) ; édition et rendu terminés
+  (multi-3D, sous-groupes, ombres, textures) ; livrables **signés** prêts pour les stores.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
