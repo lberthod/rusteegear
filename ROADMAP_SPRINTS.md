@@ -205,15 +205,16 @@
 - **Note** : l'override du bundle id/version interne sur **macOS** (cargo-bundle) et **Android** (cargo-apk)
   est limité — ils lisent `Cargo.toml` ; seul le nom de fichier est renommé. Override complet = Sprint 23.
 
-### Sprint 21 — Export APK 1-clic ⬜
+### Sprint 21 — Export APK 1-clic ✅ FAIT
 **Objectif** : bouton « Exporter Android » fiable et configurable.
-- [ ] `export.rs` invoque `cargo apk build --release` avec l'environnement issu de `BuildConfig`.
-- [ ] Pré-vol : NDK présent, cible `aarch64-linux-android` installée, keystore lisible → sinon message clair.
-- [ ] Choix du dossier de sortie (rfd) ; APK copié et **chemin affiché + bouton « Révéler dans Finder »**.
-- [ ] Option « installer sur device branché » (`adb install -r`) si `adb` détecté.
-- **Fichiers** : `src/editor/export.rs`, `packaging/build_apk.sh`, `packaging/android_env.sh`.
-- **Livrable** : un clic → `.apk` signé dans le dossier choisi (et installé si device branché). ✅ vérifiable `adb install`.
-- **Risques** : env Android fragile → centraliser la détection et logguer la commande exacte exécutée.
+- [x] `export.rs` invoque `build_apk.sh` (cargo-apk) avec l'environnement issu de `BuildConfig`.
+- [x] **Pré-vol** Android : `cargo-apk` présent, **NDK localisé** (env ou `~/Library/Android/sdk/ndk/*`),
+      cible `aarch64-linux-android` installée (`rustup target list`) → message d'aide précis sinon.
+- [x] APK rangé dans `target/export/<nom>.apk` ; bouton **« 📂 Révéler le dossier »** après succès.
+- [x] Option **« Installer sur l'appareil (adb) »** (case Android, grisée si `adb` absent) → `adb install -r`.
+- **Fichiers** : `src/editor/export.rs`, `packaging/build_apk.sh`.
+- **Livrable** : un clic → `.apk` signé dans `target/export/` (et installé sur device si coché). ✅
+- **Risques** : env Android fragile → détection centralisée (`find_ndk`, `rust_target_installed`), log streamé.
 
 ### Sprint 22 — Export IPA 1-clic ⬜
 **Objectif** : bouton « Exporter iOS » avec signature configurable.

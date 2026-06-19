@@ -31,4 +31,15 @@ if [ -n "$OUTPUT_NAME" ] && [ "$OUTPUT_NAME" != "motor3derust" ]; then
     APK="target/export/${OUTPUT_NAME}.apk"
 fi
 echo "✅ APK : $APK ($(du -h "$APK" | cut -f1))"
-echo "   Installer : adb install -r $APK"
+
+# Installation directe sur l'appareil branché (option du panneau Export).
+if [ "${INSTALL_DEVICE:-0}" = "1" ]; then
+    if command -v adb >/dev/null 2>&1; then
+        echo "▶ Installation sur l'appareil (adb install -r)…"
+        adb install -r "$APK"
+    else
+        echo "⚠️ adb introuvable : installation ignorée."
+    fi
+else
+    echo "   Installer : adb install -r $APK"
+fi

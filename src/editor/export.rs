@@ -55,6 +55,12 @@ pub struct ExportPanel {
     running: Option<Target>,
     /// Pré-requis détectés une fois au démarrage : `Ok` = prêt, `Err` = ce qui manque.
     prereqs: [(Target, Result<(), String>); 3],
+    /// Android : installer l'APK sur l'appareil branché (adb) après le build.
+    install_device: bool,
+    /// `adb` est-il disponible (sinon l'option d'installation est grisée).
+    adb_available: bool,
+    /// Le dernier export s'est-il terminé avec succès (affiche « Révéler le dossier »).
+    last_ok: bool,
 }
 
 impl Default for ExportPanel {
@@ -76,6 +82,9 @@ impl ExportPanel {
                 (Target::Android, detect(Target::Android)),
                 (Target::Ios, detect(Target::Ios)),
             ],
+            install_device: false,
+            adb_available: has_cmd("adb"),
+            last_ok: false,
         }
     }
 
@@ -120,8 +129,11 @@ impl ExportPanel {
             cfg.build_number,
             target.label()
         ));
-        self.rx = Some(run(target, cfg));
+        // installation device : Android + case cochée + adb dispo.
+        let install = target == Target::Android && self.install_device && self.adb_available;
+        self.rx = Some(run(target, cfg, install));
         self.running = Some(target);
+        self.last_ok = false;
     }
 
     /// Construit la fenêtre egui (à appeler chaque frame avec le contexte).
@@ -146,6 +158,7 @@ impl ExportPanel {
                             .to_string(),
                         );
                         self.running = None;
+                        self.last_ok = ok;
                     }
                 }
             }
@@ -185,7 +198,14 @@ impl ExportPanel {
                     self.card(ui, t, scene);
                 }
                 ui.separator();
-                ui.label("Journal :");
+                ui.horizontal(|ui| {
+                    if self.last_ok && ui.button("📂 Révéler le dossier").clicked() {
+                        let _ = Command::new("open")
+                            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/target/export"))
+                            .spawn();
+                    }
+                    ui.label("Journal :");
+                });
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
                     .auto_shrink([false, false])
@@ -227,6 +247,19 @@ impl ExportPanel {
                 ui.spinner();
             }
         });
+        // Android : option d'installation directe sur l'appareil branché.
+        if target == Target::Android {
+            ui.indent("adb_opt", |ui| {
+                ui.add_enabled_ui(self.adb_available, |ui| {
+                    ui.checkbox(&mut self.install_device, "Installer sur l'appareil (adb)");
+                });
+                if !self.adb_available {
+                    ui.weak(
+                        "adb introuvable — branche un appareil et installe les Platform-Tools.",
+                    );
+                }
+            });
+        }
         if launch {
             self.start(target, scene);
         }
@@ -251,7 +284,13 @@ fn detect(target: Target) -> Result<(), String> {
         }
         Target::Android => {
             if !has_cmd("cargo-apk") {
-                return Err("cargo install cargo-apk + NDK".into());
+                return Err("cargo install cargo-apk".into());
+            }
+            if find_ndk().is_none() {
+                return Err("NDK introuvable (installer via Android Studio)".into());
+            }
+            if !rust_target_installed("aarch64-linux-android") {
+                return Err("rustup target add aarch64-linux-android".into());
             }
             Ok(())
         }
@@ -298,9 +337,40 @@ fn has_cmd(name: &str) -> bool {
     })
 }
 
+/// Localise le NDK Android (variables d'env usuelles, puis l'emplacement par défaut
+/// d'Android Studio). `Some(chemin)` si trouvé.
+fn find_ndk() -> Option<String> {
+    for var in ["ANDROID_NDK_ROOT", "ANDROID_NDK_HOME", "NDK_HOME"] {
+        if let Ok(p) = std::env::var(var)
+            && !p.is_empty()
+            && std::path::Path::new(&p).exists()
+        {
+            return Some(p);
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    let ndk = std::path::Path::new(&home).join("Library/Android/sdk/ndk");
+    let first = std::fs::read_dir(ndk).ok()?.flatten().next()?;
+    Some(first.path().to_string_lossy().into_owned())
+}
+
+/// Vrai si la cible Rust est installée (`rustup target list --installed`).
+fn rust_target_installed(target: &str) -> bool {
+    Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .env("PATH", augmented_path())
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.trim() == target)
+        })
+        .unwrap_or(false)
+}
+
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log.
 /// La `BuildConfig` est transmise via variables d'environnement.
-fn run(target: Target, cfg: BuildConfig) -> Receiver<LogMsg> {
+fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
     let (tx, rx) = channel();
     let script = target.script();
     std::thread::spawn(move || {
@@ -312,6 +382,7 @@ fn run(target: Target, cfg: BuildConfig) -> Receiver<LogMsg> {
             .env("BUNDLE_ID", &cfg.bundle_id)
             .env("APP_VERSION", &cfg.version)
             .env("BUILD_NUMBER", cfg.build_number.to_string())
+            .env("INSTALL_DEVICE", if install { "1" } else { "0" })
             .env("PLAYER_BUILD", "1") // exporte un player jouable (cf. build_dmg.sh)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
