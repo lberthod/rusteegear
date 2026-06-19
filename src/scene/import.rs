@@ -4,15 +4,32 @@ use glam::Vec3;
 
 use crate::gfx::mesh::{MeshData, Vertex};
 
-/// Charge un fichier `.gltf`/`.glb`. Renvoie le mesh fusionné + son AABB local.
+/// Charge un fichier `.gltf`/`.glb` (chemin disque **ou** asset embarqué `bundle://`).
+/// Renvoie le mesh fusionné + son AABB local.
 pub fn load_gltf(path: &str) -> Result<(MeshData, Vec3, Vec3), String> {
+    // Asset embarqué dans le binaire (player exporté).
+    if let Some(key) = crate::assets::strip_scheme(path) {
+        let bytes = crate::assets::bundle_bytes(key)
+            .ok_or_else(|| format!("asset embarqué introuvable : {key}"))?;
+        let (doc, buffers, _images) =
+            gltf::import_slice(bytes).map_err(|e| format!("glTF embarqué illisible : {e}"))?;
+        return build_from(doc, buffers);
+    }
+
     let (doc, buffers, _images) = gltf::import(path).map_err(|e| {
         format!(
             "{e} — un .gltf référence des fichiers externes (.bin, textures) qui doivent \
              être dans le même dossier. Préférez un .glb (autonome)."
         )
     })?;
+    build_from(doc, buffers)
+}
 
+/// Construit le `MeshData` fusionné (+ AABB local) à partir d'un document glTF chargé.
+fn build_from(
+    doc: gltf::Document,
+    buffers: Vec<gltf::buffer::Data>,
+) -> Result<(MeshData, Vec3, Vec3), String> {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut min = Vec3::splat(f32::INFINITY);

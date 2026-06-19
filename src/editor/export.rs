@@ -114,17 +114,26 @@ impl ExportPanel {
             return;
         }
 
-        // Embarque la scène courante dans le binaire (le jeu jouable).
+        // Embarque la scène + ses assets (modèles glTF, sons) dans le binaire.
         let scene_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
-        let written = serde_json::to_string_pretty(scene)
-            .map_err(|e| e.to_string())
-            .and_then(|j| std::fs::write(scene_path, j).map_err(|e| e.to_string()));
-        if let Err(e) = written {
-            self.log
-                .push(format!("❌ Impossible d'embarquer la scène : {e}"));
-            return;
+        let bundled = bundle_scene_json(scene).and_then(|(json, warns)| {
+            std::fs::write(scene_path, json)
+                .map(|_| warns)
+                .map_err(|e| e.to_string())
+        });
+        match bundled {
+            Ok(warns) => {
+                self.log.push("✓ Scène + assets embarqués.".into());
+                for w in warns {
+                    self.log.push(format!("⚠ {w}"));
+                }
+            }
+            Err(e) => {
+                self.log
+                    .push(format!("❌ Impossible d'embarquer la scène : {e}"));
+                return;
+            }
         }
-        self.log.push("✓ Scène du jeu embarquée.".into());
 
         // Incrémente le numéro de build et persiste la config.
         self.config.build_number += 1;
@@ -477,6 +486,70 @@ fn rust_target_installed(target: &str) -> bool {
                 .any(|l| l.trim() == target)
         })
         .unwrap_or(false)
+}
+
+/// Réinitialise `assets/bundle/`, y copie les assets référencés par la scène
+/// (modèles glTF, sons) et renvoie le JSON de la scène avec les chemins réécrits en
+/// `bundle://…`, plus la liste des assets introuvables (avertissements).
+fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
+    use std::path::Path;
+    let dir = Path::new(PROJECT_ROOT).join("assets/bundle");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let _ = std::fs::write(dir.join(".gitkeep"), b"");
+
+    let mut val = serde_json::to_value(scene).map_err(|e| e.to_string())?;
+    let mut warns = Vec::new();
+
+    if let Some(arr) = val.get_mut("imported").and_then(|v| v.as_array_mut()) {
+        for (i, m) in arr.iter_mut().enumerate() {
+            if let Some(p) = m.get("path").and_then(|v| v.as_str()).map(str::to_string) {
+                match copy_to_bundle(&dir, &p, &format!("m{i}")) {
+                    Ok(Some(key)) => m["path"] = serde_json::Value::String(key),
+                    Ok(None) => {}
+                    Err(e) => warns.push(e),
+                }
+            }
+        }
+    }
+    if let Some(arr) = val.get_mut("objects").and_then(|v| v.as_array_mut()) {
+        for (i, o) in arr.iter_mut().enumerate() {
+            if let Some(p) = o
+                .get("audio_clip")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            {
+                match copy_to_bundle(&dir, &p, &format!("a{i}")) {
+                    Ok(Some(key)) => o["audio_clip"] = serde_json::Value::String(key),
+                    Ok(None) => {}
+                    Err(e) => warns.push(e),
+                }
+            }
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&val).map_err(|e| e.to_string())?;
+    Ok((json, warns))
+}
+
+/// Copie un asset disque dans le bundle ; renvoie sa clé `bundle://…`.
+/// `Ok(None)` si le chemin est vide / déjà embarqué ; `Err` si fichier introuvable.
+fn copy_to_bundle(
+    dir: &std::path::Path,
+    path: &str,
+    prefix: &str,
+) -> Result<Option<String>, String> {
+    if path.is_empty() || path.starts_with(crate::assets::SCHEME) {
+        return Ok(None);
+    }
+    let src = std::path::Path::new(path);
+    if !src.is_file() {
+        return Err(format!("asset introuvable, ignoré : {path}"));
+    }
+    let fname = src.file_name().and_then(|s| s.to_str()).unwrap_or("asset");
+    let key = format!("{prefix}_{fname}");
+    std::fs::copy(src, dir.join(&key)).map_err(|e| format!("copie de {path} : {e}"))?;
+    Ok(Some(format!("{}{key}", crate::assets::SCHEME)))
 }
 
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log.

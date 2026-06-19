@@ -54,6 +54,7 @@ player_build = []
 
 [dependencies]
 bytemuck = { version = "1.25.0", features = ["derive"] }
+include_dir = "0.7.4"
 egui = "0.34.3"
 egui-wgpu = "0.34.3"
 egui-winit = "0.34.3"

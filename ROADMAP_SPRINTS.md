@@ -249,15 +249,16 @@
 > partout** (assets compris), que l'**édition** rivalise avec un éditeur sérieux, et
 > que le rendu et la robustesse montent d'un cran.
 
-### Sprint 24 — Assets embarqués dans le player ⬜
+### Sprint 24 — Assets embarqués dans le player ✅ FAIT
 **Objectif** : un `.dmg`/`.apk`/`.ipa` qui contient **tout le jeu** (modèles + sons), jouable hors développement.
-- [ ] Bundle d'assets : copier les fichiers glTF/sons référencés dans `assets/bundle/` + réécrire les chemins de la scène en chemins relatifs au bundle.
-- [ ] Player : résoudre les assets depuis le bundle (`include_dir!` ou dossier `Resources` du `.app`/APK) au lieu de chemins disque absolus.
-- [ ] Décodage glTF/sons depuis mémoire (octets) et plus seulement depuis un chemin.
-- [ ] Le panneau Export embarque la scène **et** ses assets ; avertir si un asset est introuvable.
-- **Fichiers** : `src/scene/import.rs`, `src/runtime/audio.rs`, `src/editor/export.rs`, `packaging/*.sh`.
+- [x] Bundle d'assets : à l'export, copie des fichiers glTF/sons référencés dans `assets/bundle/`
+      + réécriture des chemins de la scène en `bundle://<clé>`.
+- [x] Player : assets embarqués à la compilation via `include_dir!` (`src/assets.rs`), résolus par clé.
+- [x] Décodage **depuis mémoire** : glTF (`gltf::import_slice`) et sons (`StaticSoundData::from_cursor`).
+- [x] Le panneau Export embarque la scène **et** ses assets ; **avertit** si un asset est introuvable.
+- **Fichiers** : `src/assets.rs`, `src/scene/import.rs`, `src/runtime/audio.rs`, `src/editor/export.rs`, `Cargo.toml`.
 - **Livrable** : exporter une scène avec un modèle importé + un son → le player les joue sur un autre poste/appareil. ✅
-- **Risques** : tailles d'APK/IPA ; chemins relatifs cross-platform → tests sur device.
+- **Risques** : tailles d'APK/IPA ; `.gltf` à références externes → préférer `.glb` (autonome).
 
 ### Sprint 25 — Édition avancée & hiérarchie ⬜
 **Objectif** : multi-sélection, copier/coller, renommage et réorganisation.

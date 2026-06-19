@@ -11,6 +11,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 pub mod app;
+pub mod assets;
 pub mod editor;
 pub mod gfx;
 pub mod runtime;

@@ -2,7 +2,10 @@
 
 L'éditeur Motor3DeRust (desktop) exporte le **jeu créé** sous forme de *player*
 jouable pour chaque plateforme : un `.dmg`, `.apk` ou `.ipa` qui démarre directement
-sur ta scène en mode joueur (ta scène est **embarquée** dans le binaire à l'export).
+sur ta scène en mode joueur. La scène **et ses assets** (modèles glTF, sons) sont
+**embarqués** dans le binaire à l'export (copiés dans `assets/bundle/`, inclus à la
+compilation) : le player tourne donc sur un autre poste/appareil sans fichiers externes.
+Un asset introuvable au moment de l'export est signalé dans le journal (⚠).
 
 Ouvre le panneau via le bouton **📦 Export** de la barre d'outils.
 
