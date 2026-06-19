@@ -4,15 +4,15 @@ use glam::Vec3;
 
 use crate::gfx::mesh::{MeshData, Vertex};
 
-/// Charge un fichier `.gltf`/`.glb` (chemin disque **ou** asset embarqué `bundle://`).
-/// Renvoie le mesh fusionné + son AABB local.
+/// Charge un fichier `.gltf`/`.glb` (chemin disque, asset projet `asset://` ou
+/// embarqué `bundle://`). Renvoie le mesh fusionné + son AABB local.
 pub fn load_gltf(path: &str) -> Result<(MeshData, Vec3, Vec3), String> {
-    // Asset embarqué dans le binaire (player exporté).
-    if let Some(key) = crate::assets::strip_scheme(path) {
-        let bytes = crate::assets::bundle_bytes(key)
-            .ok_or_else(|| format!("asset embarqué introuvable : {key}"))?;
+    // Asset embarqué/projet : import depuis les octets (préférer .glb, autonome).
+    if path.starts_with(crate::assets::SCHEME) || path.starts_with(crate::assets::ASSET_SCHEME) {
+        let bytes =
+            crate::assets::read_bytes(path).ok_or_else(|| format!("asset introuvable : {path}"))?;
         let (doc, buffers, _images) =
-            gltf::import_slice(bytes).map_err(|e| format!("glTF embarqué illisible : {e}"))?;
+            gltf::import_slice(&bytes).map_err(|e| format!("glTF illisible : {e}"))?;
         return build_from(doc, buffers);
     }
 

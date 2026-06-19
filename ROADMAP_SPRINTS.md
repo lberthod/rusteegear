@@ -443,7 +443,13 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] Compression/réduction de textures à l'export (taille max, mipmaps, formats GPU mobiles).
 - [x] Panneau « Optimisation mobile » câblé : réduction réelle des textures (resize Lanczos3
       → copies _optN.png, objets mis à jour, undo) + limite de lumières.
-- [ ] Gestionnaire d'assets (asset://), chargement mobile (P10), fusion meshes statiques → reste du sprint.
+- [x] Gestionnaire d'assets : schéma asset:// (~/.motor3derust/assets), read_bytes central
+      (bundle:// / asset:// / disque), « Rassembler les assets » (copie + réécriture).
+- [x] Chargement mobile (P10) : navigateur d'assets intégré (liste projet + embarqués,
+      assignation de texture), fonctionne sans rfd.
+- [~] Fusion des meshes statiques : descopée — l'instanciation du Sprint 33 collapse déjà
+      les objets même mesh+matériau en un draw call (gain redondant).
+- **Sprint 35 terminé.**
 - **Fichiers** : `src/assets.rs`, `src/scene/{mod,import}.rs`, `src/editor/{export,mod}.rs`, `packaging/*`.
 - **Livrable** : un projet s'exporte avec ses assets optimisés ; le Readiness Check reflète les gains.
 - **Risques** : formats de texture GPU mobiles (ASTC/ETC2) → commencer par redimensionnement + PNG/mipmaps.

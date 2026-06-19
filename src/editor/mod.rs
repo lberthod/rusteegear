@@ -54,6 +54,8 @@ struct Panels {
     ai_scene: bool,
     /// Fenêtre « Optimisation mobile ».
     optimize: bool,
+    /// Fenêtre « Gestionnaire d'assets ».
+    assets: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -106,6 +108,8 @@ pub struct UiActions {
     pub optimize_textures: Option<u32>,
     /// Optimisation mobile : limiter le nombre de lumières ponctuelles.
     pub limit_lights: Option<usize>,
+    /// Rassembler les assets externes dans le dossier projet (asset://).
+    pub collect_assets: bool,
 }
 
 impl Editor {
@@ -702,6 +706,10 @@ fn menu_outils(
             export.open = true;
             ui.close();
         }
+        if ui.button("📁  Gestionnaire d'assets").clicked() {
+            panels.assets = true;
+            ui.close();
+        }
         if ui.button("🪶  Optimisation mobile").clicked() {
             panels.optimize = true;
             ui.close();
@@ -1151,6 +1159,59 @@ fn optimize_window(
     panels.optimize = open;
 }
 
+/// Fenêtre « Gestionnaire d'assets » : liste les assets du projet + embarqués,
+/// permet de rassembler les fichiers externes et d'assigner une texture à la sélection.
+fn asset_browser_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &mut Scene,
+    selection: Option<usize>,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.assets;
+    egui::Window::new("📁  Gestionnaire d'assets")
+        .open(&mut open)
+        .default_size([360.0, 320.0])
+        .show(ctx, |ui| {
+            if ui
+                .button("📦 Rassembler les assets du projet")
+                .on_hover_text(
+                    "Copie les fichiers externes dans ~/.motor3derust/assets et utilise asset://",
+                )
+                .clicked()
+            {
+                actions.collect_assets = true;
+            }
+            ui.separator();
+            let assets = crate::assets::list_assets();
+            if assets.is_empty() {
+                ui.label("Aucun asset. Importe une texture/un modèle, puis « Rassembler ».");
+            } else {
+                let sel_obj = selection.filter(|&i| i < scene.objects.len());
+                ui.label(match sel_obj {
+                    Some(_) => "Clique un asset image pour l'appliquer à l'objet sélectionné :",
+                    None => "Sélectionne un objet pour assigner une texture.",
+                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for a in assets {
+                            let is_img =
+                                a.ends_with(".png") || a.ends_with(".jpg") || a.ends_with(".jpeg");
+                            let resp = ui.selectable_label(false, &a);
+                            if resp.clicked()
+                                && is_img
+                                && let Some(i) = sel_obj
+                            {
+                                scene.objects[i].texture = a.clone();
+                            }
+                        }
+                    });
+            }
+        });
+    panels.assets = open;
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -1275,6 +1336,7 @@ fn build_ui(
         actions,
     );
     optimize_window(root.ctx(), panels, scene, actions);
+    asset_browser_window(root.ctx(), panels, scene, *selection, actions);
 
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);

@@ -43,19 +43,18 @@ impl Audio {
             self.start(data);
             return;
         }
-        // Asset embarqué (player exporté) : décodage immédiat depuis la mémoire.
-        if let Some(key) = crate::assets::strip_scheme(path) {
-            match crate::assets::bundle_bytes(key) {
-                Some(bytes) => {
-                    match StaticSoundData::from_cursor(std::io::Cursor::new(bytes.to_vec())) {
-                        Ok(data) => {
-                            self.cache.insert(path.to_string(), data.clone());
-                            self.start(data);
-                        }
-                        Err(e) => log::error!("Son embarqué '{key}' illisible : {e}"),
+        // Asset embarqué/projet : décodage immédiat depuis la mémoire.
+        if path.starts_with(crate::assets::SCHEME) || path.starts_with(crate::assets::ASSET_SCHEME)
+        {
+            match crate::assets::read_bytes(path) {
+                Some(bytes) => match StaticSoundData::from_cursor(std::io::Cursor::new(bytes)) {
+                    Ok(data) => {
+                        self.cache.insert(path.to_string(), data.clone());
+                        self.start(data);
                     }
-                }
-                None => log::error!("Son embarqué introuvable : {key}"),
+                    Err(e) => log::error!("Son '{path}' illisible : {e}"),
+                },
+                None => log::error!("Son introuvable : {path}"),
             }
             return;
         }

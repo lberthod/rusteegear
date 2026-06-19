@@ -520,28 +520,39 @@ impl AppState {
 
         let mut remap: HashMap<String, String> = HashMap::new();
         for path in paths {
-            match image::open(&path) {
-                Ok(img) => {
-                    let (w, h) = (img.width(), img.height());
-                    if w <= max_px && h <= max_px {
-                        continue;
-                    }
-                    let scale = max_px as f32 / w.max(h) as f32;
-                    let (nw, nh) = (
-                        ((w as f32 * scale) as u32).max(1),
-                        ((h as f32 * scale) as u32).max(1),
-                    );
-                    let resized = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
-                    let out = optimized_path(&path, max_px);
-                    if let Err(e) = resized.save(&out) {
-                        log::error!("Échec écriture texture optimisée {out} : {e}");
-                        continue;
-                    }
-                    log::info!("Texture {path} ({w}×{h}) → {out} ({nw}×{nh})");
-                    remap.insert(path, out);
-                }
-                Err(e) => log::error!("Texture illisible {path} : {e}"),
+            let Some(bytes) = crate::assets::read_bytes(&path) else {
+                log::error!("Texture illisible {path}");
+                continue;
+            };
+            let Ok(img) = image::load_from_memory(&bytes) else {
+                log::error!("Texture non décodable {path}");
+                continue;
+            };
+            let (w, h) = (img.width(), img.height());
+            if w <= max_px && h <= max_px {
+                continue;
             }
+            let scale = max_px as f32 / w.max(h) as f32;
+            let (nw, nh) = (
+                ((w as f32 * scale) as u32).max(1),
+                ((h as f32 * scale) as u32).max(1),
+            );
+            let resized = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
+            let out = optimized_path(&path, max_px);
+            // `asset://x.png` → écrit dans le dossier d'assets ; chemin disque → à côté.
+            let write_path = match crate::assets::assets_dir() {
+                Some(dir) if out.starts_with(crate::assets::ASSET_SCHEME) => dir
+                    .join(out.trim_start_matches(crate::assets::ASSET_SCHEME))
+                    .to_string_lossy()
+                    .into_owned(),
+                _ => out.clone(),
+            };
+            if let Err(e) = resized.save(&write_path) {
+                log::error!("Échec écriture texture optimisée {write_path} : {e}");
+                continue;
+            }
+            log::info!("Texture {path} ({w}×{h}) → {out} ({nw}×{nh})");
+            remap.insert(path, out);
         }
         if remap.is_empty() {
             return 0;
@@ -553,6 +564,43 @@ impl AppState {
             }
         }
         remap.len()
+    }
+
+    /// Rassemble les assets externes (textures, sons, modèles) dans le dossier de
+    /// projet et réécrit les chemins en `asset://…` (portable). Renvoie le nombre réécrit.
+    pub fn collect_assets(&mut self) -> usize {
+        let is_external = |p: &str| {
+            !p.is_empty()
+                && !p.starts_with(crate::assets::ASSET_SCHEME)
+                && !p.starts_with(crate::assets::SCHEME)
+        };
+        let any = self
+            .scene
+            .objects
+            .iter()
+            .any(|o| is_external(&o.texture) || is_external(&o.audio_clip))
+            || self.scene.imported.iter().any(|m| is_external(&m.path));
+        if !any {
+            return 0;
+        }
+        self.push_undo();
+        let mut changed = 0;
+        let mut import = |p: &mut String| {
+            if is_external(p)
+                && let Some(a) = crate::assets::import_to_assets(p)
+            {
+                *p = a;
+                changed += 1;
+            }
+        };
+        for o in &mut self.scene.objects {
+            import(&mut o.texture);
+            import(&mut o.audio_clip);
+        }
+        for m in &mut self.scene.imported {
+            import(&mut m.path);
+        }
+        changed
     }
 
     /// Limite le nombre de lumières ponctuelles (optimisation mobile).
@@ -1209,7 +1257,18 @@ fn scene_path() -> String {
 }
 
 /// Chemin de la copie optimisée d'une texture (`foo.png` → `foo_opt2048.png`).
+/// Conserve le schéma `asset://`/`bundle://` éventuel ; sinon écrit à côté du fichier.
 fn optimized_path(path: &str, max_px: u32) -> String {
+    for scheme in [crate::assets::ASSET_SCHEME, crate::assets::SCHEME] {
+        if let Some(key) = path.strip_prefix(scheme) {
+            let stem = std::path::Path::new(key)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("texture");
+            // Une copie optimisée d'un asset devient elle-même un asset de projet.
+            return format!("{}{stem}_opt{max_px}.png", crate::assets::ASSET_SCHEME);
+        }
+    }
     let p = std::path::Path::new(path);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("texture");
     let parent = p.parent().and_then(|s| s.to_str()).unwrap_or("");
@@ -1432,6 +1491,20 @@ mod tests {
         // tap : passe au rouge
         run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true).unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn optimized_path_preserves_scheme() {
+        // Un asset projet reste un asset projet ; un chemin disque écrit à côté.
+        assert_eq!(
+            optimized_path("asset://bois.png", 1024),
+            "asset://bois_opt1024.png"
+        );
+        assert_eq!(
+            optimized_path("/tmp/bois.jpg", 2048),
+            "/tmp/bois_opt2048.png"
+        );
+        assert_eq!(optimized_path("bois.png", 512), "bois_opt512.png");
     }
 
     #[test]

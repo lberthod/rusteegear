@@ -826,6 +826,10 @@ impl Renderer {
             if let Some(max) = actions.limit_lights {
                 app.limit_point_lights(max);
             }
+            if actions.collect_assets {
+                let n = app.collect_assets();
+                log::info!("Assets rassemblés : {n} chemin(s) → asset://");
+            }
             Some(full_output)
         };
 
@@ -1123,11 +1127,7 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 /// Décode une image (disque ou `bundle://`) en RGBA8 + dimensions.
 fn load_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
-    let bytes: Vec<u8> = if let Some(key) = crate::assets::strip_scheme(path) {
-        crate::assets::bundle_bytes(key)?.to_vec()
-    } else {
-        std::fs::read(path).ok()?
-    };
+    let bytes = crate::assets::read_bytes(path)?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     Some((img.into_raw(), w, h))
