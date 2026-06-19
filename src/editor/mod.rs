@@ -29,6 +29,8 @@ pub struct Editor {
     settings: crate::app::settings::Settings,
     /// Consigne en langage naturel pour la génération de script par IA.
     ai_prompt: String,
+    /// Consigne pour la génération de scène entière par IA.
+    ai_scene_prompt: String,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -48,6 +50,8 @@ struct Panels {
     readiness_results: Vec<readiness::Check>,
     /// Fenêtre « Paramètres » (clé API…).
     settings: bool,
+    /// Fenêtre « Générer une scène (IA) ».
+    ai_scene: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -88,6 +92,10 @@ pub struct UiActions {
     pub move_in_list: Option<bool>,
     /// Génération IA d'un script : `(index objet, requête DeepSeek)`.
     pub ai_generate: Option<(usize, crate::app::ai::AiRequest)>,
+    /// Génération IA d'une scène entière.
+    pub ai_generate_scene: Option<crate::app::ai::AiRequest>,
+    /// Demande d'ouverture de la fenêtre « Générer une scène (IA) ».
+    pub open_ai_scene: bool,
 }
 
 impl Editor {
@@ -122,6 +130,7 @@ impl Editor {
             panels: Panels::default(),
             settings: crate::app::settings::Settings::load(),
             ai_prompt: String::new(),
+            ai_scene_prompt: String::new(),
         }
     }
 
@@ -188,6 +197,7 @@ impl Editor {
         let panels = &mut self.panels;
         let settings = &mut self.settings;
         let ai_prompt = &mut self.ai_prompt;
+        let ai_scene_prompt = &mut self.ai_scene_prompt;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -209,6 +219,7 @@ impl Editor {
                 panels,
                 settings,
                 ai_prompt,
+                ai_scene_prompt,
                 &mut actions,
             );
         });
@@ -477,6 +488,14 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_demo = true;
+            ui.close();
+        }
+        if ui
+            .button("✨  Générer une scène (IA)…")
+            .on_hover_text("Crée une scène complète depuis une description (DeepSeek)")
+            .clicked()
+        {
+            actions.open_ai_scene = true;
             ui.close();
         }
         ui.separator();
@@ -1009,6 +1028,57 @@ fn settings_window(
     panels.settings = open;
 }
 
+/// Fenêtre « Générer une scène (IA) » : consigne → scène complète via DeepSeek.
+fn ai_scene_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    settings: &crate::app::settings::Settings,
+    prompt: &mut String,
+    status: &StatusInfo,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.ai_scene;
+    egui::Window::new("✨  Générer une scène (IA)")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(360.0)
+        .show(ctx, |ui| {
+            ui.label("Décris la scène à générer :");
+            ui.add(
+                egui::TextEdit::multiline(prompt)
+                    .desired_rows(3)
+                    .desired_width(340.0)
+                    .hint_text(
+                        "ex : « un sol, un personnage capsule piloté au joystick, 3 cubes \
+                         tactiles colorés et une caméra qui suit »",
+                    ),
+            );
+            let has_key = !settings.deepseek_api_key.trim().is_empty();
+            let can = has_key && !status.ai_busy && !prompt.trim().is_empty();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(can, egui::Button::new("✨ Générer la scène"))
+                    .clicked()
+                {
+                    actions.ai_generate_scene = Some(crate::app::ai::AiRequest {
+                        api_key: settings.deepseek_api_key.clone(),
+                        model: settings.deepseek_model.clone(),
+                        temperature: settings.deepseek_temperature,
+                        prompt: prompt.clone(),
+                    });
+                }
+                if status.ai_busy {
+                    ui.spinner();
+                    ui.label("génération…");
+                } else if !has_key {
+                    ui.label("clé API requise (⚙ Paramètres)");
+                }
+            });
+            ui.small("⚠ Remplace la scène actuelle (annulable avec Cmd+Z).");
+        });
+    panels.ai_scene = open;
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -1118,10 +1188,20 @@ fn build_ui(
     panels: &mut Panels,
     settings: &mut crate::app::settings::Settings,
     ai_prompt: &mut String,
+    ai_scene_prompt: &mut String,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings);
+    // Fenêtre « Générer une scène (IA) ».
+    ai_scene_window(
+        root.ctx(),
+        panels,
+        settings,
+        ai_scene_prompt,
+        status,
+        actions,
+    );
 
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);
@@ -1155,6 +1235,10 @@ fn build_ui(
             menu_aide(ui, panels);
         });
     });
+    // Ouverture différée de la fenêtre « Générer une scène (IA) » (demandée par le menu).
+    if actions.open_ai_scene {
+        panels.ai_scene = true;
+    }
 
     // --- Barre d'outils rapide ---
     egui::Panel::top("toolbar").show_inside(root, |ui| {

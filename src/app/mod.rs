@@ -134,6 +134,9 @@ pub struct AppState {
     ai_rx: Receiver<(usize, Result<String, String>)>,
     /// Une génération IA est en cours (désactive le bouton, affiche l'état).
     pub ai_busy: bool,
+    // --- génération de scène entière par IA (asynchrone) ---
+    ai_scene_tx: Sender<Result<Scene, String>>,
+    ai_scene_rx: Receiver<Result<Scene, String>>,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R).
@@ -173,6 +176,7 @@ impl AppState {
         let (tx, rx) = channel();
         let (scene_tx, scene_rx) = channel();
         let (ai_tx, ai_rx) = channel();
+        let (ai_scene_tx, ai_scene_rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -220,7 +224,22 @@ impl AppState {
             ai_tx,
             ai_rx,
             ai_busy: false,
+            ai_scene_tx,
+            ai_scene_rx,
         }
+    }
+
+    /// Lance une génération de scène complète par IA (thread de fond).
+    pub fn request_ai_scene(&mut self, req: ai::AiRequest) {
+        if self.ai_busy {
+            return;
+        }
+        self.ai_busy = true;
+        let tx = self.ai_scene_tx.clone();
+        std::thread::spawn(move || {
+            let result = ai::generate_scene_json(&req).and_then(|j| Scene::from_ai_json(&j));
+            let _ = tx.send(result);
+        });
     }
 
     /// Lance une génération de script Lua par IA (thread de fond) pour l'objet `idx`.
@@ -248,6 +267,19 @@ impl AppState {
                 }
                 Ok(_) => {} // l'objet a disparu entre-temps
                 Err(e) => log::error!("Génération IA : {e}"),
+            }
+        }
+        while let Ok(result) = self.ai_scene_rx.try_recv() {
+            self.ai_busy = false;
+            match result {
+                Ok(scene) => {
+                    self.push_undo();
+                    self.scene = scene;
+                    self.imported_dirty = true;
+                    self.clear_selection();
+                    log::info!("Scène générée par IA appliquée");
+                }
+                Err(e) => log::error!("Génération de scène IA : {e}"),
             }
         }
     }

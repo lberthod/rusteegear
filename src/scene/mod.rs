@@ -168,6 +168,45 @@ impl MobileControls {
     }
 }
 
+/// Schéma JSON simplifié produit par l'IA pour générer une scène entière.
+#[derive(Deserialize)]
+struct SceneSpec {
+    #[serde(default)]
+    objects: Vec<ObjSpec>,
+    #[serde(default)]
+    joystick: bool,
+    #[serde(default)]
+    buttons: Vec<String>,
+    #[serde(default)]
+    camera_follow: bool,
+}
+
+#[derive(Deserialize)]
+struct ObjSpec {
+    #[serde(default = "unnamed")]
+    name: String,
+    #[serde(default)]
+    mesh: String,
+    #[serde(default)]
+    x: f32,
+    #[serde(default)]
+    y: f32,
+    #[serde(default)]
+    z: f32,
+    #[serde(default = "white")]
+    color: [f32; 3],
+    #[serde(default)]
+    script: String,
+    #[serde(default)]
+    physics: String,
+    #[serde(default)]
+    tappable: bool,
+}
+
+fn unnamed() -> String {
+    "Objet".to_string()
+}
+
 /// Lumière directionnelle de la scène + lumière ambiante.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Light {
@@ -352,6 +391,53 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 },
             ],
         }
+    }
+
+    /// Construit une scène depuis le JSON contraint produit par l'IA (cf. `app::ai`).
+    pub fn from_ai_json(json: &str) -> Result<Scene, String> {
+        let spec: SceneSpec =
+            serde_json::from_str(json).map_err(|e| format!("JSON de scène invalide : {e}"))?;
+        let objects: Vec<SceneObject> = spec
+            .objects
+            .into_iter()
+            .map(|o| SceneObject {
+                name: o.name,
+                transform: Transform::from_pos(Vec3::new(o.x, o.y, o.z)),
+                mesh: match o.mesh.as_str() {
+                    "sphere" => MeshKind::Sphere,
+                    "plane" => MeshKind::Plane,
+                    "cylinder" => MeshKind::Cylinder,
+                    "capsule" => MeshKind::Capsule,
+                    _ => MeshKind::Cube,
+                },
+                script: o.script,
+                physics: match o.physics.as_str() {
+                    "static" => PhysicsKind::Static,
+                    "dynamic" => PhysicsKind::Dynamic,
+                    _ => PhysicsKind::None,
+                },
+                audio_clip: String::new(),
+                audio_autoplay: false,
+                group: String::new(),
+                color: o.color,
+                texture: String::new(),
+                tappable: o.tappable,
+            })
+            .collect();
+        if objects.is_empty() {
+            return Err("La scène générée ne contient aucun objet".into());
+        }
+        Ok(Scene {
+            objects,
+            imported: Vec::new(),
+            groups: Vec::new(),
+            light: Light::default(),
+            mobile: MobileControls {
+                joystick: spec.joystick,
+                buttons: spec.buttons,
+            },
+            camera_follow: spec.camera_follow,
+        })
     }
 
     pub fn save(&self, path: &str) -> std::io::Result<()> {

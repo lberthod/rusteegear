@@ -24,10 +24,21 @@ pub struct AiRequest {
     pub prompt: String,
 }
 
-/// Appelle DeepSeek pour produire un script Lua à partir d'une consigne en langage
-/// naturel. Bloquant : à lancer dans un thread de fond.
+/// Système pour la génération de scène entière (JSON contraint).
+const SCENE_SYSTEM_PROMPT: &str = "\
+Tu génères une scène pour un moteur de jeu 3D, au format JSON STRICT (aucun texte \
+autour, pas de Markdown). Schéma :
+{\"objects\":[{\"name\":str,\"mesh\":\"cube|sphere|plane|cylinder|capsule\",\
+\"x\":num,\"y\":num,\"z\":num,\"color\":[r,g,b (0..1)],\"script\":str (Lua, peut être vide),\
+\"physics\":\"none|static|dynamic\",\"tappable\":bool}],\
+\"joystick\":bool,\"buttons\":[str],\"camera_follow\":bool}
+Variables Lua disponibles : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, obj.r/g/b, \
+obj.tapped, dt, time, input.jx, input.jy, input.btn.NOM.
+Mets un sol (mesh plane, physics static) si pertinent. Réponds UNIQUEMENT le JSON.";
+
+/// Appel bas-niveau à l'API chat de DeepSeek. Retourne le contenu texte du message.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
+fn chat(req: &AiRequest, system: &str) -> Result<String, String> {
     if req.api_key.trim().is_empty() {
         return Err("Clé API DeepSeek manquante (Outils → Paramètres)".into());
     }
@@ -37,7 +48,7 @@ pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
         req.model.trim()
     };
     log::info!(
-        "Génération IA via « {model} » (température {:.1})",
+        "Requête IA via « {model} » (température {:.1})",
         req.temperature
     );
     let body = serde_json::json!({
@@ -45,14 +56,14 @@ pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
         "temperature": req.temperature,
         "stream": false,
         "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
+            { "role": "system", "content": system },
             { "role": "user", "content": req.prompt },
         ],
     });
 
     let resp = ureq::post("https://api.deepseek.com/chat/completions")
         .set("Authorization", &format!("Bearer {}", req.api_key))
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
         .send_json(body)
         .map_err(|e| format!("Requête DeepSeek échouée : {e}"))?;
 
@@ -60,11 +71,22 @@ pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
         .into_json()
         .map_err(|e| format!("Réponse DeepSeek illisible : {e}"))?;
 
-    let content = v["choices"][0]["message"]["content"]
+    v["choices"][0]["message"]["content"]
         .as_str()
-        .ok_or("Réponse DeepSeek sans contenu")?;
+        .map(str::to_string)
+        .ok_or_else(|| "Réponse DeepSeek sans contenu".into())
+}
 
-    Ok(strip_code_fences(content))
+/// Produit un script Lua à partir d'une consigne. Bloquant (thread de fond).
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
+    chat(req, SYSTEM_PROMPT).map(|s| strip_code_fences(&s))
+}
+
+/// Produit le JSON d'une scène complète à partir d'une consigne. Bloquant.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub fn generate_scene_json(req: &AiRequest) -> Result<String, String> {
+    chat(req, SCENE_SYSTEM_PROMPT).map(|s| strip_code_fences(&s))
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -72,12 +94,18 @@ pub fn generate_lua(_req: &AiRequest) -> Result<String, String> {
     Err("Génération IA indisponible sur mobile".into())
 }
 
-/// Retire d'éventuelles balises Markdown (``` ou ```lua) autour du code.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+pub fn generate_scene_json(_req: &AiRequest) -> Result<String, String> {
+    Err("Génération IA indisponible sur mobile".into())
+}
+
+/// Retire d'éventuelles balises Markdown (``` éventuellement suivi d'un langage
+/// comme `lua` ou `json`) autour du contenu.
 fn strip_code_fences(s: &str) -> String {
     let t = s.trim();
     if let Some(rest) = t.strip_prefix("```") {
-        // saute l'éventuel langage sur la première ligne, et la fence finale
-        let rest = rest.strip_prefix("lua").unwrap_or(rest);
+        // saute le tag de langage (lettres) éventuel sur la première ligne
+        let rest = rest.trim_start_matches(|c: char| c.is_ascii_alphabetic());
         let rest = rest.trim_start_matches('\n');
         return rest
             .trim_end()

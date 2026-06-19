@@ -756,6 +756,9 @@ impl Renderer {
             if let Some((idx, req)) = actions.ai_generate {
                 app.request_ai_script(idx, req);
             }
+            if let Some(req) = actions.ai_generate_scene {
+                app.request_ai_scene(req);
+            }
             Some(full_output)
         };
 
