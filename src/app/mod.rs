@@ -598,6 +598,7 @@ impl AppState {
                     self.last_cursor = Some((x, y));
                     return;
                 } else if self.dragging
+                    && !self.device_preview // en aperçu mobile : pas d'orbite souris (simule le tactile)
                     && let Some((lx, ly)) = self.last_cursor
                 {
                     self.camera.yaw -= (x - lx) as f32 * 0.005;
@@ -606,7 +607,10 @@ impl AppState {
                 self.last_cursor = Some((x, y));
             }
             InputEvent::Scroll { delta } => {
-                self.camera.distance = (self.camera.distance - delta * 0.5).clamp(1.5, 50.0);
+                // En aperçu mobile, la molette ne zoome pas (un téléphone n'a pas de molette).
+                if !self.device_preview {
+                    self.camera.distance = (self.camera.distance - delta * 0.5).clamp(1.5, 50.0);
+                }
             }
         }
     }
