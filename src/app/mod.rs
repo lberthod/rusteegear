@@ -434,6 +434,35 @@ impl AppState {
         self.selection = self.selected.last().copied();
     }
 
+    /// Aligne la position des objets sélectionnés sur celle de la primaire, le long
+    /// d'un axe (0 = X, 1 = Y, 2 = Z).
+    pub fn align_selection_axis(&mut self, axis: usize) {
+        let Some(primary) = self.selection else {
+            return;
+        };
+        if self.selected.len() < 2 {
+            return;
+        }
+        let Some(target) = self
+            .scene
+            .objects
+            .get(primary)
+            .map(|o| o.transform.position)
+        else {
+            return;
+        };
+        self.push_undo();
+        for &i in &self.selected {
+            if let Some(o) = self.scene.objects.get_mut(i) {
+                match axis {
+                    0 => o.transform.position.x = target.x,
+                    1 => o.transform.position.y = target.y,
+                    _ => o.transform.position.z = target.z,
+                }
+            }
+        }
+    }
+
     /// Regroupe les objets sélectionnés dans un nouveau groupe nommé automatiquement.
     pub fn group_selected(&mut self) {
         if self.selected.is_empty() {

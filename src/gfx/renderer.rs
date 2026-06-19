@@ -848,6 +848,9 @@ impl Renderer {
             if actions.ungroup {
                 app.ungroup_selected();
             }
+            if let Some(axis) = actions.align_axis {
+                app.align_selection_axis(axis);
+            }
             Some(full_output)
         };
 

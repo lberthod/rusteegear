@@ -121,6 +121,8 @@ pub struct UiActions {
     pub select_all: bool,
     pub group: bool,
     pub ungroup: bool,
+    /// Aligner la sélection sur la primaire le long d'un axe (0=X, 1=Y, 2=Z).
+    pub align_axis: Option<usize>,
 }
 
 impl Editor {
@@ -647,6 +649,15 @@ fn menu_edition(ui: &mut egui::Ui, selection: &Option<usize>, actions: &mut UiAc
             actions.ungroup = true;
             ui.close();
         }
+        ui.menu_button("📐  Aligner sur…", |ui| {
+            ui.label("Aligne la sélection sur l'objet primaire");
+            for (axis, label) in [(0, "Axe X"), (1, "Axe Y"), (2, "Axe Z")] {
+                if ui.button(label).clicked() {
+                    actions.align_axis = Some(axis);
+                    ui.close();
+                }
+            }
+        });
         ui.separator();
         if ui
             .add_enabled(has, egui::Button::new("⬇  Aligner au sol"))
