@@ -546,6 +546,7 @@ impl AppState {
             metallic: 0.0,
             roughness: 0.6,
             emissive: 0.0,
+            trigger: false,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -1143,6 +1144,18 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
+        // Zones de déclenchement : objets `trigger` dont l'AABB monde contient le joueur.
+        let triggered: std::collections::HashSet<usize> = match self.player_position() {
+            Some(p) => self
+                .scene
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| o.trigger && self.world_aabb_contains(o, p))
+                .map(|(i, _)| i)
+                .collect(),
+            None => std::collections::HashSet::new(),
+        };
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             if obj.script.trim().is_empty() {
                 continue;
@@ -1172,6 +1185,7 @@ impl AppState {
                 time,
                 &self.input_state,
                 tapped,
+                triggered.contains(&idx),
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
@@ -1191,6 +1205,24 @@ impl AppState {
             let t = (dt * 6.0).min(1.0);
             self.camera.target = self.camera.target.lerp(p, t);
         }
+    }
+
+    /// Le point `p` est-il dans l'AABB monde de l'objet `o` ?
+    fn world_aabb_contains(&self, o: &SceneObject, p: Vec3) -> bool {
+        let (lmin, lmax) = self.scene.local_aabb(o.mesh);
+        let m = o.transform.matrix();
+        let mut wmin = Vec3::splat(f32::INFINITY);
+        let mut wmax = Vec3::splat(f32::NEG_INFINITY);
+        for sx in [lmin.x, lmax.x] {
+            for sy in [lmin.y, lmax.y] {
+                for sz in [lmin.z, lmax.z] {
+                    let q = (m * Vec3::new(sx, sy, sz).extend(1.0)).truncate();
+                    wmin = wmin.min(q);
+                    wmax = wmax.max(q);
+                }
+            }
+        }
+        p.cmpge(wmin).all() && p.cmple(wmax).all()
     }
 
     /// Position du « joueur » : premier objet scripté, sinon premier objet.
@@ -1303,6 +1335,7 @@ impl AppState {
             metallic: 0.0,
             roughness: 0.6,
             emissive: 0.0,
+            trigger: false,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -1392,6 +1425,7 @@ fn run_script(
     time: f32,
     input: &PlayerInput,
     tapped: bool,
+    triggered: bool,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -1408,6 +1442,7 @@ fn run_script(
     obj.set("g", color[1])?;
     obj.set("b", color[2])?;
     obj.set("tapped", tapped)?;
+    obj.set("triggered", triggered)?;
 
     // Contrôles tactiles : `input.jx`, `input.jy` (joystick) et `input.btn.<nom>` (booléens).
     let input_tbl = lua.create_table()?;
@@ -1556,14 +1591,20 @@ mod tests {
             buttons: std::collections::HashSet::new(),
         };
         input.buttons.insert("B1".into());
-        run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false).unwrap();
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, false,
+        )
+        .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
         assert!((t.position.y - 5.0).abs() < 1e-5);
 
         // Sans bouton ni joystick : aucun mouvement.
         let mut t2 = Transform::from_pos(Vec3::ZERO);
         let empty = PlayerInput::default();
-        run_script(&lua, &func, &mut t2, &mut col, 0.016, 0.0, &empty, false).unwrap();
+        run_script(
+            &lua, &func, &mut t2, &mut col, 0.016, 0.0, &empty, false, false,
+        )
+        .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
         assert!((t2.position.y).abs() < 1e-5);
     }
@@ -1578,11 +1619,38 @@ mod tests {
         let mut col = [0.5, 0.5, 0.5];
         let input = PlayerInput::default();
         // pas de tap : couleur inchangée
-        run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false).unwrap();
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, false,
+        )
+        .unwrap();
         assert_eq!(col, [0.5, 0.5, 0.5]);
         // tap : passe au rouge
-        run_script(&lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true).unwrap();
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true, false,
+        )
+        .unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn script_reacts_to_trigger() {
+        // obj.y monte quand le joueur entre dans la zone.
+        let lua = Lua::new();
+        let src = "if obj.triggered then obj.y = 9.0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
+        let input = PlayerInput::default();
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, false,
+        )
+        .unwrap();
+        assert_eq!(t.position.y, 0.0);
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, true,
+        )
+        .unwrap();
+        assert_eq!(t.position.y, 9.0);
     }
 
     #[test]

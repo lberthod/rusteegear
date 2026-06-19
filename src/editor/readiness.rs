@@ -128,13 +128,13 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
     let mut too_big = 0;
     let mut missing = 0;
     for tex in &textures {
-        match image::image_dimensions(tex) {
-            Ok((w, h)) => {
+        match texture_dimensions(tex) {
+            Some((w, h)) => {
                 if w > MAX_TEXTURE_PX || h > MAX_TEXTURE_PX {
                     too_big += 1;
                 }
             }
-            Err(_) => missing += 1,
+            None => missing += 1,
         }
     }
     if missing > 0 {
@@ -179,6 +179,18 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
     });
 
     checks
+}
+
+/// Dimensions d'une texture, en résolvant les schémas `asset://` / `bundle://`
+/// (lecture mémoire) ou un chemin disque (lecture de l'en-tête seule). `None` si introuvable.
+fn texture_dimensions(path: &str) -> Option<(u32, u32)> {
+    if path.starts_with(crate::assets::ASSET_SCHEME) || path.starts_with(crate::assets::SCHEME) {
+        let bytes = crate::assets::read_bytes(path)?;
+        return image::load_from_memory(&bytes)
+            .ok()
+            .map(|img| (img.width(), img.height()));
+    }
+    image::image_dimensions(path).ok()
 }
 
 /// Compte des vérifications par statut : (ok, warn, fail).

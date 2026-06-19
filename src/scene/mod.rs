@@ -131,6 +131,10 @@ pub struct SceneObject {
     /// Intensité d'émission (0 = aucune ; l'objet « brille » de sa propre couleur).
     #[serde(default)]
     pub emissive: f32,
+    /// Zone de déclenchement : en Play, expose `obj.triggered = true` au script quand
+    /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
+    #[serde(default)]
+    pub trigger: bool,
 }
 
 fn default_roughness() -> f32 {
@@ -352,6 +356,7 @@ impl Scene {
                     metallic: 0.0,
                     roughness: 0.6,
                     emissive: 0.0,
+                    trigger: false,
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -369,6 +374,7 @@ impl Scene {
                     metallic: 0.0,
                     roughness: 0.6,
                     emissive: 0.0,
+                    trigger: false,
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -386,6 +392,7 @@ impl Scene {
                     metallic: 0.0,
                     roughness: 0.6,
                     emissive: 0.0,
+                    trigger: false,
                 },
             ],
         }
@@ -428,6 +435,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     metallic: 0.0,
                     roughness: 0.6,
                     emissive: 0.0,
+                    trigger: false,
                 },
                 SceneObject {
                     name: "Joueur".into(),
@@ -444,6 +452,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     metallic: 0.0,
                     roughness: 0.6,
                     emissive: 0.0,
+                    trigger: false,
                 },
                 SceneObject {
                     name: "Bouton couleur".into(),
@@ -461,6 +470,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     metallic: 0.0,
                     roughness: 0.6,
                     emissive: 0.0,
+                    trigger: false,
                 },
             ],
         }
@@ -498,6 +508,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 metallic: 0.0,
                 roughness: 0.6,
                 emissive: 0.0,
+                trigger: false,
             })
             .collect();
         if objects.is_empty() {

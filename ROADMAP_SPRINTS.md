@@ -533,7 +533,8 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] **Objet 3D** : Cube, Sphère, Capsule, Cylindre, Plan, **Terrain**.
 - [ ] **Lumière** : Directionnelle, Point Light, **Spot Light**, Ambient Light.
 - [ ] **Caméra** : Caméra principale, **Caméra mobile**.
-- [ ] **Physique** : Rigidbody, Collider Box, Collider Sphere, **Trigger Zone**.
+- [x] Trigger Zone : SceneObject.trigger expose obj.triggered au script quand le joueur entre dans l'AABB.
+- [ ] **Physique** : Collider Box/Sphere explicites (auto depuis l'AABB pour l'instant).
 - [ ] **Audio** : Source audio, **Listener audio**.
 - [ ] **UI** : Texte, Bouton, **Joystick mobile**, **Bouton tactile**, **Zone tactile**, Barre de vie.
 - **Fichiers** : `src/scene/mod.rs`, `src/gfx/mesh.rs`, `src/editor/mod.rs`, `src/runtime/*`.

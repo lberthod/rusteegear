@@ -10,6 +10,7 @@ script peut lire/écrire ces variables globales :
 - obj.sx, obj.sy, obj.sz : échelle
 - obj.r, obj.g, obj.b : couleur (0..1)
 - obj.tapped : booléen, vrai la frame où l'objet est touché
+- obj.triggered : booléen, vrai quand le joueur entre dans la zone de l'objet
 - dt : temps écoulé (s), time : temps total (s)
 - input.jx, input.jy : axes du joystick (-1..1)
 - input.btn.NOM : booléen d'un bouton tactile
@@ -33,7 +34,7 @@ autour, pas de Markdown). Schéma :
 \"physics\":\"none|static|dynamic\",\"tappable\":bool}],\
 \"joystick\":bool,\"buttons\":[str],\"camera_follow\":bool}
 Variables Lua disponibles : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, obj.r/g/b, \
-obj.tapped, dt, time, input.jx, input.jy, input.btn.NOM.
+obj.tapped, obj.triggered, dt, time, input.jx, input.jy, input.btn.NOM.
 Mets un sol (mesh plane, physics static) si pertinent. Réponds UNIQUEMENT le JSON.";
 
 /// Appel bas-niveau à l'API chat de DeepSeek. Retourne le contenu texte du message.

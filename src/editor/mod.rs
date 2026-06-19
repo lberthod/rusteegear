@@ -1735,6 +1735,10 @@ fn build_ui(
                             .on_hover_text(
                                 "En Play, un tap dessus expose obj.tapped au script (ex. couleur)",
                             );
+                        ui.checkbox(&mut obj.trigger, "🎯 Zone de déclenchement")
+                            .on_hover_text(
+                                "En Play, expose obj.triggered au script quand le joueur entre dans sa zone",
+                            );
                         ui.separator();
                         ui.collapsing("Matériau", |ui| {
                             ui.horizontal(|ui| {
@@ -1781,7 +1785,7 @@ fn build_ui(
                         ui.collapsing("Script (Lua)", |ui| {
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
-                                 obj.r/g/b, obj.tapped, dt, time, input.jx/jy, input.btn.<nom>",
+                                 obj.r/g/b, obj.tapped, obj.triggered, dt, time, input.jx/jy, input.btn.<nom>",
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut obj.script)
