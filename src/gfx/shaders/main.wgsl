@@ -6,11 +6,18 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
+struct PointLight {
+    pos_range: vec4<f32>, // xyz = position, w = portée
+    color_int: vec4<f32>, // rgb = couleur, w = intensité
+};
+
 struct Light {
     dir: vec4<f32>,
     color: vec4<f32>,
     ambient: vec4<f32>,    // x = intensité ambiante
     light_vp: mat4x4<f32>, // view-projection de la lumière (shadow map)
+    num_points: vec4<f32>, // x = nombre de lumières ponctuelles
+    points: array<PointLight, 8>,
 };
 @group(0) @binding(1) var<uniform> light: Light;
 
@@ -110,6 +117,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let spec = pow(max(dot(n, h), 0.0), spec_power) * diffuse * shadow * (1.0 - roughness);
     let spec_col = mix(vec3<f32>(1.0), albedo, metallic);
     color = color + spec * spec_col * light.color.rgb;
+
+    // Lumières ponctuelles : diffus + spéculaire avec atténuation quadratique douce.
+    let count = i32(light.num_points.x);
+    for (var p = 0; p < count; p = p + 1) {
+        let pl = light.points[p];
+        let to_light = pl.pos_range.xyz - in.world_pos;
+        let dist = length(to_light);
+        let ld = to_light / max(dist, 0.001);
+        // atténuation : 1 au centre, 0 au-delà de la portée (clamp lissé).
+        let att = clamp(1.0 - dist / pl.pos_range.w, 0.0, 1.0);
+        let atten = att * att * pl.color_int.w;
+        let d = max(dot(n, ld), 0.0);
+        let ph = normalize(ld + v);
+        let s = pow(max(dot(n, ph), 0.0), spec_power) * d * (1.0 - roughness);
+        color = color + pl.color_int.rgb * atten * (albedo * kd * d + spec_col * s);
+    }
 
     // Émission (l'objet brille de sa propre couleur) + surbrillance de sélection.
     color = color + albedo * emissive;

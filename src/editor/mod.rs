@@ -645,7 +645,17 @@ fn menu_ajouter(ui: &mut egui::Ui, scene: &mut Scene, actions: &mut UiActions) {
         });
         ui.separator();
         // Catégories prévues (à venir) : grisées pour montrer la feuille de route.
-        ui.add_enabled(false, egui::Button::new("💡  Lumière  (à venir)"));
+        if ui
+            .add_enabled(
+                scene.point_lights.len() < crate::scene::MAX_POINT_LIGHTS,
+                egui::Button::new("💡  Lumière (point)"),
+            )
+            .on_hover_text("Ajoute une lumière ponctuelle (éditable dans l'inspecteur)")
+            .clicked()
+        {
+            scene.point_lights.push(crate::scene::PointLight::default());
+            ui.close();
+        }
         ui.add_enabled(false, egui::Button::new("🎥  Caméra  (à venir)"));
     });
 }
@@ -1389,6 +1399,49 @@ fn build_ui(
                         ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.0));
                     });
                 });
+                if !scene.point_lights.is_empty() {
+                    ui.collapsing(
+                        format!("💡 Lumières ponctuelles ({})", scene.point_lights.len()),
+                        |ui| {
+                            let mut remove = None;
+                            for (idx, pl) in scene.point_lights.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("#{idx}"));
+                                    ui.color_edit_button_rgb(&mut pl.color);
+                                    if ui.small_button("🗑").clicked() {
+                                        remove = Some(idx);
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::DragValue::new(&mut pl.position[0])
+                                            .speed(0.05)
+                                            .prefix("x "),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut pl.position[1])
+                                            .speed(0.05)
+                                            .prefix("y "),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut pl.position[2])
+                                            .speed(0.05)
+                                            .prefix("z "),
+                                    );
+                                });
+                                ui.add(
+                                    egui::Slider::new(&mut pl.intensity, 0.0..=5.0)
+                                        .text("intensité"),
+                                );
+                                ui.add(egui::Slider::new(&mut pl.range, 0.5..=30.0).text("portée"));
+                                ui.separator();
+                            }
+                            if let Some(i) = remove {
+                                scene.point_lights.remove(i);
+                            }
+                        },
+                    );
+                }
                 ui.separator();
                 match *selection {
                     Some(i) if i < scene.objects.len() => {

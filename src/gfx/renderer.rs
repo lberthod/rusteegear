@@ -57,6 +57,14 @@ struct ModelUniform {
     color: [f32; 4],  // teinte (albédo) de l'objet
 }
 
+/// Une lumière ponctuelle côté GPU (std140 : deux vec4).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct PointLightU {
+    pos_range: [f32; 4], // xyz = position, w = portée
+    color_int: [f32; 4], // rgb = couleur, w = intensité
+}
+
 /// Éclairage de la scène (groupe 0, binding 1).
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -65,6 +73,8 @@ struct SceneUniform {
     light_color: [f32; 4],
     ambient: [f32; 4], // x = intensité ambiante
     light_vp: [[f32; 4]; 4],
+    num_points: [f32; 4], // x = nombre de lumières ponctuelles actives
+    points: [PointLightU; crate::scene::MAX_POINT_LIGHTS],
 }
 
 const SHADOW_SIZE: u32 = 1024;
@@ -625,11 +635,31 @@ impl Renderer {
         let view = glam::Mat4::look_at_rh(dir * 20.0, glam::Vec3::ZERO, up);
         let proj = glam::Mat4::orthographic_rh(-12.0, 12.0, -12.0, 12.0, 0.1, 60.0);
         let light_vp = proj * view;
+        let mut points = [PointLightU {
+            pos_range: [0.0; 4],
+            color_int: [0.0; 4],
+        }; crate::scene::MAX_POINT_LIGHTS];
+        let count = app
+            .scene
+            .point_lights
+            .len()
+            .min(crate::scene::MAX_POINT_LIGHTS);
+        for (slot, pl) in points.iter_mut().zip(&app.scene.point_lights).take(count) {
+            slot.pos_range = [
+                pl.position[0],
+                pl.position[1],
+                pl.position[2],
+                pl.range.max(0.01),
+            ];
+            slot.color_int = [pl.color[0], pl.color[1], pl.color[2], pl.intensity];
+        }
         let scene_uniform = SceneUniform {
             light_dir: [l.dir[0], l.dir[1], l.dir[2], 0.0],
             light_color: [l.color[0], l.color[1], l.color[2], 0.0],
             ambient: [l.ambient, 0.0, 0.0, 0.0],
             light_vp: light_vp.to_cols_array_2d(),
+            num_points: [count as f32, 0.0, 0.0, 0.0],
+            points,
         };
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));

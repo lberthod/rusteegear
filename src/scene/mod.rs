@@ -156,6 +156,9 @@ pub struct Scene {
     /// Éclairage de la scène (direction, couleur, ambiante).
     #[serde(default)]
     pub light: Light,
+    /// Lumières ponctuelles (position + couleur + intensité + portée).
+    #[serde(default)]
+    pub point_lights: Vec<PointLight>,
     /// Contrôles tactiles mobiles (joystick + boutons), exposés aux scripts Lua.
     #[serde(default)]
     pub mobile: MobileControls,
@@ -238,6 +241,29 @@ impl Default for Light {
     }
 }
 
+/// Lumière ponctuelle (omnidirectionnelle) avec atténuation par la distance.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct PointLight {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: f32,
+}
+
+impl Default for PointLight {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 2.0, 0.0],
+            color: [1.0, 0.9, 0.7],
+            intensity: 1.0,
+            range: 8.0,
+        }
+    }
+}
+
+/// Nombre maximal de lumières ponctuelles prises en compte par le shader.
+pub const MAX_POINT_LIGHTS: usize = 8;
+
 impl Scene {
     /// AABB local d'un objet (primitive codée ou mesh importé).
     pub fn local_aabb(&self, mesh: MeshKind) -> (Vec3, Vec3) {
@@ -293,6 +319,7 @@ impl Scene {
             imported: Vec::new(),
             groups: Vec::new(),
             light: Light::default(),
+            point_lights: Vec::new(),
             mobile: MobileControls::default(),
             camera_follow: false,
             objects: vec![
@@ -364,6 +391,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             imported: Vec::new(),
             groups: Vec::new(),
             light: Light::default(),
+            point_lights: Vec::new(),
             mobile: MobileControls {
                 joystick: true,
                 buttons: vec!["Saut".into()],
@@ -466,6 +494,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             imported: Vec::new(),
             groups: Vec::new(),
             light: Light::default(),
+            point_lights: Vec::new(),
             mobile: MobileControls {
                 joystick: spec.joystick,
                 buttons: spec.buttons,
