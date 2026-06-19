@@ -50,9 +50,27 @@ Le panneau pilote `packaging/build_*.sh` via l'environnement :
 `OUTPUT_NAME`, `BUNDLE_ID`, `APP_VERSION`, `BUILD_NUMBER`, `PLAYER_BUILD=1`,
 `INSTALL_DEVICE`, et pour iOS `TEAM_ID` / `IDENTITY` / `PROFILE`.
 
-> **macOS / Android** : le bundle id et la version *internes* proviennent encore de
-> `Cargo.toml` (cargo-bundle / cargo-apk les y lisent) ; seul le **nom de fichier** est
-> appliqué. L'override complet (patch du `.app` / manifest) reste à faire.
+> **Android (Sprint 36)** : `build_apk.sh` injecte désormais `BUNDLE_ID` (package),
+> `APP_NAME` (label) et `APP_VERSION` (versionName) dans `Cargo.toml` avant le build,
+> puis **restaure** le fichier (trap). L'identité de l'APK reflète donc le panneau Export.
+> **macOS** : seul le nom de fichier est appliqué ; le patch du `.app` reste à faire.
+
+## Validation sur appareil (Android)
+
+Checklist de la boucle complète, à exécuter une fois sur un appareil réel :
+1. Brancher le téléphone (USB, débogage activé) → `adb devices` le liste.
+2. Panneau Export → Android, cocher *Installer sur l'appareil* → Build APK.
+3. Au lancement : vérifier le **joystick** + **boutons** (la démo mobile bouge le personnage).
+4. Mettre l'app en arrière-plan puis revenir : le rendu **reprend** sans crash.
+5. `adb logcat | grep RusteeGear` pour les logs natifs en cas de souci.
+
+## Distribution signée (à fournir en *GitHub Secrets*)
+
+- **Android** : `release.keystore` est déjà signé (clé de dev) ; pour le Play Store,
+  remplacer par une clé d'upload et stocker `KEYSTORE_BASE64` / mots de passe en secrets.
+- **iOS** : certificat `.p12` + profil `.mobileprovision` en secrets, puis activer un job
+  iOS dans `release.yml` (non activé : nécessite un compte développeur Apple).
+- **macOS** : notarisation (`xcrun notarytool`) avec un Apple ID en secrets.
 
 ## CI de release
 

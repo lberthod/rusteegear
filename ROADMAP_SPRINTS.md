@@ -456,7 +456,11 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ### Sprint 36 — Distribution signée & validation device ⬜
 **Objectif** : finir la chaîne de livraison (reprise du Sprint 31) et valider la boucle sur appareil réel.
-- [ ] Override d'identité **Android** (bundle id/version/icône/splash) injecté dans `cargo-apk`.
+- [x] Override d'identité Android : build_apk.sh injecte BUNDLE_ID/APP_NAME/APP_VERSION
+      dans Cargo.toml (puis restaure) ; release.yml fixe le versionName depuis le tag v*.
+- [x] Validation device : checklist documentée (packaging/EXPORT.md).
+- [ ] IPA signé en CI + notarisation macOS : dépendent de secrets/comptes (documentés, non activés).
+- **Sprint 36 : cœur livré (identité Android + validation) ; signature stores = secrets à fournir.**
 - [ ] **IPA signé en CI** (certificat + profil en *GitHub Secrets*), job iOS dans `release.yml`.
 - [ ] Notarisation macOS ; tag `v*` → 3 artefacts signés attachés à la Release, `build_number` cohérent.
 - [ ] **Validation device** : checklist + procédure (joystick → script → APK installé → resume arrière-plan).

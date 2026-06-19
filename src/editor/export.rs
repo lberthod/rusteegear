@@ -586,6 +586,7 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             .current_dir(PROJECT_ROOT)
             .env("PATH", augmented_path())
             .env("OUTPUT_NAME", cfg.safe_name())
+            .env("APP_NAME", &cfg.app_name)
             .env("BUNDLE_ID", &cfg.bundle_id)
             .env("APP_VERSION", &cfg.version)
             .env("BUILD_NUMBER", cfg.build_number.to_string())

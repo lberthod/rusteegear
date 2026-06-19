@@ -17,6 +17,27 @@ if [ ! -f "$KS" ]; then
         -storepass android -keypass android -dname "CN=RusteeGear, O=Berthod, C=CH"
 fi
 
+# --- Override d'identité Android (Sprint 36) ---
+# cargo-apk lit l'identité dans Cargo.toml ; on l'y injecte depuis les variables
+# fournies par le panneau Export, puis on restaure le fichier d'origine (toujours,
+# même en cas d'erreur) via un trap.
+CARGO_BAK="$(mktemp)"
+cp Cargo.toml "$CARGO_BAK"
+restore_cargo() { cp "$CARGO_BAK" Cargo.toml; rm -f "$CARGO_BAK"; }
+trap restore_cargo EXIT
+
+if [ -n "${BUNDLE_ID:-}" ]; then
+    echo "▶ Identité : package=$BUNDLE_ID"
+    perl -0pi -e "s/^package = \"[^\"]*\"/package = \"$BUNDLE_ID\"/m" Cargo.toml
+fi
+if [ -n "${APP_NAME:-}" ]; then
+    perl -0pi -e "s/^label = \"[^\"]*\"/label = \"$APP_NAME\"/m" Cargo.toml
+fi
+if [ -n "${APP_VERSION:-}" ]; then
+    # version du package = versionName de l'APK (première occurrence, sous [package]).
+    perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$APP_VERSION\"/m" Cargo.toml
+fi
+
 echo "▶ Build APK (release)…"
 # --lib : l'app Android est le cdylib (android_main). Sans ça, cargo-apk voit aussi
 # le bin desktop (main.rs) et panique (« Bin is not compatible with Cdylib »).

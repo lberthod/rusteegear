@@ -44,7 +44,11 @@ jobs:
       - name: Build .apk
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
-        run: ./packaging/build_apk.sh
+          # Le tag v* fixe le versionName de l'APK (override d'identité, Sprint 36).
+          APP_VERSION: ${{ github.ref_name }}
+        run: |
+          export APP_VERSION="${APP_VERSION#v}"   # v1.2.0 -> 1.2.0
+          ./packaging/build_apk.sh
       - name: Attacher à la Release
         uses: softprops/action-gh-release@v2
         with:
