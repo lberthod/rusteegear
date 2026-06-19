@@ -86,8 +86,8 @@ pub struct UiActions {
     pub play_audio: Option<String>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
-    /// Génération IA d'un script : `(index objet, consigne, clé API)`.
-    pub ai_generate: Option<(usize, String, String)>,
+    /// Génération IA d'un script : `(index objet, consigne, clé API, modèle)`.
+    pub ai_generate: Option<(usize, String, String, String)>,
 }
 
 impl Editor {
@@ -965,6 +965,31 @@ fn settings_window(
             } else {
                 "✅ Clé enregistrée"
             });
+            ui.add_space(6.0);
+            ui.label("Modèle");
+            ui.horizontal(|ui| {
+                for m in ["deepseek-chat", "deepseek-reasoner"] {
+                    if ui
+                        .selectable_label(settings.deepseek_model == m, m)
+                        .clicked()
+                    {
+                        settings.deepseek_model = m.to_string();
+                        settings.save();
+                    }
+                }
+            });
+            let resp_m = ui.add(
+                egui::TextEdit::singleline(&mut settings.deepseek_model)
+                    .hint_text("id du modèle (ex. deepseek-chat)")
+                    .desired_width(280.0),
+            );
+            if resp_m.lost_focus() || resp_m.changed() {
+                settings.save();
+            }
+            ui.small(
+                "« deepseek-chat » pointe vers la dernière version. Saisis un id précis au besoin.",
+            );
+            ui.add_space(6.0);
             ui.hyperlink_to(
                 "Obtenir une clé DeepSeek",
                 "https://platform.deepseek.com/api_keys",
@@ -1393,6 +1418,7 @@ fn build_ui(
                                         i,
                                         ai_prompt.clone(),
                                         settings.deepseek_api_key.clone(),
+                                        settings.deepseek_model.clone(),
                                     ));
                                 }
                                 if ui
@@ -1412,8 +1438,12 @@ fn build_ui(
                                          Script actuel :\n{}",
                                         obj.script
                                     );
-                                    actions.ai_generate =
-                                        Some((i, prompt, settings.deepseek_api_key.clone()));
+                                    actions.ai_generate = Some((
+                                        i,
+                                        prompt,
+                                        settings.deepseek_api_key.clone(),
+                                        settings.deepseek_model.clone(),
+                                    ));
                                 }
                                 if status.ai_busy {
                                     ui.spinner();

@@ -5,11 +5,27 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Clé API DeepSeek (laisser vide pour désactiver la génération IA).
     #[serde(default)]
     pub deepseek_api_key: String,
+    /// Modèle DeepSeek à utiliser (`deepseek-chat`, `deepseek-reasoner`, ou un id précis).
+    #[serde(default = "default_model")]
+    pub deepseek_model: String,
+}
+
+fn default_model() -> String {
+    "deepseek-chat".to_string()
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            deepseek_api_key: String::new(),
+            deepseek_model: default_model(),
+        }
+    }
 }
 
 impl Settings {

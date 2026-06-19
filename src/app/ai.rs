@@ -18,12 +18,17 @@ Réponds UNIQUEMENT avec le code Lua, sans explication ni balises Markdown.";
 /// Appelle DeepSeek pour produire un script Lua à partir d'une consigne en langage
 /// naturel. Bloquant : à lancer dans un thread de fond.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-pub fn generate_lua(api_key: &str, prompt: &str) -> Result<String, String> {
+pub fn generate_lua(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
     if api_key.trim().is_empty() {
         return Err("Clé API DeepSeek manquante (Outils → Paramètres)".into());
     }
+    let model = if model.trim().is_empty() {
+        "deepseek-chat"
+    } else {
+        model.trim()
+    };
     let body = serde_json::json!({
-        "model": "deepseek-chat",
+        "model": model,
         "temperature": 0.2,
         "stream": false,
         "messages": [
@@ -50,7 +55,7 @@ pub fn generate_lua(api_key: &str, prompt: &str) -> Result<String, String> {
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn generate_lua(_api_key: &str, _prompt: &str) -> Result<String, String> {
+pub fn generate_lua(_api_key: &str, _model: &str, _prompt: &str) -> Result<String, String> {
     Err("Génération IA indisponible sur mobile".into())
 }
 

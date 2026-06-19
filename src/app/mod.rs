@@ -224,14 +224,20 @@ impl AppState {
     }
 
     /// Lance une génération de script Lua par IA (thread de fond) pour l'objet `idx`.
-    pub fn request_ai_script(&mut self, idx: usize, prompt: String, api_key: String) {
+    pub fn request_ai_script(
+        &mut self,
+        idx: usize,
+        prompt: String,
+        api_key: String,
+        model: String,
+    ) {
         if self.ai_busy {
             return;
         }
         self.ai_busy = true;
         let tx = self.ai_tx.clone();
         std::thread::spawn(move || {
-            let result = ai::generate_lua(&api_key, &prompt);
+            let result = ai::generate_lua(&api_key, &model, &prompt);
             let _ = tx.send((idx, result));
         });
     }
