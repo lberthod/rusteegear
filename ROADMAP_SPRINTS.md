@@ -423,7 +423,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 ### Sprint 34 — Scène étendue : lumières & caméras comme objets ⬜
 **Objectif** : sortir du modèle « une lumière globale » vers une vraie hiérarchie d'entités.
 - [ ] `SceneObject` typé (enum `kind`: Mesh / Light(point|dir|spot) / Camera) ou composants.
-- [ ] Plusieurs lumières (tableau d'uniforms, limite mobile configurable) ; gizmo/icône dans la vue.
+- [x] Plusieurs lumières ponctuelles (Scene.point_lights, max 8) : uniform std140 + shader,
+      marqueurs en croix colorés dans l'éditeur, ajout via menu + édition inspecteur.
+- [ ] Entités typées (Light/Camera comme objets) + caméra de jeu + migration JSON → reporté.
 - [ ] Caméra de jeu comme objet : la vue Play utilise la caméra active (pas l'orbite éditeur).
 - [ ] Migration JSON rétro-compatible (anciennes scènes : lumière globale → objet lumière).
 - **Fichiers** : `src/scene/mod.rs`, `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/editor/mod.rs`.

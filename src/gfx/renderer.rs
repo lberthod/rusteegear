@@ -480,8 +480,9 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation).
-        let gizmo_capacity = 3 * RING_SEGMENTS * 2;
+        // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
+        // + un marqueur 3 axes (6 sommets) par lumière ponctuelle.
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 6;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
             size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
@@ -847,46 +848,66 @@ impl Renderer {
         app.camera.aspect = dw / dh.max(1.0);
         self.write_uniforms(app);
 
-        // Préparer le gizmo de l'objet sélectionné (jamais en mode player ni en aperçu mobile).
+        // Préparer les lignes du gizmo + marqueurs de lumières (jamais en player/aperçu mobile).
         let gizmo_count = if app.player || app.device_preview {
             0
-        } else if let Some(sel) = app.selection {
-            let o = app.scene.objects[sel].transform.position;
-            let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
+        } else {
             let mut verts: Vec<GizmoVertex> = Vec::new();
-            match app.gizmo_mode {
-                // Déplacer / Redimensionner : 3 segments d'axe.
-                GizmoMode::Translate | GizmoMode::Scale => {
-                    for (axis, color) in colors.iter().enumerate() {
-                        let end = o + axis_dir(axis) * GIZMO_LEN;
-                        verts.push(GizmoVertex {
-                            position: o.to_array(),
-                            color: *color,
-                        });
-                        verts.push(GizmoVertex {
-                            position: end.to_array(),
-                            color: *color,
-                        });
-                    }
+            // Marqueur en croix 3D à chaque lumière ponctuelle, teinté par sa couleur.
+            for pl in &app.scene.point_lights {
+                let c = pl.position;
+                let col = pl.color;
+                let s = 0.3;
+                for axis in 0..3 {
+                    let d = axis_dir(axis) * s;
+                    verts.push(GizmoVertex {
+                        position: [c[0] - d.x, c[1] - d.y, c[2] - d.z],
+                        color: col,
+                    });
+                    verts.push(GizmoVertex {
+                        position: [c[0] + d.x, c[1] + d.y, c[2] + d.z],
+                        color: col,
+                    });
                 }
-                // Tourner : 3 anneaux (un par axe).
-                GizmoMode::Rotate => {
-                    const N: usize = RING_SEGMENTS;
-                    for (axis, color) in colors.iter().enumerate() {
-                        let (u, w) = axis_basis(axis_dir(axis));
-                        for j in 0..N {
-                            let a0 = std::f32::consts::TAU * j as f32 / N as f32;
-                            let a1 = std::f32::consts::TAU * (j + 1) as f32 / N as f32;
-                            let p0 = o + (u * a0.cos() + w * a0.sin()) * GIZMO_LEN;
-                            let p1 = o + (u * a1.cos() + w * a1.sin()) * GIZMO_LEN;
+            }
+            // Gizmo de manipulation de l'objet sélectionné.
+            if let Some(sel) = app.selection {
+                let o = app.scene.objects[sel].transform.position;
+                let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
+                match app.gizmo_mode {
+                    // Déplacer / Redimensionner : 3 segments d'axe.
+                    GizmoMode::Translate | GizmoMode::Scale => {
+                        for (axis, color) in colors.iter().enumerate() {
+                            let end = o + axis_dir(axis) * GIZMO_LEN;
                             verts.push(GizmoVertex {
-                                position: p0.to_array(),
+                                position: o.to_array(),
                                 color: *color,
                             });
                             verts.push(GizmoVertex {
-                                position: p1.to_array(),
+                                position: end.to_array(),
                                 color: *color,
                             });
+                        }
+                    }
+                    // Tourner : 3 anneaux (un par axe).
+                    GizmoMode::Rotate => {
+                        const N: usize = RING_SEGMENTS;
+                        for (axis, color) in colors.iter().enumerate() {
+                            let (u, w) = axis_basis(axis_dir(axis));
+                            for j in 0..N {
+                                let a0 = std::f32::consts::TAU * j as f32 / N as f32;
+                                let a1 = std::f32::consts::TAU * (j + 1) as f32 / N as f32;
+                                let p0 = o + (u * a0.cos() + w * a0.sin()) * GIZMO_LEN;
+                                let p1 = o + (u * a1.cos() + w * a1.sin()) * GIZMO_LEN;
+                                verts.push(GizmoVertex {
+                                    position: p0.to_array(),
+                                    color: *color,
+                                });
+                                verts.push(GizmoVertex {
+                                    position: p1.to_array(),
+                                    color: *color,
+                                });
+                            }
                         }
                     }
                 }
@@ -894,8 +915,6 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.gizmo_vbuf, 0, bytemuck::cast_slice(&verts));
             verts.len() as u32
-        } else {
-            0
         };
 
         let view = frame
