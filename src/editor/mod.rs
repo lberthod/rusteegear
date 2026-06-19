@@ -1826,6 +1826,10 @@ fn build_ui(
                             };
                             ui.label(label);
                             ui.checkbox(&mut obj.audio_autoplay, "Jouer au lancement (Play)");
+                            ui.checkbox(&mut obj.audio_spatial, "🔊 Spatialisé (volume selon distance)")
+                                .on_hover_text(
+                                    "Le volume au lancement décroît avec la distance à la caméra",
+                                );
                         });
                         ui.separator();
                         ui.collapsing("Script (Lua)", |ui| {

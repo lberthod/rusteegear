@@ -135,6 +135,9 @@ pub struct SceneObject {
     /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
     #[serde(default)]
     pub trigger: bool,
+    /// Son spatialisé : le volume au lancement décroît avec la distance à la caméra.
+    #[serde(default)]
+    pub audio_spatial: bool,
 }
 
 fn default_roughness() -> f32 {
@@ -369,6 +372,7 @@ impl Scene {
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
+                    audio_spatial: false,
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -387,6 +391,7 @@ impl Scene {
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
+                    audio_spatial: false,
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -405,6 +410,7 @@ impl Scene {
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
+                    audio_spatial: false,
                 },
             ],
         }
@@ -448,6 +454,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
+                    audio_spatial: false,
                 },
                 SceneObject {
                     name: "Joueur".into(),
@@ -465,6 +472,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
+                    audio_spatial: false,
                 },
                 SceneObject {
                     name: "Bouton couleur".into(),
@@ -483,6 +491,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
+                    audio_spatial: false,
                 },
             ],
         }
@@ -521,6 +530,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 roughness: 0.6,
                 emissive: 0.0,
                 trigger: false,
+                audio_spatial: false,
             })
             .collect();
         if objects.is_empty() {

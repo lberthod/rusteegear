@@ -614,6 +614,7 @@ impl AppState {
             roughness: 0.6,
             emissive: 0.0,
             trigger: false,
+            audio_spatial: false,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -1167,16 +1168,25 @@ impl AppState {
         if self.playing && !self.was_playing {
             self.play_snapshot = self.scene.objects.clone();
             self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
-            // sons en autoplay
-            let clips: Vec<String> = self
+            // sons en autoplay (gain atténué par la distance à la caméra si spatialisé)
+            let listener = self.camera.target;
+            let clips: Vec<(String, f32)> = self
                 .scene
                 .objects
                 .iter()
                 .filter(|o| o.audio_autoplay && !o.audio_clip.is_empty())
-                .map(|o| o.audio_clip.clone())
+                .map(|o| {
+                    let gain = if o.audio_spatial {
+                        let dist = (o.transform.position - listener).length();
+                        (1.0 - dist / 20.0).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    (o.audio_clip.clone(), gain)
+                })
                 .collect();
-            for c in clips {
-                self.audio.play(&c);
+            for (c, gain) in clips {
+                self.audio.play_gain(&c, gain);
             }
             // Caméra de suivi : se cale d'emblée sur le joueur (pas de panoramique initial).
             if self.scene.camera_follow
@@ -1403,6 +1413,7 @@ impl AppState {
             roughness: 0.6,
             emissive: 0.0,
             trigger: false,
+            audio_spatial: false,
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -1741,6 +1752,7 @@ mod tests {
                 roughness: 0.6,
                 emissive: 0.0,
                 trigger: false,
+                audio_spatial: false,
             });
         }
         app.selected = vec![0, 1, 2];
