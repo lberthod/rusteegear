@@ -18,6 +18,8 @@ pub struct Editor {
     export: export::ExportPanel,
     /// Texte de filtre de la hiérarchie (recherche par nom).
     hier_filter: String,
+    /// Nom saisi pour créer un nouveau groupe.
+    hier_new_group: String,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -67,6 +69,7 @@ impl Editor {
             renderer,
             export: export::ExportPanel::new(),
             hier_filter: String::new(),
+            hier_new_group: String::new(),
         }
     }
 
@@ -90,6 +93,7 @@ impl Editor {
 
         let export = &mut self.export;
         let hier_filter = &mut self.hier_filter;
+        let hier_new_group = &mut self.hier_new_group;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -100,6 +104,7 @@ impl Editor {
                 &status,
                 export,
                 hier_filter,
+                hier_new_group,
                 &mut actions,
             );
         });
@@ -188,13 +193,14 @@ fn object_badges(obj: &crate::scene::SceneObject) -> String {
     b
 }
 
-/// Hiérarchie ergonomique : recherche, regroupement par type (en-têtes repliables
-/// avec compteur), icônes et badges (physique/script/audio).
+/// Hiérarchie ergonomique : recherche, **groupes définis par l'utilisateur** avec
+/// glisser-déposer des objets, icônes et badges (physique/script/audio).
 fn hierarchy_panel(
     ui: &mut egui::Ui,
-    scene: &Scene,
+    scene: &mut Scene,
     selection: &mut Option<usize>,
     filter: &mut String,
+    new_group: &mut String,
 ) {
     ui.horizontal(|ui| {
         ui.heading("Hiérarchie");
@@ -205,55 +211,109 @@ fn hierarchy_panel(
             .hint_text("🔎 filtrer…")
             .desired_width(f32::INFINITY),
     );
+    // Création d'un groupe.
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(new_group)
+                .hint_text("nouveau groupe")
+                .desired_width(130.0),
+        );
+        if ui.button("➕ Groupe").clicked() {
+            let n = new_group.trim().to_string();
+            if !n.is_empty() && !scene.groups.contains(&n) {
+                scene.groups.push(n);
+            }
+            new_group.clear();
+        }
+    });
     ui.separator();
 
     let needle = filter.trim().to_lowercase();
-    let matches = |o: &crate::scene::SceneObject| {
-        needle.is_empty() || o.name.to_lowercase().contains(&needle)
-    };
+    // Sections : groupes utilisateur (ordre conservé) puis « Sans groupe ».
+    let mut sections: Vec<Option<String>> = scene.groups.iter().cloned().map(Some).collect();
+    sections.push(None);
+
+    // Mutations différées (appliquées après l'UI pour éviter les conflits d'emprunt).
+    let mut moves: Vec<(usize, String)> = Vec::new();
+    let mut delete_group: Option<String> = None;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let mut shown = 0;
-            // Une section repliable par catégorie de mesh (ordre stable).
-            for (cat, icon) in [
-                ("Cubes", "🧊"),
-                ("Sphères", "⚪"),
-                ("Plans", "▦"),
-                ("Modèles", "📦"),
-            ] {
+            for sec in &sections {
+                let gname = sec.clone().unwrap_or_default();
+                let title = match sec {
+                    Some(g) => format!("📁 {g}"),
+                    None => "🗂 Sans groupe".to_string(),
+                };
                 let items: Vec<(usize, &crate::scene::SceneObject)> = scene
                     .objects
                     .iter()
                     .enumerate()
-                    .filter(|(_, o)| mesh_category(o.mesh).0 == cat && matches(o))
+                    .filter(|(_, o)| {
+                        o.group == gname
+                            && (needle.is_empty() || o.name.to_lowercase().contains(&needle))
+                    })
                     .collect();
-                if items.is_empty() {
-                    continue;
-                }
-                shown += items.len();
-                egui::CollapsingHeader::new(format!("{icon} {cat}  ({})", items.len()))
-                    .default_open(true)
-                    .id_salt(cat)
-                    .show(ui, |ui| {
-                        for (i, obj) in items {
-                            let selected = *selection == Some(i);
-                            let label = format!("{}{}", obj.name, object_badges(obj));
-                            if ui.selectable_label(selected, label).clicked() {
-                                *selection = Some(i);
-                            }
+
+                // La zone de dépôt couvre tout le groupe : déposer un objet l'y assigne.
+                let (_, payload) = ui.dnd_drop_zone::<usize, ()>(egui::Frame::default(), |ui| {
+                    ui.horizontal(|ui| {
+                        egui::CollapsingHeader::new(format!("{title}  ({})", items.len()))
+                            .default_open(true)
+                            .id_salt(("grp", &gname))
+                            .show(ui, |ui| {
+                                for (i, obj) in &items {
+                                    let i = *i;
+                                    let selected = *selection == Some(i);
+                                    let label = format!(
+                                        "{} {}{}",
+                                        mesh_category(obj.mesh).1,
+                                        obj.name,
+                                        object_badges(obj)
+                                    );
+                                    let resp = ui
+                                        .dnd_drag_source(egui::Id::new(("obj", i)), i, |ui| {
+                                            let _ = ui.selectable_label(selected, label);
+                                        })
+                                        .response;
+                                    if resp.clicked() {
+                                        *selection = Some(i);
+                                    }
+                                }
+                                if items.is_empty() {
+                                    ui.weak("  (déposer ici)");
+                                }
+                            });
+                        // Bouton de suppression pour les groupes utilisateur.
+                        if sec.is_some() && ui.small_button("🗑").clicked() {
+                            delete_group = Some(gname.clone());
                         }
                     });
-            }
-            if shown == 0 {
-                ui.weak(if scene.objects.is_empty() {
-                    "(scène vide)"
-                } else {
-                    "(aucun objet ne correspond)"
                 });
+                if let Some(idx) = payload {
+                    moves.push((*idx, gname.clone()));
+                }
+            }
+            if scene.objects.is_empty() {
+                ui.weak("(scène vide)");
             }
         });
+
+    // Application des mutations.
+    for (idx, g) in moves {
+        if let Some(o) = scene.objects.get_mut(idx) {
+            o.group = g;
+        }
+    }
+    if let Some(g) = delete_group {
+        scene.groups.retain(|x| x != &g);
+        for o in &mut scene.objects {
+            if o.group == g {
+                o.group.clear();
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // panneau d'UI : chaque paramètre est un état distinct à muter
@@ -266,6 +326,7 @@ fn build_ui(
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
+    hier_new_group: &mut String,
     actions: &mut UiActions,
 ) {
     // Fenêtre flottante « Build & Export » (Sprint 19).
@@ -349,7 +410,7 @@ fn build_ui(
     egui::Panel::left("hierarchy")
         .default_size(200.0)
         .show_inside(root, |ui| {
-            hierarchy_panel(ui, scene, selection, hier_filter);
+            hierarchy_panel(ui, scene, selection, hier_filter, hier_new_group);
         });
 
     egui::Panel::right("inspector")

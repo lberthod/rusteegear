@@ -97,6 +97,9 @@ pub struct SceneObject {
     /// Joue le son au lancement du mode Play.
     #[serde(default)]
     pub audio_autoplay: bool,
+    /// Groupe (dossier) défini par l'utilisateur ; vide = « Sans groupe ».
+    #[serde(default)]
+    pub group: String,
 }
 
 fn default_physics() -> PhysicsKind {
@@ -108,6 +111,9 @@ pub struct Scene {
     pub objects: Vec<SceneObject>,
     #[serde(default)]
     pub imported: Vec<ImportedMesh>,
+    /// Groupes (dossiers) créés par l'utilisateur, y compris vides (ordre conservé).
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 impl Scene {
@@ -161,6 +167,7 @@ impl Scene {
     pub fn demo() -> Self {
         Scene {
             imported: Vec::new(),
+            groups: Vec::new(),
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -171,6 +178,7 @@ impl Scene {
                     physics: PhysicsKind::Static,
                     audio_clip: String::new(),
                     audio_autoplay: false,
+                    group: String::new(),
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -181,6 +189,7 @@ impl Scene {
                     physics: PhysicsKind::None,
                     audio_clip: String::new(),
                     audio_autoplay: false,
+                    group: String::new(),
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -191,6 +200,7 @@ impl Scene {
                     physics: PhysicsKind::Dynamic,
                     audio_clip: String::new(),
                     audio_autoplay: false,
+                    group: String::new(),
                 },
             ],
         }

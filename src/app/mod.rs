@@ -220,6 +220,7 @@ impl AppState {
             physics: crate::runtime::physics::PhysicsKind::None,
             audio_clip: String::new(),
             audio_autoplay: false,
+            group: String::new(),
         });
         self.selection = Some(self.scene.objects.len() - 1);
     }
@@ -637,6 +638,7 @@ impl AppState {
             physics: crate::runtime::physics::PhysicsKind::None,
             audio_clip: String::new(),
             audio_autoplay: false,
+            group: String::new(),
         });
         self.selection = Some(self.scene.objects.len() - 1);
     }
