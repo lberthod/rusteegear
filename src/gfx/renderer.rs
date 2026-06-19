@@ -62,7 +62,10 @@ struct SceneUniform {
     light_dir: [f32; 4],
     light_color: [f32; 4],
     ambient: [f32; 4], // x = intensité ambiante
+    light_vp: [[f32; 4]; 4],
 }
+
+const SHADOW_SIZE: u32 = 1024;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -98,6 +101,11 @@ pub struct Renderer {
 
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
+
+    // --- ombres (shadow mapping) ---
+    shadow_view: wgpu::TextureView,
+    shadow_bind_group: wgpu::BindGroup,
+    shadow_pipeline: wgpu::RenderPipeline,
 
     editor: Editor,
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
@@ -185,6 +193,65 @@ impl Renderer {
             entries: &[uniform_entry(0)],
         });
 
+        // --- Carte d'ombre (shadow map) ---
+        let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow_map"),
+            size: wgpu::Extent3d {
+                width: SHADOW_SIZE,
+                height: SHADOW_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow_sampler"),
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let shadow_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow_bg"),
+            layout: &shadow_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
+        });
+
         // --- Pipeline ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("main_shader"),
@@ -192,7 +259,7 @@ impl Renderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline_layout"),
-            bind_group_layouts: &[Some(&camera_layout), Some(&model_layout)],
+            bind_group_layouts: &[Some(&camera_layout), Some(&model_layout), Some(&shadow_bgl)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -229,6 +296,53 @@ impl Renderer {
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // --- Pipeline d'ombre (profondeur seule depuis la lumière) ---
+        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow.wgsl").into()),
+        });
+        let shadow_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow_pl"),
+            bind_group_layouts: &[Some(&camera_layout), Some(&model_layout)],
+            immediate_size: 0,
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow_pipeline"),
+            layout: Some(&shadow_pl),
+            vertex: wgpu::VertexState {
+                module: &shadow_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                // cull des faces avant : pousse l'acné d'ombre vers les faces arrière.
+                cull_mode: Some(wgpu::Face::Front),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                // biais de profondeur pour réduire l'acné d'ombre.
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
@@ -321,6 +435,9 @@ impl Renderer {
             objects_gpu: Vec::new(),
             gizmo_pipeline,
             gizmo_vbuf,
+            shadow_view,
+            shadow_bind_group,
+            shadow_pipeline,
             editor,
             backend,
         })
@@ -384,12 +501,27 @@ impl Renderer {
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
 
-        // Éclairage de la scène.
+        // Éclairage de la scène + matrice de la carte d'ombre.
         let l = &app.scene.light;
+        let mut dir = glam::Vec3::from_array(l.dir);
+        if dir.length_squared() < 1e-6 {
+            dir = glam::Vec3::Y;
+        }
+        dir = dir.normalize();
+        // caméra orthographique placée « au niveau de la lumière », regardant l'origine.
+        let up = if dir.x.abs() < 1e-3 && dir.z.abs() < 1e-3 {
+            glam::Vec3::Z
+        } else {
+            glam::Vec3::Y
+        };
+        let view = glam::Mat4::look_at_rh(dir * 20.0, glam::Vec3::ZERO, up);
+        let proj = glam::Mat4::orthographic_rh(-12.0, 12.0, -12.0, 12.0, 0.1, 60.0);
+        let light_vp = proj * view;
         let scene_uniform = SceneUniform {
             light_dir: [l.dir[0], l.dir[1], l.dir[2], 0.0],
             light_color: [l.color[0], l.color[1], l.color[2], 0.0],
             ambient: [l.ambient, 0.0, 0.0, 0.0],
+            light_vp: light_vp.to_cols_array_2d(),
         };
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
@@ -566,6 +698,40 @@ impl Renderer {
                 label: Some("encoder"),
             });
 
+        // Passe d'ombre : profondeur de la scène depuis la lumière → carte d'ombre.
+        {
+            let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow_pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            spass.set_pipeline(&self.shadow_pipeline);
+            spass.set_bind_group(0, &self.camera_bind_group, &[]);
+            for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
+                let mesh = match obj.mesh {
+                    MeshKind::Imported(i) => match self.imported_gpu.get(i as usize) {
+                        Some(m) => m,
+                        None => continue,
+                    },
+                    k => &self.meshes[&k],
+                };
+                spass.set_bind_group(1, &gpu.bind_group, &[]);
+                spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                spass.draw_indexed(0..mesh.num_indices, 0, 0..1);
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main_pass"),
@@ -598,6 +764,7 @@ impl Renderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow_bind_group, &[]);
 
             for (obj, gpu) in app.scene.objects.iter().zip(&self.objects_gpu) {
                 let mesh = match obj.mesh {

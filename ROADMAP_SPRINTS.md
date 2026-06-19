@@ -333,15 +333,17 @@
 - **Livrable** : Cmd+clic 3D multi-sélectionne, le gizmo déplace le groupe, ▲/▼ réordonnent. ✅
 - **Risques** : invariants d'index → couverts par les tests du Sprint 28.
 
-### Sprint 30 — Rendu : ombres & textures (reporté du Sprint 26) ⬜
+### Sprint 30 — Rendu : ombres & textures (reporté du Sprint 26) 🟢 (ombres faites)
 **Objectif** : passer d'un rendu plat à un rendu crédible. **Itérer visuellement** (lancer l'app souvent).
-- [ ] **Shadow mapping** directionnel : depth pass depuis la lumière, sampler de comparaison, biais anti-acné.
-- [ ] **Textures** : charger une image (albédo), UV sur les primitives + glTF, bind group texture.
-- [ ] Matériau étendu : métallique/rugosité simples, exposés dans l'inspecteur.
-- [ ] Adapter le coût sur mobile (résolution d'ombre réduite, repli si limites `wgpu`).
-- **Fichiers** : `src/gfx/*`, `src/gfx/shaders/*.wgsl`, `src/scene/mod.rs`, `src/editor/mod.rs`.
-- **Livrable** : un objet texturé projette une ombre sur le sol ; validé à l'écran desktop **et** mobile. ✅
-- **Risques** : non vérifiable sans GPU réel → ne jamais committer « à l'aveugle », tester chaque étape.
+- [x] **Shadow mapping** directionnel : passe de profondeur 1024² depuis la lumière (`shadow.wgsl`),
+      sampler de comparaison + PCF 3×3, biais de profondeur + cull des faces avant (anti-acné).
+      **Validé à l'écran** (sphère/cube projettent une ombre nette sur le sol, sans acné).
+- [ ] **Textures** (image albédo + UV primitives/glTF, bind group texture) → étape suivante.
+- [ ] Matériau étendu (métallique/rugosité) → étape suivante.
+- [ ] Réglage du coût mobile (résolution d'ombre réduite, repli si limites `wgpu`) → à valider sur device.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/{main,shadow}.wgsl`, `src/scene/mod.rs`.
+- **Livrable** : ombres portées rendues desktop (validé). Reste : textures + validation mobile. 🟢
+- **Risques** : non vérifiable sans GPU réel → itéré à l'écran (capture utilisateur).
 
 ### Sprint 31 — Distribution complète ⬜
 **Objectif** : livrables signés et reproductibles pour les stores.
