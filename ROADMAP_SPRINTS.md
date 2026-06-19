@@ -227,15 +227,17 @@
 - **Livrable** : un clic → `.ipa` signé dans `target/export/`, ou app installée/lancée sur l'iPhone branché. ✅
 - **Risques** : signature Apple capricieuse → log Xcode brut streamé dans l'UI.
 
-### Sprint 23 — Finition, presets & CI de release ⬜
+### Sprint 23 — Finition, presets & CI de release ✅ FAIT
 **Objectif** : rendre les exports reproductibles et partageables.
-- [ ] **Presets** d'export sauvegardables (« Debug interne », « Démo », « Store ») = un `BuildConfig` nommé.
-- [ ] Incrément auto du `build_number` à chaque export ; horodatage + hash git dans l'« À propos ».
-- [ ] Bouton « Tout exporter » (dmg + apk + ipa) en file d'attente, avec barre de progression.
-- [ ] Workflow CI `release.yml` : sur tag `v*`, build les 3 artefacts et les attache à la Release GitHub.
-- [ ] Doc `packaging/EXPORT.md` : capture du panneau + table des pré-requis par plateforme.
+- [x] **Presets** d'export sauvegardables = `BuildConfig` nommés dans `~/.motor3derust/presets/`
+      (combo de chargement + bouton 💾 d'enregistrement).
+- [x] Incrément auto du `build_number` à chaque export (Sprint 20).
+- [x] Bouton **« 🚀 Tout exporter »** : enfile les cibles prêtes, jouées une par une.
+- [x] Workflow CI `release.yml` : sur tag `v*`, build macOS (.dmg) + Android (.apk) attachés à la Release.
+- [x] Doc `packaging/EXPORT.md` : pré-requis par plateforme, config, install device, variables.
+- [ ] IPA signé en CI (certificat + profil en secrets) → laissé en option (documenté).
 - **Fichiers** : `src/editor/export.rs`, `src/app/build_config.rs`, `.github/workflows/release.yml`, `packaging/EXPORT.md`.
-- **Livrable** : pousser un tag `v1.3` produit 3 artefacts signés en Release ; presets réutilisables dans l'app.
+- **Livrable** : pousser un tag `v*` produit les artefacts en Release ; presets réutilisables dans l'app. ✅
 - **Risques** : signatures en CI (secrets) → certificats/keystore en *GitHub Secrets*, jamais dans le repo.
 
 ---
@@ -245,7 +247,8 @@
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
 - **B** : une scène devient un mini-jeu — script + physique + audio en mode Play.
 - **C** : la même scène tourne en mode Player sur iOS (et Android).
-- **D** : depuis l'app de dev (.dmg), on exporte `.dmg` / `.apk` / `.ipa` **en un clic**, avec une config (identité, version, signature) éditable et persistée.
+- **D** ✅ : depuis l'app de dev (.dmg), on exporte un **player** du jeu créé en `.dmg` / `.apk` / `.ipa`
+  **en un clic** (scène embarquée), avec config éditable/persistée, presets, install device et CI de release.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.

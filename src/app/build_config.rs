@@ -72,6 +72,49 @@ impl BuildConfig {
         }
     }
 
+    /// Dossier des préréglages (`~/.motor3derust/presets/`).
+    fn presets_dir() -> Option<PathBuf> {
+        let home = std::env::var("HOME").ok()?;
+        Some(PathBuf::from(home).join(".motor3derust").join("presets"))
+    }
+
+    /// Liste les préréglages disponibles (par nom de fichier, triés).
+    pub fn list_presets() -> Vec<String> {
+        let Some(dir) = Self::presets_dir() else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                (p.extension()?.to_str()? == "json")
+                    .then(|| p.file_stem()?.to_str().map(str::to_string))?
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Enregistre la config courante comme préréglage nommé.
+    pub fn save_preset(&self, name: &str) {
+        let Some(dir) = Self::presets_dir() else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(dir.join(format!("{name}.json")), json);
+        }
+    }
+
+    /// Charge un préréglage par nom.
+    pub fn load_preset(name: &str) -> Option<Self> {
+        let dir = Self::presets_dir()?;
+        let s = std::fs::read_to_string(dir.join(format!("{name}.json"))).ok()?;
+        serde_json::from_str(&s).ok()
+    }
+
     /// Nom de fichier nettoyé (alphanumérique, `-`, `_`) ; défaut « MonJeu ».
     pub fn safe_name(&self) -> String {
         let n: String = self

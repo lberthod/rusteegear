@@ -61,6 +61,12 @@ pub struct ExportPanel {
     adb_available: bool,
     /// Le dernier export s'est-il terminé avec succès (affiche « Révéler le dossier »).
     last_ok: bool,
+    /// Nom du préréglage à enregistrer.
+    preset_name: String,
+    /// Préréglages disponibles (rafraîchi à l'enregistrement).
+    presets: Vec<String>,
+    /// File d'attente d'exports (« Tout exporter ») démarrés un par un.
+    queue: Vec<Target>,
 }
 
 impl Default for ExportPanel {
@@ -85,6 +91,9 @@ impl ExportPanel {
             install_device: false,
             adb_available: has_cmd("adb"),
             last_ok: false,
+            preset_name: "Démo".into(),
+            presets: BuildConfig::list_presets(),
+            queue: Vec::new(),
         }
     }
 
@@ -226,10 +235,48 @@ impl ExportPanel {
                     });
                     ui.weak("Vides = identité/équipe par défaut du script. Profil requis pour installer sur device.");
                 });
+
+                // Préréglages : charger / enregistrer une BuildConfig nommée.
+                ui.horizontal(|ui| {
+                    ui.label("Préréglage :");
+                    egui::ComboBox::from_id_salt("preset_cb")
+                        .selected_text(if self.preset_name.is_empty() {
+                            "—".to_string()
+                        } else {
+                            self.preset_name.clone()
+                        })
+                        .show_ui(ui, |ui| {
+                            for name in self.presets.clone() {
+                                if ui.selectable_label(false, &name).clicked()
+                                    && let Some(cfg) = BuildConfig::load_preset(&name)
+                                {
+                                    self.config = cfg;
+                                    self.preset_name = name;
+                                }
+                            }
+                        });
+                    ui.text_edit_singleline(&mut self.preset_name);
+                    if ui.button("💾").on_hover_text("Enregistrer le préréglage").clicked()
+                        && !self.preset_name.trim().is_empty()
+                    {
+                        self.config.save_preset(self.preset_name.trim());
+                        self.presets = BuildConfig::list_presets();
+                    }
+                });
+
                 ui.add_space(4.0);
                 let targets = [Target::Macos, Target::Android, Target::Ios];
                 for t in targets {
                     self.card(ui, t, scene);
+                }
+
+                // Export groupé : enfile toutes les cibles prêtes, jouées une par une.
+                let busy = self.running.is_some() || !self.queue.is_empty();
+                if ui
+                    .add_enabled(!busy, egui::Button::new("🚀 Tout exporter (cibles prêtes)"))
+                    .clicked()
+                {
+                    self.queue = targets.into_iter().filter(|t| self.prereq(*t).is_ok()).collect();
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -254,6 +301,12 @@ impl ExportPanel {
                     });
             });
         self.open = open;
+
+        // Avance la file « Tout exporter » : démarre la cible suivante dès que libre.
+        if self.running.is_none() && !self.queue.is_empty() {
+            let next = self.queue.remove(0);
+            self.start(next, scene);
+        }
     }
 
     fn card(&mut self, ui: &mut egui::Ui, target: Target, scene: &Scene) {

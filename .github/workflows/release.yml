@@ -1,0 +1,54 @@
+name: Release
+
+# Sur un tag `v*`, construit les livrables et les attache à la Release GitHub.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Build macOS .dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Installer cargo-bundle
+        run: cargo install cargo-bundle
+      - name: Build .dmg
+        run: ./packaging/build_dmg.sh
+      - name: Attacher à la Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/dmg/Motor3DeRust.dmg
+
+  android:
+    name: Build Android .apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28
+      - name: Installer cargo-apk
+        run: cargo install cargo-apk
+      - name: Build .apk
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./packaging/build_apk.sh
+      - name: Attacher à la Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/apk/motor3derust.apk
+
+# Note : l'IPA signé n'est pas produit en CI (nécessite un certificat Apple et un
+# profil de provisioning fournis en secrets — cf. packaging/EXPORT.md, à activer plus tard).
