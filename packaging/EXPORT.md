@@ -1,6 +1,6 @@
 # Exporter un jeu — panneau « Build & Export »
 
-L'éditeur Motor3DeRust (desktop) exporte le **jeu créé** sous forme de *player*
+L'éditeur RusteeGear (desktop) exporte le **jeu créé** sous forme de *player*
 jouable pour chaque plateforme : un `.dmg`, `.apk` ou `.ipa` qui démarre directement
 sur ta scène en mode joueur. La scène **et ses assets** (modèles glTF, sons) sont
 **embarqués** dans le binaire à l'export (copiés dans `assets/bundle/`, inclus à la

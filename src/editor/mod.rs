@@ -372,6 +372,114 @@ fn hierarchy_panel(
     }
 }
 
+/// Menu « Fichier » : sauvegarde, ouverture, import, export.
+fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &mut UiActions) {
+    ui.menu_button("Fichier", |ui| {
+        if ui.button("💾  Enregistrer").clicked() {
+            actions.save = true;
+            ui.close();
+        }
+        if ui.button("💾  Enregistrer sous…").clicked() {
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            if let Some(p) = rfd::FileDialog::new()
+                .add_filter("Scène JSON", &["json"])
+                .set_file_name("scene.json")
+                .save_file()
+            {
+                actions.save_path = Some(p.to_string_lossy().into_owned());
+            }
+            ui.close();
+        }
+        if ui.button("📂  Ouvrir…").clicked() {
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            if let Some(p) = rfd::FileDialog::new()
+                .add_filter("Scène JSON", &["json"])
+                .pick_file()
+            {
+                actions.load_path = Some(p.to_string_lossy().into_owned());
+            }
+            #[cfg(any(target_os = "ios", target_os = "android"))]
+            {
+                actions.load = true;
+            }
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("📥  Importer glTF…").clicked() {
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            if let Some(p) = rfd::FileDialog::new()
+                .add_filter("glTF", &["glb", "gltf"])
+                .pick_file()
+            {
+                actions.import = Some(p.to_string_lossy().into_owned());
+            }
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("📦  Build & Export…").clicked() {
+            export.open = true;
+            ui.close();
+        }
+    });
+}
+
+/// Menu « Édition » : historique et opérations sur la sélection.
+fn menu_edition(ui: &mut egui::Ui, selection: &Option<usize>, actions: &mut UiActions) {
+    ui.menu_button("Édition", |ui| {
+        if ui.button("↩  Annuler").clicked() {
+            actions.undo = true;
+            ui.close();
+        }
+        if ui.button("↪  Rétablir").clicked() {
+            actions.redo = true;
+            ui.close();
+        }
+        ui.separator();
+        let has = selection.is_some();
+        if ui
+            .add_enabled(has, egui::Button::new("⧉  Dupliquer"))
+            .clicked()
+        {
+            actions.duplicate = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(has, egui::Button::new("🗑  Supprimer"))
+            .clicked()
+        {
+            actions.delete = *selection;
+            ui.close();
+        }
+    });
+}
+
+/// Menu « Ajouter » : primitives.
+fn menu_ajouter(ui: &mut egui::Ui, actions: &mut UiActions) {
+    ui.menu_button("Ajouter", |ui| {
+        if ui.button("🧊  Cube").clicked() {
+            actions.add = Some(MeshKind::Cube);
+            ui.close();
+        }
+        if ui.button("⚪  Sphère").clicked() {
+            actions.add = Some(MeshKind::Sphere);
+            ui.close();
+        }
+        if ui.button("▦  Plan").clicked() {
+            actions.add = Some(MeshKind::Plane);
+            ui.close();
+        }
+    });
+}
+
+/// Menu « Outils » : mode de manipulation du gizmo.
+fn menu_outils(ui: &mut egui::Ui, gizmo_mode: &mut GizmoMode) {
+    ui.menu_button("Outils", |ui| {
+        ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔  Déplacer (W)");
+        ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻  Tourner (E)");
+        ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⤢  Redimensionner (R)");
+    });
+}
+
 #[allow(clippy::too_many_arguments)] // panneau d'UI : chaque paramètre est un état distinct à muter
 fn build_ui(
     root: &mut egui::Ui,
@@ -403,6 +511,21 @@ fn build_ui(
         });
     });
 
+    // --- Barre de menus (style application de bureau) ---
+    egui::Panel::top("menubar").show_inside(root, |ui| {
+        ui.horizontal(|ui| {
+            menu_fichier(ui, export, actions);
+            menu_edition(ui, selection, actions);
+            menu_ajouter(ui, actions);
+            menu_outils(ui, gizmo_mode);
+            ui.menu_button("Aide", |ui| {
+                ui.label("RusteeGear — moteur 3D en Rust");
+                ui.hyperlink_to("Dépôt GitHub", "https://github.com/lberthod/rusteegear");
+            });
+        });
+    });
+
+    // --- Barre d'outils rapide ---
     egui::Panel::top("toolbar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
             let play_label = if *playing { "⏹ Stop" } else { "▶ Play" };
@@ -410,76 +533,23 @@ fn build_ui(
                 *playing = !*playing;
             }
             ui.separator();
-            ui.label("Gizmo :");
-            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "Déplacer (W)");
-            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "Tourner (E)");
-            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "Redim. (R)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔ Déplacer");
+            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻ Tourner");
+            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⤢ Redim.");
             ui.separator();
-            if ui.button("↩ Undo").clicked() {
+            if ui.button("↩").on_hover_text("Annuler (Cmd+Z)").clicked() {
                 actions.undo = true;
             }
-            if ui.button("↪ Redo").clicked() {
+            if ui.button("↪").on_hover_text("Rétablir (Cmd+Maj+Z)").clicked() {
                 actions.redo = true;
             }
-            if ui
-                .add_enabled(selection.is_some(), egui::Button::new("⧉ Dupliquer"))
-                .clicked()
-            {
-                actions.duplicate = true;
-            }
             ui.separator();
-            ui.label("Ajouter :");
-            if ui.button("Cube").clicked() {
-                actions.add = Some(MeshKind::Cube);
-            }
-            if ui.button("Sphère").clicked() {
-                actions.add = Some(MeshKind::Sphere);
-            }
-            if ui.button("Plan").clicked() {
-                actions.add = Some(MeshKind::Plane);
-            }
-            ui.separator();
-            // Sauvegarde rapide (emplacement par défaut).
-            if ui.button("💾 Save").clicked() {
+            if ui.button("💾").on_hover_text("Enregistrer").clicked() {
                 actions.save = true;
             }
-            // Enregistrer sous… (choix du fichier JSON).
-            if ui.button("💾 Save as…").clicked() {
-                #[cfg(not(any(target_os = "ios", target_os = "android")))]
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Scène JSON", &["json"])
-                    .set_file_name("scene.json")
-                    .save_file()
-                {
-                    actions.save_path = Some(p.to_string_lossy().into_owned());
-                }
-            }
-            if ui.button("📂 Load").clicked() {
-                #[cfg(not(any(target_os = "ios", target_os = "android")))]
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Scène JSON", &["json"])
-                    .pick_file()
-                {
-                    actions.load_path = Some(p.to_string_lossy().into_owned());
-                }
-                #[cfg(any(target_os = "ios", target_os = "android"))]
-                {
-                    actions.load = true;
-                }
-            }
-            if ui.button("📥 Importer glTF").clicked() {
-                #[cfg(not(any(target_os = "ios", target_os = "android")))]
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("glTF", &["glb", "gltf"])
-                    .pick_file()
-                {
-                    actions.import = Some(p.to_string_lossy().into_owned());
-                }
-            }
-            ui.separator();
             if ui
                 .selectable_label(export.open, "📦 Export")
-                .on_hover_text("Exporter .dmg / .apk / .ipa")
+                .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
                 .clicked()
             {
                 export.open = !export.open;

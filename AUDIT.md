@@ -1,4 +1,4 @@
-# Audit technique — Motor3DeRust
+# Audit technique — RusteeGear
 
 > **Suivi des correctifs (2026-06-19).** Traités : **P1** (cache Lua), **P2** (rendu),
 > **P3** (uniforms), **P4** (panics + indexation défensive), **P5** (undo `VecDeque`),

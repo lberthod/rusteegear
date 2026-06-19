@@ -1,4 +1,4 @@
-//! Motor3DeRust — moteur 3D minimaliste (winit + wgpu).
+//! RusteeGear — moteur 3D minimaliste (winit + wgpu).
 //! Exposé en bibliothèque pour partager le point d'entrée entre desktop (bin)
 //! et Android (cdylib `android_main`).
 
@@ -96,7 +96,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Motor3DeRust")
+            .with_title("RusteeGear")
             .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 720.0));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),

@@ -14,7 +14,7 @@ if [ ! -f "$KS" ]; then
     echo "▶ Génération d'une clé de signature ($KS)…"
     "$JAVA_HOME/bin/keytool" -genkeypair -v -keystore "$KS" \
         -alias motor3derust -keyalg RSA -keysize 2048 -validity 10000 \
-        -storepass android -keypass android -dname "CN=Motor3DeRust, O=Berthod, C=CH"
+        -storepass android -keypass android -dname "CN=RusteeGear, O=Berthod, C=CH"
 fi
 
 echo "▶ Build APK (release)…"

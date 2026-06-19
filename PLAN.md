@@ -1,4 +1,4 @@
-# Motor3DeRust — Moteur de jeu 3D (style Unity, très basique) en Rust
+# RusteeGear — Moteur de jeu 3D (style Unity, très basique) en Rust
 
 > Document de cadrage : analyse, architecture, plan de sprints.
 > Cible : application macOS distribuable en `.dmg`.
@@ -181,10 +181,10 @@ Toolbar Save ─▶ serialization::save(&scene, "scene.json")
 
 ### Sprint 6 — Packaging macOS ✅ FAIT
 - [x] `cargo-bundle` + métadonnées `[package.metadata.bundle]` → `.app` + `Info.plist`.
-- [x] `packaging/build_dmg.sh` → `Motor3DeRust.dmg` (4.5 Mo).
+- [x] `packaging/build_dmg.sh` → `RusteeGear.dmg` (4.5 Mo).
 - [x] README utilisateur (commandes + contournement Gatekeeper).
 - [x] Correctif : save/load vers `~/motor3derust_scene.json` (cwd = `/` en mode .app).
-- **Livrable** : `target/release/bundle/dmg/Motor3DeRust.dmg`, `.app` lancée et vérifiée. ✅
+- **Livrable** : `target/release/bundle/dmg/RusteeGear.dmg`, `.app` lancée et vérifiée. ✅
 - (Icône `.icns` non fournie — optionnelle ; signature/notarisation = étape ultérieure.)
 
 ---
@@ -192,8 +192,8 @@ Toolbar Save ─▶ serialization::save(&scene, "scene.json")
 ## 5. Packaging `.dmg` (procédure cible)
 ```bash
 cargo install cargo-bundle           # une fois
-cargo bundle --release               # produit target/release/bundle/osx/Motor3DeRust.app
-./packaging/make_dmg.sh              # produit Motor3DeRust.dmg
+cargo bundle --release               # produit target/release/bundle/osx/RusteeGear.app
+./packaging/make_dmg.sh              # produit RusteeGear.dmg
 ```
 > Note : un `.dmg` non signé déclenchera Gatekeeper (clic droit ▸ Ouvrir).
 > Signature + notarisation = étape ultérieure (compte développeur Apple requis).

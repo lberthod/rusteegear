@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 BIN="motor3derust"
 # Identité du bundle : surchargée par le panneau Export (BuildConfig), sinon défauts.
-APP_NAME="${OUTPUT_NAME:-Motor3DeRust}"
+APP_NAME="${OUTPUT_NAME:-RusteeGear}"
 BID="${BUNDLE_ID:-com.berthod.motor3derust}"
 APP_VERSION="${APP_VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"

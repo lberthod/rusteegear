@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 # OUTPUT_NAME : nom du fichier de sortie. PLAYER_BUILD=1 : bâtit un player jouable
 # (mode Player + scène embarquée) au lieu de l'éditeur. Tous deux fournis par le panneau Export.
-OUTPUT_NAME="${OUTPUT_NAME:-Motor3DeRust}"
+OUTPUT_NAME="${OUTPUT_NAME:-RusteeGear}"
 FEATURES=""
 if [ "${PLAYER_BUILD:-0}" = "1" ]; then
     FEATURES="--features player_build"
@@ -17,9 +17,9 @@ else
 fi
 cargo bundle --release $FEATURES
 
-if [ "$OUTPUT_NAME" != "Motor3DeRust" ]; then
+if [ "$OUTPUT_NAME" != "RusteeGear" ]; then
     # Export : applique l'identité (id/nom/version) au .app puis (re)crée le .dmg.
-    APP="target/release/bundle/osx/Motor3DeRust.app"
+    APP="target/release/bundle/osx/RusteeGear.app"
     PLIST="$APP/Contents/Info.plist"
     PB=/usr/libexec/PlistBuddy
     "$PB" -c "Set :CFBundleIdentifier ${BUNDLE_ID:-com.berthod.motor3derust}" "$PLIST" 2>/dev/null || true
@@ -33,7 +33,7 @@ if [ "$OUTPUT_NAME" != "Motor3DeRust" ]; then
     rm -f "$DMG"
     hdiutil create -volname "$OUTPUT_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG" >/dev/null
 else
-    DMG="target/release/bundle/dmg/Motor3DeRust.dmg"
+    DMG="target/release/bundle/dmg/RusteeGear.dmg"
 fi
 echo "✅ DMG créé : $DMG"
 echo "   Taille : $(du -h "$DMG" | cut -f1)"

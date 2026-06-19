@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🦀 Motor3DeRust
+# 🦀 RusteeGear
 
 **Un moteur / éditeur de jeu 3D minimaliste « à la Unity », écrit _from scratch_ en Rust.**
 
@@ -20,7 +20,7 @@ mode « player » tactile sur iPhone et Android.
 
 ## ✨ Vision
 
-Motor3DeRust est un éditeur de jeu 3D léger et hackable. L'objectif n'est pas de
+RusteeGear est un éditeur de jeu 3D léger et hackable. L'objectif n'est pas de
 remplacer Unity, mais d'offrir une base **comprenable de bout en bout** : chaque
 ligne du pipeline de rendu, de l'ECS-léger et de l'UI est écrite à la main, sans
 boîte noire. Le projet est pensé pour grandir vers le **mobile (iOS / Android)**
@@ -28,7 +28,7 @@ grâce à la portabilité de `wgpu`.
 
 ---
 
-## 🎯 Quel besoin Motor3DeRust adresse-t-il ?
+## 🎯 Quel besoin RusteeGear adresse-t-il ?
 
 Les moteurs grand public (Unity, Unreal, Godot) sont extraordinairement complets,
 mais ce sont des **boîtes noires** : des millions de lignes, un runtime opaque, un
@@ -38,7 +38,7 @@ un moteur fonctionne réellement** — comment un vertex part d'un `Vec<f32>` po
 en pixel à l'écran, comment un raycast sélectionne un objet, comment une boucle de
 simulation reste stable — ces moteurs cachent justement ce qui est intéressant.
 
-Motor3DeRust répond à un besoin précis :
+RusteeGear répond à un besoin précis :
 
 - **Pédagogique & maîtrise totale.** Chaque étage du pipeline (fenêtre → événements →
   état → rendu GPU → UI) est écrit à la main, lisible en une après-midi, sans
@@ -96,13 +96,13 @@ ECS complet, ordonnanceur de systèmes, rendu PBR, plugins… Si l'objectif éta
 **produire un jeu** le plus vite possible, Bevy (ou Godot, Fyrox) serait un choix
 parfaitement légitime — et probablement supérieur.
 
-Mais l'objectif de Motor3DeRust est exactement l'inverse : **comprendre et maîtriser le
+Mais l'objectif de RusteeGear est exactement l'inverse : **comprendre et maîtriser le
 moteur lui-même**. Or s'appuyer sur Bevy reviendrait à remplacer une boîte noire
 (Unity) par une autre, certes en Rust. On hériterait de son ECS, de son ordonnanceur,
 de son pipeline de rendu et de ses choix d'architecture — c'est-à-dire de précisément
 ce que ce projet cherche à écrire à la main pour l'apprendre.
 
-| Critère | Motor3DeRust (from scratch) | Bevy |
+| Critère | RusteeGear (from scratch) | Bevy |
 |---|---|---|
 | **Objectif** | Comprendre/maîtriser un moteur | Produire des jeux efficacement |
 | **Taille du cœur** | ~2 500 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
@@ -113,7 +113,7 @@ ce que ce projet cherche à écrire à la main pour l'apprendre.
 | **Productivité jeu** | Faible (tout est à construire) | Élevée |
 | **Boîte noire** | Aucune | Le moteur lui-même |
 
-Concrètement, Motor3DeRust ne s'appuie **que** sur des briques *ciblées et
+Concrètement, RusteeGear ne s'appuie **que** sur des briques *ciblées et
 remplaçables* (`winit` pour la fenêtre, `wgpu` pour le GPU, `egui` pour l'UI,
 `rapier3d`/`kira`/`mlua` pour le runtime) et **assemble lui-même** la boucle
 d'événements, le pipeline de rendu, le picking, les gizmos, la sérialisation et le
@@ -121,7 +121,7 @@ mode Play. C'est ce qui rend la **comparaison pertinente** : on choisit la dépe
 pour *un problème précis et bien délimité*, jamais pour la structure générale du
 moteur — qui, elle, reste l'objet même de l'apprentissage.
 
-> En une phrase : **Bevy est un moteur ; Motor3DeRust est l'exercice consistant à en
+> En une phrase : **Bevy est un moteur ; RusteeGear est l'exercice consistant à en
 > écrire un.** Les deux sont en Rust ; seul le second t'apprend ce qu'il y a dedans.
 
 ---
@@ -193,7 +193,7 @@ cargo run -- --player           # mode player (scène plein écran)
 ### Builds par plateforme
 ```bash
 # macOS (.dmg) — cargo install cargo-bundle
-./packaging/build_dmg.sh        # → target/release/bundle/dmg/Motor3DeRust.dmg
+./packaging/build_dmg.sh        # → target/release/bundle/dmg/RusteeGear.dmg
 
 # Android (.apk) — NDK + cargo install cargo-apk (voir packaging/build_android.md)
 ./packaging/build_apk.sh        # → target/release/apk/motor3derust.apk

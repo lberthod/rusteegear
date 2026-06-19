@@ -1,4 +1,4 @@
-# Motor3DeRust — Plan de sprints d'exécution (post-MVP)
+# RusteeGear — Plan de sprints d'exécution (post-MVP)
 
 > Feuille de route **étape par étape** pour faire évoluer le moteur du MVP actuel
 > jusqu'au mobile (iOS / Android).

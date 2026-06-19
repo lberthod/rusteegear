@@ -1,4 +1,4 @@
-# Passation — Motor3DeRust
+# Passation — RusteeGear
 
 Document de reprise pour le développeur qui prend la suite. Lire aussi
 **[README.md](README.md)** (vision/archi), **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
