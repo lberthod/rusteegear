@@ -16,6 +16,8 @@ pub struct Editor {
     winit_state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
     export: export::ExportPanel,
+    /// Texte de filtre de la hiérarchie (recherche par nom).
+    hier_filter: String,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -64,6 +66,7 @@ impl Editor {
             winit_state,
             renderer,
             export: export::ExportPanel::new(),
+            hier_filter: String::new(),
         }
     }
 
@@ -86,6 +89,7 @@ impl Editor {
         let mut actions = UiActions::default();
 
         let export = &mut self.export;
+        let hier_filter = &mut self.hier_filter;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -95,6 +99,7 @@ impl Editor {
                 gizmo_mode,
                 &status,
                 export,
+                hier_filter,
                 &mut actions,
             );
         });
@@ -156,6 +161,101 @@ impl Editor {
     }
 }
 
+/// Catégorie (libellé + icône) d'un type de mesh, pour le regroupement de la hiérarchie.
+fn mesh_category(mesh: MeshKind) -> (&'static str, &'static str) {
+    match mesh {
+        MeshKind::Cube => ("Cubes", "🧊"),
+        MeshKind::Sphere => ("Sphères", "⚪"),
+        MeshKind::Plane => ("Plans", "▦"),
+        MeshKind::Imported(_) => ("Modèles", "📦"),
+    }
+}
+
+/// Badges compacts d'un objet : physique / script / audio.
+fn object_badges(obj: &crate::scene::SceneObject) -> String {
+    let mut b = String::new();
+    match obj.physics {
+        PhysicsKind::Static => b.push_str(" 🧱"),
+        PhysicsKind::Dynamic => b.push_str(" ⚙"),
+        PhysicsKind::None => {}
+    }
+    if !obj.script.trim().is_empty() {
+        b.push_str(" 📜");
+    }
+    if !obj.audio_clip.is_empty() {
+        b.push_str(" 🔊");
+    }
+    b
+}
+
+/// Hiérarchie ergonomique : recherche, regroupement par type (en-têtes repliables
+/// avec compteur), icônes et badges (physique/script/audio).
+fn hierarchy_panel(
+    ui: &mut egui::Ui,
+    scene: &Scene,
+    selection: &mut Option<usize>,
+    filter: &mut String,
+) {
+    ui.horizontal(|ui| {
+        ui.heading("Hiérarchie");
+        ui.weak(format!("({})", scene.objects.len()));
+    });
+    ui.add(
+        egui::TextEdit::singleline(filter)
+            .hint_text("🔎 filtrer…")
+            .desired_width(f32::INFINITY),
+    );
+    ui.separator();
+
+    let needle = filter.trim().to_lowercase();
+    let matches = |o: &crate::scene::SceneObject| {
+        needle.is_empty() || o.name.to_lowercase().contains(&needle)
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let mut shown = 0;
+            // Une section repliable par catégorie de mesh (ordre stable).
+            for (cat, icon) in [
+                ("Cubes", "🧊"),
+                ("Sphères", "⚪"),
+                ("Plans", "▦"),
+                ("Modèles", "📦"),
+            ] {
+                let items: Vec<(usize, &crate::scene::SceneObject)> = scene
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| mesh_category(o.mesh).0 == cat && matches(o))
+                    .collect();
+                if items.is_empty() {
+                    continue;
+                }
+                shown += items.len();
+                egui::CollapsingHeader::new(format!("{icon} {cat}  ({})", items.len()))
+                    .default_open(true)
+                    .id_salt(cat)
+                    .show(ui, |ui| {
+                        for (i, obj) in items {
+                            let selected = *selection == Some(i);
+                            let label = format!("{}{}", obj.name, object_badges(obj));
+                            if ui.selectable_label(selected, label).clicked() {
+                                *selection = Some(i);
+                            }
+                        }
+                    });
+            }
+            if shown == 0 {
+                ui.weak(if scene.objects.is_empty() {
+                    "(scène vide)"
+                } else {
+                    "(aucun objet ne correspond)"
+                });
+            }
+        });
+}
+
 #[allow(clippy::too_many_arguments)] // panneau d'UI : chaque paramètre est un état distinct à muter
 fn build_ui(
     root: &mut egui::Ui,
@@ -165,6 +265,7 @@ fn build_ui(
     gizmo_mode: &mut GizmoMode,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
+    hier_filter: &mut String,
     actions: &mut UiActions,
 ) {
     // Fenêtre flottante « Build & Export » (Sprint 19).
@@ -246,16 +347,9 @@ fn build_ui(
     });
 
     egui::Panel::left("hierarchy")
-        .default_size(180.0)
+        .default_size(200.0)
         .show_inside(root, |ui| {
-            ui.heading("Hiérarchie");
-            ui.separator();
-            for (i, obj) in scene.objects.iter().enumerate() {
-                let selected = *selection == Some(i);
-                if ui.selectable_label(selected, &obj.name).clicked() {
-                    *selection = Some(i);
-                }
-            }
+            hierarchy_panel(ui, scene, selection, hier_filter);
         });
 
     egui::Panel::right("inspector")
