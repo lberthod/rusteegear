@@ -393,6 +393,71 @@ un démonstrateur technique. Barre de menus complète + outils de contrôle qual
 
 ---
 
+## 🔭 Audit (2026-06-19) & sprints proposés 33–37
+
+**État.** ~7000 lignes Rust, architecture saine (état métier `app/` sans GPU, rendu `gfx/`,
+runtime `runtime/`, UI `editor/`). 20 tests, CI clippy-clean. Acquis récents : éditeur complet,
+contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (script + scène) via DeepSeek.
+
+**Dette / manques principaux** :
+- Rendu plat (pas de PBR, une seule lumière globale, pas d'instanciation/culling).
+- Modèle de scène limité : lumière unique, pas de caméras/lumières comme objets.
+- Pas de pipeline d'assets mobile (chargement fichiers désactivé sur mobile = P10, pas de compression textures).
+- Distribution non finalisée (identité Android non surchargée, IPA non signé en CI, pas de validation device).
+- Confort d'édition incomplet (pas de glisser-déposer, sous-groupes, gizmo multi rotate/scale).
+
+### Sprint 33 — Matériaux PBR & rendu avancé ⬜
+**Objectif** : passer d'un rendu plat à un rendu crédible, sans casser le coût mobile.
+- [ ] Matériau par objet : `metallic`, `roughness`, `emissive` (champs `SceneObject`, UI inspecteur).
+- [ ] Shader PBR (BRDF Cook-Torrance simplifié) + uniforms matériau (bind group dédié).
+- [ ] Rendu **instancié** des objets partageant mesh+matériau (1 draw call par lot) → perf.
+- [ ] **Frustum culling** CPU (AABB monde déjà calculées) avant soumission.
+- **Fichiers** : `src/gfx/{renderer,shaders/*}.rs`, `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : objets métal/plastique réalistes, draw calls réduits, FPS stable sur grosses scènes.
+- **Risques** : coût GPU mobile → garder un repli « unlit » (toggle qualité, lié au panneau Optimisation).
+
+### Sprint 34 — Scène étendue : lumières & caméras comme objets ⬜
+**Objectif** : sortir du modèle « une lumière globale » vers une vraie hiérarchie d'entités.
+- [ ] `SceneObject` typé (enum `kind`: Mesh / Light(point|dir|spot) / Camera) ou composants.
+- [ ] Plusieurs lumières (tableau d'uniforms, limite mobile configurable) ; gizmo/icône dans la vue.
+- [ ] Caméra de jeu comme objet : la vue Play utilise la caméra active (pas l'orbite éditeur).
+- [ ] Migration JSON rétro-compatible (anciennes scènes : lumière globale → objet lumière).
+- **Fichiers** : `src/scene/mod.rs`, `src/gfx/renderer.rs`, `src/app/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : ajouter/déplacer lumières et caméras depuis le menu Ajouter ; rendu multi-lumières.
+- **Risques** : refactor du modèle de scène → faire la migration JSON et étendre les tests d'abord.
+
+### Sprint 35 — Pipeline d'assets & optimisation mobile ⬜
+**Objectif** : rendre les assets portables et le panneau « Optimisation mobile » réel (différenciateur APK).
+- [ ] Gestionnaire d'assets : copie/normalisation dans un dossier projet, chemins relatifs (`asset://`).
+- [ ] Chargement de fichiers sur mobile (P10) : remplaçant de `rfd` (picker natif ou navigateur d'assets intégré).
+- [ ] Compression/réduction de textures à l'export (taille max, mipmaps, formats GPU mobiles).
+- [ ] Panneau **Optimisation mobile** câblé : réduire textures, limiter lumières/ombres, fusion meshes statiques.
+- **Fichiers** : `src/assets.rs`, `src/scene/{mod,import}.rs`, `src/editor/{export,mod}.rs`, `packaging/*`.
+- **Livrable** : un projet s'exporte avec ses assets optimisés ; le Readiness Check reflète les gains.
+- **Risques** : formats de texture GPU mobiles (ASTC/ETC2) → commencer par redimensionnement + PNG/mipmaps.
+
+### Sprint 36 — Distribution signée & validation device ⬜
+**Objectif** : finir la chaîne de livraison (reprise du Sprint 31) et valider la boucle sur appareil réel.
+- [ ] Override d'identité **Android** (bundle id/version/icône/splash) injecté dans `cargo-apk`.
+- [ ] **IPA signé en CI** (certificat + profil en *GitHub Secrets*), job iOS dans `release.yml`.
+- [ ] Notarisation macOS ; tag `v*` → 3 artefacts signés attachés à la Release, `build_number` cohérent.
+- [ ] **Validation device** : checklist + procédure (joystick → script → APK installé → resume arrière-plan).
+- **Fichiers** : `packaging/*.sh`, `.github/workflows/release.yml`, `Cargo.toml`, `src/editor/export.rs`.
+- **Livrable** : un tag produit `.dmg` notarisé + `.apk` + `.ipa` signés ; boucle mobile validée sur 1 appareil.
+- **Risques** : secrets/comptes développeur requis → *GitHub Secrets* uniquement ; tester tôt sur device.
+
+### Sprint 37 — IA avancée & confort d'édition ⬜
+**Objectif** : capitaliser sur l'IA et combler les manques d'ergonomie de l'éditeur.
+- [ ] IA « **Ajouter à la scène** » (au lieu de remplacer) + édition ciblée (« rends ce cube rebondissant »).
+- [ ] **Historique des prompts** par projet ; ré-exécution en un clic.
+- [ ] Hiérarchie : **glisser-déposer** pour réordonner/regrouper, **sous-groupes** imbriqués.
+- [ ] Gizmo **multi-objets en rotate/scale** (pivot commun) ; raccourcis d'alignement/distribution.
+- **Fichiers** : `src/app/{ai,mod}.rs`, `src/editor/mod.rs`, `src/scene/mod.rs`.
+- **Livrable** : workflow IA itératif + édition multi confortable proche d'un éditeur pro.
+- **Risques** : fusion IA↔scène existante (indices/sélection) → passer par des opérations validées + undo.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
