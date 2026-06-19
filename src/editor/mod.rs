@@ -691,10 +691,14 @@ fn tool_windows(
                 });
         });
 
-    // --- Profiler FPS ---
-    panels.fps_history.push_back(status.fps);
-    while panels.fps_history.len() > 120 {
-        panels.fps_history.pop_front();
+    // --- Profiler FPS (n'accumule l'historique que lorsque la fenêtre est ouverte) ---
+    if !panels.profiler {
+        panels.fps_history.clear();
+    } else {
+        panels.fps_history.push_back(status.fps);
+        while panels.fps_history.len() > 120 {
+            panels.fps_history.pop_front();
+        }
     }
     let fps_hist = panels.fps_history.clone();
     egui::Window::new("📊  Profiler FPS")
@@ -1094,140 +1098,154 @@ fn build_ui(
         });
     });
 
-    egui::Panel::left("hierarchy")
-        .default_size(200.0)
-        .show_inside(root, |ui| {
-            hierarchy_panel(
-                ui,
-                scene,
-                selection,
-                selected,
-                hier_filter,
-                hier_new_group,
-                hier_rename,
-            );
-        });
+    // Mode « focus jeu » : en aperçu mobile, on masque les panneaux latéraux pour
+    // laisser toute la place au téléphone (la toolbar reste pour quitter l'aperçu).
+    let show_panels = !*device_preview;
 
-    egui::Panel::right("inspector")
-        .default_size(240.0)
-        .show_inside(root, |ui| {
-            ui.heading("Inspecteur");
-            ui.separator();
-            ui.collapsing("🔆 Éclairage (scène)", |ui| {
-                let l = &mut scene.light;
-                ui.label("Direction");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut l.dir[0]).speed(0.02).prefix("x "));
-                    ui.add(egui::DragValue::new(&mut l.dir[1]).speed(0.02).prefix("y "));
-                    ui.add(egui::DragValue::new(&mut l.dir[2]).speed(0.02).prefix("z "));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Couleur");
-                    ui.color_edit_button_rgb(&mut l.color);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Ambiante");
-                    ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.0));
-                });
+    if show_panels {
+        egui::Panel::left("hierarchy")
+            .default_size(200.0)
+            .show_inside(root, |ui| {
+                hierarchy_panel(
+                    ui,
+                    scene,
+                    selection,
+                    selected,
+                    hier_filter,
+                    hier_new_group,
+                    hier_rename,
+                );
             });
-            ui.separator();
-            match *selection {
-                Some(i) if i < scene.objects.len() => {
-                    let obj = &mut scene.objects[i];
+    }
+
+    if show_panels {
+        egui::Panel::right("inspector")
+            .default_size(240.0)
+            .show_inside(root, |ui| {
+                ui.heading("Inspecteur");
+                ui.separator();
+                ui.collapsing("🔆 Éclairage (scène)", |ui| {
+                    let l = &mut scene.light;
+                    ui.label("Direction");
                     ui.horizontal(|ui| {
-                        ui.label("Nom");
-                        ui.text_edit_singleline(&mut obj.name);
-                        if ui.small_button("▲").on_hover_text("Monter").clicked() {
-                            actions.move_in_list = Some(false);
-                        }
-                        if ui.small_button("▼").on_hover_text("Descendre").clicked() {
-                            actions.move_in_list = Some(true);
-                        }
+                        ui.add(egui::DragValue::new(&mut l.dir[0]).speed(0.02).prefix("x "));
+                        ui.add(egui::DragValue::new(&mut l.dir[1]).speed(0.02).prefix("y "));
+                        ui.add(egui::DragValue::new(&mut l.dir[2]).speed(0.02).prefix("z "));
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Couleur (teinte)");
-                        ui.color_edit_button_rgb(&mut obj.color);
+                        ui.label("Couleur");
+                        ui.color_edit_button_rgb(&mut l.color);
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Texture");
-                        if ui.button("Choisir…").clicked() {
-                            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-                            if let Some(p) = rfd::FileDialog::new()
-                                .add_filter("Image", &["png", "jpg", "jpeg"])
-                                .pick_file()
-                            {
-                                obj.texture = p.to_string_lossy().into_owned();
-                            }
-                        }
-                        if !obj.texture.is_empty() && ui.button("✕").clicked() {
-                            obj.texture.clear();
-                        }
-                        let t = if obj.texture.is_empty() {
-                            "(aucune)".to_string()
-                        } else {
-                            std::path::Path::new(&obj.texture)
-                                .file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_default()
-                        };
-                        ui.label(t);
+                        ui.label("Ambiante");
+                        ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.0));
                     });
-                    ui.separator();
-                    transform_editor(ui, &mut obj.transform);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label("Physique");
-                        ui.selectable_value(&mut obj.physics, PhysicsKind::None, "Aucune");
-                        ui.selectable_value(&mut obj.physics, PhysicsKind::Static, "Statique");
-                        ui.selectable_value(&mut obj.physics, PhysicsKind::Dynamic, "Dynamique");
-                    });
-                    ui.separator();
-                    ui.collapsing("Audio", |ui| {
+                });
+                ui.separator();
+                match *selection {
+                    Some(i) if i < scene.objects.len() => {
+                        let obj = &mut scene.objects[i];
                         ui.horizontal(|ui| {
-                            if ui.button("Choisir un son…").clicked() {
-                                #[cfg(not(any(target_os = "ios", target_os = "android")))]
-                                if let Some(p) = rfd::FileDialog::new()
-                                    .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
-                                    .pick_file()
-                                {
-                                    obj.audio_clip = p.to_string_lossy().into_owned();
-                                }
+                            ui.label("Nom");
+                            ui.text_edit_singleline(&mut obj.name);
+                            if ui.small_button("▲").on_hover_text("Monter").clicked() {
+                                actions.move_in_list = Some(false);
                             }
-                            if !obj.audio_clip.is_empty() && ui.button("▶ Tester").clicked() {
-                                actions.play_audio = Some(obj.audio_clip.clone());
+                            if ui.small_button("▼").on_hover_text("Descendre").clicked() {
+                                actions.move_in_list = Some(true);
                             }
                         });
-                        let label = if obj.audio_clip.is_empty() {
-                            "(aucun)".to_string()
-                        } else {
-                            std::path::Path::new(&obj.audio_clip)
-                                .file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_default()
-                        };
-                        ui.label(label);
-                        ui.checkbox(&mut obj.audio_autoplay, "Jouer au lancement (Play)");
-                    });
-                    ui.separator();
-                    ui.collapsing("Script (Lua)", |ui| {
-                        ui.label("Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, dt, time");
-                        ui.add(
-                            egui::TextEdit::multiline(&mut obj.script)
-                                .code_editor()
-                                .desired_rows(4)
-                                .hint_text("ex : obj.ry = obj.ry + dt * 90"),
-                        );
-                    });
-                    ui.separator();
-                    if ui.button("🗑 Supprimer").clicked() {
-                        actions.delete = Some(i);
+                        ui.horizontal(|ui| {
+                            ui.label("Couleur (teinte)");
+                            ui.color_edit_button_rgb(&mut obj.color);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Texture");
+                            if ui.button("Choisir…").clicked() {
+                                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .add_filter("Image", &["png", "jpg", "jpeg"])
+                                    .pick_file()
+                                {
+                                    obj.texture = p.to_string_lossy().into_owned();
+                                }
+                            }
+                            if !obj.texture.is_empty() && ui.button("✕").clicked() {
+                                obj.texture.clear();
+                            }
+                            let t = if obj.texture.is_empty() {
+                                "(aucune)".to_string()
+                            } else {
+                                std::path::Path::new(&obj.texture)
+                                    .file_name()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            };
+                            ui.label(t);
+                        });
+                        ui.separator();
+                        transform_editor(ui, &mut obj.transform);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Physique");
+                            ui.selectable_value(&mut obj.physics, PhysicsKind::None, "Aucune");
+                            ui.selectable_value(&mut obj.physics, PhysicsKind::Static, "Statique");
+                            ui.selectable_value(
+                                &mut obj.physics,
+                                PhysicsKind::Dynamic,
+                                "Dynamique",
+                            );
+                        });
+                        ui.separator();
+                        ui.collapsing("Audio", |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button("Choisir un son…").clicked() {
+                                    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                                    if let Some(p) = rfd::FileDialog::new()
+                                        .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
+                                        .pick_file()
+                                    {
+                                        obj.audio_clip = p.to_string_lossy().into_owned();
+                                    }
+                                }
+                                if !obj.audio_clip.is_empty() && ui.button("▶ Tester").clicked() {
+                                    actions.play_audio = Some(obj.audio_clip.clone());
+                                }
+                            });
+                            let label = if obj.audio_clip.is_empty() {
+                                "(aucun)".to_string()
+                            } else {
+                                std::path::Path::new(&obj.audio_clip)
+                                    .file_name()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            };
+                            ui.label(label);
+                            ui.checkbox(&mut obj.audio_autoplay, "Jouer au lancement (Play)");
+                        });
+                        ui.separator();
+                        ui.collapsing("Script (Lua)", |ui| {
+                            ui.label(
+                                "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, dt, time",
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut obj.script)
+                                    .code_editor()
+                                    .desired_rows(4)
+                                    .hint_text("ex : obj.ry = obj.ry + dt * 90"),
+                            );
+                        });
+                        ui.separator();
+                        if ui.button("🗑 Supprimer").clicked() {
+                            actions.delete = Some(i);
+                        }
+                    }
+                    _ => {
+                        ui.label("Aucun objet sélectionné.");
                     }
                 }
-                _ => {
-                    ui.label("Aucun objet sélectionné.");
-                }
-            }
-        });
+            });
+    }
 
     // Région centrale 3D (ce qui reste après les panneaux) : base de l'aperçu mobile.
     let central = root.available_rect_before_wrap();
