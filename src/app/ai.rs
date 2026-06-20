@@ -14,6 +14,7 @@ script peut lire/écrire ces variables globales :
 - dt : temps écoulé (s), time : temps total (s)
 - input.jx, input.jy : axes du joystick (-1..1)
 - input.btn.NOM : booléen d'un bouton tactile
+- tilt.x, tilt.y : inclinaison (gyroscope, -1..1)
 - vibrate(ms) : retour haptique (mobile)
 Réponds UNIQUEMENT avec le code Lua, sans explication ni balises Markdown.";
 

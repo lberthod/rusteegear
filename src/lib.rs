@@ -212,6 +212,22 @@ impl ApplicationHandler for App {
                         _ => {}
                     }
                 }
+                // Gyroscope simulé : flèches → inclinaison (maintenue tant que pressée).
+                if let PhysicalKey::Code(code) = key_event.physical_key {
+                    let v = if key_event.state == ElementState::Pressed {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let tilt = &mut self.state.input_state.tilt;
+                    match code {
+                        KeyCode::ArrowLeft => tilt.0 = -v,
+                        KeyCode::ArrowRight => tilt.0 = v,
+                        KeyCode::ArrowUp => tilt.1 = v,
+                        KeyCode::ArrowDown => tilt.1 = -v,
+                        _ => {}
+                    }
+                }
             }
             _ => {}
         }

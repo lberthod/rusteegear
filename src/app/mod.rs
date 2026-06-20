@@ -48,6 +48,9 @@ pub struct PlayerInput {
     pub joy: (f32, f32),
     /// Boutons actuellement pressés (par nom).
     pub buttons: std::collections::HashSet<String>,
+    /// Inclinaison (gyroscope/accéléromètre), chaque composante dans [-1, 1].
+    /// Desktop : simulée aux flèches du clavier ; mobile : capteur natif (à brancher).
+    pub tilt: (f32, f32),
 }
 
 pub struct AppState {
@@ -1549,11 +1552,17 @@ fn run_script(
         Ok(())
     })?;
 
+    // Inclinaison (gyroscope) : `tilt.x`, `tilt.y`.
+    let tilt = lua.create_table()?;
+    tilt.set("x", input.tilt.0)?;
+    tilt.set("y", input.tilt.1)?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
     g.set("time", time)?;
     g.set("input", input_tbl)?;
+    g.set("tilt", tilt)?;
     g.set("vibrate", vibrate)?;
     func.call::<()>(())?;
 
@@ -1688,7 +1697,7 @@ mod tests {
         let mut col = [1.0, 1.0, 1.0];
         let mut input = PlayerInput {
             joy: (0.5, 0.0),
-            buttons: std::collections::HashSet::new(),
+            ..Default::default()
         };
         input.buttons.insert("B1".into());
         run_script(
@@ -1805,6 +1814,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
+    }
+
+    #[test]
+    fn script_reads_tilt() {
+        let lua = Lua::new();
+        let func = lua
+            .load("obj.x = obj.x + tilt.x; obj.z = obj.z + tilt.y")
+            .into_function()
+            .unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let input = PlayerInput {
+            tilt: (1.0, -1.0),
+            ..Default::default()
+        };
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!((t.position.x - 1.0).abs() < 1e-5);
+        assert!((t.position.z + 1.0).abs() < 1e-5);
     }
 
     #[test]
