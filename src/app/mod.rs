@@ -112,6 +112,10 @@ pub struct AppState {
     drag_pivot: Vec3,
     /// Le prochain clic ajoute/retire de la sélection (Cmd/Maj enfoncé).
     additive: bool,
+    /// Lumière ponctuelle sélectionnée (déplaçable au gizmo) ; exclusif avec `selection`.
+    pub selected_light: Option<usize>,
+    /// Lumière en cours de déplacement au gizmo (avec `active_axis`).
+    drag_light: Option<usize>,
 
     // --- historique (snapshots de la liste d'objets) ---
     undo_stack: VecDeque<Vec<SceneObject>>,
@@ -224,6 +228,8 @@ impl AppState {
             drag_orig_transforms: Vec::new(),
             drag_pivot: Vec3::ZERO,
             additive: false,
+            selected_light: None,
+            drag_light: None,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             lua: Lua::new(),
@@ -862,6 +868,21 @@ impl AppState {
                     self.dragging = true;
                     return;
                 }
+                // Gizmo de translation d'une lumière sélectionnée.
+                if let (Some(li), Some((cx, cy))) = (self.selected_light, self.last_cursor)
+                    && let Some(pl) = self.scene.point_lights.get(li)
+                {
+                    let origin = Vec3::from_array(pl.position);
+                    if let Some(axis) = self.pick_axis_at(origin, cx, cy) {
+                        if let Some(p) = self.axis_drag_param(origin, axis_dir(axis), cx, cy) {
+                            self.active_axis = Some(axis);
+                            self.drag_light = Some(li);
+                            self.drag_start_t = p;
+                            self.drag_orig_pos = origin;
+                        }
+                        return;
+                    }
+                }
                 // priorité au gizmo : si une poignée est cliquée, on démarre la manipulation.
                 if let (Some(sel), Some((cx, cy))) = (self.selection, self.last_cursor) {
                     let origin = self.scene.objects[sel].transform.position;
@@ -915,6 +936,7 @@ impl AppState {
             }
             InputEvent::PointerUp => {
                 if self.active_axis.take().is_some() {
+                    self.drag_light = None;
                     self.press_cursor = None;
                     return;
                 }
@@ -943,17 +965,36 @@ impl AppState {
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
                 {
-                    match self.pick(cx, cy) {
-                        // Cmd/Maj : ajoute/retire de la sélection ; sinon sélection simple.
-                        Some(i) if self.additive => self.toggle_select(i),
-                        Some(i) => self.select_single(i),
-                        None if !self.additive => self.clear_selection(),
-                        None => {}
+                    // Priorité au marqueur de lumière (petit), sinon objet 3D.
+                    if let Some(li) = self.pick_light(cx, cy) {
+                        self.selected_light = Some(li);
+                        self.clear_selection();
+                    } else {
+                        self.selected_light = None;
+                        match self.pick(cx, cy) {
+                            // Cmd/Maj : ajoute/retire de la sélection ; sinon sélection simple.
+                            Some(i) if self.additive => self.toggle_select(i),
+                            Some(i) => self.select_single(i),
+                            None if !self.additive => self.clear_selection(),
+                            None => {}
+                        }
                     }
                 }
                 self.press_cursor = None;
             }
             InputEvent::PointerMove { x, y } => {
+                // Déplacement d'une lumière sélectionnée (translate uniquement).
+                if let (Some(axis), Some(li)) = (self.active_axis, self.drag_light) {
+                    let a = axis_dir(axis);
+                    if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y)
+                        && let Some(pl) = self.scene.point_lights.get_mut(li)
+                    {
+                        let delta = a * (t - self.drag_start_t);
+                        pl.position = (self.drag_orig_pos + delta).to_array();
+                    }
+                    self.last_cursor = Some((x, y));
+                    return;
+                }
                 // manipulation via la poignée active
                 if let (Some(axis), Some(sel)) = (self.active_axis, self.selection) {
                     let a = axis_dir(axis);
@@ -1079,7 +1120,11 @@ impl AppState {
 
     /// Renvoie l'axe du gizmo sous le curseur (test écran à ~10 px), ou None.
     fn pick_axis(&self, sel: usize, px: f64, py: f64) -> Option<usize> {
-        let origin = self.scene.objects[sel].transform.position;
+        self.pick_axis_at(self.scene.objects[sel].transform.position, px, py)
+    }
+
+    /// Axe du gizmo de translation sous le curseur, pour une origine quelconque (~10 px).
+    fn pick_axis_at(&self, origin: Vec3, px: f64, py: f64) -> Option<usize> {
         let vp = self.camera.view_proj();
         let mut best: Option<(f64, usize)> = None;
         for axis in 0..3 {
@@ -1095,6 +1140,21 @@ impl AppState {
             }
         }
         best.map(|(_, a)| a)
+    }
+
+    /// Lumière ponctuelle dont le marqueur est sous le curseur (~14 px), ou None.
+    fn pick_light(&self, px: f64, py: f64) -> Option<usize> {
+        let vp = self.camera.view_proj();
+        let mut best: Option<(f64, usize)> = None;
+        for (i, pl) in self.scene.point_lights.iter().enumerate() {
+            if let Some((sx, sy)) = self.project_with(vp, Vec3::from_array(pl.position)) {
+                let d = (px - sx).hypot(py - sy);
+                if d < 14.0 && best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, i));
+                }
+            }
+        }
+        best.map(|(_, i)| i)
     }
 
     /// Paramètre `t` du point du curseur projeté sur l'axe (via le plan le plus face caméra).

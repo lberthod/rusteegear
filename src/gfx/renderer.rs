@@ -488,8 +488,9 @@ impl Renderer {
         });
         // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
         // + un marqueur 3 axes (6 sommets) par lumière ponctuelle + 6 pour la caméra de jeu.
-        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6.
-        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 6;
+        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6
+        // + gizmo translate d'une lumière sélectionnée (6).
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 12;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
             size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
@@ -1029,6 +1030,24 @@ impl Renderer {
                     verts.push(GizmoVertex {
                         position: [eye.x + d.x, eye.y + d.y, eye.z + d.z],
                         color: col,
+                    });
+                }
+            }
+            // Gizmo de translation d'une lumière sélectionnée (3 axes colorés).
+            if let Some(li) = app.selected_light
+                && let Some(pl) = app.scene.point_lights.get(li)
+            {
+                let o = glam::Vec3::from_array(pl.position);
+                let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
+                for (axis, color) in colors.iter().enumerate() {
+                    let end = o + axis_dir(axis) * GIZMO_LEN;
+                    verts.push(GizmoVertex {
+                        position: o.to_array(),
+                        color: *color,
+                    });
+                    verts.push(GizmoVertex {
+                        position: end.to_array(),
+                        color: *color,
                     });
                 }
             }
