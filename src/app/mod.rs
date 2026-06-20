@@ -81,6 +81,8 @@ pub struct AppState {
     pub view_rect_px: (f32, f32, f32, f32),
     /// Barre de vie du HUD (0..1) pilotée par `set_health` ; `None` = pas de barre.
     pub hud_health: Option<f32>,
+    /// Grille de référence au sol affichée en mode édition.
+    pub show_grid: bool,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -203,6 +205,7 @@ impl AppState {
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
             hud_health: None,
+            show_grid: true,
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),

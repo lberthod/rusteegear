@@ -68,6 +68,8 @@ pub struct StatusInfo<'a> {
     pub backend: &'a str,
     /// Une génération de script par IA est en cours.
     pub ai_busy: bool,
+    /// La grille de référence est-elle affichée ?
+    pub grid: bool,
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
@@ -127,6 +129,8 @@ pub struct UiActions {
     pub align_axis: Option<usize>,
     /// Distribuer la sélection à intervalles égaux le long d'un axe.
     pub distribute_axis: Option<usize>,
+    /// Basculer l'affichage de la grille de référence.
+    pub toggle_grid: bool,
 }
 
 impl Editor {
@@ -1636,6 +1640,13 @@ fn build_ui(
                 .clicked()
             {
                 scene.camera_follow = !scene.camera_follow;
+            }
+            if ui
+                .selectable_label(status.grid, "▦ Grille")
+                .on_hover_text("Grille de référence au sol (édition)")
+                .clicked()
+            {
+                actions.toggle_grid = true;
             }
             // Build APK : différenciateur du moteur, mis en avant à droite.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

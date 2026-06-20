@@ -483,8 +483,9 @@ impl Renderer {
         });
         // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
         // + un marqueur 3 axes (6 sommets) par lumière ponctuelle + 6 pour la caméra de jeu.
-        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6.
-        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 6;
+        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6
+        // + grille de référence (21 lignes × 2 axes × 2 sommets = 84).
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 6 + 84;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
             size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
@@ -758,6 +759,7 @@ impl Renderer {
                 fps: app.fps(),
                 backend: &self.backend,
                 ai_busy: app.ai_busy,
+                grid: app.show_grid,
             };
             let (full_output, actions) = self.editor.run(
                 &self.window,
@@ -875,6 +877,9 @@ impl Renderer {
             if let Some(axis) = actions.distribute_axis {
                 app.distribute_selection_axis(axis);
             }
+            if actions.toggle_grid {
+                app.show_grid = !app.show_grid;
+            }
             Some(full_output)
         };
 
@@ -915,6 +920,41 @@ impl Renderer {
             0
         } else {
             let mut verts: Vec<GizmoVertex> = Vec::new();
+            // Grille de référence au sol (y = 0), de -10 à 10 ; axes X/Z accentués.
+            if app.show_grid {
+                const N: i32 = 10;
+                for i in -N..=N {
+                    let f = i as f32;
+                    let cx = if i == 0 {
+                        [0.55, 0.3, 0.3]
+                    } else {
+                        [0.28, 0.28, 0.3]
+                    };
+                    let cz = if i == 0 {
+                        [0.3, 0.3, 0.55]
+                    } else {
+                        [0.28, 0.28, 0.3]
+                    };
+                    // lignes parallèles à Z (x = f)
+                    verts.push(GizmoVertex {
+                        position: [f, 0.0, -N as f32],
+                        color: cx,
+                    });
+                    verts.push(GizmoVertex {
+                        position: [f, 0.0, N as f32],
+                        color: cx,
+                    });
+                    // lignes parallèles à X (z = f)
+                    verts.push(GizmoVertex {
+                        position: [-N as f32, 0.0, f],
+                        color: cz,
+                    });
+                    verts.push(GizmoVertex {
+                        position: [N as f32, 0.0, f],
+                        color: cz,
+                    });
+                }
+            }
             // Marqueur en croix 3D à chaque lumière ponctuelle, teinté par sa couleur.
             for pl in &app.scene.point_lights {
                 let c = pl.position;
