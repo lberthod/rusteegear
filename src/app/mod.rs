@@ -16,7 +16,42 @@ use mlua::Lua;
 
 use crate::gfx::camera::OrbitCamera;
 use crate::gfx::mesh::MeshData;
-use crate::scene::{GameCamera, ImportedMesh, MeshKind, Scene, SceneObject, Transform};
+use crate::scene::{
+    GameCamera, ImportedMesh, MeshKind, MobileControls, PointLight, Scene, SceneObject, Transform,
+};
+
+/// Instantané léger de la scène pour l'undo/redo (sans les meshes importés, lourds
+/// et rarement modifiés) : objets + lumières + caméra de jeu + contrôles + groupes.
+#[derive(Clone)]
+struct SceneSnapshot {
+    objects: Vec<SceneObject>,
+    groups: Vec<String>,
+    point_lights: Vec<PointLight>,
+    mobile: MobileControls,
+    camera_follow: bool,
+    game_camera: Option<GameCamera>,
+}
+
+impl SceneSnapshot {
+    fn capture(s: &Scene) -> Self {
+        Self {
+            objects: s.objects.clone(),
+            groups: s.groups.clone(),
+            point_lights: s.point_lights.clone(),
+            mobile: s.mobile.clone(),
+            camera_follow: s.camera_follow,
+            game_camera: s.game_camera,
+        }
+    }
+    fn restore(self, s: &mut Scene) {
+        s.objects = self.objects;
+        s.groups = self.groups;
+        s.point_lights = self.point_lights;
+        s.mobile = self.mobile;
+        s.camera_follow = self.camera_follow;
+        s.game_camera = self.game_camera;
+    }
+}
 use input::InputEvent;
 
 /// Résultat d'un import glTF effectué en thread de fond.
@@ -118,8 +153,8 @@ pub struct AppState {
     drag_light: Option<usize>,
 
     // --- historique (snapshots de la liste d'objets) ---
-    undo_stack: VecDeque<Vec<SceneObject>>,
-    redo_stack: Vec<Vec<SceneObject>>,
+    undo_stack: VecDeque<SceneSnapshot>,
+    redo_stack: Vec<SceneSnapshot>,
 
     // --- scripting ---
     lua: Lua,
@@ -583,9 +618,10 @@ impl AppState {
 
     // --- historique ---
 
-    /// Capture l'état courant des objets avant une modification (vide la pile redo).
+    /// Capture l'état courant de la scène avant une modification (vide la pile redo).
     pub fn push_undo(&mut self) {
-        self.undo_stack.push_back(self.scene.objects.clone());
+        self.undo_stack
+            .push_back(SceneSnapshot::capture(&self.scene));
         if self.undo_stack.len() > 50 {
             self.undo_stack.pop_front(); // O(1), contrairement à Vec::remove(0)
         }
@@ -594,17 +630,20 @@ impl AppState {
 
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo_stack.pop_back() {
-            self.redo_stack.push(self.scene.objects.clone());
-            self.scene.objects = prev;
+            self.redo_stack.push(SceneSnapshot::capture(&self.scene));
+            prev.restore(&mut self.scene);
             self.clear_selection();
+            self.selected_light = None;
         }
     }
 
     pub fn redo(&mut self) {
         if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push_back(self.scene.objects.clone());
-            self.scene.objects = next;
+            self.undo_stack
+                .push_back(SceneSnapshot::capture(&self.scene));
+            next.restore(&mut self.scene);
             self.clear_selection();
+            self.selected_light = None;
         }
     }
 
@@ -875,6 +914,7 @@ impl AppState {
                     let origin = Vec3::from_array(pl.position);
                     if let Some(axis) = self.pick_axis_at(origin, cx, cy) {
                         if let Some(p) = self.axis_drag_param(origin, axis_dir(axis), cx, cy) {
+                            self.push_undo(); // déplacement de lumière annulable
                             self.active_axis = Some(axis);
                             self.drag_light = Some(li);
                             self.drag_start_t = p;
@@ -1986,6 +2026,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vib, vec![80.0]);
+    }
+
+    #[test]
+    fn undo_covers_point_lights() {
+        let mut app = AppState::new();
+        let n0 = app.scene.point_lights.len();
+        app.push_undo();
+        app.scene.point_lights.push(PointLight::default());
+        assert_eq!(app.scene.point_lights.len(), n0 + 1);
+        app.undo();
+        assert_eq!(app.scene.point_lights.len(), n0); // lumière retirée par l'undo
+        app.redo();
+        assert_eq!(app.scene.point_lights.len(), n0 + 1); // ré-ajoutée
     }
 
     #[test]
