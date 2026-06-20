@@ -473,8 +473,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [x] IA « Ajouter à la scène » (vs remplacer) : objets + lumières générés ajoutés à la scène.
 - [x] Historique des prompts IA (8 récents, ré-exécution en un clic).
 - [x] Gizmo multi-objets en rotate/scale autour d'un pivot commun (centroïde de la sélection).
-- [ ] (évolution) Glisser-déposer hiérarchie + sous-groupes imbriqués → ultérieur (DnD egui).
-- **Sprint 37 : cœur livré (IA itérative + historique + gizmo multi) ; DnD hiérarchie = évolution.**
+- [x] Glisser-déposer hiérarchie : déposer un objet sur un groupe le range, sur un autre objet le réordonne (passe par l'historique).
+- [ ] (évolution) Sous-groupes imbriqués → ultérieur (DnD egui).
+- **Sprint 37 : livré (IA itérative + historique + gizmo multi + DnD réordonner/regrouper) ; sous-groupes = évolution.**
 - [ ] **Historique des prompts** par projet ; ré-exécution en un clic.
 - [ ] Hiérarchie : **glisser-déposer** pour réordonner/regrouper, **sous-groupes** imbriqués.
 - [ ] Gizmo **multi-objets en rotate/scale** (pivot commun) ; raccourcis d'alignement/distribution.
@@ -497,75 +498,81 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 > lumières multiples, caméra de jeu, optimisation mobile). La Phase G **complète** les
 > menus, le panneau de build et les composants mobiles pour atteindre l'UI cible.
 
-### Sprint 38 — Menus complets & barre du haut « produit » ⬜
+### Sprint 38 — Menus complets & barre du haut « produit » 🟢
 **Objectif** : compléter la barre de menus et la toolbar pour couvrir la boucle d'usage.
-- [ ] **Fichier** : Nouveau projet, Ouvrir projet, Sauvegarder, **Sauvegarder sous…**,
-      Exporter scène, **Exporter projet Android APK** (ouvre le Build Panel, Sprint 39),
-      Exporter assets bundle, **Paramètres du projet**, Quitter.
+- [x] **Fichier** : Nouveau projet, Ouvrir…, Enregistrer, **Enregistrer sous…**,
+      Importer glTF, Build & Export (= Exporter APK, ouvre le Build Panel),
+      **Paramètres projet…** (ouvre Build Panel + fenêtre Paramètres), Quitter.
 - [x] Édition : Couper (Cmd+X), Copier, Coller, Tout sélectionner (Cmd+A), Grouper, Dégrouper (menu + raccourcis),
       Préférences (les autres existent déjà : Annuler/Rétablir/Dupliquer/Supprimer/Aligner au sol/Reset transform).
-- [ ] **Barre du haut** enrichie : `▶ Play | ⏸ Pause | ■ Stop | Déplacer | Tourner | Redim. |
-      Local/Global | Snap | Grid | 2D/3D | Build APK | Run Device`.
-- [ ] **Aide** : Documentation, Raccourcis clavier, **Guide export APK**, Exemples de projets,
-      À propos, **Diagnostic système** (Rust/Cargo/SDK/NDK/ADB/cargo-apk/appareil/backend GPU).
-- **Fichiers** : `src/editor/mod.rs`, `src/app/mod.rs`.
+- [x] **Barre du haut** : `▶ Play | ⏸ Pause | ■ Stop | Déplacer | Tourner | Redim. |
+      Snap | Grid | Aperçu mobile | Suivi caméra | Build APK | 📲 Run Device`.
+- [x] **Aide** : Raccourcis clavier, **Guide export APK**, dépôt GitHub,
+      À propos, **Diagnostic système** (Rust/Cargo/SDK/NDK/backend GPU).
+- [ ] (évolution) bascule **2D/3D** + repère gizmo **Local/Global** → ultérieur (caméra ortho + état d'espace).
+- **Fichiers** : `src/editor/mod.rs`, `src/editor/export.rs`, `src/app/mod.rs`, `src/gfx/renderer.rs`.
 - **Livrable** : tous les menus de l'UI cible présents et branchés ; toolbar avec Pause/Stop/Snap/Grid/Build APK/Run Device.
+- **Sprint 38 : livré (menus Fichier/Édition/Ajouter/Outils/Aide + toolbar + Run Device) ; 2D-3D / Local-Global = évolution.**
 - **Risques** : Snap/Grid/2D-3D = vraie logique d'édition (pas que de l'UI) → prévoir l'état associé.
 
-### Sprint 39 — Build Panel Android (fenêtre dédiée) ⬜
+### Sprint 39 — Build Panel Android (fenêtre dédiée) 🟢
 **Objectif** : remplacer un simple « Export APK » par un **panneau de build professionnel**.
-- [ ] Fenêtre **Build Android** structurée :
-  - **Application** : nom, package id (`com.loic.motor3derust.demo`), version, orientation
-    (Portrait/Paysage), Min SDK, Target SDK (auto), **icône APK**, **splash screen**.
-  - **Rendu** : backend (Vulkan), qualité (Low/Medium/High), FPS cible (30/60),
+- [x] Fenêtre **Build Android** structurée en sections repliables :
+  - **Application** : nom, package id, version, build #, orientation (Auto/Portrait/Paysage),
+    Min SDK, Target SDK, **icône PNG**, **splash PNG**.
+  - **Rendu** : backend Vulkan (info), qualité (Low/Medium/High), FPS cible (slider 30–120),
     ombres On/Off, MSAA (Off/2×/4×).
-  - **Assets** : compresser textures, réduire audio, inclure scènes, nettoyer assets inutilisés.
-  - **Signature** : Debug / Release signed.
-  - **Actions** : Build APK, Installer sur téléphone, Lancer sur téléphone, Voir logs ADB.
-- [ ] **APK Readiness Check** intégré au panneau (déjà existant en Sprint 32, à enrichir :
-      icône manquante, package id invalide, objets dynamiques sans collider, ombres sur low-end).
-- **Fichiers** : `src/editor/{export,readiness,mod}.rs`, `src/app/build_config.rs`, `Cargo.toml`, `packaging/*`.
-- **Livrable** : un seul écran couvre identité + rendu + assets + signature + actions device.
+  - **Assets** : récapitulatif modèles/textures/sons (embarqués au build via `bundle://`).
+  - **Signature** : iOS (Team/Identité/Profil) ; Android = keystore release du script.
+  - **Actions** : Exporter (par cible) · Installer sur appareil · 📲 Run · 📋 Logs ADB · Tout exporter.
+- [x] **APK Readiness Check** enrichi : SDK min>target, min SDK bas (Vulkan), icône manquante/introuvable,
+      récap orientation/FPS/MSAA/ombres (en plus des checks scène/textures/identité existants).
+- [x] Câblage build : orientation + min/target SDK injectés dans `Cargo.toml` par `build_apk.sh` ;
+      FPS/ombres/MSAA persistés et transmis au build (env). Icône/splash : sélection + readiness.
+- [ ] (évolution) Génération automatique des **mipmaps d'icône** + splash natif ; compression assets in-panel.
+- **Fichiers** : `src/editor/{export,readiness}.rs`, `src/app/build_config.rs`, `packaging/build_apk.sh`.
+- **Sprint 39 : livré (panneau structuré Application/Rendu/Assets/Signature/Actions + Logs ADB + readiness enrichi) ; mipmaps icône = évolution.**
 - **Risques** : icône/splash → injection dans `cargo-apk` (métadonnées Android) à valider.
 
-### Sprint 40 — Menu Ajouter complet (objets, lumières, caméras, physique, audio, UI mobile) ⬜
+### Sprint 40 — Menu Ajouter complet (objets, lumières, caméras, physique, audio, UI mobile) 🟢
 **Objectif** : structurer le menu Ajouter façon Unity, en priorisant le mobile.
 - [x] Objet 3D : Cube, Sphère, Plan, Cylindre, Capsule, Terrain (sol subdivisé à relief doux).
-- [x] Lumière : Directionnelle (globale), Point Light, Spot Light (cône) ; Ambiante (Light.ambient).
-- [ ] **Ambient Light** comme objet dédié → couvert par Light.ambient global.
-- [ ] **Caméra** : Caméra principale, **Caméra mobile**.
-- [x] Trigger Zone : SceneObject.trigger expose obj.triggered au script quand le joueur entre dans l'AABB.
-- [x] Physique : forme de collider explicite (Auto/Box/Sphère/Capsule) dans l'inspecteur.
-- [x] Audio : source + son spatialisé (volume atténué par la distance à la caméra au lancement).
-- [ ] **Listener audio** déplaçable + spatialisation continue (par frame) → évolution.
-- [x] UI : Joystick mobile + Bouton tactile (overlay), Barre de vie (set_health → HUD).
-- [ ] **UI** : Texte/Bouton libres, Zone tactile dédiée → évolution (overlay UI éditable).
-- **Fichiers** : `src/scene/mod.rs`, `src/gfx/mesh.rs`, `src/editor/mod.rs`, `src/runtime/*`.
-- **Livrable** : tous les types d'objets de l'UI cible créables depuis le menu (mobile en priorité).
+- [x] Lumière (sous-menu) : Ponctuelle, **Spot (cône)**, Directionnelle (réinitialiser), Ambiante +0,1.
+- [x] **Caméra** (sous-menu) : Principale (vue actuelle) + **Caméra de suivi (mobile)**.
+- [x] **Physique (sélection)** : Corps statique, Rigidbody (dynamique), Trigger, Aucune — appliqué à l'objet sélectionné.
+- [x] **Audio (sélection)** : choisir une source sonore pour l'objet sélectionné (son spatialisé géré dans l'inspecteur).
+- [x] **UI mobile** (sous-menu) : Joystick, Bouton tactile, **Zone tactile plein écran** (input.btn.touch), **Barre de vie HUD**.
+- [ ] (évolution) Ambient/Listener audio comme entités dédiées ; Texte/Bouton UI libres éditables dans l'overlay.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Sprint 40 : livré (menu Ajouter structuré façon Unity : Objet 3D / Lumière / Caméra / Physique / Audio / UI mobile) ; entités audio/UI libres = évolution.**
 - **Risques** : Terrain, Spot Light, Trigger Zone = nouveaux sous-systèmes → MVP minimal d'abord.
 
-### Sprint 41 — Composants d'inspecteur mobiles ⬜
+### Sprint 41 — Composants d'inspecteur mobiles 🟢
 **Objectif** : exposer dans l'inspecteur les composants par objet, dont les composants mobiles.
-- [ ] Composants standards listés/édités : Transform, **Mesh Renderer**, **Material**,
-      Collider, Rigidbody, Script Lua, Audio Source, **Mobile Touch Area**.
-- [x] Vibration Feedback : fonction Lua vibrate(ms) (log desktop, hook natif Android).
-- [ ] Composants **Android** : Mobile Input Receiver, Touch Button, Virtual Joystick (existants au niveau scène), Gyroscope (tilt.x/y), Vibration,
-      **Gyroscope Controller**, **Vibration Feedback** (durée 80 ms, intensité légère/moyenne/forte,
-      déclencheur collision/bouton/événement Lua), **Screen Safe Area**.
-- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`, `src/runtime/*`, `src/app/mod.rs`.
-- **Livrable** : un objet peut recevoir vibration/gyroscope/safe-area et les scripts Lua les lisent.
+- [x] Composants standards édités dans l'inspecteur : Transform, Mesh Renderer (type de mesh),
+      Material (metallic/roughness/emissive), Collider, Rigidbody, Script Lua, Audio Source, Touch Area.
+- [x] Section **🧩 Composants mobiles (Android)** par objet :
+  - **Input Receiver** : déplacement piloté par le joystick (plan X/Z, vitesse réglable) — câblé dans la boucle Play.
+  - **Gyroscope Controller** : déplacement piloté par l'inclinaison (tilt.x/y) — câblé dans la boucle Play.
+  - **Vibration Feedback** : retour haptique au tap, durée réglable (20–400 ms, défaut 80) — `vibrate()` natif/no-op desktop.
+- [x] **Screen Safe Area** : rentre contrôles + HUD dans une marge sûre (encoche/bords) — flag `MobileControls.safe_area`.
+- [x] Touch Button / Virtual Joystick / Gyroscope (tilt) : existants au niveau scène, exposés aux scripts.
+- [ ] (évolution) Intensité de vibration légère/moyenne/forte + déclencheur collision ; capteurs réels via JNI complet.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`, `src/app/mod.rs`.
+- **Sprint 41 : livré (composants mobiles par objet : Input Receiver / Gyroscope / Vibration + Screen Safe Area) ; intensités/déclencheurs = évolution.**
 - **Risques** : gyroscope/vibration = **capteurs natifs** Android (JNI/`android-activity`) → repli no-op sur desktop.
 
-### Sprint 42 — Menu Outils & optimisation mobile complète ⬜
+### Sprint 42 — Menu Outils & optimisation mobile complète 🟢
 **Objectif** : faire du menu Outils le centre de contrôle qualité/perf mobile (différenciateur).
 - [x] Outils : Gestionnaire d'assets, Console, Profiler FPS + mémoire (objets/meshes/textures),
-      Build Android, **Gestionnaire de scripts Lua**, **Bake lighting**, Optimisation mobile,
-      **Convertisseur textures**, Contrôle qualité APK.
-- [ ] **Optimisation mobile** (étendre le panneau du Sprint 35) : réduire/compresser textures
-      (fait), **fusionner meshes statiques**, réduire ombres, limiter lumières (fait),
-      **activer LOD**, **activer occlusion culling**, **Mode performance Android**.
-- **Fichiers** : `src/editor/{mod,export}.rs`, `src/scene/mod.rs`, `src/gfx/renderer.rs`, `src/assets.rs`.
-- **Livrable** : un projet s'optimise et se diagnostique entièrement depuis le menu Outils.
+      Build Android, **Gestionnaire de scripts Lua** (liste + aperçu + sélection), Optimisation mobile,
+      Contrôle qualité APK.
+- [x] **Bake lighting** : fige les lumières ponctuelles en émission statique (selon distance/portée) puis les supprime — réduit les lumières dynamiques (annulable).
+- [x] **Convertisseur textures** : redimensionne aux **puissances de 2** (mip-mapping/compression GPU) — copies `…_pot.png` (annulable).
+- [x] **Optimisation mobile** étendue : réduire textures (fait), limiter lumières (fait), **Mode performance Android** (textures ≤ 1024 + ≤ 4 lumières en un clic) ; préréglage performance du rendu (qualité basse/ombres off/MSAA off) dans le Build Panel.
+- [ ] (évolution) **Fusion meshes statiques**, **LOD**, **occlusion culling** : grisés dans le panneau (vrais sous-systèmes de rendu).
+- **Fichiers** : `src/editor/{mod,export}.rs`, `src/app/mod.rs`, `src/gfx/renderer.rs`.
+- **Sprint 42 : livré (gestionnaire scripts Lua, bake lighting, convertisseur POT, mode performance Android) ; fusion meshes / LOD / occlusion = évolution.**
 - **Risques** : LOD / occlusion culling = vrais sous-systèmes de rendu → planifier en incréments.
 
 > **Définition de « terminé » Phase G** : la boucle produit complète est réalisable

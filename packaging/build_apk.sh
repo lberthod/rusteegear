@@ -38,6 +38,26 @@ if [ -n "${APP_VERSION:-}" ]; then
     perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$APP_VERSION\"/m" Cargo.toml
 fi
 
+# --- Application Android (Sprint 39) : SDK + orientation depuis le Build Panel ---
+if [ -n "${MIN_SDK:-}" ]; then
+    echo "▶ minSdkVersion=$MIN_SDK"
+    perl -0pi -e "s/^min_sdk_version = .*/min_sdk_version = $MIN_SDK/m" Cargo.toml
+fi
+if [ -n "${TARGET_SDK:-}" ]; then
+    echo "▶ targetSdkVersion=$TARGET_SDK"
+    perl -0pi -e "s/^target_sdk_version = .*/target_sdk_version = $TARGET_SDK/m" Cargo.toml
+fi
+if [ -n "${ANDROID_ORIENTATION:-}" ]; then
+    echo "▶ orientation=$ANDROID_ORIENTATION"
+    # Table d'activité ajoutée en fin de fichier (ordre des tables TOML indifférent) ;
+    # Cargo.toml est restauré ensuite par le trap.
+    printf '\n[package.metadata.android.application.activity]\norientation = "%s"\n' \
+        "$ANDROID_ORIENTATION" >> Cargo.toml
+fi
+if [ -n "${ICON_PATH:-}" ]; then
+    echo "ℹ Icône demandée : $ICON_PATH (génération des mipmaps non automatisée)"
+fi
+
 echo "▶ Build APK (release)…"
 # --lib : l'app Android est le cdylib (android_main). Sans ça, cargo-apk voit aussi
 # le bin desktop (main.rs) et panique (« Bin is not compatible with Cdylib »).

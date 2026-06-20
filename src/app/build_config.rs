@@ -6,6 +6,68 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Orientation d'écran imposée à l'app Android.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Orientation {
+    #[default]
+    Sensor,
+    Portrait,
+    Landscape,
+}
+
+impl Orientation {
+    /// Valeur `android:screenOrientation` du manifeste.
+    pub fn manifest_value(self) -> &'static str {
+        match self {
+            Orientation::Sensor => "sensor",
+            Orientation::Portrait => "portrait",
+            Orientation::Landscape => "landscape",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Orientation::Sensor => "Auto (capteur)",
+            Orientation::Portrait => "Portrait",
+            Orientation::Landscape => "Paysage",
+        }
+    }
+}
+
+/// Niveau de qualité de rendu visé par le player mobile.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RenderQuality {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl RenderQuality {
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderQuality::Low => "Basse (perf)",
+            RenderQuality::Medium => "Moyenne",
+            RenderQuality::High => "Haute (qualité)",
+        }
+    }
+}
+
+fn default_min_sdk() -> u32 {
+    26
+}
+fn default_target_sdk() -> u32 {
+    33
+}
+fn default_fps() -> u32 {
+    60
+}
+fn default_true() -> bool {
+    true
+}
+fn default_msaa() -> u32 {
+    1
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BuildConfig {
     /// Nom affiché / nom du fichier de sortie.
@@ -27,6 +89,37 @@ pub struct BuildConfig {
     /// Chemin d'un profil de provisioning `.mobileprovision` (pour installer sur device).
     #[serde(default)]
     pub ios_profile: String,
+
+    // --- Application Android (Sprint 39) ---
+    /// Orientation d'écran imposée.
+    #[serde(default)]
+    pub orientation: Orientation,
+    /// `minSdkVersion` (API niveau minimal supporté).
+    #[serde(default = "default_min_sdk")]
+    pub min_sdk: u32,
+    /// `targetSdkVersion` (API niveau ciblé).
+    #[serde(default = "default_target_sdk")]
+    pub target_sdk: u32,
+    /// Icône PNG de l'app (vide = icône par défaut du projet).
+    #[serde(default)]
+    pub icon_path: String,
+    /// Image de splash/écran de démarrage (vide = aucun).
+    #[serde(default)]
+    pub splash_path: String,
+
+    // --- Rendu mobile (Sprint 39) : visés par le player, persistés et transmis au build ---
+    /// Qualité de rendu visée.
+    #[serde(default)]
+    pub render_quality: RenderQuality,
+    /// FPS cible (cadence visée par le player).
+    #[serde(default = "default_fps")]
+    pub target_fps: u32,
+    /// Ombres activées dans le player.
+    #[serde(default = "default_true")]
+    pub shadows: bool,
+    /// Anti-aliasing MSAA (1 = désactivé, 2 ou 4 = échantillons).
+    #[serde(default = "default_msaa")]
+    pub msaa: u32,
 }
 
 impl Default for BuildConfig {
@@ -39,6 +132,15 @@ impl Default for BuildConfig {
             ios_team_id: String::new(),
             ios_identity: String::new(),
             ios_profile: String::new(),
+            orientation: Orientation::default(),
+            min_sdk: default_min_sdk(),
+            target_sdk: default_target_sdk(),
+            icon_path: String::new(),
+            splash_path: String::new(),
+            render_quality: RenderQuality::default(),
+            target_fps: default_fps(),
+            shadows: default_true(),
+            msaa: default_msaa(),
         }
     }
 }
