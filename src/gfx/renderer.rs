@@ -821,6 +821,7 @@ impl Renderer {
                 &mut app.scene,
                 &mut app.selection,
                 &mut app.selected,
+                &mut app.selected_light,
                 &mut app.playing,
                 &mut app.paused,
                 &mut app.gizmo_mode,

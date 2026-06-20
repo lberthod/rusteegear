@@ -219,6 +219,7 @@ impl Editor {
         scene: &mut Scene,
         selection: &mut Option<usize>,
         selected: &mut Vec<usize>,
+        selected_light: &mut Option<usize>,
         playing: &mut bool,
         paused: &mut bool,
         gizmo_mode: &mut GizmoMode,
@@ -248,6 +249,7 @@ impl Editor {
                 scene,
                 selection,
                 selected,
+                selected_light,
                 playing,
                 paused,
                 gizmo_mode,
@@ -366,6 +368,7 @@ fn hierarchy_panel(
     scene: &mut Scene,
     selection: &mut Option<usize>,
     selected: &mut Vec<usize>,
+    selected_light: &mut Option<usize>,
     filter: &mut String,
     new_group: &mut String,
     rename: &mut Option<(usize, String)>,
@@ -520,6 +523,43 @@ fn hierarchy_panel(
             o.name = name;
         }
         *rename = None;
+    }
+
+    // Section « Lumières » : liste les lumières ponctuelles comme des entités.
+    if !scene.point_lights.is_empty() {
+        ui.separator();
+        egui::CollapsingHeader::new(format!("💡 Lumières ({})", scene.point_lights.len()))
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut remove = None;
+                for i in 0..scene.point_lights.len() {
+                    let spot = scene.point_lights[i].spot_angle > 0.0;
+                    let label = if spot {
+                        format!("🔦 Spot {i}")
+                    } else {
+                        format!("💡 Point {i}")
+                    };
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(*selected_light == Some(i), label)
+                            .clicked()
+                        {
+                            *selected_light = Some(i);
+                            *selection = None;
+                            selected.clear();
+                        }
+                        if ui.small_button("🗑").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove {
+                    scene.point_lights.remove(i);
+                    if *selected_light == Some(i) {
+                        *selected_light = None;
+                    }
+                }
+            });
     }
 }
 
@@ -1474,6 +1514,7 @@ fn build_ui(
     scene: &mut Scene,
     selection: &mut Option<usize>,
     selected: &mut Vec<usize>,
+    selected_light: &mut Option<usize>,
     playing: &mut bool,
     paused: &mut bool,
     gizmo_mode: &mut GizmoMode,
@@ -1674,6 +1715,7 @@ fn build_ui(
                     scene,
                     selection,
                     selected,
+                    selected_light,
                     hier_filter,
                     hier_new_group,
                     hier_rename,
