@@ -1050,6 +1050,7 @@ fn tool_windows(
                         ("W", "Déplacer (translation)"),
                         ("E", "Tourner (rotation)"),
                         ("R", "Redimensionner (échelle)"),
+                        ("F", "Recentrer la caméra sur la sélection"),
                         ("Cmd/Ctrl + Z", "Annuler"),
                         ("Cmd/Ctrl + Maj + Z", "Rétablir"),
                         ("Cmd/Ctrl + D", "Dupliquer la sélection"),

@@ -201,6 +201,7 @@ impl ApplicationHandler for App {
                         KeyCode::KeyW => self.state.set_gizmo_mode(GizmoMode::Translate),
                         KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
                         KeyCode::KeyR if !cmd => self.state.set_gizmo_mode(GizmoMode::Scale),
+                        KeyCode::KeyF if !cmd => self.state.frame_selected(),
                         KeyCode::KeyZ if cmd && st.shift_key() => self.state.redo(),
                         KeyCode::KeyZ if cmd => self.state.undo(),
                         KeyCode::KeyD if cmd => self.state.duplicate_selected(),

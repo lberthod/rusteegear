@@ -813,6 +813,22 @@ impl AppState {
         }
     }
 
+    /// Recentre la caméra sur l'objet (ou la lumière) sélectionné (« frame selected », touche F).
+    pub fn frame_selected(&mut self) {
+        let target = self
+            .selection
+            .and_then(|i| self.scene.objects.get(i))
+            .map(|o| o.transform.position)
+            .or_else(|| {
+                self.selected_light
+                    .and_then(|i| self.scene.point_lights.get(i))
+                    .map(|pl| Vec3::from_array(pl.position))
+            });
+        if let Some(t) = target {
+            self.camera.target = t;
+        }
+    }
+
     /// Charge la démo gameplay complète (joystick/gyro/saut/zone/vie/tap).
     pub fn load_gameplay_demo(&mut self) {
         self.push_undo();
