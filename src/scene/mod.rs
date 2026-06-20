@@ -477,6 +477,26 @@ impl Scene {
         }
     }
 
+    /// Sélectionne les indices des `max` lumières ponctuelles les **plus proches** de
+    /// `cam` (culling/LOD de lumières : seules les plus pertinentes sont envoyées au
+    /// shader quand la scène en compte plus que la limite). Ordre : de la plus proche
+    /// à la plus éloignée. Si le nombre de lumières ≤ `max`, les renvoie toutes dans
+    /// l'ordre d'origine (aucun tri).
+    pub fn nearest_point_lights(&self, cam: Vec3, max: usize) -> Vec<usize> {
+        let n = self.point_lights.len();
+        if n <= max {
+            return (0..n).collect();
+        }
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_by(|&a, &b| {
+            let da = (Vec3::from(self.point_lights[a].position) - cam).length_squared();
+            let db = (Vec3::from(self.point_lights[b].position) - cam).length_squared();
+            da.total_cmp(&db)
+        });
+        idx.truncate(max);
+        idx
+    }
+
     /// Recharge la géométrie des meshes importés depuis leurs fichiers (après désérialisation).
     pub fn reload_imported(&mut self) {
         for m in &mut self.imported {
@@ -752,6 +772,26 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_point_lights_picks_closest_to_camera() {
+        let mut s = Scene::default();
+        // 3 lumières à x = 0, 5, 10 ; caméra à l'origine.
+        for x in [0.0, 5.0, 10.0] {
+            s.point_lights.push(PointLight {
+                position: [x, 0.0, 0.0],
+                ..PointLight::default()
+            });
+        }
+        // Limite 2 → garde les deux plus proches (x=0 puis x=5), dans l'ordre.
+        let chosen = s.nearest_point_lights(Vec3::ZERO, 2);
+        assert_eq!(chosen, vec![0, 1]);
+        // Caméra près de la 3ᵉ → garde x=10 puis x=5.
+        let chosen = s.nearest_point_lights(Vec3::new(10.0, 0.0, 0.0), 2);
+        assert_eq!(chosen, vec![2, 1]);
+        // Sous la limite → toutes, ordre d'origine (pas de tri).
+        assert_eq!(s.nearest_point_lights(Vec3::ZERO, 8), vec![0, 1, 2]);
+    }
 
     #[test]
     fn transform_matrix_translates_point() {
