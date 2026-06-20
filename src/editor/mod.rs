@@ -174,6 +174,7 @@ impl Editor {
         input_state: &mut crate::app::PlayerInput,
         device_preview: bool,
         device_portrait: bool,
+        hud_health: Option<f32>,
     ) -> egui::FullOutput {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -183,6 +184,9 @@ impl Editor {
             if device_preview {
                 device_bezel(ctx, area);
                 touch_feedback(ctx, area);
+            }
+            if let Some(h) = hud_health {
+                health_bar(ctx, area, h);
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
@@ -216,6 +220,7 @@ impl Editor {
         device_preview: &mut bool,
         device_portrait: &mut bool,
         view_rect: &mut (f32, f32, f32, f32),
+        hud_health: Option<f32>,
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -244,6 +249,7 @@ impl Editor {
                 device_preview,
                 device_portrait,
                 view_rect,
+                hud_health,
                 &status,
                 export,
                 hier_filter,
@@ -1335,6 +1341,31 @@ fn asset_browser_window(
     panels.assets = open;
 }
 
+/// Barre de vie du HUD (haut de la zone de jeu), pilotée par `set_health` côté script.
+fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
+    use egui::{Color32, Stroke};
+    let h = h.clamp(0.0, 1.0);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_health"),
+    ));
+    let w = (area.width() * 0.4).min(220.0);
+    let bg = egui::Rect::from_min_size(
+        egui::pos2(area.left() + 20.0, area.top() + 16.0),
+        egui::vec2(w, 16.0),
+    );
+    painter.rect_filled(bg, 4.0, Color32::from_black_alpha(140));
+    let fill = egui::Rect::from_min_size(bg.min, egui::vec2(w * h, 16.0));
+    let col = Color32::from_rgb(((1.0 - h) * 220.0) as u8 + 30, (h * 200.0) as u8 + 30, 50);
+    painter.rect_filled(fill, 4.0, col);
+    painter.rect_stroke(
+        bg,
+        4.0,
+        Stroke::new(1.5, Color32::from_white_alpha(120)),
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -1436,6 +1467,7 @@ fn build_ui(
     device_preview: &mut bool,
     device_portrait: &mut bool,
     view_rect: &mut (f32, f32, f32, f32),
+    hud_health: Option<f32>,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -1862,7 +1894,7 @@ fn build_ui(
                         ui.collapsing("Script (Lua)", |ui| {
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
-                                 obj.r/g/b, obj.tapped, obj.triggered, dt, time, input.jx/jy, input.btn.<nom>, tilt.x/y, vibrate(ms)",
+                                 obj.r/g/b, obj.tapped, obj.triggered, dt, time, input.jx/jy, input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1)",
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut obj.script)
@@ -1964,6 +1996,9 @@ fn build_ui(
     if *device_preview {
         device_bezel(root.ctx(), play_rect);
         touch_feedback(root.ctx(), play_rect);
+    }
+    if let Some(h) = hud_health {
+        health_bar(root.ctx(), play_rect, h);
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);

@@ -538,7 +538,8 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [x] Physique : forme de collider explicite (Auto/Box/Sphère/Capsule) dans l'inspecteur.
 - [x] Audio : source + son spatialisé (volume atténué par la distance à la caméra au lancement).
 - [ ] **Listener audio** déplaçable + spatialisation continue (par frame) → évolution.
-- [ ] **UI** : Texte, Bouton, **Joystick mobile**, **Bouton tactile**, **Zone tactile**, Barre de vie.
+- [x] UI : Joystick mobile + Bouton tactile (overlay), Barre de vie (set_health → HUD).
+- [ ] **UI** : Texte/Bouton libres, Zone tactile dédiée → évolution (overlay UI éditable).
 - **Fichiers** : `src/scene/mod.rs`, `src/gfx/mesh.rs`, `src/editor/mod.rs`, `src/runtime/*`.
 - **Livrable** : tous les types d'objets de l'UI cible créables depuis le menu (mobile en priorité).
 - **Risques** : Terrain, Spot Light, Trigger Zone = nouveaux sous-systèmes → MVP minimal d'abord.

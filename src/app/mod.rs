@@ -79,6 +79,8 @@ pub struct AppState {
     /// Région centrale 3D (hors panneaux) en pixels physiques `(x, y, w, h)`,
     /// remontée par l'éditeur ; base de l'aperçu mobile. `(0,0,0,0)` = plein écran.
     pub view_rect_px: (f32, f32, f32, f32),
+    /// Barre de vie du HUD (0..1) pilotée par `set_health` ; `None` = pas de barre.
+    pub hud_health: Option<f32>,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -200,6 +202,7 @@ impl AppState {
             device_preview: false,
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
+            hud_health: None,
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
@@ -1211,6 +1214,7 @@ impl AppState {
             self.scene.objects = self.play_snapshot.clone();
             self.physics = None;
             self.paused = false;
+            self.hud_health = None;
             self.clear_selection();
             self.audio.stop_all();
         }
@@ -1238,6 +1242,7 @@ impl AppState {
             None => std::collections::HashSet::new(),
         };
         let mut vibrations: Vec<f32> = Vec::new();
+        let mut health = self.hud_health;
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             if obj.script.trim().is_empty() {
                 continue;
@@ -1269,10 +1274,12 @@ impl AppState {
                 tapped,
                 triggered.contains(&idx),
                 &mut vibrations,
+                &mut health,
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
+        self.hud_health = health;
         // Le tap n'est exposé qu'une frame.
         self.tapped_obj = None;
         // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
@@ -1516,6 +1523,7 @@ fn run_script(
     tapped: bool,
     triggered: bool,
     vib_out: &mut Vec<f32>,
+    health_out: &mut Option<f32>,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -1557,6 +1565,14 @@ fn run_script(
     tilt.set("x", input.tilt.0)?;
     tilt.set("y", input.tilt.1)?;
 
+    // `set_health(v)` : pilote la barre de vie du HUD (0..1).
+    let hud = lua.create_table()?;
+    let hud_ref = hud.clone();
+    let set_health = lua.create_function(move |_, v: f32| {
+        hud_ref.set("h", v.clamp(0.0, 1.0))?;
+        Ok(())
+    })?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
@@ -1564,10 +1580,14 @@ fn run_script(
     g.set("input", input_tbl)?;
     g.set("tilt", tilt)?;
     g.set("vibrate", vibrate)?;
+    g.set("set_health", set_health)?;
     func.call::<()>(())?;
 
     for v in vib.sequence_values::<f32>().flatten() {
         vib_out.push(v);
+    }
+    if let Ok(h) = hud.get::<f32>("h") {
+        *health_out = Some(h);
     }
 
     t.position = Vec3::new(obj.get("x")?, obj.get("y")?, obj.get("z")?);
@@ -1711,6 +1731,7 @@ mod tests {
             false,
             false,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
@@ -1730,6 +1751,7 @@ mod tests {
             false,
             false,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
@@ -1757,6 +1779,7 @@ mod tests {
             false,
             false,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert_eq!(col, [0.5, 0.5, 0.5]);
@@ -1772,6 +1795,7 @@ mod tests {
             true,
             false,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
@@ -1797,6 +1821,7 @@ mod tests {
             false,
             false,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
@@ -1811,6 +1836,7 @@ mod tests {
             false,
             true,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
@@ -1840,10 +1866,36 @@ mod tests {
             false,
             false,
             &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert!((t.position.x - 1.0).abs() < 1e-5);
         assert!((t.position.z + 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn script_sets_health() {
+        let lua = Lua::new();
+        let func = lua.load("set_health(0.5)").into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let input = PlayerInput::default();
+        let mut health = None;
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
+            &mut health,
+        )
+        .unwrap();
+        assert_eq!(health, Some(0.5));
     }
 
     #[test]
@@ -1858,7 +1910,7 @@ mod tests {
         let input = PlayerInput::default();
         let mut vib = Vec::new();
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true, false, &mut vib,
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true, false, &mut vib, &mut None,
         )
         .unwrap();
         assert_eq!(vib, vec![80.0]);

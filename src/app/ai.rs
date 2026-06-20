@@ -16,6 +16,7 @@ script peut lire/écrire ces variables globales :
 - input.btn.NOM : booléen d'un bouton tactile
 - tilt.x, tilt.y : inclinaison (gyroscope, -1..1)
 - vibrate(ms) : retour haptique (mobile)
+- set_health(v) : barre de vie du HUD (0..1)
 Réponds UNIQUEMENT avec le code Lua, sans explication ni balises Markdown.";
 
 /// Paramètres d'un appel de génération de script.

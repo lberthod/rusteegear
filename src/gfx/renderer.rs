@@ -747,6 +747,7 @@ impl Renderer {
                     &mut app.input_state,
                     app.device_preview,
                     app.device_portrait,
+                    app.hud_health,
                 ))
             } else {
                 None
@@ -769,6 +770,7 @@ impl Renderer {
                 &mut app.device_preview,
                 &mut app.device_portrait,
                 &mut app.view_rect_px,
+                app.hud_health,
                 status,
             );
             if actions.save {
