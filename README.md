@@ -43,7 +43,7 @@ RusteeGear répond à un besoin précis :
 - **Pédagogique & maîtrise totale.** Chaque étage du pipeline (fenêtre → événements →
   état → rendu GPU → UI) est écrit à la main, lisible en une après-midi, sans
   abstraction magique. C'est un moteur que l'on peut **tenir entièrement dans sa tête**.
-- **Hackable et minimal.** ~2 500 lignes de Rust au total. Ajouter une primitive, un
+- **Hackable et minimal.** ~8 000 lignes de Rust au total. Ajouter une primitive, un
   type de collider ou une variable de script se fait en quelques lignes, sans se battre
   contre un framework.
 - **Portable par conception.** La logique (scène, caméra, entrées, picking) ne dépend
@@ -105,7 +105,7 @@ ce que ce projet cherche à écrire à la main pour l'apprendre.
 | Critère | RusteeGear (from scratch) | Bevy |
 |---|---|---|
 | **Objectif** | Comprendre/maîtriser un moteur | Produire des jeux efficacement |
-| **Taille du cœur** | ~2 500 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
+| **Taille du cœur** | ~8 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
 | **Architecture** | Scène = `Vec<SceneObject>`, explicite | ECS complet + ordonnanceur de systèmes |
 | **Rendu** | Pipeline `wgpu`/WGSL écrit à la main | Moteur de rendu intégré (PBR, etc.) |
 | **Courbe d'apprentissage** | On apprend *les concepts* | On apprend *le framework* |
@@ -128,30 +128,52 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 
 ## 🎮 Fonctionnalités (disponibles aujourd'hui)
 
-**Rendu & édition**
-- **Rendu 3D** temps réel via `wgpu` (Metal sur macOS), shaders WGSL, depth buffer, éclairage Lambert paramétré.
-- **Matériaux** : teinte (albédo) par objet + **éclairage de scène éditable** (direction, couleur, ambiante).
-- **Caméra orbitale** (clic-glisser / molette) ; présentation **vsync** + cadence adaptative (throttle CPU au repos).
-- **Primitives** cube / sphère / plan **+ import de modèles glTF / GLB** (chargement asynchrone).
-- **Éditeur `egui`** : toolbar · hiérarchie · inspecteur · bandeau d'état (FPS, objets, mode, backend GPU).
-- **Hiérarchie ergonomique** : **groupes définis par l'utilisateur** (glisser-déposer), filtre de recherche, icônes & badges (physique/script/audio).
-- **Sélection** par hiérarchie ou clic 3D ; **multi-sélection** (Cmd/Maj+clic), **renommage inline** (double-clic).
-- **Gizmos** translate / rotate / scale (**W / E / R**), manipulation à la souris.
-- **Undo / Redo** (Cmd+Z / Cmd+Shift+Z), **copier/coller** (Cmd+C/V), **dupliquer** (Cmd+D), **supprimer** (Suppr) — en lot.
-- **Sérialisation** de la scène en JSON (Save / Load asynchrone).
+**Rendu**
+- **Rendu 3D** temps réel via `wgpu`, shaders WGSL, depth buffer, **ombres** (shadow map + PCF).
+- **Matériaux PBR** par objet (metallic / roughness / emissive) + spéculaire ; **textures** albédo.
+- **Lumières** : directionnelle globale + ambiante, **lumières ponctuelles** et **spots** (cône) — jusqu'à 8.
+- **Rendu instancié** (1 draw par lot mesh+texture) + **frustum culling** CPU.
+- **Caméra orbitale** ; présentation **vsync** + cadence adaptative (throttle CPU au repos).
 
-**Runtime de jeu** (mode Play ▶/⏹, aperçu réinitialisable)
-- **Scripting Lua** par objet (`mlua`, chunks compilés en cache) : `obj.x/y/z`, `obj.rx/ry/rz`, `obj.sx/sy/sz`, `dt`, `time`.
-- **Physique** `rapier3d` : corps Statique / Dynamique, gravité, collisions, rebond.
-- **Audio** `kira` : son par objet, autoplay au Play, décodage asynchrone + cache.
+**Édition**
+- **Primitives** cube / sphère / plan / cylindre / capsule / **terrain** **+ import glTF / GLB** (asynchrone).
+- **Éditeur `egui`** : toolbar (Play/Pause/Stop) · hiérarchie · inspecteur · bandeau d'état.
+- **Hiérarchie** : groupes (glisser-déposer), filtre, icônes & badges ; **renommage inline**.
+- **Sélection** clic 3D / hiérarchie, **multi-sélection** ; **gizmos** translate/rotate/scale (**multi-objets**, pivot commun).
+- **Agencement** : aligner / distribuer sur un axe, grouper / dégrouper.
+- **Undo / Redo**, couper / copier / coller (Cmd+X/C/V), dupliquer (Cmd+D), tout sélectionner (Cmd+A).
+- **Gestionnaire d'assets** (`asset://`, rassemblement + navigateur), **sérialisation** JSON.
 
-**Build & Export 1-clic** (panneau 📦 dans l'éditeur)
-- Exporte un **player jouable du jeu créé** en `.dmg` / `.apk` / `.ipa` — **scène et assets embarqués** dans le binaire.
-- **Config persistée** (nom, bundle id, version, build #) + **préréglages** ; identité appliquée au bundle macOS.
-- **Pré-vol** des toolchains (cargo-bundle / cargo-apk+NDK / Xcode), **install sur device** (adb / devicectl), log streamé, « Tout exporter ».
+**Runtime de jeu** (Play ▶ / Pause ⏸ / Stop ⏹, aperçu réinitialisable)
+- **Physique** `rapier3d` (Statique / Dynamique) avec **collider explicite** (Auto/Box/Sphère/Capsule).
+- **Audio** `kira` : son par objet, autoplay, **spatialisation** (volume selon distance), cache asynchrone.
+- **Caméra de jeu** + **suivi** du joueur.
 
-**Plateformes**
-- **macOS** (éditeur, `.dmg`), **Android** (`.apk`), **iOS** (sur iPhone) — mode player tactile sur mobile (avec resume).
+**API de script Lua** (`mlua`, chunks compilés en cache)
+```lua
+-- Lecture/écriture par objet :
+obj.x/y/z   obj.rx/ry/rz   obj.sx/sy/sz   obj.r/g/b
+obj.tapped      -- touché au doigt cette frame
+obj.triggered   -- le joueur est entré dans la zone (trigger)
+-- Globales :
+dt, time
+input.jx, input.jy, input.btn.<nom>   -- joystick + boutons tactiles
+tilt.x, tilt.y                         -- gyroscope (flèches sur desktop)
+vibrate(ms)                            -- retour haptique
+set_health(0..1)                       -- barre de vie du HUD
+```
+
+**Mobile**
+- **Aperçu device** (cadre téléphone, portrait/paysage) façon simulateur tactile.
+- **Contrôles tactiles** : joystick virtuel + boutons, **zones de déclenchement**, **barre de vie**.
+- **macOS** (éditeur, `.dmg`), **Android** (`.apk`, identité surchargée), **iOS** — player tactile (resume).
+
+**IA (DeepSeek)** — clé/modèle/température dans les Paramètres
+- **Générer** ou **optimiser** un script Lua depuis une consigne ; **générer une scène** entière (remplacer/ajouter) ; historique des prompts.
+
+**Outils** — Console (logs), Profiler FPS + mémoire, **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système.
+
+**Démos** — `Fichier → Démo mobile` et `Démo gameplay` (toute l'API en une scène jouable).
 
 ---
 
