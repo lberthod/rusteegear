@@ -296,6 +296,26 @@ impl Default for PointLight {
 pub const MAX_POINT_LIGHTS: usize = 8;
 
 impl Scene {
+    /// Estimation grossière de l'occupation mémoire (octets) : `(objets, meshes importés,
+    /// nombre de textures uniques)`. Pour le profiler mémoire (ordre de grandeur).
+    pub fn memory_estimate(&self) -> (usize, usize, usize) {
+        let mut obj_bytes = self.objects.len() * std::mem::size_of::<SceneObject>();
+        let mut textures = std::collections::BTreeSet::new();
+        for o in &self.objects {
+            obj_bytes += o.name.len() + o.script.len() + o.texture.len() + o.audio_clip.len();
+            if !o.texture.is_empty() {
+                textures.insert(o.texture.as_str());
+            }
+        }
+        let vsize = std::mem::size_of::<crate::gfx::mesh::Vertex>();
+        let mesh_bytes: usize = self
+            .imported
+            .iter()
+            .map(|m| m.data.vertices.len() * vsize + m.data.indices.len() * 4)
+            .sum();
+        (obj_bytes, mesh_bytes, textures.len())
+    }
+
     /// AABB local d'un objet (primitive codée ou mesh importé).
     pub fn local_aabb(&self, mesh: MeshKind) -> (Vec3, Vec3) {
         match mesh {

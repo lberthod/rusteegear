@@ -556,7 +556,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ### Sprint 42 — Menu Outils & optimisation mobile complète ⬜
 **Objectif** : faire du menu Outils le centre de contrôle qualité/perf mobile (différenciateur).
-- [ ] **Outils** : Gestionnaire d'assets, Console, Profiler FPS, **Profiler mémoire**,
+- [x] Outils : Gestionnaire d'assets, Console, Profiler FPS + mémoire (objets/meshes/textures),
       Build Android, **Gestionnaire de scripts Lua**, **Bake lighting**, Optimisation mobile,
       **Convertisseur textures**, Contrôle qualité APK.
 - [ ] **Optimisation mobile** (étendre le panneau du Sprint 35) : réduire/compresser textures

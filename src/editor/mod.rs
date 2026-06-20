@@ -914,6 +914,18 @@ fn tool_windows(
                     color,
                 );
             }
+            // --- Profiler mémoire (estimation) ---
+            ui.separator();
+            ui.strong("Mémoire (estimation)");
+            let (obj_b, mesh_b, n_tex) = scene.memory_estimate();
+            let kb = |b: usize| format!("{:.1} Ko", b as f32 / 1024.0);
+            ui.label(format!("Objets : {}", kb(obj_b)));
+            ui.label(format!(
+                "Meshes importés : {} ({} modèle(s))",
+                kb(mesh_b),
+                scene.imported.len()
+            ));
+            ui.label(format!("Textures : {n_tex} unique(s)"));
         });
 
     // --- Contrôle qualité APK (APK Readiness Check) ---
