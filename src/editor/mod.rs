@@ -1862,7 +1862,7 @@ fn build_ui(
                         ui.collapsing("Script (Lua)", |ui| {
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
-                                 obj.r/g/b, obj.tapped, obj.triggered, dt, time, input.jx/jy, input.btn.<nom>",
+                                 obj.r/g/b, obj.tapped, obj.triggered, dt, time, input.jx/jy, input.btn.<nom>, vibrate(ms)",
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut obj.script)

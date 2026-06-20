@@ -1234,6 +1234,7 @@ impl AppState {
                 .collect(),
             None => std::collections::HashSet::new(),
         };
+        let mut vibrations: Vec<f32> = Vec::new();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             if obj.script.trim().is_empty() {
                 continue;
@@ -1264,12 +1265,17 @@ impl AppState {
                 &self.input_state,
                 tapped,
                 triggered.contains(&idx),
+                &mut vibrations,
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
         // Le tap n'est exposé qu'une frame.
         self.tapped_obj = None;
+        // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
+        for ms in vibrations {
+            crate::runtime::vibrate(ms);
+        }
 
         // 2. physique (écrase les poses des corps dynamiques)
         if let Some(phys) = &mut self.physics {
@@ -1506,6 +1512,7 @@ fn run_script(
     input: &PlayerInput,
     tapped: bool,
     triggered: bool,
+    vib_out: &mut Vec<f32>,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -1534,12 +1541,25 @@ fn run_script(
     }
     input_tbl.set("btn", btns)?;
 
+    // `vibrate(ms)` : empile les durées de vibration demandées par le script.
+    let vib = lua.create_table()?;
+    let vib_ref = vib.clone();
+    let vibrate = lua.create_function(move |_, ms: f32| {
+        vib_ref.push(ms)?;
+        Ok(())
+    })?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
     g.set("time", time)?;
     g.set("input", input_tbl)?;
+    g.set("vibrate", vibrate)?;
     func.call::<()>(())?;
+
+    for v in vib.sequence_values::<f32>().flatten() {
+        vib_out.push(v);
+    }
 
     t.position = Vec3::new(obj.get("x")?, obj.get("y")?, obj.get("z")?);
     let (rx, ry, rz): (f32, f32, f32) = (obj.get("rx")?, obj.get("ry")?, obj.get("rz")?);
@@ -1672,7 +1692,16 @@ mod tests {
         };
         input.buttons.insert("B1".into());
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, false,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
@@ -1682,7 +1711,16 @@ mod tests {
         let mut t2 = Transform::from_pos(Vec3::ZERO);
         let empty = PlayerInput::default();
         run_script(
-            &lua, &func, &mut t2, &mut col, 0.016, 0.0, &empty, false, false,
+            &lua,
+            &func,
+            &mut t2,
+            &mut col,
+            0.016,
+            0.0,
+            &empty,
+            false,
+            false,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
@@ -1700,13 +1738,31 @@ mod tests {
         let input = PlayerInput::default();
         // pas de tap : couleur inchangée
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, false,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(col, [0.5, 0.5, 0.5]);
         // tap : passe au rouge
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true, false,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            true,
+            false,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
@@ -1722,15 +1778,51 @@ mod tests {
         let mut col = [1.0, 1.0, 1.0];
         let input = PlayerInput::default();
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, false,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, false, true,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            false,
+            true,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
+    }
+
+    #[test]
+    fn script_can_request_vibration() {
+        let lua = Lua::new();
+        let func = lua
+            .load("if obj.tapped then vibrate(80) end")
+            .into_function()
+            .unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let input = PlayerInput::default();
+        let mut vib = Vec::new();
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true, false, &mut vib,
+        )
+        .unwrap();
+        assert_eq!(vib, vec![80.0]);
     }
 
     #[test]

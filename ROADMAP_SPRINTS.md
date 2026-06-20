@@ -547,6 +547,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 **Objectif** : exposer dans l'inspecteur les composants par objet, dont les composants mobiles.
 - [ ] Composants standards listés/édités : Transform, **Mesh Renderer**, **Material**,
       Collider, Rigidbody, Script Lua, Audio Source, **Mobile Touch Area**.
+- [x] Vibration Feedback : fonction Lua vibrate(ms) (log desktop, hook natif Android).
 - [ ] Composants **Android** : Mobile Input Receiver, Touch Button, Virtual Joystick,
       **Gyroscope Controller**, **Vibration Feedback** (durée 80 ms, intensité légère/moyenne/forte,
       déclencheur collision/bouton/événement Lua), **Screen Safe Area**.
