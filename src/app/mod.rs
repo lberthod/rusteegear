@@ -413,6 +413,21 @@ impl AppState {
         self.select_single(j);
     }
 
+    /// Déplace l'objet `from` juste avant l'objet `to` dans l'ordre global
+    /// (glisser-déposer de réordonnancement dans la hiérarchie). Passe par l'historique.
+    pub fn reorder_object(&mut self, from: usize, to: usize) {
+        let n = self.scene.objects.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        self.push_undo();
+        let obj = self.scene.objects.remove(from);
+        // Après le retrait, l'index cible se décale si `from` était avant lui.
+        let dest = if from < to { to - 1 } else { to };
+        self.scene.objects.insert(dest, obj);
+        self.select_single(dest);
+    }
+
     // --- sélection (primaire + ensemble) ---
 
     /// Mémorise les transforms d'origine de la sélection + leur centroïde (pivot),
@@ -673,6 +688,7 @@ impl AppState {
             emissive: 0.0,
             trigger: false,
             audio_spatial: false,
+            ..Default::default()
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -814,6 +830,101 @@ impl AppState {
             self.push_undo();
             self.scene.point_lights.truncate(max);
         }
+    }
+
+    /// Convertisseur de textures : redimensionne chaque texture aux **puissances de 2**
+    /// inférieures (mip-mapping/compression GPU mobile). Écrit des copies `…_pot.png`
+    /// et met à jour les objets. Renvoie le nombre de textures converties.
+    pub fn convert_textures_pot(&mut self) -> usize {
+        use std::collections::HashMap;
+        let mut paths: Vec<String> = self
+            .scene
+            .objects
+            .iter()
+            .map(|o| o.texture.clone())
+            .filter(|t| !t.is_empty())
+            .collect();
+        paths.sort();
+        paths.dedup();
+
+        // Plus grande puissance de 2 ≤ v (bornée à [1, 4096]).
+        let pot = |v: u32| -> u32 {
+            if v < 2 {
+                return 1;
+            }
+            (1u32 << (31 - v.leading_zeros())).clamp(1, 4096)
+        };
+
+        let mut remap: HashMap<String, String> = HashMap::new();
+        for path in paths {
+            let Some(bytes) = crate::assets::read_bytes(&path) else {
+                log::error!("Texture illisible {path}");
+                continue;
+            };
+            let Ok(img) = image::load_from_memory(&bytes) else {
+                log::error!("Texture non décodable {path}");
+                continue;
+            };
+            let (w, h) = (img.width(), img.height());
+            let (nw, nh) = (pot(w), pot(h));
+            if nw == w && nh == h {
+                continue; // déjà en puissances de 2
+            }
+            let resized = img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3);
+            let out = format!("{path}_pot.png");
+            let write_path = match crate::assets::assets_dir() {
+                Some(dir) if out.starts_with(crate::assets::ASSET_SCHEME) => dir
+                    .join(out.trim_start_matches(crate::assets::ASSET_SCHEME))
+                    .to_string_lossy()
+                    .into_owned(),
+                _ => out.clone(),
+            };
+            if let Err(e) = resized.save(&write_path) {
+                log::error!("Échec écriture texture POT {write_path} : {e}");
+                continue;
+            }
+            log::info!("Texture {path} ({w}×{h}) → {out} ({nw}×{nh}) [POT]");
+            remap.insert(path, out);
+        }
+        if remap.is_empty() {
+            return 0;
+        }
+        self.push_undo();
+        for o in &mut self.scene.objects {
+            if let Some(new) = remap.get(&o.texture) {
+                o.texture = new.clone();
+            }
+        }
+        remap.len()
+    }
+
+    /// Bake lighting : fige la contribution des lumières **ponctuelles** dans l'émission
+    /// statique de chaque objet (selon distance/portée), puis les supprime. Réduit le
+    /// nombre de lumières dynamiques (coût GPU mobile). Renvoie le nombre de lumières figées.
+    pub fn bake_lighting(&mut self) -> usize {
+        let lights = self.scene.point_lights.clone();
+        if lights.is_empty() {
+            return 0;
+        }
+        self.push_undo();
+        for o in &mut self.scene.objects {
+            let p = o.transform.position;
+            let mut add = 0.0f32;
+            for l in &lights {
+                let lp = glam::Vec3::from(l.position);
+                let d = (lp - p).length();
+                if d < l.range {
+                    let falloff = 1.0 - d / l.range; // atténuation linéaire simple
+                    // Luminance approximative de la lumière.
+                    let lum = (l.color[0] + l.color[1] + l.color[2]) / 3.0;
+                    add += l.intensity * falloff * lum;
+                }
+            }
+            o.emissive = (o.emissive + add * 0.6).clamp(0.0, 3.0);
+        }
+        let n = lights.len();
+        self.scene.point_lights.clear();
+        n
     }
 
     /// Recentre la caméra sur l'objet (ou la lumière) sélectionné (« frame selected », touche F).
@@ -1375,7 +1486,23 @@ impl AppState {
         };
         let mut vibrations: Vec<f32> = Vec::new();
         let mut health = self.hud_health;
+        let (joy, tilt) = (self.input_state.joy, self.input_state.tilt);
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
+            // --- Composants mobiles intégrés (Sprint 41), appliqués avant le script ---
+            // Input Receiver : déplacement piloté par le joystick (plan X/Z).
+            if obj.input_receiver {
+                obj.transform.position.x += joy.0 * obj.move_speed * dt;
+                obj.transform.position.z -= joy.1 * obj.move_speed * dt;
+            }
+            // Gyroscope Controller : déplacement piloté par l'inclinaison.
+            if obj.gyro_control {
+                obj.transform.position.x += tilt.0 * obj.move_speed * dt;
+                obj.transform.position.z -= tilt.1 * obj.move_speed * dt;
+            }
+            // Vibration Feedback : retour haptique quand l'objet est tapé.
+            if obj.vibrate_on_tap > 0 && self.tapped_obj == Some(idx) {
+                vibrations.push(obj.vibrate_on_tap as f32);
+            }
             if obj.script.trim().is_empty() {
                 continue;
             }
@@ -1564,6 +1691,7 @@ impl AppState {
             emissive: 0.0,
             trigger: false,
             audio_spatial: false,
+            ..Default::default()
         });
         self.select_single(self.scene.objects.len() - 1);
     }
@@ -2097,6 +2225,7 @@ mod tests {
                 emissive: 0.0,
                 trigger: false,
                 audio_spatial: false,
+                ..Default::default()
             });
         }
         app.selected = vec![0, 1, 2];

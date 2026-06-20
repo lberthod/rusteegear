@@ -178,6 +178,49 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
         Check::new(Status::Ok, format!("Version : {}", config.version.trim()))
     });
 
+    // --- Application Android (Sprint 39) ---
+    checks.push(if config.min_sdk > config.target_sdk {
+        Check::new(
+            Status::Fail,
+            format!(
+                "min SDK ({}) > target SDK ({})",
+                config.min_sdk, config.target_sdk
+            ),
+        )
+    } else if config.min_sdk < 24 {
+        Check::new(
+            Status::Warn,
+            format!(
+                "min SDK {} bas (≥ 24 recommandé pour Vulkan)",
+                config.min_sdk
+            ),
+        )
+    } else {
+        Check::new(
+            Status::Ok,
+            format!("SDK {} → {}", config.min_sdk, config.target_sdk),
+        )
+    });
+
+    checks.push(if config.icon_path.trim().is_empty() {
+        Check::new(Status::Warn, "Aucune icône : icône par défaut utilisée")
+    } else if std::path::Path::new(config.icon_path.trim()).is_file() {
+        Check::new(Status::Ok, "Icône fournie")
+    } else {
+        Check::new(Status::Fail, "Icône introuvable sur le disque")
+    });
+
+    checks.push(Check::new(
+        Status::Ok,
+        format!(
+            "Orientation : {} · {} FPS · MSAA ×{}{}",
+            config.orientation.label(),
+            config.target_fps,
+            config.msaa,
+            if config.shadows { " · ombres" } else { "" }
+        ),
+    ));
+
     checks
 }
 

@@ -887,6 +887,9 @@ impl Renderer {
             if let Some(down) = actions.move_in_list {
                 app.move_selected_in_list(down);
             }
+            if let Some((from, to)) = actions.reorder {
+                app.reorder_object(from, to);
+            }
             if let Some((idx, req)) = actions.ai_generate {
                 app.request_ai_script(idx, req);
             }
@@ -905,6 +908,19 @@ impl Renderer {
             }
             if let Some(max) = actions.limit_lights {
                 app.limit_point_lights(max);
+            }
+            if actions.convert_textures_pot {
+                let n = app.convert_textures_pot();
+                log::info!("Convertisseur : {n} texture(s) en puissances de 2");
+            }
+            if actions.bake_lighting {
+                let n = app.bake_lighting();
+                log::info!("Bake lighting : {n} lumière(s) ponctuelle(s) figée(s) en émission");
+            }
+            if actions.perf_mode {
+                let t = app.optimize_textures(1024);
+                app.limit_point_lights(4);
+                log::info!("Mode performance Android : {t} texture(s) réduite(s), ≤ 4 lumières");
             }
             if actions.collect_assets {
                 let n = app.collect_assets();

@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 
-use crate::app::build_config::BuildConfig;
+use crate::app::build_config::{BuildConfig, RenderQuality};
 use crate::scene::Scene;
 
 /// Racine du projet, figée à la compilation : les scripts `packaging/*.sh` y résident,
@@ -166,6 +166,50 @@ impl ExportPanel {
         self.last_ok = false;
     }
 
+    /// Toolbar « Run Device » : ouvre le panneau, force l'installation sur appareil
+    /// et lance un build Android (si l'appareil/adb sont prêts).
+    pub fn run_on_device(&mut self, scene: &Scene) {
+        self.open = true;
+        if self.running.is_some() {
+            return; // un build est déjà en cours
+        }
+        self.install_device = true;
+        if self.adb_available {
+            self.start(Target::Android, scene);
+        } else {
+            self.log
+                .push("❌ Aucun appareil Android détecté (adb). Branche un téléphone.".into());
+        }
+    }
+
+    /// Actions « Logs ADB » : récupère les dernières lignes du logcat de l'appareil
+    /// branché et les ajoute au journal (utile pour diagnostiquer un crash mobile).
+    fn dump_adb_logs(&mut self) {
+        if !self.adb_available {
+            self.log.push("❌ adb introuvable.".into());
+            return;
+        }
+        self.log.push("▶ adb logcat (300 dernières lignes)…".into());
+        match Command::new("adb")
+            .args(["logcat", "-d", "-t", "300"])
+            .env("PATH", augmented_path())
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    self.log.push(line.to_string());
+                }
+                while self.log.len() > 1000 {
+                    self.log.remove(0);
+                }
+            }
+            Ok(_) => self
+                .log
+                .push("⚠ adb logcat : aucun appareil ou accès refusé.".into()),
+            Err(e) => self.log.push(format!("❌ adb logcat : {e}")),
+        }
+    }
+
     /// Construit la fenêtre egui (à appeler chaque frame avec le contexte).
     pub fn ui(&mut self, ctx: &egui::Context, scene: &Scene) {
         // Récupère les lignes de log produites par le thread de build.
@@ -202,27 +246,121 @@ impl ExportPanel {
             .show(ctx, |ui| {
                 ui.label("Exporte un player jouable du jeu créé (scène embarquée).");
                 ui.add_space(4.0);
-                egui::Grid::new("build_cfg")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
+
+                // --- 📱 Application ---
+                egui::CollapsingHeader::new("📱  Application")
+                    .default_open(true)
                     .show(ui, |ui| {
-                        ui.label("Nom de l'app");
-                        ui.text_edit_singleline(&mut self.config.app_name);
-                        ui.end_row();
-                        ui.label("Bundle id");
-                        ui.text_edit_singleline(&mut self.config.bundle_id);
-                        ui.end_row();
-                        ui.label("Version");
-                        ui.text_edit_singleline(&mut self.config.version);
-                        ui.end_row();
-                        ui.label("Build #");
-                        ui.label(self.config.build_number.to_string());
-                        ui.end_row();
+                        egui::Grid::new("build_cfg")
+                            .num_columns(2)
+                            .spacing([8.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label("Nom de l'app");
+                                ui.text_edit_singleline(&mut self.config.app_name);
+                                ui.end_row();
+                                ui.label("Bundle id / package");
+                                ui.text_edit_singleline(&mut self.config.bundle_id);
+                                ui.end_row();
+                                ui.label("Version");
+                                ui.text_edit_singleline(&mut self.config.version);
+                                ui.end_row();
+                                ui.label("Build #");
+                                ui.label(self.config.build_number.to_string());
+                                ui.end_row();
+                                ui.label("Orientation");
+                                egui::ComboBox::from_id_salt("orient_cb")
+                                    .selected_text(self.config.orientation.label())
+                                    .show_ui(ui, |ui| {
+                                        use crate::app::build_config::Orientation as O;
+                                        for o in [O::Sensor, O::Portrait, O::Landscape] {
+                                            ui.selectable_value(
+                                                &mut self.config.orientation,
+                                                o,
+                                                o.label(),
+                                            );
+                                        }
+                                    });
+                                ui.end_row();
+                                ui.label("min SDK");
+                                ui.add(egui::DragValue::new(&mut self.config.min_sdk).range(21..=35));
+                                ui.end_row();
+                                ui.label("target SDK");
+                                ui.add(
+                                    egui::DragValue::new(&mut self.config.target_sdk).range(21..=35),
+                                );
+                                ui.end_row();
+                            });
+                        // Icône + splash : sélection de fichiers PNG.
+                        asset_picker(ui, "Icône (PNG)", &mut self.config.icon_path);
+                        asset_picker(ui, "Splash (PNG)", &mut self.config.splash_path);
                     });
+
+                // --- 🎨 Rendu ---
+                egui::CollapsingHeader::new("🎨  Rendu")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Backend :");
+                            ui.strong("Vulkan");
+                            ui.weak("(wgpu sur Android)");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Qualité");
+                            egui::ComboBox::from_id_salt("quality_cb")
+                                .selected_text(self.config.render_quality.label())
+                                .show_ui(ui, |ui| {
+                                    use crate::app::build_config::RenderQuality as Q;
+                                    for q in [Q::Low, Q::Medium, Q::High] {
+                                        ui.selectable_value(
+                                            &mut self.config.render_quality,
+                                            q,
+                                            q.label(),
+                                        );
+                                    }
+                                });
+                        });
+                        ui.add(
+                            egui::Slider::new(&mut self.config.target_fps, 30..=120).text("FPS cible"),
+                        );
+                        ui.checkbox(&mut self.config.shadows, "Ombres");
+                        ui.horizontal(|ui| {
+                            ui.label("MSAA");
+                            for n in [1u32, 2, 4] {
+                                let label = if n == 1 { "off".to_string() } else { format!("×{n}") };
+                                ui.selectable_value(&mut self.config.msaa, n, label);
+                            }
+                        });
+                        ui.weak("Persisté + transmis au build ; appliqué par le player là où c'est pris en charge.");
+                        if ui
+                            .button("⚡ Préréglage performance")
+                            .on_hover_text("Qualité basse, ombres off, MSAA off, 60 FPS")
+                            .clicked()
+                        {
+                            self.config.render_quality = RenderQuality::Low;
+                            self.config.shadows = false;
+                            self.config.msaa = 1;
+                            self.config.target_fps = 60;
+                        }
+                    });
+
+                // --- 📦 Assets ---
+                egui::CollapsingHeader::new("📦  Assets")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let n_tex = scene.objects.iter().filter(|o| !o.texture.is_empty()).count();
+                        let n_audio =
+                            scene.objects.iter().filter(|o| !o.audio_clip.is_empty()).count();
+                        ui.label(format!("{} modèle(s) importé(s)", scene.imported.len()));
+                        ui.label(format!("{n_tex} texture(s), {n_audio} son(s)"));
+                        ui.weak(
+                            "Les assets référencés sont embarqués (bundle://) au moment du build.",
+                        );
+                    });
+
                 if let Err(e) = self.config.validate() {
                     ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("⚠ {e}"));
                 }
-                ui.collapsing("Signature iOS (optionnel)", |ui| {
+                ui.collapsing("🔏  Signature iOS (optionnel)", |ui| {
                     egui::Grid::new("ios_sign").num_columns(2).show(ui, |ui| {
                         ui.label("Team ID");
                         ui.text_edit_singleline(&mut self.config.ios_team_id);
@@ -281,19 +419,39 @@ impl ExportPanel {
                 });
 
                 ui.add_space(4.0);
+                ui.strong("⚙  Actions");
                 let targets = [Target::Macos, Target::Android, Target::Ios];
                 for t in targets {
                     self.card(ui, t, scene);
                 }
 
-                // Export groupé : enfile toutes les cibles prêtes, jouées une par une.
                 let busy = self.running.is_some() || !self.queue.is_empty();
-                if ui
-                    .add_enabled(!busy, egui::Button::new("🚀 Tout exporter (cibles prêtes)"))
-                    .clicked()
-                {
-                    self.queue = targets.into_iter().filter(|t| self.prereq(*t).is_ok()).collect();
-                }
+                ui.horizontal(|ui| {
+                    // Export groupé : enfile toutes les cibles prêtes, jouées une par une.
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("🚀 Tout exporter"))
+                        .clicked()
+                    {
+                        self.queue =
+                            targets.into_iter().filter(|t| self.prereq(*t).is_ok()).collect();
+                    }
+                    // Build + install + lancement Android sur l'appareil branché.
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("📲 Run"))
+                        .on_hover_text("Build Android + installation sur le téléphone (adb)")
+                        .clicked()
+                    {
+                        self.run_on_device(scene);
+                    }
+                    // Logcat de l'appareil (diagnostic crash mobile).
+                    if ui
+                        .add_enabled(self.adb_available, egui::Button::new("📋 Logs ADB"))
+                        .on_hover_text("Dernières lignes du logcat de l'appareil branché")
+                        .clicked()
+                    {
+                        self.dump_adb_logs();
+                    }
+                });
                 ui.separator();
                 ui.horizontal(|ui| {
                     if self.last_ok && ui.button("📂 Révéler le dossier").clicked() {
@@ -376,6 +534,34 @@ impl ExportPanel {
             self.start(target, scene);
         }
     }
+}
+
+/// Ligne « libellé + sélecteur de fichier PNG + nom court + effacer » pour icône/splash.
+fn asset_picker(ui: &mut egui::Ui, label: &str, path: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        if ui.button("Choisir…").clicked() {
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            if let Some(p) = rfd::FileDialog::new()
+                .add_filter("Image PNG", &["png"])
+                .pick_file()
+            {
+                *path = p.to_string_lossy().into_owned();
+            }
+        }
+        if !path.is_empty() && ui.button("✕").clicked() {
+            path.clear();
+        }
+        let name = if path.is_empty() {
+            "(aucun)".to_string()
+        } else {
+            std::path::Path::new(path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        ui.label(name);
+    });
 }
 
 /// Détecte les pré-requis d'une cible. `Ok` = prêt à exporter.
@@ -592,6 +778,15 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             .env("BUILD_NUMBER", cfg.build_number.to_string())
             .env("INSTALL_DEVICE", if install { "1" } else { "0" })
             .env("PLAYER_BUILD", "1") // exporte un player jouable (cf. build_dmg.sh)
+            // --- Application Android (Sprint 39) ---
+            .env("ANDROID_ORIENTATION", cfg.orientation.manifest_value())
+            .env("MIN_SDK", cfg.min_sdk.to_string())
+            .env("TARGET_SDK", cfg.target_sdk.to_string())
+            .env("ICON_PATH", &cfg.icon_path)
+            // --- Rendu mobile (consommé par le player là où c'est pris en charge) ---
+            .env("TARGET_FPS", cfg.target_fps.to_string())
+            .env("SHADOWS", if cfg.shadows { "1" } else { "0" })
+            .env("MSAA", cfg.msaa.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Signature iOS : ne surcharge que les champs renseignés.

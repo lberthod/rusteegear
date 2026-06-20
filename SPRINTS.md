@@ -53,8 +53,8 @@ Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4 possibilités futures).
 
 | # | Sprint | Objectif | Couvre (réf. analyse) | État |
 |---|---|---|---|---|
-| 36 | Distribution signée & validation device | Override identité Android, **IPA signé en CI** (secrets), notarisation macOS ; valider sur appareil réel (**PBR, instancing, resume**, joystick→script→APK) | Audit §6 · §2 reco 3 · §4 distribution | ⬜ |
-| 37 | IA avancée & confort d'édition | IA « Ajouter à la scène » + édition ciblée, historique de prompts, glisser-déposer hiérarchie, gizmo multi rotate/scale | §4 IA · confort d'édition | ⬜ |
+| 36 | Distribution signée & validation device | Override identité Android, **IPA signé en CI** (secrets), notarisation macOS ; valider sur appareil réel (**PBR, instancing, resume**, joystick→script→APK) | Audit §6 · §2 reco 3 · §4 distribution | 🟢 |
+| 37 | IA avancée & confort d'édition | IA « Ajouter à la scène » + édition ciblée, historique de prompts, glisser-déposer hiérarchie, gizmo multi rotate/scale | §4 IA · confort d'édition | 🟢 |
 
 > **Transversal (à intégrer dans 36–37 ou en sprint dédié)** : **découpler simulation et
 > rendu** (boucle de mise à jour séparée, pas de temps fixe physique), **durcir l'init**
@@ -71,11 +71,11 @@ tester sur téléphone*. Détail complet dans [ROADMAP_SPRINTS.md](ROADMAP_SPRIN
 
 | # | Sprint | Apport principal | État |
 |---|---|---|---|
-| 38 | Menus complets & barre du haut | Fichier (Ouvrir/Sauver sous/Exporter APK/Paramètres projet…), Édition (Couper/Coller/Sélectionner tout/Grouper), toolbar (Pause/Stop/Snap/Grid/2D-3D/Build APK/Run Device), Aide (Guide APK, Diagnostic système) | ⬜ |
-| 39 | Build Panel Android | Fenêtre dédiée : Application (nom/package/version/orientation/SDK/icône/splash), Rendu (Vulkan/qualité/FPS/ombres/MSAA), Assets (compression/nettoyage), Signature (debug/release), Actions (Build/Install/Run/Logs ADB) + Readiness Check enrichi | ⬜ |
-| 40 | Menu Ajouter complet | Objet 3D (+ Terrain), Lumière (dir/point/spot/ambient), Caméra (principale/mobile), Physique (rigidbody/colliders/trigger), Audio (source/listener), UI (texte/bouton/joystick mobile/zone tactile/barre de vie) | ⬜ |
-| 41 | Composants inspecteur mobiles | Mesh Renderer, Material, Mobile Touch Area + composants Android : Input Receiver, Touch Button, Virtual Joystick, Gyroscope, Vibration Feedback, Screen Safe Area | ⬜ |
-| 42 | Menu Outils & optimisation mobile | Gestionnaire d'assets, Profiler mémoire, Gestionnaire scripts Lua, Bake lighting, Convertisseur textures ; Optimisation mobile complète (fusion meshes, LOD, occlusion culling, Mode performance Android) | ⬜ |
+| 38 | Menus complets & barre du haut | Fichier (Ouvrir/Sauver sous/Exporter APK/Paramètres projet…), Édition (Couper/Coller/Sélectionner tout/Grouper), toolbar (Pause/Stop/Snap/Grid/2D-3D/Build APK/Run Device), Aide (Guide APK, Diagnostic système) | 🟢 |
+| 39 | Build Panel Android | Fenêtre dédiée : Application (nom/package/version/orientation/SDK/icône/splash), Rendu (Vulkan/qualité/FPS/ombres/MSAA), Assets (compression/nettoyage), Signature (debug/release), Actions (Build/Install/Run/Logs ADB) + Readiness Check enrichi | 🟢 |
+| 40 | Menu Ajouter complet | Objet 3D (+ Terrain), Lumière (dir/point/spot/ambient), Caméra (principale/mobile), Physique (rigidbody/colliders/trigger), Audio (source/listener), UI (texte/bouton/joystick mobile/zone tactile/barre de vie) | 🟢 |
+| 41 | Composants inspecteur mobiles | Mesh Renderer, Material, Mobile Touch Area + composants Android : Input Receiver, Touch Button, Virtual Joystick, Gyroscope, Vibration Feedback, Screen Safe Area | 🟢 |
+| 42 | Menu Outils & optimisation mobile | Gestionnaire d'assets, Profiler mémoire, Gestionnaire scripts Lua, Bake lighting, Convertisseur textures ; Optimisation mobile complète (fusion meshes, LOD, occlusion culling, Mode performance Android) | 🟢 |
 
 > **Déjà acquis (Sprints 32–35)** : barre de menus, console, profiler FPS, **APK Readiness
 > Check**, contrôles tactiles, PBR, lumières multiples, caméra de jeu, réduction de textures.

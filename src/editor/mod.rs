@@ -60,6 +60,8 @@ struct Panels {
     optimize: bool,
     /// Fenêtre « Gestionnaire d'assets ».
     assets: bool,
+    /// Fenêtre « Gestionnaire de scripts Lua ».
+    scripts: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -104,6 +106,12 @@ pub struct UiActions {
     pub play_audio: Option<String>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
+    /// Réordonnancement par glisser-déposer dans la hiérarchie : `(index source, index cible)`.
+    pub reorder: Option<(usize, usize)>,
+    /// Toolbar « Run Device » : ouvrir le panneau de build et installer sur l'appareil.
+    pub run_device: bool,
+    /// Menu « Paramètres projet » : ouvrir aussi la fenêtre Paramètres (clé IA…).
+    pub open_settings: bool,
     /// Génération IA d'un script : `(index objet, requête DeepSeek)`.
     pub ai_generate: Option<(usize, crate::app::ai::AiRequest)>,
     /// Génération IA d'une scène : `(requête, remplacer ?)` (sinon ajout à la scène).
@@ -118,6 +126,12 @@ pub struct UiActions {
     pub optimize_textures: Option<u32>,
     /// Optimisation mobile : limiter le nombre de lumières ponctuelles.
     pub limit_lights: Option<usize>,
+    /// Convertir les textures aux puissances de 2 (compression GPU mobile).
+    pub convert_textures_pot: bool,
+    /// Bake lighting : figer les lumières ponctuelles en émission statique.
+    pub bake_lighting: bool,
+    /// Mode performance Android : optimisations groupées (textures + lumières).
+    pub perf_mode: bool,
     /// Rassembler les assets externes dans le dossier projet (asset://).
     pub collect_assets: bool,
     /// Édition : couper / copier / coller / tout sélectionner / grouper / dégrouper.
@@ -195,7 +209,7 @@ impl Editor {
                 device_bezel(ctx, area);
                 touch_feedback(ctx, area);
             }
-            if let Some(h) = hud_health {
+            if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
             }
             if mobile.any() {
@@ -376,11 +390,13 @@ fn hierarchy_panel(
     filter: &mut String,
     new_group: &mut String,
     rename: &mut Option<(usize, String)>,
+    actions: &mut UiActions,
 ) {
     ui.horizontal(|ui| {
         ui.heading("Hiérarchie");
         ui.weak(format!("({})", scene.objects.len()));
     });
+    ui.small("Glisser un objet sur un autre : réordonner · sur un groupe : ranger.");
     ui.add(
         egui::TextEdit::singleline(filter)
             .hint_text("🔎 filtrer…")
@@ -468,6 +484,12 @@ fn hierarchy_panel(
                                             let _ = ui.selectable_label(is_sel, label);
                                         })
                                         .response;
+                                    // Dépôt d'un autre objet *sur* cette ligne → réordonner avant elle.
+                                    if let Some(src) = resp.dnd_release_payload::<usize>()
+                                        && *src != i
+                                    {
+                                        actions.reorder = Some((*src, i));
+                                    }
                                     if resp.clicked() {
                                         let m = ui.input(|inp| inp.modifiers);
                                         if m.command || m.shift {
@@ -644,6 +666,15 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             export.open = true;
             ui.close();
         }
+        if ui
+            .button("⚙  Paramètres projet…")
+            .on_hover_text("Nom, package, version, build, orientation (panneau de build)")
+            .clicked()
+        {
+            export.open = true;
+            actions.open_settings = true;
+            ui.close();
+        }
         ui.separator();
         if ui.button("🚪  Quitter").clicked() {
             actions.quit = true;
@@ -754,75 +785,187 @@ fn menu_edition(ui: &mut egui::Ui, selection: &Option<usize>, actions: &mut UiAc
     });
 }
 
-/// Menu « Ajouter » : primitives.
-fn menu_ajouter(ui: &mut egui::Ui, scene: &mut Scene, actions: &mut UiActions) {
+/// Menu « Ajouter » façon Unity : objets 3D, lumières, caméras, physique, audio, UI mobile.
+fn menu_ajouter(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    selection: Option<usize>,
+    actions: &mut UiActions,
+) {
+    use crate::scene::{MAX_POINT_LIGHTS, PointLight};
     ui.menu_button("Ajouter", |ui| {
+        // --- Objet 3D ---
         ui.menu_button("🧱  Objet 3D", |ui| {
-            if ui.button("🧊  Cube").clicked() {
-                actions.add = Some(MeshKind::Cube);
-                ui.close();
-            }
-            if ui.button("⚪  Sphère").clicked() {
-                actions.add = Some(MeshKind::Sphere);
-                ui.close();
-            }
-            if ui.button("▦  Plan").clicked() {
-                actions.add = Some(MeshKind::Plane);
-                ui.close();
-            }
-            if ui.button("🛢  Cylindre").clicked() {
-                actions.add = Some(MeshKind::Cylinder);
-                ui.close();
-            }
-            if ui.button("💊  Capsule").clicked() {
-                actions.add = Some(MeshKind::Capsule);
-                ui.close();
-            }
-            if ui.button("⛰  Terrain").clicked() {
-                actions.add = Some(MeshKind::Terrain);
-                ui.close();
+            for (kind, label) in [
+                (MeshKind::Cube, "🧊  Cube"),
+                (MeshKind::Sphere, "⚪  Sphère"),
+                (MeshKind::Plane, "▦  Plan"),
+                (MeshKind::Cylinder, "🛢  Cylindre"),
+                (MeshKind::Capsule, "💊  Capsule"),
+                (MeshKind::Terrain, "⛰  Terrain"),
+            ] {
+                if ui.button(label).clicked() {
+                    actions.add = Some(kind);
+                    ui.close();
+                }
             }
         });
-        ui.separator();
-        ui.menu_button("🕹  Contrôles mobiles", |ui| {
-            let joy_on = scene.mobile.joystick;
-            if ui.selectable_label(joy_on, "🕹  Joystick virtuel").clicked() {
-                scene.mobile.joystick = !joy_on;
-                ui.close();
-            }
-            if ui.button("🔘  Ajouter un bouton tactile").clicked() {
-                let n = scene.mobile.buttons.len() + 1;
-                scene.mobile.buttons.push(format!("B{n}"));
-                ui.close();
-            }
-            if !scene.mobile.buttons.is_empty()
-                && ui.button("✕  Retirer le dernier bouton").clicked()
+
+        // --- Lumières ---
+        ui.menu_button("💡  Lumière", |ui| {
+            let can_add = scene.point_lights.len() < MAX_POINT_LIGHTS;
+            if ui
+                .add_enabled(can_add, egui::Button::new("💡  Ponctuelle (point)"))
+                .clicked()
             {
-                scene.mobile.buttons.pop();
+                scene.point_lights.push(PointLight::default());
+                ui.close();
+            }
+            if ui
+                .add_enabled(can_add, egui::Button::new("🔦  Spot (cône)"))
+                .clicked()
+            {
+                scene.point_lights.push(PointLight {
+                    spot_angle: 30.0,
+                    ..PointLight::default()
+                });
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .button("☀  Directionnelle (réinitialiser)")
+                .on_hover_text(
+                    "Lumière directionnelle de la scène (une seule) — valeurs par défaut",
+                )
+                .clicked()
+            {
+                scene.light.dir = [0.5, 1.0, 0.3];
+                scene.light.color = [1.0, 1.0, 1.0];
+                ui.close();
+            }
+            if ui
+                .button("🌙  Ambiante +0,1")
+                .on_hover_text("Augmente la lumière ambiante de la scène")
+                .clicked()
+            {
+                scene.light.ambient = (scene.light.ambient + 0.1).min(1.0);
                 ui.close();
             }
         });
+
+        // --- Caméras ---
+        ui.menu_button("🎥  Caméra", |ui| {
+            if ui
+                .button("🎥  Principale (vue actuelle)")
+                .on_hover_text("Fige le point de vue de jeu sur la caméra actuelle (Play)")
+                .clicked()
+            {
+                actions.set_game_camera = true;
+                ui.close();
+            }
+            if ui
+                .selectable_label(scene.camera_follow, "🎯  Caméra de suivi (mobile)")
+                .on_hover_text("En Play, la caméra suit l'objet scripté (joueur)")
+                .clicked()
+            {
+                scene.camera_follow = !scene.camera_follow;
+                ui.close();
+            }
+        });
+
         ui.separator();
-        // Catégories prévues (à venir) : grisées pour montrer la feuille de route.
-        if ui
-            .add_enabled(
-                scene.point_lights.len() < crate::scene::MAX_POINT_LIGHTS,
-                egui::Button::new("💡  Lumière (point)"),
-            )
-            .on_hover_text("Ajoute une lumière ponctuelle (éditable dans l'inspecteur)")
-            .clicked()
-        {
-            scene.point_lights.push(crate::scene::PointLight::default());
-            ui.close();
-        }
-        if ui
-            .button("🎥  Caméra principale (vue actuelle)")
-            .on_hover_text("Fige le point de vue de jeu sur la caméra actuelle (utilisé en Play)")
-            .clicked()
-        {
-            actions.set_game_camera = true;
-            ui.close();
-        }
+
+        // --- Physique (s'applique à la sélection) ---
+        let sel = selection.filter(|&i| i < scene.objects.len());
+        ui.add_enabled_ui(sel.is_some(), |ui| {
+            ui.menu_button("⚙  Physique (sélection)", |ui| {
+                use crate::runtime::physics::PhysicsKind as P;
+                if let Some(i) = sel {
+                    if ui.button("🧱  Corps statique").clicked() {
+                        scene.objects[i].physics = P::Static;
+                        ui.close();
+                    }
+                    if ui.button("⚙  Rigidbody (dynamique)").clicked() {
+                        scene.objects[i].physics = P::Dynamic;
+                        ui.close();
+                    }
+                    if ui.button("🎯  Zone de déclenchement (trigger)").clicked() {
+                        scene.objects[i].trigger = true;
+                        ui.close();
+                    }
+                    if ui.button("✕  Aucune physique").clicked() {
+                        scene.objects[i].physics = P::None;
+                        ui.close();
+                    }
+                }
+            });
+        });
+
+        // --- Audio (s'applique à la sélection) ---
+        ui.add_enabled_ui(sel.is_some(), |ui| {
+            if ui
+                .button("🔊  Source audio (sélection)…")
+                .on_hover_text("Choisit un son joué par l'objet sélectionné")
+                .clicked()
+            {
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                if let Some(i) = sel
+                    && let Some(p) = rfd::FileDialog::new()
+                        .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
+                        .pick_file()
+                {
+                    scene.objects[i].audio_clip = p.to_string_lossy().into_owned();
+                }
+                ui.close();
+            }
+        });
+
+        ui.separator();
+
+        // --- UI mobile ---
+        ui.menu_button("📱  UI mobile", |ui| {
+            let m = &mut scene.mobile;
+            if ui
+                .selectable_label(m.joystick, "🕹  Joystick virtuel")
+                .clicked()
+            {
+                m.joystick = !m.joystick;
+                ui.close();
+            }
+            if ui.button("🔘  Bouton tactile").clicked() {
+                let n = m.buttons.len() + 1;
+                m.buttons.push(format!("B{n}"));
+                ui.close();
+            }
+            if !m.buttons.is_empty() && ui.button("✕  Retirer le dernier bouton").clicked() {
+                m.buttons.pop();
+                ui.close();
+            }
+            if ui
+                .selectable_label(m.touch_zone, "👆  Zone tactile (plein écran)")
+                .on_hover_text("Un tap n'importe où expose input.btn.touch au script")
+                .clicked()
+            {
+                m.touch_zone = !m.touch_zone;
+                ui.close();
+            }
+            if ui
+                .selectable_label(m.health_bar, "❤  Barre de vie (HUD)")
+                .on_hover_text("Affiche une barre de vie pilotée par set_health() côté script")
+                .clicked()
+            {
+                m.health_bar = !m.health_bar;
+                ui.close();
+            }
+            if ui
+                .selectable_label(m.safe_area, "🛡  Zone sûre (safe area)")
+                .on_hover_text("Rentre les contrôles dans une marge sûre (encoche, bords arrondis)")
+                .clicked()
+            {
+                m.safe_area = !m.safe_area;
+                ui.close();
+            }
+        });
     });
 }
 
@@ -844,6 +987,10 @@ fn menu_outils(
         }
         if ui.button("📊  Profiler FPS").clicked() {
             panels.profiler = true;
+            ui.close();
+        }
+        if ui.button("📜  Gestionnaire de scripts Lua").clicked() {
+            panels.scripts = true;
             ui.close();
         }
         ui.separator();
@@ -1337,14 +1484,110 @@ fn optimize_window(
                 }
             });
             ui.small("Écrit des copies …_optN.png et met à jour les objets (annulable).");
+            if ui
+                .button("🧱 Convertir en puissances de 2")
+                .on_hover_text("Redimensionne les textures en POT (mip-mapping/compression GPU)")
+                .clicked()
+            {
+                actions.convert_textures_pot = true;
+            }
             ui.separator();
             if scene.point_lights.len() > 4 && ui.button("Limiter à 4 lumières").clicked() {
                 actions.limit_lights = Some(4);
             }
+            if !scene.point_lights.is_empty()
+                && ui
+                    .button("💡 Bake lighting (figer les lumières)")
+                    .on_hover_text(
+                        "Fige les lumières ponctuelles en émission statique puis les supprime",
+                    )
+                    .clicked()
+            {
+                actions.bake_lighting = true;
+            }
             ui.separator();
-            ui.label("💡 Astuce : utilise « Contrôle qualité APK » pour vérifier les gains.");
+            // Évolutions de rendu non encore implémentées : grisées et explicitées.
+            ui.add_enabled(
+                false,
+                egui::Button::new("🔻 Fusionner les meshes statiques"),
+            )
+            .on_hover_text("À venir : fusion des géométries statiques (réduction des draw calls)");
+            ui.add_enabled(
+                false,
+                egui::Button::new("📉 Activer LOD / occlusion culling"),
+            )
+            .on_hover_text(
+                "À venir : niveaux de détail et culling d'occlusion (sous-systèmes de rendu)",
+            );
+            ui.separator();
+            if ui
+                .button("⚡ Mode performance Android")
+                .on_hover_text("Réduit les textures à ≤ 1024 px et limite à 4 lumières en une fois")
+                .clicked()
+            {
+                actions.perf_mode = true;
+            }
+            ui.small("💡 Astuce : utilise « Contrôle qualité APK » pour vérifier les gains.");
         });
     panels.optimize = open;
+}
+
+/// Fenêtre « Gestionnaire de scripts Lua » : liste les objets scriptés, donne un
+/// aperçu et permet de sélectionner l'objet (édition dans l'inspecteur).
+fn scripts_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &Scene,
+    selection: &mut Option<usize>,
+    selected: &mut Vec<usize>,
+) {
+    let mut open = panels.scripts;
+    egui::Window::new("📜  Gestionnaire de scripts Lua")
+        .open(&mut open)
+        .default_size([420.0, 320.0])
+        .show(ctx, |ui| {
+            let scripted: Vec<usize> = scene
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| !o.script.trim().is_empty())
+                .map(|(i, _)| i)
+                .collect();
+            let total_lines: usize = scripted
+                .iter()
+                .map(|&i| scene.objects[i].script.lines().count())
+                .sum();
+            ui.label(format!(
+                "{} script(s), {} ligne(s) au total",
+                scripted.len(),
+                total_lines
+            ));
+            ui.separator();
+            if scripted.is_empty() {
+                ui.weak("Aucun script. Sélectionne un objet et écris du Lua dans l'inspecteur.");
+            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for i in scripted {
+                        let obj = &scene.objects[i];
+                        let lines = obj.script.lines().count();
+                        let header = format!("📜 {} ({lines} l.)", obj.name);
+                        let is_sel = *selection == Some(i);
+                        if ui.selectable_label(is_sel, header).clicked() {
+                            *selection = Some(i);
+                            *selected = vec![i];
+                        }
+                        // Aperçu : première ligne non vide du script.
+                        if let Some(first) = obj.script.lines().find(|l| !l.trim().is_empty()) {
+                            ui.indent(("preview", i), |ui| {
+                                ui.weak(egui::RichText::new(first.trim()).monospace().small());
+                            });
+                        }
+                    }
+                });
+        });
+    panels.scripts = open;
 }
 
 /// Fenêtre « Gestionnaire d'assets » : liste les assets du projet + embarqués,
@@ -1459,7 +1702,26 @@ fn mobile_overlay(
     input.joy = (0.0, 0.0);
     input.buttons.clear();
 
+    // Screen Safe Area : rentre les contrôles dans une marge sûre (encoche/bords).
+    let area = if cfg.safe_area {
+        let inset = (area.width().min(area.height()) * 0.06).min(28.0);
+        area.shrink(inset)
+    } else {
+        area
+    };
+
     let margin = 32.0;
+
+    // --- Zone tactile plein écran : un tap n'importe où expose input.btn.touch ---
+    if cfg.touch_zone {
+        let down = ctx.input(|i| i.pointer.primary_down());
+        if let Some(p) = ctx.pointer_interact_pos()
+            && down
+            && area.contains(p)
+        {
+            input.buttons.insert("touch".to_string());
+        }
+    }
 
     // --- Joystick (bas-gauche de la zone de jeu) ---
     if cfg.joystick {
@@ -1556,6 +1818,7 @@ fn build_ui(
     );
     optimize_window(root.ctx(), panels, scene, actions);
     asset_browser_window(root.ctx(), panels, scene, *selection, actions);
+    scripts_window(root.ctx(), panels, scene, selection, selected);
 
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);
@@ -1584,7 +1847,7 @@ fn build_ui(
         ui.horizontal(|ui| {
             menu_fichier(ui, export, actions);
             menu_edition(ui, selection, actions);
-            menu_ajouter(ui, scene, actions);
+            menu_ajouter(ui, scene, *selection, actions);
             menu_outils(ui, gizmo_mode, export, panels);
             menu_aide(ui, panels);
         });
@@ -1592,6 +1855,14 @@ fn build_ui(
     // Ouverture différée de la fenêtre « Générer une scène (IA) » (demandée par le menu).
     if actions.open_ai_scene {
         panels.ai_scene = true;
+    }
+    // « Run Device » (toolbar) : build Android + installation sur le téléphone branché.
+    if actions.run_device {
+        export.run_on_device(scene);
+    }
+    // « Paramètres projet » (menu Fichier) : ouvre aussi la fenêtre Paramètres.
+    if actions.open_settings {
+        panels.settings = true;
     }
 
     // --- Barre d'outils rapide ---
@@ -1701,8 +1972,17 @@ fn build_ui(
             {
                 actions.toggle_snap = true;
             }
-            // Build APK : différenciateur du moteur, mis en avant à droite.
+            // Build APK + Run Device : différenciateurs du moteur, mis en avant à droite.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("📲 Run Device")
+                    .on_hover_text(
+                        "Build Android + installation/lancement sur le téléphone branché (adb)",
+                    )
+                    .clicked()
+                {
+                    actions.run_device = true;
+                }
                 if ui
                     .selectable_label(export.open, "🤖 Build APK")
                     .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
@@ -1731,6 +2011,7 @@ fn build_ui(
                     hier_filter,
                     hier_new_group,
                     hier_rename,
+                    actions,
                 );
             });
     }
@@ -1966,6 +2247,33 @@ fn build_ui(
                                 );
                         });
                         ui.separator();
+                        ui.collapsing("🧩 Composants mobiles (Android)", |ui| {
+                            ui.weak("Touch Area : voir « Tactile » ci-dessus.");
+                            ui.checkbox(&mut obj.input_receiver, "🕹 Input Receiver (joystick)")
+                                .on_hover_text("L'objet se déplace avec le joystick en Play (plan X/Z)");
+                            ui.checkbox(&mut obj.gyro_control, "📐 Gyroscope Controller (tilt)")
+                                .on_hover_text("L'objet se déplace selon l'inclinaison de l'appareil");
+                            if obj.input_receiver || obj.gyro_control {
+                                ui.horizontal(|ui| {
+                                    ui.label("Vitesse");
+                                    ui.add(egui::Slider::new(&mut obj.move_speed, 0.5..=10.0));
+                                });
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("📳 Vibration au tap");
+                                let mut on = obj.vibrate_on_tap > 0;
+                                if ui.checkbox(&mut on, "").changed() {
+                                    obj.vibrate_on_tap = if on { 80 } else { 0 };
+                                }
+                                if obj.vibrate_on_tap > 0 {
+                                    ui.add(
+                                        egui::Slider::new(&mut obj.vibrate_on_tap, 20..=400)
+                                            .suffix(" ms"),
+                                    );
+                                }
+                            });
+                        });
+                        ui.separator();
                         ui.collapsing("Script (Lua)", |ui| {
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
@@ -2072,7 +2380,7 @@ fn build_ui(
         device_bezel(root.ctx(), play_rect);
         touch_feedback(root.ctx(), play_rect);
     }
-    if let Some(h) = hud_health {
+    if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
         health_bar(root.ctx(), play_rect, h);
     }
     if *playing && scene.mobile.any() {

@@ -15,6 +15,12 @@ pub struct Transform {
     pub scale: Vec3,
 }
 
+impl Default for Transform {
+    fn default() -> Self {
+        Self::from_pos(Vec3::ZERO)
+    }
+}
+
 impl Transform {
     pub fn from_pos(position: Vec3) -> Self {
         Self {
@@ -34,8 +40,9 @@ impl Transform {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum MeshKind {
+    #[default]
     Cube,
     Sphere,
     Plane,
@@ -145,6 +152,52 @@ pub struct SceneObject {
     /// Son spatialisé : le volume au lancement décroît avec la distance à la caméra.
     #[serde(default)]
     pub audio_spatial: bool,
+
+    // --- Composants mobiles Android (Sprint 41) ---
+    /// Input Receiver : l'objet se déplace avec le joystick virtuel en Play (X/Z).
+    #[serde(default)]
+    pub input_receiver: bool,
+    /// Gyroscope Controller : l'objet se déplace selon l'inclinaison (tilt) en Play.
+    #[serde(default)]
+    pub gyro_control: bool,
+    /// Vitesse appliquée par Input Receiver / Gyroscope (unités/seconde).
+    #[serde(default = "default_move_speed")]
+    pub move_speed: f32,
+    /// Vibration Feedback : durée (ms) du retour haptique quand l'objet est tapé (0 = off).
+    #[serde(default)]
+    pub vibrate_on_tap: u32,
+}
+
+fn default_move_speed() -> f32 {
+    3.0
+}
+
+impl Default for SceneObject {
+    fn default() -> Self {
+        Self {
+            name: "Objet".into(),
+            transform: Transform::default(),
+            mesh: MeshKind::Cube,
+            script: String::new(),
+            physics: PhysicsKind::None,
+            collider_shape: crate::runtime::physics::ColliderShape::Auto,
+            audio_clip: String::new(),
+            audio_autoplay: false,
+            group: String::new(),
+            color: white(),
+            texture: String::new(),
+            tappable: false,
+            metallic: 0.0,
+            roughness: default_roughness(),
+            emissive: 0.0,
+            trigger: false,
+            audio_spatial: false,
+            input_receiver: false,
+            gyro_control: false,
+            move_speed: default_move_speed(),
+            vibrate_on_tap: 0,
+        }
+    }
 }
 
 fn default_roughness() -> f32 {
@@ -201,12 +254,21 @@ pub struct MobileControls {
     pub joystick: bool,
     /// Boutons tactiles nommés (coin bas-droite).
     pub buttons: Vec<String>,
+    /// Zone tactile plein écran : un tap n'importe où expose `input.btn.touch` au script.
+    #[serde(default)]
+    pub touch_zone: bool,
+    /// Affiche la barre de vie du HUD (pilotée par `set_health` côté script).
+    #[serde(default)]
+    pub health_bar: bool,
+    /// Screen Safe Area : rentre les contrôles/HUD dans une marge sûre (encoche, bords arrondis).
+    #[serde(default)]
+    pub safe_area: bool,
 }
 
 impl MobileControls {
     /// Au moins un contrôle est-il actif ?
     pub fn any(&self) -> bool {
-        self.joystick || !self.buttons.is_empty()
+        self.joystick || !self.buttons.is_empty() || self.touch_zone || self.health_bar
     }
 }
 
@@ -322,6 +384,7 @@ fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
         emissive: 0.0,
         trigger: false,
         audio_spatial: false,
+        ..Default::default()
     }
 }
 
@@ -370,6 +433,7 @@ end"
             mobile: MobileControls {
                 joystick: true,
                 buttons: vec!["Saut".into()],
+                ..Default::default()
             },
             camera_follow: true,
             game_camera: None,
@@ -477,6 +541,7 @@ impl Scene {
                     emissive: 0.0,
                     trigger: false,
                     audio_spatial: false,
+                    ..Default::default()
                 },
                 SceneObject {
                     name: "Cube".into(),
@@ -497,6 +562,7 @@ impl Scene {
                     emissive: 0.0,
                     trigger: false,
                     audio_spatial: false,
+                    ..Default::default()
                 },
                 SceneObject {
                     name: "Sphère".into(),
@@ -517,6 +583,7 @@ impl Scene {
                     emissive: 0.0,
                     trigger: false,
                     audio_spatial: false,
+                    ..Default::default()
                 },
             ],
         }
@@ -539,6 +606,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             mobile: MobileControls {
                 joystick: true,
                 buttons: vec!["Saut".into()],
+                ..Default::default()
             },
             camera_follow: true,
             game_camera: None,
@@ -562,6 +630,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     emissive: 0.0,
                     trigger: false,
                     audio_spatial: false,
+                    ..Default::default()
                 },
                 SceneObject {
                     name: "Joueur".into(),
@@ -581,6 +650,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     emissive: 0.0,
                     trigger: false,
                     audio_spatial: false,
+                    ..Default::default()
                 },
                 SceneObject {
                     name: "Bouton couleur".into(),
@@ -601,6 +671,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     emissive: 0.0,
                     trigger: false,
                     audio_spatial: false,
+                    ..Default::default()
                 },
             ],
         }
@@ -641,6 +712,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 emissive: 0.0,
                 trigger: false,
                 audio_spatial: false,
+                ..Default::default()
             })
             .collect();
         if objects.is_empty() {
@@ -655,6 +727,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             mobile: MobileControls {
                 joystick: spec.joystick,
                 buttons: spec.buttons,
+                ..Default::default()
             },
             camera_follow: spec.camera_follow,
             game_camera: None,
