@@ -483,7 +483,8 @@ impl Renderer {
         });
         // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
         // + un marqueur 3 axes (6 sommets) par lumière ponctuelle + 6 pour la caméra de jeu.
-        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 6 + 6;
+        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6.
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 6;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
             size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
@@ -927,6 +928,24 @@ impl Renderer {
                     });
                     verts.push(GizmoVertex {
                         position: [c[0] + d.x, c[1] + d.y, c[2] + d.z],
+                        color: col,
+                    });
+                }
+                // Spot : ligne depuis la lumière le long du cône (visualise l'orientation).
+                if pl.spot_angle > 0.0 {
+                    let dir = glam::Vec3::from_array(pl.spot_dir);
+                    let dir = if dir.length_squared() > 1e-6 {
+                        dir.normalize()
+                    } else {
+                        glam::Vec3::NEG_Y
+                    };
+                    let end = glam::Vec3::from_array(c) + dir * (pl.range * 0.4).max(0.5);
+                    verts.push(GizmoVertex {
+                        position: c,
+                        color: col,
+                    });
+                    verts.push(GizmoVertex {
+                        position: end.to_array(),
                         color: col,
                     });
                 }
