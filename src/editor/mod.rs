@@ -89,6 +89,8 @@ pub struct UiActions {
     pub new_scene: bool,
     /// « Démo mobile » : charge une scène jouable (joystick + saut).
     pub load_demo: bool,
+    /// « Démo gameplay » : scène complète (gyro/zone/vie/tap).
+    pub load_gameplay: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -530,6 +532,14 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_demo = true;
+            ui.close();
+        }
+        if ui
+            .button("🎯  Démo gameplay (complète)")
+            .on_hover_text("Joystick + gyroscope + saut + zone de danger + barre de vie + tap")
+            .clicked()
+        {
+            actions.load_gameplay = true;
             ui.close();
         }
         if ui

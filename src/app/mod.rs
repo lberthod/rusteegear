@@ -765,6 +765,15 @@ impl AppState {
         }
     }
 
+    /// Charge la démo gameplay complète (joystick/gyro/saut/zone/vie/tap).
+    pub fn load_gameplay_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::gameplay_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.clear_selection();
+    }
+
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
     pub fn new_scene(&mut self) {
         self.push_undo();

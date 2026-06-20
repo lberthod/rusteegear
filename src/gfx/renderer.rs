@@ -803,6 +803,9 @@ impl Renderer {
             if actions.load_demo {
                 app.load_mobile_demo();
             }
+            if actions.load_gameplay {
+                app.load_gameplay_demo();
+            }
             if actions.align_ground {
                 app.align_to_ground();
             }

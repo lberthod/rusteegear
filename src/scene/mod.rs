@@ -302,6 +302,81 @@ impl Default for PointLight {
 /// Nombre maximal de lumières ponctuelles prises en compte par le shader.
 pub const MAX_POINT_LIGHTS: usize = 8;
 
+/// Constructeur d'objet aux valeurs par défaut (réduit le boilerplate des démos).
+fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
+    SceneObject {
+        name: name.into(),
+        transform: Transform::from_pos(pos),
+        mesh,
+        script: String::new(),
+        physics: PhysicsKind::None,
+        collider_shape: crate::runtime::physics::ColliderShape::Auto,
+        audio_clip: String::new(),
+        audio_autoplay: false,
+        group: String::new(),
+        color: white(),
+        texture: String::new(),
+        tappable: false,
+        metallic: 0.0,
+        roughness: 0.6,
+        emissive: 0.0,
+        trigger: false,
+        audio_spatial: false,
+    }
+}
+
+impl Scene {
+    /// Démo « gameplay complet » : joueur (joystick + gyroscope + saut + vibration),
+    /// zone de danger qui retire de la vie (HUD), et cube tactile qui change de couleur.
+    /// Montre toute l'API de script en une scène jouable.
+    pub fn gameplay_demo() -> Self {
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol.transform.with_scale(Vec3::new(16.0, 1.0, 16.0));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.35, 0.5, 0.4];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 0.5, 0.0));
+        joueur.color = [0.95, 0.6, 0.25];
+        joueur.script = "\
+local s = 4.0
+obj.x = obj.x + (input.jx + tilt.x) * s * dt
+obj.z = obj.z - (input.jy + tilt.y) * s * dt
+if input.btn.Saut then obj.y = 1.4; vibrate(40) else obj.y = 0.5 end"
+            .into();
+
+        let mut danger = demo_obj("Zone danger", MeshKind::Cube, Vec3::new(3.0, 0.5, 0.0));
+        danger.color = [0.8, 0.2, 0.2];
+        danger.emissive = 0.3;
+        danger.trigger = true;
+        danger.script = "\
+if obj.triggered then set_health(0.25); vibrate(120) else set_health(1.0) end"
+            .into();
+
+        let mut bouton = demo_obj("Cube couleur", MeshKind::Cube, Vec3::new(-3.0, 0.5, 0.0));
+        bouton.color = [0.3, 0.6, 0.9];
+        bouton.tappable = true;
+        bouton.script = "\
+if obj.tapped then
+  obj.r = (time * 0.7) % 1.0; obj.g = (time * 1.3) % 1.0; obj.b = (time * 1.9) % 1.0
+end"
+        .into();
+
+        Scene {
+            objects: vec![sol, joueur, danger, bouton],
+            imported: Vec::new(),
+            groups: Vec::new(),
+            light: Light::default(),
+            point_lights: Vec::new(),
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into()],
+            },
+            camera_follow: true,
+            game_camera: None,
+        }
+    }
+}
+
 impl Scene {
     /// Estimation grossière de l'occupation mémoire (octets) : `(objets, meshes importés,
     /// nombre de textures uniques)`. Pour le profiler mémoire (ordre de grandeur).
