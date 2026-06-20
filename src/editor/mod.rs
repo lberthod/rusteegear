@@ -1794,6 +1794,16 @@ fn build_ui(
                                 "Dynamique",
                             );
                         });
+                        if obj.physics != PhysicsKind::None {
+                            ui.horizontal(|ui| {
+                                use crate::runtime::physics::ColliderShape as Cs;
+                                ui.label("Collider");
+                                ui.selectable_value(&mut obj.collider_shape, Cs::Auto, "Auto");
+                                ui.selectable_value(&mut obj.collider_shape, Cs::Box, "Box");
+                                ui.selectable_value(&mut obj.collider_shape, Cs::Sphere, "Sphère");
+                                ui.selectable_value(&mut obj.collider_shape, Cs::Capsule, "Capsule");
+                            });
+                        }
                         ui.checkbox(&mut obj.tappable, "👆 Tactile (cliquable)")
                             .on_hover_text(
                                 "En Play, un tap dessus expose obj.tapped au script (ex. couleur)",

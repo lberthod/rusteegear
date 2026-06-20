@@ -13,6 +13,16 @@ pub enum PhysicsKind {
     Dynamic,
 }
 
+/// Forme du collider en mode Play. `Auto` = déduite du mesh ; sinon forcée.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ColliderShape {
+    #[default]
+    Auto,
+    Box,
+    Sphere,
+    Capsule,
+}
+
 pub struct Physics {
     bodies: RigidBodySet,
     colliders: ColliderSet,
@@ -61,22 +71,32 @@ impl Physics {
             // demi-dimensions du collider : AABB local mis à l'échelle
             let (lmin, lmax) = scene.local_aabb(obj.mesh);
             let he = (lmax - lmin) * 0.5 * t.scale;
-            let collider = match obj.mesh {
-                MeshKind::Sphere => ColliderBuilder::ball(he.x.abs().max(0.01)),
-                MeshKind::Capsule => {
-                    // demi-hauteur de la partie cylindrique (hors capuchons sphériques)
-                    let r = he.x.abs().max(he.z.abs()).max(0.01);
-                    let half = (he.y.abs() - r).max(0.01);
-                    ColliderBuilder::capsule_y(half, r)
-                }
-                MeshKind::Cylinder => {
-                    ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(0.01))
-                }
-                _ => ColliderBuilder::cuboid(
+            let cuboid = || {
+                ColliderBuilder::cuboid(
                     he.x.abs().max(0.01),
                     he.y.abs().max(0.01),
                     he.z.abs().max(0.01),
-                ),
+                )
+            };
+            let ball = || ColliderBuilder::ball(he.x.abs().max(he.z.abs()).max(0.01));
+            let capsule = || {
+                let r = he.x.abs().max(he.z.abs()).max(0.01);
+                let half = (he.y.abs() - r).max(0.01);
+                ColliderBuilder::capsule_y(half, r)
+            };
+            // Forme explicite si demandée, sinon déduite du mesh.
+            let collider = match obj.collider_shape {
+                ColliderShape::Box => cuboid(),
+                ColliderShape::Sphere => ball(),
+                ColliderShape::Capsule => capsule(),
+                ColliderShape::Auto => match obj.mesh {
+                    MeshKind::Sphere => ball(),
+                    MeshKind::Capsule => capsule(),
+                    MeshKind::Cylinder => {
+                        ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(0.01))
+                    }
+                    _ => cuboid(),
+                },
             }
             .restitution(0.5)
             .friction(0.6)

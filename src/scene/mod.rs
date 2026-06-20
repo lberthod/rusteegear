@@ -107,6 +107,9 @@ pub struct SceneObject {
     /// Type de corps physique en mode Play.
     #[serde(default = "default_physics")]
     pub physics: PhysicsKind,
+    /// Forme du collider (Auto = déduite du mesh).
+    #[serde(default)]
+    pub collider_shape: crate::runtime::physics::ColliderShape,
     /// Fichier son associé (vide = aucun).
     #[serde(default)]
     pub audio_clip: String,
@@ -387,6 +390,7 @@ impl Scene {
                     mesh: MeshKind::Plane,
                     script: String::new(),
                     physics: PhysicsKind::Static,
+                    collider_shape: crate::runtime::physics::ColliderShape::Auto,
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
@@ -406,6 +410,7 @@ impl Scene {
                     // exemple : tourne autour de Y à 60°/s en mode Play
                     script: "obj.ry = obj.ry + dt * 60.0".into(),
                     physics: PhysicsKind::None,
+                    collider_shape: crate::runtime::physics::ColliderShape::Auto,
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
@@ -425,6 +430,7 @@ impl Scene {
                     script: String::new(),
                     // tombe et rebondit sur le sol en mode Play
                     physics: PhysicsKind::Dynamic,
+                    collider_shape: crate::runtime::physics::ColliderShape::Auto,
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
@@ -469,6 +475,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     mesh: MeshKind::Plane,
                     script: String::new(),
                     physics: PhysicsKind::Static,
+                    collider_shape: crate::runtime::physics::ColliderShape::Auto,
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
@@ -487,6 +494,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     mesh: MeshKind::Capsule,
                     script: player_script.into(),
                     physics: PhysicsKind::None,
+                    collider_shape: crate::runtime::physics::ColliderShape::Auto,
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
@@ -506,6 +514,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     // Tap → couleur aléatoire (changeante) via le temps.
                     script: "if obj.tapped then\n  obj.r = (time * 0.7) % 1.0\n  obj.g = (time * 1.3) % 1.0\n  obj.b = (time * 1.9) % 1.0\nend".into(),
                     physics: PhysicsKind::None,
+                    collider_shape: crate::runtime::physics::ColliderShape::Auto,
                     audio_clip: String::new(),
                     audio_autoplay: false,
                     group: String::new(),
@@ -545,6 +554,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     "dynamic" => PhysicsKind::Dynamic,
                     _ => PhysicsKind::None,
                 },
+                collider_shape: crate::runtime::physics::ColliderShape::Auto,
                 audio_clip: String::new(),
                 audio_autoplay: false,
                 group: String::new(),

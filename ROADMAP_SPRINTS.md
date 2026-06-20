@@ -535,7 +535,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] **Ambient Light** comme objet dédié → couvert par Light.ambient global.
 - [ ] **Caméra** : Caméra principale, **Caméra mobile**.
 - [x] Trigger Zone : SceneObject.trigger expose obj.triggered au script quand le joueur entre dans l'AABB.
-- [ ] **Physique** : Collider Box/Sphere explicites (auto depuis l'AABB pour l'instant).
+- [x] Physique : forme de collider explicite (Auto/Box/Sphère/Capsule) dans l'inspecteur.
 - [x] Audio : source + son spatialisé (volume atténué par la distance à la caméra au lancement).
 - [ ] **Listener audio** déplaçable + spatialisation continue (par frame) → évolution.
 - [ ] **UI** : Texte, Bouton, **Joystick mobile**, **Bouton tactile**, **Zone tactile**, Barre de vie.
