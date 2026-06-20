@@ -118,6 +118,11 @@ pub struct Renderer {
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
 
+    // --- grille de référence au sol (depth-testée, dans la passe principale) ---
+    grid_pipeline: wgpu::RenderPipeline,
+    grid_vbuf: wgpu::Buffer,
+    grid_count: u32,
+
     // --- ombres (shadow mapping) ---
     shadow_view: wgpu::TextureView,
     shadow_bind_group: wgpu::BindGroup,
@@ -483,15 +488,61 @@ impl Renderer {
         });
         // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
         // + un marqueur 3 axes (6 sommets) par lumière ponctuelle + 6 pour la caméra de jeu.
-        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6
-        // + grille de référence (21 lignes × 2 axes × 2 sommets = 84).
-        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 6 + 84;
+        // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6.
+        let gizmo_capacity = 3 * RING_SEGMENTS * 2 + crate::scene::MAX_POINT_LIGHTS * 8 + 6;
         let gizmo_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gizmo_vbuf"),
             size: (gizmo_capacity * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        // --- Pipeline grille : même shader lignes, mais AVEC test de profondeur
+        //     (la grille au sol passe correctement derrière les objets). ---
+        let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("grid_pipeline"),
+            layout: Some(&gizmo_layout),
+            vertex: wgpu::VertexState {
+                module: &gizmo_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[GizmoVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gizmo_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        // Géométrie statique de la grille (plan XZ, -10..10, axes X/Z accentués).
+        let grid_verts = build_grid_verts();
+        let grid_count = grid_verts.len() as u32;
+        let grid_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grid_vbuf"),
+            size: (grid_verts.len() * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&grid_vbuf, 0, bytemuck::cast_slice(&grid_verts));
 
         // --- Meshes (un GpuMesh par type) ---
         let mut meshes = HashMap::new();
@@ -523,6 +574,9 @@ impl Renderer {
             draw_plan: Vec::new(),
             gizmo_pipeline,
             gizmo_vbuf,
+            grid_pipeline,
+            grid_vbuf,
+            grid_count,
             shadow_view,
             shadow_bind_group,
             shadow_pipeline,
@@ -920,41 +974,6 @@ impl Renderer {
             0
         } else {
             let mut verts: Vec<GizmoVertex> = Vec::new();
-            // Grille de référence au sol (y = 0), de -10 à 10 ; axes X/Z accentués.
-            if app.show_grid {
-                const N: i32 = 10;
-                for i in -N..=N {
-                    let f = i as f32;
-                    let cx = if i == 0 {
-                        [0.55, 0.3, 0.3]
-                    } else {
-                        [0.28, 0.28, 0.3]
-                    };
-                    let cz = if i == 0 {
-                        [0.3, 0.3, 0.55]
-                    } else {
-                        [0.28, 0.28, 0.3]
-                    };
-                    // lignes parallèles à Z (x = f)
-                    verts.push(GizmoVertex {
-                        position: [f, 0.0, -N as f32],
-                        color: cx,
-                    });
-                    verts.push(GizmoVertex {
-                        position: [f, 0.0, N as f32],
-                        color: cx,
-                    });
-                    // lignes parallèles à X (z = f)
-                    verts.push(GizmoVertex {
-                        position: [-N as f32, 0.0, f],
-                        color: cz,
-                    });
-                    verts.push(GizmoVertex {
-                        position: [N as f32, 0.0, f],
-                        color: cz,
-                    });
-                }
-            }
             // Marqueur en croix 3D à chaque lumière ponctuelle, teinté par sa couleur.
             for pl in &app.scene.point_lights {
                 let c = pl.position;
@@ -1143,6 +1162,14 @@ impl Renderer {
             // (Le clear remplit toute la surface → bandes sombres autour = letterbox.)
             pass.set_viewport(dx, dy, dw, dh, 0.0, 1.0);
             pass.set_scissor_rect(dx as u32, dy as u32, dw as u32, dh as u32);
+
+            // Grille de référence au sol (depth-testée), en mode édition uniquement.
+            if app.show_grid && !app.player && !app.device_preview {
+                pass.set_pipeline(&self.grid_pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
+                pass.draw(0..self.grid_count, 0..1);
+            }
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -1342,6 +1369,43 @@ fn aabb_visible(
         }
     }
     true
+}
+
+/// Géométrie statique de la grille de référence (plan XZ, -10..10).
+/// Axes X (rougeâtre) et Z (bleuté) accentués, lignes secondaires grises.
+fn build_grid_verts() -> Vec<GizmoVertex> {
+    const N: i32 = 10;
+    let mut v = Vec::new();
+    for i in -N..=N {
+        let f = i as f32;
+        let cx = if i == 0 {
+            [0.6, 0.3, 0.3]
+        } else {
+            [0.26, 0.26, 0.3]
+        };
+        let cz = if i == 0 {
+            [0.3, 0.3, 0.6]
+        } else {
+            [0.26, 0.26, 0.3]
+        };
+        v.push(GizmoVertex {
+            position: [f, 0.0, -N as f32],
+            color: cx,
+        });
+        v.push(GizmoVertex {
+            position: [f, 0.0, N as f32],
+            color: cx,
+        });
+        v.push(GizmoVertex {
+            position: [-N as f32, 0.0, f],
+            color: cz,
+        });
+        v.push(GizmoVertex {
+            position: [N as f32, 0.0, f],
+            color: cz,
+        });
+    }
+    v
 }
 
 /// Clé d'ordonnancement stable d'un type de mesh (pour grouper les instances).
