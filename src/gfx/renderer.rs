@@ -1288,6 +1288,7 @@ fn mesh_key(m: MeshKind) -> u32 {
         MeshKind::Plane => 2,
         MeshKind::Cylinder => 3,
         MeshKind::Capsule => 4,
+        MeshKind::Terrain => 5,
         MeshKind::Imported(i) => 100 + i,
     }
 }

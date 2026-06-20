@@ -230,6 +230,45 @@ pub fn plane(color: [f32; 3]) -> MeshData {
     MeshData { vertices, indices }
 }
 
+/// Terrain : grille 1×1 (plan XZ) subdivisée avec un relief doux procédural.
+/// Hauteur et normales analytiques ; à mettre à l'échelle via le Transform.
+pub fn terrain(color: [f32; 3]) -> MeshData {
+    const RES: u32 = 24; // quads par côté
+    const AMP: f32 = 0.08; // amplitude du relief
+    const FREQ: f32 = 8.0;
+    let h = |x: f32, z: f32| AMP * (x * FREQ).sin() * (z * FREQ).cos();
+
+    let mut vertices = Vec::new();
+    for iz in 0..=RES {
+        for ix in 0..=RES {
+            let x = ix as f32 / RES as f32 - 0.5;
+            let z = iz as f32 / RES as f32 - 0.5;
+            let y = h(x, z);
+            // Normale analytique : (-dh/dx, 1, -dh/dz) normalisé.
+            let dhdx = AMP * FREQ * (x * FREQ).cos() * (z * FREQ).cos();
+            let dhdz = -AMP * FREQ * (x * FREQ).sin() * (z * FREQ).sin();
+            let n = [-dhdx, 1.0, -dhdz];
+            let inv = 1.0 / (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            vertices.push(Vertex {
+                position: [x, y, z],
+                normal: [n[0] * inv, n[1] * inv, n[2] * inv],
+                color,
+                uv: [ix as f32 / RES as f32, iz as f32 / RES as f32],
+            });
+        }
+    }
+    let mut indices = Vec::new();
+    let row = RES + 1;
+    for iz in 0..RES {
+        for ix in 0..RES {
+            let a = iz * row + ix;
+            let b = a + row;
+            indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    MeshData { vertices, indices }
+}
+
 /// Cylindre unitaire : rayon 0.5, hauteur 1 (y de -0.5 à 0.5), axe +Y.
 pub fn cylinder(color: [f32; 3]) -> MeshData {
     use std::f32::consts::PI;

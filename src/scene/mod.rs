@@ -41,18 +41,20 @@ pub enum MeshKind {
     Plane,
     Cylinder,
     Capsule,
+    Terrain,
     /// Modèle glTF importé, index dans `Scene::imported`.
     Imported(u32),
 }
 
 impl MeshKind {
     /// Primitives générées par code (clés du cache de meshes GPU).
-    pub const ALL: [MeshKind; 5] = [
+    pub const ALL: [MeshKind; 6] = [
         MeshKind::Cube,
         MeshKind::Sphere,
         MeshKind::Plane,
         MeshKind::Cylinder,
         MeshKind::Capsule,
+        MeshKind::Terrain,
     ];
 
     /// Données CPU des primitives (pas valable pour `Imported`).
@@ -63,6 +65,7 @@ impl MeshKind {
             MeshKind::Plane => mesh::plane([0.35, 0.4, 0.35]),
             MeshKind::Cylinder => mesh::cylinder([0.55, 0.45, 0.7]),
             MeshKind::Capsule => mesh::capsule([0.45, 0.7, 0.5]),
+            MeshKind::Terrain => mesh::terrain([0.4, 0.55, 0.35]),
             MeshKind::Imported(_) => MeshData::default(),
         }
     }
@@ -74,6 +77,7 @@ impl MeshKind {
             MeshKind::Plane => "Plan",
             MeshKind::Cylinder => "Cylindre",
             MeshKind::Capsule => "Capsule",
+            MeshKind::Terrain => "Terrain",
             MeshKind::Imported(_) => "Modèle",
         }
     }
@@ -323,6 +327,7 @@ impl Scene {
             MeshKind::Plane => (Vec3::new(-0.5, -0.02, -0.5), Vec3::new(0.5, 0.02, 0.5)),
             MeshKind::Cylinder => (Vec3::new(-0.5, -0.5, -0.5), Vec3::new(0.5, 0.5, 0.5)),
             MeshKind::Capsule => (Vec3::new(-0.25, -0.5, -0.25), Vec3::new(0.25, 0.5, 0.25)),
+            MeshKind::Terrain => (Vec3::new(-0.5, -0.1, -0.5), Vec3::new(0.5, 0.1, 0.5)),
             MeshKind::Imported(i) => {
                 let m = &self.imported[i as usize];
                 (m.aabb_min, m.aabb_max)

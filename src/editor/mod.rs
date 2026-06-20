@@ -324,6 +324,7 @@ fn mesh_category(mesh: MeshKind) -> (&'static str, &'static str) {
         MeshKind::Plane => ("Plans", "▦"),
         MeshKind::Cylinder => ("Cylindres", "🛢"),
         MeshKind::Capsule => ("Capsules", "💊"),
+        MeshKind::Terrain => ("Terrains", "⛰"),
         MeshKind::Imported(_) => ("Modèles", "📦"),
     }
 }
@@ -711,6 +712,10 @@ fn menu_ajouter(ui: &mut egui::Ui, scene: &mut Scene, actions: &mut UiActions) {
             }
             if ui.button("💊  Capsule").clicked() {
                 actions.add = Some(MeshKind::Capsule);
+                ui.close();
+            }
+            if ui.button("⛰  Terrain").clicked() {
+                actions.add = Some(MeshKind::Terrain);
                 ui.close();
             }
         });
