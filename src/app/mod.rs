@@ -118,6 +118,8 @@ pub struct AppState {
     pub hud_health: Option<f32>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
+    /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
+    pub snap: bool,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -245,6 +247,7 @@ impl AppState {
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
             hud_health: None,
             show_grid: true,
+            snap: false,
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
@@ -1046,7 +1049,7 @@ impl AppState {
                         && let Some(pl) = self.scene.point_lights.get_mut(li)
                     {
                         let delta = a * (t - self.drag_start_t);
-                        pl.position = (self.drag_orig_pos + delta).to_array();
+                        pl.position = maybe_snap(self.drag_orig_pos + delta, self.snap).to_array();
                     }
                     self.last_cursor = Some((x, y));
                     return;
@@ -1058,16 +1061,17 @@ impl AppState {
                         GizmoMode::Translate => {
                             if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y) {
                                 let delta = a * (t - self.drag_start_t);
+                                let snap = self.snap;
                                 if self.drag_orig_positions.len() > 1 {
                                     // déplace toute la sélection en bloc
                                     for (i, orig) in &self.drag_orig_positions {
                                         if let Some(o) = self.scene.objects.get_mut(*i) {
-                                            o.transform.position = *orig + delta;
+                                            o.transform.position = maybe_snap(*orig + delta, snap);
                                         }
                                     }
                                 } else {
                                     self.scene.objects[sel].transform.position =
-                                        self.drag_orig_pos + delta;
+                                        maybe_snap(self.drag_orig_pos + delta, snap);
                                 }
                             }
                         }
@@ -1627,6 +1631,19 @@ fn optimized_path(path: &str, max_px: u32) -> String {
     } else {
         format!("{parent}/{name}")
     }
+}
+
+/// Aligne une position sur la grille (pas de 0.5) si `snap` est actif.
+fn maybe_snap(p: Vec3, snap: bool) -> Vec3 {
+    if !snap {
+        return p;
+    }
+    const STEP: f32 = 0.5;
+    Vec3::new(
+        (p.x / STEP).round() * STEP,
+        (p.y / STEP).round() * STEP,
+        (p.z / STEP).round() * STEP,
+    )
 }
 
 /// Hash stable d'une source de script, clé du cache de chunks compilés.

@@ -815,6 +815,7 @@ impl Renderer {
                 backend: &self.backend,
                 ai_busy: app.ai_busy,
                 grid: app.show_grid,
+                snap: app.snap,
             };
             let (full_output, actions) = self.editor.run(
                 &self.window,
@@ -935,6 +936,9 @@ impl Renderer {
             }
             if actions.toggle_grid {
                 app.show_grid = !app.show_grid;
+            }
+            if actions.toggle_snap {
+                app.snap = !app.snap;
             }
             Some(full_output)
         };

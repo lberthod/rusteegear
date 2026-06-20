@@ -70,6 +70,8 @@ pub struct StatusInfo<'a> {
     pub ai_busy: bool,
     /// La grille de référence est-elle affichée ?
     pub grid: bool,
+    /// L'aimantation (snap) est-elle active ?
+    pub snap: bool,
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
@@ -131,6 +133,8 @@ pub struct UiActions {
     pub distribute_axis: Option<usize>,
     /// Basculer l'affichage de la grille de référence.
     pub toggle_grid: bool,
+    /// Basculer l'aimantation (snap) au déplacement.
+    pub toggle_snap: bool,
 }
 
 impl Editor {
@@ -1689,6 +1693,13 @@ fn build_ui(
                 .clicked()
             {
                 actions.toggle_grid = true;
+            }
+            if ui
+                .selectable_label(status.snap, "🧲 Snap")
+                .on_hover_text("Aimanter les déplacements à la grille (pas 0.5)")
+                .clicked()
+            {
+                actions.toggle_snap = true;
             }
             // Build APK : différenciateur du moteur, mis en avant à droite.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
