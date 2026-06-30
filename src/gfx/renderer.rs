@@ -84,8 +84,9 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Descripteur d'une instance dans le plan de rendu (ordre = index dans le buffer storage).
 struct InstanceDraw {
-    mesh: MeshKind,
-    texture: String,
+    /// Index de l'objet dans `scene.objects` (mesh/texture relus au draw, sans clone).
+    /// La scène n'est pas mutée entre la construction du plan et les passes de dessin.
+    obj: usize,
     /// Visible par la caméra (frustum culling) — la passe d'ombre l'ignore.
     visible: bool,
 }
@@ -786,8 +787,7 @@ impl Renderer {
             });
             let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
             self.draw_plan.push(InstanceDraw {
-                mesh: obj.mesh,
-                texture: obj.texture.clone(),
+                obj: i,
                 visible: obj.visible && aabb_visible(&planes, model, lmin, lmax),
             });
         }
@@ -1174,16 +1174,15 @@ impl Renderer {
             spass.set_bind_group(1, &self.models_bind_group, &[]);
             // La passe d'ombre rend TOUT (ombres d'objets hors champ), groupé par mesh.
             let plan = &self.draw_plan;
+            let objs = &app.scene.objects;
             let mut i = 0;
             while i < plan.len() {
+                let mi = objs[plan[i].obj].mesh;
                 let mut j = i + 1;
-                while j < plan.len()
-                    && plan[j].mesh == plan[i].mesh
-                    && plan[j].texture == plan[i].texture
-                {
+                while j < plan.len() && objs[plan[j].obj].mesh == mi {
                     j += 1;
                 }
-                if let Some(mesh) = self.resolve_mesh(plan[i].mesh) {
+                if let Some(mesh) = self.resolve_mesh(mi) {
                     spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
                     spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
                     spass.draw_indexed(0..mesh.num_indices, 0, i as u32..j as u32);
@@ -1243,17 +1242,19 @@ impl Renderer {
             // Rendu instancié : un draw par lot (mesh+texture), scindé en sous-plages
             // d'instances visibles consécutives (frustum culling).
             let plan = &self.draw_plan;
+            let objs = &app.scene.objects;
             let mut i = 0;
             while i < plan.len() {
-                let tex_key = &plan[i].texture;
+                let mi = objs[plan[i].obj].mesh;
+                let tex_key = &objs[plan[i].obj].texture;
                 let mut group_end = i + 1;
                 while group_end < plan.len()
-                    && plan[group_end].mesh == plan[i].mesh
-                    && &plan[group_end].texture == tex_key
+                    && objs[plan[group_end].obj].mesh == mi
+                    && &objs[plan[group_end].obj].texture == tex_key
                 {
                     group_end += 1;
                 }
-                if let Some(mesh) = self.resolve_mesh(plan[i].mesh) {
+                if let Some(mesh) = self.resolve_mesh(mi) {
                     let tex = self
                         .textures
                         .get(tex_key)
