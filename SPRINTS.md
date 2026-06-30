@@ -99,6 +99,7 @@ chemin de rendu. Détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
 |---|---|---|---|
 | 43 | Contrôleur de personnage sans script | Composant **Input Receiver** (joystick → corps dynamique rapier, rotations bloquées, **collisions**), **saut** sur bouton tactile, **caméra qui suit** l'objet pilotable, **actions au tap** (changer couleur / masquer-ramasser), démo + JSON pré-généré, récap « scène embarquée » du Build Panel | ✅ |
 | 44 | Optimisations rendu | **Culling/LOD des lumières** par distance caméra (8 plus proches), **0 allocation/frame** (tampons réutilisés), **re-tri d'ordre paresseux**, **plan de dessin par index** (0 clone de texture/frame) | ✅ |
+| 43+ | Bonus jouabilité (mini-jeu) | Actions au tap **Grandir / Respawn** ; **collectibles** (gemmes tournantes) avec **score + chrono + « Gagné en X.Xs »** ; **zones mortelles** → **« Perdu »** (boucle win/lose, sans script) | ✅ |
 
 ---
 

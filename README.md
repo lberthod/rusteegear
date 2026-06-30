@@ -150,10 +150,11 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 - **Audio** `kira` : son par objet, autoplay, **spatialisation** (volume selon distance), cache asynchrone.
 - **Caméra de jeu** + **suivi** automatique de l'objet joueur.
 
-**Contrôleur de personnage jouable — _sans écrire de script_**
-- **Input Receiver** : un objet marqué « pilotable » devient un corps dynamique piloté au **joystick** (collisions avec le décor, rotations bloquées).
-- **Saut** sur bouton tactile (gravité, retombe au sol), **vitesse** et **hauteur** réglables.
-- **Actions au tap** : changer de couleur, **masquer (ramasser)** — sans Lua.
+**🎮 Mini-jeu jouable — _sans écrire une ligne de script_**
+- **Personnage pilotable** (Input Receiver) : corps dynamique piloté au **joystick**, **collisions** avec le décor, rotations bloquées.
+- **Saut** sur bouton tactile (gravité, retombe au sol), **vitesse** et **hauteur** réglables ; **caméra qui suit**.
+- **Actions au tap** (sans Lua) : changer de couleur, **ramasser**, grandir, réapparaître au départ.
+- **Boucle de jeu complète** : **collectibles** (gemmes tournantes) avec **score ⭐**, **chrono ⏱**, **« 🎉 Gagné en X.Xs ! »** ; **zones mortelles 💀** → **« Perdu ! »**.
 - Démo prête à jouer (`Fichier → Démo contrôleur`) + scène **JSON pré-générée** ([assets/examples/demo_controleur.json](assets/examples/demo_controleur.json)).
 
 **API de script Lua** (`mlua`, chunks compilés en cache)
