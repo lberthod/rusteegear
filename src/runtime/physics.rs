@@ -248,17 +248,17 @@ mod tests {
     fn controller_demo_player_collides_with_wall() {
         let mut scene = Scene::controller_demo();
         let p = player_index(&scene);
-        // Le mur statique « Mur » est à x = 3 (épaisseur ~1, demi-largeur 0.5 → face à ~2.5).
+        // Le mur de pourtour Est est à x = 7.5 (demi-épaisseur 0.25 → face interne ~7.25).
         let mut phys = Physics::build(&scene);
-        // Pousse fort vers +X pendant 2 s : sans collision il dépasserait largement 3.
-        for _ in 0..120 {
+        // Pousse fort vers +X pendant 3 s : sans mur il sortirait largement de l'aire.
+        for _ in 0..180 {
             phys.control(p, 8.0, 0.0, false, 0.0);
             phys.step(1.0 / 60.0, &mut scene);
         }
         let x = scene.objects[p].transform.position.x;
         assert!(
-            x < 2.6,
-            "le joueur doit buter sur le mur (x≈2.5), mais x={x}"
+            x < 7.2,
+            "le joueur doit être bloqué par le mur de pourtour (x≈7), mais x={x}"
         );
     }
 }

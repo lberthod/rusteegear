@@ -508,37 +508,57 @@ impl Scene {
         joueur.jump_button = "Saut".into();
         joueur.jump_height = 1.6;
 
-        // Obstacles statiques : le joueur bute dessus.
-        let mut mur = demo_obj("Mur", MeshKind::Cube, Vec3::new(3.0, 0.5, 0.0));
-        mur.transform = mur.transform.with_scale(Vec3::new(1.0, 1.0, 4.0));
-        mur.physics = PhysicsKind::Static;
-        mur.color = [0.5, 0.55, 0.7];
+        let mut objects = vec![sol, joueur];
 
-        let mut caisse = demo_obj("Caisse", MeshKind::Cube, Vec3::new(-2.5, 0.5, 1.5));
-        caisse.physics = PhysicsKind::Static;
-        caisse.color = [0.7, 0.5, 0.3];
+        // --- Murs de pourtour : enferment l'aire de jeu (le joueur ne tombe plus) ---
+        // Le sol (plan unité × 16) couvre [-8, 8] ; on pose 4 murs statiques aux bords.
+        let half = 7.5_f32;
+        let mut wall = |name: &str, pos: Vec3, scale: Vec3| {
+            let mut w = demo_obj(name, MeshKind::Cube, pos);
+            w.transform = w.transform.with_scale(scale);
+            w.physics = PhysicsKind::Static;
+            w.color = [0.45, 0.5, 0.62];
+            objects.push(w);
+        };
+        wall(
+            "Mur Nord",
+            Vec3::new(0.0, 0.6, -half),
+            Vec3::new(16.0, 1.2, 0.5),
+        );
+        wall(
+            "Mur Sud",
+            Vec3::new(0.0, 0.6, half),
+            Vec3::new(16.0, 1.2, 0.5),
+        );
+        wall(
+            "Mur Est",
+            Vec3::new(half, 0.6, 0.0),
+            Vec3::new(0.5, 1.2, 16.0),
+        );
+        wall(
+            "Mur Ouest",
+            Vec3::new(-half, 0.6, 0.0),
+            Vec3::new(0.5, 1.2, 16.0),
+        );
 
-        // Zone mortelle (lave) : à éviter, sinon partie perdue.
-        let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(0.0, 0.02, 4.0));
-        lave.transform = lave.transform.with_scale(Vec3::new(3.0, 1.0, 2.0));
+        // Zone mortelle (lave) décalée sur un côté : à éviter, sinon partie perdue.
+        let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(4.5, 0.02, 0.0));
+        lave.transform = lave.transform.with_scale(Vec3::new(2.0, 1.0, 3.0));
         lave.color = [0.9, 0.25, 0.1];
         lave.emissive = 0.6;
         lave.deadly = true;
+        objects.push(lave);
 
-        // Collectibles : petites sphères jaunes à ramasser (tap → masquer).
-        let mut objects = vec![sol, joueur, mur, caisse, lave];
-        for (n, pos) in [
-            Vec3::new(2.0, 0.4, 2.0),
-            Vec3::new(-2.0, 0.4, -2.0),
-            Vec3::new(2.5, 0.4, -1.5),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let mut gem = demo_obj(&format!("Gemme {}", n + 1), MeshKind::Sphere, pos);
-            gem.transform = gem.transform.with_scale(Vec3::splat(0.5));
+        // --- Pièces à ramasser : générées automatiquement en anneau autour du centre ---
+        let count = 8;
+        for n in 0..count {
+            let angle = n as f32 / count as f32 * std::f32::consts::TAU;
+            let r = 5.0;
+            let pos = Vec3::new(angle.cos() * r, 0.5, angle.sin() * r);
+            let mut gem = demo_obj(&format!("Pièce {}", n + 1), MeshKind::Sphere, pos);
+            gem.transform = gem.transform.with_scale(Vec3::splat(0.45));
             gem.color = [1.0, 0.85, 0.2];
-            gem.emissive = 0.4;
+            gem.emissive = 0.5;
             gem.tappable = true;
             gem.tap_action = TapAction::Hide;
             objects.push(gem);
