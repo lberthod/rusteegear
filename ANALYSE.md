@@ -2,9 +2,10 @@
 
 > Document d'analyse transversale : compréhension du projet, audit technique, pertinence
 > des choix technologiques et possibilités d'évolution.
-> **Date :** 2026-06-19 · **Périmètre :** `src/` (~7 300 lignes Rust), shaders WGSL, packaging.
-> Pour le détail opérationnel, voir [README.md](README.md), [AUDIT.md](AUDIT.md),
-> [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md) et [HANDOFF.md](HANDOFF.md).
+> 📸 **Snapshot daté du 2026-06-19** (`src/` ~7 300 lignes alors ; **~10 400 aujourd'hui**, Phases A→H).
+> Les recommandations de fond restent valides ; pour l'état **à jour** + la suite, voir
+> **[SPRINTS.md](SPRINTS.md)** (Phase I, sprints 45→49). Détail : [README.md](README.md),
+> [AUDIT.md](AUDIT.md), [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md), [HANDOFF.md](HANDOFF.md).
 
 ---
 

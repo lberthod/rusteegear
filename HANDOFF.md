@@ -1,14 +1,21 @@
 # Passation — RusteeGear
 
 Document de reprise pour le développeur qui prend la suite. Lire aussi
-**[README.md](README.md)** (vision/archi), **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
-(historique + Phase F à venir), **[AUDIT.md](AUDIT.md)** et **[packaging/EXPORT.md](packaging/EXPORT.md)**.
+**[README.md](README.md)** (vision/archi), **[SPRINTS.md](SPRINTS.md)** (récap + logique
+des prochains sprints), **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (détail sprint),
+**[AUDIT.md](AUDIT.md)** et **[packaging/EXPORT.md](packaging/EXPORT.md)**.
 
 ## État au moment de la passation
 
-- Phases **A→E** en place (cœur) ; **11 tests verts**, `clippy -D warnings` propre, CI active.
-- ⚠️ Plusieurs nouveautés (assets embarqués, matériaux/lumière, resume mobile) sont **vertes en CI
-  mais jamais exécutées de bout en bout**. **Priorité = Sprint 28** (validation réelle) avant d'ajouter des features.
+- Phases **A→H** en place ; **31 tests verts**, `clippy --all-targets` propre, `fmt` OK, CI active.
+- L'éditeur couvre la **boucle produit mobile sans ligne de commande** : créer une scène →
+  marquer un objet **pilotable** (joystick + saut + collisions, sans script) → Build Panel Android → APK.
+- Le **chemin de rendu** est sans allocation par frame (culling lumières, tampons réutilisés,
+  plan de dessin par index, re-tri paresseux).
+- ⚠️ Le **gyroscope** est simulé au clavier sur desktop mais **pas branché au capteur Android**
+  (Sprint 48). La signature *distribution* store reste à faire (Sprint 49, secrets requis).
+- **Prochaine étape = Phase I** (sprints 45→49), à commencer par le **Sprint 45**
+  (découpler simulation & rendu) — voir [SPRINTS.md](SPRINTS.md).
 
 ## Commandes clés
 
@@ -72,5 +79,10 @@ C'est ce qui rend le portage mobile direct — ne pas la casser.
 
 ## Par où commencer
 
-**Sprint 28** (cf. ROADMAP_SPRINTS.md) : lancer un export réel, valider sur device, ajouter les tests
-manquants (invariant de sélection, résolution `bundle://`), réduire les `unwrap()`. C'est l'onboarding idéal.
+**Sprint 45 — découpler simulation & rendu** (cf. [SPRINTS.md](SPRINTS.md), Phase I) :
+aujourd'hui `advance_play` est cadencé par la boucle de rendu (le pas de temps physique suit
+le framerate). Introduire une **boucle de mise à jour à pas fixe** (accumulateur) avec
+interpolation de rendu. Bon premier chantier : isolé, testable, sans toucher au GPU.
+
+Alternative plus douce pour s'imprégner du code : **Sprint 46** (durcir l'init : propager les
+`Result` GPU/fenêtre, réduire les `unwrap()` du chemin critique → anti-crash mobile).

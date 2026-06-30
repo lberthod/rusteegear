@@ -582,6 +582,75 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+## PHASE H — Jouabilité mobile sans script & performance
+
+### Sprint 43 — Contrôleur de personnage sans script ✅
+**Objectif** : rendre un objet jouable au doigt sans écrire de Lua.
+- [x] **Input Receiver** : un objet « pilotable » devient un corps **dynamique** rapier
+      (rotations bloquées), piloté en **vitesse** par le joystick → **collisions** avec le décor statique.
+- [x] **Saut** sur bouton tactile (impulsion verticale quand au sol), vitesse + hauteur réglables.
+- [x] **Caméra qui suit** l'objet pilotable (`player_position` priorise `input_receiver`).
+- [x] **Actions au tap sans script** : `TapAction` = Changer couleur / Masquer (ramasser, champ `visible`).
+- [x] **Démo contrôleur** (Fichier ›) + **JSON pré-généré** (`assets/examples/demo_controleur.json`,
+      via `examples/gen_controller_demo.rs`) ; **récap « scène embarquée »** dans le Build Panel.
+- **Fichiers** : `src/scene/mod.rs`, `src/runtime/physics.rs`, `src/app/mod.rs`, `src/editor/{mod,export}.rs`.
+- **Tests** : déplacement au joystick + collision sur mur (rapier headless), `hue_to_rgb`.
+
+### Sprint 44 — Optimisations rendu ✅
+**Objectif** : alléger le chemin de rendu par frame.
+- [x] **Culling/LOD des lumières** : seules les 8 plus proches de la caméra envoyées au shader.
+- [x] **Zéro allocation par frame** : tampons d'ordre + d'uniformes réutilisés.
+- [x] **Re-tri d'ordre paresseux** : tri (groupage mesh/texture) seulement quand le nb d'objets change.
+- [x] **Plan de dessin par index** : mesh/texture relus depuis `scene.objects` au draw (0 clone/frame).
+- **Fichiers** : `src/gfx/renderer.rs`, `src/scene/mod.rs`.
+
+---
+
+## PHASE I — Robustesse & découplage (à venir)
+
+> Passer d'un **éditeur-produit jouable** à une **base robuste et distribuable**.
+
+### Sprint 45 — Découpler simulation & rendu ⬜
+**Objectif** : la simulation ne doit plus suivre la cadence de rendu.
+- [ ] Boucle de mise à jour à **pas fixe** (accumulateur) pour physique + scripts, indépendante du FPS.
+- [ ] **Interpolation** de rendu entre deux pas de simulation (rendu fluide à FPS variable).
+- [ ] Garde-fous : borne du nombre de sous-pas (spirale de la mort), pause/reprise propres.
+- **Fichiers** : `src/app/mod.rs` (`advance_play`), `src/lib.rs` (boucle).
+- **Risque** : régressions de gameplay (vitesses dépendantes du dt) → tests + démo de référence.
+
+### Sprint 46 — Durcir l'initialisation ⬜
+**Objectif** : éviter les crashs froids, surtout sur mobile.
+- [ ] Propager les `Result` d'init GPU/fenêtre + `log::error!` au lieu de `panic!`/`unwrap()`.
+- [ ] Recenser et réduire les `unwrap()`/`expect()` du chemin critique (création surface, pipelines).
+- **Fichiers** : `src/gfx/renderer.rs`, `src/lib.rs`. **Réf.** : Audit P4.
+
+### Sprint 47 — Dirty-tracking & tests ⬜
+**Objectif** : sauter le travail inutile au repos + élargir la couverture.
+- [ ] **Compteur de révision** de scène (bump à chaque mutation) → sauter rebuild models/draw plan
+      quand ni la scène ni la caméra n'ont changé (édition statique).
+- [ ] Tests : invariant de sélection, résolution `bundle://`, contrôleur (saut/au sol), `TapAction`.
+- **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs`, `src/scene/mod.rs`.
+- **Risque** : un mauvais critère « dirty » fige l'affichage → **valider visuellement**.
+
+### Sprint 48 — Capteurs & assets mobiles ⬜
+**Objectif** : brancher le matériel Android réel.
+- [ ] **Gyroscope natif** (NDK `ASensorManager`) → alimente `input.tilt` (repli no-op desktop).
+- [ ] **Vibration native** Android (au lieu du log desktop).
+- [ ] **Import d'assets sur mobile** (lever P10 : `rfd` désactivé sans remplacement).
+- **Fichiers** : `src/lib.rs` (`android_main`), `src/runtime/`, `src/app/input.rs`.
+- **Risque** : code plateforme **à valider sur appareil** (pas de repli testable en CI).
+
+### Sprint 49 — Distribution signée ⬜
+**Objectif** : livrables prêts pour les stores.
+- [ ] **IPA signé en CI** (certificat + profil en *GitHub Secrets*), job iOS dans `release.yml`.
+- [ ] **Notarisation macOS** ; signature *distribution* Android (clé release dédiée).
+- **Fichiers** : `.github/workflows/release.yml`, `packaging/*`. **Risque** : comptes/secrets requis.
+
+> **Pistes long terme (Phase J)** : WebGPU/WASM, ECS léger, LOD / occlusion culling /
+> fusion de meshes statiques, éditeur tournant sur mobile.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
@@ -593,6 +662,12 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   renommage) ; rendu avec matériaux/ombres ; identité de bundle et cycle de vie mobile durcis.
 - **F** : reprise sécurisée (exports/devices validés, tests élargis) ; édition et rendu terminés
   (multi-3D, sous-groupes, ombres, textures) ; livrables **signés** prêts pour les stores.
+- **G** ✅ : boucle produit **sans ligne de commande** — menus/toolbar complets, Build Panel Android,
+  menu Ajouter façon Unity, composants mobiles, outils & optimisation.
+- **H** ✅ : un objet est **jouable au doigt sans script** (joystick + saut + collisions + caméra suivi,
+  actions au tap) ; le chemin de rendu est **sans allocation par frame**.
+- **I** : base **robuste & distribuable** — simulation à pas fixe, init sans panic, capteurs mobiles
+  natifs, et livrables **signés** pour les stores.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.

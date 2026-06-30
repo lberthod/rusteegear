@@ -47,7 +47,7 @@
 
 ---
 
-## Sprints à venir — maturité & robustesse (Sprints 36–37)
+## Sprints 36–37 — maturité & robustesse 🟢 (cœur livré)
 
 Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4 possibilités futures).
 
@@ -90,20 +90,51 @@ Créer scène → Ajouter objets → Ajouter caméra → Ajouter joystick mobile
 
 ---
 
+## PHASE H — Jouabilité mobile sans script & performance (Sprints 43–44) ✅
+
+Objectif : rendre un objet **jouable au doigt sans écrire de Lua**, et alléger le
+chemin de rendu. Détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
+
+| # | Sprint | Apport principal | État |
+|---|---|---|---|
+| 43 | Contrôleur de personnage sans script | Composant **Input Receiver** (joystick → corps dynamique rapier, rotations bloquées, **collisions**), **saut** sur bouton tactile, **caméra qui suit** l'objet pilotable, **actions au tap** (changer couleur / masquer-ramasser), démo + JSON pré-généré, récap « scène embarquée » du Build Panel | ✅ |
+| 44 | Optimisations rendu | **Culling/LOD des lumières** par distance caméra (8 plus proches), **0 allocation/frame** (tampons réutilisés), **re-tri d'ordre paresseux**, **plan de dessin par index** (0 clone de texture/frame) | ✅ |
+
+---
+
+## Sprints à venir — PHASE I : robustesse & découplage (Sprints 45–49) ⬜
+
+Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4) : ce qui reste pour passer d'un
+**éditeur-produit jouable** à une **base robuste et distribuable**.
+
+| # | Sprint | Objectif | Couvre | État |
+|---|---|---|---|---|
+| 45 | **Découpler simulation & rendu** | Boucle de mise à jour à **pas fixe** pour la physique/scripts, indépendante du framerate (accumulateur), interpolation de rendu | 🔴 P-rendu/sim | ⬜ |
+| 46 | **Durcir l'initialisation** | Propager les `Result` d'init GPU/fenêtre + `log::error!`, réduire les `unwrap()` du chemin critique → **anti-crash froid mobile** | 🟠 Audit P4 | ⬜ |
+| 47 | **Dirty-tracking & tests** | Compteur de révision de scène → **sauter les rebuilds inutiles** au repos (skip models/draw plan) ; étendre la couverture de tests (sélection, `bundle://`, contrôleur) | 🟡 perf + tests | ⬜ |
+| 48 | **Capteurs & assets mobiles** | **Gyroscope natif Android** (capteur réel → `tilt`), **vibration native**, **import d'assets sur mobile** (lever P10) | 🟠 P10 + mobile | ⬜ |
+| 49 | **Distribution signée** | **IPA signé en CI** (secrets), **notarisation macOS**, signature *distribution* store (Android/iOS) | 🟢 distribution | ⬜ |
+
+> **Pistes long terme (Phase J, non planifiées)** : WebGPU/WASM, ECS léger,
+> LOD / occlusion culling / fusion de meshes statiques, éditeur sur mobile.
+
+---
+
 ## Correspondance analyse / vision → sprint
 
-| Point | Sprint cible |
-|---|---|
-| Distribution store signée (Android/iOS/macOS) | 36 |
-| Validation device (PBR / instancing / resume) | 36 |
-| P4 — panics d'init (crash mobile) | transversal (36) |
-| P10 — import d'assets sur mobile | transversal / 42 (gestionnaire d'assets) |
-| Simulation pilotée par la cadence de rendu | transversal |
-| Couverture de tests à étendre | transversal (36) |
-| IA approfondie + confort d'édition | 37 |
-| Menus & toolbar produit | 38 |
-| Build Panel Android (fenêtre dédiée) | 39 |
-| Menu Ajouter complet (UI mobile) | 40 |
-| Composants mobiles (gyroscope/vibration/safe area) | 41 |
-| Optimisation mobile (LOD / occlusion / mode perf) | 42 |
-| Ombres / textures PBR / WebGPU / ECS | pistes (voir ANALYSE §4) |
+| Point | Sprint cible | État |
+|---|---|---|
+| IA approfondie + confort d'édition | 37 | 🟢 |
+| Menus & toolbar produit | 38 | 🟢 |
+| Build Panel Android (fenêtre dédiée) | 39 | 🟢 |
+| Menu Ajouter complet (UI mobile) | 40 | 🟢 |
+| Composants inspecteur mobiles | 41 | 🟢 |
+| Optimisation mobile (mode perf, bake, POT) | 42 | 🟢 |
+| Objet jouable au joystick + saut + collisions (sans script) | 43 | ✅ |
+| Optimisations rendu (culling lumières, 0-alloc/frame) | 44 | ✅ |
+| Simulation pilotée par la cadence de rendu (à découpler) | **45** | ⬜ |
+| P4 — panics d'init (crash mobile) | **46** | ⬜ |
+| Couverture de tests à étendre + skip rebuilds | **47** | ⬜ |
+| Gyroscope/vibration natifs + P10 (assets mobile) | **48** | ⬜ |
+| Distribution store signée (IPA CI / notarisation) | **49** | ⬜ |
+| LOD / occlusion / fusion meshes / WebGPU / ECS | Phase J (pistes) | ⬜ |

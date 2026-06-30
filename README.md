@@ -43,7 +43,7 @@ RusteeGear répond à un besoin précis :
 - **Pédagogique & maîtrise totale.** Chaque étage du pipeline (fenêtre → événements →
   état → rendu GPU → UI) est écrit à la main, lisible en une après-midi, sans
   abstraction magique. C'est un moteur que l'on peut **tenir entièrement dans sa tête**.
-- **Hackable et minimal.** ~8 000 lignes de Rust au total. Ajouter une primitive, un
+- **Hackable et minimal.** ~10 000 lignes de Rust au total. Ajouter une primitive, un
   type de collider ou une variable de script se fait en quelques lignes, sans se battre
   contre un framework.
 - **Portable par conception.** La logique (scène, caméra, entrées, picking) ne dépend
@@ -105,7 +105,7 @@ ce que ce projet cherche à écrire à la main pour l'apprendre.
 | Critère | RusteeGear (from scratch) | Bevy |
 |---|---|---|
 | **Objectif** | Comprendre/maîtriser un moteur | Produire des jeux efficacement |
-| **Taille du cœur** | ~8 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
+| **Taille du cœur** | ~10 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
 | **Architecture** | Scène = `Vec<SceneObject>`, explicite | ECS complet + ordonnanceur de systèmes |
 | **Rendu** | Pipeline `wgpu`/WGSL écrit à la main | Moteur de rendu intégré (PBR, etc.) |
 | **Courbe d'apprentissage** | On apprend *les concepts* | On apprend *le framework* |
@@ -132,7 +132,8 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 - **Rendu 3D** temps réel via `wgpu`, shaders WGSL, depth buffer, **ombres** (shadow map + PCF).
 - **Matériaux PBR** par objet (metallic / roughness / emissive) + spéculaire ; **textures** albédo.
 - **Lumières** : directionnelle globale + ambiante, **lumières ponctuelles** et **spots** (cône) — jusqu'à 8.
-- **Rendu instancié** (1 draw par lot mesh+texture) + **frustum culling** CPU.
+- **Rendu instancié** (1 draw par lot mesh+texture) + **frustum culling** CPU + **culling/LOD des lumières** (les 8 plus proches de la caméra).
+- **Chemin de rendu sans allocation par frame** (tampons réutilisés, plan de dessin par index, re-tri paresseux).
 - **Caméra orbitale** ; présentation **vsync** + cadence adaptative (throttle CPU au repos).
 
 **Édition**
@@ -147,7 +148,13 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 **Runtime de jeu** (Play ▶ / Pause ⏸ / Stop ⏹, aperçu réinitialisable)
 - **Physique** `rapier3d` (Statique / Dynamique) avec **collider explicite** (Auto/Box/Sphère/Capsule).
 - **Audio** `kira` : son par objet, autoplay, **spatialisation** (volume selon distance), cache asynchrone.
-- **Caméra de jeu** + **suivi** du joueur.
+- **Caméra de jeu** + **suivi** automatique de l'objet joueur.
+
+**Contrôleur de personnage jouable — _sans écrire de script_**
+- **Input Receiver** : un objet marqué « pilotable » devient un corps dynamique piloté au **joystick** (collisions avec le décor, rotations bloquées).
+- **Saut** sur bouton tactile (gravité, retombe au sol), **vitesse** et **hauteur** réglables.
+- **Actions au tap** : changer de couleur, **masquer (ramasser)** — sans Lua.
+- Démo prête à jouer (`Fichier → Démo contrôleur`) + scène **JSON pré-générée** ([assets/examples/demo_controleur.json](assets/examples/demo_controleur.json)).
 
 **API de script Lua** (`mlua`, chunks compilés en cache)
 ```lua
@@ -173,7 +180,7 @@ set_health(0..1)                       -- barre de vie du HUD
 
 **Outils** — Console (logs), Profiler FPS + mémoire, **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système.
 
-**Démos** — `Fichier → Démo mobile` et `Démo gameplay` (toute l'API en une scène jouable).
+**Démos** — `Fichier → Démo mobile`, `Démo gameplay` (toute l'API scriptée) et **`Démo contrôleur`** (joueur jouable au joystick + saut + collisions, **sans script**).
 
 ---
 
@@ -187,9 +194,15 @@ set_health(0..1)                       -- barre de vie du HUD
 | **C** — Portage mobile (Player, tactile, iOS, Android) | 14 → 17 | ✅ |
 | **D** — App de dev & exports 1-clic (perf, panneau Export, config, presets, CI) | 18 → 23 | ✅ |
 | **E** — Player complet & maturité (assets embarqués, multi-sélection, matériaux, resume) | 24 → 27 | 🟢 cœur |
+| **F** — Validation, édition complète, **ombres & textures**, outils produit | 28 → 32 | 🟢 |
+| **Rendu avancé & opti mobile** — PBR par objet, lumières/spots multiples, caméra de jeu, réduction textures | 33 → 35 | ✅ |
+| Distribution signée (cœur) & IA/confort d'édition | 36 → 37 | 🟢 |
+| **G** — Éditeur produit orienté Android (menus, Build Panel, menu Ajouter, composants mobiles, outils) | 38 → 42 | 🟢 |
+| **H** — **Jouabilité mobile sans script** (contrôleur joueur, saut, collisions, actions au tap) & **perf rendu** | 43 → 44 | ✅ |
 
-> Détail sprint par sprint : voir **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
-> Reprise du projet par un nouveau développeur : voir **[HANDOFF.md](HANDOFF.md)**.
+> Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
+> Détail sprint par sprint : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+> Reprise du projet par un nouveau développeur : **[HANDOFF.md](HANDOFF.md)**.
 
 ### Plateformes — état honnête
 
@@ -263,73 +276,27 @@ Détails et journal : **[PLAN.md](PLAN.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_S
 
 ---
 
-## 🗺️ Roadmap
-
-> Légende : ✅ fait · 🟡 partiel · ⬜ à venir. Détail par sprint : [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
-
-### ✅ v1.1 — Confort éditeur _(Phase A, sprints 7→10)_
-- [x] **Gizmos translate / rotate / scale** manipulables à la souris (touches W/E/R).
-- [x] **Import de modèles glTF / GLB** (crate `gltf`, chargement asynchrone + recadrage auto).
-- [x] **Undo/redo** (Cmd+Z / Cmd+Shift+Z) et **duplication** (Cmd+D).
-- [ ] Multi-sélection, copier/coller (reporté à un sprint dédié).
-- [ ] Textures et matériaux PBR de base, ombres (shadow mapping).
-
-### ✅ v1.2 — Runtime & scripting _(Phase B, sprints 11→13)_
-- [x] **Scripting Lua** par objet (`mlua`) : `obj.x/y/z`, `obj.rx/ry/rz`, `obj.sx/sy/sz`, `dt`, `time`.
-- [x] **Physique** `rapier3d` : corps Statique / Dynamique, gravité, collisions, rebond.
-- [x] **Système audio** `kira` : son par objet, autoplay, décodage asynchrone + cache.
-- [x] _Bonus_ : optimisations — chargement asynchrone, présentation vsync.
-
-### ✅ 📱 v2 — Portage mobile _(Phase C, sprints 14→17)_
-- [x] **Mode « player »** plein écran sans panneaux (auto sur mobile).
-- [x] **Entrées tactiles** : orbit à un doigt, pinch-to-zoom à deux doigts.
-- [x] **iOS** : cross-compilation, signature développeur, **installé et lancé sur iPhone**.
-- [x] **Android** : NDK, `cdylib` + `android_main`, **`.apk` signé** via `cargo-apk`.
-- [ ] Reste : signature *distribution* (App Store / Play Store), icônes, écran de lancement.
-
-### ✅ 🛠️ v2.5 — App de dev & exports 1-clic _(Phase D, sprints 18→23)_
-- [x] **Optimisations app** : profils Cargo (LTO), bandeau d'état FPS/GPU, cadence adaptative.
-- [x] **Panneau « Build & Export »** : `.dmg`/`.apk`/`.ipa` depuis des boutons, log streamé, pré-vol.
-- [x] **Config persistée** (nom, bundle id, version, build #) + **préréglages** + install device.
-- [x] **CI de release** : tag `v*` → artefacts macOS/Android attachés à la Release.
-
-### 🟢 🎮 v3 — Player complet & maturité _(Phase E, sprints 24→27)_
-- [x] **Assets embarqués** dans le player (glTF + sons) → jouable hors développement.
-- [x] **Édition** : multi-sélection (Cmd/Maj), copier/coller en lot, renommage inline.
-- [x] **Matériaux** : couleur par objet + éclairage de scène éditable.
-- [x] **Resume mobile** (recréation de surface) + **identité de bundle macOS**.
-- [ ] Reste : textures & **ombres** (shadow mapping), multi-sélection au clic 3D, sous-groupes.
-
-### ⬜ Pistes futures
-- [ ] Textures / matériaux PBR, **ombres** (shadow mapping).
-- [ ] Multi-sélection au clic 3D, réordonnancement & sous-groupes dans la hiérarchie.
-- [ ] Override d'identité Android, **IPA signé en CI** (secrets), signature *distribution* store.
-
----
-
 ## 🧭 La suite — analyse & sprints
 
-Le projet a été construit par **sprints incrémentaux** (MVP → Sprint 35). Une analyse
-transversale (compréhension, audit, pertinence technologique, possibilités futures) et le
-plan des prochains sprints sont documentés à part :
+Le projet a été construit par **sprints incrémentaux** (MVP → Sprint 44, Phases A→H).
+L'historique propre et la **logique des prochains sprints** vivent dans :
 
-- **[ANALYSE.md](ANALYSE.md)** — analyse complète : compréhension du projet, audit
-  technique synthétisé, pertinence des choix technologiques, et **possibilités futures**
-  (court / moyen / long terme).
-- **[SPRINTS.md](SPRINTS.md)** — **tableau récapitulatif** de tous les sprints réalisés
-  (MVP → 35) et des **sprints à venir**, conçus pour implémenter chacun des points
-  importants de l'analyse (avec correspondance analyse ↔ sprint).
-- **[AUDIT.md](AUDIT.md)** — audit technique détaillé (P1→P10, correctifs et restant).
+- **[SPRINTS.md](SPRINTS.md)** — **récap de tous les sprints** (réalisés + à venir) et la
+  **logique de la Phase I** (sprints 45→49), avec correspondance analyse ↔ sprint.
+- **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** — détail par sprint (objectif · tâches · fichiers · livrable).
+- **[ANALYSE.md](ANALYSE.md)** / **[AUDIT.md](AUDIT.md)** — analyse transversale & audit technique (P1→P10).
 
-**Prochains chantiers prioritaires** (issus de l'analyse) :
+**Prochaine Phase I — robustesse & découplage** (détail dans [SPRINTS.md](SPRINTS.md)) :
 
-| Priorité | Chantier | Détail |
+| # | Chantier | Priorité |
 |---|---|---|
-| 🔴 | **Découpler simulation & rendu** | boucle de mise à jour séparée, pas de temps fixe physique (aujourd'hui `advance_play` est piloté par la cadence de rendu) |
-| 🟠 | **Durcir l'initialisation** | propager les `Result` d'init GPU/fenêtre + `log::error!` — éviter les crashs froids sur mobile (audit P4) |
-| 🟠 | **Valider sur device** | PBR, rendu instancié, resume mobile : verts en CI, à éprouver sur appareil réel |
-| 🟡 | **Import d'assets mobile** | lever P10 (`rfd` désactivé sur mobile, sans remplacement) |
-| 🟢 | **Rendu** | câbler les ombres (`shadow.wgsl`), textures PBR, puis piste **WebGPU / WASM** |
+| **45** | **Découpler simulation & rendu** — boucle à pas fixe physique (aujourd'hui `advance_play` suit la cadence de rendu) | 🔴 |
+| **46** | **Durcir l'init** — propager les `Result` GPU/fenêtre + `log::error!`, réduire les `unwrap()` (anti-crash mobile, P4) | 🟠 |
+| **47** | **Dirty-tracking & tests** — sauter les rebuilds au repos, étendre la couverture | 🟡 |
+| **48** | **Capteurs & assets mobiles** — gyroscope/vibration natifs Android, import d'assets mobile (P10) | 🟠 |
+| **49** | **Distribution signée** — IPA en CI, notarisation macOS, signature store | 🟢 |
+
+> Pistes long terme (Phase J) : WebGPU/WASM, ECS léger, LOD / occlusion / fusion de meshes.
 
 ---
 

@@ -1,5 +1,11 @@
 # RusteeGear — Moteur de jeu 3D (style Unity, très basique) en Rust
 
+> ⚠️ **ARCHIVE — cadrage MVP initial (Sprints 0→6, daté 2026-06-18).**
+> Ce document fige la vision et le périmètre *de départ*. Plusieurs « hors périmètre v1 »
+> (import glTF, scripting Lua, physique, audio, ombres, mobile) ont **depuis été réalisés**.
+> Pour l'état **actuel** + la suite : **[README.md](README.md)**, **[SPRINTS.md](SPRINTS.md)**,
+> **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**. Conservé comme trace historique.
+
 > Document de cadrage : analyse, architecture, plan de sprints.
 > Cible : application macOS distribuable en `.dmg`.
 > Date : 2026-06-18.
