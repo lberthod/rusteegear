@@ -120,6 +120,9 @@ pub struct Renderer {
     models_scratch: Vec<ModelUniform>,
     /// Nombre d'objets au dernier tri de `order_scratch` (re-tri paresseux).
     last_sort_len: usize,
+    /// Hash des entrées de rendu (objets + caméra) à la dernière reconstruction du plan
+    /// de dessin : si inchangé, on saute le rebuild (skip au repos, sûr par construction).
+    last_render_hash: u64,
 
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
@@ -590,6 +593,7 @@ impl Renderer {
             order_scratch: Vec::new(),
             models_scratch: Vec::new(),
             last_sort_len: usize::MAX,
+            last_render_hash: 0,
             gizmo_pipeline,
             gizmo_vbuf,
             grid_pipeline,
@@ -755,6 +759,16 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
+
+        // Skip-rebuild : si les entrées de rendu (transforms/couleurs/sélection + caméra)
+        // sont identiques à la frame précédente, le plan de dessin et le buffer d'instances
+        // sont déjà à jour. Le hash capte TOUT changement pertinent → pas d'affichage figé.
+        // (Les uniforms caméra/lumière ci-dessus sont toujours réécrits, ils sont bon marché.)
+        let hash = render_input_hash(app);
+        if hash == self.last_render_hash && !self.draw_plan.is_empty() {
+            return;
+        }
+        self.last_render_hash = hash;
 
         // Instances ordonnées par (mesh, texture) pour permettre des draws groupés.
         // On bâtit en parallèle le buffer storage et le plan de rendu (même ordre).
@@ -1492,6 +1506,48 @@ fn mesh_key(m: MeshKind) -> u32 {
         MeshKind::Terrain => 5,
         MeshKind::Imported(i) => 100 + i,
     }
+}
+
+/// Empreinte de **toutes** les entrées qui déterminent le buffer d'instances et le plan
+/// de dessin : matrice caméra (frustum) + par objet (transform, couleur, matériau,
+/// surbrillance, mesh, texture, visibilité). Sert au skip-rebuild : hash identique ⇒
+/// sortie identique ⇒ rien à reconstruire. Capte tout changement → pas de frame périmée.
+fn render_input_hash(app: &AppState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for v in app.camera.view_proj().to_cols_array() {
+        h.write_u32(v.to_bits());
+    }
+    h.write_usize(app.scene.objects.len());
+    for (i, o) in app.scene.objects.iter().enumerate() {
+        let t = &o.transform;
+        let floats = [
+            t.position.x,
+            t.position.y,
+            t.position.z,
+            t.rotation.x,
+            t.rotation.y,
+            t.rotation.z,
+            t.rotation.w,
+            t.scale.x,
+            t.scale.y,
+            t.scale.z,
+            o.color[0],
+            o.color[1],
+            o.color[2],
+            o.metallic,
+            o.roughness,
+            o.emissive,
+            app.highlight_of(i),
+        ];
+        for v in floats {
+            h.write_u32(v.to_bits());
+        }
+        o.mesh.hash(&mut h);
+        h.write(o.texture.as_bytes());
+        h.write_u8(o.visible as u8);
+    }
+    h.finish()
 }
 
 /// Crée le buffer storage d'instances + son bind group (groupe 1) pour `capacity` objets.
