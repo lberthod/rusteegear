@@ -213,19 +213,25 @@ impl ApplicationHandler for App {
                         _ => {}
                     }
                 }
-                // Gyroscope simulé : flèches → inclinaison (maintenue tant que pressée).
+                // Contrôles « ordinateur » : flèches / WASD = déplacement, Espace = saut.
                 if let PhysicalKey::Code(code) = key_event.physical_key {
-                    let v = if key_event.state == ElementState::Pressed {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let tilt = &mut self.state.input_state.tilt;
+                    let pressed = key_event.state == ElementState::Pressed;
+                    let v = if pressed { 1.0 } else { 0.0 };
+                    let inp = &mut self.state.input_state;
                     match code {
-                        KeyCode::ArrowLeft => tilt.0 = -v,
-                        KeyCode::ArrowRight => tilt.0 = v,
-                        KeyCode::ArrowUp => tilt.1 = v,
-                        KeyCode::ArrowDown => tilt.1 = -v,
+                        KeyCode::ArrowLeft | KeyCode::KeyA => inp.key_move.0 = -v,
+                        KeyCode::ArrowRight | KeyCode::KeyD => inp.key_move.0 = v,
+                        KeyCode::ArrowUp | KeyCode::KeyW => inp.key_move.1 = v,
+                        KeyCode::ArrowDown | KeyCode::KeyS => inp.key_move.1 = -v,
+                        KeyCode::Space => inp.jump = pressed,
+                        _ => {}
+                    }
+                    // Les flèches alimentent aussi le gyroscope simulé (objets gyro_control).
+                    match code {
+                        KeyCode::ArrowLeft => inp.tilt.0 = -v,
+                        KeyCode::ArrowRight => inp.tilt.0 = v,
+                        KeyCode::ArrowUp => inp.tilt.1 = v,
+                        KeyCode::ArrowDown => inp.tilt.1 = -v,
                         _ => {}
                     }
                 }

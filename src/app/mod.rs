@@ -86,6 +86,10 @@ pub struct PlayerInput {
     /// Inclinaison (gyroscope/accéléromètre), chaque composante dans [-1, 1].
     /// Desktop : simulée aux flèches du clavier ; mobile : capteur natif (à brancher).
     pub tilt: (f32, f32),
+    /// Déplacement clavier (ordinateur) : flèches / WASD ; chaque composante dans [-1, 1].
+    pub key_move: (f32, f32),
+    /// Saut clavier (Espace) maintenu enfoncé.
+    pub jump: bool,
 }
 
 pub struct AppState {
@@ -1647,9 +1651,13 @@ impl AppState {
 
         // 2. physique (écrase les poses des corps dynamiques)
         if let Some(phys) = &mut self.physics {
-            // Pilotage des objets « pilotables » : vitesse horizontale (joystick/gyro)
-            // + saut sur bouton. Appliqué avant le pas de simulation.
-            let (joy, tilt) = (self.input_state.joy, self.input_state.tilt);
+            // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
+            // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
+            let inp = &self.input_state;
+            // Mouvement combiné joystick + clavier (flèches/WASD), borné à 1 par axe.
+            let mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
+            let my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+            let (tilt, space) = (inp.tilt, inp.jump);
             for (idx, obj) in self.scene.objects.iter().enumerate() {
                 if !obj.input_receiver && !obj.gyro_control {
                     continue;
@@ -1657,15 +1665,17 @@ impl AppState {
                 let mut vx = 0.0;
                 let mut vz = 0.0;
                 if obj.input_receiver {
-                    vx += joy.0 * obj.move_speed;
-                    vz += -joy.1 * obj.move_speed;
+                    vx += mx * obj.move_speed;
+                    vz += -my * obj.move_speed;
                 }
                 if obj.gyro_control {
                     vx += tilt.0 * obj.move_speed;
                     vz += -tilt.1 * obj.move_speed;
                 }
-                let jump = !obj.jump_button.is_empty()
-                    && self.input_state.buttons.contains(&obj.jump_button);
+                // Saut : bouton tactile nommé, ou Espace au clavier (objet pilotable).
+                let jump = (!obj.jump_button.is_empty()
+                    && self.input_state.buttons.contains(&obj.jump_button))
+                    || (space && obj.input_receiver);
                 let jump_speed = (2.0 * 9.81 * obj.jump_height.max(0.0)).sqrt();
                 phys.control(idx, vx, vz, jump, jump_speed);
             }
