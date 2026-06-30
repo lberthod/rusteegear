@@ -1218,7 +1218,9 @@ impl Renderer {
             spass.set_pipeline(&self.shadow_pipeline);
             spass.set_bind_group(0, &self.camera_bind_group, &[]);
             spass.set_bind_group(1, &self.models_bind_group, &[]);
-            // La passe d'ombre rend TOUT (ombres d'objets hors champ), groupé par mesh.
+            // Passe d'ombre : rend les objets hors champ (pas de frustum culling), mais
+            // **ignore les objets invisibles** (ex. pièce ramassée) pour ne pas laisser
+            // d'ombre fantôme. Groupé par mesh, scindé en plages de visibles consécutifs.
             let plan = &self.draw_plan;
             let objs = &app.scene.objects;
             let mut i = 0;
@@ -1231,7 +1233,18 @@ impl Renderer {
                 if let Some(mesh) = self.resolve_mesh(mi) {
                     spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
                     spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    spass.draw_indexed(0..mesh.num_indices, 0, i as u32..j as u32);
+                    let mut k = i;
+                    while k < j {
+                        if !objs[plan[k].obj].visible {
+                            k += 1;
+                            continue;
+                        }
+                        let run = k;
+                        while k < j && objs[plan[k].obj].visible {
+                            k += 1;
+                        }
+                        spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    }
                 }
                 i = j;
             }

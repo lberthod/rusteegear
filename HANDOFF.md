@@ -2,8 +2,8 @@
 
 Document de reprise pour le développeur qui prend la suite. Lire aussi
 **[README.md](README.md)** (vision/archi), **[SPRINTS.md](SPRINTS.md)** (récap + logique
-des prochains sprints), **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (détail sprint),
-**[AUDIT.md](AUDIT.md)** et **[packaging/EXPORT.md](packaging/EXPORT.md)**.
+des prochains sprints), **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (détail sprint)
+et **[packaging/EXPORT.md](packaging/EXPORT.md)**.
 
 ## État au moment de la passation
 

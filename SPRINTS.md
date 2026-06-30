@@ -1,9 +1,9 @@
 # RusteeGear — Récapitulatif des sprints
 
 > Vue d'ensemble **condensée** de tout l'historique d'exécution, du MVP jusqu'à l'état
-> actuel, puis des sprints **à venir** dérivés de l'[analyse](ANALYSE.md).
+> actuel, puis des sprints **à venir**.
 > Le détail (objectif · tâches · fichiers · livrable · risques) reste dans
-> [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md). Audit complet : [AUDIT.md](AUDIT.md).
+> [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
 >
 > Légende : ✅ fait · 🟢 cœur fait (finitions reportées) · ⬜ à faire.
 
@@ -49,7 +49,7 @@
 
 ## Sprints 36–37 — maturité & robustesse 🟢 (cœur livré)
 
-Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4 possibilités futures).
+Maturité & robustesse.
 
 | # | Sprint | Objectif | Couvre (réf. analyse) | État |
 |---|---|---|---|---|
@@ -105,7 +105,7 @@ chemin de rendu. Détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
 
 ## Sprints à venir — PHASE I : robustesse & découplage (Sprints 45–49) ⬜
 
-Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4) : ce qui reste pour passer d'un
+Ce qui reste pour passer d'un
 **éditeur-produit jouable** à une **base robuste et distribuable**.
 
 | # | Sprint | Objectif | Couvre | État |

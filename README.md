@@ -273,7 +273,7 @@ src/
 Séparation nette **logique (`app`) / rendu (`gfx`)** : l'état (scène, caméra, entrées)
 ne dépend pas du GPU, ce qui a rendu le portage mobile direct. Le rendu repose sur
 `wgpu` (Metal / Vulkan / DX12 / WebGPU) — la clé de la portabilité.
-Détails et journal : **[PLAN.md](PLAN.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
 
 ---
 
@@ -285,7 +285,7 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 - **[SPRINTS.md](SPRINTS.md)** — **récap de tous les sprints** (réalisés + à venir) et la
   **logique de la Phase I** (sprints 45→49), avec correspondance analyse ↔ sprint.
 - **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** — détail par sprint (objectif · tâches · fichiers · livrable).
-- **[ANALYSE.md](ANALYSE.md)** / **[AUDIT.md](AUDIT.md)** — analyse transversale & audit technique (P1→P10).
+- **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
 **Prochaine Phase I — robustesse & découplage** (détail dans [SPRINTS.md](SPRINTS.md)) :
 

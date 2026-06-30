@@ -6,7 +6,7 @@
 > Convention : un sprint ≈ 1 à 3 jours. On ne démarre un sprint que si le précédent
 > est « vert » (livrable validé).
 
-État de départ : **MVP complet** (Sprints 0→6, voir [PLAN.md](PLAN.md)).
+État de départ : **MVP complet**.
 
 ---
 
@@ -306,7 +306,7 @@
 > sont en place (cœur), mais plusieurs nouveautés n'ont **jamais été exécutées de bout
 > en bout** (cf. audit Phase E) et certains demi-sprints restent à finir. Cette phase
 > sécurise d'abord la reprise (validation + tests), puis termine l'édition, le rendu et
-> la distribution. Lire **[README.md](README.md)**, **[PLAN.md](PLAN.md)** et
+> la distribution. Lire **[README.md](README.md)** et
 > **[packaging/EXPORT.md](packaging/EXPORT.md)** avant de démarrer.
 
 ### Sprint 28 — Prise en main & validation de bout en bout 🟢 (validé desktop)
