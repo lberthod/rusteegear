@@ -610,13 +610,14 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 > Passer d'un **éditeur-produit jouable** à une **base robuste et distribuable**.
 
-### Sprint 45 — Découpler simulation & rendu ⬜
+### Sprint 45 — Découpler simulation & rendu 🟢
 **Objectif** : la simulation ne doit plus suivre la cadence de rendu.
-- [ ] Boucle de mise à jour à **pas fixe** (accumulateur) pour physique + scripts, indépendante du FPS.
-- [ ] **Interpolation** de rendu entre deux pas de simulation (rendu fluide à FPS variable).
-- [ ] Garde-fous : borne du nombre de sous-pas (spirale de la mort), pause/reprise propres.
-- **Fichiers** : `src/app/mod.rs` (`advance_play`), `src/lib.rs` (boucle).
-- **Risque** : régressions de gameplay (vitesses dépendantes du dt) → tests + démo de référence.
+- [x] Boucle de mise à jour à **pas fixe** (1/60 s, accumulateur) pour physique + scripts, indépendante du FPS.
+- [x] Garde-fous : **cap** de sous-pas (anti « spirale de la mort »), reliquat jeté, reset à Play/Pause.
+- [x] `sim_step(dt)` isolé + `fixed_substeps()` pure et **testée** (30/60/120 FPS, gel borné).
+- [ ] (évolution) **Interpolation** de rendu entre deux pas (fluidité à FPS très variable) → ultérieur.
+- **Fichiers** : `src/app/mod.rs` (`advance_play`/`sim_step`/`fixed_substeps`).
+- **Sprint 45 : livré (pas fixe + cap + test framerate-indépendant) ; interpolation de rendu = évolution.**
 
 ### Sprint 46 — Durcir l'initialisation ⬜
 **Objectif** : éviter les crashs froids, surtout sur mobile.

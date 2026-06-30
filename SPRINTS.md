@@ -109,7 +109,7 @@ Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4) : ce qui reste pour passer
 
 | # | Sprint | Objectif | Couvre | État |
 |---|---|---|---|---|
-| 45 | **Découpler simulation & rendu** | Boucle de mise à jour à **pas fixe** pour la physique/scripts, indépendante du framerate (accumulateur), interpolation de rendu | 🔴 P-rendu/sim | ⬜ |
+| 45 | **Découpler simulation & rendu** | Boucle de mise à jour à **pas fixe** (1/60 s) pour la physique/scripts, indépendante du framerate (accumulateur + cap), testée 30/60/120 FPS | 🔴 P-rendu/sim | ✅ |
 | 46 | **Durcir l'initialisation** | Propager les `Result` d'init GPU/fenêtre + `log::error!`, réduire les `unwrap()` du chemin critique → **anti-crash froid mobile** | 🟠 Audit P4 | ⬜ |
 | 47 | **Dirty-tracking & tests** | Compteur de révision de scène → **sauter les rebuilds inutiles** au repos (skip models/draw plan) ; étendre la couverture de tests (sélection, `bundle://`, contrôleur) | 🟡 perf + tests | ⬜ |
 | 48 | **Capteurs & assets mobiles** | **Gyroscope natif Android** (capteur réel → `tilt`), **vibration native**, **import d'assets sur mobile** (lever P10) | 🟠 P10 + mobile | ⬜ |
@@ -132,7 +132,7 @@ Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4) : ce qui reste pour passer
 | Optimisation mobile (mode perf, bake, POT) | 42 | 🟢 |
 | Objet jouable au joystick + saut + collisions (sans script) | 43 | ✅ |
 | Optimisations rendu (culling lumières, 0-alloc/frame) | 44 | ✅ |
-| Simulation pilotée par la cadence de rendu (à découpler) | **45** | ⬜ |
+| Simulation pilotée par la cadence de rendu (découplée, pas fixe) | **45** | ✅ |
 | P4 — panics d'init (crash mobile) | **46** | ⬜ |
 | Couverture de tests à étendre + skip rebuilds | **47** | ⬜ |
 | Gyroscope/vibration natifs + P10 (assets mobile) | **48** | ⬜ |
