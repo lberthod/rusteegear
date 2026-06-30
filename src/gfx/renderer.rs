@@ -117,6 +117,8 @@ pub struct Renderer {
     /// Tampons réutilisés chaque frame (évite deux allocations par frame).
     order_scratch: Vec<usize>,
     models_scratch: Vec<ModelUniform>,
+    /// Nombre d'objets au dernier tri de `order_scratch` (re-tri paresseux).
+    last_sort_len: usize,
 
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
@@ -578,6 +580,7 @@ impl Renderer {
             draw_plan: Vec::new(),
             order_scratch: Vec::new(),
             models_scratch: Vec::new(),
+            last_sort_len: usize::MAX,
             gizmo_pipeline,
             gizmo_vbuf,
             grid_pipeline,
@@ -747,16 +750,24 @@ impl Renderer {
         // Instances ordonnées par (mesh, texture) pour permettre des draws groupés.
         // On bâtit en parallèle le buffer storage et le plan de rendu (même ordre).
         let planes = frustum_planes(app.camera.view_proj());
+        let n = app.scene.objects.len();
         let order = &mut self.order_scratch;
-        order.clear();
-        order.extend(0..app.scene.objects.len());
-        order.sort_by(|&a, &b| {
-            let oa = &app.scene.objects[a];
-            let ob = &app.scene.objects[b];
-            mesh_key(oa.mesh)
-                .cmp(&mesh_key(ob.mesh))
-                .then_with(|| oa.texture.cmp(&ob.texture))
-        });
+        // Re-tri paresseux : l'ordre (groupé par mesh/texture pour le batching) ne dépend
+        // pas des transforms ; on ne le recalcule que quand le nombre d'objets change.
+        // Un ordre « périmé » reste une permutation valide de 0..n → rendu correct, au pire
+        // batching sous-optimal jusqu'au prochain ajout/retrait.
+        if self.last_sort_len != n {
+            order.clear();
+            order.extend(0..n);
+            order.sort_by(|&a, &b| {
+                let oa = &app.scene.objects[a];
+                let ob = &app.scene.objects[b];
+                mesh_key(oa.mesh)
+                    .cmp(&mesh_key(ob.mesh))
+                    .then_with(|| oa.texture.cmp(&ob.texture))
+            });
+            self.last_sort_len = n;
+        }
 
         let models = &mut self.models_scratch;
         models.clear();
