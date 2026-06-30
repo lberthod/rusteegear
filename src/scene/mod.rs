@@ -189,7 +189,7 @@ fn default_jump_height() -> f32 {
 }
 
 /// Action déclenchée sans script quand l'objet est tapé en mode Play.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
 pub enum TapAction {
     #[default]
     None,
@@ -977,5 +977,38 @@ mod tests {
         assert_eq!(s.objects[0].group, "");
         assert!(s.groups.is_empty());
         assert!((s.light.ambient - 0.25).abs() < 1e-6);
+        // Composants récents : valeurs par défaut sûres sur une vieille scène.
+        assert!(!s.objects[0].input_receiver);
+        assert!(
+            s.objects[0].visible,
+            "visible doit défauter à true (sinon invisible)"
+        );
+        assert_eq!(s.objects[0].tap_action, TapAction::None);
+        assert!((s.objects[0].jump_height - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn controller_fields_survive_round_trip() {
+        let mut o = SceneObject {
+            name: "Joueur".into(),
+            ..Default::default()
+        };
+        o.input_receiver = true;
+        o.jump_button = "Saut".into();
+        o.jump_height = 2.2;
+        o.tap_action = TapAction::Hide;
+        o.visible = false;
+        let scene = Scene {
+            objects: vec![o],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&scene).unwrap();
+        let back: Scene = serde_json::from_str(&json).unwrap();
+        let b = &back.objects[0];
+        assert!(b.input_receiver);
+        assert_eq!(b.jump_button, "Saut");
+        assert!((b.jump_height - 2.2).abs() < 1e-6);
+        assert_eq!(b.tap_action, TapAction::Hide);
+        assert!(!b.visible);
     }
 }

@@ -219,6 +219,32 @@ mod tests {
     }
 
     #[test]
+    fn controller_demo_player_can_jump() {
+        let mut scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        // Laisse le joueur se poser au sol (gravité) avant de sauter.
+        for _ in 0..40 {
+            phys.control(p, 0.0, 0.0, false, 0.0);
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let grounded_y = scene.objects[p].transform.position.y;
+        // Impulsion de saut (vitesse pour ~1,6 m), puis on relâche.
+        let jump_speed = (2.0 * 9.81 * 1.6_f32).sqrt();
+        phys.control(p, 0.0, 0.0, true, jump_speed);
+        let mut max_y = grounded_y;
+        for _ in 0..25 {
+            phys.control(p, 0.0, 0.0, false, 0.0);
+            phys.step(1.0 / 60.0, &mut scene);
+            max_y = max_y.max(scene.objects[p].transform.position.y);
+        }
+        assert!(
+            max_y > grounded_y + 0.3,
+            "le joueur doit s'élever en sautant (sol={grounded_y}, max={max_y})"
+        );
+    }
+
+    #[test]
     fn controller_demo_player_collides_with_wall() {
         let mut scene = Scene::controller_demo();
         let p = player_index(&scene);
