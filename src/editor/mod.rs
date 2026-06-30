@@ -193,6 +193,7 @@ impl Editor {
 
     /// Mode Player : dessine **uniquement** les contrôles tactiles en surimpression
     /// (pas de panneaux d'éditeur) et met à jour l'état d'entrée lu par les scripts.
+    #[allow(clippy::too_many_arguments)] // états distincts à passer à l'overlay
     pub fn run_player_overlay(
         &mut self,
         window: &Window,
@@ -201,6 +202,7 @@ impl Editor {
         device_preview: bool,
         device_portrait: bool,
         hud_health: Option<f32>,
+        game_time: Option<f32>,
     ) -> egui::FullOutput {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -215,7 +217,7 @@ impl Editor {
                 health_bar(ctx, area, h);
             }
             if let Some((c, t)) = scene.collectibles() {
-                collectibles_hud(ctx, area, c, t);
+                collectibles_hud(ctx, area, c, t, game_time);
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
@@ -251,6 +253,7 @@ impl Editor {
         device_portrait: &mut bool,
         view_rect: &mut (f32, f32, f32, f32),
         hud_health: Option<f32>,
+        game_time: Option<f32>,
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -281,6 +284,7 @@ impl Editor {
                 device_portrait,
                 view_rect,
                 hud_health,
+                game_time,
                 &status,
                 export,
                 hier_filter,
@@ -1685,7 +1689,13 @@ fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
 
 /// HUD des collectibles (haut-droite) : « ⭐ ramassés / total », et bannière « Gagné ! »
 /// quand tout est ramassé.
-fn collectibles_hud(ctx: &egui::Context, area: egui::Rect, collected: usize, total: usize) {
+fn collectibles_hud(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    collected: usize,
+    total: usize,
+    time: Option<f32>,
+) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -1699,12 +1709,25 @@ fn collectibles_hud(ctx: &egui::Context, area: egui::Rect, collected: usize, tot
         FontId::proportional(20.0),
         Color32::from_rgb(255, 220, 90),
     );
+    if let Some(t) = time {
+        painter.text(
+            egui::pos2(area.right() - 20.0, area.top() + 42.0),
+            Align2::RIGHT_CENTER,
+            format!("⏱ {t:.1}s"),
+            FontId::proportional(16.0),
+            Color32::from_white_alpha(200),
+        );
+    }
     if collected == total && total > 0 {
+        let msg = match time {
+            Some(t) => format!("🎉 Gagné en {t:.1}s !"),
+            None => "🎉 Gagné !".to_string(),
+        };
         painter.text(
             area.center(),
             Align2::CENTER_CENTER,
-            "🎉 Gagné !",
-            FontId::proportional(44.0),
+            msg,
+            FontId::proportional(40.0),
             Color32::from_rgb(120, 230, 140),
         );
     }
@@ -1832,6 +1855,7 @@ fn build_ui(
     device_portrait: &mut bool,
     view_rect: &mut (f32, f32, f32, f32),
     hud_health: Option<f32>,
+    game_time: Option<f32>,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -2495,7 +2519,7 @@ fn build_ui(
         health_bar(root.ctx(), play_rect, h);
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
-        collectibles_hud(root.ctx(), play_rect, c, t);
+        collectibles_hud(root.ctx(), play_rect, c, t, game_time);
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);

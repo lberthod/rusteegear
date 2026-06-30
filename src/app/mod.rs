@@ -109,6 +109,8 @@ pub struct AppState {
     tapped_obj: Option<usize>,
     /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
     sim_accumulator: f32,
+    /// Temps de jeu (s) auquel tous les collectibles ont été ramassés (figé pour le HUD).
+    win_time: Option<f32>,
     /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
     pub device_preview: bool,
     /// Orientation de l'aperçu mobile (portrait par défaut).
@@ -245,6 +247,7 @@ impl AppState {
             input_state: PlayerInput::default(),
             tapped_obj: None,
             sim_accumulator: 0.0,
+            win_time: None,
             device_preview: false,
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
@@ -1470,12 +1473,15 @@ impl AppState {
             self.physics = None;
             self.paused = false;
             self.hud_health = None;
+            self.win_time = None;
             self.clear_selection();
             self.audio.stop_all();
         }
         if self.playing && !self.was_playing {
             // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale).
             self.sim_accumulator = 0.0;
+            self.win_time = None;
+            self.time = 0.0;
         }
         self.was_playing = self.playing;
 
@@ -1495,6 +1501,14 @@ impl AppState {
         self.sim_accumulator = acc;
         for _ in 0..steps {
             self.sim_step(FIXED_DT);
+        }
+
+        // Victoire : fige le chrono au moment où tous les collectibles sont ramassés.
+        if self.win_time.is_none()
+            && let Some((c, t)) = self.scene.collectibles()
+            && c == t
+        {
+            self.win_time = Some(self.time);
         }
 
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
@@ -1635,6 +1649,15 @@ impl AppState {
             }
         }
         p.cmpge(wmin).all() && p.cmple(wmax).all()
+    }
+
+    /// Temps à afficher au HUD chrono : figé à la victoire, sinon temps de jeu courant.
+    /// `None` si la scène n'a pas de collectibles ou si on n'est pas en Play.
+    pub fn hud_timer(&self) -> Option<f32> {
+        if !self.playing || self.scene.collectibles().is_none() {
+            return None;
+        }
+        Some(self.win_time.unwrap_or(self.time))
     }
 
     /// Position du « joueur » : objet pilotable (joystick/gyro) en priorité, sinon

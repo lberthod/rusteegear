@@ -839,6 +839,8 @@ impl Renderer {
 
         // 1. Construire l'UI éditeur. En mode player : pas de panneaux, mais on
         //    dessine quand même les contrôles tactiles (joystick + boutons).
+        // Calculé avant les appels mutant `app` (évite un conflit d'emprunt au site d'appel).
+        let game_time = app.hud_timer();
         let full_output = if app.player {
             if app.scene.mobile.any() {
                 Some(self.editor.run_player_overlay(
@@ -848,6 +850,7 @@ impl Renderer {
                     app.device_preview,
                     app.device_portrait,
                     app.hud_health,
+                    game_time,
                 ))
             } else {
                 None
@@ -874,6 +877,7 @@ impl Renderer {
                 &mut app.device_portrait,
                 &mut app.view_rect_px,
                 app.hud_health,
+                game_time,
                 status,
             );
             if actions.save {
