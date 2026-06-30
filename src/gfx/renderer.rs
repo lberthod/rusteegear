@@ -868,6 +868,9 @@ impl Renderer {
             if actions.load_gameplay {
                 app.load_gameplay_demo();
             }
+            if actions.load_controller {
+                app.load_controller_demo();
+            }
             if actions.align_ground {
                 app.align_to_ground();
             }

@@ -37,6 +37,8 @@ pub struct Physics {
     ccd: CCDSolver,
     /// (index d'objet, handle) pour les corps dynamiques à recopier.
     dynamic: Vec<(usize, RigidBodyHandle)>,
+    /// (index d'objet, handle) pour les objets **pilotables** (joystick/gyro/saut).
+    controlled: Vec<(usize, RigidBodyHandle)>,
 }
 
 impl Physics {
@@ -45,23 +47,31 @@ impl Physics {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut dynamic = Vec::new();
+        let mut controlled = Vec::new();
 
         for (i, obj) in scene.objects.iter().enumerate() {
+            // Un objet pilotable (joystick/gyro/saut) devient un corps dynamique,
+            // même sans physique explicite, pour entrer en collision avec le décor.
+            let controllable = obj.input_receiver || obj.gyro_control;
             let is_dynamic = match obj.physics {
-                PhysicsKind::None => continue,
-                PhysicsKind::Static => false,
+                PhysicsKind::None if !controllable => continue,
                 PhysicsKind::Dynamic => true,
+                _ => controllable,
             };
 
             let t = &obj.transform;
             let (axis, angle) = t.rotation.to_axis_angle();
             let rotvec = axis * angle;
 
-            let builder = if is_dynamic {
+            let mut builder = if is_dynamic {
                 RigidBodyBuilder::dynamic()
             } else {
                 RigidBodyBuilder::fixed()
             };
+            // Objet pilotable : on bloque les rotations pour qu'il reste debout.
+            if controllable {
+                builder = builder.lock_rotations();
+            }
             let body = builder
                 .translation(Vector::new(t.position.x, t.position.y, t.position.z))
                 .rotation(Vector::new(rotvec.x, rotvec.y, rotvec.z))
@@ -106,6 +116,9 @@ impl Physics {
             if is_dynamic {
                 dynamic.push((i, handle));
             }
+            if controllable {
+                controlled.push((i, handle));
+            }
         }
 
         Physics {
@@ -121,6 +134,25 @@ impl Physics {
             multibody: MultibodyJointSet::new(),
             ccd: CCDSolver::new(),
             dynamic,
+            controlled,
+        }
+    }
+
+    /// Pilote un objet (corps `controlled`) : fixe la vitesse horizontale (joystick/gyro)
+    /// et déclenche un saut si demandé **et** que l'objet est au sol. La vitesse verticale
+    /// est sinon conservée (gravité). `jump_speed` = vitesse initiale du saut (m/s).
+    pub fn control(&mut self, index: usize, vx: f32, vz: f32, jump: bool, jump_speed: f32) {
+        for &(i, handle) in &self.controlled {
+            if i != index {
+                continue;
+            }
+            if let Some(body) = self.bodies.get_mut(handle) {
+                let cur = body.linvel();
+                // Au sol : vitesse verticale quasi nulle (heuristique simple, sans raycast).
+                let grounded = cur.y.abs() < 1.0;
+                let vy = if jump && grounded { jump_speed } else { cur.y };
+                body.set_linvel(Vector::new(vx, vy, vz), true);
+            }
         }
     }
 
@@ -150,5 +182,57 @@ impl Physics {
                 obj.transform.rotation = Quat::from_xyzw(r.x, r.y, r.z, r.w);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::Scene;
+
+    /// Index de l'objet pilotable (input_receiver) dans la scène.
+    fn player_index(scene: &Scene) -> usize {
+        scene
+            .objects
+            .iter()
+            .position(|o| o.input_receiver)
+            .expect("la démo contrôleur a un joueur pilotable")
+    }
+
+    #[test]
+    fn controller_demo_player_moves_with_joystick() {
+        let mut scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let x0 = scene.objects[p].transform.position.x;
+
+        let mut phys = Physics::build(&scene);
+        // Joystick poussé vers +X (vx = move_speed) pendant ~0,5 s.
+        for _ in 0..30 {
+            phys.control(p, 4.0, 0.0, false, 0.0);
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x1 = scene.objects[p].transform.position.x;
+        assert!(
+            x1 > x0 + 0.3,
+            "le joueur doit avancer en +X (x0={x0}, x1={x1})"
+        );
+    }
+
+    #[test]
+    fn controller_demo_player_collides_with_wall() {
+        let mut scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        // Le mur statique « Mur » est à x = 3 (épaisseur ~1, demi-largeur 0.5 → face à ~2.5).
+        let mut phys = Physics::build(&scene);
+        // Pousse fort vers +X pendant 2 s : sans collision il dépasserait largement 3.
+        for _ in 0..120 {
+            phys.control(p, 8.0, 0.0, false, 0.0);
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x = scene.objects[p].transform.position.x;
+        assert!(
+            x < 2.6,
+            "le joueur doit buter sur le mur (x≈2.5), mais x={x}"
+        );
     }
 }

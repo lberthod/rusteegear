@@ -166,6 +166,16 @@ pub struct SceneObject {
     /// Vibration Feedback : durée (ms) du retour haptique quand l'objet est tapé (0 = off).
     #[serde(default)]
     pub vibrate_on_tap: u32,
+    /// Nom du bouton tactile qui fait sauter l'objet pilotable (vide = pas de saut).
+    #[serde(default)]
+    pub jump_button: String,
+    /// Hauteur de saut (mètres) de l'objet pilotable.
+    #[serde(default = "default_jump_height")]
+    pub jump_height: f32,
+}
+
+fn default_jump_height() -> f32 {
+    1.5
 }
 
 fn default_move_speed() -> f32 {
@@ -196,6 +206,8 @@ impl Default for SceneObject {
             gyro_control: false,
             move_speed: default_move_speed(),
             vibrate_on_tap: 0,
+            jump_button: String::new(),
+            jump_height: default_jump_height(),
         }
     }
 }
@@ -389,6 +401,46 @@ fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
 }
 
 impl Scene {
+    /// Démo « contrôleur » **sans script** : un joueur pilotable au joystick (composant
+    /// Input Receiver) qui saute via un bouton tactile et entre en collision avec des
+    /// obstacles statiques. Montre le contrôleur de personnage intégré.
+    pub fn controller_demo() -> Self {
+        // Sol statique.
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol.transform.with_scale(Vec3::new(16.0, 1.0, 16.0));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.35, 0.5, 0.4];
+
+        // Joueur pilotable : Input Receiver + saut sur le bouton « Saut ».
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        joueur.color = [0.95, 0.6, 0.25];
+        joueur.input_receiver = true;
+        joueur.move_speed = 4.0;
+        joueur.jump_button = "Saut".into();
+        joueur.jump_height = 1.6;
+
+        // Obstacles statiques : le joueur bute dessus.
+        let mut mur = demo_obj("Mur", MeshKind::Cube, Vec3::new(3.0, 0.5, 0.0));
+        mur.transform = mur.transform.with_scale(Vec3::new(1.0, 1.0, 4.0));
+        mur.physics = PhysicsKind::Static;
+        mur.color = [0.5, 0.55, 0.7];
+
+        let mut caisse = demo_obj("Caisse", MeshKind::Cube, Vec3::new(-2.5, 0.5, 1.5));
+        caisse.physics = PhysicsKind::Static;
+        caisse.color = [0.7, 0.5, 0.3];
+
+        Scene {
+            objects: vec![sol, joueur, mur, caisse],
+            camera_follow: true,
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Démo « gameplay complet » : joueur (joystick + gyroscope + saut + vibration),
     /// zone de danger qui retire de la vie (HUD), et cube tactile qui change de couleur.
     /// Montre toute l'API de script en une scène jouable.
