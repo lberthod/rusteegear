@@ -769,7 +769,7 @@ impl Renderer {
             self.draw_plan.push(InstanceDraw {
                 mesh: obj.mesh,
                 texture: obj.texture.clone(),
-                visible: aabb_visible(&planes, model, lmin, lmax),
+                visible: obj.visible && aabb_visible(&planes, model, lmin, lmax),
             });
         }
         if !models.is_empty() {

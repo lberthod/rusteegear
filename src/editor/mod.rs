@@ -2211,6 +2211,21 @@ fn build_ui(
                             .on_hover_text(
                                 "En Play, un tap dessus expose obj.tapped au script (ex. couleur)",
                             );
+                        if obj.tappable {
+                            ui.horizontal(|ui| {
+                                ui.label("Action au tap");
+                                use crate::scene::TapAction as Ta;
+                                egui::ComboBox::from_id_salt(("tap_action", i))
+                                    .selected_text(obj.tap_action.label())
+                                    .show_ui(ui, |ui| {
+                                        for a in [Ta::None, Ta::ChangeColor, Ta::Hide] {
+                                            ui.selectable_value(&mut obj.tap_action, a, a.label());
+                                        }
+                                    });
+                            })
+                            .response
+                            .on_hover_text("Comportement sans script quand on tape l'objet");
+                        }
                         ui.checkbox(&mut obj.trigger, "🎯 Zone de déclenchement")
                             .on_hover_text(
                                 "En Play, expose obj.triggered au script quand le joueur entre dans sa zone",

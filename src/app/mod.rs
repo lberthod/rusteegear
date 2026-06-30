@@ -1496,9 +1496,22 @@ impl AppState {
         let mut vibrations: Vec<f32> = Vec::new();
         let mut health = self.hud_health;
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
+            let just_tapped = self.tapped_obj == Some(idx);
             // Vibration Feedback : retour haptique quand l'objet est tapé.
-            if obj.vibrate_on_tap > 0 && self.tapped_obj == Some(idx) {
+            if obj.vibrate_on_tap > 0 && just_tapped {
                 vibrations.push(obj.vibrate_on_tap as f32);
+            }
+            // Action au tap sans script (ex. changer de couleur).
+            if just_tapped {
+                match obj.tap_action {
+                    crate::scene::TapAction::None => {}
+                    crate::scene::TapAction::ChangeColor => {
+                        obj.color = crate::scene::hue_to_rgb(time * 0.37);
+                    }
+                    crate::scene::TapAction::Hide => {
+                        obj.visible = false;
+                    }
+                }
             }
             if obj.script.trim().is_empty() {
                 continue;

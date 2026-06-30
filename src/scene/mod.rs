@@ -172,10 +172,41 @@ pub struct SceneObject {
     /// Hauteur de saut (mètres) de l'objet pilotable.
     #[serde(default = "default_jump_height")]
     pub jump_height: f32,
+    /// Action déclenchée sans script quand l'objet est tapé (Touch Area requise).
+    #[serde(default)]
+    pub tap_action: TapAction,
+    /// Objet visible au rendu (mis à false par l'action « Masquer » ; rétabli à l'arrêt).
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_jump_height() -> f32 {
     1.5
+}
+
+/// Action déclenchée sans script quand l'objet est tapé en mode Play.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TapAction {
+    #[default]
+    None,
+    /// Change la couleur de l'objet (teinte vive variant à chaque tap).
+    ChangeColor,
+    /// Masque l'objet (ramassage) ; il réapparaît à l'arrêt du mode Play.
+    Hide,
+}
+
+impl TapAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            TapAction::None => "Aucune",
+            TapAction::ChangeColor => "Changer de couleur",
+            TapAction::Hide => "Masquer (ramasser)",
+        }
+    }
 }
 
 fn default_move_speed() -> f32 {
@@ -208,8 +239,26 @@ impl Default for SceneObject {
             vibrate_on_tap: 0,
             jump_button: String::new(),
             jump_height: default_jump_height(),
+            tap_action: TapAction::None,
+            visible: true,
         }
     }
+}
+
+/// Couleur vive (teinte → RGB, saturation/valeur max) pour l'action « changer de couleur ».
+/// `h` est en tours (0..1) ; h=0 rouge, 1/3 vert, 2/3 bleu.
+pub fn hue_to_rgb(h: f32) -> [f32; 3] {
+    let h = (h.rem_euclid(1.0)) * 6.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+    let (r, g, b) = match h as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    [r, g, b]
 }
 
 fn default_roughness() -> f32 {
@@ -824,6 +873,16 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hue_to_rgb_primary_colors() {
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-3);
+        assert!(close(hue_to_rgb(0.0), [1.0, 0.0, 0.0]), "rouge");
+        assert!(close(hue_to_rgb(1.0 / 3.0), [0.0, 1.0, 0.0]), "vert");
+        assert!(close(hue_to_rgb(2.0 / 3.0), [0.0, 0.0, 1.0]), "bleu");
+        // Périodicité : h et h+1 donnent la même couleur.
+        assert!(close(hue_to_rgb(0.2), hue_to_rgb(1.2)), "période");
+    }
 
     #[test]
     fn nearest_point_lights_picks_closest_to_camera() {
