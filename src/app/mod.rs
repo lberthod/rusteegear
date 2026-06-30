@@ -994,7 +994,11 @@ impl AppState {
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
         {
-            self.camera.target = p;
+            self.camera.target = p + Vec3::new(0.0, 0.8, 0.0);
+            if self.scene.game_camera.is_none() {
+                self.camera.pitch = 0.62;
+                self.camera.distance = 11.0;
+            }
         }
     }
 
@@ -1514,11 +1518,17 @@ impl AppState {
             for (c, gain) in clips {
                 self.audio.play_gain(&c, gain);
             }
-            // Caméra de suivi : se cale d'emblée sur le joueur (pas de panoramique initial).
+            // Caméra de suivi : se cale d'emblée sur le joueur + adopte un bon angle de
+            // jeu 3ᵉ personne (plongée douce + recul confortable) si aucune caméra de jeu
+            // n'est définie.
             if self.scene.camera_follow
                 && let Some(p) = self.player_position()
             {
-                self.camera.target = p;
+                self.camera.target = p + Vec3::new(0.0, 0.8, 0.0);
+                if self.scene.game_camera.is_none() {
+                    self.camera.pitch = 0.62; // ~35° de plongée
+                    self.camera.distance = 11.0;
+                }
             }
             // Caméra de jeu : applique le point de vue défini pour la scène.
             if let Some(gc) = self.scene.game_camera {
@@ -1617,11 +1627,12 @@ impl AppState {
         }
 
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
+        // Cible légèrement au-dessus du joueur (regarde le buste, voit plus loin devant).
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
         {
             let t = (dt * 6.0).min(1.0);
-            self.camera.target = self.camera.target.lerp(p, t);
+            self.camera.target = self.camera.target.lerp(p + Vec3::new(0.0, 0.8, 0.0), t);
         }
     }
 
