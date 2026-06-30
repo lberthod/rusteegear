@@ -501,7 +501,8 @@ impl Scene {
         sol.color = [0.35, 0.5, 0.4];
 
         // Joueur pilotable : Input Receiver + saut sur le bouton « Saut ».
-        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        // Démarre au bord (pas sur la lave centrale).
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, -6.0));
         joueur.color = [0.95, 0.6, 0.25];
         joueur.input_receiver = true;
         joueur.move_speed = 4.0;
@@ -541,32 +542,60 @@ impl Scene {
             Vec3::new(0.5, 1.2, 16.0),
         );
 
-        // Zone mortelle (lave) décalée sur un côté : à éviter, sinon partie perdue.
-        let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(4.5, 0.02, 0.0));
-        lave.transform = lave.transform.with_scale(Vec3::new(2.0, 1.0, 3.0));
-        lave.color = [0.9, 0.25, 0.1];
-        lave.emissive = 0.6;
+        // Mare de lave **au centre** : hasard principal à contourner (défaite au contact).
+        let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(0.0, 0.02, 0.0));
+        lave.transform = lave.transform.with_scale(Vec3::new(3.0, 1.0, 3.0));
+        lave.color = [0.95, 0.3, 0.1];
+        lave.emissive = 0.7;
         lave.deadly = true;
         objects.push(lave);
 
-        // --- Pièces à ramasser : générées automatiquement en anneau autour du centre ---
-        let count = 8;
-        for n in 0..count {
-            let angle = n as f32 / count as f32 * std::f32::consts::TAU;
-            let r = 5.0;
-            let pos = Vec3::new(angle.cos() * r, 0.5, angle.sin() * r);
-            let mut gem = demo_obj(&format!("Pièce {}", n + 1), MeshKind::Sphere, pos);
-            gem.transform = gem.transform.with_scale(Vec3::splat(0.45));
-            gem.color = [1.0, 0.85, 0.2];
-            gem.emissive = 0.5;
-            gem.tappable = true;
-            gem.tap_action = TapAction::Hide;
-            objects.push(gem);
+        // Piliers-obstacles aux diagonales (le joueur les contourne).
+        for (n, (sx, sz)) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut pil = demo_obj(
+                &format!("Pilier {}", n + 1),
+                MeshKind::Cube,
+                Vec3::new(sx * 4.3, 0.7, sz * 4.3),
+            );
+            pil.transform = pil.transform.with_scale(Vec3::new(0.8, 1.4, 0.8));
+            pil.physics = PhysicsKind::Static;
+            pil.color = [0.5, 0.52, 0.6];
+            objects.push(pil);
+        }
+
+        // --- Pièces : deux anneaux générés automatiquement autour de la lave ---
+        let mut p = 0;
+        for (ring, radius) in [(6, 3.4_f32), (6, 6.2_f32)] {
+            for k in 0..ring {
+                // anneau extérieur décalé d'un demi-pas (disposition en quinconce).
+                let off = if radius > 5.0 { 0.5 } else { 0.0 };
+                let angle = (k as f32 + off) / ring as f32 * std::f32::consts::TAU;
+                let pos = Vec3::new(angle.cos() * radius, 0.5, angle.sin() * radius);
+                p += 1;
+                let mut gem = demo_obj(&format!("Pièce {p}"), MeshKind::Sphere, pos);
+                gem.transform = gem.transform.with_scale(Vec3::splat(0.45));
+                gem.color = [1.0, 0.85, 0.2];
+                gem.emissive = 0.5;
+                gem.tappable = true;
+                gem.tap_action = TapAction::Hide;
+                objects.push(gem);
+            }
         }
 
         Scene {
             objects,
             camera_follow: true,
+            // Lumière ponctuelle chaude au-dessus de l'arène (ambiance + lisibilité).
+            point_lights: vec![PointLight {
+                position: [0.0, 6.0, 0.0],
+                color: [1.0, 0.92, 0.78],
+                intensity: 1.4,
+                range: 16.0,
+                ..PointLight::default()
+            }],
             mobile: MobileControls {
                 joystick: true,
                 buttons: vec!["Saut".into()],
@@ -1186,12 +1215,18 @@ mod tests {
     fn collect_at_picks_up_touched_pieces() {
         let mut s = Scene::controller_demo();
         assert_eq!(s.collectibles().unwrap().0, 0, "rien au départ");
-        // Une pièce de l'anneau est en (rayon 5, angle 0) = (5, 0.5, 0) ; on s'y place.
-        let n = s.collect_at(Vec3::new(5.0, 0.5, 0.0), 0.7);
+        // On se place exactement sur une pièce (position trouvée dynamiquement).
+        let piece_pos = s
+            .objects
+            .iter()
+            .find(|o| o.tap_action == TapAction::Hide && o.visible)
+            .map(|o| o.transform.position)
+            .unwrap();
+        let n = s.collect_at(piece_pos, 0.7);
         assert!(n >= 1, "doit ramasser la pièce touchée");
         assert_eq!(s.collectibles().unwrap().0, n, "compteur à jour");
-        // Loin de toute pièce (centre vide) : rien ramassé.
-        assert_eq!(s.collect_at(Vec3::new(0.0, 0.5, 0.0), 0.7), 0);
+        // Très loin de l'arène : rien ramassé.
+        assert_eq!(s.collect_at(Vec3::new(100.0, 0.5, 100.0), 0.7), 0);
     }
 
     #[test]

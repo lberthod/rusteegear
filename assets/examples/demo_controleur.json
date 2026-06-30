@@ -55,7 +55,7 @@
         "position": [
           0.0,
           1.0,
-          0.0
+          -6.0
         ],
         "rotation": [
           0.0,
@@ -298,7 +298,7 @@
       "name": "Lave",
       "transform": {
         "position": [
-          4.5,
+          0.0,
           0.02,
           0.0
         ],
@@ -309,7 +309,7 @@
           1.0
         ],
         "scale": [
-          2.0,
+          3.0,
           1.0,
           3.0
         ]
@@ -322,15 +322,15 @@
       "audio_autoplay": false,
       "group": "",
       "color": [
-        0.9,
-        0.25,
+        0.95,
+        0.3,
         0.1
       ],
       "texture": "",
       "tappable": false,
       "metallic": 0.0,
       "roughness": 0.6,
-      "emissive": 0.6,
+      "emissive": 0.7,
       "trigger": false,
       "audio_spatial": false,
       "input_receiver": false,
@@ -344,10 +344,206 @@
       "deadly": true
     },
     {
+      "name": "Pilier 1",
+      "transform": {
+        "position": [
+          4.3,
+          0.7,
+          4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.8,
+          1.4,
+          0.8
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.5,
+        0.52,
+        0.6
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pilier 2",
+      "transform": {
+        "position": [
+          -4.3,
+          0.7,
+          4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.8,
+          1.4,
+          0.8
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.5,
+        0.52,
+        0.6
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pilier 3",
+      "transform": {
+        "position": [
+          4.3,
+          0.7,
+          -4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.8,
+          1.4,
+          0.8
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.5,
+        0.52,
+        0.6
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pilier 4",
+      "transform": {
+        "position": [
+          -4.3,
+          0.7,
+          -4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.8,
+          1.4,
+          0.8
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.5,
+        0.52,
+        0.6
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false
+    },
+    {
       "name": "Pièce 1",
       "transform": {
         "position": [
-          5.0,
+          3.4,
           0.5,
           0.0
         ],
@@ -396,9 +592,9 @@
       "name": "Pièce 2",
       "transform": {
         "position": [
-          3.535534,
+          1.6999999,
           0.5,
-          3.535534
+          2.9444866
         ],
         "rotation": [
           0.0,
@@ -445,9 +641,9 @@
       "name": "Pièce 3",
       "transform": {
         "position": [
-          -2.1855695e-7,
+          -1.7000003,
           0.5,
-          5.0
+          2.9444864
         ],
         "rotation": [
           0.0,
@@ -494,9 +690,9 @@
       "name": "Pièce 4",
       "transform": {
         "position": [
-          -3.535534,
+          -3.4,
           0.5,
-          3.535534
+          -2.9723745e-7
         ],
         "rotation": [
           0.0,
@@ -543,9 +739,9 @@
       "name": "Pièce 5",
       "transform": {
         "position": [
-          -5.0,
+          -1.6999997,
           0.5,
-          -4.371139e-7
+          -2.9444866
         ],
         "rotation": [
           0.0,
@@ -592,9 +788,9 @@
       "name": "Pièce 6",
       "transform": {
         "position": [
-          -3.5355332,
+          1.6999997,
           0.5,
-          -3.5355344
+          -2.9444866
         ],
         "rotation": [
           0.0,
@@ -641,9 +837,9 @@
       "name": "Pièce 7",
       "transform": {
         "position": [
-          5.9624405e-8,
+          5.369357,
           0.5,
-          -5.0
+          3.1
         ],
         "rotation": [
           0.0,
@@ -690,9 +886,205 @@
       "name": "Pièce 8",
       "transform": {
         "position": [
-          3.535535,
+          -2.710106e-7,
           0.5,
-          -3.5355327
+          6.2
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.45,
+          0.45,
+          0.45
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        1.0,
+        0.85,
+        0.2
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.5,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pièce 9",
+      "transform": {
+        "position": [
+          -5.369357,
+          0.5,
+          3.1000004
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.45,
+          0.45,
+          0.45
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        1.0,
+        0.85,
+        0.2
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.5,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pièce 10",
+      "transform": {
+        "position": [
+          -5.369357,
+          0.5,
+          -3.0999997
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.45,
+          0.45,
+          0.45
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        1.0,
+        0.85,
+        0.2
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.5,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pièce 11",
+      "transform": {
+        "position": [
+          7.393426e-8,
+          0.5,
+          -6.2
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.45,
+          0.45,
+          0.45
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        1.0,
+        0.85,
+        0.2
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.5,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Pièce 12",
+      "transform": {
+        "position": [
+          5.3693585,
+          0.5,
+          -3.0999985
         ],
         "rotation": [
           0.0,
@@ -751,7 +1143,28 @@
     ],
     "ambient": 0.25
   },
-  "point_lights": [],
+  "point_lights": [
+    {
+      "position": [
+        0.0,
+        6.0,
+        0.0
+      ],
+      "color": [
+        1.0,
+        0.92,
+        0.78
+      ],
+      "intensity": 1.4,
+      "range": 16.0,
+      "spot_dir": [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      "spot_angle": 0.0
+    }
+  ],
   "mobile": {
     "joystick": true,
     "buttons": [
