@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod physics;
+pub mod sfx;
 
 /// Retour haptique : déclenche une vibration de `ms` millisecondes.
 /// Natif sur Android (à brancher au Vibrator via JNI) ; sur desktop, journalisé.

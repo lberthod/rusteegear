@@ -87,6 +87,22 @@ impl Audio {
         }
     }
 
+    /// Joue un son **généré en mémoire** (WAV synthétisé), mis en cache sous `key`.
+    /// Sert aux effets sonores du jeu (ramassage, saut, victoire, défaite).
+    pub fn play_bytes(&mut self, key: &str, bytes: &[u8]) {
+        if let Some(data) = self.cache.get(key).cloned() {
+            self.start(data, 1.0);
+            return;
+        }
+        match StaticSoundData::from_cursor(std::io::Cursor::new(bytes.to_vec())) {
+            Ok(data) => {
+                self.cache.insert(key.to_string(), data.clone());
+                self.start(data, 1.0);
+            }
+            Err(e) => log::error!("SFX '{key}' illisible : {e}"),
+        }
+    }
+
     /// À appeler chaque frame : récupère les sons décodés et joue ceux en attente.
     pub fn update(&mut self) {
         while let Ok((path, data)) = self.rx.try_recv() {

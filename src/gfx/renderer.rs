@@ -841,6 +841,7 @@ impl Renderer {
         //    dessine quand même les contrôles tactiles (joystick + boutons).
         // Calculé avant les appels mutant `app` (évite un conflit d'emprunt au site d'appel).
         let game_time = app.hud_timer();
+        let score = app.score();
         let lost = app.is_lost();
         let mut restart = false;
         let full_output = if app.player {
@@ -853,6 +854,7 @@ impl Renderer {
                     app.device_portrait,
                     app.hud_health,
                     game_time,
+                    score,
                     lost,
                     &mut restart,
                 ))
@@ -882,6 +884,7 @@ impl Renderer {
                 &mut app.view_rect_px,
                 app.hud_health,
                 game_time,
+                score,
                 lost,
                 status,
             );
@@ -1017,9 +1020,13 @@ impl Renderer {
             Some(full_output)
         };
 
-        // Bouton « Rejouer » (player ou preview éditeur) : relance la partie en cours.
+        // Bouton de fin de partie : « Niveau suivant » si gagné, sinon « Rejouer ».
         if restart {
-            app.restart_game();
+            if app.has_won() {
+                app.next_level();
+            } else {
+                app.restart_game();
+            }
         }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.

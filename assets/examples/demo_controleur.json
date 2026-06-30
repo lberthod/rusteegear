@@ -28,9 +28,9 @@
       "audio_autoplay": false,
       "group": "",
       "color": [
-        0.35,
+        0.3,
         0.5,
-        0.4
+        0.42
       ],
       "texture": "",
       "tappable": false,
@@ -47,7 +47,8 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Joueur",
@@ -96,7 +97,8 @@
       "jump_height": 1.6,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Mur Nord",
@@ -145,7 +147,8 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Mur Sud",
@@ -194,7 +197,8 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Mur Est",
@@ -243,7 +247,8 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Mur Ouest",
@@ -292,7 +297,8 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Lave",
@@ -341,7 +347,8 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": true
+      "deadly": true,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pilier 1",
@@ -390,7 +397,58 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Étoile 1",
+      "transform": {
+        "position": [
+          4.3,
+          1.9,
+          4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.55,
+        0.85,
+        1.0
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.8,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 4.0
     },
     {
       "name": "Pilier 2",
@@ -439,7 +497,58 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Étoile 2",
+      "transform": {
+        "position": [
+          -4.3,
+          1.9,
+          4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.55,
+        0.85,
+        1.0
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.8,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 4.0
     },
     {
       "name": "Pilier 3",
@@ -488,7 +597,58 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Étoile 3",
+      "transform": {
+        "position": [
+          4.3,
+          1.9,
+          -4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.55,
+        0.85,
+        1.0
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.8,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 4.0
     },
     {
       "name": "Pilier 4",
@@ -537,7 +697,58 @@
       "jump_height": 1.5,
       "tap_action": "None",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Étoile 4",
+      "transform": {
+        "position": [
+          -4.3,
+          1.9,
+          -4.3
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.55,
+        0.85,
+        1.0
+      ],
+      "texture": "",
+      "tappable": true,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.8,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "Hide",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 4.0
     },
     {
       "name": "Pièce 1",
@@ -586,7 +797,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 2",
@@ -635,7 +847,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 3",
@@ -684,7 +897,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 4",
@@ -733,7 +947,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 5",
@@ -782,7 +997,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 6",
@@ -831,7 +1047,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 7",
@@ -880,7 +1097,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 8",
@@ -929,7 +1147,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 9",
@@ -978,7 +1197,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 10",
@@ -1027,7 +1247,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 11",
@@ -1076,7 +1297,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     },
     {
       "name": "Pièce 12",
@@ -1125,7 +1347,8 @@
       "jump_height": 1.5,
       "tap_action": "Hide",
       "visible": true,
-      "deadly": false
+      "deadly": false,
+      "respawn_delay": 0.0
     }
   ],
   "imported": [],

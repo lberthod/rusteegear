@@ -117,6 +117,12 @@ pub struct AppState {
     win_time: Option<f32>,
     /// Partie perdue : le joueur a touché une zone mortelle (fige le jeu jusqu'au Stop).
     lost: bool,
+    /// Score : nombre total de pièces ramassées dans la partie (bonus respawn inclus).
+    score: u32,
+    /// File de réapparition : (index de pièce, temps de jeu auquel la rendre visible).
+    respawn_queue: Vec<(usize, f32)>,
+    /// Niveau courant de la démo contrôleur (1-based).
+    level: u32,
     /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
     pub device_preview: bool,
     /// Orientation de l'aperçu mobile (portrait par défaut).
@@ -255,6 +261,9 @@ impl AppState {
             sim_accumulator: 0.0,
             win_time: None,
             lost: false,
+            score: 0,
+            respawn_queue: Vec::new(),
+            level: 1,
             device_preview: false,
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
@@ -978,6 +987,8 @@ impl AppState {
         self.sim_accumulator = 0.0;
         self.win_time = None;
         self.lost = false;
+        self.score = 0;
+        self.respawn_queue.clear();
         self.hud_health = None;
         self.tapped_obj = None;
         if self.scene.camera_follow
@@ -987,8 +998,29 @@ impl AppState {
         }
     }
 
+    /// A-t-on gagné le niveau (toutes les pièces-objectif ramassées) ?
+    pub fn has_won(&self) -> bool {
+        self.win_time.is_some()
+    }
+
+    /// Score courant (pièces ramassées) — affiché au HUD.
+    pub fn score(&self) -> u32 {
+        self.score
+    }
+
+    /// Passe au niveau suivant (boucle au niveau 1 après le dernier) et le charge en Play.
+    pub fn next_level(&mut self) {
+        self.level = self.level % crate::scene::CONTROLLER_LEVELS + 1;
+        self.scene = crate::scene::Scene::controller_level(self.level);
+        self.imported_dirty = true;
+        // Repart « en jeu » sur le nouveau niveau.
+        self.play_snapshot = self.scene.objects.clone();
+        self.restart_game();
+    }
+
     /// Charge la démo « contrôleur » : joueur pilotable au joystick + saut, sans script.
     pub fn load_controller_demo(&mut self) {
+        self.level = 1;
         self.push_undo();
         self.scene = Scene::controller_demo();
         self.imported_dirty = true;
@@ -1512,6 +1544,8 @@ impl AppState {
             self.sim_accumulator = 0.0;
             self.win_time = None;
             self.lost = false;
+            self.score = 0;
+            self.respawn_queue.clear();
             self.time = 0.0;
         }
         self.was_playing = self.playing;
@@ -1537,21 +1571,48 @@ impl AppState {
             }
 
             // Ramassage par contact : le joueur récupère les pièces qu'il traverse.
+            // Score +1 par pièce ; les pièces bonus (respawn_delay>0) réapparaissent.
             if let Some(p) = self.player_position() {
-                self.scene.collect_at(p, 0.7);
+                let now = self.time;
+                let hit = self.scene.collect_at(p, 0.7);
+                if !hit.is_empty() {
+                    self.score += hit.len() as u32;
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Pickup);
+                    for i in hit {
+                        let d = self.scene.objects[i].respawn_delay;
+                        if d > 0.0 {
+                            self.respawn_queue.push((i, now + d));
+                        }
+                    }
+                }
             }
+            // Réapparition des pièces bonus dont le délai est écoulé.
+            let now = self.time;
+            self.respawn_queue.retain(|&(i, at)| {
+                if now >= at {
+                    if let Some(o) = self.scene.objects.get_mut(i) {
+                        o.visible = true;
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
             // Défaite : le joueur a touché une zone mortelle.
-            if let Some(p) = self.player_position()
+            if !self.lost
+                && let Some(p) = self.player_position()
                 && self.scene.deadly_at(p)
             {
                 self.lost = true;
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
             }
-            // Victoire : fige le chrono quand tous les collectibles sont ramassés.
+            // Victoire : fige le chrono quand toutes les pièces-objectif sont ramassées.
             if self.win_time.is_none()
                 && let Some((c, t)) = self.scene.collectibles()
                 && c == t
             {
                 self.win_time = Some(self.time);
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
             }
         }
 
@@ -1658,6 +1719,7 @@ impl AppState {
             let mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
             let my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
             let (tilt, space) = (inp.tilt, inp.jump);
+            let mut any_jump = false;
             for (idx, obj) in self.scene.objects.iter().enumerate() {
                 if !obj.input_receiver && !obj.gyro_control {
                     continue;
@@ -1677,9 +1739,12 @@ impl AppState {
                     && self.input_state.buttons.contains(&obj.jump_button))
                     || (space && obj.input_receiver);
                 let jump_speed = (2.0 * 9.81 * obj.jump_height.max(0.0)).sqrt();
-                phys.control(idx, vx, vz, jump, jump_speed);
+                any_jump |= phys.control(idx, vx, vz, jump, jump_speed);
             }
             phys.step(dt, &mut self.scene);
+            if any_jump {
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
+            }
         }
     }
 

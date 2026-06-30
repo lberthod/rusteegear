@@ -205,6 +205,7 @@ impl Editor {
         device_portrait: bool,
         hud_health: Option<f32>,
         game_time: Option<f32>,
+        score: u32,
         lost: bool,
         restart: &mut bool,
     ) -> egui::FullOutput {
@@ -222,14 +223,14 @@ impl Editor {
             }
             let collect = scene.collectibles();
             if let Some((c, t)) = collect {
-                collectibles_hud(ctx, area, c, t, game_time);
+                collectibles_hud(ctx, area, c, t, game_time, score);
             }
             if lost {
                 lose_banner(ctx, area);
             }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
             let won = matches!(collect, Some((c, t)) if c == t && t > 0);
-            if (won || lost) && restart_button(ctx, area) {
+            if (won || lost) && restart_button(ctx, area, won) {
                 *restart = true;
             }
             if mobile.any() {
@@ -267,6 +268,7 @@ impl Editor {
         view_rect: &mut (f32, f32, f32, f32),
         hud_health: Option<f32>,
         game_time: Option<f32>,
+        score: u32,
         lost: bool,
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
@@ -299,6 +301,7 @@ impl Editor {
                 view_rect,
                 hud_health,
                 game_time,
+                score,
                 lost,
                 &status,
                 export,
@@ -1710,6 +1713,7 @@ fn collectibles_hud(
     collected: usize,
     total: usize,
     time: Option<f32>,
+    score: u32,
 ) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -1724,9 +1728,16 @@ fn collectibles_hud(
         FontId::proportional(20.0),
         Color32::from_rgb(255, 220, 90),
     );
+    painter.text(
+        egui::pos2(area.right() - 20.0, area.top() + 42.0),
+        Align2::RIGHT_CENTER,
+        format!("🏆 {score}"),
+        FontId::proportional(16.0),
+        Color32::from_rgb(150, 220, 255),
+    );
     if let Some(t) = time {
         painter.text(
-            egui::pos2(area.right() - 20.0, area.top() + 42.0),
+            egui::pos2(area.right() - 20.0, area.top() + 64.0),
             Align2::RIGHT_CENTER,
             format!("⏱ {t:.1}s"),
             FontId::proportional(16.0),
@@ -1766,13 +1777,18 @@ fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
 
 /// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
 /// Renvoie `true` s'il est cliqué (pour relancer la partie, y compris sur APK).
-fn restart_button(ctx: &egui::Context, area: egui::Rect) -> bool {
+fn restart_button(ctx: &egui::Context, area: egui::Rect, won: bool) -> bool {
     let mut clicked = false;
+    let label = if won {
+        "➡ Niveau suivant"
+    } else {
+        "🔄 Rejouer"
+    };
     egui::Area::new("restart_btn".into())
-        .fixed_pos(egui::pos2(area.center().x - 75.0, area.center().y + 40.0))
+        .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y + 40.0))
         .show(ctx, |ui| {
-            let btn = egui::Button::new(egui::RichText::new("🔄 Rejouer").size(20.0));
-            if ui.add_sized([150.0, 46.0], btn).clicked() {
+            let btn = egui::Button::new(egui::RichText::new(label).size(20.0));
+            if ui.add_sized([170.0, 46.0], btn).clicked() {
                 clicked = true;
             }
         });
@@ -1902,6 +1918,7 @@ fn build_ui(
     view_rect: &mut (f32, f32, f32, f32),
     hud_health: Option<f32>,
     game_time: Option<f32>,
+    score: u32,
     lost: bool,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
@@ -2570,7 +2587,7 @@ fn build_ui(
         health_bar(root.ctx(), play_rect, h);
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
-        collectibles_hud(root.ctx(), play_rect, c, t, game_time);
+        collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);
     }
     if *playing && lost {
         lose_banner(root.ctx(), play_rect);
@@ -2578,7 +2595,7 @@ fn build_ui(
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
     if *playing {
         let won = matches!(scene.collectibles(), Some((c, t)) if c == t && t > 0);
-        if (won || lost) && restart_button(root.ctx(), play_rect) {
+        if (won || lost) && restart_button(root.ctx(), play_rect, won) {
             actions.restart = true;
         }
     }

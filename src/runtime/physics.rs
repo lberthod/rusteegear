@@ -141,7 +141,9 @@ impl Physics {
     /// Pilote un objet (corps `controlled`) : fixe la vitesse horizontale (joystick/gyro)
     /// et déclenche un saut si demandé **et** que l'objet est au sol. La vitesse verticale
     /// est sinon conservée (gravité). `jump_speed` = vitesse initiale du saut (m/s).
-    pub fn control(&mut self, index: usize, vx: f32, vz: f32, jump: bool, jump_speed: f32) {
+    /// Renvoie `true` si un **saut** a effectivement été déclenché (objet au sol).
+    pub fn control(&mut self, index: usize, vx: f32, vz: f32, jump: bool, jump_speed: f32) -> bool {
+        let mut jumped = false;
         for &(i, handle) in &self.controlled {
             if i != index {
                 continue;
@@ -150,10 +152,13 @@ impl Physics {
                 let cur = body.linvel();
                 // Au sol : vitesse verticale quasi nulle (heuristique simple, sans raycast).
                 let grounded = cur.y.abs() < 1.0;
-                let vy = if jump && grounded { jump_speed } else { cur.y };
+                let do_jump = jump && grounded;
+                let vy = if do_jump { jump_speed } else { cur.y };
                 body.set_linvel(Vector::new(vx, vy, vz), true);
+                jumped |= do_jump;
             }
         }
+        jumped
     }
 
     /// Avance la simulation de `dt` et recopie les poses des corps dynamiques.

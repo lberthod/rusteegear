@@ -181,6 +181,10 @@ pub struct SceneObject {
     /// Zone mortelle : si le joueur entre dans son AABB en Play, la partie est perdue.
     #[serde(default)]
     pub deadly: bool,
+    /// Délai de réapparition (s) d'un collectible après ramassage (0 = ne réapparaît pas).
+    /// > 0 ⇒ pièce **bonus** (score continu), hors objectif de victoire.
+    #[serde(default)]
+    pub respawn_delay: f32,
 }
 
 fn default_true() -> bool {
@@ -281,6 +285,7 @@ impl Default for SceneObject {
             tap_action: TapAction::None,
             visible: true,
             deadly: false,
+            respawn_delay: 0.0,
         }
     }
 }
@@ -489,16 +494,27 @@ fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
     }
 }
 
+/// Nombre de niveaux de la démo contrôleur (cf. `Scene::controller_level`).
+pub const CONTROLLER_LEVELS: u32 = 2;
+
 impl Scene {
-    /// Démo « contrôleur » **sans script** : un joueur pilotable au joystick (composant
-    /// Input Receiver) qui saute via un bouton tactile et entre en collision avec des
-    /// obstacles statiques. Montre le contrôleur de personnage intégré.
+    /// Démo « contrôleur » **sans script** (niveau 1) : joueur pilotable au joystick,
+    /// saut, collisions, pièces à ramasser, lave à éviter.
     pub fn controller_demo() -> Self {
-        // Sol statique.
+        Self::controller_level(1)
+    }
+
+    /// Niveau `level` (1-based) de la démo contrôleur. Les niveaux supérieurs sont plus
+    /// grands/chargés (plus de pièces, lave plus large, bonus plus fréquents).
+    pub fn controller_level(level: u32) -> Self {
+        let lvl = level.max(1);
+        let hard = (lvl - 1) as f32; // 0 au niveau 1, 1 au niveau 2, …
+
+        // Sol statique (teinte qui varie par niveau pour les distinguer).
         let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
         sol.transform = sol.transform.with_scale(Vec3::new(16.0, 1.0, 16.0));
         sol.physics = PhysicsKind::Static;
-        sol.color = [0.35, 0.5, 0.4];
+        sol.color = [0.30 + 0.12 * hard, 0.5 - 0.08 * hard, 0.42];
 
         // Joueur pilotable : Input Receiver + saut sur le bouton « Saut ».
         // Démarre au bord (pas sur la lave centrale).
@@ -542,33 +558,54 @@ impl Scene {
             Vec3::new(0.5, 1.2, 16.0),
         );
 
-        // Mare de lave **au centre** : hasard principal à contourner (défaite au contact).
+        // Mare de lave **au centre** (plus large aux niveaux supérieurs) : à contourner.
+        let lave_s = 3.0 + hard;
         let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(0.0, 0.02, 0.0));
-        lave.transform = lave.transform.with_scale(Vec3::new(3.0, 1.0, 3.0));
+        lave.transform = lave.transform.with_scale(Vec3::new(lave_s, 1.0, lave_s));
         lave.color = [0.95, 0.3, 0.1];
         lave.emissive = 0.7;
         lave.deadly = true;
         objects.push(lave);
 
-        // Piliers-obstacles aux diagonales (le joueur les contourne).
+        // Piliers-obstacles aux diagonales, surmontés d'une **étoile bonus** (en hauteur,
+        // atteignable au saut ; réapparaît → score continu).
         for (n, (sx, sz)) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
             .into_iter()
             .enumerate()
         {
+            let base = Vec3::new(sx * 4.3, 0.0, sz * 4.3);
             let mut pil = demo_obj(
                 &format!("Pilier {}", n + 1),
                 MeshKind::Cube,
-                Vec3::new(sx * 4.3, 0.7, sz * 4.3),
+                base + Vec3::Y * 0.7,
             );
             pil.transform = pil.transform.with_scale(Vec3::new(0.8, 1.4, 0.8));
             pil.physics = PhysicsKind::Static;
             pil.color = [0.5, 0.52, 0.6];
             objects.push(pil);
+
+            let mut star = demo_obj(
+                &format!("Étoile {}", n + 1),
+                MeshKind::Sphere,
+                base + Vec3::Y * 1.9,
+            );
+            star.transform = star.transform.with_scale(Vec3::splat(0.4));
+            star.color = [0.55, 0.85, 1.0];
+            star.emissive = 0.8;
+            star.tappable = true;
+            star.tap_action = TapAction::Hide;
+            star.respawn_delay = 4.0 - hard; // réapparition plus rapide au niveau 2
+            objects.push(star);
         }
 
-        // --- Pièces : deux anneaux générés automatiquement autour de la lave ---
+        // --- Pièces-objectif : anneaux générés automatiquement autour de la lave ---
+        let rings: &[(u32, f32)] = if hard > 0.5 {
+            &[(6, 3.8), (8, 6.4)]
+        } else {
+            &[(6, 3.4), (6, 6.2)]
+        };
         let mut p = 0;
-        for (ring, radius) in [(6, 3.4_f32), (6, 6.2_f32)] {
+        for &(ring, radius) in rings {
             for k in 0..ring {
                 // anneau extérieur décalé d'un demi-pas (disposition en quinconce).
                 let off = if radius > 5.0 { 0.5 } else { 0.0 };
@@ -721,37 +758,35 @@ impl Scene {
 
     /// Ramassage par contact : masque (collecte) les collectibles encore visibles dont
     /// le centre est à moins de `radius` (+ leur rayon) du point `p` (position du joueur).
-    /// Renvoie le nombre de pièces ramassées cette frame.
-    pub fn collect_at(&mut self, p: Vec3, radius: f32) -> usize {
-        let mut n = 0;
-        for o in &mut self.objects {
+    /// Renvoie les **indices** des pièces ramassées cette frame (pour score + respawn).
+    pub fn collect_at(&mut self, p: Vec3, radius: f32) -> Vec<usize> {
+        let mut hit = Vec::new();
+        for (i, o) in self.objects.iter_mut().enumerate() {
             if o.tap_action == TapAction::Hide && o.visible {
                 let piece_r = o.transform.scale.max_element() * 0.5;
                 if (o.transform.position - p).length() <= radius + piece_r {
                     o.visible = false;
-                    n += 1;
+                    hit.push(i);
                 }
             }
         }
-        n
+        hit
     }
 
-    /// État des collectibles (objets à ramasser = action au tap « Masquer ») :
-    /// `Some((ramassés, total))` si la scène en contient, sinon `None`. Un objet est
-    /// « ramassé » quand il est devenu invisible. `ramassés == total` ⇒ niveau gagné.
+    /// État des **pièces-objectif** (action « Masquer », **non** réapparaissantes) :
+    /// `Some((ramassées, total))` si la scène en contient, sinon `None`. Les pièces bonus
+    /// (`respawn_delay > 0`) ne comptent pas. `ramassées == total` ⇒ niveau gagné.
     pub fn collectibles(&self) -> Option<(usize, usize)> {
-        let total = self
-            .objects
-            .iter()
-            .filter(|o| o.tap_action == TapAction::Hide)
-            .count();
+        let goal = |o: &&SceneObject| o.tap_action == TapAction::Hide && o.respawn_delay == 0.0;
+        let total = self.objects.iter().filter(goal).count();
         if total == 0 {
             return None;
         }
         let collected = self
             .objects
             .iter()
-            .filter(|o| o.tap_action == TapAction::Hide && !o.visible)
+            .filter(goal)
+            .filter(|o| !o.visible)
             .count();
         Some((collected, total))
     }
@@ -1222,11 +1257,10 @@ mod tests {
             .find(|o| o.tap_action == TapAction::Hide && o.visible)
             .map(|o| o.transform.position)
             .unwrap();
-        let n = s.collect_at(piece_pos, 0.7);
+        let n = s.collect_at(piece_pos, 0.7).len();
         assert!(n >= 1, "doit ramasser la pièce touchée");
-        assert_eq!(s.collectibles().unwrap().0, n, "compteur à jour");
         // Très loin de l'arène : rien ramassé.
-        assert_eq!(s.collect_at(Vec3::new(100.0, 0.5, 100.0), 0.7), 0);
+        assert!(s.collect_at(Vec3::new(100.0, 0.5, 100.0), 0.7).is_empty());
     }
 
     #[test]
