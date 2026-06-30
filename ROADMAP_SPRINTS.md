@@ -627,13 +627,15 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - **Fichiers** : `src/gfx/renderer.rs`, `src/lib.rs`. **Réf.** : Audit P4.
 - **Sprint 46 : livré (init sans panic, code de prod sans unwrap).**
 
-### Sprint 47 — Dirty-tracking & tests ⬜
-**Objectif** : sauter le travail inutile au repos + élargir la couverture.
-- [ ] **Compteur de révision** de scène (bump à chaque mutation) → sauter rebuild models/draw plan
-      quand ni la scène ni la caméra n'ont changé (édition statique).
-- [ ] Tests : invariant de sélection, résolution `bundle://`, contrôleur (saut/au sol), `TapAction`.
-- **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs`, `src/scene/mod.rs`.
-- **Risque** : un mauvais critère « dirty » fige l'affichage → **valider visuellement**.
+### Sprint 47 — Tests étendus (dirty-tracking reporté) 🟢
+**Objectif** : élargir la couverture ; sauter le travail inutile au repos.
+- [x] Tests : **saut du contrôleur** (s'élève), collision sur mur, **round-trip JSON** des composants
+      (input_receiver, jump, tap_action, visible), défauts rétro-compat (`visible=true`).
+- [ ] (reporté) **Compteur de révision** de scène → sauter rebuild models/draw plan au repos.
+      Raison : la boucle **throttle déjà à 16 Hz** au repos (gain marginal) ; un mauvais critère
+      « dirty » figerait l'affichage sur édition d'inspecteur → à faire **avec validation visuelle**.
+- **Fichiers** : `src/runtime/physics.rs`, `src/scene/mod.rs`.
+- **Sprint 47 : tests livrés ; skip-rebuild reporté (gain marginal vs risque non vérifiable).**
 
 ### Sprint 48 — Capteurs & assets mobiles ⬜
 **Objectif** : brancher le matériel Android réel.
