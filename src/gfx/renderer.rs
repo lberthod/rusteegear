@@ -178,12 +178,20 @@ impl Renderer {
         let backend = format!("{:?}", adapter.get_info().backend);
 
         let caps = surface.get_capabilities(&adapter);
+        // GPU dégénéré (surface incompatible) : `caps.formats`/`alpha_modes` peuvent être
+        // vides → on remonte une erreur claire au lieu de paniquer en indexant `[0]`.
         let format = caps
             .formats
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+            .ok_or_else(|| "Aucun format de surface supporté par le GPU".to_string())?;
+        let alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .ok_or_else(|| "Aucun mode alpha de surface supporté par le GPU".to_string())?;
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -192,7 +200,7 @@ impl Renderer {
             height: size.height.max(1),
             // Fifo (vsync) : cale le rendu sur l'écran, fluide et peu gourmand.
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
