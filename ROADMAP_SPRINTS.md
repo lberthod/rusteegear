@@ -619,11 +619,13 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - **Fichiers** : `src/app/mod.rs` (`advance_play`/`sim_step`/`fixed_substeps`).
 - **Sprint 45 : livré (pas fixe + cap + test framerate-indépendant) ; interpolation de rendu = évolution.**
 
-### Sprint 46 — Durcir l'initialisation ⬜
+### Sprint 46 — Durcir l'initialisation 🟢
 **Objectif** : éviter les crashs froids, surtout sur mobile.
-- [ ] Propager les `Result` d'init GPU/fenêtre + `log::error!` au lieu de `panic!`/`unwrap()`.
-- [ ] Recenser et réduire les `unwrap()`/`expect()` du chemin critique (création surface, pipelines).
+- [x] Init GPU/fenêtre/resume entièrement sur `Result` + `match` + `log::error!` + `exit` (déjà en place, vérifié).
+- [x] Caps de surface vides (`formats`/`alpha_modes`) → erreur propre au lieu d'indexer `[0]` (panic).
+- [x] Audit : **0 `unwrap()`/`expect()` en code de production** (tous confinés aux tests) ; lookup texture par défaut sûr.
 - **Fichiers** : `src/gfx/renderer.rs`, `src/lib.rs`. **Réf.** : Audit P4.
+- **Sprint 46 : livré (init sans panic, code de prod sans unwrap).**
 
 ### Sprint 47 — Dirty-tracking & tests ⬜
 **Objectif** : sauter le travail inutile au repos + élargir la couverture.
