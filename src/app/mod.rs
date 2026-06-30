@@ -107,6 +107,8 @@ pub struct AppState {
     pub input_state: PlayerInput,
     /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
     tapped_obj: Option<usize>,
+    /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
+    sim_accumulator: f32,
     /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
     pub device_preview: bool,
     /// Orientation de l'aperçu mobile (portrait par défaut).
@@ -242,6 +244,7 @@ impl AppState {
             player: false,
             input_state: PlayerInput::default(),
             tapped_obj: None,
+            sim_accumulator: 0.0,
             device_preview: false,
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
@@ -1470,14 +1473,42 @@ impl AppState {
             self.clear_selection();
             self.audio.stop_all();
         }
+        if self.playing && !self.was_playing {
+            // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale).
+            self.sim_accumulator = 0.0;
+        }
         self.was_playing = self.playing;
 
         // En pause : on reste en mode Play (snapshot conservé) mais on gèle la
         // simulation (ni scripts, ni physique, ni avance du temps).
         if !self.playing || self.paused {
+            self.sim_accumulator = 0.0;
             return;
         }
 
+        // --- Simulation découplée du rendu : pas de temps FIXE (Sprint 45) ---
+        // On accumule le temps réel écoulé et on simule par incréments fixes, quel que
+        // soit le framerate → physique et scripts déterministes, indépendants du FPS.
+        const FIXED_DT: f32 = 1.0 / 60.0;
+        const MAX_SUBSTEPS: u32 = 5;
+        let (steps, acc) = fixed_substeps(self.sim_accumulator, dt, FIXED_DT, MAX_SUBSTEPS);
+        self.sim_accumulator = acc;
+        for _ in 0..steps {
+            self.sim_step(FIXED_DT);
+        }
+
+        // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
+        if self.scene.camera_follow
+            && let Some(p) = self.player_position()
+        {
+            let t = (dt * 6.0).min(1.0);
+            self.camera.target = self.camera.target.lerp(p, t);
+        }
+    }
+
+    /// Un pas de simulation à **dt fixe** : scripts Lua, actions au tap, pilotage des
+    /// objets pilotables et pas de physique. Appelé 0..N fois par frame (cf. `advance_play`).
+    fn sim_step(&mut self, dt: f32) {
         // 1. scripts
         self.time += dt;
         let time = self.time;
@@ -1581,14 +1612,6 @@ impl AppState {
                 phys.control(idx, vx, vz, jump, jump_speed);
             }
             phys.step(dt, &mut self.scene);
-        }
-
-        // 3. caméra qui suit le joueur (objet pilotable, sinon scripté) en douceur.
-        if self.scene.camera_follow
-            && let Some(p) = self.player_position()
-        {
-            let t = (dt * 6.0).min(1.0);
-            self.camera.target = self.camera.target.lerp(p, t);
         }
     }
 
@@ -1820,6 +1843,23 @@ fn script_key(src: &str) -> u64 {
     h.finish()
 }
 
+/// Cadence à pas fixe : ajoute le temps de la frame à l'accumulateur (borné contre la
+/// « spirale de la mort »), puis renvoie le nombre de sous-pas de `fixed_dt` à exécuter
+/// et l'accumulateur restant. Au-delà de `max` sous-pas, le reliquat est jeté (pas de
+/// retard accumulé sur une machine trop lente).
+fn fixed_substeps(accumulator: f32, frame_dt: f32, fixed_dt: f32, max: u32) -> (u32, f32) {
+    let mut acc = accumulator + frame_dt.min(0.25);
+    let mut steps = 0;
+    while acc >= fixed_dt && steps < max {
+        acc -= fixed_dt;
+        steps += 1;
+    }
+    if steps == max {
+        acc = 0.0;
+    }
+    (steps, acc)
+}
+
 /// Exécute le chunk Lua **déjà compilé** d'un objet : expose `obj` (x,y,z,
 /// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped), `dt`, `time` et `input`, puis relit
 /// les champs modifiés.
@@ -1964,6 +2004,29 @@ fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_substeps_is_framerate_independent() {
+        let fixed = 1.0 / 60.0;
+        // 60 FPS : 1 frame = 1 pas, reliquat ~0.
+        let (n, acc) = fixed_substeps(0.0, fixed, fixed, 5);
+        assert_eq!(n, 1);
+        assert!(acc.abs() < 1e-6);
+        // 30 FPS : une frame longue = 2 pas fixes (rattrapage).
+        let (n, _) = fixed_substeps(0.0, 1.0 / 30.0, fixed, 5);
+        assert_eq!(n, 2);
+        // 120 FPS : frame trop courte → 0 pas, le temps s'accumule.
+        let (n, acc) = fixed_substeps(0.0, 1.0 / 120.0, fixed, 5);
+        assert_eq!(n, 0);
+        assert!(acc > 0.0);
+        // Deux frames à 120 FPS finissent par produire un pas.
+        let (n2, _) = fixed_substeps(acc, 1.0 / 120.0, fixed, 5);
+        assert_eq!(n2, 1);
+        // Gel long : borné par le cap (pas de spirale), accumulateur remis à 0.
+        let (n, acc) = fixed_substeps(0.0, 5.0, fixed, 5);
+        assert_eq!(n, 5);
+        assert_eq!(acc, 0.0);
+    }
 
     /// Invariant : la primaire (si présente) appartient toujours à l'ensemble sélectionné.
     fn assert_selection_invariant(app: &AppState) {
