@@ -1532,6 +1532,10 @@ impl AppState {
                 self.sim_step(FIXED_DT);
             }
 
+            // Ramassage par contact : le joueur récupère les pièces qu'il traverse.
+            if let Some(p) = self.player_position() {
+                self.scene.collect_at(p, 0.7);
+            }
             // Défaite : le joueur a touché une zone mortelle.
             if let Some(p) = self.player_position()
                 && self.scene.deadly_at(p)

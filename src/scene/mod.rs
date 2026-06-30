@@ -690,6 +690,23 @@ impl Scene {
             .any(|o| self.world_aabb_contains(o, p))
     }
 
+    /// Ramassage par contact : masque (collecte) les collectibles encore visibles dont
+    /// le centre est à moins de `radius` (+ leur rayon) du point `p` (position du joueur).
+    /// Renvoie le nombre de pièces ramassées cette frame.
+    pub fn collect_at(&mut self, p: Vec3, radius: f32) -> usize {
+        let mut n = 0;
+        for o in &mut self.objects {
+            if o.tap_action == TapAction::Hide && o.visible {
+                let piece_r = o.transform.scale.max_element() * 0.5;
+                if (o.transform.position - p).length() <= radius + piece_r {
+                    o.visible = false;
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
     /// État des collectibles (objets à ramasser = action au tap « Masquer ») :
     /// `Some((ramassés, total))` si la scène en contient, sinon `None`. Un objet est
     /// « ramassé » quand il est devenu invisible. `ramassés == total` ⇒ niveau gagné.
@@ -1163,6 +1180,18 @@ mod tests {
         let mut n = SceneObject::default();
         animate_collectible(&mut n, 1.0);
         assert!(angle(&n) < 1e-6);
+    }
+
+    #[test]
+    fn collect_at_picks_up_touched_pieces() {
+        let mut s = Scene::controller_demo();
+        assert_eq!(s.collectibles().unwrap().0, 0, "rien au départ");
+        // Une pièce de l'anneau est en (rayon 5, angle 0) = (5, 0.5, 0) ; on s'y place.
+        let n = s.collect_at(Vec3::new(5.0, 0.5, 0.0), 0.7);
+        assert!(n >= 1, "doit ramasser la pièce touchée");
+        assert_eq!(s.collectibles().unwrap().0, n, "compteur à jour");
+        // Loin de toute pièce (centre vide) : rien ramassé.
+        assert_eq!(s.collect_at(Vec3::new(0.0, 0.5, 0.0), 0.7), 0);
     }
 
     #[test]
