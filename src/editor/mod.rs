@@ -203,6 +203,7 @@ impl Editor {
         device_portrait: bool,
         hud_health: Option<f32>,
         game_time: Option<f32>,
+        lost: bool,
     ) -> egui::FullOutput {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -218,6 +219,9 @@ impl Editor {
             }
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time);
+            }
+            if lost {
+                lose_banner(ctx, area);
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
@@ -254,6 +258,7 @@ impl Editor {
         view_rect: &mut (f32, f32, f32, f32),
         hud_health: Option<f32>,
         game_time: Option<f32>,
+        lost: bool,
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -285,6 +290,7 @@ impl Editor {
                 view_rect,
                 hud_health,
                 game_time,
+                lost,
                 &status,
                 export,
                 hier_filter,
@@ -1733,6 +1739,22 @@ fn collectibles_hud(
     }
 }
 
+/// Bannière de défaite « 💀 Perdu ! » au centre de la zone de jeu.
+fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_lose"),
+    ));
+    painter.text(
+        area.center(),
+        Align2::CENTER_CENTER,
+        "💀 Perdu !",
+        FontId::proportional(44.0),
+        Color32::from_rgb(230, 90, 80),
+    );
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -1856,6 +1878,7 @@ fn build_ui(
     view_rect: &mut (f32, f32, f32, f32),
     hud_health: Option<f32>,
     game_time: Option<f32>,
+    lost: bool,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -2280,6 +2303,10 @@ fn build_ui(
                             .response
                             .on_hover_text("Comportement sans script quand on tape l'objet");
                         }
+                        ui.checkbox(&mut obj.deadly, "💀 Zone mortelle")
+                            .on_hover_text(
+                                "En Play, la partie est perdue si le joueur entre dans son AABB",
+                            );
                         ui.checkbox(&mut obj.trigger, "🎯 Zone de déclenchement")
                             .on_hover_text(
                                 "En Play, expose obj.triggered au script quand le joueur entre dans sa zone",
@@ -2520,6 +2547,9 @@ fn build_ui(
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(root.ctx(), play_rect, c, t, game_time);
+    }
+    if *playing && lost {
+        lose_banner(root.ctx(), play_rect);
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);

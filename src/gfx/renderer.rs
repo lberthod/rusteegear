@@ -841,6 +841,7 @@ impl Renderer {
         //    dessine quand même les contrôles tactiles (joystick + boutons).
         // Calculé avant les appels mutant `app` (évite un conflit d'emprunt au site d'appel).
         let game_time = app.hud_timer();
+        let lost = app.is_lost();
         let full_output = if app.player {
             if app.scene.mobile.any() {
                 Some(self.editor.run_player_overlay(
@@ -851,6 +852,7 @@ impl Renderer {
                     app.device_portrait,
                     app.hud_health,
                     game_time,
+                    lost,
                 ))
             } else {
                 None
@@ -878,6 +880,7 @@ impl Renderer {
                 &mut app.view_rect_px,
                 app.hud_health,
                 game_time,
+                lost,
                 status,
             );
             if actions.save {

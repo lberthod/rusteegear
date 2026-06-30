@@ -178,6 +178,9 @@ pub struct SceneObject {
     /// Objet visible au rendu (mis à false par l'action « Masquer » ; rétabli à l'arrêt).
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// Zone mortelle : si le joueur entre dans son AABB en Play, la partie est perdue.
+    #[serde(default)]
+    pub deadly: bool,
 }
 
 fn default_true() -> bool {
@@ -277,6 +280,7 @@ impl Default for SceneObject {
             jump_height: default_jump_height(),
             tap_action: TapAction::None,
             visible: true,
+            deadly: false,
         }
     }
 }
@@ -514,8 +518,15 @@ impl Scene {
         caisse.physics = PhysicsKind::Static;
         caisse.color = [0.7, 0.5, 0.3];
 
+        // Zone mortelle (lave) : à éviter, sinon partie perdue.
+        let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(0.0, 0.02, 4.0));
+        lave.transform = lave.transform.with_scale(Vec3::new(3.0, 1.0, 2.0));
+        lave.color = [0.9, 0.25, 0.1];
+        lave.emissive = 0.6;
+        lave.deadly = true;
+
         // Collectibles : petites sphères jaunes à ramasser (tap → masquer).
-        let mut objects = vec![sol, joueur, mur, caisse];
+        let mut objects = vec![sol, joueur, mur, caisse, lave];
         for (n, pos) in [
             Vec3::new(2.0, 0.4, 2.0),
             Vec3::new(-2.0, 0.4, -2.0),
@@ -631,6 +642,32 @@ impl Scene {
                 (m.aabb_min, m.aabb_max)
             }
         }
+    }
+
+    /// Le point monde `p` est-il dans l'AABB monde de l'objet `o` ?
+    pub fn world_aabb_contains(&self, o: &SceneObject, p: Vec3) -> bool {
+        let (lmin, lmax) = self.local_aabb(o.mesh);
+        let m = o.transform.matrix();
+        let mut wmin = Vec3::splat(f32::INFINITY);
+        let mut wmax = Vec3::splat(f32::NEG_INFINITY);
+        for sx in [lmin.x, lmax.x] {
+            for sy in [lmin.y, lmax.y] {
+                for sz in [lmin.z, lmax.z] {
+                    let q = (m * Vec3::new(sx, sy, sz).extend(1.0)).truncate();
+                    wmin = wmin.min(q);
+                    wmax = wmax.max(q);
+                }
+            }
+        }
+        p.cmpge(wmin).all() && p.cmple(wmax).all()
+    }
+
+    /// Le point `p` (position du joueur) touche-t-il une zone mortelle ?
+    pub fn deadly_at(&self, p: Vec3) -> bool {
+        self.objects
+            .iter()
+            .filter(|o| o.deadly)
+            .any(|o| self.world_aabb_contains(o, p))
     }
 
     /// État des collectibles (objets à ramasser = action au tap « Masquer ») :
@@ -1060,6 +1097,28 @@ mod tests {
         );
         assert_eq!(s.objects[0].tap_action, TapAction::None);
         assert!((s.objects[0].jump_height - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn deadly_zone_detects_player() {
+        let mut zone = SceneObject {
+            mesh: MeshKind::Cube,
+            transform: Transform::from_pos(Vec3::new(0.0, 0.0, 0.0)).with_scale(Vec3::splat(2.0)),
+            deadly: true,
+            ..Default::default()
+        };
+        zone.name = "Piège".into();
+        let s = Scene {
+            objects: vec![zone],
+            ..Default::default()
+        };
+        assert!(s.deadly_at(Vec3::ZERO), "le centre touche la zone");
+        assert!(
+            !s.deadly_at(Vec3::new(10.0, 0.0, 0.0)),
+            "loin = pas de contact"
+        );
+        // La démo contrôleur a bien une zone mortelle.
+        assert!(Scene::controller_demo().objects.iter().any(|o| o.deadly));
     }
 
     #[test]

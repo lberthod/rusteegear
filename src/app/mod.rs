@@ -111,6 +111,8 @@ pub struct AppState {
     sim_accumulator: f32,
     /// Temps de jeu (s) auquel tous les collectibles ont été ramassés (figé pour le HUD).
     win_time: Option<f32>,
+    /// Partie perdue : le joueur a touché une zone mortelle (fige le jeu jusqu'au Stop).
+    lost: bool,
     /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
     pub device_preview: bool,
     /// Orientation de l'aperçu mobile (portrait par défaut).
@@ -248,6 +250,7 @@ impl AppState {
             tapped_obj: None,
             sim_accumulator: 0.0,
             win_time: None,
+            lost: false,
             device_preview: false,
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
@@ -1474,6 +1477,7 @@ impl AppState {
             self.paused = false;
             self.hud_health = None;
             self.win_time = None;
+            self.lost = false;
             self.clear_selection();
             self.audio.stop_all();
         }
@@ -1481,6 +1485,7 @@ impl AppState {
             // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale).
             self.sim_accumulator = 0.0;
             self.win_time = None;
+            self.lost = false;
             self.time = 0.0;
         }
         self.was_playing = self.playing;
@@ -1497,18 +1502,27 @@ impl AppState {
         // soit le framerate → physique et scripts déterministes, indépendants du FPS.
         const FIXED_DT: f32 = 1.0 / 60.0;
         const MAX_SUBSTEPS: u32 = 5;
-        let (steps, acc) = fixed_substeps(self.sim_accumulator, dt, FIXED_DT, MAX_SUBSTEPS);
-        self.sim_accumulator = acc;
-        for _ in 0..steps {
-            self.sim_step(FIXED_DT);
-        }
+        // Partie perdue : on gèle toute la simulation jusqu'au Stop.
+        if !self.lost {
+            let (steps, acc) = fixed_substeps(self.sim_accumulator, dt, FIXED_DT, MAX_SUBSTEPS);
+            self.sim_accumulator = acc;
+            for _ in 0..steps {
+                self.sim_step(FIXED_DT);
+            }
 
-        // Victoire : fige le chrono au moment où tous les collectibles sont ramassés.
-        if self.win_time.is_none()
-            && let Some((c, t)) = self.scene.collectibles()
-            && c == t
-        {
-            self.win_time = Some(self.time);
+            // Défaite : le joueur a touché une zone mortelle.
+            if let Some(p) = self.player_position()
+                && self.scene.deadly_at(p)
+            {
+                self.lost = true;
+            }
+            // Victoire : fige le chrono quand tous les collectibles sont ramassés.
+            if self.win_time.is_none()
+                && let Some((c, t)) = self.scene.collectibles()
+                && c == t
+            {
+                self.win_time = Some(self.time);
+            }
         }
 
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
@@ -1633,22 +1647,14 @@ impl AppState {
         }
     }
 
-    /// Le point `p` est-il dans l'AABB monde de l'objet `o` ?
+    /// Le point `p` est-il dans l'AABB monde de l'objet `o` ? (délègue à la scène)
     fn world_aabb_contains(&self, o: &SceneObject, p: Vec3) -> bool {
-        let (lmin, lmax) = self.scene.local_aabb(o.mesh);
-        let m = o.transform.matrix();
-        let mut wmin = Vec3::splat(f32::INFINITY);
-        let mut wmax = Vec3::splat(f32::NEG_INFINITY);
-        for sx in [lmin.x, lmax.x] {
-            for sy in [lmin.y, lmax.y] {
-                for sz in [lmin.z, lmax.z] {
-                    let q = (m * Vec3::new(sx, sy, sz).extend(1.0)).truncate();
-                    wmin = wmin.min(q);
-                    wmax = wmax.max(q);
-                }
-            }
-        }
-        p.cmpge(wmin).all() && p.cmple(wmax).all()
+        self.scene.world_aabb_contains(o, p)
+    }
+
+    /// La partie est-elle perdue (joueur entré dans une zone mortelle) ?
+    pub fn is_lost(&self) -> bool {
+        self.lost
     }
 
     /// Temps à afficher au HUD chrono : figé à la victoire, sinon temps de jeu courant.

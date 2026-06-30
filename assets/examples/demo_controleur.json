@@ -46,7 +46,8 @@
       "jump_button": "",
       "jump_height": 1.5,
       "tap_action": "None",
-      "visible": true
+      "visible": true,
+      "deadly": false
     },
     {
       "name": "Joueur",
@@ -94,7 +95,8 @@
       "jump_button": "Saut",
       "jump_height": 1.6,
       "tap_action": "None",
-      "visible": true
+      "visible": true,
+      "deadly": false
     },
     {
       "name": "Mur",
@@ -142,7 +144,8 @@
       "jump_button": "",
       "jump_height": 1.5,
       "tap_action": "None",
-      "visible": true
+      "visible": true,
+      "deadly": false
     },
     {
       "name": "Caisse",
@@ -190,7 +193,57 @@
       "jump_button": "",
       "jump_height": 1.5,
       "tap_action": "None",
-      "visible": true
+      "visible": true,
+      "deadly": false
+    },
+    {
+      "name": "Lave",
+      "transform": {
+        "position": [
+          0.0,
+          0.02,
+          4.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          3.0,
+          1.0,
+          2.0
+        ]
+      },
+      "mesh": "Plane",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.9,
+        0.25,
+        0.1
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.6,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": true
     },
     {
       "name": "Gemme 1",
@@ -238,7 +291,8 @@
       "jump_button": "",
       "jump_height": 1.5,
       "tap_action": "Hide",
-      "visible": true
+      "visible": true,
+      "deadly": false
     },
     {
       "name": "Gemme 2",
@@ -286,7 +340,8 @@
       "jump_button": "",
       "jump_height": 1.5,
       "tap_action": "Hide",
-      "visible": true
+      "visible": true,
+      "deadly": false
     },
     {
       "name": "Gemme 3",
@@ -334,7 +389,8 @@
       "jump_button": "",
       "jump_height": 1.5,
       "tap_action": "Hide",
-      "visible": true
+      "visible": true,
+      "deadly": false
     }
   ],
   "imported": [],
