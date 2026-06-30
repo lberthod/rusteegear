@@ -952,6 +952,15 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Charge la démo « contrôleur » : joueur pilotable au joystick + saut, sans script.
+    pub fn load_controller_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::controller_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.clear_selection();
+    }
+
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
     pub fn new_scene(&mut self) {
         self.push_undo();
@@ -1486,19 +1495,7 @@ impl AppState {
         };
         let mut vibrations: Vec<f32> = Vec::new();
         let mut health = self.hud_health;
-        let (joy, tilt) = (self.input_state.joy, self.input_state.tilt);
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
-            // --- Composants mobiles intégrés (Sprint 41), appliqués avant le script ---
-            // Input Receiver : déplacement piloté par le joystick (plan X/Z).
-            if obj.input_receiver {
-                obj.transform.position.x += joy.0 * obj.move_speed * dt;
-                obj.transform.position.z -= joy.1 * obj.move_speed * dt;
-            }
-            // Gyroscope Controller : déplacement piloté par l'inclinaison.
-            if obj.gyro_control {
-                obj.transform.position.x += tilt.0 * obj.move_speed * dt;
-                obj.transform.position.z -= tilt.1 * obj.move_speed * dt;
-            }
             // Vibration Feedback : retour haptique quand l'objet est tapé.
             if obj.vibrate_on_tap > 0 && self.tapped_obj == Some(idx) {
                 vibrations.push(obj.vibrate_on_tap as f32);
@@ -1548,10 +1545,32 @@ impl AppState {
 
         // 2. physique (écrase les poses des corps dynamiques)
         if let Some(phys) = &mut self.physics {
+            // Pilotage des objets « pilotables » : vitesse horizontale (joystick/gyro)
+            // + saut sur bouton. Appliqué avant le pas de simulation.
+            let (joy, tilt) = (self.input_state.joy, self.input_state.tilt);
+            for (idx, obj) in self.scene.objects.iter().enumerate() {
+                if !obj.input_receiver && !obj.gyro_control {
+                    continue;
+                }
+                let mut vx = 0.0;
+                let mut vz = 0.0;
+                if obj.input_receiver {
+                    vx += joy.0 * obj.move_speed;
+                    vz += -joy.1 * obj.move_speed;
+                }
+                if obj.gyro_control {
+                    vx += tilt.0 * obj.move_speed;
+                    vz += -tilt.1 * obj.move_speed;
+                }
+                let jump = !obj.jump_button.is_empty()
+                    && self.input_state.buttons.contains(&obj.jump_button);
+                let jump_speed = (2.0 * 9.81 * obj.jump_height.max(0.0)).sqrt();
+                phys.control(idx, vx, vz, jump, jump_speed);
+            }
             phys.step(dt, &mut self.scene);
         }
 
-        // 3. caméra qui suit le joueur (premier objet scripté) en douceur.
+        // 3. caméra qui suit le joueur (objet pilotable, sinon scripté) en douceur.
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
         {
@@ -1578,12 +1597,19 @@ impl AppState {
         p.cmpge(wmin).all() && p.cmple(wmax).all()
     }
 
-    /// Position du « joueur » : premier objet scripté, sinon premier objet.
+    /// Position du « joueur » : objet pilotable (joystick/gyro) en priorité, sinon
+    /// premier objet scripté, sinon premier objet.
     fn player_position(&self) -> Option<Vec3> {
         self.scene
             .objects
             .iter()
-            .find(|o| !o.script.trim().is_empty())
+            .find(|o| o.input_receiver || o.gyro_control)
+            .or_else(|| {
+                self.scene
+                    .objects
+                    .iter()
+                    .find(|o| !o.script.trim().is_empty())
+            })
             .or_else(|| self.scene.objects.first())
             .map(|o| o.transform.position)
     }

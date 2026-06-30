@@ -97,6 +97,8 @@ pub struct UiActions {
     pub load_demo: bool,
     /// « Démo gameplay » : scène complète (gyro/zone/vie/tap).
     pub load_gameplay: bool,
+    /// « Démo contrôleur » : joueur pilotable au joystick + saut, sans script.
+    pub load_controller: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -610,6 +612,16 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_gameplay = true;
+            ui.close();
+        }
+        if ui
+            .button("🕹  Démo contrôleur (joystick + saut, sans script)")
+            .on_hover_text(
+                "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor",
+            )
+            .clicked()
+        {
+            actions.load_controller = true;
             ui.close();
         }
         if ui
@@ -1865,9 +1877,9 @@ fn build_ui(
         panels.settings = true;
     }
 
-    // --- Barre d'outils rapide ---
+    // --- Barre d'outils rapide (passe à la ligne si la fenêtre est étroite) ---
     egui::Panel::top("toolbar").show_inside(root, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Play / Pause / Stop distincts (style lecteur).
             if !*playing {
                 if ui.button("▶ Play").clicked() {
@@ -1972,25 +1984,24 @@ fn build_ui(
             {
                 actions.toggle_snap = true;
             }
-            // Build APK + Run Device : différenciateurs du moteur, mis en avant à droite.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("📲 Run Device")
-                    .on_hover_text(
-                        "Build Android + installation/lancement sur le téléphone branché (adb)",
-                    )
-                    .clicked()
-                {
-                    actions.run_device = true;
-                }
-                if ui
-                    .selectable_label(export.open, "🤖 Build APK")
-                    .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
-                    .clicked()
-                {
-                    export.open = !export.open;
-                }
-            });
+            // Build APK + Run Device : différenciateurs du moteur (passent à la ligne si étroit).
+            ui.separator();
+            if ui
+                .selectable_label(export.open, "🤖 Build APK")
+                .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
+                .clicked()
+            {
+                export.open = !export.open;
+            }
+            if ui
+                .button("📲 Run Device")
+                .on_hover_text(
+                    "Build Android + installation/lancement sur le téléphone branché (adb)",
+                )
+                .clicked()
+            {
+                actions.run_device = true;
+            }
         });
     });
 
@@ -2130,6 +2141,10 @@ fn build_ui(
                 ui.separator();
                 match *selection {
                     Some(i) if i < scene.objects.len() => {
+                        // Boutons tactiles définis (pour mapper le saut), copiés avant l'emprunt mut.
+                        let mobile_buttons = scene.mobile.buttons.clone();
+                        // Activer le joystick après l'emprunt mut de l'objet (cf. plus bas).
+                        let mut need_joystick = false;
                         let obj = &mut scene.objects[i];
                         ui.horizontal(|ui| {
                             ui.label("Nom");
@@ -2249,8 +2264,17 @@ fn build_ui(
                         ui.separator();
                         ui.collapsing("🧩 Composants mobiles (Android)", |ui| {
                             ui.weak("Touch Area : voir « Tactile » ci-dessus.");
-                            ui.checkbox(&mut obj.input_receiver, "🕹 Input Receiver (joystick)")
-                                .on_hover_text("L'objet se déplace avec le joystick en Play (plan X/Z)");
+                            if ui
+                                .checkbox(&mut obj.input_receiver, "🕹 Input Receiver (joystick)")
+                                .on_hover_text(
+                                    "L'objet se déplace avec le joystick en Play (plan X/Z)",
+                                )
+                                .changed()
+                                && obj.input_receiver
+                            {
+                                // Active le joystick d'office : sans lui, rien à piloter en jeu.
+                                need_joystick = true;
+                            }
                             ui.checkbox(&mut obj.gyro_control, "📐 Gyroscope Controller (tilt)")
                                 .on_hover_text("L'objet se déplace selon l'inclinaison de l'appareil");
                             if obj.input_receiver || obj.gyro_control {
@@ -2258,6 +2282,44 @@ fn build_ui(
                                     ui.label("Vitesse");
                                     ui.add(egui::Slider::new(&mut obj.move_speed, 0.5..=10.0));
                                 });
+                                ui.weak("Pilotable : devient un corps dynamique (collisions + gravité).");
+                                // Saut : choix du bouton tactile déclencheur.
+                                ui.horizontal(|ui| {
+                                    ui.label("🦘 Saut ← bouton");
+                                    let sel = if obj.jump_button.is_empty() {
+                                        "(aucun)".to_string()
+                                    } else {
+                                        obj.jump_button.clone()
+                                    };
+                                    egui::ComboBox::from_id_salt(("jump_btn", i))
+                                        .selected_text(sel)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut obj.jump_button,
+                                                String::new(),
+                                                "(aucun)",
+                                            );
+                                            for b in &mobile_buttons {
+                                                ui.selectable_value(
+                                                    &mut obj.jump_button,
+                                                    b.clone(),
+                                                    b,
+                                                );
+                                            }
+                                        });
+                                });
+                                if mobile_buttons.is_empty() {
+                                    ui.weak("Ajoute un bouton via Ajouter › UI mobile pour le saut.");
+                                }
+                                if !obj.jump_button.is_empty() {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Hauteur");
+                                        ui.add(
+                                            egui::Slider::new(&mut obj.jump_height, 0.3..=5.0)
+                                                .suffix(" m"),
+                                        );
+                                    });
+                                }
                             }
                             ui.horizontal(|ui| {
                                 ui.label("📳 Vibration au tap");
@@ -2355,6 +2417,10 @@ fn build_ui(
                         ui.separator();
                         if ui.button("🗑 Supprimer").clicked() {
                             actions.delete = Some(i);
+                        }
+                        // L'emprunt mut de `obj` est terminé : on peut toucher scene.mobile.
+                        if need_joystick {
+                            scene.mobile.joystick = true;
                         }
                     }
                     _ => {

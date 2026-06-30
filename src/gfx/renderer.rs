@@ -699,12 +699,14 @@ impl Renderer {
             color_int: [0.0; 4],
             spot: [0.0, -1.0, 0.0, -1.0],
         }; crate::scene::MAX_POINT_LIGHTS];
-        let count = app
+        // Culling/LOD : au-delà de la limite, on garde les lumières les plus proches
+        // de la caméra (les plus visibles) plutôt que les premières de la liste.
+        let chosen = app
             .scene
-            .point_lights
-            .len()
-            .min(crate::scene::MAX_POINT_LIGHTS);
-        for (slot, pl) in points.iter_mut().zip(&app.scene.point_lights).take(count) {
+            .nearest_point_lights(eye, crate::scene::MAX_POINT_LIGHTS);
+        let count = chosen.len();
+        for (slot, &li) in points.iter_mut().zip(&chosen) {
+            let pl = &app.scene.point_lights[li];
             slot.pos_range = [
                 pl.position[0],
                 pl.position[1],
@@ -865,6 +867,9 @@ impl Renderer {
             }
             if actions.load_gameplay {
                 app.load_gameplay_demo();
+            }
+            if actions.load_controller {
+                app.load_controller_demo();
             }
             if actions.align_ground {
                 app.align_to_ground();

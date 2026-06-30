@@ -1,0 +1,215 @@
+{
+  "objects": [
+    {
+      "name": "Sol",
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          16.0,
+          1.0,
+          16.0
+        ]
+      },
+      "mesh": "Plane",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.35,
+        0.5,
+        0.4
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5
+    },
+    {
+      "name": "Joueur",
+      "transform": {
+        "position": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Capsule",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.95,
+        0.6,
+        0.25
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": true,
+      "gyro_control": false,
+      "move_speed": 4.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "Saut",
+      "jump_height": 1.6
+    },
+    {
+      "name": "Mur",
+      "transform": {
+        "position": [
+          3.0,
+          0.5,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          4.0
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.5,
+        0.55,
+        0.7
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5
+    },
+    {
+      "name": "Caisse",
+      "transform": {
+        "position": [
+          -2.5,
+          0.5,
+          1.5
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio_clip": "",
+      "audio_autoplay": false,
+      "group": "",
+      "color": [
+        0.7,
+        0.5,
+        0.3
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "audio_spatial": false,
+      "input_receiver": false,
+      "gyro_control": false,
+      "move_speed": 3.0,
+      "vibrate_on_tap": 0,
+      "jump_button": "",
+      "jump_height": 1.5
+    }
+  ],
+  "imported": [],
+  "groups": [],
+  "light": {
+    "dir": [
+      0.5,
+      1.0,
+      0.3
+    ],
+    "color": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ambient": 0.25
+  },
+  "point_lights": [],
+  "mobile": {
+    "joystick": true,
+    "buttons": [
+      "Saut"
+    ],
+    "touch_zone": false,
+    "health_bar": false,
+    "safe_area": false
+  },
+  "camera_follow": true,
+  "game_camera": null
+}

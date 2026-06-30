@@ -166,6 +166,16 @@ pub struct SceneObject {
     /// Vibration Feedback : durée (ms) du retour haptique quand l'objet est tapé (0 = off).
     #[serde(default)]
     pub vibrate_on_tap: u32,
+    /// Nom du bouton tactile qui fait sauter l'objet pilotable (vide = pas de saut).
+    #[serde(default)]
+    pub jump_button: String,
+    /// Hauteur de saut (mètres) de l'objet pilotable.
+    #[serde(default = "default_jump_height")]
+    pub jump_height: f32,
+}
+
+fn default_jump_height() -> f32 {
+    1.5
 }
 
 fn default_move_speed() -> f32 {
@@ -196,6 +206,8 @@ impl Default for SceneObject {
             gyro_control: false,
             move_speed: default_move_speed(),
             vibrate_on_tap: 0,
+            jump_button: String::new(),
+            jump_height: default_jump_height(),
         }
     }
 }
@@ -389,6 +401,46 @@ fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
 }
 
 impl Scene {
+    /// Démo « contrôleur » **sans script** : un joueur pilotable au joystick (composant
+    /// Input Receiver) qui saute via un bouton tactile et entre en collision avec des
+    /// obstacles statiques. Montre le contrôleur de personnage intégré.
+    pub fn controller_demo() -> Self {
+        // Sol statique.
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol.transform.with_scale(Vec3::new(16.0, 1.0, 16.0));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.35, 0.5, 0.4];
+
+        // Joueur pilotable : Input Receiver + saut sur le bouton « Saut ».
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        joueur.color = [0.95, 0.6, 0.25];
+        joueur.input_receiver = true;
+        joueur.move_speed = 4.0;
+        joueur.jump_button = "Saut".into();
+        joueur.jump_height = 1.6;
+
+        // Obstacles statiques : le joueur bute dessus.
+        let mut mur = demo_obj("Mur", MeshKind::Cube, Vec3::new(3.0, 0.5, 0.0));
+        mur.transform = mur.transform.with_scale(Vec3::new(1.0, 1.0, 4.0));
+        mur.physics = PhysicsKind::Static;
+        mur.color = [0.5, 0.55, 0.7];
+
+        let mut caisse = demo_obj("Caisse", MeshKind::Cube, Vec3::new(-2.5, 0.5, 1.5));
+        caisse.physics = PhysicsKind::Static;
+        caisse.color = [0.7, 0.5, 0.3];
+
+        Scene {
+            objects: vec![sol, joueur, mur, caisse],
+            camera_follow: true,
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Démo « gameplay complet » : joueur (joystick + gyroscope + saut + vibration),
     /// zone de danger qui retire de la vie (HUD), et cube tactile qui change de couleur.
     /// Montre toute l'API de script en une scène jouable.
@@ -475,6 +527,26 @@ impl Scene {
                 (m.aabb_min, m.aabb_max)
             }
         }
+    }
+
+    /// Sélectionne les indices des `max` lumières ponctuelles les **plus proches** de
+    /// `cam` (culling/LOD de lumières : seules les plus pertinentes sont envoyées au
+    /// shader quand la scène en compte plus que la limite). Ordre : de la plus proche
+    /// à la plus éloignée. Si le nombre de lumières ≤ `max`, les renvoie toutes dans
+    /// l'ordre d'origine (aucun tri).
+    pub fn nearest_point_lights(&self, cam: Vec3, max: usize) -> Vec<usize> {
+        let n = self.point_lights.len();
+        if n <= max {
+            return (0..n).collect();
+        }
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_by(|&a, &b| {
+            let da = (Vec3::from(self.point_lights[a].position) - cam).length_squared();
+            let db = (Vec3::from(self.point_lights[b].position) - cam).length_squared();
+            da.total_cmp(&db)
+        });
+        idx.truncate(max);
+        idx
     }
 
     /// Recharge la géométrie des meshes importés depuis leurs fichiers (après désérialisation).
@@ -752,6 +824,26 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_point_lights_picks_closest_to_camera() {
+        let mut s = Scene::default();
+        // 3 lumières à x = 0, 5, 10 ; caméra à l'origine.
+        for x in [0.0, 5.0, 10.0] {
+            s.point_lights.push(PointLight {
+                position: [x, 0.0, 0.0],
+                ..PointLight::default()
+            });
+        }
+        // Limite 2 → garde les deux plus proches (x=0 puis x=5), dans l'ordre.
+        let chosen = s.nearest_point_lights(Vec3::ZERO, 2);
+        assert_eq!(chosen, vec![0, 1]);
+        // Caméra près de la 3ᵉ → garde x=10 puis x=5.
+        let chosen = s.nearest_point_lights(Vec3::new(10.0, 0.0, 0.0), 2);
+        assert_eq!(chosen, vec![2, 1]);
+        // Sous la limite → toutes, ordre d'origine (pas de tri).
+        assert_eq!(s.nearest_point_lights(Vec3::ZERO, 8), vec![0, 1, 2]);
+    }
 
     #[test]
     fn transform_matrix_translates_point() {

@@ -245,6 +245,33 @@ impl ExportPanel {
             .default_width(440.0)
             .show(ctx, |ui| {
                 ui.label("Exporte un player jouable du jeu créé (scène embarquée).");
+                // Récap de CE qui sera embarqué : évite de builder la mauvaise scène.
+                let controllable = scene
+                    .objects
+                    .iter()
+                    .filter(|o| o.input_receiver || o.gyro_control)
+                    .count();
+                let scripted = scene
+                    .objects
+                    .iter()
+                    .filter(|o| !o.script.trim().is_empty())
+                    .count();
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.label(egui::RichText::new("📦 Scène embarquée (au Build)").strong());
+                    ui.label(format!(
+                        "{} objet(s) · joystick {} · {} pilotable(s) · {} scripté(s)",
+                        scene.objects.len(),
+                        if scene.mobile.joystick { "ON" } else { "OFF" },
+                        controllable,
+                        scripted,
+                    ));
+                    if controllable == 0 && scripted == 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 170, 60),
+                            "⚠ Aucun objet pilotable ni scripté : rien ne bougera en jeu.",
+                        );
+                    }
+                });
                 ui.add_space(4.0);
 
                 // --- 📱 Application ---
