@@ -842,6 +842,7 @@ impl Renderer {
         // Calculé avant les appels mutant `app` (évite un conflit d'emprunt au site d'appel).
         let game_time = app.hud_timer();
         let lost = app.is_lost();
+        let mut restart = false;
         let full_output = if app.player {
             if app.scene.mobile.any() {
                 Some(self.editor.run_player_overlay(
@@ -853,6 +854,7 @@ impl Renderer {
                     app.hud_health,
                     game_time,
                     lost,
+                    &mut restart,
                 ))
             } else {
                 None
@@ -918,6 +920,9 @@ impl Renderer {
             }
             if actions.load_controller {
                 app.load_controller_demo();
+            }
+            if actions.restart {
+                restart = true;
             }
             if actions.align_ground {
                 app.align_to_ground();
@@ -1011,6 +1016,11 @@ impl Renderer {
             }
             Some(full_output)
         };
+
+        // Bouton « Rejouer » (player ou preview éditeur) : relance la partie en cours.
+        if restart {
+            app.restart_game();
+        }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
         app.advance_play();

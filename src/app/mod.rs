@@ -961,6 +961,28 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Recommence la partie en cours (mode Play) : restaure la scène d'origine,
+    /// reconstruit la physique et remet à zéro chrono/victoire/défaite. Permet de
+    /// « Rejouer » depuis le jeu lui-même (essentiel sur APK, sans bouton Stop éditeur).
+    pub fn restart_game(&mut self) {
+        if self.play_snapshot.is_empty() {
+            return;
+        }
+        self.scene.objects = self.play_snapshot.clone();
+        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        self.time = 0.0;
+        self.sim_accumulator = 0.0;
+        self.win_time = None;
+        self.lost = false;
+        self.hud_health = None;
+        self.tapped_obj = None;
+        if self.scene.camera_follow
+            && let Some(p) = self.player_position()
+        {
+            self.camera.target = p;
+        }
+    }
+
     /// Charge la démo « contrôleur » : joueur pilotable au joystick + saut, sans script.
     pub fn load_controller_demo(&mut self) {
         self.push_undo();
@@ -1502,8 +1524,8 @@ impl AppState {
         // soit le framerate → physique et scripts déterministes, indépendants du FPS.
         const FIXED_DT: f32 = 1.0 / 60.0;
         const MAX_SUBSTEPS: u32 = 5;
-        // Partie perdue : on gèle toute la simulation jusqu'au Stop.
-        if !self.lost {
+        // Jeu figé une fois gagné ou perdu (l'écran de fin attend « Rejouer »).
+        if !self.lost && self.win_time.is_none() {
             let (steps, acc) = fixed_substeps(self.sim_accumulator, dt, FIXED_DT, MAX_SUBSTEPS);
             self.sim_accumulator = acc;
             for _ in 0..steps {
@@ -2322,6 +2344,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vib, vec![80.0]);
+    }
+
+    #[test]
+    fn restart_game_restores_scene_and_clears_flags() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::controller_demo();
+        app.play_snapshot = app.scene.objects.clone();
+        // Simule une partie en cours : une gemme ramassée, perdu, chrono figé.
+        if let Some(g) = app
+            .scene
+            .objects
+            .iter_mut()
+            .find(|o| o.tap_action == crate::scene::TapAction::Hide)
+        {
+            g.visible = false;
+        }
+        app.lost = true;
+        app.win_time = Some(5.0);
+        app.time = 5.0;
+
+        app.restart_game();
+
+        assert!(!app.lost, "défaite remise à zéro");
+        assert!(app.win_time.is_none(), "victoire remise à zéro");
+        assert_eq!(app.time, 0.0, "chrono remis à zéro");
+        assert!(
+            app.scene.objects.iter().all(|o| o.visible),
+            "toutes les gemmes redeviennent visibles"
+        );
     }
 
     #[test]

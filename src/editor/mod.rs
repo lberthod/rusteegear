@@ -99,6 +99,8 @@ pub struct UiActions {
     pub load_gameplay: bool,
     /// « Démo contrôleur » : joueur pilotable au joystick + saut, sans script.
     pub load_controller: bool,
+    /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
+    pub restart: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -204,6 +206,7 @@ impl Editor {
         hud_health: Option<f32>,
         game_time: Option<f32>,
         lost: bool,
+        restart: &mut bool,
     ) -> egui::FullOutput {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -217,11 +220,17 @@ impl Editor {
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
             }
-            if let Some((c, t)) = scene.collectibles() {
+            let collect = scene.collectibles();
+            if let Some((c, t)) = collect {
                 collectibles_hud(ctx, area, c, t, game_time);
             }
             if lost {
                 lose_banner(ctx, area);
+            }
+            // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
+            let won = matches!(collect, Some((c, t)) if c == t && t > 0);
+            if (won || lost) && restart_button(ctx, area) {
+                *restart = true;
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
@@ -1755,6 +1764,21 @@ fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
     );
 }
 
+/// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
+/// Renvoie `true` s'il est cliqué (pour relancer la partie, y compris sur APK).
+fn restart_button(ctx: &egui::Context, area: egui::Rect) -> bool {
+    let mut clicked = false;
+    egui::Area::new("restart_btn".into())
+        .fixed_pos(egui::pos2(area.center().x - 75.0, area.center().y + 40.0))
+        .show(ctx, |ui| {
+            let btn = egui::Button::new(egui::RichText::new("🔄 Rejouer").size(20.0));
+            if ui.add_sized([150.0, 46.0], btn).clicked() {
+                clicked = true;
+            }
+        });
+    clicked
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -2550,6 +2574,13 @@ fn build_ui(
     }
     if *playing && lost {
         lose_banner(root.ctx(), play_rect);
+    }
+    // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
+    if *playing {
+        let won = matches!(scene.collectibles(), Some((c, t)) if c == t && t > 0);
+        if (won || lost) && restart_button(root.ctx(), play_rect) {
+            actions.restart = true;
+        }
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);
