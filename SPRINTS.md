@@ -111,7 +111,7 @@ Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4) : ce qui reste pour passer
 |---|---|---|---|---|
 | 45 | **Découpler simulation & rendu** | Boucle de mise à jour à **pas fixe** (1/60 s) pour la physique/scripts, indépendante du framerate (accumulateur + cap), testée 30/60/120 FPS | 🔴 P-rendu/sim | ✅ |
 | 46 | **Durcir l'initialisation** | Init GPU/fenêtre/resume entièrement sur `Result` + `log::error!` ; caps de surface vides gérées ; **code de production sans `unwrap()`/`expect()`** | 🟠 Audit P4 | ✅ |
-| 47 | **Tests étendus** (+ dirty-tracking reporté) | Couverture élargie : **saut du contrôleur**, collision, round-trip des composants, défauts rétro-compat. Skip-rebuild **reporté** (la boucle throttle déjà à 16 Hz au repos ; risque d'affichage figé sans vérif visuelle) | 🟡 tests | 🟢 |
+| 47 | **Tests étendus & skip-rebuild** | Couverture élargie (saut/collision contrôleur, round-trip composants, défauts) + **skip-rebuild du plan de dessin par hash des entrées** (sûr par construction : hash identique ⇒ sortie identique) | 🟡 perf + tests | ✅ |
 | 48 | **Capteurs & assets mobiles** | **Gyroscope natif Android** (capteur réel → `tilt`), **vibration native**, **import d'assets sur mobile** (lever P10) | 🟠 P10 + mobile | ⬜ |
 | 49 | **Distribution signée** | **IPA signé en CI** (secrets), **notarisation macOS**, signature *distribution* store (Android/iOS) | 🟢 distribution | ⬜ |
 
@@ -134,7 +134,7 @@ Dérivés de l'[analyse](ANALYSE.md) (§2 audit, §4) : ce qui reste pour passer
 | Optimisations rendu (culling lumières, 0-alloc/frame) | 44 | ✅ |
 | Simulation pilotée par la cadence de rendu (découplée, pas fixe) | **45** | ✅ |
 | P4 — panics d'init (crash mobile) | **46** | ✅ |
-| Couverture de tests à étendre (skip rebuild reporté) | **47** | 🟢 |
+| Couverture de tests + skip-rebuild (par hash) | **47** | ✅ |
 | Gyroscope/vibration natifs + P10 (assets mobile) | **48** | ⬜ |
 | Distribution store signée (IPA CI / notarisation) | **49** | ⬜ |
 | LOD / occlusion / fusion meshes / WebGPU / ECS | Phase J (pistes) | ⬜ |

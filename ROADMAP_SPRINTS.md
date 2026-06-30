@@ -627,15 +627,16 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - **Fichiers** : `src/gfx/renderer.rs`, `src/lib.rs`. **Réf.** : Audit P4.
 - **Sprint 46 : livré (init sans panic, code de prod sans unwrap).**
 
-### Sprint 47 — Tests étendus (dirty-tracking reporté) 🟢
+### Sprint 47 — Tests étendus & skip-rebuild ✅
 **Objectif** : élargir la couverture ; sauter le travail inutile au repos.
 - [x] Tests : **saut du contrôleur** (s'élève), collision sur mur, **round-trip JSON** des composants
       (input_receiver, jump, tap_action, visible), défauts rétro-compat (`visible=true`).
-- [ ] (reporté) **Compteur de révision** de scène → sauter rebuild models/draw plan au repos.
-      Raison : la boucle **throttle déjà à 16 Hz** au repos (gain marginal) ; un mauvais critère
-      « dirty » figerait l'affichage sur édition d'inspecteur → à faire **avec validation visuelle**.
-- **Fichiers** : `src/runtime/physics.rs`, `src/scene/mod.rs`.
-- **Sprint 47 : tests livrés ; skip-rebuild reporté (gain marginal vs risque non vérifiable).**
+- [x] **Skip-rebuild par hash** : `render_input_hash` couvre caméra + transforms/couleurs/matériau/
+      surbrillance/mesh/texture/visibilité. Hash identique ⇒ sortie identique ⇒ pas de reconstruction
+      (matrices, inverse-transposée, upload d'instances). **Sûr par construction** (tout changement
+      modifie le hash → pas de frame périmée).
+- **Fichiers** : `src/runtime/physics.rs`, `src/scene/mod.rs`, `src/gfx/renderer.rs`.
+- **Sprint 47 : livré (tests + skip-rebuild par hash, sans risque d'affichage figé).**
 
 ### Sprint 48 — Capteurs & assets mobiles ⬜
 **Objectif** : brancher le matériel Android réel.
