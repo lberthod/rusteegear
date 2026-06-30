@@ -114,6 +114,9 @@ pub struct Renderer {
     models_capacity: usize,
     /// Plan de rendu de la frame : un descripteur par objet, dans l'ordre du buffer d'instances.
     draw_plan: Vec<InstanceDraw>,
+    /// Tampons réutilisés chaque frame (évite deux allocations par frame).
+    order_scratch: Vec<usize>,
+    models_scratch: Vec<ModelUniform>,
 
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
@@ -573,6 +576,8 @@ impl Renderer {
             models_bind_group,
             models_capacity,
             draw_plan: Vec::new(),
+            order_scratch: Vec::new(),
+            models_scratch: Vec::new(),
             gizmo_pipeline,
             gizmo_vbuf,
             grid_pipeline,
@@ -742,7 +747,9 @@ impl Renderer {
         // Instances ordonnées par (mesh, texture) pour permettre des draws groupés.
         // On bâtit en parallèle le buffer storage et le plan de rendu (même ordre).
         let planes = frustum_planes(app.camera.view_proj());
-        let mut order: Vec<usize> = (0..app.scene.objects.len()).collect();
+        let order = &mut self.order_scratch;
+        order.clear();
+        order.extend(0..app.scene.objects.len());
         order.sort_by(|&a, &b| {
             let oa = &app.scene.objects[a];
             let ob = &app.scene.objects[b];
@@ -751,9 +758,10 @@ impl Renderer {
                 .then_with(|| oa.texture.cmp(&ob.texture))
         });
 
-        let mut models: Vec<ModelUniform> = Vec::with_capacity(order.len());
+        let models = &mut self.models_scratch;
+        models.clear();
         self.draw_plan.clear();
-        for &i in &order {
+        for &i in order.iter() {
             let obj = &app.scene.objects[i];
             let model = obj.transform.matrix();
             let highlight = app.highlight_of(i);
@@ -774,7 +782,7 @@ impl Renderer {
         }
         if !models.is_empty() {
             self.queue
-                .write_buffer(&self.models_buf, 0, bytemuck::cast_slice(&models));
+                .write_buffer(&self.models_buf, 0, bytemuck::cast_slice(models));
         }
     }
 
