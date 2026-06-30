@@ -214,6 +214,9 @@ impl Editor {
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
             }
+            if let Some((c, t)) = scene.collectibles() {
+                collectibles_hud(ctx, area, c, t);
+            }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
             } else {
@@ -1680,6 +1683,33 @@ fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
     );
 }
 
+/// HUD des collectibles (haut-droite) : « ⭐ ramassés / total », et bannière « Gagné ! »
+/// quand tout est ramassé.
+fn collectibles_hud(ctx: &egui::Context, area: egui::Rect, collected: usize, total: usize) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_collectibles"),
+    ));
+    let pos = egui::pos2(area.right() - 20.0, area.top() + 18.0);
+    painter.text(
+        pos,
+        Align2::RIGHT_CENTER,
+        format!("⭐ {collected} / {total}"),
+        FontId::proportional(20.0),
+        Color32::from_rgb(255, 220, 90),
+    );
+    if collected == total && total > 0 {
+        painter.text(
+            area.center(),
+            Align2::CENTER_CENTER,
+            "🎉 Gagné !",
+            FontId::proportional(44.0),
+            Color32::from_rgb(120, 230, 140),
+        );
+    }
+}
+
 /// Anneau de retour visuel à l'endroit touché (simulation tactile), dans `area`.
 fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Color32, Stroke};
@@ -2463,6 +2493,9 @@ fn build_ui(
     }
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
         health_bar(root.ctx(), play_rect, h);
+    }
+    if *playing && let Some((c, t)) = scene.collectibles() {
+        collectibles_hud(root.ctx(), play_rect, c, t);
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);

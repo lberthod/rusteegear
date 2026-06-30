@@ -505,8 +505,27 @@ impl Scene {
         caisse.physics = PhysicsKind::Static;
         caisse.color = [0.7, 0.5, 0.3];
 
+        // Collectibles : petites sphères jaunes à ramasser (tap → masquer).
+        let mut objects = vec![sol, joueur, mur, caisse];
+        for (n, pos) in [
+            Vec3::new(2.0, 0.4, 2.0),
+            Vec3::new(-2.0, 0.4, -2.0),
+            Vec3::new(2.5, 0.4, -1.5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut gem = demo_obj(&format!("Gemme {}", n + 1), MeshKind::Sphere, pos);
+            gem.transform = gem.transform.with_scale(Vec3::splat(0.5));
+            gem.color = [1.0, 0.85, 0.2];
+            gem.emissive = 0.4;
+            gem.tappable = true;
+            gem.tap_action = TapAction::Hide;
+            objects.push(gem);
+        }
+
         Scene {
-            objects: vec![sol, joueur, mur, caisse],
+            objects,
             camera_follow: true,
             mobile: MobileControls {
                 joystick: true,
@@ -603,6 +622,26 @@ impl Scene {
                 (m.aabb_min, m.aabb_max)
             }
         }
+    }
+
+    /// État des collectibles (objets à ramasser = action au tap « Masquer ») :
+    /// `Some((ramassés, total))` si la scène en contient, sinon `None`. Un objet est
+    /// « ramassé » quand il est devenu invisible. `ramassés == total` ⇒ niveau gagné.
+    pub fn collectibles(&self) -> Option<(usize, usize)> {
+        let total = self
+            .objects
+            .iter()
+            .filter(|o| o.tap_action == TapAction::Hide)
+            .count();
+        if total == 0 {
+            return None;
+        }
+        let collected = self
+            .objects
+            .iter()
+            .filter(|o| o.tap_action == TapAction::Hide && !o.visible)
+            .count();
+        Some((collected, total))
     }
 
     /// Sélectionne les indices des `max` lumières ponctuelles les **plus proches** de
@@ -1012,6 +1051,27 @@ mod tests {
         );
         assert_eq!(s.objects[0].tap_action, TapAction::None);
         assert!((s.objects[0].jump_height - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn collectibles_count_and_win() {
+        let mut s = Scene::controller_demo();
+        let (collected, total) = s.collectibles().expect("la démo a des collectibles");
+        assert!(total >= 3, "au moins 3 gemmes");
+        assert_eq!(collected, 0, "rien ramassé au départ");
+        // Ramasse tout : chaque collectible devient invisible.
+        for o in s
+            .objects
+            .iter_mut()
+            .filter(|o| o.tap_action == TapAction::Hide)
+        {
+            o.visible = false;
+        }
+        let (collected, total2) = s.collectibles().unwrap();
+        assert_eq!(collected, total2, "tout ramassé = gagné");
+        // Une scène sans collectible renvoie None.
+        let empty = Scene::default();
+        assert!(empty.collectibles().is_none());
     }
 
     #[test]
