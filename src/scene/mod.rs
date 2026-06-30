@@ -224,6 +224,15 @@ impl TapAction {
     ];
 }
 
+/// Anime les collectibles (objets « à ramasser » encore visibles) : rotation continue
+/// autour de Y pour signaler qu'ils sont ramassables. Rotation absolue dérivée du temps
+/// (déterministe, sans dérive).
+pub fn animate_collectible(o: &mut SceneObject, time: f32) {
+    if o.tap_action == TapAction::Hide && o.visible {
+        o.transform.rotation = Quat::from_rotation_y(time * 2.0);
+    }
+}
+
 /// Applique l'action au tap d'un objet (sans script), en mode Play. `start` = position
 /// de départ (snapshot d'entrée en Play), `time` = temps de jeu écoulé.
 pub fn apply_tap_action(o: &mut SceneObject, start: Vec3, time: f32) {
@@ -1051,6 +1060,30 @@ mod tests {
         );
         assert_eq!(s.objects[0].tap_action, TapAction::None);
         assert!((s.objects[0].jump_height - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn collectible_spins_only_while_visible() {
+        // Collectible visible : il tourne (rotation ≠ identité après animation).
+        let angle = |o: &SceneObject| o.transform.rotation.to_axis_angle().1.abs();
+        let mut o = SceneObject {
+            tap_action: TapAction::Hide,
+            ..Default::default()
+        };
+        animate_collectible(&mut o, 1.0);
+        assert!(angle(&o) > 0.1, "doit tourner si visible");
+        // Une fois ramassé (invisible), on ne touche plus à sa rotation.
+        let mut o2 = SceneObject {
+            tap_action: TapAction::Hide,
+            visible: false,
+            ..Default::default()
+        };
+        animate_collectible(&mut o2, 1.0);
+        assert!(angle(&o2) < 1e-6, "figé une fois ramassé");
+        // Un objet normal (pas un collectible) n'est pas animé.
+        let mut n = SceneObject::default();
+        animate_collectible(&mut n, 1.0);
+        assert!(angle(&n) < 1e-6);
     }
 
     #[test]

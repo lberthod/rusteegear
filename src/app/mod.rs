@@ -1546,6 +1546,8 @@ impl AppState {
                     .unwrap_or(obj.transform.position);
                 crate::scene::apply_tap_action(obj, start, time);
             }
+            // Game feel : les collectibles encore visibles tournent sur eux-mêmes.
+            crate::scene::animate_collectible(obj, time);
             if obj.script.trim().is_empty() {
                 continue;
             }
