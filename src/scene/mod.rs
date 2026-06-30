@@ -197,6 +197,10 @@ pub enum TapAction {
     ChangeColor,
     /// Masque l'objet (ramassage) ; il réapparaît à l'arrêt du mode Play.
     Hide,
+    /// Grossit l'objet à chaque tap (plafonné).
+    Grow,
+    /// Replace l'objet à sa position de départ (respawn).
+    Respawn,
 }
 
 impl TapAction {
@@ -205,7 +209,30 @@ impl TapAction {
             TapAction::None => "Aucune",
             TapAction::ChangeColor => "Changer de couleur",
             TapAction::Hide => "Masquer (ramasser)",
+            TapAction::Grow => "Grandir",
+            TapAction::Respawn => "Réapparaître au départ",
         }
+    }
+
+    /// Toutes les variantes, pour les menus déroulants.
+    pub const ALL: [TapAction; 5] = [
+        TapAction::None,
+        TapAction::ChangeColor,
+        TapAction::Hide,
+        TapAction::Grow,
+        TapAction::Respawn,
+    ];
+}
+
+/// Applique l'action au tap d'un objet (sans script), en mode Play. `start` = position
+/// de départ (snapshot d'entrée en Play), `time` = temps de jeu écoulé.
+pub fn apply_tap_action(o: &mut SceneObject, start: Vec3, time: f32) {
+    match o.tap_action {
+        TapAction::None => {}
+        TapAction::ChangeColor => o.color = hue_to_rgb(time * 0.37),
+        TapAction::Hide => o.visible = false,
+        TapAction::Grow => o.transform.scale = (o.transform.scale * 1.25).min(Vec3::splat(4.0)),
+        TapAction::Respawn => o.transform.position = start,
     }
 }
 
@@ -985,6 +1012,37 @@ mod tests {
         );
         assert_eq!(s.objects[0].tap_action, TapAction::None);
         assert!((s.objects[0].jump_height - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tap_actions_apply_correctly() {
+        let start = Vec3::new(0.0, 1.0, 0.0);
+        // Hide : devient invisible.
+        let mut o = SceneObject {
+            tap_action: TapAction::Hide,
+            ..Default::default()
+        };
+        apply_tap_action(&mut o, start, 0.0);
+        assert!(!o.visible);
+        // Grow : grossit mais reste plafonné à 4.
+        let mut o = SceneObject {
+            tap_action: TapAction::Grow,
+            ..Default::default()
+        };
+        apply_tap_action(&mut o, start, 0.0);
+        assert!(o.transform.scale.x > 1.0);
+        for _ in 0..50 {
+            apply_tap_action(&mut o, start, 0.0);
+        }
+        assert!(o.transform.scale.x <= 4.0 + 1e-3, "plafonné à 4");
+        // Respawn : revient à la position de départ.
+        let mut o = SceneObject {
+            tap_action: TapAction::Respawn,
+            transform: Transform::from_pos(Vec3::new(5.0, 5.0, 5.0)),
+            ..Default::default()
+        };
+        apply_tap_action(&mut o, start, 0.0);
+        assert!((o.transform.position - start).length() < 1e-6);
     }
 
     #[test]

@@ -2218,7 +2218,7 @@ fn build_ui(
                                 egui::ComboBox::from_id_salt(("tap_action", i))
                                     .selected_text(obj.tap_action.label())
                                     .show_ui(ui, |ui| {
-                                        for a in [Ta::None, Ta::ChangeColor, Ta::Hide] {
+                                        for a in Ta::ALL {
                                             ui.selectable_value(&mut obj.tap_action, a, a.label());
                                         }
                                     });
