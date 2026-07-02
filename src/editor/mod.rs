@@ -105,7 +105,7 @@ pub struct UiActions {
     pub load_temple_run: bool,
     /// « Scène exemple » (composants optionnels) : référence minimale, pas un niveau.
     pub load_components_demo: bool,
-    /// « Démo Duel IA » : jeu local vs ordinateur, chasseurs qui poursuivent le joueur.
+    /// « Démo Vagues de zombies » : jeu local vs ordinateur, manches de monstres.
     pub load_ai_duel: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
@@ -216,6 +216,8 @@ impl Editor {
         game_time: Option<f32>,
         score: u32,
         lost: bool,
+        won: bool,
+        wave: u32,
         restart: &mut bool,
     ) -> egui::FullOutput {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -233,15 +235,14 @@ impl Editor {
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
             }
-            let collect = scene.collectibles();
-            if let Some((c, t)) = collect {
+            wave_hud(ctx, area, scene, wave);
+            if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
             }
             if lost {
                 lose_banner(ctx, area);
             }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
-            let won = matches!(collect, Some((c, t)) if c == t && t > 0);
             if (won || lost) && restart_button(ctx, area, won) {
                 *restart = true;
             }
@@ -283,6 +284,8 @@ impl Editor {
         game_time: Option<f32>,
         score: u32,
         lost: bool,
+        won: bool,
+        wave: u32,
         status: StatusInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -317,6 +320,8 @@ impl Editor {
                 game_time,
                 score,
                 lost,
+                won,
+                wave,
                 &status,
                 export,
                 hier_filter,
@@ -694,9 +699,9 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             ui.close();
         }
         if ui
-            .button("🤖  Démo Duel IA (local, sans réseau)")
+            .button("🧟  Démo Vagues de zombies (local, sans réseau)")
             .on_hover_text(
-                "3 chasseurs poursuivent activement le joueur : atteins la gemme adverse pour gagner",
+                "Manches de monstres (Rôdeur/Coureur/Brute) qui poursuivent le joueur, style Call of Zombies",
             )
             .clicked()
         {
@@ -1749,6 +1754,37 @@ fn damage_vignette(ctx: &egui::Context, area: egui::Rect, intensity: f32) {
     painter.rect_filled(area, 0.0, Color32::from_rgba_unmultiplied(220, 20, 20, alpha));
 }
 
+/// Indicateur de manche (haut-centre), pour les scènes à système de manches (cf.
+/// `Combat::wave`/`AppState::wave`) — style « Vague N/M » (Call of Zombies). N'affiche
+/// rien si `wave == 0` (pas de système de manches dans la scène courante).
+fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
+    if wave == 0 {
+        return;
+    }
+    let max_wave = scene
+        .objects
+        .iter()
+        .filter_map(|o| o.combat.as_ref())
+        .map(|c| c.wave)
+        .max()
+        .unwrap_or(0);
+    if max_wave == 0 {
+        return;
+    }
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_wave"),
+    ));
+    painter.text(
+        egui::pos2(area.center().x, area.top() + 22.0),
+        Align2::CENTER_CENTER,
+        format!("🧟 Vague {wave} / {max_wave}"),
+        FontId::proportional(22.0),
+        Color32::from_rgb(230, 120, 90),
+    );
+}
+
 /// Barre de vie du HUD (haut de la zone de jeu), pilotée par `set_health` côté script.
 fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
     use egui::{Color32, Stroke};
@@ -1990,6 +2026,8 @@ fn build_ui(
     game_time: Option<f32>,
     score: u32,
     lost: bool,
+    won: bool,
+    wave: u32,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -2691,6 +2729,9 @@ fn build_ui(
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
         health_bar(root.ctx(), play_rect, h);
     }
+    if *playing {
+        wave_hud(root.ctx(), play_rect, scene, wave);
+    }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);
     }
@@ -2698,11 +2739,8 @@ fn build_ui(
         lose_banner(root.ctx(), play_rect);
     }
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
-    if *playing {
-        let won = matches!(scene.collectibles(), Some((c, t)) if c == t && t > 0);
-        if (won || lost) && restart_button(root.ctx(), play_rect, won) {
-            actions.restart = true;
-        }
+    if *playing && (won || lost) && restart_button(root.ctx(), play_rect, won) {
+        actions.restart = true;
     }
     if *playing && scene.mobile.any() {
         mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);

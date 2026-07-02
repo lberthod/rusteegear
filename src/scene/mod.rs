@@ -184,6 +184,13 @@ pub struct Combat {
     /// `AppState::attack_flash`). N'a aucun effet tant qu'aucune attaque ne porte.
     #[serde(default)]
     pub is_attack_fx: bool,
+    /// Numéro de manche (1-based) auquel appartient cet ennemi ; 0 = pas de système de
+    /// manches (visible/actif dès le départ, comme les autres démos). Les ennemis d'une
+    /// manche > 1 sont masqués jusqu'à ce que `App` révèle leur manche (cf.
+    /// `AppState::wave` : toutes les cibles de la manche courante vaincues ⇒ manche
+    /// suivante révélée, jusqu'à la dernière ⇒ victoire).
+    #[serde(default)]
+    pub wave: u32,
 }
 
 /// Composant optionnel : IA qui **poursuit activement le joueur** (contrairement aux
@@ -1391,20 +1398,19 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         }
     }
 
-    /// Démo « Duel IA » : jeu **local contre l'ordinateur**, sans réseau — 3 chasseurs
-    /// (`AiChaser`) poursuivent activement le joueur en continu (recalcul de direction
-    /// chaque frame), contrairement aux patrouilles à trajectoire fixe des autres démos.
-    /// Objectif : atteindre la gemme à l'autre bout de l'arène en évitant/combattant les
-    /// chasseurs — des piliers servent d'obstacles (les chasseurs ne les contournent pas
-    /// intelligemment : s'en servir pour casser une poursuite est une vraie tactique).
-    pub fn ai_duel_demo() -> Self {
+    /// Démo « Vagues de zombies » : jeu **local contre l'ordinateur**, sans réseau, en
+    /// **manches** (style Call of Duty Zombies) — 3 archétypes de monstres (`AiChaser`,
+    /// poursuite active, pas de patrouille scriptée), de plus en plus nombreux et variés
+    /// à chaque manche. Vaincre tous les monstres d'une manche révèle la suivante ; la
+    /// dernière vaincue ⇒ victoire (`App` pilote la progression, cf. `AppState::wave`).
+    pub fn zombies_demo() -> Self {
         let half = 10.0_f32;
         let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
         sol.transform = sol.transform.with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
         sol.physics = PhysicsKind::Static;
-        sol.color = [0.32, 0.35, 0.4];
+        sol.color = [0.22, 0.24, 0.28];
 
-        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(-half + 1.5, 1.0, -half + 1.5));
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
         joueur.color = [0.95, 0.6, 0.25];
         joueur.controller = Some(Controller {
             input: true,
@@ -1418,12 +1424,12 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
 
         let mut objects = vec![sol, joueur];
 
-        // Murs de pourtour (comme l'arène de combat).
+        // Murs de pourtour.
         let mut wall = |name: &str, pos: Vec3, scale: Vec3| {
             let mut w = demo_obj(name, MeshKind::Cube, pos);
             w.transform = w.transform.with_scale(scale);
             w.physics = PhysicsKind::Static;
-            w.color = [0.42, 0.46, 0.55];
+            w.color = [0.3, 0.32, 0.38];
             objects.push(w);
         };
         wall("Mur Nord", Vec3::new(0.0, 0.9, -half), Vec3::new(2.0 * half, 1.8, 0.5));
@@ -1431,28 +1437,15 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         wall("Mur Est", Vec3::new(half, 0.9, 0.0), Vec3::new(0.5, 1.8, 2.0 * half));
         wall("Mur Ouest", Vec3::new(-half, 0.9, 0.0), Vec3::new(0.5, 1.8, 2.0 * half));
 
-        // Piliers de couverture : obstacles pour casser une poursuite (les chasseurs ne
+        // Piliers de couverture : obstacles pour casser une poursuite (les monstres ne
         // les contournent pas intelligemment, ils foncent tout droit vers le joueur).
-        for (sx, sz) in [(-3.0_f32, 2.0), (3.0, -2.0), (0.0, 5.0), (-4.0, -5.0)] {
+        for (sx, sz) in [(-3.0_f32, 2.0), (3.0, -2.0), (0.0, 5.5), (-4.0, -5.0), (4.5, 4.5)] {
             let mut pilier = demo_obj("Pilier", MeshKind::Cylinder, Vec3::new(sx, 0.9, sz));
             pilier.transform = pilier.transform.with_scale(Vec3::new(1.4, 1.8, 1.4));
             pilier.physics = PhysicsKind::Static;
-            pilier.color = [0.5, 0.5, 0.55];
+            pilier.color = [0.4, 0.4, 0.45];
             objects.push(pilier);
         }
-
-        // Objectif : seule pièce obligatoire (victoire = l'atteindre), à l'opposé du départ.
-        let mut objectif = demo_obj(
-            "Gemme Objectif",
-            MeshKind::Sphere,
-            Vec3::new(half - 1.5, 1.0, half - 1.5),
-        );
-        objectif.transform = objectif.transform.with_scale(Vec3::splat(0.55));
-        objectif.color = [0.5, 0.9, 1.0];
-        objectif.emissive = 0.9;
-        objectif.tappable = true;
-        objectif.tap_action = TapAction::Hide;
-        objects.push(objectif);
 
         // Ancre de l'effet visuel d'attaque (cf. `Combat::is_attack_fx`).
         let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
@@ -1465,29 +1458,82 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         fx.visible = false;
         objects.push(fx);
 
-        // --- 3 chasseurs IA : poursuite active (pas de patrouille scriptée). Vitesse
-        // légèrement inférieure à celle du joueur pour rester évitable en mouvement.
-        for (n, (sx, sz)) in [(half - 1.5, -half + 1.5), (-half + 1.5, half - 1.5), (0.0, 0.0)]
-            .into_iter()
-            .enumerate()
-        {
-            let mut chaser = demo_obj(&format!("Chasseur {}", n + 1), MeshKind::Sphere, Vec3::new(sx, 0.5, sz));
-            chaser.transform = chaser.transform.with_scale(Vec3::new(0.7, 0.6, 0.7));
-            chaser.color = [0.85, 0.08, 0.08];
-            chaser.emissive = 0.5;
-            chaser.trigger = true;
-            chaser.ai_chaser = Some(AiChaser { speed: 3.3 });
-            chaser.combat = Some(Combat {
-                attackable: true,
-                ..Default::default()
-            });
-            chaser.respawn_delay = 6.0;
-            chaser.script = "\
-if obj.triggered then damage(1.0 * dt) end\n\
-local p = 0.5 + 0.5 * math.sin(time * 7.0)\n\
-obj.r = 0.7 + 0.3 * p; obj.g = 0.05; obj.b = 0.05"
-                .into();
-            objects.push(chaser);
+        // --- 3 archétypes de monstres, de plus en plus présents/variés à chaque manche
+        // (comme les vagues d'un mode zombies) : Rôdeur (basique), Coureur (rapide et
+        // fragile), Brute (lente mais très punitive et plus difficile à esquiver).
+        struct Kind {
+            label: &'static str,
+            speed: f32,
+            dmg: f32,
+            scale: f32,
+            color: [f32; 3],
+        }
+        const RODEUR: Kind = Kind {
+            label: "Rôdeur",
+            speed: 2.6,
+            dmg: 0.8,
+            scale: 0.7,
+            color: [0.35, 0.55, 0.25],
+        };
+        const COUREUR: Kind = Kind {
+            label: "Coureur",
+            speed: 4.6,
+            dmg: 0.5,
+            scale: 0.55,
+            color: [0.75, 0.8, 0.2],
+        };
+        const BRUTE: Kind = Kind {
+            label: "Brute",
+            speed: 1.8,
+            dmg: 2.2,
+            scale: 1.3,
+            color: [0.45, 0.08, 0.25],
+        };
+        // (manche, archétypes de cette manche) — la difficulté monte : plus de monstres,
+        // puis des archétypes plus dangereux introduits progressivement.
+        let waves: &[(u32, &[&Kind])] = &[
+            (1, &[&RODEUR, &RODEUR, &RODEUR]),
+            (2, &[&RODEUR, &RODEUR, &RODEUR, &COUREUR, &COUREUR]),
+            (3, &[&RODEUR, &RODEUR, &COUREUR, &COUREUR, &COUREUR, &BRUTE, &BRUTE]),
+            (4, &[&RODEUR, &RODEUR, &COUREUR, &COUREUR, &BRUTE, &BRUTE, &BRUTE]),
+        ];
+        let total: usize = waves.iter().map(|(_, ks)| ks.len()).sum();
+        let mut spawned = 0usize;
+        for &(wave, kinds) in waves {
+            for (n, k) in kinds.iter().enumerate() {
+                // Répartis en cercle sur tout le pourtour (indice global, pas par manche) :
+                // les manches suivantes n'occupent pas les mêmes points que la précédente.
+                let angle = spawned as f32 / total as f32 * std::f32::consts::TAU;
+                let radius = half - 1.4;
+                let pos = Vec3::new(angle.cos() * radius, k.scale.max(0.5) * 0.5, angle.sin() * radius);
+                spawned += 1;
+
+                let mut m = demo_obj(&format!("{} {}", k.label, n + 1), MeshKind::Sphere, pos);
+                m.transform = m.transform.with_scale(Vec3::splat(k.scale));
+                m.color = k.color;
+                m.emissive = 0.5;
+                m.trigger = true;
+                m.ai_chaser = Some(AiChaser { speed: k.speed });
+                m.combat = Some(Combat {
+                    attackable: true,
+                    wave,
+                    ..Default::default()
+                });
+                // Pas de réapparition : un monstre vaincu reste mort pour la manche
+                // (contrairement aux ennemis de l'arène de combat, qui reviennent).
+                m.respawn_delay = 0.0;
+                m.script = format!(
+                    "if obj.triggered then damage({} * dt) end\n\
+                     local p = 0.5 + 0.5 * math.sin(time * 7.0)\n\
+                     obj.r = {} + {} * p; obj.g = {}; obj.b = {}",
+                    k.dmg,
+                    k.color[0] * 0.7,
+                    k.color[0] * 0.3,
+                    k.color[1] * 0.6,
+                    k.color[2] * 0.6,
+                );
+                objects.push(m);
+            }
         }
 
         Scene {
@@ -1495,17 +1541,17 @@ obj.r = 0.7 + 0.3 * p; obj.g = 0.05; obj.b = 0.05"
             camera_follow: true,
             point_lights: vec![
                 PointLight {
-                    position: [0.0, 8.0, 0.0],
-                    color: [1.0, 0.95, 0.85],
+                    position: [0.0, 9.0, 0.0],
+                    color: [0.75, 0.85, 1.0],
                     intensity: 1.3,
-                    range: 22.0,
+                    range: 24.0,
                     ..PointLight::default()
                 },
                 PointLight {
-                    position: [half - 1.5, 3.0, half - 1.5],
-                    color: [0.6, 0.9, 1.0],
-                    intensity: 1.0,
-                    range: 8.0,
+                    position: [0.0, 3.0, 0.0],
+                    color: [1.0, 0.5, 0.3],
+                    intensity: 0.7,
+                    range: 10.0,
                     ..PointLight::default()
                 },
             ],
@@ -2405,6 +2451,7 @@ mod tests {
         o.combat = Some(Combat {
             attackable: true,
             is_attack_fx: false,
+            wave: 2,
         });
         let scene = Scene {
             objects: vec![o],
@@ -2415,6 +2462,7 @@ mod tests {
         let c = back.objects[0].combat.as_ref().expect("combat round-trip");
         assert!(c.attackable);
         assert!(!c.is_attack_fx);
+        assert_eq!(c.wave, 2);
     }
 
     #[test]
@@ -2451,32 +2499,59 @@ mod tests {
     }
 
     #[test]
-    fn ai_duel_demo_has_active_chasers_not_scripted_patrols() {
-        let s = Scene::ai_duel_demo();
-        let chasers: Vec<_> = s
+    fn zombies_demo_has_four_waves_of_varied_active_chasers() {
+        let s = Scene::zombies_demo();
+        let monsters: Vec<_> = s
             .objects
             .iter()
-            .filter(|o| o.name.starts_with("Chasseur"))
+            .filter(|o| o.ai_chaser.is_some())
             .collect();
-        assert_eq!(chasers.len(), 3, "3 chasseurs IA");
-        for c in &chasers {
+        // 3 archétypes distincts (Rôdeur/Coureur/Brute), pas un seul type répété.
+        let distinct_names: std::collections::HashSet<&str> = monsters
+            .iter()
+            .map(|o| o.name.split(' ').next().unwrap())
+            .collect();
+        assert!(
+            distinct_names.len() >= 3,
+            "au moins 3 archétypes de monstres différents : {distinct_names:?}"
+        );
+        for m in &monsters {
             assert!(
-                c.ai_chaser.is_some(),
-                "un chasseur doit poursuivre activement, pas suivre un script de patrouille"
+                m.ai_chaser.is_some(),
+                "un monstre doit poursuivre activement, pas suivre un script de patrouille"
             );
             assert!(
-                c.combat.as_ref().is_some_and(|combat| combat.attackable),
-                "un chasseur doit être une cible d'attaque valide (défendable)"
+                m.combat.as_ref().is_some_and(|c| c.attackable),
+                "un monstre doit être une cible d'attaque valide (défendable)"
             );
-            assert!(c.trigger, "un chasseur doit détecter le contact pour infliger des dégâts");
+            assert!(m.trigger, "un monstre doit détecter le contact pour infliger des dégâts");
+            assert!(
+                m.combat.as_ref().is_some_and(|c| c.wave > 0),
+                "un monstre doit appartenir à une manche"
+            );
+            assert_eq!(m.respawn_delay, 0.0, "un monstre vaincu reste mort pour la manche");
         }
-        // Un seul objectif obligatoire (victoire), pas de lave (danger différent de
-        // l'arène de combat — ici le danger, ce sont les chasseurs eux-mêmes).
-        let (collected, total) = s.collectibles().expect("un objectif de victoire");
-        assert_eq!(collected, 0);
-        assert_eq!(total, 1);
+        // 4 manches, difficulté croissante (de plus en plus de monstres).
+        let max_wave = monsters
+            .iter()
+            .filter_map(|o| o.combat.as_ref())
+            .map(|c| c.wave)
+            .max()
+            .unwrap();
+        assert_eq!(max_wave, 4, "4 manches");
+        let per_wave = |w: u32| {
+            monsters
+                .iter()
+                .filter(|o| o.combat.as_ref().is_some_and(|c| c.wave == w))
+                .count()
+        };
+        assert!(per_wave(1) < per_wave(4), "la dernière manche doit être plus dense");
+
+        // Pas d'objectif « collectible » séparé : la victoire vient de vider les manches
+        // (cf. `App::update_waves`), pas de ramasser une gemme.
+        assert!(s.collectibles().is_none());
         assert!(!s.objects.iter().any(|o| o.name == "Lave"));
-        // Joueur pilotable avec attaque (peut se défendre).
+
         let player = s
             .objects
             .iter()

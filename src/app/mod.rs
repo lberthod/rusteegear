@@ -144,6 +144,16 @@ pub struct AppState {
     /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
     /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
     pub attack_flash: f32,
+    /// Manche courante (1-based) d'un système de vagues (cf. `Combat::wave`) ; 0 = pas
+    /// de système de manches dans la scène courante (les autres démos). Toutes les
+    /// cibles de la manche courante vaincues ⇒ manche suivante révélée ; dernière
+    /// manche vaincue ⇒ victoire (cf. `update_waves` dans `advance_play`).
+    pub wave: u32,
+    /// La scène courante est-elle la démo contrôleur à niveaux (`Scene::controller_level`) ?
+    /// Seule cette famille de scènes a un « niveau suivant » (cf. `next_level`) ; toute
+    /// autre victoire (course infinie, tour, manches de zombies...) doit juste relancer
+    /// la même scène au clic sur « Rejouer », pas basculer vers l'arène de combat.
+    pub is_leveled_demo: bool,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -283,6 +293,8 @@ impl AppState {
             render_quality: crate::app::build_config::BuildConfig::load().render_quality,
             damage_flash: 0.0,
             attack_flash: 0.0,
+            wave: 0,
+            is_leveled_demo: false,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -737,6 +749,7 @@ impl AppState {
         self.push_undo();
         self.scene = Scene::mobile_demo();
         self.imported_dirty = true;
+        self.is_leveled_demo = false;
         self.clear_selection();
     }
 
@@ -990,6 +1003,8 @@ impl AppState {
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
         self.clear_selection();
     }
 
@@ -1001,7 +1016,6 @@ impl AppState {
             return;
         }
         self.scene.objects = self.play_snapshot.clone();
-        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
         self.time = 0.0;
         self.sim_accumulator = 0.0;
         self.win_time = None;
@@ -1012,6 +1026,11 @@ impl AppState {
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
         self.tapped_obj = None;
+        // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
+        // reconstruire la physique, pour que les corps rigides des monstres masqués ne
+        // soient pas créés (cf. `init_waves`).
+        self.init_waves();
+        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
         {
@@ -1038,6 +1057,7 @@ impl AppState {
         self.level = self.level % crate::scene::CONTROLLER_LEVELS + 1;
         self.scene = crate::scene::Scene::controller_level(self.level);
         self.imported_dirty = true;
+        self.is_leveled_demo = true;
         // Repart « en jeu » sur le nouveau niveau.
         self.play_snapshot = self.scene.objects.clone();
         self.restart_game();
@@ -1052,6 +1072,8 @@ impl AppState {
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = true;
         self.clear_selection();
     }
 
@@ -1064,6 +1086,8 @@ impl AppState {
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
         self.clear_selection();
     }
 
@@ -1076,18 +1100,22 @@ impl AppState {
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
         self.clear_selection();
     }
 
-    /// Charge la démo « Duel IA » (cf. `Scene::ai_duel_demo`) : jeu local contre
-    /// l'ordinateur, sans réseau — chasseurs qui poursuivent activement le joueur.
-    pub fn load_ai_duel_demo(&mut self) {
+    /// Charge la démo « Vagues de zombies » (cf. `Scene::zombies_demo`) : jeu local
+    /// contre l'ordinateur, sans réseau — manches de monstres poursuivant le joueur.
+    pub fn load_zombies_demo(&mut self) {
         self.push_undo();
-        self.scene = Scene::ai_duel_demo();
+        self.scene = Scene::zombies_demo();
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
         self.clear_selection();
     }
 
@@ -1100,6 +1128,8 @@ impl AppState {
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
         self.clear_selection();
     }
 
@@ -1568,6 +1598,9 @@ impl AppState {
         // transitions Edit <-> Play
         if self.playing && !self.was_playing {
             self.play_snapshot = self.scene.objects.clone();
+            // Manche 1 révélée, suivantes masquées, *avant* de construire la physique
+            // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
+            self.init_waves();
             self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
             // sons en autoplay (gain atténué par la distance à la caméra si spatialisé)
             let listener = self.camera.target;
@@ -1620,6 +1653,7 @@ impl AppState {
             self.hud_health = None;
             self.damage_flash = 0.0;
             self.attack_flash = 0.0;
+            self.wave = 0;
             self.win_time = None;
             self.lost = false;
             self.clear_selection();
@@ -1752,6 +1786,10 @@ impl AppState {
                 self.win_time = Some(self.time);
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
             }
+            // Système de manches (cf. `Combat::wave`) : révèle la manche suivante une
+            // fois la courante vidée, ou déclenche la victoire à la dernière. N'a aucun
+            // effet si la scène n'a pas de monstres à manches (self.wave == 0).
+            self.update_waves();
         }
 
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
@@ -1931,6 +1969,12 @@ impl AppState {
             if let Some(target) = chase_target {
                 for (idx, obj) in self.scene.objects.iter().enumerate() {
                     let Some(ai) = &obj.ai_chaser else { continue };
+                    // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
+                    // ne poursuit pas (et n'a de toute façon pas de corps physique tant
+                    // qu'il est masqué, cf. le filtre `visible` dans `Physics::build`).
+                    if !obj.visible {
+                        continue;
+                    }
                     let to_target = target - obj.transform.position;
                     let dir = Vec3::new(to_target.x, 0.0, to_target.z);
                     let (vx, vz) = if dir.length_squared() > 1e-6 {
@@ -1996,6 +2040,75 @@ impl AppState {
             .objects
             .iter()
             .position(|o| o.combat.as_ref().is_some_and(|c| c.is_attack_fx))
+    }
+
+    /// Plus haut numéro de manche présent dans la scène (0 = pas de système de manches).
+    fn max_wave(&self) -> u32 {
+        self.scene
+            .objects
+            .iter()
+            .filter_map(|o| o.combat.as_ref())
+            .map(|c| c.wave)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Initialise le système de manches (cf. `Combat::wave`) : révèle la manche 1,
+    /// masque les suivantes. Sans effet si la scène n'a aucun monstre à manches
+    /// (`self.wave` reste à 0) — appelée avant `Physics::build` (à l'entrée en Play et
+    /// au redémarrage) pour que les monstres masqués n'aient pas de corps rigide créé
+    /// inutilement (cf. le filtre `visible` dans `Physics::build`).
+    fn init_waves(&mut self) {
+        let max = self.max_wave();
+        self.wave = if max > 0 { 1 } else { 0 };
+        if max == 0 {
+            return;
+        }
+        for o in &mut self.scene.objects {
+            if let Some(c) = &o.combat
+                && c.wave > 0
+            {
+                o.visible = c.wave == self.wave;
+            }
+        }
+    }
+
+    /// Fait progresser le système de manches : la manche courante vidée (plus aucun
+    /// monstre visible qui lui appartient) révèle la suivante, jusqu'à la dernière ⇒
+    /// victoire. Reconstruit la physique après avoir révélé une manche (les nouveaux
+    /// monstres visibles ont besoin d'un corps rigide, absent tant qu'ils étaient masqués).
+    fn update_waves(&mut self) {
+        if self.wave == 0 {
+            return;
+        }
+        let wave = self.wave;
+        let remaining = self
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && o.combat.as_ref().is_some_and(|c| c.wave == wave))
+            .count();
+        if remaining > 0 {
+            return;
+        }
+        let max = self.max_wave();
+        if self.wave >= max {
+            if self.win_time.is_none() {
+                self.win_time = Some(self.time);
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
+            }
+            return;
+        }
+        self.wave += 1;
+        let next = self.wave;
+        for o in &mut self.scene.objects {
+            if let Some(c) = &o.combat
+                && c.wave == next
+            {
+                o.visible = true;
+            }
+        }
+        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
     /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
@@ -2951,6 +3064,125 @@ mod tests {
             dist1 < dist0 - 1.0,
             "le chasseur doit se rapprocher du joueur (dist0={dist0}, dist1={dist1})"
         );
+    }
+
+    #[test]
+    fn wave_system_reveals_next_wave_then_wins_on_the_last() {
+        // 2 manches synthétiques d'un seul monstre chacune : ne doit révéler la manche 2
+        // qu'une fois la manche 1 vidée, et gagner une fois la manche 2 vidée à son tour.
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                attack_button: "Attaque".into(),
+                attack_range: 50.0, // portée large : le test cible la logique de manches, pas la précision d'attaque.
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(30.0, 1.0, 30.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let mut m1 = crate::scene::SceneObject {
+            name: "Monstre Vague1".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser { speed: 1.0 }),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                wave: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        m1.color = [1.0; 3];
+        let mut m2 = crate::scene::SceneObject {
+            name: "Monstre Vague2".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(-5.0, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser { speed: 1.0 }),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                wave: 2,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        m2.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, joueur, m1, m2],
+            ..Default::default()
+        };
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play(); // entrée en Play : `init_waves` doit s'exécuter.
+
+        assert_eq!(app.wave, 1, "démarre à la manche 1");
+        assert!(app.scene.objects[2].visible, "manche 1 : le monstre 1 est révélé");
+        assert!(!app.scene.objects[3].visible, "manche 1 : le monstre 2 reste masqué");
+
+        // Attaque : vainc le monstre de la manche 1 (portée large, toujours à portée).
+        app.input_state.buttons.insert("Attaque".into());
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        app.input_state.buttons.clear();
+        // Une frame de plus pour laisser `update_waves` détecter la manche vidée.
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+
+        assert_eq!(app.wave, 2, "la manche 1 vidée doit révéler la manche 2");
+        assert!(app.scene.objects[3].visible, "manche 2 : le monstre 2 est révélé");
+        assert!(app.win_time.is_none(), "pas encore gagné, la manche 2 reste à vider");
+
+        // Vainc le monstre de la manche 2 : dernière manche ⇒ victoire.
+        app.input_state.buttons.insert("Attaque".into());
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        app.input_state.buttons.clear();
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+
+        assert!(app.win_time.is_some(), "toutes les manches vidées ⇒ victoire");
+    }
+
+    #[test]
+    fn only_controller_demo_is_marked_as_leveled() {
+        // `is_leveled_demo` pilote si le bouton de fin de partie appelle `next_level()`
+        // (bascule vers `controller_level`) ou `restart_game()` (relance la même scène).
+        // Une régression ici ferait basculer une victoire en course infinie / tour /
+        // manches de zombies vers l'arène de combat au lieu de relancer la bonne scène.
+        let mut app = AppState::new();
+        app.load_controller_demo();
+        assert!(app.is_leveled_demo, "démo contrôleur : à niveaux");
+
+        app.load_tower_demo();
+        assert!(!app.is_leveled_demo, "tour : pas de niveau suivant");
+
+        app.load_temple_run_demo();
+        assert!(!app.is_leveled_demo, "course infinie : pas de niveau suivant");
+
+        app.load_zombies_demo();
+        assert!(!app.is_leveled_demo, "zombies : pas de niveau suivant (manches)");
+
+        app.load_gameplay_demo();
+        assert!(!app.is_leveled_demo);
+
+        app.load_components_demo();
+        assert!(!app.is_leveled_demo);
+
+        app.load_mobile_demo();
+        assert!(!app.is_leveled_demo);
     }
 
     #[test]

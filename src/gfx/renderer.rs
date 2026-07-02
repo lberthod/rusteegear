@@ -844,6 +844,8 @@ impl Renderer {
         let game_time = app.hud_timer();
         let score = app.score();
         let lost = app.is_lost();
+        let won = app.has_won();
+        let wave = app.wave;
         let mut restart = false;
         let full_output = if app.player {
             if app.scene.mobile.any() {
@@ -858,6 +860,8 @@ impl Renderer {
                     game_time,
                     score,
                     lost,
+                    won,
+                    wave,
                     &mut restart,
                 ))
             } else {
@@ -889,6 +893,8 @@ impl Renderer {
                 game_time,
                 score,
                 lost,
+                won,
+                wave,
                 status,
             );
             if actions.save {
@@ -937,7 +943,7 @@ impl Renderer {
                 app.load_components_demo();
             }
             if actions.load_ai_duel {
-                app.load_ai_duel_demo();
+                app.load_zombies_demo();
             }
             if actions.restart {
                 restart = true;
@@ -1035,9 +1041,11 @@ impl Renderer {
             Some(full_output)
         };
 
-        // Bouton de fin de partie : « Niveau suivant » si gagné, sinon « Rejouer ».
+        // Bouton de fin de partie : « Niveau suivant » uniquement pour la démo contrôleur
+        // à niveaux ; sinon « Rejouer » — y compris une victoire par manches (zombies) ou
+        // par ligne d'arrivée (course infinie/tour), qui doivent juste relancer la scène.
         if restart {
-            if app.has_won() {
+            if app.has_won() && app.is_leveled_demo {
                 app.next_level();
             } else {
                 app.restart_game();

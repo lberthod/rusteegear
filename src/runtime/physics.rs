@@ -50,12 +50,15 @@ impl Physics {
         let mut controlled = Vec::new();
 
         for (i, obj) in scene.objects.iter().enumerate() {
-            // Un objet pilotable (joystick/gyro/saut) OU une IA poursuivante devient un
-            // corps dynamique, même sans physique explicite, pour entrer en collision
-            // avec le décor — les deux sont « pilotés » par `Physics::control` (le joueur
-            // par l'entrée, l'IA par la direction vers le joueur, cf. `App::advance_play`).
+            // Un objet pilotable (joystick/gyro/saut) OU une IA poursuivante **visible**
+            // devient un corps dynamique, même sans physique explicite, pour entrer en
+            // collision avec le décor — les deux sont « pilotés » par `Physics::control`
+            // (le joueur par l'entrée, l'IA par la direction vers le joueur, cf.
+            // `App::advance_play`). Un chasseur masqué (manche pas encore révélée, ou
+            // vaincu) n'a pas de corps : sinon son collider bloquerait le joueur alors
+            // qu'il est invisible (cf. `App::init_waves`/`update_waves`).
             let controllable = obj.controller.as_ref().is_some_and(|c| c.input || c.gyro)
-                || obj.ai_chaser.is_some();
+                || (obj.ai_chaser.is_some() && obj.visible);
             let is_dynamic = match obj.physics {
                 PhysicsKind::None if !controllable => continue,
                 PhysicsKind::Dynamic => true,
