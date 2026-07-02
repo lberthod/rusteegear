@@ -936,6 +936,9 @@ impl Renderer {
             if actions.load_components_demo {
                 app.load_components_demo();
             }
+            if actions.load_ai_duel {
+                app.load_ai_duel_demo();
+            }
             if actions.restart {
                 restart = true;
             }

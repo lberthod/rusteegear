@@ -186,6 +186,19 @@ pub struct Combat {
     pub is_attack_fx: bool,
 }
 
+/// Composant optionnel : IA qui **poursuit activement le joueur** (contrairement aux
+/// patrouilles scriptées à trajectoire fixe/sinusoïdale, prévisibles) — se déplace en
+/// ligne droite vers la position courante du joueur chaque frame, via le moteur physique
+/// (collisions avec le décor respectées, comme le joueur). L'attaque au contact reste
+/// gérée séparément par `trigger` + un script `damage()` (cf. `controller_level`) :
+/// `AiChaser` ne fait que le déplacement, pas les dégâts.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct AiChaser {
+    /// Vitesse de poursuite (unités/seconde).
+    #[serde(default = "default_move_speed")]
+    pub speed: f32,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SceneObject {
     pub name: String,
@@ -248,6 +261,10 @@ pub struct SceneObject {
     /// collectibles bonus, il n'est pas propre au combat.
     #[serde(default)]
     pub combat: Option<Combat>,
+    /// IA de poursuite active du joueur (cf. `AiChaser`) : `None` pour la grande
+    /// majorité des objets — seuls les ennemis « chasseurs » (jeu local vs IA) en ont.
+    #[serde(default)]
+    pub ai_chaser: Option<AiChaser>,
     /// Action déclenchée sans script quand l'objet est tapé (Touch Area requise).
     #[serde(default)]
     pub tap_action: TapAction,
@@ -357,6 +374,7 @@ impl Default for SceneObject {
             controller: None,
             vibrate_on_tap: 0,
             combat: None,
+            ai_chaser: None,
             tap_action: TapAction::None,
             visible: true,
             deadly: false,
@@ -1373,6 +1391,133 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         }
     }
 
+    /// Démo « Duel IA » : jeu **local contre l'ordinateur**, sans réseau — 3 chasseurs
+    /// (`AiChaser`) poursuivent activement le joueur en continu (recalcul de direction
+    /// chaque frame), contrairement aux patrouilles à trajectoire fixe des autres démos.
+    /// Objectif : atteindre la gemme à l'autre bout de l'arène en évitant/combattant les
+    /// chasseurs — des piliers servent d'obstacles (les chasseurs ne les contournent pas
+    /// intelligemment : s'en servir pour casser une poursuite est une vraie tactique).
+    pub fn ai_duel_demo() -> Self {
+        let half = 10.0_f32;
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol.transform.with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.32, 0.35, 0.4];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(-half + 1.5, 1.0, -half + 1.5));
+        joueur.color = [0.95, 0.6, 0.25];
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.5,
+            attack_button: "Attaque".into(),
+            attack_range: 1.5,
+            ..Default::default()
+        });
+
+        let mut objects = vec![sol, joueur];
+
+        // Murs de pourtour (comme l'arène de combat).
+        let mut wall = |name: &str, pos: Vec3, scale: Vec3| {
+            let mut w = demo_obj(name, MeshKind::Cube, pos);
+            w.transform = w.transform.with_scale(scale);
+            w.physics = PhysicsKind::Static;
+            w.color = [0.42, 0.46, 0.55];
+            objects.push(w);
+        };
+        wall("Mur Nord", Vec3::new(0.0, 0.9, -half), Vec3::new(2.0 * half, 1.8, 0.5));
+        wall("Mur Sud", Vec3::new(0.0, 0.9, half), Vec3::new(2.0 * half, 1.8, 0.5));
+        wall("Mur Est", Vec3::new(half, 0.9, 0.0), Vec3::new(0.5, 1.8, 2.0 * half));
+        wall("Mur Ouest", Vec3::new(-half, 0.9, 0.0), Vec3::new(0.5, 1.8, 2.0 * half));
+
+        // Piliers de couverture : obstacles pour casser une poursuite (les chasseurs ne
+        // les contournent pas intelligemment, ils foncent tout droit vers le joueur).
+        for (sx, sz) in [(-3.0_f32, 2.0), (3.0, -2.0), (0.0, 5.0), (-4.0, -5.0)] {
+            let mut pilier = demo_obj("Pilier", MeshKind::Cylinder, Vec3::new(sx, 0.9, sz));
+            pilier.transform = pilier.transform.with_scale(Vec3::new(1.4, 1.8, 1.4));
+            pilier.physics = PhysicsKind::Static;
+            pilier.color = [0.5, 0.5, 0.55];
+            objects.push(pilier);
+        }
+
+        // Objectif : seule pièce obligatoire (victoire = l'atteindre), à l'opposé du départ.
+        let mut objectif = demo_obj(
+            "Gemme Objectif",
+            MeshKind::Sphere,
+            Vec3::new(half - 1.5, 1.0, half - 1.5),
+        );
+        objectif.transform = objectif.transform.with_scale(Vec3::splat(0.55));
+        objectif.color = [0.5, 0.9, 1.0];
+        objectif.emissive = 0.9;
+        objectif.tappable = true;
+        objectif.tap_action = TapAction::Hide;
+        objects.push(objectif);
+
+        // Ancre de l'effet visuel d'attaque (cf. `Combat::is_attack_fx`).
+        let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
+        fx.color = [1.0, 0.95, 0.75];
+        fx.emissive = 1.6;
+        fx.combat = Some(Combat {
+            is_attack_fx: true,
+            ..Default::default()
+        });
+        fx.visible = false;
+        objects.push(fx);
+
+        // --- 3 chasseurs IA : poursuite active (pas de patrouille scriptée). Vitesse
+        // légèrement inférieure à celle du joueur pour rester évitable en mouvement.
+        for (n, (sx, sz)) in [(half - 1.5, -half + 1.5), (-half + 1.5, half - 1.5), (0.0, 0.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut chaser = demo_obj(&format!("Chasseur {}", n + 1), MeshKind::Sphere, Vec3::new(sx, 0.5, sz));
+            chaser.transform = chaser.transform.with_scale(Vec3::new(0.7, 0.6, 0.7));
+            chaser.color = [0.85, 0.08, 0.08];
+            chaser.emissive = 0.5;
+            chaser.trigger = true;
+            chaser.ai_chaser = Some(AiChaser { speed: 3.3 });
+            chaser.combat = Some(Combat {
+                attackable: true,
+                ..Default::default()
+            });
+            chaser.respawn_delay = 6.0;
+            chaser.script = "\
+if obj.triggered then damage(1.0 * dt) end\n\
+local p = 0.5 + 0.5 * math.sin(time * 7.0)\n\
+obj.r = 0.7 + 0.3 * p; obj.g = 0.05; obj.b = 0.05"
+                .into();
+            objects.push(chaser);
+        }
+
+        Scene {
+            objects,
+            camera_follow: true,
+            point_lights: vec![
+                PointLight {
+                    position: [0.0, 8.0, 0.0],
+                    color: [1.0, 0.95, 0.85],
+                    intensity: 1.3,
+                    range: 22.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [half - 1.5, 3.0, half - 1.5],
+                    color: [0.6, 0.9, 1.0],
+                    intensity: 1.0,
+                    range: 8.0,
+                    ..PointLight::default()
+                },
+            ],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into(), "Attaque".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Démo « gameplay complet » : joueur (joystick + gyroscope + saut + vibration),
     /// zone de danger qui retire de la vie (HUD), et cube tactile qui change de couleur.
     /// Montre toute l'API de script en une scène jouable.
@@ -2303,5 +2448,40 @@ mod tests {
         // Le sol n'a aucun des trois : c'est du pur décor.
         let sol = s.objects.iter().find(|o| o.name == "Sol").unwrap();
         assert!(sol.controller.is_none() && sol.audio.is_none() && sol.combat.is_none());
+    }
+
+    #[test]
+    fn ai_duel_demo_has_active_chasers_not_scripted_patrols() {
+        let s = Scene::ai_duel_demo();
+        let chasers: Vec<_> = s
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Chasseur"))
+            .collect();
+        assert_eq!(chasers.len(), 3, "3 chasseurs IA");
+        for c in &chasers {
+            assert!(
+                c.ai_chaser.is_some(),
+                "un chasseur doit poursuivre activement, pas suivre un script de patrouille"
+            );
+            assert!(
+                c.combat.as_ref().is_some_and(|combat| combat.attackable),
+                "un chasseur doit être une cible d'attaque valide (défendable)"
+            );
+            assert!(c.trigger, "un chasseur doit détecter le contact pour infliger des dégâts");
+        }
+        // Un seul objectif obligatoire (victoire), pas de lave (danger différent de
+        // l'arène de combat — ici le danger, ce sont les chasseurs eux-mêmes).
+        let (collected, total) = s.collectibles().expect("un objectif de victoire");
+        assert_eq!(collected, 0);
+        assert_eq!(total, 1);
+        assert!(!s.objects.iter().any(|o| o.name == "Lave"));
+        // Joueur pilotable avec attaque (peut se défendre).
+        let player = s
+            .objects
+            .iter()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("un joueur pilotable");
+        assert!(!player.controller.as_ref().unwrap().attack_button.is_empty());
     }
 }

@@ -1079,6 +1079,18 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Charge la démo « Duel IA » (cf. `Scene::ai_duel_demo`) : jeu local contre
+    /// l'ordinateur, sans réseau — chasseurs qui poursuivent activement le joueur.
+    pub fn load_ai_duel_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::ai_duel_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.clear_selection();
+    }
+
     /// Charge la scène **exemple** des composants optionnels (cf. `Scene::components_demo`) :
     /// Controller/AudioSource/Combat, un seul chacun, pour référence rapide (pas un niveau).
     pub fn load_components_demo(&mut self) {
@@ -1873,6 +1885,7 @@ impl AppState {
         }
 
         // 2. physique (écrase les poses des corps dynamiques)
+        let chase_target = self.player_position();
         if let Some(phys) = &mut self.physics {
             // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
             // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
@@ -1911,6 +1924,23 @@ impl AppState {
                     || (space && ctrl.input);
                 let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
                 any_jump |= phys.control(idx, vx, vz, jump, jump_speed);
+            }
+            // Pilotage des « chasseurs » IA (cf. `AiChaser`) : direction directe vers la
+            // position courante du joueur, recalculée chaque frame — une vraie poursuite
+            // réactive (jeu local vs IA), pas une trajectoire fixe scriptée à l'avance.
+            if let Some(target) = chase_target {
+                for (idx, obj) in self.scene.objects.iter().enumerate() {
+                    let Some(ai) = &obj.ai_chaser else { continue };
+                    let to_target = target - obj.transform.position;
+                    let dir = Vec3::new(to_target.x, 0.0, to_target.z);
+                    let (vx, vz) = if dir.length_squared() > 1e-6 {
+                        let d = dir.normalize() * ai.speed;
+                        (d.x, d.z)
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    phys.control(idx, vx, vz, false, 0.0);
+                }
             }
             phys.step(dt, &mut self.scene);
             if any_jump {
@@ -2866,6 +2896,60 @@ mod tests {
         assert!(
             z1 > z0 + 1.0,
             "la course automatique doit avancer le joueur sans entrée (z0={z0}, z1={z1})"
+        );
+    }
+
+    #[test]
+    fn ai_chaser_actively_closes_distance_to_the_player() {
+        // Cœur du « jeu local vs IA » : contrairement aux patrouilles scriptées à
+        // trajectoire fixe (prévisibles, évitables par pattern), un `AiChaser` doit
+        // se rapprocher réellement de la position courante du joueur, recalculée
+        // chaque frame — une poursuite réactive.
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(30.0, 1.0, 30.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let mut chaser = crate::scene::SceneObject {
+            name: "Chasseur".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(10.0, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            ..Default::default()
+        };
+        chaser.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, joueur, chaser],
+            ..Default::default()
+        };
+        app.playing = true;
+        let dist0 = (app.scene.objects[2].transform.position - Vec3::new(0.0, 1.0, 0.0)).length();
+        for _ in 0..60 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        let player_pos = app.player_position().unwrap();
+        let dist1 = (app.scene.objects[2].transform.position - player_pos).length();
+        assert!(
+            dist1 < dist0 - 1.0,
+            "le chasseur doit se rapprocher du joueur (dist0={dist0}, dist1={dist1})"
         );
     }
 

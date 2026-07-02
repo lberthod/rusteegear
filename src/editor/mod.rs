@@ -105,6 +105,8 @@ pub struct UiActions {
     pub load_temple_run: bool,
     /// « Scène exemple » (composants optionnels) : référence minimale, pas un niveau.
     pub load_components_demo: bool,
+    /// « Démo Duel IA » : jeu local vs ordinateur, chasseurs qui poursuivent le joueur.
+    pub load_ai_duel: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
@@ -689,6 +691,16 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_components_demo = true;
+            ui.close();
+        }
+        if ui
+            .button("🤖  Démo Duel IA (local, sans réseau)")
+            .on_hover_text(
+                "3 chasseurs poursuivent activement le joueur : atteins la gemme adverse pour gagner",
+            )
+            .clicked()
+        {
+            actions.load_ai_duel = true;
             ui.close();
         }
         if ui
