@@ -103,6 +103,8 @@ pub struct UiActions {
     pub load_tower: bool,
     /// « Démo Course infinie » (style Temple Run) : course auto + voies + obstacles.
     pub load_temple_run: bool,
+    /// « Scène exemple » (composants optionnels) : référence minimale, pas un niveau.
+    pub load_components_demo: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
@@ -677,6 +679,16 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_temple_run = true;
+            ui.close();
+        }
+        if ui
+            .button("🧩  Scène exemple (composants Controller/Audio/Combat)")
+            .on_hover_text(
+                "Référence minimale : un objet par composant optionnel, pas un niveau de jeu",
+            )
+            .clicked()
+        {
+            actions.load_components_demo = true;
             ui.close();
         }
         if ui

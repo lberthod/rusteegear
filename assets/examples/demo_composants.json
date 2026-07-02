@@ -1,0 +1,297 @@
+{
+  "objects": [
+    {
+      "name": "Sol",
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          10.0,
+          1.0,
+          10.0
+        ]
+      },
+      "mesh": "Plane",
+      "script": "",
+      "physics": "Static",
+      "collider_shape": "Auto",
+      "audio": null,
+      "group": "",
+      "color": [
+        0.4,
+        0.45,
+        0.5
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "controller": null,
+      "vibrate_on_tap": 0,
+      "combat": null,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Joueur",
+      "transform": {
+        "position": [
+          -2.5,
+          1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Capsule",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio": null,
+      "group": "",
+      "color": [
+        0.95,
+        0.6,
+        0.25
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "controller": {
+        "input": true,
+        "gyro": false,
+        "move_speed": 4.0,
+        "auto_run_speed": 0.0,
+        "jump_button": "Saut",
+        "jump_height": 1.5,
+        "attack_button": "Attaque",
+        "attack_range": 1.5
+      },
+      "vibrate_on_tap": 0,
+      "combat": null,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Boîte à musique",
+      "transform": {
+        "position": [
+          0.0,
+          0.5,
+          2.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Cube",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio": {
+        "clip": "",
+        "autoplay": true,
+        "spatial": true
+      },
+      "group": "",
+      "color": [
+        0.6,
+        0.4,
+        0.8
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.0,
+      "trigger": false,
+      "controller": null,
+      "vibrate_on_tap": 0,
+      "combat": null,
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 0.0
+    },
+    {
+      "name": "Cible d'entraînement",
+      "transform": {
+        "position": [
+          2.5,
+          1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio": null,
+      "group": "",
+      "color": [
+        0.85,
+        0.15,
+        0.15
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 0.4,
+      "trigger": false,
+      "controller": null,
+      "vibrate_on_tap": 0,
+      "combat": {
+        "attackable": true,
+        "is_attack_fx": false
+      },
+      "tap_action": "None",
+      "visible": true,
+      "deadly": false,
+      "respawn_delay": 3.0
+    },
+    {
+      "name": "FX Attaque",
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "mesh": "Sphere",
+      "script": "",
+      "physics": "None",
+      "collider_shape": "Auto",
+      "audio": null,
+      "group": "",
+      "color": [
+        1.0,
+        0.95,
+        0.75
+      ],
+      "texture": "",
+      "tappable": false,
+      "metallic": 0.0,
+      "roughness": 0.6,
+      "emissive": 1.6,
+      "trigger": false,
+      "controller": null,
+      "vibrate_on_tap": 0,
+      "combat": {
+        "attackable": false,
+        "is_attack_fx": true
+      },
+      "tap_action": "None",
+      "visible": false,
+      "deadly": false,
+      "respawn_delay": 0.0
+    }
+  ],
+  "imported": [],
+  "groups": [],
+  "light": {
+    "dir": [
+      0.5,
+      1.0,
+      0.3
+    ],
+    "color": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ambient": 0.25
+  },
+  "point_lights": [
+    {
+      "position": [
+        0.0,
+        5.0,
+        0.0
+      ],
+      "color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "intensity": 1.2,
+      "range": 14.0,
+      "spot_dir": [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      "spot_angle": 0.0
+    }
+  ],
+  "mobile": {
+    "joystick": true,
+    "buttons": [
+      "Saut",
+      "Attaque"
+    ],
+    "touch_zone": false,
+    "health_bar": false,
+    "safe_area": false
+  },
+  "camera_follow": true,
+  "game_camera": null
+}

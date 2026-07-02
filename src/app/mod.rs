@@ -1079,6 +1079,18 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Charge la scène **exemple** des composants optionnels (cf. `Scene::components_demo`) :
+    /// Controller/AudioSource/Combat, un seul chacun, pour référence rapide (pas un niveau).
+    pub fn load_components_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::components_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.clear_selection();
+    }
+
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
     pub fn new_scene(&mut self) {
         self.push_undo();
