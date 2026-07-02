@@ -1771,6 +1771,11 @@ fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
     if max_wave == 0 {
         return;
     }
+    let remaining = scene
+        .objects
+        .iter()
+        .filter(|o| o.visible && o.combat.as_ref().is_some_and(|c| c.wave == wave))
+        .count();
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -1782,6 +1787,13 @@ fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
         format!("🧟 Vague {wave} / {max_wave}"),
         FontId::proportional(22.0),
         Color32::from_rgb(230, 120, 90),
+    );
+    painter.text(
+        egui::pos2(area.center().x, area.top() + 44.0),
+        Align2::CENTER_CENTER,
+        format!("{remaining} restant(s)"),
+        FontId::proportional(14.0),
+        Color32::from_white_alpha(200),
     );
 }
 

@@ -154,6 +154,10 @@ pub struct AppState {
     /// autre victoire (course infinie, tour, manches de zombies...) doit juste relancer
     /// la même scène au clic sur « Rejouer », pas basculer vers l'arène de combat.
     pub is_leveled_demo: bool,
+    /// Temps restant (s) avant la prochaine attaque possible (cf. `Controller::attack_cooldown`).
+    /// Sans ce temporisateur, maintenir le bouton défait instantanément tout ce qui entre
+    /// en portée, sans le moindre risque — verrouillé par un test dédié.
+    attack_cooldown_remaining: f32,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -295,6 +299,7 @@ impl AppState {
             attack_flash: 0.0,
             wave: 0,
             is_leveled_demo: false,
+            attack_cooldown_remaining: 0.0,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -1025,6 +1030,7 @@ impl AppState {
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
+        self.attack_cooldown_remaining = 0.0;
         self.tapped_obj = None;
         // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
         // reconstruire la physique, pour que les corps rigides des monstres masqués ne
@@ -1653,6 +1659,7 @@ impl AppState {
             self.hud_health = None;
             self.damage_flash = 0.0;
             self.attack_flash = 0.0;
+            self.attack_cooldown_remaining = 0.0;
             self.wave = 0;
             self.win_time = None;
             self.lost = false;
@@ -1709,18 +1716,27 @@ impl AppState {
                     }
                 }
             }
+            // Temps de recharge de l'attaque : décompte à chaque frame, indépendamment
+            // du bouton (sinon le relâcher puis le rappuyer contournerait le temporisateur).
+            if self.attack_cooldown_remaining > 0.0 {
+                self.attack_cooldown_remaining -= dt;
+            }
             // Attaque du joueur : bouton tactile nommé (controller.attack_button) ou touche
             // clavier Attaque. Vainc les ennemis `attackable` à portée ; ils réapparaissent
             // après `respawn_delay` comme les pièces bonus (même file de réapparition).
+            // Recharge requise : sans elle, maintenir le bouton défait instantanément tout
+            // ce qui entre en portée, sans le moindre risque (cf. `Controller::attack_cooldown`).
             if let Some(player) = self.player_object()
                 && let Some(ctrl) = player.controller.clone()
             {
-                let pressed = (!ctrl.attack_button.is_empty()
+                let pressed = ((!ctrl.attack_button.is_empty()
                     && self.input_state.buttons.contains(&ctrl.attack_button))
-                    || self.input_state.attack;
+                    || self.input_state.attack)
+                    && self.attack_cooldown_remaining <= 0.0;
                 if pressed {
                     let p = player.transform.position;
                     let range = ctrl.attack_range;
+                    self.attack_cooldown_remaining = ctrl.attack_cooldown;
                     let now = self.time;
                     let hit = self.scene.attack_at(p, range);
                     if !hit.is_empty() {
@@ -2945,6 +2961,89 @@ mod tests {
     }
 
     #[test]
+    fn attack_cooldown_blocks_rapid_refire_but_allows_it_once_expired() {
+        // Trouvaille de l'audit gameplay : sans temps de recharge, maintenir le bouton
+        // d'attaque défaisait instantanément tout ce qui entrait en portée, sans le
+        // moindre risque — le combat était trivial. Verrouille le correctif : une
+        // deuxième cible à portée n'est PAS vaincue dans la fenêtre de recharge, mais
+        // l'est une fois celle-ci expirée.
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                attack_button: "Attaque".into(),
+                attack_range: 50.0,
+                attack_cooldown: 0.5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut cible1 = crate::scene::SceneObject {
+            name: "Cible 1".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(1.0, 0.5, 0.0)),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cible1.color = [1.0; 3];
+        // Hors de portée au départ : n'est PAS touchée par la première attaque (portée
+        // 50 mais la cible 2 démarre à 100 unités). Téléportée à portée juste après.
+        let mut cible2 = crate::scene::SceneObject {
+            name: "Cible 2".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(100.0, 0.5, 0.0)),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cible2.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![joueur, cible1, cible2],
+            ..Default::default()
+        };
+        app.playing = true;
+        app.input_state.buttons.insert("Attaque".into());
+
+        // Frame 1 : première attaque, vainc la cible 1 (seule à portée).
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(!app.scene.objects[1].visible, "cible 1 vaincue au premier coup");
+        assert!(app.scene.objects[2].visible, "cible 2 encore debout (hors de portée)");
+
+        // La cible 2 entre à portée juste après (ex. un monstre qui s'approche) — toujours
+        // dans la fenêtre de recharge de 0,5 s : le bouton reste enfoncé mais ne doit PAS
+        // vaincre la cible 2 à cet instant.
+        app.scene.objects[2].transform.position = Vec3::new(1.0, 0.5, 0.0);
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(
+            app.scene.objects[2].visible,
+            "sans recharge écoulée, la cible 2 ne doit pas être vaincue le même instant"
+        );
+
+        // Laisse la recharge s'écouler (0,5 s), bouton toujours enfoncé : l'attaque suivante
+        // doit alors porter.
+        for _ in 0..12 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert!(
+            !app.scene.objects[2].visible,
+            "la recharge écoulée, la cible 2 doit finir par être vaincue"
+        );
+    }
+
+    #[test]
     fn attack_shows_and_hides_the_visual_fx_anchor() {
         // Une attaque qui porte doit rendre visible l'ancre `is_attack_fx`, la téléporter
         // sur la cible touchée, puis la faire disparaître une fois `attack_flash` retombé
@@ -3078,6 +3177,7 @@ mod tests {
                 input: true,
                 attack_button: "Attaque".into(),
                 attack_range: 50.0, // portée large : le test cible la logique de manches, pas la précision d'attaque.
+                attack_cooldown: 0.0, // pas de recharge : le test cible les manches, pas le rythme de combat.
                 ..Default::default()
             }),
             ..Default::default()

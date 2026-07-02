@@ -126,7 +126,7 @@ pub struct AudioSource {
 /// les y laisser à plat aurait alourdi *tous* les objets (décor, ennemis, pièces...)
 /// pour rien. Étape de migration « composants optionnels » (pas un ECS complet : pas
 /// de requêtes génériques, juste un regroupement logique qui évite le bloat plat).
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Controller {
     /// Le joystick/clavier (X/Z, ou X seul si `auto_run_speed > 0`) pilote l'objet.
     #[serde(default)]
@@ -154,6 +154,31 @@ pub struct Controller {
     /// Portée (mètres) de l'attaque, centrée sur la position de l'objet.
     #[serde(default = "default_attack_range")]
     pub attack_range: f32,
+    /// Temps de recharge (s) entre deux attaques (0 = pas de limite — à éviter : sans
+    /// recharge, maintenir le bouton défait instantanément tout ce qui entre en portée,
+    /// sans risque). Cf. `AppState::attack_cooldown_remaining`.
+    #[serde(default = "default_attack_cooldown")]
+    pub attack_cooldown: f32,
+}
+
+// Implémentation manuelle (pas `#[derive(Default)]`) : `derive` donnerait 0.0/vide à
+// chaque champ, alors que plusieurs ont un défaut serde non trivial (`move_speed` = 3.0,
+// `attack_cooldown` = 0.5, etc.) — un piège classique où `..Default::default()` en Rust
+// diverge silencieusement des défauts appliqués à la désérialisation JSON.
+impl Default for Controller {
+    fn default() -> Self {
+        Self {
+            input: false,
+            gyro: false,
+            move_speed: default_move_speed(),
+            auto_run_speed: 0.0,
+            jump_button: String::new(),
+            jump_height: default_jump_height(),
+            attack_button: String::new(),
+            attack_range: default_attack_range(),
+            attack_cooldown: default_attack_cooldown(),
+        }
+    }
 }
 
 impl Controller {
@@ -199,11 +224,21 @@ pub struct Combat {
 /// (collisions avec le décor respectées, comme le joueur). L'attaque au contact reste
 /// gérée séparément par `trigger` + un script `damage()` (cf. `controller_level`) :
 /// `AiChaser` ne fait que le déplacement, pas les dégâts.
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AiChaser {
     /// Vitesse de poursuite (unités/seconde).
     #[serde(default = "default_move_speed")]
     pub speed: f32,
+}
+
+// Manuel comme `Controller` : `derive(Default)` donnerait speed=0.0 (immobile), pas la
+// vitesse par défaut serde — mêmes raisons, cf. le commentaire sur `impl Default for Controller`.
+impl Default for AiChaser {
+    fn default() -> Self {
+        Self {
+            speed: default_move_speed(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -297,6 +332,10 @@ fn default_jump_height() -> f32 {
 
 fn default_attack_range() -> f32 {
     1.4
+}
+
+fn default_attack_cooldown() -> f32 {
+    0.5
 }
 
 /// Action déclenchée sans script quand l'objet est tapé en mode Play.
@@ -2378,6 +2417,28 @@ mod tests {
         };
         apply_tap_action(&mut o, start, 0.0);
         assert!((o.transform.position - start).length() < 1e-6);
+    }
+
+    #[test]
+    fn controller_and_ai_chaser_rust_default_matches_serde_default() {
+        // Piège classique : `#[derive(Default)]` donne 0.0/vide à chaque champ, alors
+        // que plusieurs ont un défaut serde non trivial (`default = "fn"`). Un
+        // `Controller { ..Default::default() }` en Rust doit produire les MÊMES valeurs
+        // qu'un objet JSON sans ces champs (désérialisé avec les défauts serde) — sinon
+        // les scènes construites en Rust (toutes les démos) divergent silencieusement
+        // des scènes chargées depuis un fichier ancien.
+        let rust_default = Controller::default();
+        let from_json: Controller = serde_json::from_str("{}").unwrap();
+        assert_eq!(rust_default.move_speed, from_json.move_speed);
+        assert_eq!(rust_default.jump_height, from_json.jump_height);
+        assert_eq!(rust_default.attack_range, from_json.attack_range);
+        assert_eq!(rust_default.attack_cooldown, from_json.attack_cooldown);
+        assert!(rust_default.attack_cooldown > 0.0, "sans quoi l'attaque n'a aucune limite");
+
+        let ai_rust_default = AiChaser::default();
+        let ai_from_json: AiChaser = serde_json::from_str("{}").unwrap();
+        assert_eq!(ai_rust_default.speed, ai_from_json.speed);
+        assert!(ai_rust_default.speed > 0.0, "sans quoi le chasseur reste immobile");
     }
 
     #[test]
