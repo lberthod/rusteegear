@@ -99,6 +99,10 @@ pub struct UiActions {
     pub load_gameplay: bool,
     /// « Démo contrôleur » : joueur pilotable au joystick + saut, sans script.
     pub load_controller: bool,
+    /// « Démo Tour d'ascension » : platforming vertical, sans combat.
+    pub load_tower: bool,
+    /// « Démo Course infinie » (style Temple Run) : course auto + voies + obstacles.
+    pub load_temple_run: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
@@ -204,6 +208,7 @@ impl Editor {
         device_preview: bool,
         device_portrait: bool,
         hud_health: Option<f32>,
+        damage_flash: f32,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -217,6 +222,9 @@ impl Editor {
             if device_preview {
                 device_bezel(ctx, area);
                 touch_feedback(ctx, area);
+            }
+            if damage_flash > 0.0 {
+                damage_vignette(ctx, area, damage_flash);
             }
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
@@ -267,6 +275,7 @@ impl Editor {
         device_portrait: &mut bool,
         view_rect: &mut (f32, f32, f32, f32),
         hud_health: Option<f32>,
+        damage_flash: f32,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -300,6 +309,7 @@ impl Editor {
                 device_portrait,
                 view_rect,
                 hud_health,
+                damage_flash,
                 game_time,
                 score,
                 lost,
@@ -647,6 +657,26 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_controller = true;
+            ui.close();
+        }
+        if ui
+            .button("🗼  Démo Tour d'ascension (platforming)")
+            .on_hover_text(
+                "Style différent : grimpe la tour en spirale, aucune arme ni combat, éviter le vide",
+            )
+            .clicked()
+        {
+            actions.load_tower = true;
+            ui.close();
+        }
+        if ui
+            .button("🏃  Démo Course infinie (style Temple Run)")
+            .on_hover_text(
+                "Course automatique + changement de voie + saut : esquive les obstacles, ramasse les pièces",
+            )
+            .clicked()
+        {
+            actions.load_temple_run = true;
             ui.close();
         }
         if ui
@@ -1680,6 +1710,18 @@ fn asset_browser_window(
     panels.assets = open;
 }
 
+/// Flash rouge plein écran quand la vie baisse (contact ennemi) : retour immédiat, même
+/// sans regarder la barre de vie. `intensity` (1 = pic du coup) décroît vers 0 côté App.
+fn damage_vignette(ctx: &egui::Context, area: egui::Rect, intensity: f32) {
+    use egui::Color32;
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_damage_flash"),
+    ));
+    let alpha = (70.0 * intensity.clamp(0.0, 1.0)) as u8;
+    painter.rect_filled(area, 0.0, Color32::from_rgba_unmultiplied(220, 20, 20, alpha));
+}
+
 /// Barre de vie du HUD (haut de la zone de jeu), pilotée par `set_health` côté script.
 fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
     use egui::{Color32, Stroke};
@@ -1917,6 +1959,7 @@ fn build_ui(
     device_portrait: &mut bool,
     view_rect: &mut (f32, f32, f32, f32),
     hud_health: Option<f32>,
+    damage_flash: f32,
     game_time: Option<f32>,
     score: u32,
     lost: bool,
@@ -2582,6 +2625,9 @@ fn build_ui(
     if *device_preview {
         device_bezel(root.ctx(), play_rect);
         touch_feedback(root.ctx(), play_rect);
+    }
+    if *playing && damage_flash > 0.0 {
+        damage_vignette(root.ctx(), play_rect, damage_flash);
     }
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
         health_bar(root.ctx(), play_rect, h);

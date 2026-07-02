@@ -90,6 +90,8 @@ pub struct PlayerInput {
     pub key_move: (f32, f32),
     /// Saut clavier (Espace) maintenu enfoncé.
     pub jump: bool,
+    /// Attaque clavier (J) maintenue enfoncée.
+    pub attack: bool,
 }
 
 pub struct AppState {
@@ -132,6 +134,16 @@ pub struct AppState {
     pub view_rect_px: (f32, f32, f32, f32),
     /// Barre de vie du HUD (0..1) pilotée par `set_health` ; `None` = pas de barre.
     pub hud_health: Option<f32>,
+    /// Qualité de rendu visée (cf. `build_config::RenderQuality`) : relue depuis la
+    /// config persistée à chaque entrée en Play, pilote le nombre de lumières
+    /// ponctuelles envoyées au shader (perf en mode interactif « Basse » qualité).
+    pub render_quality: crate::app::build_config::RenderQuality,
+    /// Intensité (1 = pic, décroît vers 0) du flash de dégâts (vignette rouge HUD),
+    /// déclenché quand `hud_health` baisse. Purement cosmétique (retour de coup).
+    pub damage_flash: f32,
+    /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
+    /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
+    pub attack_flash: f32,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -268,6 +280,9 @@ impl AppState {
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
             hud_health: None,
+            render_quality: crate::app::build_config::BuildConfig::load().render_quality,
+            damage_flash: 0.0,
+            attack_flash: 0.0,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -971,6 +986,8 @@ impl AppState {
         self.scene = Scene::gameplay_demo();
         self.imported_dirty = true;
         self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
         self.clear_selection();
     }
 
@@ -990,6 +1007,8 @@ impl AppState {
         self.score = 0;
         self.respawn_queue.clear();
         self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
         self.tapped_obj = None;
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
@@ -1029,6 +1048,32 @@ impl AppState {
         self.scene = Scene::controller_demo();
         self.imported_dirty = true;
         self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.clear_selection();
+    }
+
+    /// Charge la démo « Tour d'ascension » (cf. `Scene::tower_demo`) : style de jeu
+    /// différent de la démo contrôleur — platforming vertical pur, sans combat.
+    pub fn load_tower_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::tower_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.clear_selection();
+    }
+
+    /// Charge la démo « Course infinie » (cf. `Scene::temple_run_demo`) : 3ᵉ style de jeu
+    /// — course automatique, changement de voie, obstacles à esquiver/sauter.
+    pub fn load_temple_run_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::temple_run_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
         self.clear_selection();
     }
 
@@ -1544,6 +1589,8 @@ impl AppState {
             self.physics = None;
             self.paused = false;
             self.hud_health = None;
+            self.damage_flash = 0.0;
+            self.attack_flash = 0.0;
             self.win_time = None;
             self.lost = false;
             self.clear_selection();
@@ -1557,6 +1604,9 @@ impl AppState {
             self.score = 0;
             self.respawn_queue.clear();
             self.time = 0.0;
+            // Relit la qualité visée (modifiable dans le panneau Export sans redémarrer
+            // l'app) : s'applique dès ce lancement de Play, pas seulement au build exporté.
+            self.render_quality = crate::app::build_config::BuildConfig::load().render_quality;
         }
         self.was_playing = self.playing;
 
@@ -1596,6 +1646,43 @@ impl AppState {
                     }
                 }
             }
+            // Attaque du joueur : bouton tactile nommé (obj.attack_button) ou touche
+            // clavier Attaque. Vainc les ennemis `attackable` à portée ; ils réapparaissent
+            // après `respawn_delay` comme les pièces bonus (même file de réapparition).
+            if let Some(player) = self.player_object() {
+                let pressed = (!player.attack_button.is_empty()
+                    && self.input_state.buttons.contains(&player.attack_button))
+                    || self.input_state.attack;
+                if pressed {
+                    let p = player.transform.position;
+                    let range = player.attack_range;
+                    let now = self.time;
+                    let hit = self.scene.attack_at(p, range);
+                    if !hit.is_empty() {
+                        self.score += hit.len() as u32;
+                        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
+                        // Effet visuel : téléporte l'ancre `is_attack_fx` sur la première
+                        // cible touchée et déclenche le pic du flash (décroissance ensuite,
+                        // cf. section caméra plus bas) — rend le coup lisible en 3D, pas
+                        // juste sonore/au score.
+                        let hit_pos = self.scene.objects[hit[0]].transform.position;
+                        if let Some(fx) = self.attack_fx_index()
+                            && let Some(o) = self.scene.objects.get_mut(fx)
+                        {
+                            o.transform.position = hit_pos;
+                            o.transform.scale = Vec3::splat(1.2);
+                            o.visible = true;
+                        }
+                        self.attack_flash = 1.0;
+                        for i in hit {
+                            let d = self.scene.objects[i].respawn_delay;
+                            if d > 0.0 {
+                                self.respawn_queue.push((i, now + d));
+                            }
+                        }
+                    }
+                }
+            }
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
             self.respawn_queue.retain(|&(i, at)| {
@@ -1608,10 +1695,20 @@ impl AppState {
                     true
                 }
             });
-            // Défaite : le joueur a touché une zone mortelle.
+            // Défaite : le joueur a touché une zone mortelle (mort instantanée, ex. lave).
             if !self.lost
                 && let Some(p) = self.player_position()
                 && self.scene.deadly_at(p)
+            {
+                self.lost = true;
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+            }
+            // Défaite : la vie (dégâts cumulés des ennemis via `damage()`) est tombée à 0.
+            // Contrairement aux zones mortelles, les ennemis punissent par usure (dégâts
+            // progressifs + régénération hors contact), plus indulgent qu'une mort au tap.
+            if !self.lost
+                && let Some(h) = self.hud_health
+                && h <= 0.0
             {
                 self.lost = true;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
@@ -1634,6 +1731,25 @@ impl AppState {
             let t = (dt * 6.0).min(1.0);
             self.camera.target = self.camera.target.lerp(p + Vec3::new(0.0, 0.8, 0.0), t);
         }
+
+        // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
+        if self.damage_flash > 0.0 {
+            self.damage_flash = (self.damage_flash - dt * 2.5).max(0.0);
+        }
+        // Décroissance de l'effet d'attaque (~0,33 s) : rétrécit l'ancre `is_attack_fx`
+        // jusqu'à disparition, puis la remasque pour ne pas polluer le prochain coup.
+        if self.attack_flash > 0.0 {
+            self.attack_flash = (self.attack_flash - dt * 3.0).max(0.0);
+            if let Some(fx) = self.attack_fx_index()
+                && let Some(o) = self.scene.objects.get_mut(fx)
+            {
+                if self.attack_flash <= 0.0 {
+                    o.visible = false;
+                } else {
+                    o.transform.scale = Vec3::splat(0.25 + 0.95 * self.attack_flash);
+                }
+            }
+        }
     }
 
     /// Un pas de simulation à **dt fixe** : scripts Lua, actions au tap, pilotage des
@@ -1642,20 +1758,27 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
-        // Zones de déclenchement : objets `trigger` dont l'AABB monde contient le joueur.
+        // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde contient le
+        // joueur. `visible` exclut les ennemis vaincus (masqués par l'attaque, cf.
+        // `Scene::attack_at`) : un ennemi caché ne doit plus pouvoir infliger de dégâts.
         let triggered: std::collections::HashSet<usize> = match self.player_position() {
             Some(p) => self
                 .scene
                 .objects
                 .iter()
                 .enumerate()
-                .filter(|(_, o)| o.trigger && self.world_aabb_contains(o, p))
+                .filter(|(_, o)| o.trigger && o.visible && self.world_aabb_contains(o, p))
                 .map(|(i, _)| i)
                 .collect(),
             None => std::collections::HashSet::new(),
         };
         let mut vibrations: Vec<f32> = Vec::new();
-        let mut health = self.hud_health;
+        // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
+        // que les appels `damage()` de cette frame s'appliquent après, sans s'annuler.
+        const HEALTH_REGEN_PER_S: f32 = 0.25;
+        let mut health = self
+            .hud_health
+            .map(|h| (h + HEALTH_REGEN_PER_S * dt).min(1.0));
         // Positions de départ (snapshot d'entrée en Play) pour l'action « Respawn ».
         let start_pos: Vec<Vec3> = self
             .play_snapshot
@@ -1713,6 +1836,15 @@ impl AppState {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
+        // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
+        // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
+        // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
+        if let (Some(prev), Some(cur)) = (self.hud_health, health)
+            && cur < prev - 1e-4
+        {
+            self.damage_flash = 1.0;
+            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+        }
         self.hud_health = health;
         // Le tap n'est exposé qu'une frame.
         self.tapped_obj = None;
@@ -1739,7 +1871,13 @@ impl AppState {
                 let mut vz = 0.0;
                 if obj.input_receiver {
                     vx += mx * obj.move_speed;
-                    vz += -my * obj.move_speed;
+                    if obj.auto_run_speed > 0.0 {
+                        // Course automatique (endless runner) : avance en continu en +Z ;
+                        // l'entrée verticale du joystick ne fait rien (seul X = voie compte).
+                        vz += obj.auto_run_speed;
+                    } else {
+                        vz += -my * obj.move_speed;
+                    }
                 }
                 if obj.gyro_control {
                     vx += tilt.0 * obj.move_speed;
@@ -1778,9 +1916,10 @@ impl AppState {
         Some(self.win_time.unwrap_or(self.time))
     }
 
-    /// Position du « joueur » : objet pilotable (joystick/gyro) en priorité, sinon
-    /// premier objet scripté, sinon premier objet.
-    fn player_position(&self) -> Option<Vec3> {
+    /// Objet « joueur » : pilotable (joystick/gyro) en priorité, sinon premier objet
+    /// scripté, sinon premier objet. Base commune à `player_position` et à la résolution
+    /// d'attaque (bouton/portée propres à cet objet).
+    fn player_object(&self) -> Option<&SceneObject> {
         self.scene
             .objects
             .iter()
@@ -1792,7 +1931,16 @@ impl AppState {
                     .find(|o| !o.script.trim().is_empty())
             })
             .or_else(|| self.scene.objects.first())
-            .map(|o| o.transform.position)
+    }
+
+    /// Position du « joueur » : cf. `player_object`.
+    fn player_position(&self) -> Option<Vec3> {
+        self.player_object().map(|o| o.transform.position)
+    }
+
+    /// Indice de l'ancre visuelle d'attaque (`is_attack_fx`), s'il y en a une dans la scène.
+    fn attack_fx_index(&self) -> Option<usize> {
+        self.scene.objects.iter().position(|o| o.is_attack_fx)
     }
 
     /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
@@ -2062,11 +2210,25 @@ fn run_script(
     tilt.set("x", input.tilt.0)?;
     tilt.set("y", input.tilt.1)?;
 
-    // `set_health(v)` : pilote la barre de vie du HUD (0..1).
+    // `set_health(v)` : pilote la barre de vie du HUD (0..1), valeur absolue.
+    // La table `hud` reste vide tant qu'aucun script n'y touche (opt-in : les scripts
+    // sans rapport avec la vie — décor animé, etc. — ne font pas apparaître la barre).
     let hud = lua.create_table()?;
     let hud_ref = hud.clone();
     let set_health = lua.create_function(move |_, v: f32| {
         hud_ref.set("h", v.clamp(0.0, 1.0))?;
+        Ok(())
+    })?;
+    // `damage(v)` : soustrait `v` à la vie courante (accumulée depuis le début de la
+    // frame, entre objets inclus) plutôt que de l'écraser — plusieurs ennemis peuvent
+    // infliger des dégâts la même frame sans s'annuler mutuellement comme le ferait
+    // `set_health` (valeur absolue). Base = vie déjà régénérée/endommagée cette frame,
+    // ou pleine vie par défaut si le système de vie n'a jamais démarré.
+    let base_health = health_out.unwrap_or(1.0);
+    let hud_ref_dmg = hud.clone();
+    let damage = lua.create_function(move |_, v: f32| {
+        let cur: f32 = hud_ref_dmg.get("h").unwrap_or(base_health);
+        hud_ref_dmg.set("h", (cur - v).clamp(0.0, 1.0))?;
         Ok(())
     })?;
 
@@ -2078,6 +2240,7 @@ fn run_script(
     g.set("tilt", tilt)?;
     g.set("vibrate", vibrate)?;
     g.set("set_health", set_health)?;
+    g.set("damage", damage)?;
     func.call::<()>(())?;
 
     for v in vib.sequence_values::<f32>().flatten() {
@@ -2419,6 +2582,331 @@ mod tests {
     }
 
     #[test]
+    fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
+        // `damage(v)` doit soustraire de la vie déjà accumulée cette frame (par d'autres
+        // objets), contrairement à `set_health` (valeur absolue) qui écraserait les dégâts
+        // d'un ennemi précédent si un autre script s'exécutait après lui sans le vouloir.
+        let lua = Lua::new();
+        let func = lua.load("damage(0.3)").into_function().unwrap();
+        let input = PlayerInput::default();
+        // Aucun système de vie démarré : la base par défaut est pleine vie (1.0).
+        let mut health = None;
+        run_script(
+            &lua, &func, &mut Transform::from_pos(Vec3::ZERO), &mut [1.0; 3], 0.016, 0.0,
+            &input, false, false, &mut Vec::new(), &mut health,
+        )
+        .unwrap();
+        assert_eq!(health, Some(0.7));
+        // Un deuxième objet inflige des dégâts la même frame : doit partir de 0.7, pas de 1.0.
+        run_script(
+            &lua, &func, &mut Transform::from_pos(Vec3::ZERO), &mut [1.0; 3], 0.016, 0.0,
+            &input, false, false, &mut Vec::new(), &mut health,
+        )
+        .unwrap();
+        assert!(
+            (health.unwrap() - 0.4).abs() < 1e-5,
+            "les dégâts de deux objets la même frame doivent s'additionner : {health:?}"
+        );
+        // Clampé à 0, ne descend pas en négatif.
+        for _ in 0..10 {
+            run_script(
+                &lua, &func, &mut Transform::from_pos(Vec3::ZERO), &mut [1.0; 3], 0.016, 0.0,
+                &input, false, false, &mut Vec::new(), &mut health,
+            )
+            .unwrap();
+        }
+        assert_eq!(health, Some(0.0));
+    }
+
+    #[test]
+    fn controller_demo_enemy_scripts_compile_and_patrol() {
+        // Les ennemis de la démo contrôleur sont scriptés (patrouille + pulsation rouge) :
+        // vérifie que leurs scripts compilent et déplacent réellement l'objet dans le temps
+        // (sinon un ennemi "mort" resterait immobile, silencieusement cassé).
+        let scene = crate::scene::Scene::controller_demo();
+        let enemies: Vec<_> = scene
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Ennemi"))
+            .collect();
+        assert!(enemies.len() >= 3, "au moins 3 ennemis dans la démo");
+        let lua = Lua::new();
+        for e in enemies {
+            assert!(
+                e.trigger && !e.deadly,
+                "un ennemi doit infliger des dégâts progressifs (trigger), pas tuer \
+                 instantanément (deadly) : {}",
+                e.name
+            );
+            let func = lua.load(&e.script).into_function().unwrap();
+            let mut t0 = e.transform.clone();
+            let mut col = e.color;
+            let input = PlayerInput::default();
+            run_script(
+                &lua, &func, &mut t0, &mut col, 0.016, 0.0, &input, false, false,
+                &mut Vec::new(), &mut None,
+            )
+            .unwrap();
+            let mut t1 = e.transform.clone();
+            let mut col1 = e.color;
+            run_script(
+                &lua, &func, &mut t1, &mut col1, 0.016, 1.0, &input, false, false,
+                &mut Vec::new(), &mut None,
+            )
+            .unwrap();
+            assert!(
+                (t0.position - t1.position).length() > 0.01,
+                "l'ennemi {} doit bouger avec le temps",
+                e.name
+            );
+        }
+    }
+
+    /// Scène synthétique minimale (sol + joueur + un danger `trigger`+`damage()` couvrant
+    /// tout le sol) : isole la mécanique vie/dégâts de l'équilibrage d'un niveau réel.
+    /// La démo contrôleur n'est pas réutilisée ici : sa patrouille est conçue pour un
+    /// contact *intermittent* (l'ennemi s'éloigne), ce qui ne conviendrait pas pour
+    /// tester un contact permanent sans coupler le test à ce détail d'équilibrage.
+    fn synthetic_damage_scene() -> crate::scene::Scene {
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            input_receiver: true,
+            attack_button: "Attaque".into(),
+            attack_range: 2.0,
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(16.0, 1.0, 16.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let mut danger = crate::scene::SceneObject {
+            name: "Danger".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.5, 0.0))
+                .with_scale(Vec3::splat(3.0)),
+            trigger: true,
+            attackable: true,
+            respawn_delay: 100.0,
+            script: "if obj.triggered then damage(2.0 * dt) end".into(),
+            ..Default::default()
+        };
+        danger.color = [1.0; 3];
+        let mut fx = crate::scene::SceneObject {
+            name: "FX Attaque".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            is_attack_fx: true,
+            visible: false,
+            ..Default::default()
+        };
+        fx.color = [1.0; 3];
+        crate::scene::Scene {
+            objects: vec![sol, joueur, danger, fx],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sustained_enemy_contact_drains_health_and_ends_the_game() {
+        // Bout en bout (App réel, pas juste `run_script`) : un contact **permanent** avec
+        // un danger `trigger` + `damage()` doit finir par vaincre le joueur via le nouveau
+        // check de défaite sur `hud_health <= 0`, malgré la régénération passive.
+        let mut app = AppState::new();
+        app.scene = synthetic_damage_scene();
+        app.playing = true;
+        let mut ended = false;
+        for _ in 0..80 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if app.lost {
+                ended = true;
+                break;
+            }
+        }
+        assert!(
+            ended,
+            "un contact soutenu doit finir par vaincre le joueur (vie = {:?})",
+            app.hud_health
+        );
+    }
+
+    #[test]
+    fn attacking_defeats_enemy_and_stops_further_damage() {
+        // Bout en bout : appuyer sur « Attaque » (bouton nommé) alors qu'un ennemi
+        // `attackable` est à portée doit le vaincre (masquer) et augmenter le score.
+        // Verrouille aussi la correction du filtre `triggered` (doit exclure les objets
+        // invisibles) : un ennemi vaincu ne doit plus pouvoir blesser le joueur ensuite.
+        let mut app = AppState::new();
+        app.scene = synthetic_damage_scene();
+        app.playing = true;
+        app.input_state.buttons.insert("Attaque".into());
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(app.score, 1, "l'attaque doit vaincre l'ennemi à portée (score += 1)");
+        assert!(
+            !app.scene.objects.iter().find(|o| o.name == "Danger").unwrap().visible,
+            "l'ennemi vaincu doit devenir invisible"
+        );
+        // Le joueur ne prend plus de dégâts une fois l'ennemi vaincu, même en restant
+        // dessus (sans la correction du filtre `triggered`, le script du danger continuerait
+        // à appeler `damage()` malgré `visible = false`).
+        app.input_state.buttons.clear();
+        let health_after_defeat = app.hud_health;
+        for _ in 0..20 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert!(
+            !app.lost,
+            "un ennemi vaincu ne doit plus pouvoir vaincre le joueur (vie = {:?} → {:?})",
+            health_after_defeat, app.hud_health
+        );
+    }
+
+    #[test]
+    fn attack_shows_and_hides_the_visual_fx_anchor() {
+        // Une attaque qui porte doit rendre visible l'ancre `is_attack_fx`, la téléporter
+        // sur la cible touchée, puis la faire disparaître une fois `attack_flash` retombé
+        // à 0 — sinon l'effet resterait affiché indéfiniment après un coup.
+        let mut app = AppState::new();
+        app.scene = synthetic_damage_scene();
+        let target_pos = app
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Danger")
+            .unwrap()
+            .transform
+            .position;
+        app.playing = true;
+        app.input_state.buttons.insert("Attaque".into());
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+
+        fn fx(app: &AppState) -> crate::scene::SceneObject {
+            app.scene
+                .objects
+                .iter()
+                .find(|o| o.is_attack_fx)
+                .unwrap()
+                .clone()
+        }
+        assert!(fx(&app).visible, "l'ancre FX doit être visible après un coup");
+        assert!(
+            (fx(&app).transform.position - target_pos).length() < 1e-4,
+            "l'ancre FX doit être téléportée sur la cible touchée"
+        );
+        assert!(app.attack_flash > 0.0);
+
+        app.input_state.buttons.clear();
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if app.attack_flash <= 0.0 {
+                break;
+            }
+        }
+        assert_eq!(app.attack_flash, 0.0, "le flash d'attaque doit finir par retomber à 0");
+        assert!(!fx(&app).visible, "l'ancre FX doit disparaître une fois le flash retombé");
+    }
+
+    #[test]
+    fn auto_run_speed_advances_the_player_with_zero_input() {
+        // Cœur du style « Temple Run » : un joueur `auto_run_speed > 0` doit avancer en +Z
+        // même sans la moindre entrée (ni joystick, ni clavier) — contrairement au
+        // déplacement classique (`move_speed` seul), purement piloté par l'entrée.
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::temple_run_demo();
+        app.playing = true;
+        // `input_state` reste à ses valeurs par défaut (aucune entrée).
+        let z0 = app.player_position().unwrap().z;
+        for _ in 0..40 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        let z1 = app.player_position().unwrap().z;
+        assert!(
+            z1 > z0 + 1.0,
+            "la course automatique doit avancer le joueur sans entrée (z0={z0}, z1={z1})"
+        );
+    }
+
+    #[test]
+    fn damage_triggers_flash_that_fades_and_resets_on_stop() {
+        // Retour visuel du coup : `damage_flash` doit monter à 1.0 dès la première baisse
+        // de vie détectée, puis décroître frame après frame (pas rester bloqué au pic).
+        let mut app = AppState::new();
+        app.scene = synthetic_damage_scene();
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        // Le pic (1.0) est déclenché par le sim_step qui détecte le coup, mais cette même
+        // frame applique déjà une frame de décroissance ensuite (comportement voulu : le
+        // flash commence à s'estomper dès la frame du coup) — d'où la marge, pas `== 1.0`.
+        let peak = app.damage_flash;
+        assert!(peak > 0.8, "un coup doit déclencher un pic net du flash : {peak}");
+        // Sort du contact (sinon chaque frame retriggerait le pic à 1.0) pour vérifier la
+        // décroissance en l'absence de nouveaux coups. Reconstruit le corps physique à sa
+        // nouvelle position : sinon le pas de physique du même appel le ramènerait vers
+        // l'ancienne pose (le corps rigide, lui, n'a pas bougé) et le contact reprendrait.
+        if let Some(j) = app.scene.objects.iter_mut().find(|o| o.input_receiver) {
+            j.transform.position = Vec3::new(50.0, 0.5, 50.0);
+        }
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(
+            app.damage_flash < peak,
+            "le flash doit continuer à décroître frame après frame hors contact"
+        );
+        // Sortir de Play remet tout à zéro (pas de flash résiduel visible en édition).
+        app.playing = false;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(app.damage_flash, 0.0, "le flash est effacé à la sortie de Play");
+    }
+
+    #[test]
+    fn controller_demo_lava_boil_script_preserves_collision_scale() {
+        // La lave a un script de « bouillonnement » (pulsation de couleur) ajouté après coup ;
+        // il ne doit surtout pas toucher à l'échelle Y, qui encode l'épaisseur de collision
+        // nécessaire pour que la zone mortelle détecte un joueur debout (cf. test dédié dans
+        // scene::tests). Une régression ici rendrait la lave inoffensive en silence.
+        let scene = crate::scene::Scene::controller_demo();
+        let lave = scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Lave")
+            .expect("la lave existe");
+        assert!(!lave.script.trim().is_empty(), "la lave doit être animée");
+        let lua = Lua::new();
+        let func = lua.load(&lave.script).into_function().unwrap();
+        let mut t = lave.transform.clone();
+        let mut col = lave.color;
+        let input = PlayerInput::default();
+        run_script(
+            &lua, &func, &mut t, &mut col, 0.016, 3.7, &input, false, false,
+            &mut Vec::new(), &mut None,
+        )
+        .unwrap();
+        assert_eq!(
+            t.scale, lave.transform.scale,
+            "le script de la lave ne doit pas modifier l'échelle (collision)"
+        );
+        assert_eq!(
+            t.position, lave.transform.position,
+            "le script de la lave ne doit pas déplacer la mare"
+        );
+    }
+
+    #[test]
     fn script_can_request_vibration() {
         let lua = Lua::new();
         let func = lua
@@ -2459,8 +2947,14 @@ mod tests {
         assert!(!app.lost, "défaite remise à zéro");
         assert!(app.win_time.is_none(), "victoire remise à zéro");
         assert_eq!(app.time, 0.0, "chrono remis à zéro");
+        // Scopé aux gemmes (Hide) : d'autres objets sont légitimement invisibles par défaut
+        // dans cette démo (ex. l'ancre `is_attack_fx`, masquée tant qu'aucun coup ne porte).
         assert!(
-            app.scene.objects.iter().all(|o| o.visible),
+            app.scene
+                .objects
+                .iter()
+                .filter(|o| o.tap_action == crate::scene::TapAction::Hide)
+                .all(|o| o.visible),
             "toutes les gemmes redeviennent visibles"
         );
     }

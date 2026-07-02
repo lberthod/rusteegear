@@ -50,6 +50,37 @@ impl RenderQuality {
             RenderQuality::High => "Haute (qualité)",
         }
     }
+
+    /// Nombre maximal de lumières ponctuelles envoyées au shader pour ce niveau de
+    /// qualité (culling/LOD, cf. `Scene::nearest_point_lights`). Utilisé en mode Play
+    /// (éditeur et player exporté) pour que le réglage ait un effet réel sur la perf,
+    /// pas seulement sur les métadonnées d'export.
+    pub fn light_budget(self) -> usize {
+        match self {
+            RenderQuality::Low => 2,
+            RenderQuality::Medium => 4,
+            RenderQuality::High => crate::scene::MAX_POINT_LIGHTS,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn light_budget_scales_with_quality_and_stays_in_bounds() {
+        assert_eq!(RenderQuality::Low.light_budget(), 2);
+        assert_eq!(RenderQuality::Medium.light_budget(), 4);
+        assert_eq!(RenderQuality::High.light_budget(), crate::scene::MAX_POINT_LIGHTS);
+        // Chaque niveau doit rester borné par la capacité shader (jamais dépassée).
+        for q in [RenderQuality::Low, RenderQuality::Medium, RenderQuality::High] {
+            assert!(q.light_budget() <= crate::scene::MAX_POINT_LIGHTS);
+        }
+        // Ordre croissant strict : plus de qualité = plus de lumières.
+        assert!(RenderQuality::Low.light_budget() < RenderQuality::Medium.light_budget());
+        assert!(RenderQuality::Medium.light_budget() < RenderQuality::High.light_budget());
+    }
 }
 
 fn default_min_sdk() -> u32 {

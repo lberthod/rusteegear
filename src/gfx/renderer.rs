@@ -721,10 +721,11 @@ impl Renderer {
             spot: [0.0, -1.0, 0.0, -1.0],
         }; crate::scene::MAX_POINT_LIGHTS];
         // Culling/LOD : au-delà de la limite, on garde les lumières les plus proches
-        // de la caméra (les plus visibles) plutôt que les premières de la liste.
+        // de la caméra (les plus visibles) plutôt que les premières de la liste. Le
+        // plafond dépend de la qualité de rendu visée (perf en mode interactif « Basse »).
         let chosen = app
             .scene
-            .nearest_point_lights(eye, crate::scene::MAX_POINT_LIGHTS);
+            .nearest_point_lights(eye, app.render_quality.light_budget());
         let count = chosen.len();
         for (slot, &li) in points.iter_mut().zip(&chosen) {
             let pl = &app.scene.point_lights[li];
@@ -853,6 +854,7 @@ impl Renderer {
                     app.device_preview,
                     app.device_portrait,
                     app.hud_health,
+                    app.damage_flash,
                     game_time,
                     score,
                     lost,
@@ -883,6 +885,7 @@ impl Renderer {
                 &mut app.device_portrait,
                 &mut app.view_rect_px,
                 app.hud_health,
+                app.damage_flash,
                 game_time,
                 score,
                 lost,
@@ -923,6 +926,12 @@ impl Renderer {
             }
             if actions.load_controller {
                 app.load_controller_demo();
+            }
+            if actions.load_tower {
+                app.load_tower_demo();
+            }
+            if actions.load_temple_run {
+                app.load_temple_run_demo();
             }
             if actions.restart {
                 restart = true;

@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "motor3derust"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "android_logger",
  "bytemuck",

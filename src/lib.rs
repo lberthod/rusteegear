@@ -224,6 +224,7 @@ impl ApplicationHandler for App {
                         KeyCode::ArrowUp | KeyCode::KeyW => inp.key_move.1 = v,
                         KeyCode::ArrowDown | KeyCode::KeyS => inp.key_move.1 = -v,
                         KeyCode::Space => inp.jump = pressed,
+                        KeyCode::KeyJ => inp.attack = pressed,
                         _ => {}
                     }
                     // Les flèches alimentent aussi le gyroscope simulé (objets gyro_control).

@@ -10,6 +10,11 @@ pub enum Sfx {
     Jump,
     Win,
     Lose,
+    /// Dégât encaissé (contact ennemi) : distinct de `Lose`, joué une fois par « coup »
+    /// (front descendant de la vie), pas en continu tant que le contact dure.
+    Hit,
+    /// Ennemi vaincu par l'attaque du joueur (cf. `Scene::attack_at`).
+    Defeat,
 }
 
 impl Sfx {
@@ -19,6 +24,8 @@ impl Sfx {
             Sfx::Jump => "sfx:jump",
             Sfx::Win => "sfx:win",
             Sfx::Lose => "sfx:lose",
+            Sfx::Hit => "sfx:hit",
+            Sfx::Defeat => "sfx:defeat",
         }
     }
 
@@ -29,6 +36,8 @@ impl Sfx {
             Sfx::Jump => (&[(440.0, 0.05), (700.0, 0.05)], 0.22),
             Sfx::Win => (&[(523.0, 0.11), (659.0, 0.11), (784.0, 0.18)], 0.28),
             Sfx::Lose => (&[(330.0, 0.14), (247.0, 0.22)], 0.28),
+            Sfx::Hit => (&[(180.0, 0.08)], 0.3),
+            Sfx::Defeat => (&[(600.0, 0.05), (900.0, 0.05), (1200.0, 0.08)], 0.26),
         }
     }
 }
@@ -100,7 +109,7 @@ mod tests {
 
     #[test]
     fn each_sfx_generates_audio() {
-        for s in [Sfx::Pickup, Sfx::Jump, Sfx::Win, Sfx::Lose] {
+        for s in [Sfx::Pickup, Sfx::Jump, Sfx::Win, Sfx::Lose, Sfx::Hit, Sfx::Defeat] {
             let (segs, vol) = s.segments();
             assert!(synth_wav(segs, vol).len() > 44);
         }
