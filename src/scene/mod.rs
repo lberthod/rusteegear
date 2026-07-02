@@ -168,6 +168,24 @@ impl Controller {
     }
 }
 
+/// Composant optionnel : rôle d'un `SceneObject` dans le combat — cible d'attaque
+/// (`attackable`) et/ou ancre visuelle de l'effet d'impact (`is_attack_fx`). `None`
+/// pour la grande majorité des objets d'une scène (décor, collectibles, joueur...).
+/// Les deux champs se cumulent rarement sur le même objet (l'ancre FX n'est
+/// généralement pas elle-même attaquable) mais partagent le même domaine « combat ».
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Combat {
+    /// Cible valide pour l'attaque du joueur (cf. `Scene::attack_at`) : un ennemi vaincu
+    /// devient invisible, puis réapparaît après `respawn_delay` (0 = ne réapparaît pas).
+    #[serde(default)]
+    pub attackable: bool,
+    /// Ancre visuelle de l'effet d'attaque (au plus un objet par scène) : téléportée sur
+    /// la cible touchée et affichée brièvement par `App` quand une attaque porte (cf.
+    /// `AppState::attack_flash`). N'a aucun effet tant qu'aucune attaque ne porte.
+    #[serde(default)]
+    pub is_attack_fx: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SceneObject {
     pub name: String,
@@ -224,15 +242,12 @@ pub struct SceneObject {
     /// Reste hors de `Controller` : s'applique à tout objet tactile, pas seulement pilotable.
     #[serde(default)]
     pub vibrate_on_tap: u32,
-    /// Cible valide pour l'attaque du joueur (cf. `Scene::attack_at`) : un ennemi vaincu
-    /// devient invisible, puis réapparaît après `respawn_delay` (0 = ne réapparaît pas).
+    /// Combat : cible d'attaque et/ou ancre visuelle d'effet (cf. `Combat`). `None` pour
+    /// la grande majorité des objets — décor, collectibles, etc. n'ont rien à voir avec
+    /// le combat. `respawn_delay` (plus bas) reste hors de ce composant : partagé avec les
+    /// collectibles bonus, il n'est pas propre au combat.
     #[serde(default)]
-    pub attackable: bool,
-    /// Ancre visuelle de l'effet d'attaque (au plus un objet par scène) : téléportée sur
-    /// la cible touchée et affichée brièvement par `App` quand une attaque porte (cf.
-    /// `AppState::attack_flash`). N'a aucun effet tant qu'aucune attaque ne porte.
-    #[serde(default)]
-    pub is_attack_fx: bool,
+    pub combat: Option<Combat>,
     /// Action déclenchée sans script quand l'objet est tapé (Touch Area requise).
     #[serde(default)]
     pub tap_action: TapAction,
@@ -341,8 +356,7 @@ impl Default for SceneObject {
             trigger: false,
             controller: None,
             vibrate_on_tap: 0,
-            attackable: false,
-            is_attack_fx: false,
+            combat: None,
             tap_action: TapAction::None,
             visible: true,
             deadly: false,
@@ -597,7 +611,10 @@ impl Scene {
         let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
         fx.color = [1.0, 0.95, 0.75];
         fx.emissive = 1.6;
-        fx.is_attack_fx = true;
+        fx.combat = Some(Combat {
+            is_attack_fx: true,
+            ..Default::default()
+        });
         fx.visible = false;
         let mut objects = vec![sol, joueur, fx];
 
@@ -844,7 +861,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             e.color = [0.85, 0.08, 0.08];
             e.emissive = 0.5;
             e.trigger = true;
-            e.attackable = true;
+            e.combat = Some(Combat {
+                attackable: true,
+                ..Default::default()
+            });
             e.respawn_delay = 8.0 - hard;
             e.script = script;
             objects.push(e);
@@ -1415,7 +1435,8 @@ impl Scene {
     pub fn attack_at(&mut self, p: Vec3, radius: f32) -> Vec<usize> {
         let mut hit = Vec::new();
         for (i, o) in self.objects.iter_mut().enumerate() {
-            if o.attackable && o.visible {
+            let attackable = o.combat.as_ref().is_some_and(|c| c.attackable);
+            if attackable && o.visible {
                 let enemy_r = o.transform.scale.max_element() * 0.5;
                 if (o.transform.position - p).length() <= radius + enemy_r {
                     o.visible = false;
@@ -1996,7 +2017,10 @@ mod tests {
         assert!(enemies.len() >= 3, "au moins 3 ennemis dans la démo");
         for (i, o) in s.objects.iter().enumerate() {
             if o.name.starts_with("Ennemi") {
-                assert!(o.attackable, "un ennemi doit être une cible d'attaque valide : {i}");
+                assert!(
+                    o.combat.as_ref().is_some_and(|c| c.attackable),
+                    "un ennemi doit être une cible d'attaque valide : {i}"
+                );
             }
         }
         // Loin de tout ennemi : aucune attaque ne touche.
@@ -2144,5 +2168,31 @@ mod tests {
         assert_eq!(a.clip, "assets/wind.wav");
         assert!(a.autoplay);
         assert!(a.spatial);
+    }
+
+    #[test]
+    fn combat_component_is_optional_and_survives_round_trip() {
+        // Un objet hors combat garde `combat: None` (décor, collectibles...). Un ennemi
+        // voit ses 2 champs regroupés (attackable, is_attack_fx) survivre à la sérialisation.
+        let peaceful = SceneObject::default();
+        assert!(peaceful.combat.is_none());
+
+        let mut o = SceneObject {
+            name: "Ennemi".into(),
+            ..Default::default()
+        };
+        o.combat = Some(Combat {
+            attackable: true,
+            is_attack_fx: false,
+        });
+        let scene = Scene {
+            objects: vec![o],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&scene).unwrap();
+        let back: Scene = serde_json::from_str(&json).unwrap();
+        let c = back.objects[0].combat.as_ref().expect("combat round-trip");
+        assert!(c.attackable);
+        assert!(!c.is_attack_fx);
     }
 }

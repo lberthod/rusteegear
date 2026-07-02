@@ -1950,7 +1950,10 @@ impl AppState {
 
     /// Indice de l'ancre visuelle d'attaque (`is_attack_fx`), s'il y en a une dans la scène.
     fn attack_fx_index(&self) -> Option<usize> {
-        self.scene.objects.iter().position(|o| o.is_attack_fx)
+        self.scene
+            .objects
+            .iter()
+            .position(|o| o.combat.as_ref().is_some_and(|c| c.is_attack_fx))
     }
 
     /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
@@ -2703,7 +2706,10 @@ mod tests {
             transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.5, 0.0))
                 .with_scale(Vec3::splat(3.0)),
             trigger: true,
-            attackable: true,
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                ..Default::default()
+            }),
             respawn_delay: 100.0,
             script: "if obj.triggered then damage(2.0 * dt) end".into(),
             ..Default::default()
@@ -2712,7 +2718,10 @@ mod tests {
         let mut fx = crate::scene::SceneObject {
             name: "FX Attaque".into(),
             mesh: crate::scene::MeshKind::Sphere,
-            is_attack_fx: true,
+            combat: Some(crate::scene::Combat {
+                is_attack_fx: true,
+                ..Default::default()
+            }),
             visible: false,
             ..Default::default()
         };
@@ -2804,7 +2813,7 @@ mod tests {
             app.scene
                 .objects
                 .iter()
-                .find(|o| o.is_attack_fx)
+                .find(|o| o.combat.as_ref().is_some_and(|c| c.is_attack_fx))
                 .unwrap()
                 .clone()
         }
