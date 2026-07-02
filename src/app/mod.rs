@@ -714,8 +714,6 @@ impl AppState {
             script: String::new(),
             physics: crate::runtime::physics::PhysicsKind::None,
             collider_shape: crate::runtime::physics::ColliderShape::Auto,
-            audio_clip: String::new(),
-            audio_autoplay: false,
             group: String::new(),
             color: [1.0, 1.0, 1.0],
             texture: String::new(),
@@ -724,7 +722,6 @@ impl AppState {
             roughness: 0.6,
             emissive: 0.0,
             trigger: false,
-            audio_spatial: false,
             ..Default::default()
         });
         self.select_single(self.scene.objects.len() - 1);
@@ -836,7 +833,10 @@ impl AppState {
             .scene
             .objects
             .iter()
-            .any(|o| is_external(&o.texture) || is_external(&o.audio_clip))
+            .any(|o| {
+                is_external(&o.texture)
+                    || o.audio.as_ref().is_some_and(|a| is_external(&a.clip))
+            })
             || self.scene.imported.iter().any(|m| is_external(&m.path));
         if !any {
             return 0;
@@ -853,7 +853,9 @@ impl AppState {
         };
         for o in &mut self.scene.objects {
             import(&mut o.texture);
-            import(&mut o.audio_clip);
+            if let Some(a) = &mut o.audio {
+                import(&mut a.clip);
+            }
         }
         for m in &mut self.scene.imported {
             import(&mut m.path);
@@ -1549,15 +1551,18 @@ impl AppState {
                 .scene
                 .objects
                 .iter()
-                .filter(|o| o.audio_autoplay && !o.audio_clip.is_empty())
-                .map(|o| {
-                    let gain = if o.audio_spatial {
+                .filter_map(|o| {
+                    let a = o.audio.as_ref()?;
+                    if !a.autoplay || a.clip.is_empty() {
+                        return None;
+                    }
+                    let gain = if a.spatial {
                         let dist = (o.transform.position - listener).length();
                         (1.0 - dist / 20.0).clamp(0.0, 1.0)
                     } else {
                         1.0
                     };
-                    (o.audio_clip.clone(), gain)
+                    Some((a.clip.clone(), gain))
                 })
                 .collect();
             for (c, gain) in clips {
@@ -2040,8 +2045,6 @@ impl AppState {
             script: String::new(),
             physics: crate::runtime::physics::PhysicsKind::None,
             collider_shape: crate::runtime::physics::ColliderShape::Auto,
-            audio_clip: String::new(),
-            audio_autoplay: false,
             group: String::new(),
             color: [1.0, 1.0, 1.0],
             texture: String::new(),
@@ -2050,7 +2053,6 @@ impl AppState {
             roughness: 0.6,
             emissive: 0.0,
             trigger: false,
-            audio_spatial: false,
             ..Default::default()
         });
         self.select_single(self.scene.objects.len() - 1);
@@ -2997,8 +2999,6 @@ mod tests {
                 script: String::new(),
                 physics: crate::runtime::physics::PhysicsKind::None,
                 collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                audio_clip: String::new(),
-                audio_autoplay: false,
                 group: String::new(),
                 color: [1.0; 3],
                 texture: String::new(),
@@ -3007,7 +3007,6 @@ mod tests {
                 roughness: 0.6,
                 emissive: 0.0,
                 trigger: false,
-                audio_spatial: false,
                 ..Default::default()
             });
         }

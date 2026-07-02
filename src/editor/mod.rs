@@ -409,7 +409,7 @@ fn object_badges(obj: &crate::scene::SceneObject) -> String {
     if !obj.script.trim().is_empty() {
         b.push_str(" 📜");
     }
-    if !obj.audio_clip.is_empty() {
+    if obj.audio.as_ref().is_some_and(|a| !a.clip.is_empty()) {
         b.push_str(" 🔊");
     }
     b
@@ -981,7 +981,10 @@ fn menu_ajouter(
                         .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
                         .pick_file()
                 {
-                    scene.objects[i].audio_clip = p.to_string_lossy().into_owned();
+                    scene.objects[i]
+                        .audio
+                        .get_or_insert_with(crate::scene::AudioSource::default)
+                        .clip = p.to_string_lossy().into_owned();
                 }
                 ui.close();
             }
@@ -2412,6 +2415,12 @@ fn build_ui(
                         });
                         ui.separator();
                         ui.collapsing("Audio", |ui| {
+                            use crate::scene::AudioSource;
+                            let clip = obj
+                                .audio
+                                .as_ref()
+                                .map(|a| a.clip.clone())
+                                .unwrap_or_default();
                             ui.horizontal(|ui| {
                                 if ui.button("Choisir un son…").clicked() {
                                     #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -2419,27 +2428,34 @@ fn build_ui(
                                         .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
                                         .pick_file()
                                     {
-                                        obj.audio_clip = p.to_string_lossy().into_owned();
+                                        obj.audio.get_or_insert_with(AudioSource::default).clip =
+                                            p.to_string_lossy().into_owned();
                                     }
                                 }
-                                if !obj.audio_clip.is_empty() && ui.button("▶ Tester").clicked() {
-                                    actions.play_audio = Some(obj.audio_clip.clone());
+                                if !clip.is_empty() && ui.button("▶ Tester").clicked() {
+                                    actions.play_audio = Some(clip.to_string());
                                 }
                             });
-                            let label = if obj.audio_clip.is_empty() {
+                            let label = if clip.is_empty() {
                                 "(aucun)".to_string()
                             } else {
-                                std::path::Path::new(&obj.audio_clip)
+                                std::path::Path::new(&clip)
                                     .file_name()
                                     .map(|s| s.to_string_lossy().into_owned())
                                     .unwrap_or_default()
                             };
                             ui.label(label);
-                            ui.checkbox(&mut obj.audio_autoplay, "Jouer au lancement (Play)");
-                            ui.checkbox(&mut obj.audio_spatial, "🔊 Spatialisé (volume selon distance)")
-                                .on_hover_text(
-                                    "Le volume au lancement décroît avec la distance à la caméra",
-                                );
+                            // Autoplay/spatialisation n'ont de sens que si un clip est choisi :
+                            // évite de créer un `AudioSource` (donc un badge 🔊) juste en les cochant.
+                            if let Some(a) = &mut obj.audio
+                                && !a.clip.is_empty()
+                            {
+                                ui.checkbox(&mut a.autoplay, "Jouer au lancement (Play)");
+                                ui.checkbox(&mut a.spatial, "🔊 Spatialisé (volume selon distance)")
+                                    .on_hover_text(
+                                        "Le volume au lancement décroît avec la distance à la caméra",
+                                    );
+                            }
                         });
                         ui.separator();
                         ui.collapsing("🧩 Composants mobiles (Android)", |ui| {

@@ -375,8 +375,11 @@ impl ExportPanel {
                     .default_open(false)
                     .show(ui, |ui| {
                         let n_tex = scene.objects.iter().filter(|o| !o.texture.is_empty()).count();
-                        let n_audio =
-                            scene.objects.iter().filter(|o| !o.audio_clip.is_empty()).count();
+                        let n_audio = scene
+                            .objects
+                            .iter()
+                            .filter(|o| o.audio.as_ref().is_some_and(|a| !a.clip.is_empty()))
+                            .count();
                         ui.label(format!("{} modèle(s) importé(s)", scene.imported.len()));
                         ui.label(format!("{n_tex} texture(s), {n_audio} son(s)"));
                         ui.weak(
@@ -735,12 +738,13 @@ fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
     if let Some(arr) = val.get_mut("objects").and_then(|v| v.as_array_mut()) {
         for (i, o) in arr.iter_mut().enumerate() {
             if let Some(p) = o
-                .get("audio_clip")
+                .get("audio")
+                .and_then(|a| a.get("clip"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
             {
                 match copy_to_bundle(&dir, &p, &format!("a{i}")) {
-                    Ok(Some(key)) => o["audio_clip"] = serde_json::Value::String(key),
+                    Ok(Some(key)) => o["audio"]["clip"] = serde_json::Value::String(key),
                     Ok(None) => {}
                     Err(e) => warns.push(e),
                 }

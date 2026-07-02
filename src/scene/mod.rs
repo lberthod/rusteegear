@@ -103,6 +103,23 @@ pub struct ImportedMesh {
     pub aabb_max: Vec3,
 }
 
+/// Composant optionnel : son associé à un `SceneObject` (clip, autoplay, spatialisation).
+/// `None` = aucun son — la grande majorité des objets d'une scène n'en ont pas ; les y
+/// laisser à plat (3 champs) aurait alourdi tous les objets pour rien. Même logique de
+/// migration que `Controller`.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct AudioSource {
+    /// Fichier son (chemin disque ou `bundle://`).
+    #[serde(default)]
+    pub clip: String,
+    /// Joue le son au lancement du mode Play.
+    #[serde(default)]
+    pub autoplay: bool,
+    /// Volume au lancement décroissant avec la distance à la caméra.
+    #[serde(default)]
+    pub spatial: bool,
+}
+
 /// Composant optionnel : fait d'un `SceneObject` un objet pilotable par le joueur
 /// (joystick, gyroscope, saut, attaque). Regroupe des champs auparavant plats sur
 /// `SceneObject` — un seul objet par scène en porte généralement un (le joueur), donc
@@ -165,12 +182,11 @@ pub struct SceneObject {
     /// Forme du collider (Auto = déduite du mesh).
     #[serde(default)]
     pub collider_shape: crate::runtime::physics::ColliderShape,
-    /// Fichier son associé (vide = aucun).
+    /// Son associé à l'objet (clip, autoplay, spatialisation) : `None` = aucun son —
+    /// la grande majorité des objets d'une scène n'en ont pas. Composant optionnel
+    /// (regroupe 3 champs auparavant plats), même logique que `controller`.
     #[serde(default)]
-    pub audio_clip: String,
-    /// Joue le son au lancement du mode Play.
-    #[serde(default)]
-    pub audio_autoplay: bool,
+    pub audio: Option<AudioSource>,
     /// Groupe (dossier) défini par l'utilisateur ; vide = « Sans groupe ».
     #[serde(default)]
     pub group: String,
@@ -197,10 +213,6 @@ pub struct SceneObject {
     /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
     #[serde(default)]
     pub trigger: bool,
-    /// Son spatialisé : le volume au lancement décroît avec la distance à la caméra.
-    #[serde(default)]
-    pub audio_spatial: bool,
-
     // --- Composants mobiles Android (Sprint 41) ---
     /// Fait de cet objet un objet **pilotable** (joystick/gyroscope/saut/attaque) : `None`
     /// pour la grande majorité des objets d'une scène (décor, ennemis, pièces...), qui
@@ -318,8 +330,7 @@ impl Default for SceneObject {
             script: String::new(),
             physics: PhysicsKind::None,
             collider_shape: crate::runtime::physics::ColliderShape::Auto,
-            audio_clip: String::new(),
-            audio_autoplay: false,
+            audio: None,
             group: String::new(),
             color: white(),
             texture: String::new(),
@@ -328,7 +339,6 @@ impl Default for SceneObject {
             roughness: default_roughness(),
             emissive: 0.0,
             trigger: false,
-            audio_spatial: false,
             controller: None,
             vibrate_on_tap: 0,
             attackable: false,
@@ -530,8 +540,6 @@ fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
         script: String::new(),
         physics: PhysicsKind::None,
         collider_shape: crate::runtime::physics::ColliderShape::Auto,
-        audio_clip: String::new(),
-        audio_autoplay: false,
         group: String::new(),
         color: white(),
         texture: String::new(),
@@ -540,7 +548,6 @@ fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
         roughness: 0.6,
         emissive: 0.0,
         trigger: false,
-        audio_spatial: false,
         ..Default::default()
     }
 }
@@ -1329,7 +1336,8 @@ impl Scene {
         let mut obj_bytes = self.objects.len() * std::mem::size_of::<SceneObject>();
         let mut textures = std::collections::BTreeSet::new();
         for o in &self.objects {
-            obj_bytes += o.name.len() + o.script.len() + o.texture.len() + o.audio_clip.len();
+            let audio_len = o.audio.as_ref().map_or(0, |a| a.clip.len());
+            obj_bytes += o.name.len() + o.script.len() + o.texture.len() + audio_len;
             if !o.texture.is_empty() {
                 textures.insert(o.texture.as_str());
             }
@@ -1509,8 +1517,6 @@ impl Scene {
                     script: String::new(),
                     physics: PhysicsKind::Static,
                     collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                    audio_clip: String::new(),
-                    audio_autoplay: false,
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
@@ -1519,7 +1525,6 @@ impl Scene {
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
-                    audio_spatial: false,
                     ..Default::default()
                 },
                 SceneObject {
@@ -1530,8 +1535,6 @@ impl Scene {
                     script: "obj.ry = obj.ry + dt * 60.0".into(),
                     physics: PhysicsKind::None,
                     collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                    audio_clip: String::new(),
-                    audio_autoplay: false,
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
@@ -1540,7 +1543,6 @@ impl Scene {
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
-                    audio_spatial: false,
                     ..Default::default()
                 },
                 SceneObject {
@@ -1551,8 +1553,6 @@ impl Scene {
                     // tombe et rebondit sur le sol en mode Play
                     physics: PhysicsKind::Dynamic,
                     collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                    audio_clip: String::new(),
-                    audio_autoplay: false,
                     group: String::new(),
                     color: [1.0, 1.0, 1.0],
                     texture: String::new(),
@@ -1561,7 +1561,6 @@ impl Scene {
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
-                    audio_spatial: false,
                     ..Default::default()
                 },
             ],
@@ -1598,8 +1597,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     script: String::new(),
                     physics: PhysicsKind::Static,
                     collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                    audio_clip: String::new(),
-                    audio_autoplay: false,
                     group: String::new(),
                     color: [0.4, 0.5, 0.45],
                     texture: String::new(),
@@ -1608,7 +1605,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
-                    audio_spatial: false,
                     ..Default::default()
                 },
                 SceneObject {
@@ -1618,8 +1614,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     script: player_script.into(),
                     physics: PhysicsKind::None,
                     collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                    audio_clip: String::new(),
-                    audio_autoplay: false,
                     group: String::new(),
                     color: [0.95, 0.6, 0.25],
                     texture: String::new(),
@@ -1628,7 +1622,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
-                    audio_spatial: false,
                     ..Default::default()
                 },
                 SceneObject {
@@ -1639,8 +1632,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     script: "if obj.tapped then\n  obj.r = (time * 0.7) % 1.0\n  obj.g = (time * 1.3) % 1.0\n  obj.b = (time * 1.9) % 1.0\nend".into(),
                     physics: PhysicsKind::None,
                     collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                    audio_clip: String::new(),
-                    audio_autoplay: false,
                     group: String::new(),
                     color: [0.3, 0.6, 0.9],
                     texture: String::new(),
@@ -1649,7 +1640,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     roughness: 0.6,
                     emissive: 0.0,
                     trigger: false,
-                    audio_spatial: false,
                     ..Default::default()
                 },
             ],
@@ -1680,8 +1670,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     _ => PhysicsKind::None,
                 },
                 collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                audio_clip: String::new(),
-                audio_autoplay: false,
                 group: String::new(),
                 color: o.color,
                 texture: String::new(),
@@ -1690,7 +1678,6 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                 roughness: 0.6,
                 emissive: 0.0,
                 trigger: false,
-                audio_spatial: false,
                 ..Default::default()
             })
             .collect();
@@ -2129,5 +2116,33 @@ mod tests {
         assert!((ctrl.jump_height - 2.2).abs() < 1e-6);
         assert_eq!(b.tap_action, TapAction::Hide);
         assert!(!b.visible);
+    }
+
+    #[test]
+    fn audio_source_component_is_optional_and_survives_round_trip() {
+        // Un objet sans son garde `audio: None` (pas de bloat JSON pour la majorité des
+        // objets). Un objet avec son voit ses 3 champs regroupés survivre à la sérialisation.
+        let silent = SceneObject::default();
+        assert!(silent.audio.is_none());
+
+        let mut o = SceneObject {
+            name: "Ambiance".into(),
+            ..Default::default()
+        };
+        o.audio = Some(AudioSource {
+            clip: "assets/wind.wav".into(),
+            autoplay: true,
+            spatial: true,
+        });
+        let scene = Scene {
+            objects: vec![o],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&scene).unwrap();
+        let back: Scene = serde_json::from_str(&json).unwrap();
+        let a = back.objects[0].audio.as_ref().expect("audio round-trip");
+        assert_eq!(a.clip, "assets/wind.wav");
+        assert!(a.autoplay);
+        assert!(a.spatial);
     }
 }
