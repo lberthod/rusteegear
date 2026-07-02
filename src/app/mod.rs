@@ -1646,16 +1646,18 @@ impl AppState {
                     }
                 }
             }
-            // Attaque du joueur : bouton tactile nommé (obj.attack_button) ou touche
+            // Attaque du joueur : bouton tactile nommé (controller.attack_button) ou touche
             // clavier Attaque. Vainc les ennemis `attackable` à portée ; ils réapparaissent
             // après `respawn_delay` comme les pièces bonus (même file de réapparition).
-            if let Some(player) = self.player_object() {
-                let pressed = (!player.attack_button.is_empty()
-                    && self.input_state.buttons.contains(&player.attack_button))
+            if let Some(player) = self.player_object()
+                && let Some(ctrl) = player.controller.clone()
+            {
+                let pressed = (!ctrl.attack_button.is_empty()
+                    && self.input_state.buttons.contains(&ctrl.attack_button))
                     || self.input_state.attack;
                 if pressed {
                     let p = player.transform.position;
-                    let range = player.attack_range;
+                    let range = ctrl.attack_range;
                     let now = self.time;
                     let hit = self.scene.attack_at(p, range);
                     if !hit.is_empty() {
@@ -1864,30 +1866,33 @@ impl AppState {
             let (tilt, space) = (inp.tilt, inp.jump);
             let mut any_jump = false;
             for (idx, obj) in self.scene.objects.iter().enumerate() {
-                if !obj.input_receiver && !obj.gyro_control {
+                let Some(ctrl) = &obj.controller else {
+                    continue;
+                };
+                if !ctrl.input && !ctrl.gyro {
                     continue;
                 }
                 let mut vx = 0.0;
                 let mut vz = 0.0;
-                if obj.input_receiver {
-                    vx += mx * obj.move_speed;
-                    if obj.auto_run_speed > 0.0 {
+                if ctrl.input {
+                    vx += mx * ctrl.move_speed;
+                    if ctrl.auto_run_speed > 0.0 {
                         // Course automatique (endless runner) : avance en continu en +Z ;
                         // l'entrée verticale du joystick ne fait rien (seul X = voie compte).
-                        vz += obj.auto_run_speed;
+                        vz += ctrl.auto_run_speed;
                     } else {
-                        vz += -my * obj.move_speed;
+                        vz += -my * ctrl.move_speed;
                     }
                 }
-                if obj.gyro_control {
-                    vx += tilt.0 * obj.move_speed;
-                    vz += -tilt.1 * obj.move_speed;
+                if ctrl.gyro {
+                    vx += tilt.0 * ctrl.move_speed;
+                    vz += -tilt.1 * ctrl.move_speed;
                 }
                 // Saut : bouton tactile nommé, ou Espace au clavier (objet pilotable).
-                let jump = (!obj.jump_button.is_empty()
-                    && self.input_state.buttons.contains(&obj.jump_button))
-                    || (space && obj.input_receiver);
-                let jump_speed = (2.0 * 9.81 * obj.jump_height.max(0.0)).sqrt();
+                let jump = (!ctrl.jump_button.is_empty()
+                    && self.input_state.buttons.contains(&ctrl.jump_button))
+                    || (space && ctrl.input);
+                let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
                 any_jump |= phys.control(idx, vx, vz, jump, jump_speed);
             }
             phys.step(dt, &mut self.scene);
@@ -1923,7 +1928,7 @@ impl AppState {
         self.scene
             .objects
             .iter()
-            .find(|o| o.input_receiver || o.gyro_control)
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
             .or_else(|| {
                 self.scene
                     .objects
@@ -2672,9 +2677,12 @@ mod tests {
             name: "Joueur".into(),
             mesh: crate::scene::MeshKind::Capsule,
             transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
-            input_receiver: true,
-            attack_button: "Attaque".into(),
-            attack_range: 2.0,
+            controller: Some(crate::scene::Controller {
+                input: true,
+                attack_button: "Attaque".into(),
+                attack_range: 2.0,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         joueur.color = [1.0; 3];
@@ -2856,7 +2864,12 @@ mod tests {
         // décroissance en l'absence de nouveaux coups. Reconstruit le corps physique à sa
         // nouvelle position : sinon le pas de physique du même appel le ramènerait vers
         // l'ancienne pose (le corps rigide, lui, n'a pas bougé) et le contact reprendrait.
-        if let Some(j) = app.scene.objects.iter_mut().find(|o| o.input_receiver) {
+        if let Some(j) = app
+            .scene
+            .objects
+            .iter_mut()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+        {
             j.transform.position = Vec3::new(50.0, 0.5, 50.0);
         }
         app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));

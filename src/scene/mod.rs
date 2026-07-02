@@ -103,6 +103,54 @@ pub struct ImportedMesh {
     pub aabb_max: Vec3,
 }
 
+/// Composant optionnel : fait d'un `SceneObject` un objet pilotable par le joueur
+/// (joystick, gyroscope, saut, attaque). Regroupe des champs auparavant plats sur
+/// `SceneObject` — un seul objet par scène en porte généralement un (le joueur), donc
+/// les y laisser à plat aurait alourdi *tous* les objets (décor, ennemis, pièces...)
+/// pour rien. Étape de migration « composants optionnels » (pas un ECS complet : pas
+/// de requêtes génériques, juste un regroupement logique qui évite le bloat plat).
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Controller {
+    /// Le joystick/clavier (X/Z, ou X seul si `auto_run_speed > 0`) pilote l'objet.
+    #[serde(default)]
+    pub input: bool,
+    /// L'inclinaison (gyroscope/flèches simulées) pilote l'objet.
+    #[serde(default)]
+    pub gyro: bool,
+    /// Vitesse appliquée par `input`/`gyro` (unités/seconde).
+    #[serde(default = "default_move_speed")]
+    pub move_speed: f32,
+    /// Course automatique (m/s, +Z) : > 0 ⇒ avance en continu sans action du joueur
+    /// (style « endless runner »), l'entrée horizontale ne pilotant plus que la voie (X).
+    #[serde(default)]
+    pub auto_run_speed: f32,
+    /// Nom du bouton tactile qui fait sauter (vide = pas de saut).
+    #[serde(default)]
+    pub jump_button: String,
+    /// Hauteur de saut (mètres).
+    #[serde(default = "default_jump_height")]
+    pub jump_height: f32,
+    /// Nom du bouton tactile qui fait attaquer (vide = pas d'attaque). Combiné à la
+    /// touche clavier Attaque (desktop) — cf. `PlayerInput::attack`.
+    #[serde(default)]
+    pub attack_button: String,
+    /// Portée (mètres) de l'attaque, centrée sur la position de l'objet.
+    #[serde(default = "default_attack_range")]
+    pub attack_range: f32,
+}
+
+impl Controller {
+    /// Pilotable « standard » (joystick + saut), le cas le plus courant. Les autres champs
+    /// restent à leurs défauts (`Controller::default()` puis champs modifiés au besoin).
+    pub fn input_only(move_speed: f32) -> Self {
+        Self {
+            input: true,
+            move_speed,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SceneObject {
     pub name: String,
@@ -154,36 +202,16 @@ pub struct SceneObject {
     pub audio_spatial: bool,
 
     // --- Composants mobiles Android (Sprint 41) ---
-    /// Input Receiver : l'objet se déplace avec le joystick virtuel en Play (X/Z).
+    /// Fait de cet objet un objet **pilotable** (joystick/gyroscope/saut/attaque) : `None`
+    /// pour la grande majorité des objets d'une scène (décor, ennemis, pièces...), qui
+    /// n'ont pas besoin de ces champs. Regroupe ce qui était 8 champs plats séparés
+    /// (composant optionnel plutôt qu'un ECS complet — cf. discussion d'architecture).
     #[serde(default)]
-    pub input_receiver: bool,
-    /// Gyroscope Controller : l'objet se déplace selon l'inclinaison (tilt) en Play.
-    #[serde(default)]
-    pub gyro_control: bool,
-    /// Vitesse appliquée par Input Receiver / Gyroscope (unités/seconde).
-    #[serde(default = "default_move_speed")]
-    pub move_speed: f32,
-    /// Course automatique (m/s, +Z) d'un objet `input_receiver` : > 0 ⇒ avance en continu
-    /// sans action du joueur (style « endless runner »), l'entrée horizontale (joystick/
-    /// clavier X) ne contrôlant plus que le changement de voie (X), pas l'axe avant/arrière.
-    #[serde(default)]
-    pub auto_run_speed: f32,
+    pub controller: Option<Controller>,
     /// Vibration Feedback : durée (ms) du retour haptique quand l'objet est tapé (0 = off).
+    /// Reste hors de `Controller` : s'applique à tout objet tactile, pas seulement pilotable.
     #[serde(default)]
     pub vibrate_on_tap: u32,
-    /// Nom du bouton tactile qui fait sauter l'objet pilotable (vide = pas de saut).
-    #[serde(default)]
-    pub jump_button: String,
-    /// Hauteur de saut (mètres) de l'objet pilotable.
-    #[serde(default = "default_jump_height")]
-    pub jump_height: f32,
-    /// Nom du bouton tactile qui fait attaquer l'objet pilotable (vide = pas d'attaque).
-    /// Combiné à la touche clavier Attaque (desktop) — cf. `PlayerInput::attack`.
-    #[serde(default)]
-    pub attack_button: String,
-    /// Portée (mètres) de l'attaque de l'objet pilotable, centrée sur sa position.
-    #[serde(default = "default_attack_range")]
-    pub attack_range: f32,
     /// Cible valide pour l'attaque du joueur (cf. `Scene::attack_at`) : un ennemi vaincu
     /// devient invisible, puis réapparaît après `respawn_delay` (0 = ne réapparaît pas).
     #[serde(default)]
@@ -301,15 +329,8 @@ impl Default for SceneObject {
             emissive: 0.0,
             trigger: false,
             audio_spatial: false,
-            input_receiver: false,
-            gyro_control: false,
-            move_speed: default_move_speed(),
-            auto_run_speed: 0.0,
+            controller: None,
             vibrate_on_tap: 0,
-            jump_button: String::new(),
-            jump_height: default_jump_height(),
-            attack_button: String::new(),
-            attack_range: default_attack_range(),
             attackable: false,
             is_attack_fx: false,
             tap_action: TapAction::None,
@@ -550,15 +571,18 @@ impl Scene {
         // Démarre au bord (pas sur la lave centrale).
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, -6.0));
         joueur.color = [0.95, 0.6, 0.25];
-        joueur.input_receiver = true;
-        joueur.move_speed = 4.0;
-        joueur.jump_button = "Saut".into();
-        joueur.jump_height = 1.6;
         // Attaque au corps-à-corps : vainc les ennemis `attackable` à portée (cf.
         // `Scene::attack_at`), sur pression du bouton tactile « Attaque » ou de la
         // touche J (desktop, cf. `PlayerInput::attack`).
-        joueur.attack_button = "Attaque".into();
-        joueur.attack_range = 1.5;
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.0,
+            jump_button: "Saut".into(),
+            jump_height: 1.6,
+            attack_button: "Attaque".into(),
+            attack_range: 1.5,
+            ..Default::default()
+        });
 
         // Effet visuel du coup : sphère blanche invisible par défaut, téléportée sur la
         // cible et affichée brièvement par `App` quand une attaque porte (cf.
@@ -949,10 +973,13 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // mais ici la précision de saut est ce qui compte, pas le combat.
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
         joueur.color = [0.95, 0.6, 0.25];
-        joueur.input_receiver = true;
-        joueur.move_speed = 4.0;
-        joueur.jump_button = "Saut".into();
-        joueur.jump_height = 1.7;
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.0,
+            jump_button: "Saut".into(),
+            jump_height: 1.7,
+            ..Default::default()
+        });
         objects.push(joueur);
 
         // Vide mortel loin en contrebas : toute chute hors des plateformes est une mort
@@ -1103,11 +1130,14 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // Joueur : course automatique en +Z, le joystick/clavier X ne pilote que la voie.
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, -3.0));
         joueur.color = [0.95, 0.6, 0.25];
-        joueur.input_receiver = true;
-        joueur.move_speed = 7.0;
-        joueur.auto_run_speed = 5.5;
-        joueur.jump_button = "Saut".into();
-        joueur.jump_height = 1.5;
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 7.0,
+            auto_run_speed: 5.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.5,
+            ..Default::default()
+        });
         objects.push(joueur);
 
         // --- Génération procédurale de la piste : motifs répétés tous les 6 m, densité
@@ -1771,9 +1801,12 @@ mod tests {
         let player = s
             .objects
             .iter()
-            .find(|o| o.input_receiver)
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
             .expect("un joueur pilotable");
-        assert!(player.attack_button.is_empty(), "pas de bouton d'attaque dans ce niveau");
+        assert!(
+            player.controller.as_ref().unwrap().attack_button.is_empty(),
+            "pas de bouton d'attaque dans ce niveau"
+        );
         // Aucun ennemi, aucune lave (contrairement à la démo contrôleur) : le seul danger
         // est la chute (zone `deadly` unique).
         assert!(!s.objects.iter().any(|o| o.name.starts_with("Ennemi")));
@@ -1821,10 +1854,11 @@ mod tests {
         let player = s
             .objects
             .iter()
-            .find(|o| o.input_receiver)
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
             .expect("un joueur pilotable");
-        assert!(player.auto_run_speed > 0.0, "la course doit être automatique");
-        assert!(player.attack_button.is_empty(), "pas de combat dans ce style de niveau");
+        let ctrl = player.controller.as_ref().unwrap();
+        assert!(ctrl.auto_run_speed > 0.0, "la course doit être automatique");
+        assert!(ctrl.attack_button.is_empty(), "pas de combat dans ce style de niveau");
         assert!(!s.objects.iter().any(|o| o.name.starts_with("Ennemi")));
 
         // Des obstacles mortels (haies/barrages) et des pièces existent.
@@ -1891,13 +1925,12 @@ mod tests {
         assert!(s.groups.is_empty());
         assert!((s.light.ambient - 0.25).abs() < 1e-6);
         // Composants récents : valeurs par défaut sûres sur une vieille scène.
-        assert!(!s.objects[0].input_receiver);
+        assert!(s.objects[0].controller.is_none(), "pas pilotable par défaut");
         assert!(
             s.objects[0].visible,
             "visible doit défauter à true (sinon invisible)"
         );
         assert_eq!(s.objects[0].tap_action, TapAction::None);
-        assert!((s.objects[0].jump_height - 1.5).abs() < 1e-6);
     }
 
     #[test]
@@ -2075,9 +2108,12 @@ mod tests {
             name: "Joueur".into(),
             ..Default::default()
         };
-        o.input_receiver = true;
-        o.jump_button = "Saut".into();
-        o.jump_height = 2.2;
+        o.controller = Some(Controller {
+            input: true,
+            jump_button: "Saut".into(),
+            jump_height: 2.2,
+            ..Default::default()
+        });
         o.tap_action = TapAction::Hide;
         o.visible = false;
         let scene = Scene {
@@ -2087,9 +2123,10 @@ mod tests {
         let json = serde_json::to_string(&scene).unwrap();
         let back: Scene = serde_json::from_str(&json).unwrap();
         let b = &back.objects[0];
-        assert!(b.input_receiver);
-        assert_eq!(b.jump_button, "Saut");
-        assert!((b.jump_height - 2.2).abs() < 1e-6);
+        let ctrl = b.controller.as_ref().expect("controller round-trip");
+        assert!(ctrl.input);
+        assert_eq!(ctrl.jump_button, "Saut");
+        assert!((ctrl.jump_height - 2.2).abs() < 1e-6);
         assert_eq!(b.tap_action, TapAction::Hide);
         assert!(!b.visible);
     }

@@ -2443,45 +2443,64 @@ fn build_ui(
                         });
                         ui.separator();
                         ui.collapsing("🧩 Composants mobiles (Android)", |ui| {
+                            use crate::scene::Controller;
                             ui.weak("Touch Area : voir « Tactile » ci-dessus.");
+                            // `controller` est optionnel (composant) : les checkboxes le créent
+                            // à la volée au premier cochage, et le suppriment si plus rien n'y
+                            // reste actif (la grande majorité des objets n'en ont pas besoin).
+                            let mut has_input =
+                                obj.controller.as_ref().is_some_and(|c| c.input);
+                            let mut has_gyro = obj.controller.as_ref().is_some_and(|c| c.gyro);
                             if ui
-                                .checkbox(&mut obj.input_receiver, "🕹 Input Receiver (joystick)")
+                                .checkbox(&mut has_input, "🕹 Input Receiver (joystick)")
                                 .on_hover_text(
                                     "L'objet se déplace avec le joystick en Play (plan X/Z)",
                                 )
                                 .changed()
-                                && obj.input_receiver
                             {
-                                // Active le joystick d'office : sans lui, rien à piloter en jeu.
-                                need_joystick = true;
+                                obj.controller.get_or_insert_with(Controller::default).input =
+                                    has_input;
+                                if has_input {
+                                    // Active le joystick d'office : sans lui, rien à piloter en jeu.
+                                    need_joystick = true;
+                                }
                             }
-                            ui.checkbox(&mut obj.gyro_control, "📐 Gyroscope Controller (tilt)")
-                                .on_hover_text("L'objet se déplace selon l'inclinaison de l'appareil");
-                            if obj.input_receiver || obj.gyro_control {
+                            if ui
+                                .checkbox(&mut has_gyro, "📐 Gyroscope Controller (tilt)")
+                                .on_hover_text("L'objet se déplace selon l'inclinaison de l'appareil")
+                                .changed()
+                            {
+                                obj.controller.get_or_insert_with(Controller::default).gyro =
+                                    has_gyro;
+                            }
+                            if !has_input && !has_gyro {
+                                obj.controller = None;
+                            }
+                            if let Some(ctrl) = &mut obj.controller {
                                 ui.horizontal(|ui| {
                                     ui.label("Vitesse");
-                                    ui.add(egui::Slider::new(&mut obj.move_speed, 0.5..=10.0));
+                                    ui.add(egui::Slider::new(&mut ctrl.move_speed, 0.5..=10.0));
                                 });
                                 ui.weak("Pilotable : devient un corps dynamique (collisions + gravité).");
                                 // Saut : choix du bouton tactile déclencheur.
                                 ui.horizontal(|ui| {
                                     ui.label("🦘 Saut ← bouton");
-                                    let sel = if obj.jump_button.is_empty() {
+                                    let sel = if ctrl.jump_button.is_empty() {
                                         "(aucun)".to_string()
                                     } else {
-                                        obj.jump_button.clone()
+                                        ctrl.jump_button.clone()
                                     };
                                     egui::ComboBox::from_id_salt(("jump_btn", i))
                                         .selected_text(sel)
                                         .show_ui(ui, |ui| {
                                             ui.selectable_value(
-                                                &mut obj.jump_button,
+                                                &mut ctrl.jump_button,
                                                 String::new(),
                                                 "(aucun)",
                                             );
                                             for b in &mobile_buttons {
                                                 ui.selectable_value(
-                                                    &mut obj.jump_button,
+                                                    &mut ctrl.jump_button,
                                                     b.clone(),
                                                     b,
                                                 );
@@ -2491,11 +2510,11 @@ fn build_ui(
                                 if mobile_buttons.is_empty() {
                                     ui.weak("Ajoute un bouton via Ajouter › UI mobile pour le saut.");
                                 }
-                                if !obj.jump_button.is_empty() {
+                                if !ctrl.jump_button.is_empty() {
                                     ui.horizontal(|ui| {
                                         ui.label("Hauteur");
                                         ui.add(
-                                            egui::Slider::new(&mut obj.jump_height, 0.3..=5.0)
+                                            egui::Slider::new(&mut ctrl.jump_height, 0.3..=5.0)
                                                 .suffix(" m"),
                                         );
                                     });

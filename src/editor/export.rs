@@ -249,7 +249,7 @@ impl ExportPanel {
                 let controllable = scene
                     .objects
                     .iter()
-                    .filter(|o| o.input_receiver || o.gyro_control)
+                    .filter(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
                     .count();
                 let scripted = scene
                     .objects

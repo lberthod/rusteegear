@@ -52,7 +52,10 @@ impl Physics {
         for (i, obj) in scene.objects.iter().enumerate() {
             // Un objet pilotable (joystick/gyro/saut) devient un corps dynamique,
             // même sans physique explicite, pour entrer en collision avec le décor.
-            let controllable = obj.input_receiver || obj.gyro_control;
+            let controllable = obj
+                .controller
+                .as_ref()
+                .is_some_and(|c| c.input || c.gyro);
             let is_dynamic = match obj.physics {
                 PhysicsKind::None if !controllable => continue,
                 PhysicsKind::Dynamic => true,
@@ -195,12 +198,12 @@ mod tests {
     use super::*;
     use crate::scene::Scene;
 
-    /// Index de l'objet pilotable (input_receiver) dans la scène.
+    /// Index de l'objet pilotable (`controller.input`) dans la scène.
     fn player_index(scene: &Scene) -> usize {
         scene
             .objects
             .iter()
-            .position(|o| o.input_receiver)
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
             .expect("la démo contrôleur a un joueur pilotable")
     }
 
