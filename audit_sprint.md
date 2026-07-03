@@ -144,12 +144,40 @@ véritablement garanti demanderait une refonte plus profonde (temps de
 préparation sur l'attaque, ou pénalité de mouvement pendant le swing) — hors
 périmètre de ce sprint.
 
+## 4. Attaque transformée en missile (demande explicite : « comme des missiles »)
+
+L'attaque, jusque-là une résolution instantanée au moment du tir, est
+devenue un **missile homing** (`AttackProjectile`) : verrouille la cible la
+plus proche à portée au moment du tir, puis vole vers sa position
+**courante** (homing, pas une trajectoire figée) à vitesse constante
+(`ATTACK_PROJECTILE_SPEED`, 10 m/s) ; l'impact (mise à mort réelle) n'est
+résolu qu'à l'arrivée, pas au moment du tir. L'ancre visuelle
+(`is_attack_fx`) sert maintenant à deux choses : un petit projectile
+lumineux pendant le vol, puis l'éclat d'impact déjà en place (rétrécissement
+progressif) une fois la cible atteinte.
+
+**Tentative de vérifier si ceci referme la limite n°2/n°3 (risque garanti en
+1 contre 1)** : construction d'un scénario où un monstre fonce vers le
+joueur pendant le vol du missile, pour voir s'il peut mordre avant l'impact.
+**Résultat, à nouveau honnête** : non, pas de façon fiable — un missile
+homing tiré dès l'entrée en portée arrive presque toujours avant qu'un
+monstre approchant en ligne droite n'ait atteint sa propre (bien plus
+courte) portée de morsure, sauf à rendre le missile déraisonnablement lent
+(la démonstration mathématique tient dans le commit). Le missile est donc
+une **vraie amélioration de lisibilité et de sensation** (le coup se voit
+voyager, pas de disparition instantanée), mais ne remplace pas le levier de
+risque déjà identifié (plusieurs monstres à la fois pendant la recharge).
+Verrouillé par `attack_is_a_missile_with_travel_time_not_an_instant_hit`,
+qui teste précisément ce qui est vrai (vol progressif, homing) sans
+prétendre garantir un risque que le mécanisme ne garantit pas.
+
 ### Pistes restantes pour la suite
 
-- **Wind-up d'attaque** : introduire un court délai entre l'appui et l'effet
-  du coup (le joueur reste vulnérable pendant ce temps) serait le levier le
-  plus direct pour garantir un vrai risque en 1 contre 1, plutôt que de
-  compter uniquement sur le nombre de monstres.
+- **Wind-up d'attaque** : introduire un court délai entre l'appui et le
+  *lancement* du missile (le joueur reste vulnérable pendant ce temps,
+  avant même que le projectile ne parte) serait le levier le plus direct
+  pour garantir un vrai risque en 1 contre 1 — le vol du missile seul ne
+  suffit pas (cf. section 4).
 - Équilibrage vitesse/dégâts des 3 archétypes en jeu réel (pas seulement en
   simulation) : reste à valider en jouant, notamment si le Coureur (plus
   rapide que le joueur) se sent réellement menaçant une fois qu'on ne peut
@@ -159,7 +187,7 @@ périmètre de ce sprint.
 
 ## État des tests
 
-67/67 tests passent à l'issue de ce sprint (partis de 52 avant le début des
+68/68 tests passent à l'issue de ce sprint (partis de 52 avant le début des
 migrations de composants). Build release + relance manuelle vérifiés à
-chaque commit, y compris le tout dernier correctif (`attack_at` cible
-unique).
+chaque commit, y compris les tout derniers (`attack_at` cible unique, puis
+missile homing).

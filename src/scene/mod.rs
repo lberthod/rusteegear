@@ -1753,8 +1753,20 @@ impl Scene {
     /// une cible force à revenir au corps-à-corps plusieurs fois pour vider un groupe,
     /// laissant une vraie fenêtre aux autres pendant la recharge.
     pub fn attack_at(&mut self, p: Vec3, radius: f32) -> Vec<usize> {
-        let nearest = self
-            .objects
+        match self.nearest_attackable(p, radius) {
+            Some(i) => {
+                self.objects[i].visible = false;
+                vec![i]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Cible la plus proche à portée, **sans la vaincre** (contrairement à `attack_at`) :
+    /// utilisé pour verrouiller la cible d'un missile au moment du tir (cf.
+    /// `AppState::attack_projectile`), l'impact réel étant résolu plus tard, à l'arrivée.
+    pub fn nearest_attackable(&self, p: Vec3, radius: f32) -> Option<usize> {
+        self.objects
             .iter()
             .enumerate()
             .filter(|(_, o)| o.combat.as_ref().is_some_and(|c| c.attackable) && o.visible)
@@ -1764,14 +1776,7 @@ impl Scene {
             })
             .filter(|&(_, dist)| dist <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i);
-        match nearest {
-            Some(i) => {
-                self.objects[i].visible = false;
-                vec![i]
-            }
-            None => Vec::new(),
-        }
+            .map(|(i, _)| i)
     }
 
     /// État des **pièces-objectif** (action « Masquer », **non** réapparaissantes) :

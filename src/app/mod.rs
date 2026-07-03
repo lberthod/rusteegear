@@ -94,6 +94,21 @@ pub struct PlayerInput {
     pub attack: bool,
 }
 
+/// Missile en vol vers une cible verrouillée au tir (cf. `AppState::attack_projectile`).
+/// Homing : vise la position **courante** de la cible chaque frame (une cible qui bouge
+/// pendant le vol n'est pas esquivée), à vitesse constante `SPEED`.
+struct AttackProjectile {
+    /// Indice de la cible dans `scene.objects`, verrouillé au tir.
+    target: usize,
+    /// Position courante du missile (mise à jour chaque frame vers la cible).
+    pos: Vec3,
+}
+
+/// Vitesse du missile (m/s). Volontairement pas instantanée : le temps de vol laisse la
+/// cible continuer d'approcher, donc mordre avant l'impact — le risque qu'une résolution
+/// immédiate au tir ne pouvait pas garantir (cf. audit_sprint.md).
+const ATTACK_PROJECTILE_SPEED: f32 = 10.0;
+
 pub struct AppState {
     pub scene: Scene,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
@@ -158,6 +173,12 @@ pub struct AppState {
     /// Sans ce temporisateur, maintenir le bouton défait instantanément tout ce qui entre
     /// en portée, sans le moindre risque — verrouillé par un test dédié.
     attack_cooldown_remaining: f32,
+    /// Missile d'attaque en vol (cf. `Scene::attack_at` → tir à distance) : `None` = pas
+    /// de tir en cours. L'impact réel (mise à mort) n'est résolu qu'à l'arrivée, pas au
+    /// moment du tir — laisse le temps à la cible de continuer d'approcher, donc de
+    /// mordre avant que le coup ne porte (le vrai risque qu'une résolution instantanée
+    /// ne pouvait pas garantir, cf. audit_sprint.md).
+    attack_projectile: Option<AttackProjectile>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -300,6 +321,7 @@ impl AppState {
             wave: 0,
             is_leveled_demo: false,
             attack_cooldown_remaining: 0.0,
+            attack_projectile: None,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -1031,6 +1053,7 @@ impl AppState {
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;
         self.attack_cooldown_remaining = 0.0;
+        self.attack_projectile = None;
         self.tapped_obj = None;
         // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
         // reconstruire la physique, pour que les corps rigides des monstres masqués ne
@@ -1660,6 +1683,7 @@ impl AppState {
             self.damage_flash = 0.0;
             self.attack_flash = 0.0;
             self.attack_cooldown_remaining = 0.0;
+            self.attack_projectile = None;
             self.wave = 0;
             self.win_time = None;
             self.lost = false;
@@ -1722,11 +1746,13 @@ impl AppState {
                 self.attack_cooldown_remaining -= dt;
             }
             // Attaque du joueur : bouton tactile nommé (controller.attack_button) ou touche
-            // clavier Attaque. Vainc les ennemis `attackable` à portée ; ils réapparaissent
-            // après `respawn_delay` comme les pièces bonus (même file de réapparition).
-            // Recharge requise : sans elle, maintenir le bouton défait instantanément tout
-            // ce qui entre en portée, sans le moindre risque (cf. `Controller::attack_cooldown`).
-            if let Some(player) = self.player_object()
+            // clavier Attaque. Tire un missile qui verrouille la cible `attackable` la
+            // plus proche à portée ; l'impact (mise à mort) n'est résolu qu'à l'arrivée
+            // du missile, pas au moment du tir (cf. `attack_projectile`, mis à jour plus
+            // bas). Recharge requise : sans elle, maintenir le bouton tirerait en rafale
+            // sans le moindre coût (cf. `Controller::attack_cooldown`).
+            if self.attack_projectile.is_none()
+                && let Some(player) = self.player_object()
                 && let Some(ctrl) = player.controller.clone()
             {
                 let pressed = ((!ctrl.attack_button.is_empty()
@@ -1737,32 +1763,66 @@ impl AppState {
                     let p = player.transform.position;
                     let range = ctrl.attack_range;
                     self.attack_cooldown_remaining = ctrl.attack_cooldown;
-                    let now = self.time;
-                    let hit = self.scene.attack_at(p, range);
-                    if !hit.is_empty() {
-                        self.score += hit.len() as u32;
-                        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
-                        // Effet visuel : téléporte l'ancre `is_attack_fx` sur la première
-                        // cible touchée et déclenche le pic du flash (décroissance ensuite,
-                        // cf. section caméra plus bas) — rend le coup lisible en 3D, pas
-                        // juste sonore/au score.
-                        let hit_pos = self.scene.objects[hit[0]].transform.position;
+                    if let Some(target) = self.scene.nearest_attackable(p, range) {
+                        self.attack_projectile = Some(AttackProjectile { target, pos: p });
+                        // Ancre visuelle : petit projectile lumineux, visible dès le tir
+                        // (déplacé chaque frame par la mise à jour du missile ci-dessous).
                         if let Some(fx) = self.attack_fx_index()
                             && let Some(o) = self.scene.objects.get_mut(fx)
                         {
-                            o.transform.position = hit_pos;
-                            o.transform.scale = Vec3::splat(1.2);
+                            o.transform.position = p;
+                            o.transform.scale = Vec3::splat(0.25);
                             o.visible = true;
-                        }
-                        self.attack_flash = 1.0;
-                        for i in hit {
-                            let d = self.scene.objects[i].respawn_delay;
-                            if d > 0.0 {
-                                self.respawn_queue.push((i, now + d));
-                            }
                         }
                     }
                 }
+            }
+            // Mise à jour du missile en vol : homing (vise la position courante de la
+            // cible), avance à vitesse constante. À l'arrivée (ou si la cible a disparu
+            // entre-temps — respawn, autre mise à mort...), résout l'impact.
+            if let Some(proj) = self.attack_projectile.take() {
+                let alive = self
+                    .scene
+                    .objects
+                    .get(proj.target)
+                    .is_some_and(|o| o.visible);
+                if alive {
+                    let target_pos = self.scene.objects[proj.target].transform.position;
+                    let to_target = target_pos - proj.pos;
+                    let step = ATTACK_PROJECTILE_SPEED * dt;
+                    if to_target.length() <= step.max(0.15) {
+                        // Impact : résout la mise à mort maintenant, pas au moment du tir.
+                        let i = proj.target;
+                        self.scene.objects[i].visible = false;
+                        self.score += 1;
+                        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
+                        if let Some(fx) = self.attack_fx_index()
+                            && let Some(o) = self.scene.objects.get_mut(fx)
+                        {
+                            o.transform.position = target_pos;
+                            o.transform.scale = Vec3::splat(1.2);
+                        }
+                        self.attack_flash = 1.0;
+                        let d = self.scene.objects[i].respawn_delay;
+                        if d > 0.0 {
+                            self.respawn_queue.push((i, self.time + d));
+                        }
+                        // Le missile a atteint sa cible : rien à remettre dans `attack_projectile`.
+                    } else {
+                        let new_pos = proj.pos + to_target.normalize() * step;
+                        if let Some(fx) = self.attack_fx_index()
+                            && let Some(o) = self.scene.objects.get_mut(fx)
+                        {
+                            o.transform.position = new_pos;
+                        }
+                        self.attack_projectile = Some(AttackProjectile {
+                            target: proj.target,
+                            pos: new_pos,
+                        });
+                    }
+                }
+                // Cible disparue en vol (respawn, autre mise à mort...) : le missile
+                // s'évanouit silencieusement, `attack_projectile` reste `None`.
             }
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
@@ -3016,32 +3076,35 @@ mod tests {
         app.playing = true;
         app.input_state.buttons.insert("Attaque".into());
 
-        // Frame 1 : première attaque, vainc la cible 1 (seule à portée).
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
-        assert!(!app.scene.objects[1].visible, "cible 1 vaincue au premier coup");
+        // Tir sur la cible 1 (seule à portée), puis laisse le temps au missile d'arriver
+        // (le coup n'est plus instantané, cf. `AttackProjectile`).
+        for _ in 0..5 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert!(!app.scene.objects[1].visible, "cible 1 vaincue après l'arrivée du missile");
         assert!(app.scene.objects[2].visible, "cible 2 encore debout (hors de portée)");
 
         // La cible 2 entre à portée juste après (ex. un monstre qui s'approche) — toujours
         // dans la fenêtre de recharge de 0,5 s : le bouton reste enfoncé mais ne doit PAS
-        // vaincre la cible 2 à cet instant.
+        // tirer un nouveau missile sur elle à cet instant.
         app.scene.objects[2].transform.position = Vec3::new(1.0, 0.5, 0.0);
         app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         assert!(
             app.scene.objects[2].visible,
-            "sans recharge écoulée, la cible 2 ne doit pas être vaincue le même instant"
+            "sans recharge écoulée, aucun missile ne doit être tiré sur la cible 2"
         );
 
-        // Laisse la recharge s'écouler (0,5 s), bouton toujours enfoncé : l'attaque suivante
-        // doit alors porter.
-        for _ in 0..12 {
+        // Laisse la recharge s'écouler (0,5 s) puis le missile arriver : l'attaque
+        // suivante doit alors porter.
+        for _ in 0..15 {
             app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
         }
         assert!(
             !app.scene.objects[2].visible,
-            "la recharge écoulée, la cible 2 doit finir par être vaincue"
+            "la recharge écoulée et le missile arrivé, la cible 2 doit finir par être vaincue"
         );
     }
 
@@ -3234,14 +3297,20 @@ mod tests {
         assert!(app.scene.objects[2].visible, "manche 1 : le monstre 1 est révélé");
         assert!(!app.scene.objects[3].visible, "manche 1 : le monstre 2 reste masqué");
 
-        // Attaque : vainc le monstre de la manche 1 (portée large, toujours à portée).
+        // Attaque : tire sur le monstre de la manche 1 (portée large, toujours à portée),
+        // puis laisse le temps au missile d'arriver (le coup n'est plus instantané, cf.
+        // `AttackProjectile`) et à `update_waves` de détecter la manche vidée.
         app.input_state.buttons.insert("Attaque".into());
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
+        for _ in 0..20 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if app.wave == 2 {
+                // S'arrête dès la révélation de la manche 2, avant qu'un nouveau missile
+                // (bouton toujours enfoncé) n'ait le temps de la vaincre aussi.
+                break;
+            }
+        }
         app.input_state.buttons.clear();
-        // Une frame de plus pour laisser `update_waves` détecter la manche vidée.
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
 
         assert_eq!(app.wave, 2, "la manche 1 vidée doit révéler la manche 2");
         assert!(app.scene.objects[3].visible, "manche 2 : le monstre 2 est révélé");
@@ -3249,11 +3318,11 @@ mod tests {
 
         // Vainc le monstre de la manche 2 : dernière manche ⇒ victoire.
         app.input_state.buttons.insert("Attaque".into());
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
+        for _ in 0..20 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
         app.input_state.buttons.clear();
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
 
         assert!(app.win_time.is_some(), "toutes les manches vidées ⇒ victoire");
     }
@@ -3366,6 +3435,119 @@ mod tests {
         assert_eq!(hit.len(), 1, "une attaque ne vainc qu'une seule cible, pas tout le groupe");
         let still_visible = s.objects[1..].iter().filter(|o| o.visible).count();
         assert_eq!(still_visible, 2, "les 2 autres cibles du groupe doivent survivre à ce coup");
+    }
+
+    #[test]
+    fn attack_is_a_missile_with_travel_time_not_an_instant_hit() {
+        // L'attaque est désormais un missile homing avec un temps de vol (cf.
+        // `AttackProjectile`), pas une résolution instantanée au tir : rend le coup
+        // lisible en 3D (le missile se voit voyager, pas juste « la cible disparaît »).
+        //
+        // Limite honnête, re-vérifiée ici plutôt que survendue : le temps de vol NE
+        // garantit PAS à lui seul un risque en 1 contre 1 — un missile homing tiré dès
+        // l'entrée en portée arrive quasi toujours avant qu'un monstre qui fonce en
+        // ligne droite n'ait eu le temps d'atteindre sa propre (bien plus courte) portée
+        // de morsure, sauf à rendre le missile déraisonnablement lent. Le vrai risque
+        // reste celui déjà documenté : affronter plusieurs monstres à la fois pendant la
+        // recharge (cf. `attack_at_clears_a_cluster_one_target_at_a_time_not_in_one_swing`).
+        // Ce test vérifie donc uniquement ce que le missile change réellement : un vol
+        // progressif et homing, pas un « tout ou rien » au moment du tir.
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                attack_button: "Attaque".into(),
+                attack_range: 6.0,
+                attack_cooldown: 0.5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(30.0, 1.0, 30.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        // À 5 m : à portée du tir (6 m), le missile doit voyager plusieurs frames avant
+        // d'arriver (pas de patrouille/chasse ici : isole le temps de vol lui-même).
+        let mut monstre = crate::scene::SceneObject {
+            name: "Monstre".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.5, 0.0)),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        monstre.color = [1.0; 3];
+        let mut fx = crate::scene::SceneObject {
+            name: "FX Attaque".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            combat: Some(crate::scene::Combat {
+                is_attack_fx: true,
+                ..Default::default()
+            }),
+            visible: false,
+            ..Default::default()
+        };
+        fx.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, joueur, monstre, fx],
+            ..Default::default()
+        };
+        app.playing = true;
+        app.input_state.attack = true;
+
+        // Un seul pas : le missile part (verrouille la cible) mais ne peut pas encore
+        // avoir parcouru les 5 m qui le séparent de sa cible.
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(
+            app.scene.objects[2].visible,
+            "le monstre à 5 m ne doit pas être vaincu dès le tour du tir : le missile \
+             met du temps à arriver"
+        );
+        let fx_after_launch = app
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.combat.as_ref().is_some_and(|c| c.is_attack_fx))
+            .map(|o| o.transform.position);
+
+        // Quelques frames plus tard : le missile a progressé (pas téléporté), mais
+        // n'est probablement pas encore arrivé (10 m/s, ~0,1 s pour 1 m).
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.03);
+        app.advance_play();
+        let fx_mid_flight = app
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.combat.as_ref().is_some_and(|c| c.is_attack_fx))
+            .map(|o| o.transform.position);
+        assert_ne!(
+            fx_after_launch, fx_mid_flight,
+            "l'ancre visuelle doit progresser vers la cible, pas rester figée"
+        );
+
+        // Laisse le temps au missile d'arriver (5 m à 10 m/s ≈ 0,5 s).
+        for _ in 0..20 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if !app.scene.objects[2].visible {
+                break;
+            }
+        }
+        assert!(!app.scene.objects[2].visible, "le missile doit finir par atteindre sa cible");
     }
 
     #[test]
