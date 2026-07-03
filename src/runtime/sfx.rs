@@ -15,6 +15,10 @@ pub enum Sfx {
     Hit,
     /// Ennemi vaincu par l'attaque du joueur (cf. `Scene::attack_at`).
     Defeat,
+    /// Nouvelle manche révélée (cf. `Combat::wave`/`AppState::update_waves`). Sans ce
+    /// signal, une manche démarre silencieusement — mauvais pour la lisibilité d'un
+    /// mode par vagues où le joueur doit sentir la montée en tension.
+    WaveStart,
 }
 
 impl Sfx {
@@ -26,6 +30,7 @@ impl Sfx {
             Sfx::Lose => "sfx:lose",
             Sfx::Hit => "sfx:hit",
             Sfx::Defeat => "sfx:defeat",
+            Sfx::WaveStart => "sfx:wave_start",
         }
     }
 
@@ -38,6 +43,12 @@ impl Sfx {
             Sfx::Lose => (&[(330.0, 0.14), (247.0, 0.22)], 0.28),
             Sfx::Hit => (&[(180.0, 0.08)], 0.3),
             Sfx::Defeat => (&[(600.0, 0.05), (900.0, 0.05), (1200.0, 0.08)], 0.26),
+            // Sirène courte à deux tons (façon alarme d'incursion), distincte des autres
+            // effets (montée continue de Win, un seul coup sourd de Hit).
+            Sfx::WaveStart => (
+                &[(220.0, 0.12), (330.0, 0.12), (220.0, 0.12), (330.0, 0.18)],
+                0.3,
+            ),
         }
     }
 }
@@ -109,7 +120,15 @@ mod tests {
 
     #[test]
     fn each_sfx_generates_audio() {
-        for s in [Sfx::Pickup, Sfx::Jump, Sfx::Win, Sfx::Lose, Sfx::Hit, Sfx::Defeat] {
+        for s in [
+            Sfx::Pickup,
+            Sfx::Jump,
+            Sfx::Win,
+            Sfx::Lose,
+            Sfx::Hit,
+            Sfx::Defeat,
+            Sfx::WaveStart,
+        ] {
             let (segs, vol) = s.segments();
             assert!(synth_wav(segs, vol).len() > 44);
         }

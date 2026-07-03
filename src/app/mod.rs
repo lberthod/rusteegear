@@ -2087,6 +2087,7 @@ impl AppState {
                 o.visible = c.wave == self.wave;
             }
         }
+        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::WaveStart);
     }
 
     /// Fait progresser le système de manches : la manche courante vidée (plus aucun
@@ -2125,6 +2126,7 @@ impl AppState {
             }
         }
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::WaveStart);
     }
 
     /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
@@ -3283,6 +3285,37 @@ mod tests {
 
         app.load_mobile_demo();
         assert!(!app.is_leveled_demo);
+    }
+
+    #[test]
+    fn zombies_demo_attack_range_stays_close_to_monster_bite_reach() {
+        // Audit gameplay : la portée d'attaque totale (attack_range + rayon du monstre)
+        // est un cercle qui **contient toujours** la boîte de morsure du monstre (rayon
+        // ≈ son propre rayon) dès que `attack_range > 0` — un joueur qui fonce droit sur
+        // un monstre gagnera donc structurellement la course à l'engagement, quelle que
+        // soit sa vitesse. `attack_range` ne peut pas éliminer ce biais en 1 contre 1
+        // frontal, seulement en réduire la marge (le vrai risque vient d'affronter
+        // plusieurs monstres à la fois pendant la recharge). L'ancienne valeur (1,5 m)
+        // donnait une marge de sécurité énorme (jusqu'à 4-5× le rayon du plus petit
+        // monstre) ; verrouille qu'elle reste modeste désormais.
+        let s = crate::scene::Scene::zombies_demo();
+        let ctrl = s
+            .objects
+            .iter()
+            .find_map(|o| o.controller.as_ref())
+            .expect("un joueur pilotable");
+        let smallest_monster_r = s
+            .objects
+            .iter()
+            .filter(|o| o.ai_chaser.is_some())
+            .map(|o| o.transform.scale.max_element() * 0.5)
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            ctrl.attack_range <= smallest_monster_r + 0.5,
+            "marge de sécurité trop généreuse : attack_range={} vs rayon du plus petit \
+             monstre={smallest_monster_r} (marge > 0,5 m)",
+            ctrl.attack_range
+        );
     }
 
     #[test]

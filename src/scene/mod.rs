@@ -658,14 +658,17 @@ impl Scene {
         joueur.color = [0.95, 0.6, 0.25];
         // Attaque au corps-à-corps : vainc les ennemis `attackable` à portée (cf.
         // `Scene::attack_at`), sur pression du bouton tactile « Attaque » ou de la
-        // touche J (desktop, cf. `PlayerInput::attack`).
+        // touche J (desktop, cf. `PlayerInput::attack`). Portée courte (0,7 m) : au-delà
+        // de `attack_range`, ce qui compte c'est l'écart avec la portée de morsure de la
+        // cible (son propre rayon) — un écart de 1,5 m rendait le combat sans risque
+        // (audit gameplay : un bot qui approche puis attaque ne prenait jamais de dégâts).
         joueur.controller = Some(Controller {
             input: true,
             move_speed: 4.0,
             jump_button: "Saut".into(),
             jump_height: 1.6,
             attack_button: "Attaque".into(),
-            attack_range: 1.5,
+            attack_range: 0.7,
             ..Default::default()
         });
 
@@ -1451,13 +1454,16 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
 
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
         joueur.color = [0.95, 0.6, 0.25];
+        // Portée courte (0,7 m, pas 1,5) : audit gameplay — un bot qui approche puis
+        // attaque au cooldown ne prenait jamais un seul point de dégâts sur les 4 manches,
+        // la portée dépassant bien trop largement le rayon de morsure des monstres.
         joueur.controller = Some(Controller {
             input: true,
             move_speed: 4.5,
             jump_button: "Saut".into(),
             jump_height: 1.5,
             attack_button: "Attaque".into(),
-            attack_range: 1.5,
+            attack_range: 0.7,
             ..Default::default()
         });
 
