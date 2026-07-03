@@ -3319,6 +3319,56 @@ mod tests {
     }
 
     #[test]
+    fn attack_at_clears_a_cluster_one_target_at_a_time_not_in_one_swing() {
+        // Suite de l'audit gameplay : `attack_at` vainquait TOUTES les cibles à portée en
+        // un seul appel (balayage de zone). Une expérimentation poussée (3 archétypes
+        // convergeant en cercle serré sur un joueur immobile qui attaque en continu) a
+        // montré qu'ils entraient dans le rayon de mise à mort de façon quasi synchronisée
+        // — leur taille (donc leur propre rayon, qui élargit d'autant le rayon de mise à
+        // mort perçu) compense presque exactement leur différence de vitesse. Résultat :
+        // un groupe entier disparaissait en un seul coup, sans qu'aucun n'ait jamais mordu.
+        // `attack_at` ne vainc désormais que la cible la plus proche : un groupe de 3
+        // exige donc 3 coups (et donc 3 fenêtres de recharge), pas un seul.
+        //
+        // Limite honnête, documentée plutôt que masquée par un test fragile : ceci ne
+        // garantit pas qu'un joueur qui reste immobile et attaque prendra des dégâts —
+        // sans temps de préparation sur l'attaque, la portée d'attaque englobera toujours
+        // la portée de morsure d'un monstre qui approche en ligne droite (cf.
+        // `zombies_demo_attack_range_stays_close_to_monster_bite_reach`), donc gagner la
+        // course à l'engagement 1 contre 1 reste structurellement favorable au joueur.
+        // Un vrai risque garanti demanderait un temps de préparation sur l'attaque
+        // (fenêtre de vulnérabilité avant que le coup ne porte) — hors du périmètre de ce
+        // sprint, noté dans audit_sprint.md pour une prochaine itération.
+        let mut s = crate::scene::Scene::default();
+        s.objects.push(crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        for n in 0..3 {
+            let mut m = crate::scene::SceneObject {
+                name: format!("Monstre {n}"),
+                mesh: crate::scene::MeshKind::Sphere,
+                transform: crate::scene::Transform::from_pos(Vec3::new(0.2 * n as f32, 0.5, 0.0)),
+                combat: Some(crate::scene::Combat {
+                    attackable: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            m.color = [1.0; 3];
+            s.objects.push(m);
+        }
+        // Les 3 sont groupés à moins de 0,5 m les uns des autres, largement à portée
+        // d'une seule attaque à grand rayon.
+        let hit = s.attack_at(Vec3::new(0.2, 0.5, 0.0), 5.0);
+        assert_eq!(hit.len(), 1, "une attaque ne vainc qu'une seule cible, pas tout le groupe");
+        let still_visible = s.objects[1..].iter().filter(|o| o.visible).count();
+        assert_eq!(still_visible, 2, "les 2 autres cibles du groupe doivent survivre à ce coup");
+    }
+
+    #[test]
     fn damage_triggers_flash_that_fades_and_resets_on_stop() {
         // Retour visuel du coup : `damage_flash` doit monter à 1.0 dès la première baisse
         // de vie détectée, puis décroître frame après frame (pas rester bloqué au pic).

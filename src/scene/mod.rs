@@ -1744,19 +1744,34 @@ impl Scene {
     /// Résout une attaque du joueur en `p` (portée `radius`) : vainc (masque) les ennemis
     /// `attackable` encore visibles à portée. Renvoie les indices vaincus (pour score,
     /// son, et mise en file de réapparition côté `App`, comme les bonus).
+    /// Ne vainc que **la cible la plus proche** à portée, pas toutes celles dans le
+    /// rayon. Audit gameplay : un swing en zone (toutes les cibles à portée à la fois)
+    /// laissait un groupe de monstres convergeant ensemble se faire vaincre d'un seul
+    /// coup avant qu'aucun n'ait pu mordre — la taille des monstres (donc leur propre
+    /// rayon de mise à mort) compense presque exactement leur vitesse, ce qui les fait
+    /// arriver à portée de façon quasi synchronisée plutôt qu'échelonnée. Un coup =
+    /// une cible force à revenir au corps-à-corps plusieurs fois pour vider un groupe,
+    /// laissant une vraie fenêtre aux autres pendant la recharge.
     pub fn attack_at(&mut self, p: Vec3, radius: f32) -> Vec<usize> {
-        let mut hit = Vec::new();
-        for (i, o) in self.objects.iter_mut().enumerate() {
-            let attackable = o.combat.as_ref().is_some_and(|c| c.attackable);
-            if attackable && o.visible {
+        let nearest = self
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.combat.as_ref().is_some_and(|c| c.attackable) && o.visible)
+            .map(|(i, o)| {
                 let enemy_r = o.transform.scale.max_element() * 0.5;
-                if (o.transform.position - p).length() <= radius + enemy_r {
-                    o.visible = false;
-                    hit.push(i);
-                }
+                (i, (o.transform.position - p).length() - enemy_r)
+            })
+            .filter(|&(_, dist)| dist <= radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
+        match nearest {
+            Some(i) => {
+                self.objects[i].visible = false;
+                vec![i]
             }
+            None => Vec::new(),
         }
-        hit
     }
 
     /// État des **pièces-objectif** (action « Masquer », **non** réapparaissantes) :
