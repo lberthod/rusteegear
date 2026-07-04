@@ -107,6 +107,10 @@ pub struct UiActions {
     pub load_components_demo: bool,
     /// « Démo Vagues de zombies » : jeu local vs ordinateur, manches de monstres.
     pub load_ai_duel: bool,
+    /// « Démo Donjon (roguelike) » : 3 salles à vider une à une, arme de départ aléatoire.
+    pub load_roguelike: bool,
+    /// « Démo Duel (Tekken/Smash) » : arène flottante, rival à plusieurs PV, ring out.
+    pub load_brawl: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
@@ -706,6 +710,26 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_ai_duel = true;
+            ui.close();
+        }
+        if ui
+            .button("🗡  Démo Donjon (roguelike, 3 salles)")
+            .on_hover_text(
+                "3 salles à vider une à une (porte fermée jusqu'à la précédente vidée), arme de départ tirée au sort",
+            )
+            .clicked()
+        {
+            actions.load_roguelike = true;
+            ui.close();
+        }
+        if ui
+            .button("🥊  Démo Duel (façon Tekken/Smash Bros)")
+            .on_hover_text(
+                "Arène flottante, un rival à plusieurs coups avant de tomber, ring out possible (le vide sous l'arène est mortel)",
+            )
+            .clicked()
+        {
+            actions.load_brawl = true;
             ui.close();
         }
         if ui

@@ -120,6 +120,26 @@ pub struct AudioSource {
     pub spatial: bool,
 }
 
+/// Mécanique de résolution de l'attaque du joueur (cf. `Controller::attack_mode`).
+/// `Single` reste le comportement par défaut de toutes les démos existantes — un audit
+/// antérieur a justement retiré l'attaque en zone du comportement par défaut (un swing
+/// qui vainc tout un groupe convergent avant qu'aucun monstre n'ait pu mordre triviale
+/// le combat, cf. commit « attack_at cible désormais une seule cible, pas la zone »).
+/// `Zone` redevient disponible ici en **opt-in par arme** (cf. `Weapon::mode`, le
+/// Marteau) : le coût (préparation/recharge longues) compense le fait de vaincre tout
+/// un groupe d'un coup, ce que l'ancien comportement par défaut ne compensait pas.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum AttackMode {
+    /// Missile unique verrouillé sur la cible `attackable` la plus proche à portée au
+    /// moment du tir (cf. `AppState::attack_projectile`).
+    #[default]
+    Single,
+    /// Frappe de zone résolue instantanément à la fin de la préparation (pas de missile
+    /// à temps de vol) : vainc TOUTES les cibles `attackable` visibles à portée d'un
+    /// coup (cf. `Scene::attack_zone_at`).
+    Zone,
+}
+
 /// Composant optionnel : fait d'un `SceneObject` un objet pilotable par le joueur
 /// (joystick, gyroscope, saut, attaque). Regroupe des champs auparavant plats sur
 /// `SceneObject` — un seul objet par scène en porte généralement un (le joueur), donc
@@ -168,6 +188,11 @@ pub struct Controller {
     /// Cf. `AppState::attack_charge`.
     #[serde(default = "default_attack_windup")]
     pub attack_windup: f32,
+    /// Mécanique de résolution de l'attaque (cf. `AttackMode`) : `Single` par défaut
+    /// (comportement historique de toutes les démos), `Zone` pour les armes qui
+    /// l'assument explicitement (cf. `Weapon::mode`, le Marteau du donjon roguelike).
+    #[serde(default)]
+    pub attack_mode: AttackMode,
 }
 
 // Implémentation manuelle (pas `#[derive(Default)]`) : `derive` donnerait 0.0/vide à
@@ -187,6 +212,7 @@ impl Default for Controller {
             attack_range: default_attack_range(),
             attack_cooldown: default_attack_cooldown(),
             attack_windup: default_attack_windup(),
+            attack_mode: AttackMode::Single,
         }
     }
 }
@@ -208,7 +234,7 @@ impl Controller {
 /// pour la grande majorité des objets d'une scène (décor, collectibles, joueur...).
 /// Les deux champs se cumulent rarement sur le même objet (l'ancre FX n'est
 /// généralement pas elle-même attaquable) mais partagent le même domaine « combat ».
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Combat {
     /// Cible valide pour l'attaque du joueur (cf. `Scene::attack_at`) : un ennemi vaincu
     /// devient invisible, puis réapparaît après `respawn_delay` (0 = ne réapparaît pas).
@@ -226,6 +252,34 @@ pub struct Combat {
     /// suivante révélée, jusqu'à la dernière ⇒ victoire).
     #[serde(default)]
     pub wave: u32,
+    /// Points de vie : nombre de coups nécessaires pour vaincre cette cible. 1 par défaut
+    /// (mise à mort en un coup, comportement historique de toutes les démos existantes).
+    /// Une valeur plus grande décrit un adversaire qui encaisse plusieurs coups avant de
+    /// tomber (cf. `Scene::brawl_demo`, un duel façon Tekken/Smash) — décompté par
+    /// `Scene::damage_attackable`, qui ne masque la cible que si ce coup l'achève.
+    /// Limite connue : un ennemi qui réapparaît (`respawn_delay` positif) revient avec
+    /// les PV où il les a laissés (0), pas remis à son maximum — sans effet sur les
+    /// démos actuelles (aucune ne combine plusieurs PV et réapparition).
+    #[serde(default = "default_combat_hp")]
+    pub hp: u32,
+}
+
+// Manuel comme `Controller`/`AiChaser` : `derive(Default)` donnerait hp=0 (cible déjà
+// vaincue avant le moindre coup), pas 1 (une cible naît vivante par défaut) — même piège
+// que documenté sur `impl Default for Controller`.
+impl Default for Combat {
+    fn default() -> Self {
+        Self {
+            attackable: false,
+            is_attack_fx: false,
+            wave: 0,
+            hp: default_combat_hp(),
+        }
+    }
+}
+
+fn default_combat_hp() -> u32 {
+    1
 }
 
 /// Composant optionnel : IA qui **poursuit activement le joueur** (contrairement aux
@@ -249,6 +303,77 @@ impl Default for AiChaser {
             speed: default_move_speed(),
         }
     }
+}
+
+/// Profil d'arme (portée/recharge/préparation) appliqué au `Controller` du joueur — pas
+/// de dégât différent d'un profil à l'autre : une attaque vainc toujours sa cible en un
+/// coup (cf. `Scene::attack_at`), le choix change le *style* de jeu (risque/portée), pas
+/// la puissance brute. Utilisé par `Scene::roguelike_demo` : une arme de départ tirée au
+/// sort, et d'autres à trouver en jeu (cf. `WeaponPickup`).
+#[derive(Clone, Copy, Debug)]
+pub struct Weapon {
+    pub label: &'static str,
+    pub range: f32,
+    pub cooldown: f32,
+    pub windup: f32,
+    /// Mécanique de résolution (cf. `AttackMode`) : `Zone` pour le Marteau seulement —
+    /// la contrepartie (préparation et recharge les plus longues de la table) doit
+    /// compenser le fait de vaincre tout un groupe à portée d'un coup.
+    pub mode: AttackMode,
+}
+
+/// Les 5 profils d'arme connus, du plus risqué (corps-à-corps rapide) au plus prudent
+/// (portée longue, lent à préparer). Table publique : partagée entre la génération de
+/// la démo (tirage de l'arme de départ + placement des butins) et la résolution du
+/// ramassage en jeu (cf. `Scene::weapon_pickup_at`), pour n'avoir qu'une seule source
+/// de vérité sur les profils.
+pub const WEAPONS: [Weapon; 5] = [
+    Weapon {
+        label: "Dague",
+        range: 0.9,
+        cooldown: 0.3,
+        windup: 0.12,
+        mode: AttackMode::Single,
+    },
+    Weapon {
+        label: "Épée",
+        range: 1.6,
+        cooldown: 0.5,
+        windup: 0.25,
+        mode: AttackMode::Single,
+    },
+    Weapon {
+        label: "Lance",
+        range: 2.4,
+        cooldown: 0.65,
+        windup: 0.3,
+        mode: AttackMode::Single,
+    },
+    Weapon {
+        label: "Marteau",
+        range: 1.2,
+        cooldown: 0.9,
+        windup: 0.5,
+        mode: AttackMode::Zone,
+    },
+    Weapon {
+        label: "Arc",
+        range: 4.0,
+        cooldown: 1.0,
+        windup: 0.45,
+        mode: AttackMode::Single,
+    },
+];
+
+/// Composant optionnel : butin à ramasser au contact (cf. `Scene::weapon_pickup_at`) qui
+/// équipe l'arme `WEAPONS[weapon]` sur le joueur. Distinct des pièces (`tap_action ==
+/// Hide`, cf. `collect_at`) : une pièce compte comme pièce-objectif (`collectibles()`),
+/// ce qu'un butin d'arme ne doit **pas** faire — sinon ramasser du matériel déclencherait
+/// une victoire prématurée, à la place de vider les salles (cf. `Combat::wave`).
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct WeaponPickup {
+    /// Indice dans `WEAPONS`.
+    pub weapon: usize,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -317,6 +442,10 @@ pub struct SceneObject {
     /// majorité des objets — seuls les ennemis « chasseurs » (jeu local vs IA) en ont.
     #[serde(default)]
     pub ai_chaser: Option<AiChaser>,
+    /// Butin d'arme à ramasser au contact (cf. `WeaponPickup`) : `None` pour la grande
+    /// majorité des objets — seuls les butins du donjon roguelike en ont.
+    #[serde(default)]
+    pub weapon_pickup: Option<WeaponPickup>,
     /// Action déclenchée sans script quand l'objet est tapé (Touch Area requise).
     #[serde(default)]
     pub tap_action: TapAction,
@@ -435,6 +564,7 @@ impl Default for SceneObject {
             vibrate_on_tap: 0,
             combat: None,
             ai_chaser: None,
+            weapon_pickup: None,
             tap_action: TapAction::None,
             visible: true,
             deadly: false,
@@ -1688,6 +1818,398 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         }
     }
 
+    /// Démo « Donjon » façon roguelike : 3 salles reliées par des portes (une salle à la
+    /// fois, comme un couloir de progression), chacune gardée par un monstre — réutilise
+    /// le système de manches (`Combat::wave`) de `zombies_demo` : un monstre par manche,
+    /// la salle suivante ne se révèle (et n'obtient de corps physique, cf.
+    /// `Physics::build`) qu'une fois la précédente vidée. Particularité roguelike : à
+    /// chaque chargement, 3 armes **distinctes** sont tirées au sort parmi les 5 profils
+    /// connus (cf. `WEAPONS`) — une équipée au départ, les 2 autres cachées en butin
+    /// dans les salles 1 et 2 (cf. `WeaponPickup`) à trouver en explorant avant d'arriver
+    /// à la salle 3 (l'Ogre). Score +1 par monstre vaincu *et* par arme trouvée (cf.
+    /// `AppState::advance_play`) : un vrai objectif d'exploration, pas juste un combat.
+    pub fn roguelike_demo() -> Self {
+        // Salles carrées de 9 m de côté, alignées le long de +Z, séparées par une porte
+        // (mur avec une ouverture centrale de 3 m) plutôt que par un couloir séparé —
+        // plus compact qu'un vrai couloir, mais tout aussi lisible comme 3 pièces
+        // distinctes (ligne de vue coupée hors de l'ouverture).
+        let half_x = 4.5_f32;
+        let room_depth = 9.0_f32;
+        let room_z = [-room_depth, 0.0, room_depth]; // centres des 3 salles
+        let total_half_z = 1.5 * room_depth;
+
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(2.0 * half_x, 1.0, 2.0 * total_half_z));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.2, 0.18, 0.24];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, room_z[0]));
+        joueur.color = [0.95, 0.6, 0.25];
+
+        // --- Tirage de 3 armes DISTINCTES parmi les 5 profils connus (`WEAPONS`) : une
+        // pour l'équipement de départ, les 2 autres cachées en butin plus bas (cf.
+        // `WeaponPickup`). Mélange de Fisher-Yates sur un petit xorshift maison (pas de
+        // dépendance `rand` pour un tirage aussi simple, cf. philosophie du projet —
+        // dépendances choisies pour des besoins délimités, jamais pour la structure du
+        // moteur) : l'horloge système sert de graine.
+        let mut rng_state = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E3779B97F4A7C15)
+            | 1; // xorshift dégénère à 0 si la graine est 0 : jamais nulle.
+        let mut next_rand = move || {
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 7;
+            rng_state ^= rng_state << 17;
+            rng_state
+        };
+        let mut order: [usize; WEAPONS.len()] = std::array::from_fn(|i| i);
+        for i in (1..order.len()).rev() {
+            let j = (next_rand() as usize) % (i + 1);
+            order.swap(i, j);
+        }
+        let (starting_idx, found_idx) = (order[0], [order[1], order[2]]);
+        let weapon = WEAPONS[starting_idx];
+        log::info!(
+            "Donjon : arme de départ « {} » (portée {:.1} m, recharge {:.2} s, préparation {:.2} s) — à trouver : {}, {}",
+            weapon.label,
+            weapon.range,
+            weapon.cooldown,
+            weapon.windup,
+            WEAPONS[found_idx[0]].label,
+            WEAPONS[found_idx[1]].label,
+        );
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.0,
+            attack_button: "Attaque".into(),
+            attack_range: weapon.range,
+            attack_cooldown: weapon.cooldown,
+            attack_windup: weapon.windup,
+            attack_mode: weapon.mode,
+            ..Default::default()
+        });
+
+        let mut objects = vec![sol, joueur];
+
+        // Murs de pourtour de tout le donjon (une seule enveloppe extérieure).
+        let wall = |name: &str, pos: Vec3, scale: Vec3, objects: &mut Vec<SceneObject>| {
+            let mut w = demo_obj(name, MeshKind::Cube, pos);
+            w.transform = w.transform.with_scale(scale);
+            w.physics = PhysicsKind::Static;
+            w.color = [0.32, 0.28, 0.35];
+            objects.push(w);
+        };
+        wall(
+            "Mur Nord",
+            Vec3::new(0.0, 0.9, -total_half_z - 0.25),
+            Vec3::new(2.0 * half_x + 0.5, 1.8, 0.5),
+            &mut objects,
+        );
+        wall(
+            "Mur Sud",
+            Vec3::new(0.0, 0.9, total_half_z + 0.25),
+            Vec3::new(2.0 * half_x + 0.5, 1.8, 0.5),
+            &mut objects,
+        );
+        wall(
+            "Mur Est",
+            Vec3::new(half_x + 0.25, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * total_half_z + 0.5),
+            &mut objects,
+        );
+        wall(
+            "Mur Ouest",
+            Vec3::new(-half_x - 0.25, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * total_half_z + 0.5),
+            &mut objects,
+        );
+
+        // Portes entre les salles : mur transversal avec une ouverture centrale de 3 m
+        // (deux segments latéraux), à mi-chemin entre chaque paire de salles.
+        let door_gap_half = 1.5_f32;
+        for (n, z) in [room_z[0], room_z[1]]
+            .iter()
+            .map(|z| z + room_depth * 0.5)
+            .enumerate()
+        {
+            wall(
+                &format!("Porte {} (gauche)", n + 1),
+                Vec3::new(-(half_x + door_gap_half) * 0.5, 0.9, z),
+                Vec3::new(half_x - door_gap_half, 1.8, 0.4),
+                &mut objects,
+            );
+            wall(
+                &format!("Porte {} (droite)", n + 1),
+                Vec3::new((half_x + door_gap_half) * 0.5, 0.9, z),
+                Vec3::new(half_x - door_gap_half, 1.8, 0.4),
+                &mut objects,
+            );
+        }
+
+        // Ancre de l'effet visuel d'attaque (cf. `Combat::is_attack_fx`).
+        let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
+        fx.color = [1.0, 0.95, 0.75];
+        fx.emissive = 1.6;
+        fx.combat = Some(Combat {
+            is_attack_fx: true,
+            ..Default::default()
+        });
+        fx.visible = false;
+        objects.push(fx);
+
+        // --- Un monstre par salle (une manche chacun, cf. `Combat::wave`) : la salle 2
+        // ne se révèle qu'une fois le monstre de la salle 1 vaincu, etc. — progression
+        // « une salle à la fois » typique d'un roguelike, sans script de porte à part.
+        struct Kind {
+            label: &'static str,
+            speed: f32,
+            dmg: f32,
+            scale: f32,
+            color: [f32; 3],
+        }
+        const GOBELIN: Kind = Kind {
+            label: "Gobelin",
+            speed: 3.2,
+            dmg: 0.6,
+            scale: 0.6,
+            color: [0.35, 0.6, 0.3],
+        };
+        const SQUELETTE: Kind = Kind {
+            label: "Squelette",
+            speed: 2.4,
+            dmg: 1.0,
+            scale: 0.85,
+            color: [0.75, 0.72, 0.65],
+        };
+        const OGRE: Kind = Kind {
+            label: "Ogre",
+            speed: 1.6,
+            dmg: 2.4,
+            scale: 1.4,
+            color: [0.4, 0.15, 0.15],
+        };
+        // Décalage du monstre par rapport au centre de sa salle : loin du point d'entrée
+        // du joueur — son spawn pour la salle 1 (sinon le Gobelin apparaissait pile sur
+        // le joueur et mordait avant même qu'il ait pu bouger), la porte d'entrée pour
+        // les salles 2 et 3 (sinon le monstre suivant mord dès le franchissement de la
+        // porte, sans le moindre temps de réaction).
+        const MONSTER_Z_OFFSET: [f32; 3] = [-3.0, 3.0, 3.0];
+        for (wave, ((k, z), z_offset)) in [GOBELIN, SQUELETTE, OGRE]
+            .into_iter()
+            .zip(room_z)
+            .zip(MONSTER_Z_OFFSET)
+            .enumerate()
+        {
+            let wave = wave as u32 + 1;
+            let mut m = demo_obj(
+                k.label,
+                MeshKind::Sphere,
+                Vec3::new(0.0, k.scale.max(0.5) * 0.5, z + z_offset),
+            );
+            m.transform = m.transform.with_scale(Vec3::splat(k.scale));
+            m.color = k.color;
+            m.emissive = 0.5;
+            m.trigger = true;
+            m.ai_chaser = Some(AiChaser { speed: k.speed });
+            m.combat = Some(Combat {
+                attackable: true,
+                wave,
+                ..Default::default()
+            });
+            m.respawn_delay = 0.0;
+            m.script = format!(
+                "if obj.triggered then damage({} * dt) end\n\
+                 local p = 0.5 + 0.5 * math.sin(time * 7.0)\n\
+                 obj.r = {} + {} * p; obj.g = {}; obj.b = {}",
+                k.dmg,
+                k.color[0] * 0.7,
+                k.color[0] * 0.3,
+                k.color[1] * 0.6,
+                k.color[2] * 0.6,
+            );
+            objects.push(m);
+        }
+
+        // Butins d'arme (cf. `WeaponPickup`) : un dans la salle 1, un dans la salle 2 —
+        // la salle 3 (l'Ogre, le combat le plus dur) doit pouvoir être abordée avec la
+        // meilleure arme déjà trouvée en explorant, pas en découvrir une nouvelle en
+        // pleine bagarre. Coin de salle opposé au monstre (au centre), pour ne pas
+        // forcer le joueur à passer devant le monstre juste pour le voir.
+        for (n, &weapon_idx) in found_idx.iter().enumerate() {
+            let w = WEAPONS[weapon_idx];
+            let side = if n == 0 { 1.0 } else { -1.0 };
+            let mut loot = demo_obj(
+                &format!("Butin: {}", w.label),
+                MeshKind::Cube,
+                Vec3::new(side * 3.0, 0.4, room_z[n] + side * 3.0),
+            );
+            loot.transform = loot.transform.with_scale(Vec3::splat(0.4));
+            loot.color = [1.0, 0.85, 0.2];
+            loot.emissive = 1.2;
+            loot.weapon_pickup = Some(WeaponPickup { weapon: weapon_idx });
+            objects.push(loot);
+        }
+
+        Scene {
+            objects,
+            camera_follow: true,
+            point_lights: vec![
+                PointLight {
+                    position: [0.0, 6.0, room_z[0]],
+                    color: [0.4, 0.8, 0.5],
+                    intensity: 1.0,
+                    range: 12.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [0.0, 6.0, room_z[1]],
+                    color: [0.9, 0.85, 0.7],
+                    intensity: 1.0,
+                    range: 12.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [0.0, 6.0, room_z[2]],
+                    color: [0.9, 0.3, 0.3],
+                    intensity: 1.0,
+                    range: 12.0,
+                    ..PointLight::default()
+                },
+            ],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Attaque".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Démo « Duel » façon Tekken/Smash Bros : arène compacte flottant au-dessus du
+    /// vide, joueur contre un unique rival qui encaisse plusieurs coups (cf.
+    /// `Combat::hp`) avant de tomber — un vrai combat, pas une mise à mort au premier
+    /// coup. Deux façons de gagner, comme dans un vrai jeu de combat : l'achever à coups
+    /// de poing (hp à 0, cf. `Scene::damage_attackable`), ou le faire sortir de l'arène
+    /// d'un coup de recul (« ring out », cf. `AppState::stagger` — le vide sous la scène
+    /// est une zone mortelle, cf. `deadly`, réutilisée pour l'IA comme pour le joueur).
+    /// Réutilise le système de manches (`Combat::wave = 1`, un seul adversaire) plutôt
+    /// qu'un mécanisme de victoire dédié : dès que le rival est invisible (achevé ou
+    /// sorti de l'arène), `AppState::update_waves` déclenche la victoire tout seul.
+    pub fn brawl_demo() -> Self {
+        let half = 7.0_f32;
+
+        let mut sol = demo_obj("Arène", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.18, 0.16, 0.22];
+        sol.metallic = 0.5;
+        sol.roughness = 0.3;
+
+        // Le vide sous l'arène : aucun mur, aucun sol au-delà du bord — tomber suffit à
+        // perdre (joueur) ou à être vaincu (rival, cf. la vérification de ring out dans
+        // `AppState::advance_play`). Invisible : la chute elle-même (rien sous les
+        // pieds) suffit à faire comprendre le danger, pas besoin d'un aplat coloré.
+        let mut vide = demo_obj("Vide", MeshKind::Cube, Vec3::new(0.0, -8.0, 0.0));
+        vide.transform = vide.transform.with_scale(Vec3::new(60.0, 10.0, 60.0));
+        vide.deadly = true;
+        vide.visible = false;
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(-4.0, 1.0, 0.0));
+        joueur.color = [0.9, 0.75, 0.3];
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.2,
+            attack_button: "Attaque".into(),
+            // Portée courte et préparation vive : des coups qui se rapprochent d'un jab
+            // de jeu de combat, pas d'un missile à distance.
+            attack_range: 1.3,
+            attack_cooldown: 0.45,
+            attack_windup: 0.15,
+            ..Default::default()
+        });
+
+        // Ancre de l'effet visuel d'attaque (cf. `Combat::is_attack_fx`).
+        let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
+        fx.color = [1.0, 0.9, 0.6];
+        fx.emissive = 1.6;
+        fx.combat = Some(Combat {
+            is_attack_fx: true,
+            ..Default::default()
+        });
+        fx.visible = false;
+
+        let mut rival = demo_obj("Rival", MeshKind::Capsule, Vec3::new(4.0, 1.0, 0.0));
+        rival.transform = rival.transform.with_scale(Vec3::splat(1.05));
+        rival.color = [0.55, 0.08, 0.12];
+        rival.emissive = 0.35;
+        rival.trigger = true;
+        rival.ai_chaser = Some(AiChaser { speed: 2.8 });
+        rival.combat = Some(Combat {
+            attackable: true,
+            // Une seule « manche » (cf. `Combat::wave`) : un adversaire unique, pas des
+            // vagues — juste pour déclencher la victoire via `AppState::update_waves`
+            // une fois qu'il est invisible (achevé ou sorti de l'arène), sans avoir à
+            // écrire une condition de victoire dédiée à cette démo.
+            wave: 1,
+            // 3 coups pour l'achever : un vrai duel, pas une mise à mort au premier
+            // coup (`Combat::hp` par défaut ailleurs). Reste vainquable par ring out
+            // avant d'y arriver (cf. la vérification dans `AppState::advance_play`).
+            hp: 3,
+            ..Default::default()
+        });
+        rival.respawn_delay = 0.0;
+        rival.script = "if obj.triggered then damage(0.9 * dt) end\n\
+             local p = 0.5 + 0.5 * math.sin(time * 6.0)\n\
+             obj.r = 0.55 + 0.35 * p; obj.g = 0.08; obj.b = 0.12"
+            .into();
+
+        Scene {
+            objects: vec![sol, vide, joueur, fx, rival],
+            camera_follow: true,
+            // Angle plus bas et plus horizontal que les autres démos (pitch ~0,35 contre
+            // ~0,62) : cadrage de profil façon jeu de combat plutôt qu'une vue plongeante
+            // de action-aventure — le point de vue précis se règle facilement dans
+            // l'éditeur (`Vue → Définir la caméra de jeu`) si besoin d'un angle différent.
+            game_camera: Some(GameCamera {
+                target: [0.0, 1.0, 0.0],
+                yaw: 0.0,
+                pitch: 0.35,
+                distance: 9.0,
+            }),
+            point_lights: vec![
+                // Lumière chaude du côté du joueur, froide du côté du rival — cadrage
+                // « vs » à deux couleurs typique des jeux de combat.
+                PointLight {
+                    position: [-4.0, 4.0, 2.0],
+                    color: [1.0, 0.65, 0.3],
+                    intensity: 1.1,
+                    range: 14.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [4.0, 4.0, -2.0],
+                    color: [0.3, 0.55, 1.0],
+                    intensity: 1.1,
+                    range: 14.0,
+                    ..PointLight::default()
+                },
+            ],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into(), "Attaque".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Démo « gameplay complet » : joueur (joystick + gyroscope + saut + vibration),
     /// zone de danger qui retire de la vie (HUD), et cube tactile qui change de couleur.
     /// Montre toute l'API de script en une scène jouable.
@@ -1836,6 +2358,25 @@ impl Scene {
         hit
     }
 
+    /// Ramassage d'arme au contact (cf. `WeaponPickup`) : masque le premier butin touché
+    /// et renvoie son profil (`WEAPONS[weapon]`) — un seul par appel, contrairement à
+    /// `collect_at` qui peut en ramasser plusieurs d'un coup (équiper 2 armes à la fois
+    /// n'aurait pas de sens, contrairement à empocher 2 pièces).
+    pub fn weapon_pickup_at(&mut self, p: Vec3, radius: f32) -> Option<Weapon> {
+        for o in &mut self.objects {
+            if let Some(wp) = o.weapon_pickup
+                && o.visible
+            {
+                let piece_r = o.transform.scale.max_element() * 0.5;
+                if (o.transform.position - p).length() <= radius + piece_r {
+                    o.visible = false;
+                    return Some(WEAPONS[wp.weapon]);
+                }
+            }
+        }
+        None
+    }
+
     /// Résout une attaque du joueur en `p` (portée `radius`) : vainc (masque) les ennemis
     /// `attackable` encore visibles à portée. Renvoie les indices vaincus (pour score,
     /// son, et mise en file de réapparition côté `App`, comme les bonus).
@@ -1854,6 +2395,56 @@ impl Scene {
                 vec![i]
             }
             None => Vec::new(),
+        }
+    }
+
+    /// Frappe de zone (cf. `AttackMode::Zone`) : vainc (masque) TOUTES les cibles
+    /// `attackable` encore visibles à portée d'un coup, contrairement à `attack_at` qui
+    /// n'en vainc qu'une (cf. sa doc : un swing en zone par défaut trivialise un groupe
+    /// convergent). Réservée aux armes qui l'assument explicitement via un coût élevé
+    /// (préparation/recharge longues, cf. `Weapon::mode` — le Marteau) : le compromis
+    /// change selon l'arme équipée, pas selon un swing par défaut universel.
+    /// Ne renvoie que les cibles **vaincues** par ce coup (cf. `damage_attackable`) : une
+    /// cible à plusieurs points de vie touchée mais encore vivante n'apparaît pas dans le
+    /// résultat (elle reste visible, sans recul — le recul en zone n'a pas de direction
+    /// unique à appliquer par cible, contrairement au mode `Single`, cf. `AppState`).
+    pub fn attack_zone_at(&mut self, p: Vec3, radius: f32) -> Vec<usize> {
+        let targets: Vec<usize> = self
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.combat.as_ref().is_some_and(|c| c.attackable) && o.visible)
+            .filter(|(_, o)| {
+                let enemy_r = o.transform.scale.max_element() * 0.5;
+                (o.transform.position - p).length() - enemy_r <= radius
+            })
+            .map(|(i, _)| i)
+            .collect();
+        targets
+            .into_iter()
+            .filter(|&i| self.damage_attackable(i))
+            .collect()
+    }
+
+    /// Inflige un coup à la cible `i` (décompte `Combat.hp`) : la masque et renvoie
+    /// `true` si ce coup l'achève (hp tombé à 0), renvoie `false` si elle survit (hp
+    /// encore > 0, reste visible). Distingue un coup qui achève d'un coup qui blesse
+    /// seulement — nécessaire pour un duel à plusieurs points de vie (cf.
+    /// `Scene::brawl_demo`), impossible à exprimer avec l'ancien `attack_at`/`attack_zone_at`
+    /// (masquage immédiat, sans notion de PV restants).
+    pub fn damage_attackable(&mut self, i: usize) -> bool {
+        let Some(o) = self.objects.get_mut(i) else {
+            return false;
+        };
+        let Some(c) = &mut o.combat else {
+            return false;
+        };
+        c.hp = c.hp.saturating_sub(1);
+        if c.hp == 0 {
+            o.visible = false;
+            true
+        } else {
+            false
         }
     }
 
@@ -2474,6 +3065,143 @@ mod tests {
     }
 
     #[test]
+    fn attack_zone_at_defeats_every_attackable_target_in_range_at_once() {
+        // Contrairement à `attack_at` (une seule cible, cf. sa doc), `attack_zone_at`
+        // (mode `AttackMode::Zone`, réservé aux armes qui l'assument via un coût élevé,
+        // cf. `Weapon::mode` — le Marteau) doit vaincre TOUT un groupe d'un coup.
+        let mk_enemy = |name: &str, pos: Vec3| SceneObject {
+            name: name.into(),
+            transform: Transform::from_pos(pos),
+            combat: Some(Combat {
+                attackable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut s = Scene {
+            objects: vec![
+                mk_enemy("E1", Vec3::new(0.0, 0.5, 0.0)),
+                mk_enemy("E2", Vec3::new(0.5, 0.5, 0.0)),
+                mk_enemy("E3", Vec3::new(-0.4, 0.5, 0.3)),
+                mk_enemy("Loin", Vec3::new(50.0, 0.5, 0.0)),
+            ],
+            ..Default::default()
+        };
+
+        let hit = s.attack_zone_at(Vec3::ZERO, 2.0);
+        assert_eq!(
+            hit.len(),
+            3,
+            "les 3 cibles groupées doivent toutes être vaincues d'un coup"
+        );
+        for &i in &hit {
+            assert!(
+                !s.objects[i].visible,
+                "chaque cible touchée devient invisible"
+            );
+        }
+        assert!(
+            s.objects.iter().find(|o| o.name == "Loin").unwrap().visible,
+            "une cible hors de portée ne doit pas être concernée"
+        );
+        assert!(
+            s.attack_zone_at(Vec3::ZERO, 2.0).is_empty(),
+            "un groupe déjà vaincu n'est pas retouché"
+        );
+    }
+
+    #[test]
+    fn damage_attackable_survives_until_hp_reaches_zero() {
+        // Fondation du duel façon Tekken/Smash (`Scene::brawl_demo`) : une cible à
+        // plusieurs PV doit encaisser plusieurs coups, pas tomber au premier — la
+        // différence entre `damage_attackable` (décompte `Combat.hp`) et l'ancien
+        // masquage immédiat de `attack_at`/`attack_zone_at`.
+        let mut s = Scene {
+            objects: vec![SceneObject {
+                name: "Rival".into(),
+                combat: Some(Combat {
+                    attackable: true,
+                    hp: 3,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            !s.damage_attackable(0),
+            "1er coup : encaisse, ne meurt pas (hp 3 -> 2)"
+        );
+        assert!(s.objects[0].visible, "encore visible après le 1er coup");
+        assert!(
+            !s.damage_attackable(0),
+            "2e coup : encaisse encore (hp 2 -> 1)"
+        );
+        assert!(s.objects[0].visible, "encore visible après le 2e coup");
+        assert!(
+            s.damage_attackable(0),
+            "3e coup : achève la cible (hp 1 -> 0)"
+        );
+        assert!(!s.objects[0].visible, "invisible une fois achevée");
+        // Un index invalide ou sans `Combat` ne doit pas paniquer.
+        assert!(!s.damage_attackable(99));
+    }
+
+    #[test]
+    fn brawl_demo_has_a_multi_hit_rival_a_ring_out_void_and_a_single_wave() {
+        let s = Scene::brawl_demo();
+        // Un seul adversaire (pas des vagues de monstres comme zombies/donjon).
+        let rivals: Vec<_> = s.objects.iter().filter(|o| o.ai_chaser.is_some()).collect();
+        assert_eq!(rivals.len(), 1, "un seul rival, pas des vagues de monstres");
+        let rival = rivals[0];
+        let combat = rival
+            .combat
+            .as_ref()
+            .expect("le rival doit être attaquable");
+        assert!(combat.attackable);
+        assert!(
+            combat.hp > 1,
+            "le rival doit encaisser plusieurs coups, pas tomber au premier : hp={}",
+            combat.hp
+        );
+        // `wave = 1` : réutilise le système de manches existant pour déclencher la
+        // victoire dès que le rival est invisible (achevé ou ring out), sans condition
+        // de victoire dédiée à cette démo (cf. doc de `Scene::brawl_demo`).
+        assert_eq!(combat.wave, 1);
+        assert!(
+            rival.trigger,
+            "le rival doit pouvoir mordre/frapper au contact"
+        );
+
+        // Une zone mortelle (le vide) existe : le ring out doit être possible.
+        assert!(
+            s.objects.iter().any(|o| o.deadly),
+            "l'arène doit avoir une zone mortelle (le vide) pour le ring out"
+        );
+        // Pas de mur autour de l'arène (contrairement au donjon/zombies) : rien n'empêche
+        // physiquement de sortir de l'arène.
+        assert!(!s.objects.iter().any(|o| o.name.starts_with("Mur")));
+
+        // Le joueur a une attaque courte et vive (façon jab), pas un tir longue portée.
+        let player = s
+            .objects
+            .iter()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("un joueur pilotable")
+            .controller
+            .as_ref()
+            .unwrap();
+        assert!(
+            player.attack_range < 2.0,
+            "portée courte, façon corps-à-corps"
+        );
+
+        // Une caméra de jeu est définie (cadrage de duel), pas la vue par défaut.
+        assert!(s.game_camera.is_some());
+        assert!(s.camera_follow);
+    }
+
+    #[test]
     fn controller_demo_lava_kills_standing_player() {
         // Le mesh Plane a une AABB locale très fine (±0.02 en Y) ; sans épaississement de
         // l'échelle Y à la génération, la lave ne recouperait jamais la hauteur réelle d'un
@@ -2652,6 +3380,7 @@ mod tests {
             attackable: true,
             is_attack_fx: false,
             wave: 2,
+            ..Default::default()
         });
         let scene = Scene {
             objects: vec![o],
@@ -2767,5 +3496,188 @@ mod tests {
             .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
             .expect("un joueur pilotable");
         assert!(!player.controller.as_ref().unwrap().attack_button.is_empty());
+    }
+
+    #[test]
+    fn exactly_one_weapon_profile_uses_the_zone_attack_mode() {
+        // Le mode `Zone` (frappe tout un groupe d'un coup) reste une exception délibérée,
+        // pas la norme : un seul profil l'assume (le Marteau, via son coût le plus élevé
+        // de la table — préparation et recharge les plus longues), tous les autres
+        // restent en mode `Single` (comportement historique de toutes les démos).
+        let zone: Vec<_> = WEAPONS
+            .iter()
+            .filter(|w| w.mode == AttackMode::Zone)
+            .collect();
+        assert_eq!(zone.len(), 1, "un seul profil en mode Zone : {zone:?}");
+        assert_eq!(zone[0].label, "Marteau");
+        assert_eq!(
+            zone[0].windup,
+            WEAPONS.iter().map(|w| w.windup).fold(0.0, f32::max),
+            "le mode Zone doit rester la préparation la plus longue de la table"
+        );
+    }
+
+    #[test]
+    fn roguelike_demo_has_three_rooms_one_monster_each_and_a_random_weapon() {
+        let s = Scene::roguelike_demo();
+        let monsters: Vec<_> = s.objects.iter().filter(|o| o.ai_chaser.is_some()).collect();
+        assert_eq!(monsters.len(), 3, "une salle = un monstre, 3 salles");
+        // 3 archétypes distincts (Gobelin/Squelette/Ogre), un par salle.
+        let distinct_names: std::collections::HashSet<&str> =
+            monsters.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(
+            distinct_names.len(),
+            3,
+            "3 monstres distincts, pas 3 copies du même"
+        );
+        for m in &monsters {
+            assert!(
+                m.combat
+                    .as_ref()
+                    .is_some_and(|c| c.attackable && c.wave > 0),
+                "chaque monstre doit être une cible d'attaque valide, une manche = une salle"
+            );
+            assert!(m.trigger, "un monstre doit détecter le contact pour mordre");
+        }
+        // Une salle à la fois : 3 manches distinctes, une par monstre (pas plusieurs
+        // monstres entassés dans la même manche comme dans `zombies_demo`).
+        let waves: std::collections::HashSet<u32> = monsters
+            .iter()
+            .filter_map(|o| o.combat.as_ref())
+            .map(|c| c.wave)
+            .collect();
+        assert_eq!(waves, std::collections::HashSet::from([1, 2, 3]));
+
+        // Arme de départ : un des 5 profils connus (`WEAPONS`), jamais les défauts
+        // génériques de `Controller` (qui ne correspondent à aucun des 5).
+        let player = s
+            .objects
+            .iter()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("un joueur pilotable")
+            .controller
+            .as_ref()
+            .unwrap();
+        let stat = |w: &Weapon| (w.range, w.cooldown, w.windup);
+        let starting = stat(
+            WEAPONS
+                .iter()
+                .find(|w| {
+                    stat(w)
+                        == (
+                            player.attack_range,
+                            player.attack_cooldown,
+                            player.attack_windup,
+                        )
+                })
+                .expect("l'arme de départ doit être l'un des 5 profils connus, pas les défauts génériques"),
+        );
+
+        // 2 butins d'arme dans le donjon (cf. `WeaponPickup`), un par salle 1/2 — la
+        // salle 3 (l'Ogre) n'en a pas : le joueur doit avoir déjà trouvé sa meilleure
+        // arme avant d'y entrer.
+        let loot: Vec<_> = s
+            .objects
+            .iter()
+            .filter_map(|o| o.weapon_pickup.map(|wp| WEAPONS[wp.weapon]))
+            .collect();
+        assert_eq!(
+            loot.len(),
+            2,
+            "2 butins d'arme, un dans chaque première salle"
+        );
+        // Les 3 armes en jeu (départ + 2 butins) doivent être 3 profils DISTINCTS :
+        // sinon trouver un butin n'apporterait rien (même arme que celle déjà en main).
+        let mut all_three: std::collections::HashSet<(u32, u32, u32)> = loot
+            .iter()
+            .map(|w| (w.range.to_bits(), w.cooldown.to_bits(), w.windup.to_bits()))
+            .collect();
+        all_three.insert((
+            starting.0.to_bits(),
+            starting.1.to_bits(),
+            starting.2.to_bits(),
+        ));
+        assert_eq!(
+            all_three.len(),
+            3,
+            "l'arme de départ et les 2 butins doivent être 3 profils distincts"
+        );
+
+        // Portes fermées (pas de couloir séparé) entre les salles : au moins 4 segments
+        // de mur transversal supplémentaires (2 portes à 2 segments chacune), en plus de
+        // l'enveloppe extérieure à 4 murs.
+        let walls = s
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Mur") || o.name.starts_with("Porte"))
+            .count();
+        assert!(
+            walls >= 8,
+            "enveloppe (4 murs) + 2 portes à 2 segments : {walls}"
+        );
+    }
+
+    /// Sur un grand nombre de tirages, les profils d'arme tirés ne doivent pas toujours
+    /// être les mêmes — sinon le tirage serait biaisé (ou codé en dur sur un seul profil).
+    #[test]
+    fn roguelike_demo_weapon_draw_is_not_always_the_same_profile() {
+        let mut seen: std::collections::HashSet<(u32, u32, u32)> = std::collections::HashSet::new();
+        for _ in 0..40 {
+            let s = Scene::roguelike_demo();
+            let c = s
+                .objects
+                .iter()
+                .find_map(|o| o.controller.as_ref().filter(|c| c.input))
+                .unwrap();
+            // Bits flottants exacts (valeurs codées en dur, pas de calcul) : comparaison
+            // par bits sûre pour un ensemble de discrimination.
+            seen.insert((
+                c.attack_range.to_bits(),
+                c.attack_cooldown.to_bits(),
+                c.attack_windup.to_bits(),
+            ));
+            if seen.len() >= 2 {
+                break;
+            }
+        }
+        assert!(
+            seen.len() >= 2,
+            "40 tirages n'ont produit qu'un seul profil d'arme : le tirage semble figé"
+        );
+    }
+
+    #[test]
+    fn weapon_pickup_at_equips_the_right_profile_and_is_one_shot() {
+        let mut s = Scene::roguelike_demo();
+        let (pos, expected) = s
+            .objects
+            .iter()
+            .find_map(|o| {
+                o.weapon_pickup
+                    .map(|wp| (o.transform.position, WEAPONS[wp.weapon]))
+            })
+            .expect("le donjon a au moins un butin d'arme");
+
+        let got = s
+            .weapon_pickup_at(pos, 0.9)
+            .expect("doit ramasser le butin exactement sur sa position");
+        assert_eq!(
+            (got.range, got.cooldown, got.windup),
+            (expected.range, expected.cooldown, expected.windup),
+            "doit renvoyer le profil du butin ramassé, pas un autre"
+        );
+
+        // Ramassage à usage unique : retoucher le même endroit ne renvoie plus rien
+        // (l'objet a été masqué), contrairement à une pièce qui pourrait réapparaître.
+        assert!(
+            s.weapon_pickup_at(pos, 0.9).is_none(),
+            "un butin déjà ramassé ne doit pas se reramasser"
+        );
+
+        // Très loin de tout butin : rien ramassé.
+        assert!(
+            s.weapon_pickup_at(Vec3::new(500.0, 0.5, 500.0), 0.9)
+                .is_none()
+        );
     }
 }

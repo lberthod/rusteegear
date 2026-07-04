@@ -109,11 +109,29 @@ struct AttackProjectile {
 /// immédiate au tir ne pouvait pas garantir (cf. audit_sprint.md).
 const ATTACK_PROJECTILE_SPEED: f32 = 10.0;
 
-/// Préparation d'attaque en cours (cf. `Controller::attack_windup`) : la cible est
-/// verrouillée dès l'appui, mais le missile ne part qu'une fois `remaining` écoulé — le
-/// joueur reste exposé pendant ce temps (aucune protection spéciale : c'est le point).
+/// Vitesse horizontale (m/s) du recul (knockback) infligé à une cible touchée qui
+/// survit au coup (cf. `Combat::hp`, `AppState::stagger`) — assez pour repousser un
+/// adversaire vers le bord d'une arène façon Smash/Tekken (`Scene::brawl_demo`), pas
+/// juste un tressaillement cosmétique.
+const KNOCKBACK_SPEED: f32 = 9.0;
+
+/// Durée (s) pendant laquelle le recul prime sur le pilotage IA (cf. `AppState::stagger`) :
+/// sans cette fenêtre, le chasseur recalculerait sa vitesse de poursuite dès la frame
+/// suivante et écraserait le recul avant qu'il n'ait le moindre effet visible.
+const KNOCKBACK_DURATION: f32 = 0.35;
+
+/// Préparation d'attaque en cours (cf. `Controller::attack_windup`) : verrouillée dès
+/// l'appui, résolue une fois `remaining` écoulé — le joueur reste exposé pendant ce
+/// temps (aucune protection spéciale : c'est le point).
 struct AttackCharge {
-    target: usize,
+    /// Cible verrouillée (mode `AttackMode::Single`) ; `None` en mode `Zone` — rien à
+    /// verrouiller à l'avance, la frappe touche tout ce qui est à portée au moment de
+    /// la résolution, pas une cible unique choisie au moment du tir.
+    target: Option<usize>,
+    /// Portée au moment de l'appui, ré-appliquée à la résolution en mode `Zone` (le
+    /// mode `Single` n'en a pas besoin : `target` porte déjà l'information).
+    range: f32,
+    mode: crate::scene::AttackMode,
     remaining: f32,
 }
 
@@ -193,6 +211,11 @@ pub struct AppState {
     /// temps (aucune invulnérabilité), créant enfin un vrai risque en 1 contre 1 (cf.
     /// audit_sprint.md : le temps de vol du missile seul ne suffisait pas).
     attack_charge: Option<AttackCharge>,
+    /// Reculs (knockback) en cours : (indice d'objet, vitesse horizontale, temps restant
+    /// en s) — cf. `KNOCKBACK_SPEED`/`KNOCKBACK_DURATION`. Prioritaire sur le pilotage
+    /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
+    /// la frame suivante).
+    stagger: Vec<(usize, Vec3, f32)>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -337,6 +360,7 @@ impl AppState {
             attack_cooldown_remaining: 0.0,
             attack_projectile: None,
             attack_charge: None,
+            stagger: Vec::new(),
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -1064,6 +1088,7 @@ impl AppState {
         self.attack_cooldown_remaining = 0.0;
         self.attack_projectile = None;
         self.attack_charge = None;
+        self.stagger.clear();
         self.tapped_obj = None;
         // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
         // reconstruire la physique, pour que les corps rigides des monstres masqués ne
@@ -1149,6 +1174,36 @@ impl AppState {
     pub fn load_zombies_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::zombies_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
+    /// Charge la démo « Donjon » façon roguelike (cf. `Scene::roguelike_demo`) : 3 salles
+    /// à vider une à une (portes fermées jusqu'à la manche suivante), arme de départ
+    /// tirée au sort parmi 3 profils à chaque chargement.
+    pub fn load_roguelike_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::roguelike_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
+    /// Charge la démo « Duel » façon Tekken/Smash Bros (cf. `Scene::brawl_demo`) : arène
+    /// flottante, un seul rival à plusieurs points de vie, à achever ou à sortir de
+    /// l'arène (ring out).
+    pub fn load_brawl_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::brawl_demo();
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
@@ -1695,6 +1750,7 @@ impl AppState {
             self.attack_cooldown_remaining = 0.0;
             self.attack_projectile = None;
             self.attack_charge = None;
+            self.stagger.clear();
             self.wave = 0;
             self.win_time = None;
             self.lost = false;
@@ -1751,6 +1807,29 @@ impl AppState {
                     }
                 }
             }
+            // Ramassage d'arme par contact (cf. `WeaponPickup`, donjon roguelike) :
+            // équipe le nouveau profil sur le joueur et score +1, comme une pièce —
+            // mais **natif** (pas un script Lua, qui ne peut pas modifier `Controller`).
+            if let Some(pi) = self.player_index() {
+                let p = self.scene.objects[pi].transform.position;
+                if let Some(w) = self.scene.weapon_pickup_at(p, 0.9) {
+                    if let Some(ctrl) = self.scene.objects[pi].controller.as_mut() {
+                        ctrl.attack_range = w.range;
+                        ctrl.attack_cooldown = w.cooldown;
+                        ctrl.attack_windup = w.windup;
+                        ctrl.attack_mode = w.mode;
+                    }
+                    self.score += 1;
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Pickup);
+                    log::info!(
+                        "Arme trouvée : « {} » équipée (portée {:.1} m, recharge {:.2} s, préparation {:.2} s)",
+                        w.label,
+                        w.range,
+                        w.cooldown,
+                        w.windup
+                    );
+                }
+            }
             // Temps de recharge de l'attaque : décompte à chaque frame, indépendamment
             // du bouton (sinon le relâcher puis le rappuyer contournerait le temporisateur).
             if self.attack_cooldown_remaining > 0.0 {
@@ -1758,11 +1837,13 @@ impl AppState {
             }
             // Attaque du joueur : bouton tactile nommé (controller.attack_button) ou touche
             // clavier Attaque. Verrouille la cible `attackable` la plus proche à portée
-            // et lance une **préparation** (cf. `attack_charge`) avant de tirer le
-            // missile — le joueur reste exposé pendant ce temps, sans protection
-            // spéciale (c'est le point : cf. `Controller::attack_windup`). Recharge
-            // requise : sans elle, maintenir le bouton déclencherait une préparation en
-            // rafale sans le moindre coût (cf. `Controller::attack_cooldown`).
+            // (mode `Single`) ou constate qu'il y en a au moins une à portée (mode
+            // `Zone`, cf. `Controller::attack_mode`) et lance une **préparation** (cf.
+            // `attack_charge`) avant de résoudre le coup — le joueur reste exposé
+            // pendant ce temps, sans protection spéciale (c'est le point : cf.
+            // `Controller::attack_windup`). Recharge requise : sans elle, maintenir le
+            // bouton déclencherait une préparation en rafale sans le moindre coût (cf.
+            // `Controller::attack_cooldown`).
             if self.attack_projectile.is_none()
                 && self.attack_charge.is_none()
                 && let Some(player) = self.player_object()
@@ -1776,9 +1857,19 @@ impl AppState {
                     let p = player.transform.position;
                     let range = ctrl.attack_range;
                     self.attack_cooldown_remaining = ctrl.attack_cooldown;
-                    if let Some(target) = self.scene.nearest_attackable(p, range) {
+                    let target = match ctrl.attack_mode {
+                        crate::scene::AttackMode::Single => {
+                            self.scene.nearest_attackable(p, range).map(Some)
+                        }
+                        crate::scene::AttackMode::Zone => {
+                            self.scene.nearest_attackable(p, range).map(|_| None)
+                        }
+                    };
+                    if let Some(target) = target {
                         self.attack_charge = Some(AttackCharge {
                             target,
+                            range,
+                            mode: ctrl.attack_mode,
                             remaining: ctrl.attack_windup,
                         });
                         // Ancre visuelle : petit éclat au niveau du joueur pendant la
@@ -1793,17 +1884,18 @@ impl AppState {
                     }
                 }
             }
-            // Préparation en cours : décompte, puis lance le missile une fois écoulée.
-            // Si la cible verrouillée disparaît entre-temps (respawn, autre mise à
-            // mort...), la préparation s'annule silencieusement (pas de missile à vide).
+            // Préparation en cours : décompte, puis résout le coup une fois écoulée. En
+            // mode `Single`, si la cible verrouillée disparaît entre-temps (respawn,
+            // autre mise à mort...), la préparation s'annule silencieusement (pas de
+            // missile à vide) ; en mode `Zone`, rien n'est verrouillé à l'avance, donc
+            // rien à annuler — la frappe touche ce qui est à portée à la résolution,
+            // quitte à ne rien toucher du tout.
             if let Some(charge) = &mut self.attack_charge {
                 charge.remaining -= dt;
-                let alive = self
-                    .scene
-                    .objects
-                    .get(charge.target)
-                    .is_some_and(|o| o.visible);
-                if !alive {
+                let cancel = charge
+                    .target
+                    .is_some_and(|t| !self.scene.objects.get(t).is_some_and(|o| o.visible));
+                if cancel {
                     self.attack_charge = None;
                     if let Some(fx) = self.attack_fx_index()
                         && let Some(o) = self.scene.objects.get_mut(fx)
@@ -1811,15 +1903,37 @@ impl AppState {
                         o.visible = false;
                     }
                 } else if charge.remaining <= 0.0 {
-                    let target = charge.target;
+                    let (target, range, mode) = (charge.target, charge.range, charge.mode);
                     self.attack_charge = None;
                     if let Some(p) = self.player_position() {
-                        self.attack_projectile = Some(AttackProjectile { target, pos: p });
-                        if let Some(fx) = self.attack_fx_index()
-                            && let Some(o) = self.scene.objects.get_mut(fx)
-                        {
-                            o.transform.position = p;
-                            o.transform.scale = Vec3::splat(0.25);
+                        match mode {
+                            crate::scene::AttackMode::Single => {
+                                let target = target.expect("mode Single verrouille toujours une cible avant de lancer une préparation");
+                                self.attack_projectile = Some(AttackProjectile { target, pos: p });
+                                if let Some(fx) = self.attack_fx_index()
+                                    && let Some(o) = self.scene.objects.get_mut(fx)
+                                {
+                                    o.transform.position = p;
+                                    o.transform.scale = Vec3::splat(0.25);
+                                }
+                            }
+                            crate::scene::AttackMode::Zone => {
+                                let defeated = self.scene.attack_zone_at(p, range);
+                                if !defeated.is_empty() {
+                                    self.score += defeated.len() as u32;
+                                    crate::runtime::sfx::play(
+                                        &mut self.audio,
+                                        crate::runtime::sfx::Sfx::Defeat,
+                                    );
+                                    self.attack_flash = 1.0;
+                                    if let Some(fx) = self.attack_fx_index()
+                                        && let Some(o) = self.scene.objects.get_mut(fx)
+                                    {
+                                        o.transform.position = p;
+                                        o.transform.scale = Vec3::splat(1.2);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1838,24 +1952,48 @@ impl AppState {
                     let to_target = target_pos - proj.pos;
                     let step = ATTACK_PROJECTILE_SPEED * dt;
                     if to_target.length() <= step.max(0.15) {
-                        // Impact : résout la mise à mort maintenant, pas au moment du tir.
+                        // Impact : résout le coup maintenant, pas au moment du tir. Une
+                        // cible à plusieurs points de vie (cf. `Combat::hp`, le duel
+                        // `Scene::brawl_demo`) peut survivre au coup — `damage_attackable`
+                        // ne la masque que si ce coup l'achève.
                         let i = proj.target;
-                        self.scene.objects[i].visible = false;
-                        self.score += 1;
-                        crate::runtime::sfx::play(
-                            &mut self.audio,
-                            crate::runtime::sfx::Sfx::Defeat,
-                        );
+                        let defeated = self.scene.damage_attackable(i);
+                        self.attack_flash = 1.0;
+                        if defeated {
+                            self.score += 1;
+                            crate::runtime::sfx::play(
+                                &mut self.audio,
+                                crate::runtime::sfx::Sfx::Defeat,
+                            );
+                            let d = self.scene.objects[i].respawn_delay;
+                            if d > 0.0 {
+                                self.respawn_queue.push((i, self.time + d));
+                            }
+                        } else {
+                            crate::runtime::sfx::play(
+                                &mut self.audio,
+                                crate::runtime::sfx::Sfx::Hit,
+                            );
+                            // Recul (knockback) : la cible survivante est repoussée loin
+                            // du joueur — cf. `AppState::stagger`, qui empêche l'IA de
+                            // reprendre la main sur sa vitesse tant que le recul dure.
+                            if let Some(p) = self.player_position() {
+                                let away = target_pos - p;
+                                let dir = Vec3::new(away.x, 0.0, away.z);
+                                if dir.length_squared() > 1e-6 {
+                                    self.stagger.push((
+                                        i,
+                                        dir.normalize() * KNOCKBACK_SPEED,
+                                        KNOCKBACK_DURATION,
+                                    ));
+                                }
+                            }
+                        }
                         if let Some(fx) = self.attack_fx_index()
                             && let Some(o) = self.scene.objects.get_mut(fx)
                         {
                             o.transform.position = target_pos;
                             o.transform.scale = Vec3::splat(1.2);
-                        }
-                        self.attack_flash = 1.0;
-                        let d = self.scene.objects[i].respawn_delay;
-                        if d > 0.0 {
-                            self.respawn_queue.push((i, self.time + d));
                         }
                         // Le missile a atteint sa cible : rien à remettre dans `attack_projectile`.
                     } else {
@@ -1893,6 +2031,26 @@ impl AppState {
             {
                 self.lost = true;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+            }
+            // Mise à mort par « ring out » (arène façon Smash/Tekken, cf. `Scene::brawl_demo`) :
+            // un adversaire (IA poursuivante) qui tombe dans une zone mortelle (le vide
+            // sous l'arène) est vaincu, comme un coup réussi — réutilise `deadly_at`
+            // (déjà utilisé pour la défaite du joueur ci-dessus), pas un mécanisme séparé.
+            // Sans effet sur les autres démos : aucune n'a de zone mortelle à proximité
+            // de ses monstres poursuivants (arènes fermées par des murs).
+            for i in 0..self.scene.objects.len() {
+                let o = &self.scene.objects[i];
+                if !o.visible || o.ai_chaser.is_none() {
+                    continue;
+                }
+                if !o.combat.as_ref().is_some_and(|c| c.attackable) {
+                    continue;
+                }
+                if self.scene.deadly_at(o.transform.position) {
+                    self.scene.objects[i].visible = false;
+                    self.score += 1;
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
+                }
             }
             // Défaite : la vie (dégâts cumulés des ennemis via `damage()`) est tombée à 0.
             // Contrairement aux zones mortelles, les ennemis punissent par usure (dégâts
@@ -2123,6 +2281,15 @@ impl AppState {
                     phys.control(idx, vx, vz, false, 0.0);
                 }
             }
+            // Recul (knockback, cf. `AppState::stagger`) : appliqué en dernier, après le
+            // pilotage joystick/IA ci-dessus, pour qu'un coup encaissé cette frame ne soit
+            // pas immédiatement écrasé par la vitesse que le joystick ou la poursuite
+            // viennent de recalculer.
+            self.stagger.retain_mut(|(idx, vel, remaining)| {
+                phys.control(*idx, vel.x, vel.z, false, 0.0);
+                *remaining -= dt;
+                *remaining > 0.0
+            });
             phys.step(dt, &mut self.scene);
             if any_jump {
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
@@ -3515,6 +3682,273 @@ mod tests {
 
         app.load_mobile_demo();
         assert!(!app.is_leveled_demo);
+
+        app.load_roguelike_demo();
+        assert!(
+            !app.is_leveled_demo,
+            "donjon : pas de niveau suivant (manches)"
+        );
+
+        app.load_brawl_demo();
+        assert!(
+            !app.is_leveled_demo,
+            "duel : pas de niveau suivant (manches)"
+        );
+    }
+
+    #[test]
+    fn roguelike_demo_clears_rooms_one_at_a_time_to_victory() {
+        // Bout en bout sur la vraie scène (pas une scène synthétique) : la salle 2 ne
+        // doit pas être révélée avant que la salle 1 soit vidée, et ainsi de suite
+        // jusqu'à la victoire — même mécanique que `wave_system_reveals_next_wave_...`
+        // mais sur `Scene::roguelike_demo`, portée d'attaque élargie et préparation
+        // nulle pour isoler la logique de manches de la précision de visée et de l'arme
+        // tirée au sort (cf. commentaire similaire dans
+        // `wave_system_reveals_next_wave_then_wins_on_the_last`). Le joueur ne bouge
+        // jamais dans ce test (aucune entrée de mouvement) : le missile doit donc
+        // parcourir toute la longueur du donjon pour la salle 3 (~20 m) — budget de
+        // boucle large pour laisser le temps au missile homing d'arriver.
+        let mut app = AppState::new();
+        app.load_roguelike_demo();
+        for o in &mut app.scene.objects {
+            if let Some(c) = &mut o.controller
+                && c.input
+            {
+                c.attack_range = 50.0;
+                c.attack_cooldown = 0.0;
+                c.attack_windup = 0.0;
+            }
+        }
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(app.wave, 1, "démarre à la salle 1");
+
+        let monster_count_wave = |app: &AppState, w: u32| {
+            app.scene
+                .objects
+                .iter()
+                .filter(|o| o.visible && o.combat.as_ref().is_some_and(|c| c.wave == w))
+                .count()
+        };
+        assert_eq!(
+            monster_count_wave(&app, 1),
+            1,
+            "salle 1 : son monstre est visible"
+        );
+        assert_eq!(monster_count_wave(&app, 2), 0, "salle 2 : encore masquée");
+        assert_eq!(monster_count_wave(&app, 3), 0, "salle 3 : encore masquée");
+
+        app.input_state.attack = true;
+        for wave in 1..=3u32 {
+            for _ in 0..100 {
+                app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+                app.advance_play();
+                if app.wave > wave || app.has_won() {
+                    break;
+                }
+            }
+        }
+        assert!(
+            app.has_won(),
+            "les 3 salles vidées doivent déclencher la victoire (wave={})",
+            app.wave
+        );
+    }
+
+    #[test]
+    fn roguelike_demo_walking_onto_a_weapon_pickup_reequips_the_player() {
+        // Le ramassage d'arme (donjon roguelike) est **natif** (pas un script Lua, qui ne
+        // peut pas modifier `Controller`) : bout en bout via `advance_play`, pas
+        // seulement au niveau `Scene::weapon_pickup_at` (déjà testé isolément côté scène).
+        let mut app = AppState::new();
+        app.load_roguelike_demo();
+        let (loot_idx, loot_pos, expected) = app
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .find_map(|(i, o)| {
+                o.weapon_pickup
+                    .map(|wp| (i, o.transform.position, crate::scene::WEAPONS[wp.weapon]))
+            })
+            .expect("le donjon a au moins un butin d'arme");
+        let pi = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .unwrap();
+        // Place le joueur exactement sur le butin (au lieu de simuler un déplacement) :
+        // isole la résolution du ramassage de la logique de déplacement, déjà testée
+        // ailleurs (`controller_demo_player_moves_with_joystick`).
+        app.scene.objects[pi].transform.position = loot_pos;
+
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+
+        let ctrl = app.scene.objects[pi].controller.as_ref().unwrap();
+        assert_eq!(
+            (ctrl.attack_range, ctrl.attack_cooldown, ctrl.attack_windup),
+            (expected.range, expected.cooldown, expected.windup),
+            "le joueur doit être équipé du profil du butin ramassé"
+        );
+        assert!(
+            !app.scene.objects[loot_idx].visible,
+            "le butin ramassé doit disparaître"
+        );
+        assert_eq!(
+            app.score(),
+            1,
+            "un butin ramassé doit compter au score, comme une pièce"
+        );
+    }
+
+    #[test]
+    fn brawl_demo_rival_survives_two_hits_then_falls_on_the_third() {
+        // Le cœur du duel façon Tekken/Smash : le rival a plusieurs PV (cf.
+        // `Combat::hp`), donc encaisse d'abord, ne meurt pas au premier coup. Portée
+        // élargie et recharge/préparation nulles pour isoler la mécanique de PV de la
+        // précision de visée et du timing (même convention que les tests de manches).
+        let mut app = AppState::new();
+        app.load_brawl_demo();
+        let ri = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Rival")
+            .unwrap();
+        for o in &mut app.scene.objects {
+            if let Some(c) = &mut o.controller
+                && c.input
+            {
+                c.attack_range = 50.0;
+                c.attack_cooldown = 0.0;
+                c.attack_windup = 0.0;
+            }
+        }
+        app.playing = true;
+        app.input_state.attack = true;
+
+        let mut hp_history = Vec::new();
+        for _ in 0..1000 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if let Some(hp) = app.scene.objects[ri].combat.as_ref().map(|c| c.hp)
+                && hp_history.last() != Some(&hp)
+            {
+                hp_history.push(hp);
+            }
+            if !app.scene.objects[ri].visible {
+                break;
+            }
+        }
+        assert_eq!(
+            hp_history,
+            vec![3, 2, 1, 0],
+            "le rival doit encaisser 3 coups avant de tomber, pas mourir au premier"
+        );
+        assert!(
+            !app.scene.objects[ri].visible,
+            "invisible une fois achevé au 3e coup"
+        );
+        assert_eq!(
+            app.score(),
+            1,
+            "le score ne doit compter que le coup qui achève, pas les coups intermédiaires"
+        );
+        assert!(
+            app.has_won(),
+            "achever l'unique rival doit déclencher la victoire (cf. Combat::wave = 1)"
+        );
+    }
+
+    #[test]
+    fn brawl_demo_non_lethal_hit_knocks_the_rival_away_from_the_player() {
+        // Contrepoint « Smash » du coup qui achève : un coup qui blesse sans tuer doit
+        // repousser la cible (cf. `AppState::stagger`/`KNOCKBACK_SPEED`), pas la laisser
+        // reprendre aussitôt sa poursuite comme si de rien n'était — sinon aucun ring out
+        // n'est jamais possible.
+        let mut app = AppState::new();
+        app.load_brawl_demo();
+        let ri = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Rival")
+            .unwrap();
+        for o in &mut app.scene.objects {
+            if let Some(c) = &mut o.controller
+                && c.input
+            {
+                c.attack_range = 50.0;
+                // Recharge énorme : un seul coup possible sur toute la durée du test,
+                // pour observer le recul sans qu'un 2e coup n'interfère.
+                c.attack_cooldown = 100.0;
+                c.attack_windup = 0.0;
+            }
+        }
+        app.playing = true;
+        app.input_state.attack = true;
+
+        let mut pos_at_impact = None;
+        for _ in 0..200 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if app.scene.objects[ri]
+                .combat
+                .as_ref()
+                .is_some_and(|c| c.hp == 2)
+            {
+                pos_at_impact = Some(app.scene.objects[ri].transform.position);
+                break;
+            }
+        }
+        let pos_at_impact = pos_at_impact.expect("le 1er coup (non-létal) doit atterrir");
+        let player_pos = app
+            .player_position()
+            .expect("le joueur ne bouge pas dans ce test (aucune entrée de mouvement)");
+        let dist0 = (pos_at_impact - player_pos).length();
+
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        let dist1 = (app.scene.objects[ri].transform.position - player_pos).length();
+        assert!(
+            dist1 > dist0,
+            "le rival doit s'éloigner juste après un coup non-létal, pas continuer de \
+             se rapprocher comme le ferait une poursuite ininterrompue (avant={dist0}, après={dist1})"
+        );
+    }
+
+    #[test]
+    fn falling_into_the_void_ring_outs_the_rival_and_counts_as_victory() {
+        // Deuxième façon de gagner un duel façon Smash : sortir l'adversaire de l'arène,
+        // pas seulement l'achever à coups de poing (cf. `Scene::brawl_demo`).
+        let mut app = AppState::new();
+        app.load_brawl_demo();
+        let ri = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Rival")
+            .unwrap();
+        // Téléporte le rival dans le vide sous l'arène (au lieu de simuler un vrai
+        // recul jusqu'au bord) : isole la détection du ring out de la mécanique de
+        // recul, déjà testée ailleurs (`brawl_demo_non_lethal_hit_knocks_the_rival_away_from_the_player`).
+        app.scene.objects[ri].transform.position = Vec3::new(0.0, -8.0, 0.0);
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+
+        assert!(
+            !app.scene.objects[ri].visible,
+            "le rival doit être vaincu en tombant dans le vide"
+        );
+        assert!(
+            app.has_won(),
+            "un ring out doit compter comme une victoire (adversaire unique, wave=1)"
+        );
     }
 
     #[test]
@@ -3602,6 +4036,78 @@ mod tests {
         assert_eq!(
             still_visible, 2,
             "les 2 autres cibles du groupe doivent survivre à ce coup"
+        );
+    }
+
+    #[test]
+    fn attack_mode_zone_clears_a_whole_cluster_in_one_swing() {
+        // Contrepoint direct de `attack_at_clears_a_cluster_one_target_at_a_time_not_in_one_swing` :
+        // ce dernier documente que le mode par défaut (`Single`) ne vainc qu'une cible à
+        // la fois, précisément pour ne pas trivialiser un groupe convergent. Le mode
+        // `AttackMode::Zone` (Marteau, cf. `Weapon::mode`) doit au contraire vaincre TOUT
+        // le groupe d'un coup — c'est le point de payer une préparation/recharge plus
+        // longues (cf. `WEAPONS`) : jamais d'état intermédiaire « 1 ou 2 des 3 vaincus ».
+        let mut s = crate::scene::Scene::default();
+        s.objects.push(crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.2, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                attack_button: "Attaque".into(),
+                attack_range: 5.0,
+                attack_cooldown: 1.0,
+                attack_windup: 0.1,
+                attack_mode: crate::scene::AttackMode::Zone,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        s.objects.push(joueur);
+        for n in 0..3 {
+            let mut m = crate::scene::SceneObject {
+                name: format!("Monstre {n}"),
+                mesh: crate::scene::MeshKind::Sphere,
+                transform: crate::scene::Transform::from_pos(Vec3::new(0.2 * n as f32, 0.5, 0.0)),
+                combat: Some(crate::scene::Combat {
+                    attackable: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            m.color = [1.0; 3];
+            s.objects.push(m);
+        }
+
+        let mut app = AppState::new();
+        app.scene = s;
+        app.playing = true;
+        app.input_state.attack = true;
+        let mut seen_counts: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            let visible = app.scene.objects[2..].iter().filter(|o| o.visible).count();
+            seen_counts.insert(visible);
+            if visible == 0 {
+                break;
+            }
+        }
+        assert!(
+            seen_counts.contains(&0),
+            "le mode Zone doit finir par vaincre tout le groupe"
+        );
+        assert!(
+            !seen_counts.contains(&1) && !seen_counts.contains(&2),
+            "jamais d'état intermédiaire \"1 ou 2 vaincus\" : la résolution doit toucher \
+             les 3 cibles du groupe dans le même appel, pas une par une (vu={seen_counts:?})"
         );
     }
 

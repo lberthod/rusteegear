@@ -945,6 +945,12 @@ impl Renderer {
             if actions.load_ai_duel {
                 app.load_zombies_demo();
             }
+            if actions.load_roguelike {
+                app.load_roguelike_demo();
+            }
+            if actions.load_brawl {
+                app.load_brawl_demo();
+            }
             if actions.restart {
                 restart = true;
             }
