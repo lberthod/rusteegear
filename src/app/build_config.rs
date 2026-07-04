@@ -72,9 +72,16 @@ mod tests {
     fn light_budget_scales_with_quality_and_stays_in_bounds() {
         assert_eq!(RenderQuality::Low.light_budget(), 2);
         assert_eq!(RenderQuality::Medium.light_budget(), 4);
-        assert_eq!(RenderQuality::High.light_budget(), crate::scene::MAX_POINT_LIGHTS);
+        assert_eq!(
+            RenderQuality::High.light_budget(),
+            crate::scene::MAX_POINT_LIGHTS
+        );
         // Chaque niveau doit rester borné par la capacité shader (jamais dépassée).
-        for q in [RenderQuality::Low, RenderQuality::Medium, RenderQuality::High] {
+        for q in [
+            RenderQuality::Low,
+            RenderQuality::Medium,
+            RenderQuality::High,
+        ] {
             assert!(q.light_budget() <= crate::scene::MAX_POINT_LIGHTS);
         }
         // Ordre croissant strict : plus de qualité = plus de lumières.

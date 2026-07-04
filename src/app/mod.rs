@@ -109,6 +109,14 @@ struct AttackProjectile {
 /// immédiate au tir ne pouvait pas garantir (cf. audit_sprint.md).
 const ATTACK_PROJECTILE_SPEED: f32 = 10.0;
 
+/// Préparation d'attaque en cours (cf. `Controller::attack_windup`) : la cible est
+/// verrouillée dès l'appui, mais le missile ne part qu'une fois `remaining` écoulé — le
+/// joueur reste exposé pendant ce temps (aucune protection spéciale : c'est le point).
+struct AttackCharge {
+    target: usize,
+    remaining: f32,
+}
+
 pub struct AppState {
     pub scene: Scene,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
@@ -179,6 +187,12 @@ pub struct AppState {
     /// mordre avant que le coup ne porte (le vrai risque qu'une résolution instantanée
     /// ne pouvait pas garantir, cf. audit_sprint.md).
     attack_projectile: Option<AttackProjectile>,
+    /// Préparation d'attaque en cours (cf. `Controller::attack_windup`) : `None` = pas de
+    /// tir en préparation. La cible est verrouillée dès l'appui, mais le missile ne part
+    /// qu'une fois le temps de préparation écoulé — le joueur reste exposé pendant ce
+    /// temps (aucune invulnérabilité), créant enfin un vrai risque en 1 contre 1 (cf.
+    /// audit_sprint.md : le temps de vol du missile seul ne suffisait pas).
+    attack_charge: Option<AttackCharge>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -322,6 +336,7 @@ impl AppState {
             is_leveled_demo: false,
             attack_cooldown_remaining: 0.0,
             attack_projectile: None,
+            attack_charge: None,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -869,15 +884,9 @@ impl AppState {
                 && !p.starts_with(crate::assets::ASSET_SCHEME)
                 && !p.starts_with(crate::assets::SCHEME)
         };
-        let any = self
-            .scene
-            .objects
-            .iter()
-            .any(|o| {
-                is_external(&o.texture)
-                    || o.audio.as_ref().is_some_and(|a| is_external(&a.clip))
-            })
-            || self.scene.imported.iter().any(|m| is_external(&m.path));
+        let any = self.scene.objects.iter().any(|o| {
+            is_external(&o.texture) || o.audio.as_ref().is_some_and(|a| is_external(&a.clip))
+        }) || self.scene.imported.iter().any(|m| is_external(&m.path));
         if !any {
             return 0;
         }
@@ -1054,6 +1063,7 @@ impl AppState {
         self.attack_flash = 0.0;
         self.attack_cooldown_remaining = 0.0;
         self.attack_projectile = None;
+        self.attack_charge = None;
         self.tapped_obj = None;
         // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
         // reconstruire la physique, pour que les corps rigides des monstres masqués ne
@@ -1684,6 +1694,7 @@ impl AppState {
             self.attack_flash = 0.0;
             self.attack_cooldown_remaining = 0.0;
             self.attack_projectile = None;
+            self.attack_charge = None;
             self.wave = 0;
             self.win_time = None;
             self.lost = false;
@@ -1746,12 +1757,14 @@ impl AppState {
                 self.attack_cooldown_remaining -= dt;
             }
             // Attaque du joueur : bouton tactile nommé (controller.attack_button) ou touche
-            // clavier Attaque. Tire un missile qui verrouille la cible `attackable` la
-            // plus proche à portée ; l'impact (mise à mort) n'est résolu qu'à l'arrivée
-            // du missile, pas au moment du tir (cf. `attack_projectile`, mis à jour plus
-            // bas). Recharge requise : sans elle, maintenir le bouton tirerait en rafale
-            // sans le moindre coût (cf. `Controller::attack_cooldown`).
+            // clavier Attaque. Verrouille la cible `attackable` la plus proche à portée
+            // et lance une **préparation** (cf. `attack_charge`) avant de tirer le
+            // missile — le joueur reste exposé pendant ce temps, sans protection
+            // spéciale (c'est le point : cf. `Controller::attack_windup`). Recharge
+            // requise : sans elle, maintenir le bouton déclencherait une préparation en
+            // rafale sans le moindre coût (cf. `Controller::attack_cooldown`).
             if self.attack_projectile.is_none()
+                && self.attack_charge.is_none()
                 && let Some(player) = self.player_object()
                 && let Some(ctrl) = player.controller.clone()
             {
@@ -1764,15 +1777,49 @@ impl AppState {
                     let range = ctrl.attack_range;
                     self.attack_cooldown_remaining = ctrl.attack_cooldown;
                     if let Some(target) = self.scene.nearest_attackable(p, range) {
+                        self.attack_charge = Some(AttackCharge {
+                            target,
+                            remaining: ctrl.attack_windup,
+                        });
+                        // Ancre visuelle : petit éclat au niveau du joueur pendant la
+                        // préparation (télégraphe le coup à venir), avant même le tir.
+                        if let Some(fx) = self.attack_fx_index()
+                            && let Some(o) = self.scene.objects.get_mut(fx)
+                        {
+                            o.transform.position = p;
+                            o.transform.scale = Vec3::splat(0.2);
+                            o.visible = true;
+                        }
+                    }
+                }
+            }
+            // Préparation en cours : décompte, puis lance le missile une fois écoulée.
+            // Si la cible verrouillée disparaît entre-temps (respawn, autre mise à
+            // mort...), la préparation s'annule silencieusement (pas de missile à vide).
+            if let Some(charge) = &mut self.attack_charge {
+                charge.remaining -= dt;
+                let alive = self
+                    .scene
+                    .objects
+                    .get(charge.target)
+                    .is_some_and(|o| o.visible);
+                if !alive {
+                    self.attack_charge = None;
+                    if let Some(fx) = self.attack_fx_index()
+                        && let Some(o) = self.scene.objects.get_mut(fx)
+                    {
+                        o.visible = false;
+                    }
+                } else if charge.remaining <= 0.0 {
+                    let target = charge.target;
+                    self.attack_charge = None;
+                    if let Some(p) = self.player_position() {
                         self.attack_projectile = Some(AttackProjectile { target, pos: p });
-                        // Ancre visuelle : petit projectile lumineux, visible dès le tir
-                        // (déplacé chaque frame par la mise à jour du missile ci-dessous).
                         if let Some(fx) = self.attack_fx_index()
                             && let Some(o) = self.scene.objects.get_mut(fx)
                         {
                             o.transform.position = p;
                             o.transform.scale = Vec3::splat(0.25);
-                            o.visible = true;
                         }
                     }
                 }
@@ -1795,7 +1842,10 @@ impl AppState {
                         let i = proj.target;
                         self.scene.objects[i].visible = false;
                         self.score += 1;
-                        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
+                        crate::runtime::sfx::play(
+                            &mut self.audio,
+                            crate::runtime::sfx::Sfx::Defeat,
+                        );
                         if let Some(fx) = self.attack_fx_index()
                             && let Some(o) = self.scene.objects.get_mut(fx)
                         {
@@ -1903,18 +1953,29 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
-        // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde contient le
-        // joueur. `visible` exclut les ennemis vaincus (masqués par l'attaque, cf.
-        // `Scene::attack_at`) : un ennemi caché ne doit plus pouvoir infliger de dégâts.
-        let triggered: std::collections::HashSet<usize> = match self.player_position() {
-            Some(p) => self
-                .scene
-                .objects
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| o.trigger && o.visible && self.world_aabb_contains(o, p))
-                .map(|(i, _)| i)
-                .collect(),
+        // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
+        // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
+        // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les
+        // colliders empêchent le centre du joueur d'entrer dans son AABB — le contact
+        // doit suffire pour qu'un monstre au corps-à-corps puisse mordre. `visible`
+        // exclut les ennemis vaincus (masqués par l'attaque, cf. `Scene::attack_at`) :
+        // un ennemi caché ne doit plus pouvoir infliger de dégâts.
+        let triggered: std::collections::HashSet<usize> = match self.player_index() {
+            Some(pi) => {
+                let player = &self.scene.objects[pi];
+                self.scene
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, o)| {
+                        *i != pi
+                            && o.trigger
+                            && o.visible
+                            && self.scene.world_aabb_intersects(o, player)
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            }
             None => std::collections::HashSet::new(),
         };
         let mut vibrations: Vec<f32> = Vec::new();
@@ -2069,11 +2130,6 @@ impl AppState {
         }
     }
 
-    /// Le point `p` est-il dans l'AABB monde de l'objet `o` ? (délègue à la scène)
-    fn world_aabb_contains(&self, o: &SceneObject, p: Vec3) -> bool {
-        self.scene.world_aabb_contains(o, p)
-    }
-
     /// La partie est-elle perdue (joueur entré dans une zone mortelle) ?
     pub fn is_lost(&self) -> bool {
         self.lost
@@ -2092,17 +2148,22 @@ impl AppState {
     /// scripté, sinon premier objet. Base commune à `player_position` et à la résolution
     /// d'attaque (bouton/portée propres à cet objet).
     fn player_object(&self) -> Option<&SceneObject> {
+        self.player_index().map(|i| &self.scene.objects[i])
+    }
+
+    /// Indice de l'objet « joueur » : cf. `player_object`.
+    fn player_index(&self) -> Option<usize> {
         self.scene
             .objects
             .iter()
-            .find(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
             .or_else(|| {
                 self.scene
                     .objects
                     .iter()
-                    .find(|o| !o.script.trim().is_empty())
+                    .position(|o| !o.script.trim().is_empty())
             })
-            .or_else(|| self.scene.objects.first())
+            .or_else(|| (!self.scene.objects.is_empty()).then_some(0))
     }
 
     /// Position du « joueur » : cf. `player_object`.
@@ -2835,15 +2896,33 @@ mod tests {
         // Aucun système de vie démarré : la base par défaut est pleine vie (1.0).
         let mut health = None;
         run_script(
-            &lua, &func, &mut Transform::from_pos(Vec3::ZERO), &mut [1.0; 3], 0.016, 0.0,
-            &input, false, false, &mut Vec::new(), &mut health,
+            &lua,
+            &func,
+            &mut Transform::from_pos(Vec3::ZERO),
+            &mut [1.0; 3],
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
+            &mut health,
         )
         .unwrap();
         assert_eq!(health, Some(0.7));
         // Un deuxième objet inflige des dégâts la même frame : doit partir de 0.7, pas de 1.0.
         run_script(
-            &lua, &func, &mut Transform::from_pos(Vec3::ZERO), &mut [1.0; 3], 0.016, 0.0,
-            &input, false, false, &mut Vec::new(), &mut health,
+            &lua,
+            &func,
+            &mut Transform::from_pos(Vec3::ZERO),
+            &mut [1.0; 3],
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
+            &mut health,
         )
         .unwrap();
         assert!(
@@ -2853,8 +2932,17 @@ mod tests {
         // Clampé à 0, ne descend pas en négatif.
         for _ in 0..10 {
             run_script(
-                &lua, &func, &mut Transform::from_pos(Vec3::ZERO), &mut [1.0; 3], 0.016, 0.0,
-                &input, false, false, &mut Vec::new(), &mut health,
+                &lua,
+                &func,
+                &mut Transform::from_pos(Vec3::ZERO),
+                &mut [1.0; 3],
+                0.016,
+                0.0,
+                &input,
+                false,
+                false,
+                &mut Vec::new(),
+                &mut health,
             )
             .unwrap();
         }
@@ -2882,19 +2970,37 @@ mod tests {
                 e.name
             );
             let func = lua.load(&e.script).into_function().unwrap();
-            let mut t0 = e.transform.clone();
+            let mut t0 = e.transform;
             let mut col = e.color;
             let input = PlayerInput::default();
             run_script(
-                &lua, &func, &mut t0, &mut col, 0.016, 0.0, &input, false, false,
-                &mut Vec::new(), &mut None,
+                &lua,
+                &func,
+                &mut t0,
+                &mut col,
+                0.016,
+                0.0,
+                &input,
+                false,
+                false,
+                &mut Vec::new(),
+                &mut None,
             )
             .unwrap();
-            let mut t1 = e.transform.clone();
+            let mut t1 = e.transform;
             let mut col1 = e.color;
             run_script(
-                &lua, &func, &mut t1, &mut col1, 0.016, 1.0, &input, false, false,
-                &mut Vec::new(), &mut None,
+                &lua,
+                &func,
+                &mut t1,
+                &mut col1,
+                0.016,
+                1.0,
+                &input,
+                false,
+                false,
+                &mut Vec::new(),
+                &mut None,
             )
             .unwrap();
             assert!(
@@ -2999,11 +3105,23 @@ mod tests {
         app.scene = synthetic_damage_scene();
         app.playing = true;
         app.input_state.buttons.insert("Attaque".into());
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
-        assert_eq!(app.score, 1, "l'attaque doit vaincre l'ennemi à portée (score += 1)");
+        // Laisse le temps à la préparation (attack_windup) puis au missile d'arriver
+        // (l'attaque n'est plus instantanée, cf. `AttackCharge`/`AttackProjectile`).
+        for _ in 0..10 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert_eq!(
+            app.score, 1,
+            "l'attaque doit vaincre l'ennemi à portée (score += 1)"
+        );
         assert!(
-            !app.scene.objects.iter().find(|o| o.name == "Danger").unwrap().visible,
+            !app.scene
+                .objects
+                .iter()
+                .find(|o| o.name == "Danger")
+                .unwrap()
+                .visible,
             "l'ennemi vaincu doit devenir invisible"
         );
         // Le joueur ne prend plus de dégâts une fois l'ennemi vaincu, même en restant
@@ -3076,14 +3194,23 @@ mod tests {
         app.playing = true;
         app.input_state.buttons.insert("Attaque".into());
 
-        // Tir sur la cible 1 (seule à portée), puis laisse le temps au missile d'arriver
-        // (le coup n'est plus instantané, cf. `AttackProjectile`).
-        for _ in 0..5 {
+        // Tir sur la cible 1 (seule à portée), puis laisse le temps à la préparation
+        // (attack_windup, défaut 0,25 s) et au missile d'arriver (le coup n'est plus
+        // instantané, cf. `AttackCharge`/`AttackProjectile`) — sans dépasser la fenêtre
+        // de recharge (0,5 s), sans quoi l'assertion suivante (cible 2 protégée par la
+        // recharge) ne serait plus valide.
+        for _ in 0..8 {
             app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
         }
-        assert!(!app.scene.objects[1].visible, "cible 1 vaincue après l'arrivée du missile");
-        assert!(app.scene.objects[2].visible, "cible 2 encore debout (hors de portée)");
+        assert!(
+            !app.scene.objects[1].visible,
+            "cible 1 vaincue après l'arrivée du missile"
+        );
+        assert!(
+            app.scene.objects[2].visible,
+            "cible 2 encore debout (hors de portée)"
+        );
 
         // La cible 2 entre à portée juste après (ex. un monstre qui s'approche) — toujours
         // dans la fenêtre de recharge de 0,5 s : le bouton reste enfoncé mais ne doit PAS
@@ -3125,8 +3252,12 @@ mod tests {
             .position;
         app.playing = true;
         app.input_state.buttons.insert("Attaque".into());
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
+        // Laisse le temps à la préparation puis au missile d'arriver (le coup n'est plus
+        // instantané, cf. `AttackCharge`/`AttackProjectile`).
+        for _ in 0..10 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
 
         fn fx(app: &AppState) -> crate::scene::SceneObject {
             app.scene
@@ -3136,7 +3267,10 @@ mod tests {
                 .unwrap()
                 .clone()
         }
-        assert!(fx(&app).visible, "l'ancre FX doit être visible après un coup");
+        assert!(
+            fx(&app).visible,
+            "l'ancre FX doit être visible après un coup"
+        );
         assert!(
             (fx(&app).transform.position - target_pos).length() < 1e-4,
             "l'ancre FX doit être téléportée sur la cible touchée"
@@ -3151,8 +3285,14 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(app.attack_flash, 0.0, "le flash d'attaque doit finir par retomber à 0");
-        assert!(!fx(&app).visible, "l'ancre FX doit disparaître une fois le flash retombé");
+        assert_eq!(
+            app.attack_flash, 0.0,
+            "le flash d'attaque doit finir par retomber à 0"
+        );
+        assert!(
+            !fx(&app).visible,
+            "l'ancre FX doit disparaître une fois le flash retombé"
+        );
     }
 
     #[test]
@@ -3294,8 +3434,14 @@ mod tests {
         app.advance_play(); // entrée en Play : `init_waves` doit s'exécuter.
 
         assert_eq!(app.wave, 1, "démarre à la manche 1");
-        assert!(app.scene.objects[2].visible, "manche 1 : le monstre 1 est révélé");
-        assert!(!app.scene.objects[3].visible, "manche 1 : le monstre 2 reste masqué");
+        assert!(
+            app.scene.objects[2].visible,
+            "manche 1 : le monstre 1 est révélé"
+        );
+        assert!(
+            !app.scene.objects[3].visible,
+            "manche 1 : le monstre 2 reste masqué"
+        );
 
         // Attaque : tire sur le monstre de la manche 1 (portée large, toujours à portée),
         // puis laisse le temps au missile d'arriver (le coup n'est plus instantané, cf.
@@ -3313,8 +3459,14 @@ mod tests {
         app.input_state.buttons.clear();
 
         assert_eq!(app.wave, 2, "la manche 1 vidée doit révéler la manche 2");
-        assert!(app.scene.objects[3].visible, "manche 2 : le monstre 2 est révélé");
-        assert!(app.win_time.is_none(), "pas encore gagné, la manche 2 reste à vider");
+        assert!(
+            app.scene.objects[3].visible,
+            "manche 2 : le monstre 2 est révélé"
+        );
+        assert!(
+            app.win_time.is_none(),
+            "pas encore gagné, la manche 2 reste à vider"
+        );
 
         // Vainc le monstre de la manche 2 : dernière manche ⇒ victoire.
         app.input_state.buttons.insert("Attaque".into());
@@ -3324,7 +3476,10 @@ mod tests {
         }
         app.input_state.buttons.clear();
 
-        assert!(app.win_time.is_some(), "toutes les manches vidées ⇒ victoire");
+        assert!(
+            app.win_time.is_some(),
+            "toutes les manches vidées ⇒ victoire"
+        );
     }
 
     #[test]
@@ -3341,10 +3496,16 @@ mod tests {
         assert!(!app.is_leveled_demo, "tour : pas de niveau suivant");
 
         app.load_temple_run_demo();
-        assert!(!app.is_leveled_demo, "course infinie : pas de niveau suivant");
+        assert!(
+            !app.is_leveled_demo,
+            "course infinie : pas de niveau suivant"
+        );
 
         app.load_zombies_demo();
-        assert!(!app.is_leveled_demo, "zombies : pas de niveau suivant (manches)");
+        assert!(
+            !app.is_leveled_demo,
+            "zombies : pas de niveau suivant (manches)"
+        );
 
         app.load_gameplay_demo();
         assert!(!app.is_leveled_demo);
@@ -3432,9 +3593,140 @@ mod tests {
         // Les 3 sont groupés à moins de 0,5 m les uns des autres, largement à portée
         // d'une seule attaque à grand rayon.
         let hit = s.attack_at(Vec3::new(0.2, 0.5, 0.0), 5.0);
-        assert_eq!(hit.len(), 1, "une attaque ne vainc qu'une seule cible, pas tout le groupe");
+        assert_eq!(
+            hit.len(),
+            1,
+            "une attaque ne vainc qu'une seule cible, pas tout le groupe"
+        );
         let still_visible = s.objects[1..].iter().filter(|o| o.visible).count();
-        assert_eq!(still_visible, 2, "les 2 autres cibles du groupe doivent survivre à ce coup");
+        assert_eq!(
+            still_visible, 2,
+            "les 2 autres cibles du groupe doivent survivre à ce coup"
+        );
+    }
+
+    /// Duel 1 contre 1 : sol statique, joueur pilotable (attaque à préparation) et un
+    /// monstre-chasseur mordeur à 1 m. Le monstre a un **corps physique** (via
+    /// `ai_chaser` + `visible`, cf. `Physics::build`) : contrairement aux dangers
+    /// statiques de `synthetic_damage_scene`, sa collision solide repousse le joueur —
+    /// c'est précisément la configuration où la morsure « centre dans l'AABB » échouait.
+    fn duel_1v1_scene() -> crate::scene::Scene {
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                attack_button: "Attaque".into(),
+                attack_range: 6.0,
+                attack_cooldown: 0.5,
+                attack_windup: 0.25,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(30.0, 1.0, 30.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        // À 1 m (rayon de morsure par défaut ≈ 0,5 m) et 4 m/s : atteint sa portée de
+        // morsure en (1 - 0,5) / 4 = 0,125 s — avant la fin des 0,25 s de préparation,
+        // donc avant même que le missile ne soit tiré.
+        let mut monstre = crate::scene::SceneObject {
+            name: "Monstre".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(1.0, 0.5, 0.0)),
+            trigger: true,
+            ai_chaser: Some(crate::scene::AiChaser { speed: 4.0 }),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                ..Default::default()
+            }),
+            script: "if obj.triggered then damage(5.0 * dt) end".into(),
+            ..Default::default()
+        };
+        monstre.color = [1.0; 3];
+
+        crate::scene::Scene {
+            objects: vec![sol, joueur, monstre],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn chasing_monster_with_solid_body_can_bite_the_player_on_contact() {
+        // Régression du bug racine découvert par l'audit : la morsure testait « centre
+        // du joueur dans l'AABB du monstre », or les colliders solides (joueur et
+        // chasseur ont tous deux un corps rigide) empêchent toute interpénétration —
+        // un monstre-chasseur ne mordait donc *jamais*, même en contact continu. Le
+        // test de déclenchement est désormais une **intersection d'AABB** (cf.
+        // `Scene::world_aabb_intersects`) : le contact suffit.
+        let mut app = AppState::new();
+        app.scene = duel_1v1_scene();
+        app.playing = true;
+        // Aucune attaque : on isole la collision physique pure (le joueur ne se défend
+        // pas, le monstre doit finir par le mordre).
+        app.input_state.attack = false;
+
+        let mut took_damage = false;
+        for _ in 0..40 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if app.hud_health.is_some() {
+                took_damage = true;
+                break;
+            }
+        }
+        assert!(
+            took_damage,
+            "un monstre-chasseur au corps solide doit pouvoir mordre au contact, \
+             malgré la répulsion physique qui interdit l'interpénétration des centres"
+        );
+    }
+
+    #[test]
+    fn attack_windup_finally_guarantees_risk_in_a_1v1() {
+        // Clôt la limite documentée à répétition dans l'audit (le temps de vol du
+        // missile seul ne suffisait pas à garantir un risque en 1 contre 1, cf.
+        // `attack_at_clears_a_cluster_one_target_at_a_time_not_in_one_swing` et
+        // `attack_is_a_missile_with_travel_time_not_an_instant_hit`) : un temps de
+        // préparation (`Controller::attack_windup`) *avant même que le missile ne
+        // parte* fonctionne, lui, indépendamment de la vitesse du missile — un monstre
+        // déjà proche de sa propre portée de morsure au moment du tir peut mordre
+        // pendant la préparation, avant qu'aucun projectile n'existe.
+        let mut app = AppState::new();
+        app.scene = duel_1v1_scene();
+        app.playing = true;
+        // Attaque maintenue dès la première frame : la préparation démarre aussitôt.
+        app.input_state.attack = true;
+
+        let mut bitten_before_kill = false;
+        for _ in 0..40 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+            if app.hud_health.is_some() && app.scene.objects[2].visible {
+                bitten_before_kill = true;
+            }
+            if !app.scene.objects[2].visible {
+                break;
+            }
+        }
+        assert!(
+            !app.scene.objects[2].visible,
+            "le missile doit finir par vaincre le monstre (sinon le duel ne se résout pas)"
+        );
+        assert!(
+            bitten_before_kill,
+            "un monstre déjà proche de sa portée de morsure doit pouvoir mordre pendant \
+             la préparation de l'attaque, avant que le missile ne le vainque — gagner \
+             un 1 contre 1 doit coûter de la vie"
+        );
     }
 
     #[test]
@@ -3508,14 +3800,17 @@ mod tests {
         app.playing = true;
         app.input_state.attack = true;
 
-        // Un seul pas : le missile part (verrouille la cible) mais ne peut pas encore
-        // avoir parcouru les 5 m qui le séparent de sa cible.
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
-        app.advance_play();
+        // Quelques pas : couvre la préparation (attack_windup, 0,25 s par défaut) sans
+        // atteindre le temps de vol du missile (5 m à 10 m/s ≈ 0,5 s) — le monstre à 5 m
+        // ne doit pas être vaincu si tôt.
+        for _ in 0..6 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
         assert!(
             app.scene.objects[2].visible,
-            "le monstre à 5 m ne doit pas être vaincu dès le tour du tir : le missile \
-             met du temps à arriver"
+            "le monstre à 5 m ne doit pas être vaincu dès la préparation/le tir : le \
+             missile met du temps à arriver"
         );
         let fx_after_launch = app
             .scene
@@ -3524,9 +3819,8 @@ mod tests {
             .find(|o| o.combat.as_ref().is_some_and(|c| c.is_attack_fx))
             .map(|o| o.transform.position);
 
-        // Quelques frames plus tard : le missile a progressé (pas téléporté), mais
-        // n'est probablement pas encore arrivé (10 m/s, ~0,1 s pour 1 m).
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.03);
+        // Quelques frames plus tard : le missile a progressé (pas téléporté).
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         let fx_mid_flight = app
             .scene
@@ -3539,7 +3833,7 @@ mod tests {
             "l'ancre visuelle doit progresser vers la cible, pas rester figée"
         );
 
-        // Laisse le temps au missile d'arriver (5 m à 10 m/s ≈ 0,5 s).
+        // Laisse le temps au missile d'arriver.
         for _ in 0..20 {
             app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
@@ -3547,7 +3841,10 @@ mod tests {
                 break;
             }
         }
-        assert!(!app.scene.objects[2].visible, "le missile doit finir par atteindre sa cible");
+        assert!(
+            !app.scene.objects[2].visible,
+            "le missile doit finir par atteindre sa cible"
+        );
     }
 
     #[test]
@@ -3563,7 +3860,10 @@ mod tests {
         // frame applique déjà une frame de décroissance ensuite (comportement voulu : le
         // flash commence à s'estomper dès la frame du coup) — d'où la marge, pas `== 1.0`.
         let peak = app.damage_flash;
-        assert!(peak > 0.8, "un coup doit déclencher un pic net du flash : {peak}");
+        assert!(
+            peak > 0.8,
+            "un coup doit déclencher un pic net du flash : {peak}"
+        );
         // Sort du contact (sinon chaque frame retriggerait le pic à 1.0) pour vérifier la
         // décroissance en l'absence de nouveaux coups. Reconstruit le corps physique à sa
         // nouvelle position : sinon le pas de physique du même appel le ramènerait vers
@@ -3587,7 +3887,10 @@ mod tests {
         app.playing = false;
         app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
-        assert_eq!(app.damage_flash, 0.0, "le flash est effacé à la sortie de Play");
+        assert_eq!(
+            app.damage_flash, 0.0,
+            "le flash est effacé à la sortie de Play"
+        );
     }
 
     #[test]
@@ -3605,12 +3908,21 @@ mod tests {
         assert!(!lave.script.trim().is_empty(), "la lave doit être animée");
         let lua = Lua::new();
         let func = lua.load(&lave.script).into_function().unwrap();
-        let mut t = lave.transform.clone();
+        let mut t = lave.transform;
         let mut col = lave.color;
         let input = PlayerInput::default();
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 3.7, &input, false, false,
-            &mut Vec::new(), &mut None,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            3.7,
+            &input,
+            false,
+            false,
+            &mut Vec::new(),
+            &mut None,
         )
         .unwrap();
         assert_eq!(

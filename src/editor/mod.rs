@@ -1751,7 +1751,11 @@ fn damage_vignette(ctx: &egui::Context, area: egui::Rect, intensity: f32) {
         egui::Id::new("hud_damage_flash"),
     ));
     let alpha = (70.0 * intensity.clamp(0.0, 1.0)) as u8;
-    painter.rect_filled(area, 0.0, Color32::from_rgba_unmultiplied(220, 20, 20, alpha));
+    painter.rect_filled(
+        area,
+        0.0,
+        Color32::from_rgba_unmultiplied(220, 20, 20, alpha),
+    );
 }
 
 /// Indicateur de manche (haut-centre), pour les scènes à système de manches (cf.

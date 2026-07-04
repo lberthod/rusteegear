@@ -159,6 +159,15 @@ pub struct Controller {
     /// sans risque). Cf. `AppState::attack_cooldown_remaining`.
     #[serde(default = "default_attack_cooldown")]
     pub attack_cooldown: f32,
+    /// Temps de préparation (s) entre l'appui et le départ du missile (0 = tir immédiat).
+    /// Audit gameplay : le temps de vol du missile ne suffit pas à garantir un risque
+    /// en 1 contre 1 (un missile homing tiré dès l'entrée en portée arrive presque
+    /// toujours avant qu'un monstre en approche directe n'atteigne sa propre portée de
+    /// morsure) — un temps de préparation, lui, laisse la cible continuer d'approcher
+    /// *avant même que le missile ne parte*, créant une vraie fenêtre de vulnérabilité.
+    /// Cf. `AppState::attack_charge`.
+    #[serde(default = "default_attack_windup")]
+    pub attack_windup: f32,
 }
 
 // Implémentation manuelle (pas `#[derive(Default)]`) : `derive` donnerait 0.0/vide à
@@ -177,6 +186,7 @@ impl Default for Controller {
             attack_button: String::new(),
             attack_range: default_attack_range(),
             attack_cooldown: default_attack_cooldown(),
+            attack_windup: default_attack_windup(),
         }
     }
 }
@@ -336,6 +346,10 @@ fn default_attack_range() -> f32 {
 
 fn default_attack_cooldown() -> f32 {
     0.5
+}
+
+fn default_attack_windup() -> f32 {
+    0.25
 }
 
 /// Action déclenchée sans script quand l'objet est tapé en mode Play.
@@ -724,9 +738,7 @@ impl Scene {
         // franchissable en sautant par-dessus (le pic du saut dépasse cette plage).
         let lave_s = 3.0 + hard;
         let mut lave = demo_obj("Lave", MeshKind::Plane, Vec3::new(0.0, 0.02, 0.0));
-        lave.transform = lave
-            .transform
-            .with_scale(Vec3::new(lave_s, 30.0, lave_s));
+        lave.transform = lave.transform.with_scale(Vec3::new(lave_s, 30.0, lave_s));
         lave.color = [0.95, 0.3, 0.1];
         lave.emissive = 0.7;
         lave.deadly = true;
@@ -885,7 +897,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             objects.push(bonus);
         }
         // Trophée : bonus le plus précieux (score continu), au sommet de la plateforme.
-        let mut trophy = demo_obj("Étoile Trophée", MeshKind::Sphere, Vec3::new(-5.0, 2.1, 0.0));
+        let mut trophy = demo_obj(
+            "Étoile Trophée",
+            MeshKind::Sphere,
+            Vec3::new(-5.0, 2.1, 0.0),
+        );
         trophy.transform = trophy.transform.with_scale(Vec3::splat(0.55));
         trophy.color = [1.0, 0.75, 0.25];
         trophy.emissive = 1.0;
@@ -905,7 +921,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             post.roughness = 0.3;
             objects.push(post);
         }
-        let mut lintel = demo_obj("Linteau Portique", MeshKind::Cube, Vec3::new(0.0, 2.35, -5.6));
+        let mut lintel = demo_obj(
+            "Linteau Portique",
+            MeshKind::Cube,
+            Vec3::new(0.0, 2.35, -5.6),
+        );
         lintel.transform = lintel.transform.with_scale(Vec3::new(3.6, 0.4, 0.5));
         lintel.physics = PhysicsKind::Static;
         lintel.color = [0.45, 0.4, 0.5];
@@ -988,13 +1008,21 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             .enumerate()
         {
             let base = Vec3::new(cx * 6.9, 0.0, cz * 6.9);
-            let mut torch = demo_obj(&format!("Torche {}", n + 1), MeshKind::Cube, base + Vec3::Y * 0.8);
+            let mut torch = demo_obj(
+                &format!("Torche {}", n + 1),
+                MeshKind::Cube,
+                base + Vec3::Y * 0.8,
+            );
             torch.transform = torch.transform.with_scale(Vec3::new(0.3, 1.6, 0.3));
             torch.physics = PhysicsKind::Static;
             torch.color = [0.3, 0.28, 0.3];
             objects.push(torch);
 
-            let mut flame = demo_obj(&format!("Flamme {}", n + 1), MeshKind::Sphere, base + Vec3::Y * 1.7);
+            let mut flame = demo_obj(
+                &format!("Flamme {}", n + 1),
+                MeshKind::Sphere,
+                base + Vec3::Y * 1.7,
+            );
             flame.transform = flame.transform.with_scale(Vec3::splat(0.3));
             flame.color = [1.0, 0.55, 0.15];
             flame.emissive = 1.2;
@@ -1113,7 +1141,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             plat.roughness = 0.35;
             objects.push(plat);
 
-            let mut gem = demo_obj(&format!("Gemme {}", i + 1), MeshKind::Sphere, pos + Vec3::Y * 0.85);
+            let mut gem = demo_obj(
+                &format!("Gemme {}", i + 1),
+                MeshKind::Sphere,
+                pos + Vec3::Y * 0.85,
+            );
             gem.transform = gem.transform.with_scale(Vec3::splat(0.4));
             gem.color = [0.6, 0.9, 1.0];
             gem.emissive = 0.7;
@@ -1275,8 +1307,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 2 => {
                     // Arc de pièces sur les 3 voies : encourage à zigzaguer.
                     for &lx in &LANES {
-                        let mut coin =
-                            demo_obj("Pièce", MeshKind::Sphere, Vec3::new(lx, 1.0, z));
+                        let mut coin = demo_obj("Pièce", MeshKind::Sphere, Vec3::new(lx, 1.0, z));
                         coin.transform = coin.transform.with_scale(Vec3::splat(0.4));
                         coin.color = [1.0, 0.85, 0.2];
                         coin.emissive = 0.6;
@@ -1312,7 +1343,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // lumineux bien visible + une étoile à ramasser.
         let finish_z = 8.0 + n_segments as f32 * seg_len + 4.0;
         for sx in [-3.2_f32, 3.2] {
-            let mut post = demo_obj("Pilier Arrivée", MeshKind::Cube, Vec3::new(sx, 1.4, finish_z));
+            let mut post = demo_obj(
+                "Pilier Arrivée",
+                MeshKind::Cube,
+                Vec3::new(sx, 1.4, finish_z),
+            );
             post.transform = post.transform.with_scale(Vec3::new(0.5, 2.8, 0.5));
             post.physics = PhysicsKind::Static;
             post.color = [0.9, 0.75, 0.2];
@@ -1330,7 +1365,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         lintel.metallic = 0.5;
         objects.push(lintel);
 
-        let mut finish = demo_obj("Étoile Arrivée", MeshKind::Sphere, Vec3::new(0.0, 1.5, finish_z));
+        let mut finish = demo_obj(
+            "Étoile Arrivée",
+            MeshKind::Sphere,
+            Vec3::new(0.0, 1.5, finish_z),
+        );
         finish.transform = finish.transform.with_scale(Vec3::splat(0.6));
         finish.color = [1.0, 0.9, 0.3];
         finish.emissive = 1.2;
@@ -1403,7 +1442,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // --- Combat : cible d'attaque (`attackable`) et ancre visuelle de l'effet
         // d'impact (`is_attack_fx`), rarement sur le même objet (ici, deux objets
         // séparés). Approche le joueur et appuie sur Attaque (ou touche J) pour tester.
-        let mut cible = demo_obj("Cible d'entraînement", MeshKind::Sphere, Vec3::new(2.5, 1.0, 0.0));
+        let mut cible = demo_obj(
+            "Cible d'entraînement",
+            MeshKind::Sphere,
+            Vec3::new(2.5, 1.0, 0.0),
+        );
         cible.color = [0.85, 0.15, 0.15];
         cible.emissive = 0.4;
         cible.combat = Some(Combat {
@@ -1448,7 +1491,9 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
     pub fn zombies_demo() -> Self {
         let half = 10.0_f32;
         let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
-        sol.transform = sol.transform.with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
         sol.physics = PhysicsKind::Static;
         sol.color = [0.22, 0.24, 0.28];
 
@@ -1477,14 +1522,36 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             w.color = [0.3, 0.32, 0.38];
             objects.push(w);
         };
-        wall("Mur Nord", Vec3::new(0.0, 0.9, -half), Vec3::new(2.0 * half, 1.8, 0.5));
-        wall("Mur Sud", Vec3::new(0.0, 0.9, half), Vec3::new(2.0 * half, 1.8, 0.5));
-        wall("Mur Est", Vec3::new(half, 0.9, 0.0), Vec3::new(0.5, 1.8, 2.0 * half));
-        wall("Mur Ouest", Vec3::new(-half, 0.9, 0.0), Vec3::new(0.5, 1.8, 2.0 * half));
+        wall(
+            "Mur Nord",
+            Vec3::new(0.0, 0.9, -half),
+            Vec3::new(2.0 * half, 1.8, 0.5),
+        );
+        wall(
+            "Mur Sud",
+            Vec3::new(0.0, 0.9, half),
+            Vec3::new(2.0 * half, 1.8, 0.5),
+        );
+        wall(
+            "Mur Est",
+            Vec3::new(half, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * half),
+        );
+        wall(
+            "Mur Ouest",
+            Vec3::new(-half, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * half),
+        );
 
         // Piliers de couverture : obstacles pour casser une poursuite (les monstres ne
         // les contournent pas intelligemment, ils foncent tout droit vers le joueur).
-        for (sx, sz) in [(-3.0_f32, 2.0), (3.0, -2.0), (0.0, 5.5), (-4.0, -5.0), (4.5, 4.5)] {
+        for (sx, sz) in [
+            (-3.0_f32, 2.0),
+            (3.0, -2.0),
+            (0.0, 5.5),
+            (-4.0, -5.0),
+            (4.5, 4.5),
+        ] {
             let mut pilier = demo_obj("Pilier", MeshKind::Cylinder, Vec3::new(sx, 0.9, sz));
             pilier.transform = pilier.transform.with_scale(Vec3::new(1.4, 1.8, 1.4));
             pilier.physics = PhysicsKind::Static;
@@ -1539,8 +1606,16 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         let waves: &[(u32, &[&Kind])] = &[
             (1, &[&RODEUR, &RODEUR, &RODEUR]),
             (2, &[&RODEUR, &RODEUR, &RODEUR, &COUREUR, &COUREUR]),
-            (3, &[&RODEUR, &RODEUR, &COUREUR, &COUREUR, &COUREUR, &BRUTE, &BRUTE]),
-            (4, &[&RODEUR, &RODEUR, &COUREUR, &COUREUR, &BRUTE, &BRUTE, &BRUTE]),
+            (
+                3,
+                &[
+                    &RODEUR, &RODEUR, &COUREUR, &COUREUR, &COUREUR, &BRUTE, &BRUTE,
+                ],
+            ),
+            (
+                4,
+                &[&RODEUR, &RODEUR, &COUREUR, &COUREUR, &BRUTE, &BRUTE, &BRUTE],
+            ),
         ];
         let total: usize = waves.iter().map(|(_, ks)| ks.len()).sum();
         let mut spawned = 0usize;
@@ -1550,7 +1625,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 // les manches suivantes n'occupent pas les mêmes points que la précédente.
                 let angle = spawned as f32 / total as f32 * std::f32::consts::TAU;
                 let radius = half - 1.4;
-                let pos = Vec3::new(angle.cos() * radius, k.scale.max(0.5) * 0.5, angle.sin() * radius);
+                let pos = Vec3::new(
+                    angle.cos() * radius,
+                    k.scale.max(0.5) * 0.5,
+                    angle.sin() * radius,
+                );
                 spawned += 1;
 
                 let mut m = demo_obj(&format!("{} {}", k.label, n + 1), MeshKind::Sphere, pos);
@@ -1698,8 +1777,8 @@ impl Scene {
         }
     }
 
-    /// Le point monde `p` est-il dans l'AABB monde de l'objet `o` ?
-    pub fn world_aabb_contains(&self, o: &SceneObject, p: Vec3) -> bool {
+    /// AABB monde de l'objet `o` (AABB local transformé, ré-englobé axe-aligné).
+    pub fn world_aabb(&self, o: &SceneObject) -> (Vec3, Vec3) {
         let (lmin, lmax) = self.local_aabb(o.mesh);
         let m = o.transform.matrix();
         let mut wmin = Vec3::splat(f32::INFINITY);
@@ -1713,7 +1792,23 @@ impl Scene {
                 }
             }
         }
+        (wmin, wmax)
+    }
+
+    /// Le point monde `p` est-il dans l'AABB monde de l'objet `o` ?
+    pub fn world_aabb_contains(&self, o: &SceneObject, p: Vec3) -> bool {
+        let (wmin, wmax) = self.world_aabb(o);
         p.cmpge(wmin).all() && p.cmple(wmax).all()
+    }
+
+    /// Les AABB monde de `a` et `b` se chevauchent-ils ? Contrairement à
+    /// `world_aabb_contains` (test d'un *point*), ce test réussit dès le *contact* des
+    /// volumes : indispensable quand les deux objets ont un corps physique, car les
+    /// colliders empêchent alors le centre de l'un d'entrer dans l'AABB de l'autre.
+    pub fn world_aabb_intersects(&self, a: &SceneObject, b: &SceneObject) -> bool {
+        let (amin, amax) = self.world_aabb(a);
+        let (bmin, bmax) = self.world_aabb(b);
+        amin.cmple(bmax).all() && bmin.cmple(amax).all()
     }
 
     /// Le point `p` (position du joueur) touche-t-il une zone mortelle ?
@@ -2161,7 +2256,10 @@ mod tests {
             .iter()
             .filter(|o| o.name.starts_with("Plateforme"))
             .count();
-        assert!(platforms >= 10, "une vraie tour à gravir, pas un décor minimal");
+        assert!(
+            platforms >= 10,
+            "une vraie tour à gravir, pas un décor minimal"
+        );
         let (collected, total) = s.collectibles().expect("des gemmes-objectif");
         assert_eq!(collected, 0);
         assert_eq!(total, platforms, "une gemme obligatoire par plateforme");
@@ -2198,7 +2296,10 @@ mod tests {
             .expect("un joueur pilotable");
         let ctrl = player.controller.as_ref().unwrap();
         assert!(ctrl.auto_run_speed > 0.0, "la course doit être automatique");
-        assert!(ctrl.attack_button.is_empty(), "pas de combat dans ce style de niveau");
+        assert!(
+            ctrl.attack_button.is_empty(),
+            "pas de combat dans ce style de niveau"
+        );
         assert!(!s.objects.iter().any(|o| o.name.starts_with("Ennemi")));
 
         // Des obstacles mortels (haies/barrages) et des pièces existent.
@@ -2265,7 +2366,10 @@ mod tests {
         assert!(s.groups.is_empty());
         assert!((s.light.ambient - 0.25).abs() < 1e-6);
         // Composants récents : valeurs par défaut sûres sur une vieille scène.
-        assert!(s.objects[0].controller.is_none(), "pas pilotable par défaut");
+        assert!(
+            s.objects[0].controller.is_none(),
+            "pas pilotable par défaut"
+        );
         assert!(
             s.objects[0].visible,
             "visible doit défauter à true (sinon invisible)"
@@ -2363,7 +2467,10 @@ mod tests {
         let hit = s.attack_at(pos, 1.5);
         assert_eq!(hit, vec![idx]);
         assert!(!s.objects[idx].visible, "l'ennemi vaincu devient invisible");
-        assert!(s.attack_at(pos, 1.5).is_empty(), "un ennemi déjà vaincu n'est pas retouché");
+        assert!(
+            s.attack_at(pos, 1.5).is_empty(),
+            "un ennemi déjà vaincu n'est pas retouché"
+        );
     }
 
     #[test]
@@ -2459,12 +2566,18 @@ mod tests {
         assert_eq!(rust_default.jump_height, from_json.jump_height);
         assert_eq!(rust_default.attack_range, from_json.attack_range);
         assert_eq!(rust_default.attack_cooldown, from_json.attack_cooldown);
-        assert!(rust_default.attack_cooldown > 0.0, "sans quoi l'attaque n'a aucune limite");
+        assert!(
+            rust_default.attack_cooldown > 0.0,
+            "sans quoi l'attaque n'a aucune limite"
+        );
 
         let ai_rust_default = AiChaser::default();
         let ai_from_json: AiChaser = serde_json::from_str("{}").unwrap();
         assert_eq!(ai_rust_default.speed, ai_from_json.speed);
-        assert!(ai_rust_default.speed > 0.0, "sans quoi le chasseur reste immobile");
+        assert!(
+            ai_rust_default.speed > 0.0,
+            "sans quoi le chasseur reste immobile"
+        );
     }
 
     #[test]
@@ -2558,7 +2671,11 @@ mod tests {
         // n'apparaît que là où il est pertinent, jamais sur les autres objets — c'est
         // tout l'intérêt pédagogique (et la preuve que le bloat plat est bien évité).
         let s = Scene::components_demo();
-        assert_eq!(s.objects.len(), 5, "5 objets : sol, joueur, boîte, cible, FX");
+        assert_eq!(
+            s.objects.len(),
+            5,
+            "5 objets : sol, joueur, boîte, cible, FX"
+        );
 
         let with_controller = s.objects.iter().filter(|o| o.controller.is_some()).count();
         assert_eq!(with_controller, 1, "un seul objet pilotable (le joueur)");
@@ -2588,11 +2705,7 @@ mod tests {
     #[test]
     fn zombies_demo_has_four_waves_of_varied_active_chasers() {
         let s = Scene::zombies_demo();
-        let monsters: Vec<_> = s
-            .objects
-            .iter()
-            .filter(|o| o.ai_chaser.is_some())
-            .collect();
+        let monsters: Vec<_> = s.objects.iter().filter(|o| o.ai_chaser.is_some()).collect();
         // 3 archétypes distincts (Rôdeur/Coureur/Brute), pas un seul type répété.
         let distinct_names: std::collections::HashSet<&str> = monsters
             .iter()
@@ -2611,12 +2724,18 @@ mod tests {
                 m.combat.as_ref().is_some_and(|c| c.attackable),
                 "un monstre doit être une cible d'attaque valide (défendable)"
             );
-            assert!(m.trigger, "un monstre doit détecter le contact pour infliger des dégâts");
+            assert!(
+                m.trigger,
+                "un monstre doit détecter le contact pour infliger des dégâts"
+            );
             assert!(
                 m.combat.as_ref().is_some_and(|c| c.wave > 0),
                 "un monstre doit appartenir à une manche"
             );
-            assert_eq!(m.respawn_delay, 0.0, "un monstre vaincu reste mort pour la manche");
+            assert_eq!(
+                m.respawn_delay, 0.0,
+                "un monstre vaincu reste mort pour la manche"
+            );
         }
         // 4 manches, difficulté croissante (de plus en plus de monstres).
         let max_wave = monsters
@@ -2632,7 +2751,10 @@ mod tests {
                 .filter(|o| o.combat.as_ref().is_some_and(|c| c.wave == w))
                 .count()
         };
-        assert!(per_wave(1) < per_wave(4), "la dernière manche doit être plus dense");
+        assert!(
+            per_wave(1) < per_wave(4),
+            "la dernière manche doit être plus dense"
+        );
 
         // Pas d'objectif « collectible » séparé : la victoire vient de vider les manches
         // (cf. `App::update_waves`), pas de ramasser une gemme.
