@@ -47,7 +47,7 @@
 | 51 | Serveur headless (binaire, tick fixe) | ✅ |
 | 52 | Protocole réseau & sérialisation | ✅ |
 | 53 | Transport WebSocket + connexion client | ✅ |
-| 54 | Prédiction client & interpolation | ⬜ |
+| 54 | Prédiction client & interpolation | 🟢 |
 | 55 | Salons multijoueurs (lobby, join/leave) | ⬜ |
 | 56 | Firebase : comptes & auth | ⬜ |
 | 57 | Firebase : inventaire/progression | ⬜ |
@@ -199,21 +199,37 @@ réutilisant `scene`/`runtime`/`combat.rs`.
 
 ## PHASE O — Client réseau
 
-### Sprint 54 — Prédiction client & interpolation
+### Sprint 54 — Prédiction client & interpolation 🟢 (cœur livré, câblage UI reporté)
 **Objectif** : rendre le jeu jouable malgré la latence réseau (le serveur est à 20 Hz,
 le rendu à 60 Hz).
-- [ ] **Joueur local** : appliquer l'input immédiatement côté client (prédiction),
-  puis réconcilier silencieusement à réception du snapshot serveur (correction de
-  position si écart, sans à-coup visible).
-- [ ] **Autres joueurs/monstres** : interpolation entre les deux derniers snapshots
-  reçus (pas de téléportation à chaque tick réseau).
-- [ ] Test de régression : simuler une latence artificielle (delay configurable sur le
-  socket client) et vérifier que le mouvement local reste fluide.
-- **Fichiers** : `src/app/mod.rs`, `src/net/client.rs`, nouveau `src/net/interpolation.rs`.
-- **Livrable** : jouable à 150 ms de latence simulée sans sensation de lag sur son
-  propre joueur ; mouvement des autres joueurs lisse (pas de saccades au tick réseau).
-- **Risques** : la réconciliation serveur mal réglée peut créer des micro-saccades —
-  garder un seuil de correction (« snap » seulement au-delà d'un écart significatif).
+- [x] `src/net/interpolation.rs` : `RemoteEntity` (historique borné à 2 snapshots
+  horodatés en temps **client local**, pas en tick serveur — reste correct quel que
+  soit le jitter réseau) + `sample(now)` qui interpole position/yaw (chemin le plus
+  court sur l'angle, pas de détour par 0 en cas de demi-tour) et clampe avant le
+  premier / après le dernier snapshot (pas d'extrapolation hasardeuse).
+- [x] `reconcile(predicted, authoritative)` : ne renvoie une correction que si
+  l'écart dépasse `SNAP_THRESHOLD` (0,5 m) — sinon la prédiction locale reste
+  telle quelle, pas de micro-saccade à chaque snapshot reçu.
+- [x] 7 tests couvrant : aucun snapshot, un seul snapshot (pas d'interpolation),
+  interpolation au mi-temps, clamp avant/après, angle qui traverse π (chemin
+  court), et les deux branches de `reconcile` (ignoré / corrigé).
+- [ ] **Reporté au Sprint 55** : câbler `NetClient` dans la boucle `winit`/`AppState`
+  (envoi d'`Input` par frame, `RemoteEntity` par joueur distant affiché comme
+  objet de scène supplémentaire, réconciliation appliquée au joueur local). Décision
+  assumée : cet environnement n'a pas d'affichage graphique pour valider visuellement
+  un tel câblage (cf. Sprint 53) ; le Sprint 55 câble de toute façon les salons
+  multi-joueurs (plusieurs objets pilotables distincts), donc regrouper les deux
+  évite un premier câblage à moitié refait une semaine plus tard.
+- [ ] Test de latence artificielle : repoussé avec le câblage ci-dessus (nécessite
+  un client réseau réellement intégré à la boucle de jeu pour être significatif).
+- **Fichiers** : nouveau `src/net/interpolation.rs`.
+- **Livrable obtenu** : la logique d'interpolation/réconciliation — la partie
+  mathématique qui rend le mouvement lisse malgré la latence — est écrite et
+  testée (102/102 tests verts au total, clippy/fmt propres). Le câblage bout-en-
+  bout dans le jeu réel est la partie non couverte, reportée explicitement.
+- **Risques** : le seuil `SNAP_THRESHOLD` (0,5 m) est une valeur de départ
+  raisonnable mais non validée en conditions réelles de latence — à ajuster au
+  Sprint 55 une fois testable dans le jeu.
 
 ### Sprint 55 — Salons multijoueurs (lobby, join/leave)
 **Objectif** : brancher le réseau sur le mode manches existant, jouable à plusieurs.
@@ -358,7 +374,7 @@ le rendu à 60 Hz).
 | Extraction préalable du combat (bloquant, cf. AUDIT §7.4) | 50 | ✅ |
 | Serveur autoritaire headless | 51 | ✅ |
 | Protocole + transport réseau | 52, 53 | ✅ |
-| Jouabilité malgré latence (prédiction/interpolation) | 54 | ⬜ |
+| Jouabilité malgré latence (prédiction/interpolation) | 54 | 🟢 (logique faite, câblage → 55) |
 | Salons 2-16 joueurs, réutilisation du mode manches | 55 | ⬜ |
 | Firebase RTDB — comptes | 56 | ⬜ |
 | Firebase RTDB — progression persistante | 57 | ⬜ |

@@ -8,6 +8,7 @@
 //! `protocol` (types + sérialisation, sans I/O) est compilé partout, y compris
 //! dans la lib `cdylib` Android/iOS.
 
+pub mod interpolation;
 pub mod protocol;
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
