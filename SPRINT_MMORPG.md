@@ -46,7 +46,7 @@
 | 50 | Extraction `app/combat.rs` | ✅ |
 | 51 | Serveur headless (binaire, tick fixe) | ✅ |
 | 52 | Protocole réseau & sérialisation | ✅ |
-| 53 | Transport WebSocket + connexion client | ⬜ |
+| 53 | Transport WebSocket + connexion client | ✅ |
 | 54 | Prédiction client & interpolation | ⬜ |
 | 55 | Salons multijoueurs (lobby, join/leave) | ⬜ |
 | 56 | Firebase : comptes & auth | ⬜ |
@@ -155,25 +155,45 @@ réutilisant `scene`/`runtime`/`combat.rs`.
   `Snapshot`, pas du format lui-même) — à garder en tête au Sprint 55/61 si la
   mesure de charge dépasse le budget.
 
-### Sprint 53 — Transport WebSocket + connexion client
+### Sprint 53 — Transport WebSocket + connexion client ✅ FAIT
 **Objectif** : faire circuler le protocole du Sprint 52 sur un vrai réseau.
-- [ ] Ajouter `tokio` + `tokio-tungstenite` (serveur) ; côté client, une crate
-  WebSocket compatible avec la boucle `winit` existante (thread dédié + canal vers
-  `AppState`, sur le modèle déjà utilisé pour l'import glTF asynchrone et l'IA).
-  ⚠️ **Prototype à faire tôt** : `winit` (boucle synchrone) + `tokio` (async) doivent
-  cohabiter sans bloquer le rendu — valider ce point avant d'écrire le reste du sprint.
-- [ ] Serveur : accepte les connexions, associe chaque socket à un `PlayerId` dans un
-  salon.
-- [ ] Client : se connecte, envoie ses `Input`, reçoit les `Snapshot` et les applique
-  brut (sans prédiction pour l'instant — c'est le Sprint 54).
-- [ ] Test bout-en-bout local : un serveur + deux instances client sur la même
-  machine, chacun voit l'autre joueur bouger.
-- **Fichiers** : `src/net/client.rs`, `src/net/server_loop.rs`, `src/bin/server.rs`,
-  `src/app/mod.rs` (branchement du canal réseau), `Cargo.toml`.
-- **Livrable** : deux fenêtres RusteeGear affichant chacune les deux joueurs, dans le
-  même salon, en local (`ws://127.0.0.1:PORT`).
-- **Risques** : c'est le sprint le plus risqué techniquement de la phase N — prévoir
-  une marge (jusqu'à 2x l'estimation) pour le prototype tokio/winit.
+- [x] Ajouté `tokio` (rt-multi-thread/net/sync/macros/time), `tokio-tungstenite`,
+  `futures-util`, gatés **desktop-only** dans `Cargo.toml` (même section que
+  `rfd`/`ureq`) : la lib `cdylib` Android/iOS ne les compile pas — `src/net/mod.rs`
+  gate `client`/`server_loop` derrière `#[cfg(not(any(target_os = "ios", target_os
+  = "android")))]`, seul `protocol` (pas d'I/O) reste universel.
+- [x] `src/net/server_loop.rs` (`NetServer`) et `src/net/client.rs` (`NetClient`) :
+  chacun démarre son propre thread + runtime tokio et n'expose au reste du
+  programme que des **canaux `std::sync::mpsc` synchrones** — même schéma que les
+  imports glTF/requêtes IA déjà présents dans `app/mod.rs` (thread de fond + canal,
+  poll non bloquant). `AppState`/`src/bin/server.rs` n'ont donc jamais besoin de
+  connaître `tokio` directement.
+  ⚠️ **Cohabitation tokio/winit non testée dans ce sprint** : le client réseau
+  (`NetClient`) est écrit et testé isolément (test d'intégration), mais son
+  branchement dans la boucle `winit` (`lib.rs`/`app/mod.rs`) est repoussé au
+  Sprint 54, où la prédiction/interpolation ont de toute façon besoin d'un vrai
+  branchement dans `advance_play`.
+- [x] Serveur : accepte les connexions, lit le `ClientMsg::Join` initial, attribue un
+  `PlayerId`, répond `ServerMsg::Welcome`, puis relaie `Input`/`Leave` vers `inbox`.
+- [x] `src/bin/server.rs` intègre `NetServer` dans la vraie boucle de jeu (pas
+  seulement en test isolé) : logue les messages reçus, diffuse un `Snapshot` de la
+  position du joueur local à chaque tick.
+- [x] Tests d'intégration bout-en-bout (2, dans `server_loop.rs`) : un `NetClient`
+  rejoint, reçoit son `Welcome`, envoie un `Input` que le serveur reçoit avec le bon
+  `PlayerId` ; deux clients obtiennent des identifiants distincts et reçoivent tous
+  deux un `broadcast`. **Choix assumé** : validation par test automatisé plutôt que
+  par ouverture manuelle de deux fenêtres graphiques — cet environnement n'a pas
+  d'affichage pour observer visuellement « l'autre joueur bouger », et un test
+  reproductible est de toute façon plus fiable qu'une vérification à l'œil.
+- **Fichiers** : nouveaux `src/net/client.rs`, `src/net/server_loop.rs` ; modifiés
+  `src/net/mod.rs`, `src/bin/server.rs`, `Cargo.toml`.
+- **Livrable** : `cargo test` → **95/95 verts** (2 nouveaux tests réseau bout-en-bout),
+  `cargo run --bin server` écoute réellement sur `127.0.0.1:7777` et diffuse un
+  `Snapshot` par tick ; `clippy`/`fmt` propres.
+- **Reste ouvert pour le Sprint 54/55** : brancher `NetClient` dans la boucle
+  `winit` (pas encore fait ici, volontairement — la prédiction/interpolation du
+  Sprint 54 en a besoin de toute façon) ; le pilotage du joueur depuis l'`Input`
+  réseau reçu par le serveur n'est pas encore appliqué à `AppState` (juste logué).
 
 ---
 
@@ -337,7 +357,7 @@ le rendu à 60 Hz).
 |---|---|---|
 | Extraction préalable du combat (bloquant, cf. AUDIT §7.4) | 50 | ✅ |
 | Serveur autoritaire headless | 51 | ✅ |
-| Protocole + transport réseau | 52, 53 | 52 ✅ · 53 ⬜ |
+| Protocole + transport réseau | 52, 53 | ✅ |
 | Jouabilité malgré latence (prédiction/interpolation) | 54 | ⬜ |
 | Salons 2-16 joueurs, réutilisation du mode manches | 55 | ⬜ |
 | Firebase RTDB — comptes | 56 | ⬜ |

@@ -74,10 +74,15 @@ serde_json = "1.0.150"
 wgpu = "29.0.3"
 winit = "0.30.13"
 
-# Sélecteur de fichiers + client HTTP (génération de scripts par IA) : desktop uniquement.
+# Sélecteur de fichiers + client HTTP (génération de scripts par IA) + réseau
+# multijoueur (WebSocket, SPRINT_MMORPG.md Sprint 53) : desktop uniquement pour
+# l'instant, comme le reste des dépendances desktop-only de cette section.
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.17.2"
 ureq = { version = "2.12", features = ["json"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # Android : winit a besoin d'un backend android-activity + logger natif.
 [target.'cfg(target_os = "android")'.dependencies]
