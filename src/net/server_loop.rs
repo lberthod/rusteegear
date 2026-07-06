@@ -144,6 +144,13 @@ async fn handle_connection(
     let welcome = protocol::encode(&ServerMsg::Welcome { player_id: id })?;
     sink.send(Message::Binary(welcome.into())).await?;
 
+    // Relaie aussi le `Join` lui-même au thread principal (contrairement au
+    // `Welcome`, géré ici) : c'est le signal qui doit faire apparaître le joueur
+    // dans la partie (cf. `AppState::spawn_network_player`, Sprint 55). Une
+    // défaillance d'envoi ici (thread principal arrêté) ne doit pas empêcher la
+    // connexion de continuer, donc pas de `?`.
+    let _ = tx.send((id, ClientMsg::Join { name }));
+
     // Pompe sortante : relaie les messages poussés par `send_to`/`broadcast`
     // (thread principal) vers la socket, jusqu'à fermeture du canal ou erreur
     // d'écriture.
@@ -158,13 +165,14 @@ async fn handle_connection(
     // Pompe entrante : décode chaque trame en `ClientMsg` et la transmet au thread
     // principal via le canal synchrone (jamais bloquant : `std::sync::mpsc` est
     // non borné, même choix que pour les imports glTF/IA dans `app/mod.rs`).
+    let inbound_tx = tx.clone();
     let inbound = async move {
         while let Some(Ok(msg)) = stream.next().await {
             if let Message::Binary(bytes) = msg
                 && let Ok(client_msg) = protocol::decode::<ClientMsg>(&bytes)
             {
                 let is_leave = matches!(client_msg, ClientMsg::Leave);
-                if tx.send((id, client_msg)).is_err() || is_leave {
+                if inbound_tx.send((id, client_msg)).is_err() || is_leave {
                     break;
                 }
             }
@@ -176,6 +184,11 @@ async fn handle_connection(
         _ = inbound => {}
     }
     outboxes.lock().unwrap().remove(&id);
+    // Signale la déconnexion au thread principal, qu'elle soit volontaire (déjà
+    // relayée par la pompe entrante) ou abrupte (perte de connexion) — envoyer un
+    // second `Leave` dans le premier cas ne coûte rien : `despawn_network_player`
+    // est idempotent (retirer un joueur déjà absent ne fait rien).
+    let _ = tx.send((id, ClientMsg::Leave));
     log::info!("Joueur {id} déconnecté");
     Ok(())
 }
@@ -206,6 +219,21 @@ mod tests {
         let ServerMsg::Welcome { player_id } = welcome else {
             panic!("premier message attendu : Welcome, reçu {welcome:?}");
         };
+
+        // Le serveur relaie aussi le `Join` initial au thread principal (cf.
+        // `AppState::spawn_network_player`, Sprint 55) : c'est le premier message
+        // dans `inbox`, avant l'`Input` envoyé ci-dessous.
+        let (join_id, join_msg) = server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("le serveur doit recevoir le Join du client");
+        assert_eq!(join_id, player_id);
+        assert_eq!(
+            join_msg,
+            ClientMsg::Join {
+                name: "Testeur".to_string()
+            }
+        );
 
         client.send(&ClientMsg::Input {
             move_x: 0.5,

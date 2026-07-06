@@ -5,6 +5,7 @@ pub mod ai;
 pub mod build_config;
 mod combat;
 pub mod input;
+pub mod multiplayer;
 pub mod settings;
 
 use combat::{AttackCharge, AttackProjectile};
@@ -178,6 +179,12 @@ pub struct AppState {
     /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
     /// la frame suivante).
     stagger: Vec<(usize, Vec3, f32)>,
+    /// Joueurs réseau connectés (cf. `multiplayer.rs`, Sprint 55) : indice de
+    /// l'objet de scène que chacun pilote, dans `scene.objects`.
+    network_players: HashMap<crate::net::protocol::PlayerId, usize>,
+    /// Dernier `Input` reçu de chaque joueur réseau (remplacé, pas cumulé : le
+    /// client renvoie son état complet à chaque message).
+    network_inputs: HashMap<crate::net::protocol::PlayerId, multiplayer::NetworkInput>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -323,6 +330,8 @@ impl AppState {
             attack_projectile: None,
             attack_charge: None,
             stagger: Vec::new(),
+            network_players: HashMap::new(),
+            network_inputs: HashMap::new(),
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -1990,6 +1999,15 @@ impl AppState {
             let my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
             let (tilt, space) = (inp.tilt, inp.jump);
             let mut any_jump = false;
+            // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`, Sprint 55) :
+            // chacun a son propre `NetworkInput`, distinct de `self.input_state`
+            // (qui ne pilote que l'objet « joueur local », clavier/tactile/gyro de
+            // cette instance — ex. l'éditeur desktop, ou un client sans réseau).
+            let network_by_index: HashMap<usize, multiplayer::NetworkInput> = self
+                .network_players
+                .iter()
+                .filter_map(|(id, &idx)| self.network_inputs.get(id).map(|inp| (idx, *inp)))
+                .collect();
             for (idx, obj) in self.scene.objects.iter().enumerate() {
                 let Some(ctrl) = &obj.controller else {
                     continue;
@@ -1997,6 +2015,11 @@ impl AppState {
                 if !ctrl.input && !ctrl.gyro {
                     continue;
                 }
+                let net_input = network_by_index.get(&idx);
+                let (mx, my, space) = match net_input {
+                    Some(n) => (n.move_x.clamp(-1.0, 1.0), n.move_y.clamp(-1.0, 1.0), n.jump),
+                    None => (mx, my, space),
+                };
                 let mut vx = 0.0;
                 let mut vz = 0.0;
                 if ctrl.input {
@@ -2009,11 +2032,12 @@ impl AppState {
                         vz += -my * ctrl.move_speed;
                     }
                 }
-                if ctrl.gyro {
+                if ctrl.gyro && net_input.is_none() {
                     vx += tilt.0 * ctrl.move_speed;
                     vz += -tilt.1 * ctrl.move_speed;
                 }
-                // Saut : bouton tactile nommé, ou Espace au clavier (objet pilotable).
+                // Saut : bouton tactile nommé (joueur local), ou Espace au clavier
+                // (joueur local), ou demandé par l'`Input` réseau de ce joueur.
                 let jump = (!ctrl.jump_button.is_empty()
                     && self.input_state.buttons.contains(&ctrl.jump_button))
                     || (space && ctrl.input);

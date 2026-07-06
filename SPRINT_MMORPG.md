@@ -48,7 +48,7 @@
 | 52 | Protocole réseau & sérialisation | ✅ |
 | 53 | Transport WebSocket + connexion client | ✅ |
 | 54 | Prédiction client & interpolation | 🟢 |
-| 55 | Salons multijoueurs (lobby, join/leave) | ⬜ |
+| 55 | Salons multijoueurs (lobby, join/leave) | 🟢 |
 | 56 | Firebase : comptes & auth | ⬜ |
 | 57 | Firebase : inventaire/progression | ⬜ |
 | 58 | Firebase : chat + présence | ⬜ |
@@ -231,21 +231,73 @@ le rendu à 60 Hz).
   raisonnable mais non validée en conditions réelles de latence — à ajuster au
   Sprint 55 une fois testable dans le jeu.
 
-### Sprint 55 — Salons multijoueurs (lobby, join/leave)
+### Sprint 55 — Salons multijoueurs (lobby, join/leave) 🟢 (cœur serveur fait, UI lobby reportée)
 **Objectif** : brancher le réseau sur le mode manches existant, jouable à plusieurs.
-- [ ] Écran de lobby minimal (egui) : créer un salon / rejoindre par code, liste des
-  joueurs connectés avant le lancement.
-- [ ] Le mode manches (`Combat`/`AiChaser`, vagues) tourne **sur le serveur** ; les
-  clients ne font que prédire/afficher (cf. Sprint 0 du scope : autorité serveur).
-- [ ] Gestion propre de la déconnexion d'un joueur en cours de manche (ne bloque pas
-  les autres).
-- [ ] Test manuel : 3-4 joueurs sur la même manche, un qui quitte en cours de partie.
-- **Fichiers** : `src/editor/mod.rs` (écran lobby), `src/app/mod.rs`, `src/net/*`.
-- **Livrable** : une manche « Call of Zombies » jouable à plusieurs, en local réseau
-  (LAN), du lobby jusqu'au score final.
-- **Risques** : resynchronisation d'un client qui rejoint en cours de manche (aucun
-  snapshot initial complet reçu) — prévoir un message `ServerMsg::FullState` dédié au
-  join tardif si besoin.
+- [x] `src/app/multiplayer.rs` (nouveau, `pub` — contrairement à `combat.rs`,
+  privé, car `src/bin/server.rs` en a besoin depuis l'extérieur de la lib) :
+  `spawn_network_player`/`despawn_network_player`/`set_network_input`/
+  `network_player_object`/`network_snapshot`. Un joueur réseau = un clone du
+  gabarit pilotable de la scène, ajouté comme objet indépendant (écarté du
+  gabarit et des joueurs précédents pour éviter une interpénétration physique
+  au spawn), avec son propre `NetworkInput`.
+- [x] `sim_step` (`app/mod.rs`) route l'input par objet : un objet mappé à un
+  joueur réseau utilise son `NetworkInput` propre ; l'objet « joueur local »
+  (non mappé) continue d'utiliser `self.input_state` comme avant — **aucun
+  changement de comportement pour le mode solo existant** (108 tests toujours
+  verts sans modification).
+- [x] `src/net/server_loop.rs` relaie maintenant aussi `ClientMsg::Join` au
+  thread principal (pas seulement `Input`/`Leave` comme au Sprint 53), et
+  émet un `Leave` synthétique à la fin de la connexion (déconnexion volontaire
+  *ou* abrupte) — `despawn_network_player` étant idempotent, pas de risque de
+  double traitement.
+- [x] `src/bin/server.rs` (`handle_message`) : `Join` → `spawn_network_player` +
+  broadcast `PlayerJoined` ; `Input` → `set_network_input` ; `Leave` →
+  `despawn_network_player` + broadcast `PlayerLeft`. Diffuse
+  `network_snapshot(tick)` (tous les joueurs réseau) à chaque tick au lieu du
+  snapshot à un seul objet du Sprint 53.
+- [x] Test bout-en-bout **à travers un vrai socket** (`src/bin/server.rs`,
+  `joining_moving_and_leaving_through_the_real_socket`) : un `NetClient` réel
+  rejoint, obtient un objet, le déplace via son `Input`, puis part — vérifie le
+  câblage complet (pas seulement les méthodes `AppState` isolées). 6 tests
+  supplémentaires dans `app::multiplayer` (spawn/despawn/inputs indépendants/
+  snapshot).
+- [ ] **Reporté** : écran de lobby egui (créer un salon / rejoindre par code,
+  liste des joueurs avant lancement). Décision assumée : aucune valeur sans un
+  client graphique réellement connecté au réseau (le client desktop actuel ne
+  se connecte pas encore à `NetClient, cf. Sprint 54) — ajouter un écran avant
+  d'avoir un client qui l'utilise serait du code mort, non testable ici de
+  toute façon (pas d'affichage graphique dans cet environnement).
+- [ ] **Reporté** : re-synchronisation d'un client qui rejoint en cours de
+  manche avancée (`ServerMsg::FullState` dédié) — pour l'instant un nouveau
+  joueur reçoit les prochains `Snapshot` réguliers (contenant déjà tous les
+  joueurs réseau), donc se resynchronise en pratique en un tick ; un état
+  complet dédié n'apporterait de valeur qu'avec des entités *non-joueur*
+  (monstres) dans le snapshot, absentes pour l'instant (cf. limite ci-dessous).
+- **Fichiers** : nouveau `src/app/multiplayer.rs` ; modifiés `src/app/mod.rs`
+  (déclaration du module, champs `network_players`/`network_inputs`, routage
+  d'input par objet dans `sim_step`), `src/net/server_loop.rs`,
+  `src/bin/server.rs`.
+- **Livrable** : **108 tests lib + 1 test bin verts** (aucune régression sur le
+  mode solo), clippy/fmt propres ; un client réseau réel peut rejoindre,
+  déplacer *son* objet indépendamment des autres, et partir proprement — validé
+  par test automatisé de bout en bout à travers un vrai socket TCP/WebSocket
+  local (pas seulement en mémoire).
+- **Limites connues, assumées et documentées dans le code** (`multiplayer.rs`,
+  `server.rs`) :
+  1. La vie (`hud_health`) et les conditions de victoire/défaite restent
+     celles de l'objet gabarit d'origine, pas individualisées par joueur —
+     un vrai combat joueur-contre-joueur demande d'abord de donner à chaque
+     joueur sa propre vie (extension naturelle de `Combat`, pas faite ici).
+  2. `network_snapshot` ne transmet que les joueurs réseau, pas les monstres
+     (`AiChaser`/`Combat`) — un client verrait donc les autres joueurs bouger
+     mais pas les monstres qu'ils combattent. À étendre si/quand un client
+     graphique réel consomme ces snapshots.
+  3. Les monstres (`AiChaser`) poursuivent toujours *un seul* point cible
+     (`player_position()`, heuristique du joueur local), pas le joueur réseau
+     le plus proche — plusieurs joueurs connectés ne changent donc pas
+     (encore) le comportement de l'IA.
+  4. Pas d'écran de lobby ; pas de multi-salons (un seul salon = un seul
+     `AppState` par processus serveur).
 
 ---
 
@@ -375,7 +427,7 @@ le rendu à 60 Hz).
 | Serveur autoritaire headless | 51 | ✅ |
 | Protocole + transport réseau | 52, 53 | ✅ |
 | Jouabilité malgré latence (prédiction/interpolation) | 54 | 🟢 (logique faite, câblage → 55) |
-| Salons 2-16 joueurs, réutilisation du mode manches | 55 | ⬜ |
+| Salons 2-16 joueurs, réutilisation du mode manches | 55 | 🟢 (serveur fait, lobby UI → plus tard) |
 | Firebase RTDB — comptes | 56 | ⬜ |
 | Firebase RTDB — progression persistante | 57 | ⬜ |
 | Firebase RTDB — chat/présence | 58 | ⬜ |
