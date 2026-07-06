@@ -44,7 +44,7 @@
 | # | Sprint | État |
 |---|---|---|
 | 50 | Extraction `app/combat.rs` | ✅ |
-| 51 | Serveur headless (binaire, tick fixe) | ⬜ |
+| 51 | Serveur headless (binaire, tick fixe) | ✅ |
 | 52 | Protocole réseau & sérialisation | ⬜ |
 | 53 | Transport WebSocket + connexion client | ⬜ |
 | 54 | Prédiction client & interpolation | ⬜ |
@@ -94,24 +94,39 @@ le réseau sans travailler dans un fichier de ~4600 lignes.
 
 ## PHASE N — Serveur & protocole
 
-### Sprint 51 — Serveur de jeu headless
+### Sprint 51 — Serveur de jeu headless ✅ FAIT
 **Objectif** : un binaire serveur qui simule une partie **sans fenêtre ni GPU**, en
 réutilisant `scene`/`runtime`/`combat.rs`.
-- [ ] Nouveau binaire `src/bin/server.rs` (ou crate séparée si la compilation partagée
-  pose souci) : dépend uniquement de `scene`, `runtime`, `app::combat` — pas de `gfx`,
-  `egui`, `winit`.
-- [ ] Boucle de simulation à **tick fixe** (réutilise l'accumulateur `fixed_substeps`
-  du Sprint 45, déjà testé framerate-indépendant) — ex. 20 Hz réseau, découplé du 60 Hz
-  physique local.
-- [ ] Un salon = une instance de `Scene` + liste de joueurs connectés (`PlayerId` →
-  `SceneObject` index).
-- [ ] Test manuel : lancer le serveur, vérifier par logs qu'une manche (vagues,
-  monstres) tourne correctement sans rendu.
-- **Fichiers** : `src/bin/server.rs`, `Cargo.toml` (nouvelle cible bin), `src/app/combat.rs`.
-- **Livrable** : `cargo run --bin server` fait tourner une manche complète en console,
-  logs de vagues/score identiques à la version desktop.
-- **Risques** : `mlua`/`kira`/`rapier3d` doivent rester compilables sans `wgpu`/`winit`
-  actifs — vérifier qu'aucune dépendance transverse ne force l'init GPU au démarrage.
+- [x] Nouveau binaire `src/bin/server.rs` (convention Cargo `src/bin/*.rs`, pas de
+  déclaration `[[bin]]` nécessaire dans `Cargo.toml`) : n'importe que
+  `motor3derust::app::AppState` (donc, transitivement, `scene`/`runtime`/`app::combat`)
+  — zéro appel à `gfx`, `editor`, `egui`, `winit` dans ce fichier. `AppState::advance_play`,
+  `load_zombies_demo`, `has_won`/`is_lost`/`score`/`wave` étaient déjà `pub`, aucune
+  API nouvelle à exposer pour ce sprint.
+- [x] Boucle à tick serveur **20 Hz** (`SERVER_TICK`, découplée du pas fixe physique
+  60 Hz interne à `advance_play`, cf. Sprint 45) : `advance_play()` appelé une fois par
+  tick, `std::thread::sleep` pour le reste du budget de tick.
+- [x] Test manuel : `cargo run --bin server` — la manche 1 se révèle, la physique/l'IA
+  tournent, la défaite est détectée correctement à l'usure (aucune entrée joueur
+  simulée pour l'instant → normal, le joueur ne se défend pas encore). Confirme que
+  toute la chaîne (physique `rapier3d`, audio `kira` en repli silencieux, IA poursuite,
+  manches, combat) s'initialise et boucle sans fenêtre ni crash.
+- [x] `cargo fmt --check` et `cargo clippy --all-targets -D warnings` propres sur
+  l'ensemble du projet avec le nouveau binaire.
+- [ ] Reporté au Sprint 55 : un salon = une instance de `Scene` + liste de joueurs
+  connectés (`PlayerId` → index) — pas de notion de salon multi-joueurs tant que le
+  réseau (Sprints 52-53) n'existe pas.
+- **Fichiers** : nouveau `src/bin/server.rs`.
+- **Livrable** : `cargo run --bin server` fait tourner une manche jusqu'à son issue en
+  console, sans fenêtre ; logs wave/score identiques en substance à la version desktop
+  (mêmes fonctions `AppState`, aucune duplication de logique).
+- **Risques levés** : `mlua`/`kira`/`rapier3d` compilent et s'exécutent sans
+  `wgpu`/`winit` actifs — `Audio::new()` était déjà durci (Sprint 46, repli silencieux
+  si aucun device audio), donc pas de crash en environnement sans son.
+- **Note pour la suite** : dans ce MVP le joueur ne reçoit aucune entrée (pas de
+  joystick/attaque simulés) — c'est voulu, le pilotage réel viendra du client réseau
+  (Sprint 53). Un test de charge future (Sprint 61) devra simuler des inputs, pas
+  laisser le joueur passif.
 
 ### Sprint 52 — Protocole réseau & sérialisation
 **Objectif** : définir le format des messages client ↔ serveur avant d'ouvrir une socket.
@@ -311,7 +326,7 @@ le rendu à 60 Hz).
 | Point du scope (§0) | Sprint(s) couvrant | État |
 |---|---|---|
 | Extraction préalable du combat (bloquant, cf. AUDIT §7.4) | 50 | ✅ |
-| Serveur autoritaire headless | 51 | ⬜ |
+| Serveur autoritaire headless | 51 | ✅ |
 | Protocole + transport réseau | 52, 53 | ⬜ |
 | Jouabilité malgré latence (prédiction/interpolation) | 54 | ⬜ |
 | Salons 2-16 joueurs, réutilisation du mode manches | 55 | ⬜ |
