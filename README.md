@@ -185,6 +185,86 @@ set_health(0..1)                       -- barre de vie du HUD
 
 ---
 
+## 🌐 Multijoueur en ligne (chantier en cours)
+
+RusteeGear commence à devenir jouable **à plusieurs, en ligne**, sur le mode
+manches « Call of Zombies » — un chantier séparé du moteur solo, suivi sprint
+par sprint dans **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)**. Trois décisions de
+scope, prises dès le départ :
+
+- **Échelle visée** : des salons de **2 à 16 joueurs**, pas un MMO à monde
+  persistant (qui demanderait du sharding de zones et une infra bien plus
+  lourde — hors de portée d'un projet solo).
+- **Autorité serveur** : le gameplay (mouvement, manches, combat) est simulé
+  par un **serveur de jeu Rust autoritaire**, jamais par les clients — anti-
+  triche de base, chaque client ne fait qu'envoyer ses entrées et afficher
+  l'état reçu.
+- **Firebase Realtime Database en backend annexe seulement** (comptes,
+  inventaire persistant, chat, classement — pas encore implémenté). Firebase
+  RTDB n'a pas d'autorité serveur ni de SDK Rust natif : inadapté au transport
+  temps réel du gameplay (position, coups), qui passe par un vrai serveur
+  WebSocket.
+
+### Comment ça marche
+
+```
+┌─────────────┐        WebSocket (bincode)        ┌──────────────────────────┐
+│   Client     │ ───────────────────────────────▶  │   src/bin/server.rs      │
+│ (RusteeGear, │  ClientMsg::Join / Input / Leave  │   (headless, sans GPU)   │
+│  desktop)    │ ◀───────────────────────────────  │                          │
+└─────────────┘   ServerMsg::Welcome / Snapshot /  │  AppState (la MÊME que   │
+                   PlayerJoined / PlayerLeft /      │  l'éditeur desktop) +    │
+                   Event                            │  app::multiplayer        │
+                                                     └──────────────────────────┘
+```
+
+- **Le serveur est headless** (`src/bin/server.rs`) : il fait tourner une
+  `AppState` — exactement le même moteur de simulation que l'éditeur desktop
+  (`scene`, `runtime::physics`, `app::combat`) — mais sans fenêtre, sans GPU,
+  sans `egui`/`winit`. C'est ce qui a motivé l'extraction du combat/manches
+  (`app/combat.rs`, Sprint 50) hors du fichier principal : la même logique de
+  jeu doit tourner *aussi bien* dans une fenêtre que dans ce binaire console.
+- **Chaque joueur réseau = son propre objet piloté indépendamment**
+  (`app::multiplayer::spawn_network_player`) : rejoindre clone l'objet
+  « joueur » de la scène, et son `Input` (joystick/attaque/saut envoyé par le
+  client) ne pilote que *cet* objet — le gameplay solo existant n'est pas
+  affecté (aucune régression sur les tests existants).
+- **Protocole compact** (`src/net/protocol.rs`) : messages sérialisés en
+  `bincode`, pas JSON — un `Snapshot` (position/orientation/santé/visibilité)
+  pour 20 entités tient dans ~540 octets, largement sous le budget réseau visé.
+- **Mouvement lisse malgré la latence** (`src/net/interpolation.rs`) : les
+  entités distantes sont interpolées entre les deux derniers snapshots reçus
+  (jamais téléportées à chaque tick réseau), et la position prédite du joueur
+  local n'est corrigée que si l'écart avec le serveur devient significatif.
+
+### Essayer le serveur dès maintenant
+
+```bash
+cargo run --bin server              # écoute sur 127.0.0.1:7777, lance une manche
+RUSTEEGEAR_SERVER_ADDR=0.0.0.0:9000 cargo run --bin server   # port/adresse au choix
+```
+
+Le binaire tourne déjà en autonome (sans client, la manche se joue toute
+seule) et accepte de vraies connexions WebSocket — validé par des tests
+d'intégration bout-en-bout (`cargo test`) qui ouvrent un vrai socket local.
+**Ce qui manque encore pour jouer en vrai depuis l'éditeur** : brancher le
+client réseau (`src/net/client.rs`) dans la boucle `winit` et ajouter un écran
+de lobby — actuellement le seul client testé est celui des tests automatisés,
+pas encore l'éditeur graphique (cf. l'état sprint par sprint dans
+[SPRINT_MMORPG.md](SPRINT_MMORPG.md)).
+
+### Limites connues (assumées, documentées dans le code)
+
+- La vie et les conditions de victoire/défaite restent celles du joueur
+  « gabarit » d'origine, pas encore individualisées par joueur réseau.
+- Les snapshots ne transmettent pas (encore) les monstres, seulement les
+  joueurs réseau.
+- L'IA de poursuite vise toujours un seul point (le joueur local), pas le
+  joueur réseau le plus proche.
+- Pas de multi-salons : un processus serveur = un seul salon pour l'instant.
+
+---
+
 ## 🗓️ Historique & avancement
 
 | Phase | Sprints | État |
@@ -262,18 +342,27 @@ cargo run -- --player           # mode player (scène plein écran)
 src/
 ├── lib.rs         # event loop winit + run() (desktop) + android_main (cdylib) + resume mobile
 ├── main.rs        # entrée desktop → motor3derust::run()
+├── bin/server.rs  # serveur de jeu headless (multijoueur) — sans gfx/egui/winit
 ├── assets.rs      # assets embarqués (include_dir, schéma bundle://) pour le player exporté
 ├── app/           # logique sans GPU : AppState, picking, sélection, build_config
+│   ├── combat.rs      # attaque, manches (extrait pour être réutilisé par le serveur)
+│   └── multiplayer.rs # un joueur réseau = un objet piloté indépendamment
 ├── gfx/           # couche rendu wgpu (renderer, mesh, camera, gizmo, shaders WGSL)
 ├── scene/         # Transform, MeshKind, Scene, groupes, lumière, import glTF, sérialisation
 ├── runtime/       # mode Play : physics (rapier3d), audio (kira)
+├── net/           # multijoueur : protocol (bincode), server_loop/client (WebSocket,
+│                  # desktop only), interpolation (lissage malgré la latence)
 └── editor/        # UI egui (toolbar, hiérarchie, inspecteur, panneau export) — desktop
 ```
 
 Séparation nette **logique (`app`) / rendu (`gfx`)** : l'état (scène, caméra, entrées)
-ne dépend pas du GPU, ce qui a rendu le portage mobile direct. Le rendu repose sur
-`wgpu` (Metal / Vulkan / DX12 / WebGPU) — la clé de la portabilité.
-Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+ne dépend pas du GPU, ce qui a rendu le portage mobile direct **et** permet à
+`src/bin/server.rs` de réutiliser exactement la même simulation de jeu en
+headless (aucune duplication de logique entre l'éditeur desktop et le
+serveur). Le rendu repose sur `wgpu` (Metal / Vulkan / DX12 / WebGPU) — la clé
+de la portabilité.
+Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (moteur),
+**[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** (multijoueur).
 
 ---
 
@@ -285,6 +374,8 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 - **[SPRINTS.md](SPRINTS.md)** — **récap de tous les sprints** (réalisés + à venir) et la
   **logique de la Phase I** (sprints 45→49), avec correspondance analyse ↔ sprint.
 - **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** — détail par sprint (objectif · tâches · fichiers · livrable).
+- **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** — chantier **multijoueur en ligne** (sprints 50→62),
+  séparé du moteur solo : cf. **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
 - **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
 **Prochaine Phase I — robustesse & découplage** (détail dans [SPRINTS.md](SPRINTS.md)) :
@@ -316,6 +407,7 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 | Audio | `kira` |
 | Assets embarqués (player) | `include_dir` |
 | Sélecteur de fichiers (desktop) | `rfd` |
+| Réseau multijoueur (desktop only) | `tokio` + `tokio-tungstenite` (WebSocket) + `bincode` (protocole) |
 | Packaging | `cargo-bundle` (macOS) · `cargo-apk` (Android) · `xcodegen`+Xcode (iOS) |
 
 > Export depuis l'éditeur : voir **[packaging/EXPORT.md](packaging/EXPORT.md)**.
