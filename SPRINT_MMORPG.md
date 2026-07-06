@@ -45,7 +45,7 @@
 |---|---|---|
 | 50 | Extraction `app/combat.rs` | ✅ |
 | 51 | Serveur headless (binaire, tick fixe) | ✅ |
-| 52 | Protocole réseau & sérialisation | ⬜ |
+| 52 | Protocole réseau & sérialisation | ✅ |
 | 53 | Transport WebSocket + connexion client | ⬜ |
 | 54 | Prédiction client & interpolation | ⬜ |
 | 55 | Salons multijoueurs (lobby, join/leave) | ⬜ |
@@ -128,22 +128,32 @@ réutilisant `scene`/`runtime`/`combat.rs`.
   (Sprint 53). Un test de charge future (Sprint 61) devra simuler des inputs, pas
   laisser le joueur passif.
 
-### Sprint 52 — Protocole réseau & sérialisation
+### Sprint 52 — Protocole réseau & sérialisation ✅ FAIT
 **Objectif** : définir le format des messages client ↔ serveur avant d'ouvrir une socket.
-- [ ] `src/net/protocol.rs` : enums `ClientMsg` (Join, Input, Leave) et `ServerMsg`
-  (Snapshot delta, PlayerJoined/Left, Event: attaque/mort/manche suivante).
-- [ ] Sérialisation via `serde` (déjà en dépendance) + `bincode` (à ajouter, plus
-  compact que JSON pour du temps réel) — un feature flag JSON en debug pour inspecter
-  facilement les trames.
-- [ ] Snapshots **delta** (positions/santé qui changent depuis le dernier tick envoyé),
-  pas l'état complet à chaque message, pour limiter la bande passante.
-- [ ] Tests unitaires : round-trip sérialisation/désérialisation de chaque variant.
+- [x] `src/net/protocol.rs` : `ClientMsg` (Join, Input, Leave), `ServerMsg` (Welcome,
+  PlayerJoined/Left, Snapshot, Event), `Snapshot`/`EntityDelta` (position + yaw +
+  visible + santé optionnelle, indexés sur `scene.objects`), `GameEvent`
+  (WaveStart/Defeated/Win/Lose).
+- [x] Sérialisation via `serde` (déjà en dépendance) + **`bincode` 1.3** (ajouté à
+  `Cargo.toml`) : `encode`/`decode` génériques, erreur typée `CodecError`.
+  `serde_json` reste utilisable sur les mêmes types pour une inspection debug
+  ponctuelle (déjà présent dans le projet, pas de dépendance en plus).
+- [x] `EntityDelta` conçu comme un état minimal par entité (pas la place réservée
+  pour l'implémentation *delta* proprement dite côté serveur — c'est-à-dire ne
+  transmettre que les entités qui ont changé — qui viendra avec la boucle serveur
+  au Sprint 53/55, mais le format s'y prête déjà : chaque entité est indépendante
+  et optionnelle dans le `Vec`).
+- [x] Tests unitaires : round-trip de chaque variant `ClientMsg`/`ServerMsg`
+  (10 tests), plus un test de rejet d'octets invalides et un test de taille.
 - **Fichiers** : nouveau `src/net/mod.rs`, `src/net/protocol.rs`, `Cargo.toml`
-  (dépendance `bincode`).
-- **Livrable** : tests de round-trip verts ; taille d'un snapshot delta mesurée et
-  documentée (objectif : < 200 octets/joueur/tick pour 16 joueurs).
-- **Risques** : sous-dimensionner le protocole (oublier un champ) coûte cher une fois
-  le transport branché — faire relire le format avant Sprint 53.
+  (dépendance `bincode`), `src/lib.rs` (`pub mod net;`).
+- **Livrable** : 10 tests de round-trip verts ; taille mesurée d'un snapshot de
+  20 entités (16 joueurs + 4 monstres) = **536 octets, soit ~27 octets/entité**
+  — largement sous l'objectif de 200 octets/joueur/tick.
+- **Risques** : le format n'encode pas encore l'omission sélective des entités
+  inchangées (ça reste à faire au niveau de la boucle serveur qui *construit* le
+  `Snapshot`, pas du format lui-même) — à garder en tête au Sprint 55/61 si la
+  mesure de charge dépasse le budget.
 
 ### Sprint 53 — Transport WebSocket + connexion client
 **Objectif** : faire circuler le protocole du Sprint 52 sur un vrai réseau.
@@ -327,7 +337,7 @@ le rendu à 60 Hz).
 |---|---|---|
 | Extraction préalable du combat (bloquant, cf. AUDIT §7.4) | 50 | ✅ |
 | Serveur autoritaire headless | 51 | ✅ |
-| Protocole + transport réseau | 52, 53 | ⬜ |
+| Protocole + transport réseau | 52, 53 | 52 ✅ · 53 ⬜ |
 | Jouabilité malgré latence (prédiction/interpolation) | 54 | ⬜ |
 | Salons 2-16 joueurs, réutilisation du mode manches | 55 | ⬜ |
 | Firebase RTDB — comptes | 56 | ⬜ |

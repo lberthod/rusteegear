@@ -15,6 +15,7 @@ pub mod assets;
 pub mod editor;
 pub mod gfx;
 pub mod log_buffer;
+pub mod net;
 pub mod runtime;
 pub mod scene;
 
