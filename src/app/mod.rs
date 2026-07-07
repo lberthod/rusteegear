@@ -206,6 +206,21 @@ pub struct AppState {
     /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
     /// localement (le serveur est autoritaire sur eux).
     remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
+    /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
+    /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
+    /// créditer la progression au bon compte (Sprint 57). `None` = partie
+    /// anonyme, sans compte.
+    firebase_uid: Option<String>,
+    /// Une requête Firebase (sign in/up) est en cours (évite d'en empiler
+    /// plusieurs si l'utilisateur clique deux fois).
+    firebase_busy: bool,
+    /// Canal de résultat des requêtes Firebase (thread de fond, cf. les
+    /// requêtes IA existantes) : `Ok(uid)` ou message d'erreur. Types
+    /// universels (`String`) : pas besoin de gater ces champs par plateforme,
+    /// seules les fonctions qui les produisent (`net::firebase::sign_in`/
+    /// `sign_up`) le sont.
+    firebase_tx: std::sync::mpsc::Sender<Result<String, String>>,
+    firebase_rx: std::sync::mpsc::Receiver<Result<String, String>>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -321,6 +336,7 @@ impl AppState {
         let (scene_tx, scene_rx) = channel();
         let (ai_tx, ai_rx) = channel();
         let (ai_scene_tx, ai_scene_rx) = channel();
+        let (firebase_tx, firebase_rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -359,6 +375,10 @@ impl AppState {
             net_player_id: None,
             net_status: String::new(),
             remote_players: HashMap::new(),
+            firebase_uid: None,
+            firebase_busy: false,
+            firebase_tx,
+            firebase_rx,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),

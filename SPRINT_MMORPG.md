@@ -577,16 +577,30 @@ s'y connecter — le câblage explicitement reporté aux Sprints 54/55.
   désigner le sol) ; nouvelle méthode `AppState::hide_local_player_template()`,
   appelée par `src/bin/server.rs` avant `playing = true`. Test de régression :
   `waiting_for_the_first_player_never_drains_health_via_monster_scripts`.
+- [x] **Câblage Firebase du Join** (ajouté juste après, même sprint) : la
+  fenêtre Multijoueur gagne une section « Compte (optionnel) » (email/mot de
+  passe, Se connecter/Créer un compte), visible seulement si une clé API et
+  une URL Database sont renseignées dans les Paramètres. `AppState::
+  request_firebase_sign_in`/`request_firebase_sign_up` (thread de fond, comme
+  les requêtes IA existantes) résolvent un `uid`, mémorisé et **transmis au
+  prochain `connect_to_server`** — sans ce câblage, `firebase_uid` restait
+  toujours `None` et toute la progression/le classement des Sprints 57/59
+  n'aurait jamais pu se relier à un vrai compte, même Firebase configuré.
+  2 tests : le `uid` s'applique dès que la requête de fond résout (simulé,
+  sans vrai projet Firebase), et `connect_to_server` le transmet bien au
+  `Join` reçu côté serveur (vrai socket).
 - **Fichiers** : nouveau `src/app/network_client.rs` ; modifiés
   `src/net/protocol.rs` (+ `interpolation.rs`, tests), `src/app/multiplayer.rs`,
   `src/app/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`, `src/bin/server.rs`.
-- **Livrable** : 134 tests lib + 2 tests bin verts, clippy/fmt propres ; serveur
+- **Livrable** : 136 tests lib + 2 tests bin verts, clippy/fmt propres ; serveur
   réel vérifié stable indéfiniment en attente d'un joueur (15 s+ testées, contre
-  2,5-4,5 s de défaite automatique avant correctif).
+  2,5-4,5 s de défaite automatique avant correctif) ; app desktop relancée et
+  vérifiée sans crash avec la nouvelle UI.
 - **Reste non vérifié** : aucune fenêtre graphique vue tourner dans cet
-  environnement (pas d'affichage) — la fenêtre Multijoueur et le mouvement des
-  fantômes en jeu réel restent à valider visuellement par l'utilisateur, en
-  lançant deux instances de l'éditeur l'une contre l'autre.
+  environnement (pas d'affichage) — la fenêtre Multijoueur, la connexion
+  Firebase et le mouvement des fantômes en jeu réel restent à valider
+  visuellement par l'utilisateur, en lançant deux instances de l'éditeur l'une
+  contre l'autre.
 - **Limite assumée** : pas de réconciliation pour le joueur local (le
   `Snapshot` le concernant est ignoré, cf. Sprint 54) — en cas de désaccord
   fort avec le serveur (triche, désync), le client ne se corrige pas encore.

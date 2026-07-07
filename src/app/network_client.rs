@@ -23,10 +23,12 @@ pub struct RemotePlayer {
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
-    /// Remplace une connexion existante s'il y en avait une.
+    /// Remplace une connexion existante s'il y en avait une. Transmet
+    /// `self.firebase_uid` au serveur s'il est connu (cf. `sign_in`/`sign_up`
+    /// ci-dessous) — `None` pour une partie anonyme.
     pub fn connect_to_server(&mut self, url: &str, name: &str) {
         self.disconnect_from_server();
-        match crate::net::client::NetClient::connect(url, name, None) {
+        match crate::net::client::NetClient::connect(url, name, self.firebase_uid.as_deref()) {
             Ok(client) => {
                 log::info!("Multijoueur : connecté à {url} sous « {name} »");
                 self.net_client = Some(client);
@@ -35,6 +37,85 @@ impl AppState {
             Err(e) => {
                 log::warn!("Multijoueur : connexion à {url} échouée : {e}");
                 self.net_status = format!("Connexion échouée : {e}");
+            }
+        }
+    }
+
+    /// `true` si un compte Firebase est associé à cette session (cf.
+    /// `sign_in`/`sign_up`).
+    pub fn has_firebase_account(&self) -> bool {
+        self.firebase_uid.is_some()
+    }
+
+    /// Se connecte à un compte Firebase existant (thread de fond, comme les
+    /// requêtes IA déjà présentes) : au succès, `self.firebase_uid` est
+    /// renseigné et transmis au prochain `connect_to_server`. Sans effet si
+    /// une requête est déjà en cours.
+    pub fn request_firebase_sign_in(
+        &mut self,
+        api_key: String,
+        database_url: String,
+        email: String,
+        password: String,
+    ) {
+        self.request_firebase_auth(api_key, database_url, email, password, false);
+    }
+
+    /// Crée un compte Firebase puis s'y connecte. Mêmes garanties que
+    /// `request_firebase_sign_in`.
+    pub fn request_firebase_sign_up(
+        &mut self,
+        api_key: String,
+        database_url: String,
+        email: String,
+        password: String,
+    ) {
+        self.request_firebase_auth(api_key, database_url, email, password, true);
+    }
+
+    fn request_firebase_auth(
+        &mut self,
+        api_key: String,
+        database_url: String,
+        email: String,
+        password: String,
+        sign_up: bool,
+    ) {
+        if self.firebase_busy {
+            return;
+        }
+        self.firebase_busy = true;
+        self.net_status = "Connexion à Firebase…".to_string();
+        let tx = self.firebase_tx.clone();
+        std::thread::spawn(move || {
+            let config = crate::net::firebase::FirebaseConfig {
+                api_key,
+                database_url,
+            };
+            let result = if sign_up {
+                crate::net::firebase::sign_up(&config, &email, &password)
+            } else {
+                crate::net::firebase::sign_in(&config, &email, &password)
+            };
+            let _ = tx.send(result.map(|session| session.uid));
+        });
+    }
+
+    /// Applique le résultat d'une requête Firebase en attente, s'il y en a un
+    /// (appelé depuis `poll_network`, non bloquant).
+    fn poll_firebase(&mut self) {
+        while let Ok(result) = self.firebase_rx.try_recv() {
+            self.firebase_busy = false;
+            match result {
+                Ok(uid) => {
+                    log::info!("Firebase : connecté (uid {uid})");
+                    self.net_status = format!("Connecté à Firebase (uid {uid})");
+                    self.firebase_uid = Some(uid);
+                }
+                Err(e) => {
+                    log::warn!("Firebase : connexion échouée : {e}");
+                    self.net_status = format!("Connexion Firebase échouée : {e}");
+                }
             }
         }
     }
@@ -64,6 +145,7 @@ impl AppState {
     /// Appelé une fois par frame depuis `advance_play` : envoie l'input local,
     /// draine les messages serveur, met à jour les fantômes des autres joueurs.
     pub(super) fn poll_network(&mut self) {
+        self.poll_firebase();
         if self.net_client.is_none() {
             return;
         }
@@ -198,6 +280,30 @@ impl AppState {
         false
     }
 
+    pub fn has_firebase_account(&self) -> bool {
+        false
+    }
+
+    pub fn request_firebase_sign_in(
+        &mut self,
+        _api_key: String,
+        _database_url: String,
+        _email: String,
+        _password: String,
+    ) {
+        self.net_status = "Firebase indisponible sur mobile".to_string();
+    }
+
+    pub fn request_firebase_sign_up(
+        &mut self,
+        _api_key: String,
+        _database_url: String,
+        _email: String,
+        _password: String,
+    ) {
+        self.net_status = "Firebase indisponible sur mobile".to_string();
+    }
+
     pub(super) fn poll_network(&mut self) {}
 }
 
@@ -242,6 +348,55 @@ mod tests {
         }
         server_app.advance_play();
         net.broadcast(&ServerMsg::Snapshot(server_app.network_snapshot(tick)));
+    }
+
+    /// `poll_firebase` (appelée par `poll_network`) applique le résultat d'une
+    /// requête Firebase dès qu'il arrive sur le canal — sans dépendre d'un
+    /// vrai projet Firebase : on pousse directement un résultat simulé sur
+    /// `firebase_tx`, exactement ce qu'un thread de fond ferait après un
+    /// `sign_in` réel.
+    #[test]
+    fn firebase_uid_is_applied_once_the_background_request_resolves() {
+        let mut app = AppState::new();
+        assert!(!app.has_firebase_account());
+
+        app.firebase_tx
+            .send(Ok("uid-test-1234".to_string()))
+            .expect("canal ouvert");
+        app.poll_network();
+
+        assert!(app.has_firebase_account());
+        assert_eq!(app.firebase_uid.as_deref(), Some("uid-test-1234"));
+    }
+
+    /// Une fois un `uid` Firebase connu, `connect_to_server` doit le
+    /// transmettre au `Join` — c'est ce qui permet au serveur de créditer la
+    /// bonne progression (Sprint 57). Vérifié à travers un vrai socket : le
+    /// `Join` reçu côté serveur doit porter le même `uid`.
+    #[test]
+    fn connect_to_server_forwards_the_known_firebase_uid() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+
+        let mut app = AppState::new();
+        app.firebase_tx
+            .send(Ok("uid-alice".to_string()))
+            .expect("canal ouvert");
+        app.poll_network(); // applique le uid simulé avant la connexion
+
+        app.connect_to_server(&url, "Alice");
+
+        let (_, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        assert_eq!(
+            msg,
+            ClientMsg::Join {
+                name: "Alice".to_string(),
+                firebase_uid: Some("uid-alice".to_string()),
+            }
+        );
     }
 
     /// Bout-en-bout (vrai socket) : deux clients rejoignent le même serveur de

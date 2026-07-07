@@ -39,6 +39,10 @@ pub struct Editor {
     mp_server_url: String,
     /// Pseudo saisi dans la fenêtre Multijoueur.
     mp_name: String,
+    /// Email saisi dans la fenêtre Multijoueur (connexion Firebase).
+    mp_email: String,
+    /// Mot de passe saisi dans la fenêtre Multijoueur (connexion Firebase).
+    mp_password: String,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -123,6 +127,10 @@ pub struct UiActions {
     pub connect_to_server: Option<(String, String)>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
     pub disconnect_from_server: bool,
+    /// Fenêtre Multijoueur : « Se connecter (compte) » Firebase demandé (email, mot de passe).
+    pub firebase_sign_in: Option<(String, String)>,
+    /// Fenêtre Multijoueur : « Créer un compte » Firebase demandé (email, mot de passe).
+    pub firebase_sign_up: Option<(String, String)>,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -214,7 +222,16 @@ impl Editor {
             ai_history: Vec::new(),
             mp_server_url: "ws://127.0.0.1:7777".to_string(),
             mp_name: String::new(),
+            mp_email: String::new(),
+            mp_password: String::new(),
         }
+    }
+
+    /// Réglages courants (clé API DeepSeek, config Firebase…) — lecture seule,
+    /// pour les appelants (ex. `Renderer`) qui doivent construire une requête
+    /// à partir de la config sans dupliquer l'état.
+    pub fn settings(&self) -> &crate::app::settings::Settings {
+        &self.settings
     }
 
     /// Mode Player : dessine **uniquement** les contrôles tactiles en surimpression
@@ -321,6 +338,8 @@ impl Editor {
         let ai_history = &mut self.ai_history;
         let mp_server_url = &mut self.mp_server_url;
         let mp_name = &mut self.mp_name;
+        let mp_email = &mut self.mp_email;
+        let mp_password = &mut self.mp_password;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -355,6 +374,8 @@ impl Editor {
                 ai_history,
                 mp_server_url,
                 mp_name,
+                mp_email,
+                mp_password,
                 net_status,
                 net_connected,
                 &mut actions,
@@ -1559,11 +1580,15 @@ fn settings_window(
 /// (SPRINT_MMORPG.md). Le joueur local reste piloté comme en solo ; les autres
 /// joueurs connectés apparaissent comme des objets fantômes une fois reçus par
 /// `Snapshot` (cf. `app::network_client`).
+#[allow(clippy::too_many_arguments)]
 fn multiplayer_window(
     ctx: &egui::Context,
     panels: &mut Panels,
     server_url: &mut String,
     name: &mut String,
+    email: &mut String,
+    password: &mut String,
+    settings: &crate::app::settings::Settings,
     net_status: &str,
     net_connected: bool,
     actions: &mut UiActions,
@@ -1612,6 +1637,42 @@ fn multiplayer_window(
                 "Lance d'abord un serveur (`cargo run --bin server`), puis connecte-toi \
                  depuis chaque instance de l'éditeur/du player avec la même adresse.",
             );
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("Compte (optionnel)");
+            let firebase_configured = !settings.firebase_api_key.trim().is_empty()
+                && !settings.firebase_database_url.trim().is_empty();
+            if !firebase_configured {
+                ui.small(
+                    "Configure d'abord une clé API et une URL Database dans \
+                     ⚙ Paramètres pour activer les comptes (progression persistante).",
+                );
+            } else {
+                ui.label("Email");
+                ui.add(egui::TextEdit::singleline(email).hint_text("toi@example.com"));
+                ui.label("Mot de passe");
+                ui.add(egui::TextEdit::singleline(password).password(true));
+                let can_auth = !email.trim().is_empty() && !password.trim().is_empty();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(can_auth, egui::Button::new("Se connecter (compte)"))
+                        .clicked()
+                    {
+                        actions.firebase_sign_in = Some((email.clone(), password.clone()));
+                    }
+                    if ui
+                        .add_enabled(can_auth, egui::Button::new("Créer un compte"))
+                        .clicked()
+                    {
+                        actions.firebase_sign_up = Some((email.clone(), password.clone()));
+                    }
+                });
+                ui.small(
+                    "Se connecter avant de rejoindre un salon relie ta progression \
+                     (XP, classement) à ce compte, cf. SPRINT_MMORPG.md.",
+                );
+            }
         });
     panels.multiplayer = open;
 }
@@ -2202,6 +2263,8 @@ fn build_ui(
     ai_history: &mut Vec<String>,
     mp_server_url: &mut String,
     mp_name: &mut String,
+    mp_email: &mut String,
+    mp_password: &mut String,
     net_status: &str,
     net_connected: bool,
     actions: &mut UiActions,
@@ -2214,6 +2277,9 @@ fn build_ui(
         panels,
         mp_server_url,
         mp_name,
+        mp_email,
+        mp_password,
+        settings,
         net_status,
         net_connected,
         actions,

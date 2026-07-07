@@ -964,6 +964,24 @@ impl Renderer {
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
             }
+            if let Some((email, password)) = actions.firebase_sign_in {
+                let settings = self.editor.settings();
+                app.request_firebase_sign_in(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                    email,
+                    password,
+                );
+            }
+            if let Some((email, password)) = actions.firebase_sign_up {
+                let settings = self.editor.settings();
+                app.request_firebase_sign_up(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                    email,
+                    password,
+                );
+            }
             if actions.align_ground {
                 app.align_to_ground();
             }
