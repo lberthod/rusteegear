@@ -903,6 +903,7 @@ impl Renderer {
                 net_connected,
                 &app.chat_messages,
                 has_firebase_account,
+                &app.leaderboard,
             );
             if actions.save {
                 app.save();
@@ -1001,6 +1002,14 @@ impl Renderer {
                     settings.firebase_api_key.clone(),
                     settings.firebase_database_url.clone(),
                     lobby_code,
+                );
+            }
+            if actions.refresh_leaderboard {
+                let settings = self.editor.settings();
+                app.request_refresh_leaderboard(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                    10,
                 );
             }
             if actions.align_ground {

@@ -235,6 +235,12 @@ pub struct AppState {
     chat_busy: bool,
     chat_tx: std::sync::mpsc::Sender<Result<Vec<network_client::ChatLine>, String>>,
     chat_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::ChatLine>, String>>,
+    /// Dernier classement connu (dernier `request_refresh_leaderboard` réussi).
+    pub leaderboard: Vec<network_client::LeaderboardLine>,
+    /// Une requête de classement est en cours.
+    leaderboard_busy: bool,
+    leaderboard_tx: std::sync::mpsc::Sender<Result<Vec<network_client::LeaderboardLine>, String>>,
+    leaderboard_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::LeaderboardLine>, String>>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -352,6 +358,7 @@ impl AppState {
         let (ai_scene_tx, ai_scene_rx) = channel();
         let (firebase_tx, firebase_rx) = channel();
         let (chat_tx, chat_rx) = channel();
+        let (leaderboard_tx, leaderboard_rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -399,6 +406,10 @@ impl AppState {
             chat_busy: false,
             chat_tx,
             chat_rx,
+            leaderboard: Vec::new(),
+            leaderboard_busy: false,
+            leaderboard_tx,
+            leaderboard_rx,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),

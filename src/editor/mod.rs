@@ -139,6 +139,8 @@ pub struct UiActions {
     pub send_chat_message: Option<(String, String, String)>,
     /// Fenêtre Multijoueur : « Rafraîchir » le chat demandé (salon).
     pub refresh_chat: Option<String>,
+    /// Fenêtre Multijoueur : « Rafraîchir le classement » demandé.
+    pub refresh_leaderboard: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -334,6 +336,7 @@ impl Editor {
         net_connected: bool,
         chat_messages: &[crate::app::network_client::ChatLine],
         has_firebase_account: bool,
+        leaderboard: &[crate::app::network_client::LeaderboardLine],
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -396,6 +399,7 @@ impl Editor {
                 net_connected,
                 chat_messages,
                 has_firebase_account,
+                leaderboard,
                 &mut actions,
             );
         });
@@ -1613,6 +1617,7 @@ fn multiplayer_window(
     net_connected: bool,
     chat_messages: &[crate::app::network_client::ChatLine],
     has_firebase_account: bool,
+    leaderboard: &[crate::app::network_client::LeaderboardLine],
     actions: &mut UiActions,
 ) {
     let mut open = panels.multiplayer;
@@ -1736,6 +1741,23 @@ fn multiplayer_window(
                 }
                 if ui.button("🔄  Rafraîchir").clicked() && !lobby_code.trim().is_empty() {
                     actions.refresh_chat = Some(lobby_code.clone());
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.heading("Classement");
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        if leaderboard.is_empty() {
+                            ui.small("Aucun score pour l'instant.");
+                        }
+                        for (rank, entry) in leaderboard.iter().enumerate() {
+                            ui.label(format!("{}. {} — {}", rank + 1, entry.name, entry.score));
+                        }
+                    });
+                if ui.button("🔄  Rafraîchir le classement").clicked() {
+                    actions.refresh_leaderboard = true;
                 }
             }
         });
@@ -2336,6 +2358,7 @@ fn build_ui(
     net_connected: bool,
     chat_messages: &[crate::app::network_client::ChatLine],
     has_firebase_account: bool,
+    leaderboard: &[crate::app::network_client::LeaderboardLine],
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -2355,6 +2378,7 @@ fn build_ui(
         net_connected,
         chat_messages,
         has_firebase_account,
+        leaderboard,
         actions,
     );
     // Fenêtre « Générer une scène (IA) ».

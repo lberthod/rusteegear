@@ -58,6 +58,7 @@
 | 62 | Déploiement serveur | ⬜ |
 | 63 | Client réseau desktop & fenêtre Multijoueur (hors plan initial) | ✅ |
 | 64 | Chat en jeu, branché sur le backend Firebase du Sprint 58 (hors plan initial) | ✅ |
+| 65 | Classement en jeu, branché sur le backend Firebase du Sprint 59 (hors plan initial) | ✅ |
 
 > Mettre à jour cette table à chaque sprint terminé — c'est la vue « où j'en suis »
 > sans devoir relire tout le détail ci-dessous.
@@ -637,6 +638,25 @@ relié à une UI.
   rafraîchissement automatique (bouton manuel) : un vrai auto-poll périodique
   reste à ajouter si l'usage le justifie.
 
+### Sprint 65 — Classement en jeu (hors plan initial) ✅ FAIT
+**Objectif** : même geste que le Sprint 64, pour le classement (backend Sprint 59,
+jamais relié à une UI).
+- [x] `AppState::request_refresh_leaderboard` (thread de fond) : lit
+  `net::firebase::get_top_leaderboard` (lecture publique, pas besoin de compte —
+  l'écriture reste réservée au serveur de jeu, `src/bin/server.rs`, cf. Sprint 59).
+- [x] Nouveau type universel `network_client::LeaderboardLine { name, score }`,
+  même raison qu'`ChatLine` (évite d'exposer `net::firebase::LeaderboardEntry`,
+  absent des cibles mobiles, sur l'API publique d'`AppState`).
+- [x] Section « Classement » dans la fenêtre Multijoueur : liste triée (déjà
+  triée côté backend) + bouton Rafraîchir.
+- [x] 1 test : le résultat d'une requête simulée s'applique bien via `poll_network`.
+- **Fichiers** : `src/app/network_client.rs`, `src/app/mod.rs` (champs),
+  `src/editor/mod.rs` (fenêtre), `src/gfx/renderer.rs` (application de l'action).
+- **Livrable** : 138 tests lib + 2 tests bin verts, clippy/fmt propres ; app
+  desktop relancée et vérifiée sans crash avec la nouvelle section.
+- **Reste non vérifié** : même réserve que le Sprint 64 (pas d'affichage ici,
+  pas de vrai projet Firebase testé).
+
 ---
 
 ## Correspondance décision de scope → sprint
@@ -651,7 +671,7 @@ relié à une UI.
 | Firebase RTDB — comptes | 56 | 🟢 (backend fait, UI connexion non branchée) |
 | Firebase RTDB — progression persistante | 57 | 🟢 (backend + serveur faits) |
 | Firebase RTDB — chat/présence | 58, 64 | ✅ (chat câblé Sprint 64 ; présence encore backend seul) |
-| Firebase RTDB — classement | 59 | 🟢 (backend + serveur faits) |
+| Firebase RTDB — classement | 59, 65 | ✅ (câblé Sprint 65) |
 | Anti-triche de base (validation serveur) | 60 | ✅ |
 | Validation charge/perf réseau | 61 | ✅ |
 | Client réseau desktop + fenêtre Multijoueur | 63 | ✅ |

@@ -30,6 +30,14 @@ pub struct ChatLine {
     pub text: String,
 }
 
+/// Entrée de classement affichable — même raison d'être universelle que
+/// `ChatLine` (pas `net::firebase::LeaderboardEntry`, absent des cibles mobiles).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeaderboardLine {
+    pub name: String,
+    pub score: u32,
+}
+
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
@@ -211,6 +219,50 @@ impl AppState {
         }
     }
 
+    /// Rafraîchit le classement global (les `limit` meilleurs scores, lecture
+    /// publique — ne nécessite pas de compte connecté ; l'écriture reste
+    /// réservée au serveur de jeu, cf. `net::firebase`, Sprint 59). Sans effet
+    /// si une requête est déjà en cours.
+    pub fn request_refresh_leaderboard(
+        &mut self,
+        api_key: String,
+        database_url: String,
+        limit: usize,
+    ) {
+        if self.leaderboard_busy {
+            return;
+        }
+        self.leaderboard_busy = true;
+        let tx = self.leaderboard_tx.clone();
+        std::thread::spawn(move || {
+            let config = crate::net::firebase::FirebaseConfig {
+                api_key,
+                database_url,
+            };
+            let result = crate::net::firebase::get_top_leaderboard(&config, limit).map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| LeaderboardLine {
+                        name: e.name,
+                        score: e.score,
+                    })
+                    .collect()
+            });
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Applique le résultat d'une requête de classement en attente, s'il y en a un.
+    fn poll_leaderboard(&mut self) {
+        while let Ok(result) = self.leaderboard_rx.try_recv() {
+            self.leaderboard_busy = false;
+            match result {
+                Ok(entries) => self.leaderboard = entries,
+                Err(e) => log::warn!("Classement : requête échouée : {e}"),
+            }
+        }
+    }
+
     /// Quitte la partie en ligne (sans effet si non connecté) : prévient le
     /// serveur, masque les fantômes des autres joueurs.
     pub fn disconnect_from_server(&mut self) {
@@ -238,6 +290,7 @@ impl AppState {
     pub(super) fn poll_network(&mut self) {
         self.poll_firebase();
         self.poll_chat();
+        self.poll_leaderboard();
         if self.net_client.is_none() {
             return;
         }
@@ -432,6 +485,14 @@ impl AppState {
     ) {
     }
 
+    pub fn request_refresh_leaderboard(
+        &mut self,
+        _api_key: String,
+        _database_url: String,
+        _limit: usize,
+    ) {
+    }
+
     pub(super) fn poll_network(&mut self) {}
 }
 
@@ -549,6 +610,33 @@ mod tests {
             "aucune requête ne doit démarrer sans compte connecté"
         );
         assert!(app.chat_messages.is_empty());
+    }
+
+    /// `poll_leaderboard` (appelée par `poll_network`) applique le résultat
+    /// d'une requête de classement dès qu'il arrive sur le canal — même schéma
+    /// que le test équivalent pour Firebase Auth, sans dépendre d'un vrai
+    /// projet Firebase.
+    #[test]
+    fn leaderboard_is_applied_once_the_background_request_resolves() {
+        let mut app = AppState::new();
+        assert!(app.leaderboard.is_empty());
+
+        app.leaderboard_tx
+            .send(Ok(vec![
+                LeaderboardLine {
+                    name: "Bob".to_string(),
+                    score: 42,
+                },
+                LeaderboardLine {
+                    name: "Alice".to_string(),
+                    score: 12,
+                },
+            ]))
+            .expect("canal ouvert");
+        app.poll_network();
+
+        assert_eq!(app.leaderboard.len(), 2);
+        assert_eq!(app.leaderboard[0].name, "Bob");
     }
 
     /// Bout-en-bout (vrai socket) : deux clients rejoignent le même serveur de
