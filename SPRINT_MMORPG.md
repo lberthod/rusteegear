@@ -581,3 +581,16 @@ le rendu à 60 Hz).
   l'utilisateur dès qu'un projet est configuré. Sprint 61 : chiffres **mesurés**
   (pas estimés) confirmant une large marge à 16 joueurs (voir sa section) —
   aucune optimisation réseau nécessaire à cette échelle.
+
+- **2026-07-07 — Audit du chantier multijoueur ([AUDIT_MMORPG.md](AUDIT_MMORPG.md)).**
+  Revue critique post-Sprint 61. Un bug réel trouvé et corrigé : un second
+  `Join` du même client (rejeu réseau, bug client, trame forgée) créait un
+  objet fantôme simulé indéfiniment sans jamais nettoyer le premier
+  (`spawn_network_player` n'était pas idempotent) — corrigé, test de
+  régression ajouté. Deux limites latentes documentées mais **non corrigées**
+  (inatteignables à l'échelle actuelle, à traiter avant d'aller plus loin) :
+  les indices de joueurs réseau ne sont pas réinitialisés si le serveur
+  bouclait un jour sur plusieurs manches (`restart_game`/transition Play→Edit) ;
+  chaque connexion (`NetServer`/`NetClient`) instancie un runtime tokio
+  multi-thread complet, coûteux en threads OS à l'échelle d'un vrai
+  déploiement multi-salons.

@@ -65,7 +65,22 @@ impl AppState {
     /// indépendant, avec sa propre entrée d'input. Reconstruit la physique
     /// (nouvel objet ⇒ nouveau corps rigide). `None` si la scène ne contient
     /// aucun gabarit pilotable (aucune manche/démo compatible chargée).
+    ///
+    /// **Idempotent (bug corrigé à l'audit du 2026-07-07)** : si `id` a déjà un
+    /// objet (un second `ClientMsg::Join` du même client — rejeu réseau, bug
+    /// client, ou trame forgée par un client modifié : rien dans le protocole
+    /// n'empêchait un client d'envoyer `Join` une seconde fois après le
+    /// premier, cf. `net::server_loop::handle_connection`, qui ne borne que la
+    /// *première* trame à être un `Join`), renvoie l'objet existant plutôt que
+    /// d'en spawner un second — sinon l'ancien objet devient un fantôme : plus
+    /// jamais référencé par `network_players` (donc invisible du `Snapshot`
+    /// réseau), mais toujours simulé par la physique indéfiniment, et chaque
+    /// spawn en trop reconstruit toute la physique de la scène (coût qui
+    /// grandit avec le nombre d'objets).
     pub fn spawn_network_player(&mut self, id: PlayerId) -> Option<usize> {
+        if let Some(&existing) = self.network_players.get(&id) {
+            return Some(existing);
+        }
         let mut template = self
             .scene
             .objects
@@ -225,6 +240,33 @@ mod tests {
         let b = app.spawn_network_player(2).unwrap();
         assert_ne!(a, b, "chaque joueur doit avoir son propre objet");
         assert_eq!(app.network_player_count(), 2);
+    }
+
+    /// Régression (trouvée à l'audit du 2026-07-07) : rien dans le protocole
+    /// n'empêche un client d'envoyer un second `Join` (rejeu, bug client, trame
+    /// forgée — cf. `net::server_loop::handle_connection`, qui ne borne que la
+    /// *première* trame à être un `Join`). Avant le correctif, ce second appel
+    /// spawnait un objet fantôme supplémentaire sans jamais nettoyer le
+    /// premier : plus référencé par `network_players` (invisible du `Snapshot`
+    /// réseau), mais simulé indéfiniment par la physique.
+    #[test]
+    fn spawning_twice_for_the_same_player_reuses_the_existing_object() {
+        let mut app = app_with_zombies_demo();
+        let before = app.scene.objects.len();
+
+        let first = app.spawn_network_player(1).unwrap();
+        let second = app.spawn_network_player(1).unwrap();
+
+        assert_eq!(
+            first, second,
+            "un second Join du même joueur doit renvoyer le même objet, pas en créer un autre"
+        );
+        assert_eq!(
+            app.scene.objects.len(),
+            before + 1,
+            "un seul objet doit avoir été ajouté à la scène, pas un fantôme par Join répété"
+        );
+        assert_eq!(app.network_player_count(), 1);
     }
 
     #[test]
