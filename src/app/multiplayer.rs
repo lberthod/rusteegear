@@ -115,6 +115,24 @@ impl AppState {
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
+    /// Oublie tous les joueurs réseau (audit du 2026-07-07, cf. AUDIT_MMORPG.md
+    /// §4.2) : à appeler chaque fois que `scene.objects` est remis à un état
+    /// antérieur en bloc (`restart_game`, transition Play→Edit dans
+    /// `advance_play`), qui ne connaît pas les objets ajoutés en cours de partie
+    /// par `spawn_network_player`. Sans cet appel, `network_players` continuerait
+    /// de pointer vers des indices obsolètes (un autre objet, ou plus rien) après
+    /// la restauration — un joueur réseau piloterait alors le mauvais objet.
+    /// Ne notifie pas les clients (pas de `PlayerLeft` envoyé) : c'est un simple
+    /// nettoyage de la table de correspondance côté `AppState`, pas une
+    /// déconnexion — le serveur réseau (`src/bin/server.rs`) reste responsable de
+    /// décider s'il faut aussi fermer les connexions ou re-spawner les joueurs
+    /// dans la scène restaurée.
+    pub fn clear_network_players(&mut self) {
+        self.network_players.clear();
+        self.network_inputs.clear();
+        self.network_attack_cooldowns.clear();
+    }
+
     /// Enregistre l'input reçu d'un joueur réseau pour le tick courant : remplace
     /// le précédent (le client renvoie son état complet à chaque message, pas un
     /// delta, cf. `ClientMsg::Input`). Sans effet si `id` n'est pas (ou plus)
@@ -282,6 +300,27 @@ mod tests {
             !app.scene.objects[index].visible,
             "l'objet doit rester en place (indices stables) mais devenir invisible"
         );
+    }
+
+    /// Régression AUDIT_MMORPG.md §4.2 : `restart_game` remet `scene.objects` à
+    /// l'état d'avant Play (qui ne connaît pas les joueurs réseau, spawnés en
+    /// cours de partie) — `network_players` doit être oublié en même temps,
+    /// sinon il continuerait de pointer vers des indices obsolètes.
+    #[test]
+    fn restart_game_forgets_network_players() {
+        let mut app = app_with_zombies_demo();
+        app.play_snapshot = app.scene.objects.clone();
+        app.spawn_network_player(1);
+        assert_eq!(app.network_player_count(), 1);
+
+        app.restart_game();
+
+        assert_eq!(
+            app.network_player_count(),
+            0,
+            "un restart doit oublier les joueurs réseau, pas garder des indices obsolètes"
+        );
+        assert_eq!(app.network_player_object(1), None);
     }
 
     #[test]

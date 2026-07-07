@@ -1051,6 +1051,11 @@ impl AppState {
             return;
         }
         self.scene.objects = self.play_snapshot.clone();
+        // cf. AUDIT_MMORPG.md §4.2 : `play_snapshot` ne connaît pas les objets
+        // ajoutés en cours de partie par `spawn_network_player` — sans ce
+        // nettoyage, `network_players` pointerait vers des indices obsolètes
+        // après la restauration.
+        self.clear_network_players();
         self.time = 0.0;
         self.sim_accumulator = 0.0;
         self.win_time = None;
@@ -1717,6 +1722,8 @@ impl AppState {
             }
         } else if !self.playing && self.was_playing {
             self.scene.objects = self.play_snapshot.clone();
+            // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
+            self.clear_network_players();
             self.physics = None;
             self.paused = false;
             self.hud_health = None;

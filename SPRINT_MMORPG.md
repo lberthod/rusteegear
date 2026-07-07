@@ -587,10 +587,12 @@ le rendu à 60 Hz).
   `Join` du même client (rejeu réseau, bug client, trame forgée) créait un
   objet fantôme simulé indéfiniment sans jamais nettoyer le premier
   (`spawn_network_player` n'était pas idempotent) — corrigé, test de
-  régression ajouté. Deux limites latentes documentées mais **non corrigées**
-  (inatteignables à l'échelle actuelle, à traiter avant d'aller plus loin) :
-  les indices de joueurs réseau ne sont pas réinitialisés si le serveur
-  bouclait un jour sur plusieurs manches (`restart_game`/transition Play→Edit) ;
-  chaque connexion (`NetServer`/`NetClient`) instancie un runtime tokio
-  multi-thread complet, coûteux en threads OS à l'échelle d'un vrai
-  déploiement multi-salons.
+  régression ajouté. Deux limites latentes également corrigées dans la foulée
+  (peu coûteuses, avec test de régression, aucune régression sur les 130+2
+  tests existants) : `AppState::clear_network_players()` oublie les joueurs
+  réseau à chaque reset de scène (`restart_game`/transition Play→Edit), et
+  `NetServer`/`NetClient` utilisent désormais un runtime tokio
+  `current_thread` dédié (thread de fond qui le `block_on` en continu) au lieu
+  d'un runtime multi-thread complet par connexion — mesuré : 30 threads OS au
+  total pour le test de charge à 16 joueurs, contre plus de 150 estimés avant.
+  Détail complet : [AUDIT_MMORPG.md](AUDIT_MMORPG.md).

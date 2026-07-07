@@ -1,11 +1,21 @@
 //! Transport WebSocket côté serveur (SPRINT_MMORPG.md, Sprint 53).
 //!
-//! `NetServer` accepte des connexions dans un thread dédié doté de son propre
-//! runtime tokio, et n'expose au reste du programme que des canaux
-//! `std::sync::mpsc` **synchrones** — le même schéma que les imports glTF ou les
-//! requêtes IA asynchrones déjà présents dans `app/mod.rs` (thread de fond +
-//! canal, poll non bloquant côté boucle principale). La boucle de jeu (`AppState`,
-//! `src/bin/server.rs`) n'a donc jamais besoin de connaître `tokio`.
+//! `NetServer` accepte des connexions dans un thread dédié, et n'expose au
+//! reste du programme que des canaux `std::sync::mpsc` **synchrones** — le
+//! même schéma que les imports glTF ou les requêtes IA asynchrones déjà
+//! présents dans `app/mod.rs` (thread de fond + canal, poll non bloquant côté
+//! boucle principale). La boucle de jeu (`AppState`, `src/bin/server.rs`) n'a
+//! donc jamais besoin de connaître `tokio`.
+//!
+//! **Runtime `current_thread` (corrigé à l'audit du 2026-07-07, cf.
+//! AUDIT_MMORPG.md §4.3)** : à l'échelle visée (2-16 joueurs/salon), accepter
+//! des connexions et faire progresser une poignée de sockets est un travail
+//! d'attente réseau, pas de calcul parallèle — un runtime multi-thread
+//! (`tokio::runtime::Runtime::new()`, utilisé avant ce correctif) réserve un
+//! thread ouvrier par CPU logique pour rien. Le thread dédié ci-dessous
+//! `block_on` la boucle d'acceptation *et* toutes les connexions (via
+//! `tokio::spawn`, ordonnancées coopérativement sur ce seul thread) pour toute
+//! la durée de vie du serveur.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -15,7 +25,6 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::protocol::{self, ClientMsg, PlayerId, ServerMsg};
@@ -37,48 +46,74 @@ pub struct NetServer {
     /// Adresse effectivement liée (utile en test : `"127.0.0.1:0"` laisse l'OS
     /// choisir un port libre).
     pub local_addr: SocketAddr,
-    _runtime: Runtime,
 }
 
 impl NetServer {
     /// Démarre le serveur sur `addr` (ex. `"127.0.0.1:7777"`).
     pub fn start(addr: &str) -> std::io::Result<Self> {
-        let runtime = Runtime::new()?;
-        let listener = runtime.block_on(TcpListener::bind(addr))?;
-        let local_addr = listener.local_addr()?;
-
         let (tx, rx) = channel::<Inbound>();
         let outboxes: Outboxes = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU32::new(1));
 
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::io::Result<SocketAddr>>();
+        let addr = addr.to_string();
         let accept_outboxes = outboxes.clone();
         let accept_next_id = next_id.clone();
-        runtime.spawn(async move {
-            loop {
-                let (stream, peer) = match listener.accept().await {
-                    Ok(v) => v,
+        std::thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
+            runtime.block_on(async move {
+                let listener = match TcpListener::bind(&addr).await {
+                    Ok(l) => l,
                     Err(e) => {
-                        log::warn!("Connexion entrante refusée : {e}");
-                        continue;
+                        let _ = ready_tx.send(Err(e));
+                        return;
                     }
                 };
-                let tx = tx.clone();
-                let outboxes = accept_outboxes.clone();
-                let next_id = accept_next_id.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, peer, tx, outboxes, next_id).await {
-                        log::info!("Connexion {peer} terminée : {e}");
-                    }
-                });
-            }
+                let local_addr = listener.local_addr();
+                let bind_ok = local_addr.is_ok();
+                let _ = ready_tx.send(local_addr);
+                if !bind_ok {
+                    return;
+                }
+                loop {
+                    let (stream, peer) = match listener.accept().await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("Connexion entrante refusée : {e}");
+                            continue;
+                        }
+                    };
+                    let tx = tx.clone();
+                    let outboxes = accept_outboxes.clone();
+                    let next_id = accept_next_id.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(stream, peer, tx, outboxes, next_id).await
+                        {
+                            log::info!("Connexion {peer} terminée : {e}");
+                        }
+                    });
+                }
+            });
         });
+
+        let local_addr = ready_rx.recv().map_err(|_| {
+            std::io::Error::other("le thread réseau du serveur s'est arrêté avant le bind")
+        })??;
 
         Ok(Self {
             inbox: rx,
             outboxes,
             next_id,
             local_addr,
-            _runtime: runtime,
         })
     }
 

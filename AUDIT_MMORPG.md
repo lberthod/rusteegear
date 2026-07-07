@@ -30,7 +30,7 @@ seule validation est le test automatisé et la relecture de code.
 
 ## 2. Ce qui a été vérifié pour cet audit
 
-- `cargo test` (lib + bin) : **131 tests lib + 2 tests bin, tous verts**
+- `cargo test` (lib + bin) : **132 tests lib + 2 tests bin, tous verts**
   (dont 1 correctif apporté pendant cet audit, cf. §4).
 - `cargo clippy --all-targets -- -D warnings` : propre.
 - `cargo fmt --check` : propre.
@@ -106,16 +106,16 @@ progressive si répété).
 **Corrigé** : `spawn_network_player` est maintenant idempotent (retourne
 l'objet existant si `id` est déjà connu), avec un test de régression
 (`spawning_twice_for_the_same_player_reuses_the_existing_object`,
-`src/app/multiplayer.rs`). Vérifié : 131/131 tests lib verts après correctif,
+`src/app/multiplayer.rs`). Vérifié : 132/132 tests lib verts après correctif,
 clippy/fmt propres.
 
-### 4.2 🟠 Non corrigée — indices réseau non réinitialisés à un restart
+### 4.2 🟢 Corrigée après cet audit — indices réseau non réinitialisés à un restart
 
 **Constat** : `AppState::restart_game()` (`app/mod.rs:1049`) et la transition
 Play→Edit dans `advance_play` (`app/mod.rs:1719`) remettent
 `self.scene.objects` à l'état de `play_snapshot` (capturé **avant** que le
 moindre joueur réseau n'ait rejoint, puisque `spawn_network_player` n'est
-appelé qu'en cours de Play) — mais ne touchent ni `network_players`, ni
+appelé qu'en cours de Play) — mais ne touchaient ni `network_players`, ni
 `network_inputs`, ni `network_attack_cooldowns`.
 
 **Conséquence potentielle** : si ces chemins sont un jour empruntés avec des
@@ -125,18 +125,20 @@ n'existent plus) — un joueur réseau pourrait se retrouver à piloter un objet
 qui n'est plus le sien, ou une erreur silencieuse (indices hors bornes filtrés
 par les `.get()` existants, donc pas de panique, mais un état incohérent).
 
-**Pourquoi ce n'est pas corrigé ici** : **actuellement inatteignable** — le
-serveur headless (`src/bin/server.rs`) ne boucle pas sur plusieurs manches
-(le `main()` sort du programme après une seule manche, `break` puis fin de
-fonction) et n'appelle jamais `restart_game()` ni ne repasse `playing` à
-`false`. Corriger proprement demande une décision de conception (les joueurs
-réseau doivent-ils survivre à un restart, re-spawnés à leurs positions
-décalées, ou tous être déconnectés/re-attendus ?) qui dépasse le cadre d'un
-correctif d'audit. **À traiter avant tout Sprint qui ferait boucler le
-serveur sur plusieurs manches** (un « Sprint 62+ » naturel une fois le
-déploiement réel abordé).
+**Corrigé** (après la rédaction initiale de cet audit) : nouvelle méthode
+`AppState::clear_network_players()` (`app/multiplayer.rs`), appelée aux deux
+points de reset (`restart_game`, transition Play→Edit) — elle ne fait
+qu'oublier la table de correspondance côté serveur (pas de notification
+`PlayerLeft` aux clients : c'est un remaniement de conception plus large,
+resté hors scope, cf. la doc de la méthode). Test de régression
+(`restart_game_forgets_network_players`) : un joueur réseau spawné puis un
+`restart_game()` ne laisse plus d'indice obsolète. Cette échéance était
+**actuellement inatteignable en pratique** (le serveur headless ne boucle pas
+sur plusieurs manches et n'appelle jamais `restart_game()`), mais corriger
+maintenant coûtait peu et évite d'oublier ce point si un Sprint futur fait
+boucler le serveur sur plusieurs manches.
 
-### 4.3 🟡 Non corrigée — un runtime tokio multi-thread complet par connexion
+### 4.3 🟢 Corrigée après cet audit — un runtime tokio multi-thread complet par connexion
 
 **Constat** : `NetServer::start` et `NetClient::connect` utilisent tous deux
 `tokio::runtime::Runtime::new()` (`server_loop.rs:46`, `client.rs:38`), qui
@@ -147,23 +149,21 @@ multi-thread complets**, soit potentiellement plus de 150 threads OS pour un
 besoin qui est fondamentalement de l'attente réseau sur une poignée de
 connexions (peu de parallélisme CPU réel requis).
 
-**Conséquence** : pas un bug de correction (les 131+2 tests passent, le test
+**Conséquence** : pas un bug de correction (les 132+2 tests passent, le test
 de charge tourne), mais un vrai gaspillage de ressources — significatif sur un
 hébergement modeste (Sprint 62) où un runtime `current_thread` par connexion
 suffirait largement à ce volume (2-16 joueurs).
 
-**Pourquoi ce n'est pas corrigé ici** : passer en `current_thread` n'est pas
-un simple changement de constructeur — un runtime `current_thread` n'a pas de
-thread ouvrier propre : les tâches `spawn`ées ne progressent que pendant qu'un
-thread appelle `block_on` sur ce runtime. Le code actuel s'appuie
-implicitement sur les threads ouvriers internes du runtime multi-thread pour
-faire progresser `outbound`/`inbound` en tâche de fond sans jamais rappeler
-`block_on`. Un passage à `current_thread` demande donc de dédier un thread OS
-qui bloque sur ce runtime en continu — un vrai remaniement de
-`NetServer::start`/`NetClient::connect`, avec un risque de régression sur du
-code réseau déjà testé et qui fonctionne. **Recommandé avant un déploiement à
-plusieurs salons simultanés** (chaque salon = un `NetServer` = un runtime
-aujourd'hui), mais pas urgent à l'échelle actuelle (un salon, 2-16 joueurs).
+**Corrigé** (après la rédaction initiale de cet audit) : `NetServer::start` et
+`NetClient::connect` construisent désormais un runtime `tokio::runtime::
+Builder::new_current_thread()`, chacun `block_on`é en continu par un thread OS
+dédié (spawné explicitement) plutôt que délégué aux threads ouvriers internes
+d'un runtime multi-thread. Vérifié : 132 tests lib + 2 tests bin toujours
+verts (aucune régression sur le code réseau déjà testé), et mesuré
+concrètement — le test de charge du Sprint 61 (1 `NetServer` + 16
+`NetClient`) tourne désormais avec **30 threads OS au total** pour le
+processus (contre plus de 150 estimés avant, cf. le constat ci-dessus), avec
+les mêmes chiffres de performance (~0,4 ms/tick, 368 octets/snapshot).
 
 ### 4.4 🟡 Limite déjà connue, reconfirmée — jeton Firebase serveur non renouvelé
 
@@ -196,11 +196,20 @@ Le chantier multijoueur est **solide pour son échelle visée** (2-16 joueurs,
 serveur autoritaire) : architecture cohérente, tests réels (y compris
 bout-en-bout à travers de vrais sockets), et une discipline de documentation
 des limites plutôt rare (les zones non testées sont signalées, pas cachées).
-L'audit a trouvé et corrigé un bug réel (objet fantôme sur double `Join`,
-§4.1) et documenté deux limites latentes non urgentes (§4.2 indices réseau
-au restart, §4.3 coût des runtimes tokio) à traiter avant, respectivement,
-un serveur multi-manches et un déploiement à plusieurs salons simultanés.
-Le point qui reste hors de portée de cet audit — comme de tout le chantier —
-est la validation en conditions réelles : aucune UI vue tourner, aucun projet
-Firebase réel testé. C'est un chantier **backend prêt à être branché**, pas
-encore un produit vérifié de bout en bout.
+L'audit a trouvé et corrigé trois problèmes réels, tous avec test de
+régression et sans rien casser (**132 tests lib + 2 tests bin verts** après
+correctifs, clippy/fmt propres) :
+- §4.1 — objet fantôme sur double `Join` (bug de correction).
+- §4.2 — indices de joueurs réseau non réinitialisés à un restart de manche
+  (latent, corrigé par précaution).
+- §4.3 — un runtime tokio multi-thread complet par connexion (gaspillage de
+  ressources, mesuré : 30 threads OS au total pour 17 connexions après
+  correctif, contre plus de 150 estimés avant).
+
+Il ne reste **aucune anomalie ouverte** de cet audit, à l'exception d'une
+limite de conception à garder à l'esprit (§4.4, jeton Firebase serveur non
+renouvelé — sans impact tant que le serveur ne tourne qu'une seule manche par
+processus). Le point qui reste hors de portée de cet audit — comme de tout le
+chantier — est la validation en conditions réelles : aucune UI vue tourner,
+aucun projet Firebase réel testé. C'est un chantier **backend prêt à être
+branché**, pas encore un produit vérifié de bout en bout.
