@@ -219,8 +219,22 @@ pub struct AppState {
     /// universels (`String`) : pas besoin de gater ces champs par plateforme,
     /// seules les fonctions qui les produisent (`net::firebase::sign_in`/
     /// `sign_up`) le sont.
-    firebase_tx: std::sync::mpsc::Sender<Result<String, String>>,
-    firebase_rx: std::sync::mpsc::Receiver<Result<String, String>>,
+    /// `Ok((uid, id_token))` ou message d'erreur.
+    firebase_tx: std::sync::mpsc::Sender<Result<(String, String), String>>,
+    firebase_rx: std::sync::mpsc::Receiver<Result<(String, String), String>>,
+    /// Jeton d'authentification Firebase (`?auth=...`), nécessaire pour poster
+    /// un message de chat (écriture réservée aux comptes connectés). `None`
+    /// tant qu'aucun `sign_in`/`sign_up` n'a réussi.
+    firebase_id_token: Option<String>,
+    /// Derniers messages de chat connus (dernier `request_refresh_chat`
+    /// réussi) ; `ChatLine` est une représentation universelle (pas
+    /// `net::firebase::ChatMessage`, absent des cibles mobiles), cf.
+    /// `network_client`.
+    pub chat_messages: Vec<network_client::ChatLine>,
+    /// Une requête de chat (envoi ou rafraîchissement) est en cours.
+    chat_busy: bool,
+    chat_tx: std::sync::mpsc::Sender<Result<Vec<network_client::ChatLine>, String>>,
+    chat_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::ChatLine>, String>>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -337,6 +351,7 @@ impl AppState {
         let (ai_tx, ai_rx) = channel();
         let (ai_scene_tx, ai_scene_rx) = channel();
         let (firebase_tx, firebase_rx) = channel();
+        let (chat_tx, chat_rx) = channel();
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -379,6 +394,11 @@ impl AppState {
             firebase_busy: false,
             firebase_tx,
             firebase_rx,
+            firebase_id_token: None,
+            chat_messages: Vec::new(),
+            chat_busy: false,
+            chat_tx,
+            chat_rx,
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),

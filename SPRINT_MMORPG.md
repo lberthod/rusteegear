@@ -57,6 +57,7 @@
 | 61 | Tests de charge & optimisation bande passante | ✅ |
 | 62 | Déploiement serveur | ⬜ |
 | 63 | Client réseau desktop & fenêtre Multijoueur (hors plan initial) | ✅ |
+| 64 | Chat en jeu, branché sur le backend Firebase du Sprint 58 (hors plan initial) | ✅ |
 
 > Mettre à jour cette table à chaque sprint terminé — c'est la vue « où j'en suis »
 > sans devoir relire tout le détail ci-dessous.
@@ -605,6 +606,37 @@ s'y connecter — le câblage explicitement reporté aux Sprints 54/55.
   `Snapshot` le concernant est ignoré, cf. Sprint 54) — en cas de désaccord
   fort avec le serveur (triche, désync), le client ne se corrige pas encore.
 
+### Sprint 64 — Chat en jeu (hors plan initial) ✅ FAIT
+**Objectif** (demandé directement par l'utilisateur) : brancher un vrai chat dans la
+fenêtre Multijoueur, sur le backend Firebase déjà écrit (Sprint 58) mais jamais
+relié à une UI.
+- [x] `AppState::request_send_chat_message`/`request_refresh_chat` (thread de fond,
+  même schéma que les requêtes IA/Firebase existantes) : postent/lisent
+  `/lobbies/{code}/chat` via `net::firebase::post_chat_message`/`list_chat_messages`.
+  Envoyer un message nécessite un compte connecté (`firebase_id_token`, les
+  règles RTDB réservent l'écriture aux comptes authentifiés) ; lire ne le
+  nécessite pas.
+- [x] Nouveau type universel `network_client::ChatLine { sender, text }` — évite
+  d'exposer `net::firebase::ChatMessage` (absent des cibles mobiles) sur l'API
+  publique d'`AppState` : `chat_messages: Vec<ChatLine>` reste un champ normal,
+  sans gating par plateforme.
+- [x] Fenêtre Multijoueur : section « Chat » (code de salon, historique
+  défilant, champ de saisie + Envoyer, bouton Rafraîchir), visible dès que
+  Firebase est configuré (indépendant d'être connecté au serveur de jeu — le
+  chat passe par Firebase REST, pas par le WebSocket du protocole de jeu).
+- [x] 2 tests : envoyer sans compte connecté est un no-op propre (pas de requête
+  réseau démarrée) ; le résultat d'une requête Firebase simulée s'applique bien
+  via `poll_network`.
+- **Fichiers** : `src/app/network_client.rs`, `src/app/mod.rs` (champs),
+  `src/editor/mod.rs` (fenêtre), `src/gfx/renderer.rs` (application des actions).
+- **Livrable** : 137 tests lib + 2 tests bin verts, clippy/fmt propres ; app
+  desktop relancée et vérifiée sans crash avec la nouvelle section.
+- **Reste non vérifié** : comme le reste de l'UI, jamais vu tourner dans une
+  vraie fenêtre ici (pas d'affichage) — et le chat n'a jamais été testé contre
+  un vrai projet Firebase (même réserve que les Sprints 56-59). Pas de
+  rafraîchissement automatique (bouton manuel) : un vrai auto-poll périodique
+  reste à ajouter si l'usage le justifie.
+
 ---
 
 ## Correspondance décision de scope → sprint
@@ -618,7 +650,7 @@ s'y connecter — le câblage explicitement reporté aux Sprints 54/55.
 | Salons 2-16 joueurs, réutilisation du mode manches | 55, 63 | ✅ (serveur Sprint 55, client Sprint 63) |
 | Firebase RTDB — comptes | 56 | 🟢 (backend fait, UI connexion non branchée) |
 | Firebase RTDB — progression persistante | 57 | 🟢 (backend + serveur faits) |
-| Firebase RTDB — chat/présence | 58 | 🟢 (backend REST fait, polling) |
+| Firebase RTDB — chat/présence | 58, 64 | ✅ (chat câblé Sprint 64 ; présence encore backend seul) |
 | Firebase RTDB — classement | 59 | 🟢 (backend + serveur faits) |
 | Anti-triche de base (validation serveur) | 60 | ✅ |
 | Validation charge/perf réseau | 61 | ✅ |

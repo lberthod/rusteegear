@@ -20,6 +20,16 @@ pub struct RemotePlayer {
     interp: crate::net::interpolation::RemoteEntity,
 }
 
+/// Message de chat affichable — représentation universelle (contrairement à
+/// `net::firebase::ChatMessage`, absent des cibles mobiles) : permet à
+/// `AppState::chat_messages` de rester un champ normal, sans avoir besoin
+/// d'être gaté par plateforme.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatLine {
+    pub sender: String,
+    pub text: String,
+}
+
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
@@ -97,7 +107,7 @@ impl AppState {
             } else {
                 crate::net::firebase::sign_in(&config, &email, &password)
             };
-            let _ = tx.send(result.map(|session| session.uid));
+            let _ = tx.send(result.map(|session| (session.uid, session.id_token)));
         });
     }
 
@@ -107,15 +117,96 @@ impl AppState {
         while let Ok(result) = self.firebase_rx.try_recv() {
             self.firebase_busy = false;
             match result {
-                Ok(uid) => {
+                Ok((uid, id_token)) => {
                     log::info!("Firebase : connecté (uid {uid})");
                     self.net_status = format!("Connecté à Firebase (uid {uid})");
                     self.firebase_uid = Some(uid);
+                    self.firebase_id_token = Some(id_token);
                 }
                 Err(e) => {
                     log::warn!("Firebase : connexion échouée : {e}");
                     self.net_status = format!("Connexion Firebase échouée : {e}");
                 }
+            }
+        }
+    }
+
+    /// Poste un message dans le chat du salon `lobby_code` (thread de fond),
+    /// puis rafraîchit la liste. Nécessite un compte connecté (`sign_in`/
+    /// `sign_up`) : les règles RTDB réservent l'écriture aux comptes
+    /// authentifiés (cf. `net::firebase`, Sprint 58). Sans effet si non
+    /// connecté à un compte, ou si une requête de chat est déjà en cours.
+    pub fn request_send_chat_message(
+        &mut self,
+        api_key: String,
+        database_url: String,
+        lobby_code: String,
+        sender_name: String,
+        text: String,
+    ) {
+        let Some(id_token) = self.firebase_id_token.clone() else {
+            self.net_status = "Connecte-toi d'abord à un compte pour discuter".to_string();
+            return;
+        };
+        if self.chat_busy || text.trim().is_empty() {
+            return;
+        }
+        self.chat_busy = true;
+        let tx = self.chat_tx.clone();
+        std::thread::spawn(move || {
+            let config = crate::net::firebase::FirebaseConfig {
+                api_key,
+                database_url,
+            };
+            let sent_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let message = crate::net::firebase::ChatMessage {
+                sender: sender_name,
+                text,
+                sent_at_ms,
+            };
+            if let Err(e) =
+                crate::net::firebase::post_chat_message(&config, &lobby_code, &id_token, &message)
+            {
+                log::warn!("Chat : envoi échoué : {e}");
+            }
+            let result = fetch_chat_lines(&config, &lobby_code);
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Rafraîchit la liste des messages du salon `lobby_code` (lecture
+    /// publique, ne nécessite pas de compte connecté). Sans effet si une
+    /// requête de chat est déjà en cours.
+    pub fn request_refresh_chat(
+        &mut self,
+        api_key: String,
+        database_url: String,
+        lobby_code: String,
+    ) {
+        if self.chat_busy {
+            return;
+        }
+        self.chat_busy = true;
+        let tx = self.chat_tx.clone();
+        std::thread::spawn(move || {
+            let config = crate::net::firebase::FirebaseConfig {
+                api_key,
+                database_url,
+            };
+            let _ = tx.send(fetch_chat_lines(&config, &lobby_code));
+        });
+    }
+
+    /// Applique le résultat d'une requête de chat en attente, s'il y en a un.
+    fn poll_chat(&mut self) {
+        while let Ok(result) = self.chat_rx.try_recv() {
+            self.chat_busy = false;
+            match result {
+                Ok(lines) => self.chat_messages = lines,
+                Err(e) => log::warn!("Chat : requête échouée : {e}"),
             }
         }
     }
@@ -146,6 +237,7 @@ impl AppState {
     /// draine les messages serveur, met à jour les fantômes des autres joueurs.
     pub(super) fn poll_network(&mut self) {
         self.poll_firebase();
+        self.poll_chat();
         if self.net_client.is_none() {
             return;
         }
@@ -268,6 +360,24 @@ impl AppState {
     }
 }
 
+/// Récupère les messages d'un salon et les convertit en `ChatLine`
+/// (représentation universelle, cf. sa doc).
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn fetch_chat_lines(
+    config: &crate::net::firebase::FirebaseConfig,
+    lobby_code: &str,
+) -> Result<Vec<ChatLine>, String> {
+    crate::net::firebase::list_chat_messages(config, lobby_code).map(|messages| {
+        messages
+            .into_iter()
+            .map(|m| ChatLine {
+                sender: m.sender,
+                text: m.text,
+            })
+            .collect()
+    })
+}
+
 #[cfg(any(target_os = "ios", target_os = "android"))]
 impl AppState {
     pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
@@ -302,6 +412,24 @@ impl AppState {
         _password: String,
     ) {
         self.net_status = "Firebase indisponible sur mobile".to_string();
+    }
+
+    pub fn request_send_chat_message(
+        &mut self,
+        _api_key: String,
+        _database_url: String,
+        _lobby_code: String,
+        _sender_name: String,
+        _text: String,
+    ) {
+    }
+
+    pub fn request_refresh_chat(
+        &mut self,
+        _api_key: String,
+        _database_url: String,
+        _lobby_code: String,
+    ) {
     }
 
     pub(super) fn poll_network(&mut self) {}
@@ -361,7 +489,7 @@ mod tests {
         assert!(!app.has_firebase_account());
 
         app.firebase_tx
-            .send(Ok("uid-test-1234".to_string()))
+            .send(Ok(("uid-test-1234".to_string(), "token-test".to_string())))
             .expect("canal ouvert");
         app.poll_network();
 
@@ -380,7 +508,7 @@ mod tests {
 
         let mut app = AppState::new();
         app.firebase_tx
-            .send(Ok("uid-alice".to_string()))
+            .send(Ok(("uid-alice".to_string(), "token-alice".to_string())))
             .expect("canal ouvert");
         app.poll_network(); // applique le uid simulé avant la connexion
 
@@ -397,6 +525,30 @@ mod tests {
                 firebase_uid: Some("uid-alice".to_string()),
             }
         );
+    }
+
+    /// Sans compte connecté (`firebase_id_token` absent), l'envoi d'un message
+    /// de chat ne doit ni planter ni démarrer de requête réseau — les règles
+    /// RTDB refuseraient de toute façon l'écriture à un client anonyme
+    /// (cf. `net::firebase`, Sprint 58).
+    #[test]
+    fn sending_chat_without_an_account_is_a_no_op() {
+        let mut app = AppState::new();
+        assert!(!app.chat_busy);
+
+        app.request_send_chat_message(
+            "api-key".to_string(),
+            "https://example.firebaseio.com".to_string(),
+            "salon-1".to_string(),
+            "Alice".to_string(),
+            "coucou".to_string(),
+        );
+
+        assert!(
+            !app.chat_busy,
+            "aucune requête ne doit démarrer sans compte connecté"
+        );
+        assert!(app.chat_messages.is_empty());
     }
 
     /// Bout-en-bout (vrai socket) : deux clients rejoignent le même serveur de

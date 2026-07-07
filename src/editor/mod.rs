@@ -43,6 +43,10 @@ pub struct Editor {
     mp_email: String,
     /// Mot de passe saisi dans la fenêtre Multijoueur (connexion Firebase).
     mp_password: String,
+    /// Code de salon de chat saisi dans la fenêtre Multijoueur.
+    mp_lobby_code: String,
+    /// Message en cours de saisie dans le chat de la fenêtre Multijoueur.
+    mp_chat_input: String,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -131,6 +135,10 @@ pub struct UiActions {
     pub firebase_sign_in: Option<(String, String)>,
     /// Fenêtre Multijoueur : « Créer un compte » Firebase demandé (email, mot de passe).
     pub firebase_sign_up: Option<(String, String)>,
+    /// Fenêtre Multijoueur : « Envoyer » un message de chat (salon, pseudo, texte).
+    pub send_chat_message: Option<(String, String, String)>,
+    /// Fenêtre Multijoueur : « Rafraîchir » le chat demandé (salon).
+    pub refresh_chat: Option<String>,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -224,6 +232,8 @@ impl Editor {
             mp_name: String::new(),
             mp_email: String::new(),
             mp_password: String::new(),
+            mp_lobby_code: "default".to_string(),
+            mp_chat_input: String::new(),
         }
     }
 
@@ -322,6 +332,8 @@ impl Editor {
         status: StatusInfo,
         net_status: &str,
         net_connected: bool,
+        chat_messages: &[crate::app::network_client::ChatLine],
+        has_firebase_account: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -340,6 +352,8 @@ impl Editor {
         let mp_name = &mut self.mp_name;
         let mp_email = &mut self.mp_email;
         let mp_password = &mut self.mp_password;
+        let mp_lobby_code = &mut self.mp_lobby_code;
+        let mp_chat_input = &mut self.mp_chat_input;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -376,8 +390,12 @@ impl Editor {
                 mp_name,
                 mp_email,
                 mp_password,
+                mp_lobby_code,
+                mp_chat_input,
                 net_status,
                 net_connected,
+                chat_messages,
+                has_firebase_account,
                 &mut actions,
             );
         });
@@ -1588,9 +1606,13 @@ fn multiplayer_window(
     name: &mut String,
     email: &mut String,
     password: &mut String,
+    lobby_code: &mut String,
+    chat_input: &mut String,
     settings: &crate::app::settings::Settings,
     net_status: &str,
     net_connected: bool,
+    chat_messages: &[crate::app::network_client::ChatLine],
+    has_firebase_account: bool,
     actions: &mut UiActions,
 ) {
     let mut open = panels.multiplayer;
@@ -1672,6 +1694,49 @@ fn multiplayer_window(
                     "Se connecter avant de rejoindre un salon relie ta progression \
                      (XP, classement) à ce compte, cf. SPRINT_MMORPG.md.",
                 );
+            }
+
+            if firebase_configured {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.heading("Chat");
+                ui.label("Salon");
+                ui.add(egui::TextEdit::singleline(lobby_code).hint_text("default"));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        if chat_messages.is_empty() {
+                            ui.small("Aucun message pour l'instant.");
+                        }
+                        for line in chat_messages {
+                            ui.label(format!("{} : {}", line.sender, line.text));
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(chat_input)
+                            .hint_text("Message…")
+                            .desired_width(180.0),
+                    );
+                    let can_send = has_firebase_account
+                        && !chat_input.trim().is_empty()
+                        && !lobby_code.trim().is_empty();
+                    if ui
+                        .add_enabled(can_send, egui::Button::new("Envoyer"))
+                        .clicked()
+                    {
+                        actions.send_chat_message =
+                            Some((lobby_code.clone(), name.clone(), chat_input.clone()));
+                        chat_input.clear();
+                    }
+                });
+                if !has_firebase_account {
+                    ui.small("Connecte-toi d'abord à un compte pour envoyer des messages.");
+                }
+                if ui.button("🔄  Rafraîchir").clicked() && !lobby_code.trim().is_empty() {
+                    actions.refresh_chat = Some(lobby_code.clone());
+                }
             }
         });
     panels.multiplayer = open;
@@ -2265,8 +2330,12 @@ fn build_ui(
     mp_name: &mut String,
     mp_email: &mut String,
     mp_password: &mut String,
+    mp_lobby_code: &mut String,
+    mp_chat_input: &mut String,
     net_status: &str,
     net_connected: bool,
+    chat_messages: &[crate::app::network_client::ChatLine],
+    has_firebase_account: bool,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -2279,9 +2348,13 @@ fn build_ui(
         mp_name,
         mp_email,
         mp_password,
+        mp_lobby_code,
+        mp_chat_input,
         settings,
         net_status,
         net_connected,
+        chat_messages,
+        has_firebase_account,
         actions,
     );
     // Fenêtre « Générer une scène (IA) ».

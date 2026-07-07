@@ -877,6 +877,7 @@ impl Renderer {
             };
             let net_status = app.net_status.clone();
             let net_connected = app.is_connected();
+            let has_firebase_account = app.has_firebase_account();
             let (full_output, actions) = self.editor.run(
                 &self.window,
                 &mut app.scene,
@@ -900,6 +901,8 @@ impl Renderer {
                 status,
                 &net_status,
                 net_connected,
+                &app.chat_messages,
+                has_firebase_account,
             );
             if actions.save {
                 app.save();
@@ -980,6 +983,24 @@ impl Renderer {
                     settings.firebase_database_url.clone(),
                     email,
                     password,
+                );
+            }
+            if let Some((lobby_code, sender_name, text)) = actions.send_chat_message {
+                let settings = self.editor.settings();
+                app.request_send_chat_message(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                    lobby_code,
+                    sender_name,
+                    text,
+                );
+            }
+            if let Some(lobby_code) = actions.refresh_chat {
+                let settings = self.editor.settings();
+                app.request_refresh_chat(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                    lobby_code,
                 );
             }
             if actions.align_ground {
