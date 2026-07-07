@@ -56,6 +56,7 @@
 | 60 | Durcissement réseau & anti-triche de base | ✅ |
 | 61 | Tests de charge & optimisation bande passante | ✅ |
 | 62 | Déploiement serveur | ⬜ |
+| 63 | Client réseau desktop & fenêtre Multijoueur (hors plan initial) | ✅ |
 
 > Mettre à jour cette table à chaque sprint terminé — c'est la vue « où j'en suis »
 > sans devoir relire tout le détail ci-dessous.
@@ -542,6 +543,54 @@ le rendu à 60 Hz).
 - **Risques** : coûts d'hébergement récurrents (même modeste) — à valider avec le
   budget avant de laisser tourner en continu.
 
+### Sprint 63 — Client réseau desktop & fenêtre Multijoueur ✅ FAIT (hors plan initial)
+**Objectif** (demandé directement par l'utilisateur, pas dans le plan de sprints
+d'origine : « pouvoir générer deux applications et jouer ensemble ») : brancher
+enfin `NetClient` dans la boucle réelle de l'éditeur/du player, avec une UI pour
+s'y connecter — le câblage explicitement reporté aux Sprints 54/55.
+- [x] `src/app/network_client.rs` (nouveau, desktop-only comme `ai.rs`/
+  `multiplayer.rs` réseau) : `connect_to_server`/`disconnect_from_server`/
+  `is_connected`, et `poll_network` (appelée depuis `advance_play`, comme
+  `poll_imports`/`poll_ai`) : envoie l'`Input` du joueur local à chaque frame,
+  draine les `ServerMsg` reçus, affiche les **autres** joueurs comme des objets
+  fantômes (`RemotePlayer`, position interpolée via `net::interpolation::
+  RemoteEntity` du Sprint 54 — enfin utilisé). Le joueur local reste piloté par
+  prédiction, inchangé.
+- [x] **Extension de protocole nécessaire** : `EntityDelta` gagne un champ
+  `player_id: Option<PlayerId>` — sans lui, un client ne pouvait pas distinguer
+  « mon propre joueur » (à ne jamais écraser) des « autres joueurs » (à afficher
+  en fantôme) dans un `Snapshot`, qui ne portait que des indices d'objets côté
+  serveur. `AppState::network_snapshot` mis à jour pour le renseigner.
+- [x] Fenêtre **🌐 Multijoueur** dans l'éditeur (`editor/mod.rs`) : adresse du
+  serveur, pseudo, bouton Se connecter/Se déconnecter, statut — même convention
+  que la fenêtre Paramètres (Sprint 56).
+- [x] Test bout-en-bout à travers de vrais sockets (`app::network_client::tests`) :
+  deux `AppState` (Alice, Bob) connectées au même serveur de test voient chacune
+  **exactement un** fantôme (l'autre), jamais elles-mêmes.
+- [x] **Bug critique trouvé et corrigé en testant réellement** (cf.
+  AUDIT_MMORPG.md §4.5) : le serveur perdait la manche tout seul en 2,5-4,5 s,
+  avant qu'un joueur n'ait eu le temps de se connecter — un monstre, puis le
+  gabarit inerte, se faisaient désigner « le joueur » par l'heuristique
+  `player_index` (qui retombait sur « premier objet scripté visible », et les
+  monstres ont aussi un script). Corrigé : `player_index` exclut les monstres de
+  ce repli et n'a plus de repli « premier objet quel qu'il soit » (pouvait
+  désigner le sol) ; nouvelle méthode `AppState::hide_local_player_template()`,
+  appelée par `src/bin/server.rs` avant `playing = true`. Test de régression :
+  `waiting_for_the_first_player_never_drains_health_via_monster_scripts`.
+- **Fichiers** : nouveau `src/app/network_client.rs` ; modifiés
+  `src/net/protocol.rs` (+ `interpolation.rs`, tests), `src/app/multiplayer.rs`,
+  `src/app/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`, `src/bin/server.rs`.
+- **Livrable** : 134 tests lib + 2 tests bin verts, clippy/fmt propres ; serveur
+  réel vérifié stable indéfiniment en attente d'un joueur (15 s+ testées, contre
+  2,5-4,5 s de défaite automatique avant correctif).
+- **Reste non vérifié** : aucune fenêtre graphique vue tourner dans cet
+  environnement (pas d'affichage) — la fenêtre Multijoueur et le mouvement des
+  fantômes en jeu réel restent à valider visuellement par l'utilisateur, en
+  lançant deux instances de l'éditeur l'une contre l'autre.
+- **Limite assumée** : pas de réconciliation pour le joueur local (le
+  `Snapshot` le concernant est ignoré, cf. Sprint 54) — en cas de désaccord
+  fort avec le serveur (triche, désync), le client ne se corrige pas encore.
+
 ---
 
 ## Correspondance décision de scope → sprint
@@ -551,14 +600,15 @@ le rendu à 60 Hz).
 | Extraction préalable du combat (bloquant, cf. AUDIT §7.4) | 50 | ✅ |
 | Serveur autoritaire headless | 51 | ✅ |
 | Protocole + transport réseau | 52, 53 | ✅ |
-| Jouabilité malgré latence (prédiction/interpolation) | 54 | 🟢 (logique faite, câblage → 55) |
-| Salons 2-16 joueurs, réutilisation du mode manches | 55 | 🟢 (serveur fait, lobby UI → plus tard) |
-| Firebase RTDB — comptes | 56 | ⬜ |
-| Firebase RTDB — progression persistante | 57 | ⬜ |
-| Firebase RTDB — chat/présence | 58 | ⬜ |
-| Firebase RTDB — classement | 59 | ⬜ |
+| Jouabilité malgré latence (prédiction/interpolation) | 54, 63 | ✅ (logique Sprint 54, câblage réel Sprint 63) |
+| Salons 2-16 joueurs, réutilisation du mode manches | 55, 63 | ✅ (serveur Sprint 55, client Sprint 63) |
+| Firebase RTDB — comptes | 56 | 🟢 (backend fait, UI connexion non branchée) |
+| Firebase RTDB — progression persistante | 57 | 🟢 (backend + serveur faits) |
+| Firebase RTDB — chat/présence | 58 | 🟢 (backend REST fait, polling) |
+| Firebase RTDB — classement | 59 | 🟢 (backend + serveur faits) |
 | Anti-triche de base (validation serveur) | 60 | ✅ |
 | Validation charge/perf réseau | 61 | ✅ |
+| Client réseau desktop + fenêtre Multijoueur | 63 | ✅ |
 | Mise en production (hors LAN) | 62 | ⬜ |
 
 ---
@@ -596,3 +646,17 @@ le rendu à 60 Hz).
   d'un runtime multi-thread complet par connexion — mesuré : 30 threads OS au
   total pour le test de charge à 16 joueurs, contre plus de 150 estimés avant.
   Détail complet : [AUDIT_MMORPG.md](AUDIT_MMORPG.md).
+
+- **2026-07-07 — Sprint 63 (hors plan, demandé par l'utilisateur).** Câblage
+  réel de `NetClient` dans l'éditeur (fenêtre Multijoueur + `poll_network`),
+  explicitement reporté aux Sprints 54/55 faute d'affichage graphique pour le
+  valider — resté vrai ici aussi (pas de fenêtre vue tourner), mais un test
+  bout-en-bout à deux `AppState` réelles a quand même trouvé un **bug bloquant
+  pour l'objectif demandé** : le serveur perdait la manche tout seul avant
+  qu'un joueur ne rejoigne (cf. AUDIT_MMORPG.md §4.5). Corrigé. Point notable :
+  c'est le seul bug de toute la session trouvé en **exécutant** le serveur
+  réel plutôt qu'en relisant le code ou en lançant les tests déjà écrits —
+  aucun test antérieur ne faisait tourner une manche assez longtemps pour
+  l'exposer. Prochaine étape naturelle si l'utilisateur veut aller plus loin :
+  tester réellement deux instances de l'éditeur l'une contre l'autre (lui
+  seul peut le faire, cet environnement n'a pas d'affichage).

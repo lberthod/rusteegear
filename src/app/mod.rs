@@ -6,6 +6,7 @@ pub mod build_config;
 mod combat;
 pub mod input;
 pub mod multiplayer;
+pub mod network_client;
 pub mod settings;
 
 use combat::{AttackCharge, AttackProjectile};
@@ -188,6 +189,23 @@ pub struct AppState {
     /// Temps de recharge (s) restant avant la prochaine attaque possible de
     /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`, Sprint 60).
     network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
+    /// a rejoint une partie en ligne. Desktop uniquement : `net::client` dépend
+    /// de `tokio`, absent des cibles mobiles (cf. `net/mod.rs`).
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    net_client: Option<crate::net::client::NetClient>,
+    /// Identifiant attribué par le serveur à ce client (`ServerMsg::Welcome`),
+    /// une fois connecté. Sert à ignorer sa propre entité dans les `Snapshot`
+    /// reçus (le joueur local reste piloté par prédiction, jamais écrasé par
+    /// le réseau, cf. `network_client::poll_network`).
+    net_player_id: Option<crate::net::protocol::PlayerId>,
+    /// Message de statut réseau à afficher dans l'UI (connecté/déconnecté/erreur).
+    pub net_status: String,
+    /// Autres joueurs réseau visibles par ce client, affichés comme des
+    /// « fantômes » (objet de scène dont la position suit le dernier `Snapshot`
+    /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
+    /// localement (le serveur est autoritaire sur eux).
+    remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -336,6 +354,11 @@ impl AppState {
             network_players: HashMap::new(),
             network_inputs: HashMap::new(),
             network_attack_cooldowns: HashMap::new(),
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            net_client: None,
+            net_player_id: None,
+            net_status: String::new(),
+            remote_players: HashMap::new(),
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -1653,6 +1676,7 @@ impl AppState {
         // chargements asynchrones (imports glTF, sons décodés, script IA) prêts cette frame
         self.poll_imports();
         self.poll_ai();
+        self.poll_network();
         self.audio.update();
 
         let now = Instant::now();
@@ -2118,17 +2142,38 @@ impl AppState {
 
     /// Indice de l'objet « joueur » : cf. `player_object`.
     fn player_index(&self) -> Option<usize> {
+        // `o.visible` : exclut un objet masqué (cf. `AppState::despawn_network_player`,
+        // ou le gabarit caché par `spawn_network_player` une fois un vrai joueur
+        // réseau présent) — sans ce filtre, un gabarit inerte resterait « le
+        // joueur » pour l'IA/la victoire-défaite même après avoir été masqué,
+        // cf. AUDIT_MMORPG.md.
         self.scene
             .objects
             .iter()
-            .position(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
+            .position(|o| o.visible && o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
             .or_else(|| {
-                self.scene
-                    .objects
-                    .iter()
-                    .position(|o| !o.script.trim().is_empty())
+                // Exclut les monstres (`ai_chaser`) et cibles de combat
+                // (`combat.attackable`) : ils portent aussi un script (leur
+                // logique de dégâts/couleur), donc sans cette exclusion, un
+                // monstre pouvait être désigné « le joueur » dès qu'aucun objet
+                // pilotable n'était visible (ex. avant qu'un joueur réseau ne
+                // rejoigne un serveur headless) — trouvé en testant réellement
+                // le serveur multijoueur, cf. AUDIT_MMORPG.md : les monstres se
+                // « déclenchaient » alors entre eux et vidaient la vie partagée
+                // en quelques secondes, sans le moindre joueur connecté.
+                self.scene.objects.iter().position(|o| {
+                    o.visible
+                        && !o.script.trim().is_empty()
+                        && o.ai_chaser.is_none()
+                        && !o.combat.as_ref().is_some_and(|c| c.attackable)
+                })
             })
-            .or_else(|| (!self.scene.objects.is_empty()).then_some(0))
+        // Pas de repli sur « le premier objet de la scène » (retiré, cf.
+        // AUDIT_MMORPG.md) : un tel repli désignait parfois un décor statique
+        // (ex. le sol) comme « le joueur » — son AABB, souvent immense pour un
+        // sol, chevauche alors tous les monstres et déclenche leurs scripts de
+        // dégâts en même temps. `None` (aucun joueur trouvable) doit laisser
+        // l'IA/les déclencheurs inactifs, pas désigner un objet au hasard.
     }
 
     /// Position du « joueur » : cf. `player_object`.

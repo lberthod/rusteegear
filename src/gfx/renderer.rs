@@ -875,6 +875,8 @@ impl Renderer {
                 grid: app.show_grid,
                 snap: app.snap,
             };
+            let net_status = app.net_status.clone();
+            let net_connected = app.is_connected();
             let (full_output, actions) = self.editor.run(
                 &self.window,
                 &mut app.scene,
@@ -896,6 +898,8 @@ impl Renderer {
                 won,
                 wave,
                 status,
+                &net_status,
+                net_connected,
             );
             if actions.save {
                 app.save();
@@ -953,6 +957,12 @@ impl Renderer {
             }
             if actions.restart {
                 restart = true;
+            }
+            if let Some((url, name)) = actions.connect_to_server {
+                app.connect_to_server(&url, &name);
+            }
+            if actions.disconnect_from_server {
+                app.disconnect_from_server();
             }
             if actions.align_ground {
                 app.align_to_ground();

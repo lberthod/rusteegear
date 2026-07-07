@@ -1,0 +1,301 @@
+//! Client réseau desktop (SPRINT_MMORPG.md) : connecte l'éditeur/le player à un
+//! serveur RusteeGear (`src/bin/server.rs`) pour jouer à plusieurs. Desktop
+//! uniquement — sur mobile, les mêmes méthodes existent mais renvoient une
+//! erreur (même convention que `app::ai`, qui a la même contrainte : `net::client`
+//! dépend de `tokio`, absent des cibles mobiles, cf. `net/mod.rs`).
+//!
+//! Le joueur local reste **piloté par prédiction**, exactement comme en solo
+//! (`sim_step` ne change pas) : ce module se contente d'envoyer son `Input` au
+//! serveur, et d'afficher les *autres* joueurs reçus par `Snapshot` comme des
+//! objets « fantômes » — sans physique ni script, leur position suit le
+//! dernier `Snapshot` reçu, interpolée (cf. `net::interpolation::RemoteEntity`,
+//! Sprint 54).
+
+use super::AppState;
+
+/// Un autre joueur réseau, affiché comme un objet fantôme dans la scène locale.
+pub struct RemotePlayer {
+    pub name: String,
+    scene_index: usize,
+    interp: crate::net::interpolation::RemoteEntity,
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+impl AppState {
+    /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
+    /// Remplace une connexion existante s'il y en avait une.
+    pub fn connect_to_server(&mut self, url: &str, name: &str) {
+        self.disconnect_from_server();
+        match crate::net::client::NetClient::connect(url, name, None) {
+            Ok(client) => {
+                log::info!("Multijoueur : connecté à {url} sous « {name} »");
+                self.net_client = Some(client);
+                self.net_status = format!("Connexion à {url}…");
+            }
+            Err(e) => {
+                log::warn!("Multijoueur : connexion à {url} échouée : {e}");
+                self.net_status = format!("Connexion échouée : {e}");
+            }
+        }
+    }
+
+    /// Quitte la partie en ligne (sans effet si non connecté) : prévient le
+    /// serveur, masque les fantômes des autres joueurs.
+    pub fn disconnect_from_server(&mut self) {
+        if let Some(client) = &self.net_client {
+            client.send(&crate::net::protocol::ClientMsg::Leave);
+        }
+        self.net_client = None;
+        self.net_player_id = None;
+        for rp in self.remote_players.values() {
+            if let Some(o) = self.scene.objects.get_mut(rp.scene_index) {
+                o.visible = false;
+            }
+        }
+        self.remote_players.clear();
+        self.net_status = "Déconnecté".to_string();
+    }
+
+    /// `true` si une connexion au serveur est active.
+    pub fn is_connected(&self) -> bool {
+        self.net_client.is_some()
+    }
+
+    /// Appelé une fois par frame depuis `advance_play` : envoie l'input local,
+    /// draine les messages serveur, met à jour les fantômes des autres joueurs.
+    pub(super) fn poll_network(&mut self) {
+        if self.net_client.is_none() {
+            return;
+        }
+
+        // Envoie l'input courant du joueur local (même calcul que dans
+        // `sim_step` pour son propre pilotage) — le serveur en a besoin pour
+        // faire bouger *notre* objet côté autres clients.
+        let inp = &self.input_state;
+        let input = crate::net::protocol::ClientMsg::Input {
+            move_x: (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0),
+            move_y: (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0),
+            attack: inp.attack,
+            jump: inp.jump,
+        };
+        if let Some(client) = &self.net_client {
+            client.send(&input);
+        }
+
+        let messages: Vec<crate::net::protocol::ServerMsg> = match &self.net_client {
+            Some(client) => client.inbox.try_iter().collect(),
+            None => Vec::new(),
+        };
+        for msg in messages {
+            self.handle_server_msg(msg);
+        }
+
+        let now = std::time::Instant::now();
+        for rp in self.remote_players.values_mut() {
+            if let Some((pos, yaw, visible)) = rp.interp.sample(now)
+                && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
+            {
+                o.transform.position = pos;
+                o.transform.rotation = glam::Quat::from_rotation_y(yaw);
+                o.visible = visible;
+            }
+        }
+    }
+
+    fn handle_server_msg(&mut self, msg: crate::net::protocol::ServerMsg) {
+        use crate::net::protocol::ServerMsg;
+        match msg {
+            ServerMsg::Welcome { player_id } => {
+                log::info!("Multijoueur : bienvenue, joueur {player_id}");
+                self.net_player_id = Some(player_id);
+                self.net_status = format!("Connecté (joueur {player_id})");
+            }
+            ServerMsg::PlayerJoined { player_id, name } => {
+                if Some(player_id) != self.net_player_id {
+                    log::info!("Multijoueur : « {name} » (joueur {player_id}) a rejoint");
+                    self.ensure_remote_player(player_id, &name);
+                }
+            }
+            ServerMsg::PlayerLeft { player_id } => {
+                log::info!("Multijoueur : joueur {player_id} est parti");
+                if let Some(rp) = self.remote_players.remove(&player_id)
+                    && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
+                {
+                    o.visible = false;
+                }
+            }
+            ServerMsg::Snapshot(snap) => {
+                let now = std::time::Instant::now();
+                for e in snap.entities {
+                    let Some(pid) = e.player_id else { continue };
+                    // Notre propre joueur : piloté en local par prédiction,
+                    // jamais écrasé par le snapshot serveur (cf. la doc du
+                    // module — pas de réconciliation implémentée pour
+                    // l'instant, cf. SPRINT_MMORPG.md Sprint 54).
+                    if Some(pid) == self.net_player_id {
+                        continue;
+                    }
+                    let default_name = format!("Joueur {pid}");
+                    let rp = self.ensure_remote_player(pid, &default_name);
+                    rp.interp.push(e, now);
+                }
+            }
+            ServerMsg::Event(_) => {}
+        }
+    }
+
+    /// Renvoie le fantôme du joueur `id`, en le créant s'il n'existe pas
+    /// encore : clone du gabarit pilotable local, mais sans contrôleur ni
+    /// physique (affichage seul — le serveur est autoritaire sur sa position,
+    /// appliquée directement au `transform`, pas simulée localement).
+    fn ensure_remote_player(
+        &mut self,
+        id: crate::net::protocol::PlayerId,
+        name: &str,
+    ) -> &mut RemotePlayer {
+        if !self.remote_players.contains_key(&id) {
+            let template = self
+                .scene
+                .objects
+                .iter()
+                .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+                .cloned()
+                .unwrap_or_default();
+            let ghost = crate::scene::SceneObject {
+                name: format!("Joueur réseau {name}"),
+                controller: None,
+                physics: crate::runtime::physics::PhysicsKind::None,
+                // Masqué tant qu'aucun `Snapshot` n'est arrivé pour ce joueur.
+                visible: false,
+                ..template
+            };
+            let scene_index = self.scene.objects.len();
+            self.scene.objects.push(ghost);
+            self.remote_players.insert(
+                id,
+                RemotePlayer {
+                    name: name.to_string(),
+                    scene_index,
+                    interp: crate::net::interpolation::RemoteEntity::default(),
+                },
+            );
+        }
+        self.remote_players
+            .get_mut(&id)
+            .expect("vient d'être inséré juste au-dessus")
+    }
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
+impl AppState {
+    pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
+        self.net_status = "Multijoueur indisponible sur mobile".to_string();
+    }
+
+    pub fn disconnect_from_server(&mut self) {}
+
+    pub fn is_connected(&self) -> bool {
+        false
+    }
+
+    pub(super) fn poll_network(&mut self) {}
+}
+
+#[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::app::multiplayer::NetworkInput;
+    use crate::net::protocol::{ClientMsg, ServerMsg};
+    use crate::net::server_loop::NetServer;
+
+    /// Fait progresser le "serveur de test" d'un tick : traite les messages en
+    /// attente (Join/Input/Leave, cf. `src/bin/server.rs`), simule, diffuse un
+    /// `Snapshot`. Retourne le numéro de tick utilisé.
+    fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
+        while let Ok((id, msg)) = net.inbox.try_recv() {
+            match msg {
+                ClientMsg::Join { .. } => {
+                    server_app.spawn_network_player(id);
+                }
+                ClientMsg::Input {
+                    move_x,
+                    move_y,
+                    attack,
+                    jump,
+                } => {
+                    server_app.set_network_input(
+                        id,
+                        NetworkInput {
+                            move_x,
+                            move_y,
+                            attack,
+                            jump,
+                        },
+                    );
+                }
+                ClientMsg::Leave => {
+                    server_app.despawn_network_player(id);
+                }
+            }
+        }
+        server_app.advance_play();
+        net.broadcast(&ServerMsg::Snapshot(server_app.network_snapshot(tick)));
+    }
+
+    /// Bout-en-bout (vrai socket) : deux clients rejoignent le même serveur de
+    /// test. Chacun doit voir un fantôme pour **l'autre**, mais jamais pour
+    /// lui-même — c'est exactement le bug qu'aurait causé l'absence de
+    /// `EntityDelta::player_id` (sans lui, impossible de distinguer « moi » de
+    /// « l'autre joueur » dans un `Snapshot`).
+    #[test]
+    fn client_sees_a_ghost_for_the_other_player_but_never_for_itself() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+
+        let mut server_app = AppState::new();
+        server_app.load_zombies_demo();
+        server_app.playing = true;
+
+        let mut alice = AppState::new();
+        alice.load_zombies_demo();
+        alice.connect_to_server(&url, "Alice");
+        assert!(alice.is_connected());
+
+        let mut bob = AppState::new();
+        bob.load_zombies_demo();
+        bob.connect_to_server(&url, "Bob");
+        assert!(bob.is_connected());
+
+        // Quelques itérations : traite les Join, envoie des Input, diffuse des
+        // Snapshot — le temps que tout le monde reçoive son Welcome et le
+        // Snapshot de l'autre joueur.
+        for tick in 0..20 {
+            std::thread::sleep(Duration::from_millis(20));
+            server_tick(&mut server_app, &net, tick);
+            alice.poll_network();
+            bob.poll_network();
+        }
+
+        assert_eq!(
+            alice.remote_players.len(),
+            1,
+            "Alice doit voir exactement un fantôme (Bob), pas elle-même"
+        );
+        assert_eq!(
+            bob.remote_players.len(),
+            1,
+            "Bob doit voir exactement un fantôme (Alice), pas lui-même"
+        );
+        assert!(alice.net_player_id.is_some());
+        assert!(bob.net_player_id.is_some());
+        assert_ne!(alice.net_player_id, bob.net_player_id);
+        assert!(
+            !alice
+                .remote_players
+                .contains_key(&alice.net_player_id.expect("vérifié ci-dessus")),
+            "Alice ne doit jamais avoir un fantôme d'elle-même"
+        );
+    }
+}

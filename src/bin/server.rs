@@ -268,6 +268,11 @@ fn main() {
 
     let mut app = AppState::new();
     app.load_zombies_demo();
+    // Masque le gabarit joueur local *avant* le premier join : sans ça, l'IA
+    // le poursuit et sa santé s'épuise pendant l'attente du premier joueur,
+    // terminant la manche en défaite avant même qu'un joueur ait pu se
+    // connecter (cf. AUDIT_MMORPG.md, bug trouvé en conditions réelles).
+    app.hide_local_player_template();
     app.playing = true;
 
     let mut lobby = Lobby::default();

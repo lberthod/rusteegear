@@ -59,6 +59,32 @@ fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
 }
 
 impl AppState {
+    /// Masque le gabarit joueur local avant même qu'un joueur ne rejoigne — à
+    /// appeler par un serveur headless juste après avoir chargé la scène, et
+    /// **avant** de démarrer le Play (`self.playing = true`).
+    ///
+    /// Sans cet appel, le gabarit reste « le joueur » du point de vue de
+    /// `player_index` (c'est le premier objet pilotable trouvé) pendant toute
+    /// l'attente du premier joueur réseau : personne ne le pilote, les
+    /// monstres le poursuivent quand même et sa santé s'épuise sans qu'il ne
+    /// bouge jamais — la manche se terminait en défaite après quelques
+    /// secondes, **avant même qu'un joueur n'ait eu le temps de se
+    /// connecter** (bug trouvé en testant réellement deux applications l'une
+    /// contre l'autre, cf. AUDIT_MMORPG.md). `spawn_network_player` masque
+    /// aussi ce gabarit dès le premier joueur, donc cet appel n'est utile que
+    /// pour la fenêtre *avant* ce premier join.
+    pub fn hide_local_player_template(&mut self) {
+        if let Some(o) = self
+            .scene
+            .objects
+            .iter_mut()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+        {
+            o.visible = false;
+        }
+        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+    }
+
     /// Fait entrer un nouveau joueur réseau dans la partie : clone le premier
     /// objet « gabarit » pilotable trouvé dans la scène (le même gabarit que le
     /// joueur local utiliserait, cf. `player_index`) et l'ajoute comme un objet
@@ -81,12 +107,12 @@ impl AppState {
         if let Some(&existing) = self.network_players.get(&id) {
             return Some(existing);
         }
-        let mut template = self
+        let template_index = self
             .scene
             .objects
             .iter()
-            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))?
-            .clone();
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))?;
+        let mut template = self.scene.objects[template_index].clone();
         // Écarte chaque joueur du gabarit d'origine (et des précédents) : sans ça,
         // deux corps rigides spawnés au même point s'interpénètrent et la physique
         // les sépare par une violente impulsion à la première étape de simulation.
@@ -96,6 +122,15 @@ impl AppState {
         self.scene.objects.push(template);
         self.network_players.insert(id, index);
         self.network_inputs.insert(id, NetworkInput::default());
+        // Masque le gabarit d'origine : personne ne le pilote (ni un joueur
+        // réseau — chacun a son propre clone — ni un joueur local, le serveur
+        // étant headless). Sans ça, `player_index` continuerait de le désigner
+        // comme « le joueur » (c'est le premier objet pilotable trouvé) : les
+        // monstres poursuivraient un mannequin inerte au lieu des vrais joueurs
+        // réseau, et sa santé qui s'épuise sans qu'il ne bouge jamais
+        // terminerait la manche en défaite en quelques secondes, avant même
+        // qu'un joueur ait eu le temps de rejoindre (cf. AUDIT_MMORPG.md).
+        self.scene.objects[template_index].visible = false;
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
         Some(index)
     }
@@ -207,12 +242,13 @@ impl AppState {
     pub fn network_snapshot(&self, tick: u32) -> Snapshot {
         let entities = self
             .network_players
-            .values()
-            .filter_map(|&index| self.scene.objects.get(index).map(|o| (index, o)))
-            .map(|(index, o)| {
+            .iter()
+            .filter_map(|(&id, &index)| self.scene.objects.get(index).map(|o| (id, index, o)))
+            .map(|(id, index, o)| {
                 let (yaw, _, _) = o.transform.rotation.to_euler(glam::EulerRot::YXZ);
                 EntityDelta {
                     index: index as u32,
+                    player_id: Some(id),
                     position: o.transform.position.to_array(),
                     yaw,
                     visible: o.visible,
@@ -234,6 +270,34 @@ mod tests {
         let mut app = AppState::new();
         app.load_zombies_demo();
         app
+    }
+
+    /// Régression trouvée en testant réellement un serveur headless
+    /// (cf. AUDIT_MMORPG.md) : `hide_local_player_template` masque le gabarit
+    /// avant le premier join, pour qu'aucun objet ne soit désigné « le
+    /// joueur ». Sans exclure explicitement les monstres (`ai_chaser`/
+    /// `combat.attackable`, qui portent aussi un script) du repli « premier
+    /// objet scripté visible » de `player_index`, un monstre était désigné
+    /// « le joueur » dès que les monstres devenaient visibles (manche 1) — les
+    /// monstres se déclenchaient alors entre eux et vidaient `hud_health`
+    /// (partagé) en quelques secondes, sans le moindre joueur connecté.
+    #[test]
+    fn waiting_for_the_first_player_never_drains_health_via_monster_scripts() {
+        let mut app = app_with_zombies_demo();
+        app.hide_local_player_template();
+        app.playing = true;
+        for _ in 0..80 {
+            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert_eq!(
+            app.hud_health, None,
+            "sans joueur connecté, aucun script de monstre ne doit pouvoir affecter la vie"
+        );
+        assert!(
+            !app.is_lost(),
+            "la manche ne doit jamais se perdre toute seule en attendant"
+        );
     }
 
     #[test]

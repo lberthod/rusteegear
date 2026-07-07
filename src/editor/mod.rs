@@ -35,6 +35,10 @@ pub struct Editor {
     ai_scene_replace: bool,
     /// Historique des consignes IA récentes (scène), pour ré-exécution rapide.
     ai_history: Vec<String>,
+    /// Adresse du serveur multijoueur saisie dans la fenêtre Multijoueur.
+    mp_server_url: String,
+    /// Pseudo saisi dans la fenêtre Multijoueur.
+    mp_name: String,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -62,6 +66,8 @@ struct Panels {
     assets: bool,
     /// Fenêtre « Gestionnaire de scripts Lua ».
     scripts: bool,
+    /// Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
+    multiplayer: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -113,6 +119,10 @@ pub struct UiActions {
     pub load_brawl: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
+    /// Fenêtre Multijoueur : « Se connecter » demandé (adresse, pseudo).
+    pub connect_to_server: Option<(String, String)>,
+    /// Fenêtre Multijoueur : « Se déconnecter » demandé.
+    pub disconnect_from_server: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -202,6 +212,8 @@ impl Editor {
             ai_scene_prompt: String::new(),
             ai_scene_replace: true,
             ai_history: Vec::new(),
+            mp_server_url: "ws://127.0.0.1:7777".to_string(),
+            mp_name: String::new(),
         }
     }
 
@@ -291,6 +303,8 @@ impl Editor {
         won: bool,
         wave: u32,
         status: StatusInfo,
+        net_status: &str,
+        net_connected: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -305,6 +319,8 @@ impl Editor {
         let ai_scene_prompt = &mut self.ai_scene_prompt;
         let ai_scene_replace = &mut self.ai_scene_replace;
         let ai_history = &mut self.ai_history;
+        let mp_server_url = &mut self.mp_server_url;
+        let mp_name = &mut self.mp_name;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -337,6 +353,10 @@ impl Editor {
                 ai_scene_prompt,
                 ai_scene_replace,
                 ai_history,
+                mp_server_url,
+                mp_name,
+                net_status,
+                net_connected,
                 &mut actions,
             );
         });
@@ -1138,6 +1158,10 @@ fn menu_outils(
             panels.diagnostic = true;
             ui.close();
         }
+        if ui.button("🌐  Multijoueur").clicked() {
+            panels.multiplayer = true;
+            ui.close();
+        }
         ui.separator();
         if ui.button("⚙  Paramètres").clicked() {
             panels.settings = true;
@@ -1529,6 +1553,67 @@ fn settings_window(
             );
         });
     panels.settings = open;
+}
+
+/// Fenêtre « Multijoueur » : adresse du serveur + pseudo, connexion/déconnexion
+/// (SPRINT_MMORPG.md). Le joueur local reste piloté comme en solo ; les autres
+/// joueurs connectés apparaissent comme des objets fantômes une fois reçus par
+/// `Snapshot` (cf. `app::network_client`).
+fn multiplayer_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    server_url: &mut String,
+    name: &mut String,
+    net_status: &str,
+    net_connected: bool,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.multiplayer;
+    egui::Window::new("🌐  Multijoueur")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(320.0)
+        .show(ctx, |ui| {
+            ui.label("Adresse du serveur");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(server_url).hint_text("ws://127.0.0.1:7777"),
+            );
+            ui.label("Pseudo");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(name).hint_text("Joueur"),
+            );
+            ui.add_space(6.0);
+            if net_connected {
+                if ui.button("🔌  Se déconnecter").clicked() {
+                    actions.disconnect_from_server = true;
+                }
+            } else {
+                let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
+                if ui
+                    .add_enabled(can_connect, egui::Button::new("▶  Se connecter"))
+                    .clicked()
+                {
+                    actions.connect_to_server = Some((server_url.clone(), name.clone()));
+                }
+                if !can_connect {
+                    ui.small("Adresse et pseudo requis.");
+                }
+            }
+            ui.add_space(6.0);
+            ui.label(if net_status.is_empty() {
+                "Non connecté"
+            } else {
+                net_status
+            });
+            ui.add_space(6.0);
+            ui.small(
+                "Lance d'abord un serveur (`cargo run --bin server`), puis connecte-toi \
+                 depuis chaque instance de l'éditeur/du player avec la même adresse.",
+            );
+        });
+    panels.multiplayer = open;
 }
 
 /// Fenêtre « Générer une scène (IA) » : consigne → scène (remplacer ou ajouter) via DeepSeek.
@@ -2115,10 +2200,24 @@ fn build_ui(
     ai_scene_prompt: &mut String,
     ai_scene_replace: &mut bool,
     ai_history: &mut Vec<String>,
+    mp_server_url: &mut String,
+    mp_name: &mut String,
+    net_status: &str,
+    net_connected: bool,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings);
+    // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
+    multiplayer_window(
+        root.ctx(),
+        panels,
+        mp_server_url,
+        mp_name,
+        net_status,
+        net_connected,
+        actions,
+    );
     // Fenêtre « Générer une scène (IA) ».
     ai_scene_window(
         root.ctx(),

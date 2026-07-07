@@ -30,7 +30,7 @@ seule validation est le test automatisé et la relecture de code.
 
 ## 2. Ce qui a été vérifié pour cet audit
 
-- `cargo test` (lib + bin) : **132 tests lib + 2 tests bin, tous verts**
+- `cargo test` (lib + bin) : **134 tests lib + 2 tests bin, tous verts**
   (dont 1 correctif apporté pendant cet audit, cf. §4).
 - `cargo clippy --all-targets -- -D warnings` : propre.
 - `cargo fmt --check` : propre.
@@ -180,6 +180,58 @@ réel** si le serveur est un jour adapté pour tourner en service persistant
 rafraîchissement de jeton (`refreshToken`, déjà présent dans la réponse
 Firebase Auth mais non exploité ici).
 
+### 4.5 🔴 Corrigée — le serveur perdait la manche tout seul avant qu'un joueur ne rejoigne
+
+**Trouvée en conditions réelles**, pas par relecture : la première fois que le
+client réseau (`app::network_client`, écrit après cet audit pour répondre à la
+demande « pouvoir générer deux applications et jouer ensemble ») a été
+réellement testé contre un vrai `cargo run --bin server`, le serveur perdait
+la manche (« défaite ») en 2,5 à 4,5 secondes — **avant même qu'un client
+n'ait eu le temps de se connecter**. Aucun test automatisé ne l'avait
+détecté, parce que tous les tests existants pilotaient `AppState` sur des
+fenêtres de quelques centaines de millisecondes, jamais assez longtemps pour
+que la manche se termine.
+
+**Cause racine (double)** :
+1. `player_index()` (heuristique « quel objet est le joueur ») retombait,
+   faute d'objet pilotable visible, sur « le premier objet visible avec un
+   script non vide » — mais les **monstres** (`ai_chaser`) ont eux aussi un
+   script (dégâts + couleur). Un monstre se retrouvait donc désigné « le
+   joueur », et les autres monstres — dont l'AABB chevauchait la sienne — se
+   « déclenchaient » les uns les autres, vidant la vie partagée en quelques
+   secondes.
+2. Avant tout correctif, le gabarit joueur local (jamais piloté par un
+   serveur headless) restait visible et **le repli initial ci-dessus tombait
+   sur lui plutôt que sur un monstre** — un mannequin inerte que l'IA
+   poursuivait et dont la vie s'épuisait sans qu'il ne bouge jamais, avec le
+   même résultat : défaite avant tout joueur.
+
+**Corrigé** :
+- `player_index()` exclut désormais explicitement les objets `ai_chaser`/
+  `combat.attackable` de son repli « objet scripté » (`app/mod.rs`).
+- Le repli final « premier objet de la scène, quel qu'il soit » a été
+  **retiré** : il pouvait désigner un décor statique (le sol, à l'AABB
+  immense) comme « le joueur », avec le même effet de déclenchement en
+  cascade — `None` (aucun joueur trouvable) doit laisser l'IA/les
+  déclencheurs inactifs, pas désigner un objet au hasard.
+- Nouvelle méthode `AppState::hide_local_player_template()`, appelée par
+  `src/bin/server.rs` juste après le chargement de la scène et avant
+  `playing = true` : masque le gabarit avant même le premier join (en plus du
+  masquage déjà fait par `spawn_network_player` dès qu'un joueur rejoint).
+
+**Test de régression** (`waiting_for_the_first_player_never_drains_health_
+via_monster_scripts`, `app/multiplayer.rs`) : 80 pas de simulation sans
+aucun joueur réseau connecté, `hud_health` doit rester `None` et la manche ne
+doit jamais se perdre. Vérifié manuellement en plus du test : le serveur réel
+(`cargo run --bin server`) reste stable indéfiniment (15 s+ testées) en
+attente d'un joueur, contre 2,5-4,5 s avant correctif.
+
+**Leçon** : c'est le seul problème de cet audit trouvé en **exécutant
+réellement l'application** plutôt qu'en relisant le code ou en lançant les
+tests existants — aucun test présent avant ce correctif ne faisait tourner
+une manche assez longtemps pour l'exposer. Les 134 tests lib + 2 tests bin
+actuels restent verts après correctif, clippy/fmt propres.
+
 ## 5. Vérifications de cohérence doc ↔ code
 
 Les affirmations de `SPRINT_MMORPG.md` recoupées pendant cet audit se sont
@@ -196,8 +248,8 @@ Le chantier multijoueur est **solide pour son échelle visée** (2-16 joueurs,
 serveur autoritaire) : architecture cohérente, tests réels (y compris
 bout-en-bout à travers de vrais sockets), et une discipline de documentation
 des limites plutôt rare (les zones non testées sont signalées, pas cachées).
-L'audit a trouvé et corrigé trois problèmes réels, tous avec test de
-régression et sans rien casser (**132 tests lib + 2 tests bin verts** après
+L'audit a trouvé et corrigé quatre problèmes réels, tous avec test de
+régression et sans rien casser (**134 tests lib + 2 tests bin verts** après
 correctifs, clippy/fmt propres) :
 - §4.1 — objet fantôme sur double `Join` (bug de correction).
 - §4.2 — indices de joueurs réseau non réinitialisés à un restart de manche
@@ -205,11 +257,21 @@ correctifs, clippy/fmt propres) :
 - §4.3 — un runtime tokio multi-thread complet par connexion (gaspillage de
   ressources, mesuré : 30 threads OS au total pour 17 connexions après
   correctif, contre plus de 150 estimés avant).
+- §4.5 — le serveur perdait la manche tout seul avant qu'un joueur ne
+  rejoigne (un monstre, puis le gabarit inerte, se faisaient désigner
+  « le joueur » par l'heuristique `player_index`). **Le seul des cinq trouvé
+  en exécutant réellement l'application** plutôt qu'en relisant le code —
+  confirme que la relecture, aussi rigoureuse soit-elle, ne remplace pas un
+  vrai test d'exécution bout en bout.
 
 Il ne reste **aucune anomalie ouverte** de cet audit, à l'exception d'une
 limite de conception à garder à l'esprit (§4.4, jeton Firebase serveur non
 renouvelé — sans impact tant que le serveur ne tourne qu'une seule manche par
-processus). Le point qui reste hors de portée de cet audit — comme de tout le
-chantier — est la validation en conditions réelles : aucune UI vue tourner,
-aucun projet Firebase réel testé. C'est un chantier **backend prêt à être
-branché**, pas encore un produit vérifié de bout en bout.
+processus). Le client réseau (`app::network_client`, écrit après la rédaction
+initiale de cet audit) a depuis été testé bout-en-bout (deux `AppState`
+connectées au même serveur, chacune voit un fantôme de l'autre mais jamais
+d'elle-même) — mais reste **non vérifié visuellement** : aucune fenêtre
+graphique n'a été vue tourner dans cet environnement, et aucun projet
+Firebase réel n'a été testé. C'est un chantier **backend prêt à être
+branché**, avec un premier bout-en-bout applicatif fonctionnel, mais pas
+encore un produit vérifié visuellement de bout en bout.

@@ -75,6 +75,15 @@ pub struct EntityDelta {
     /// Indice dans `scene.objects`, stable pour la durée d'une manche (les objets
     /// ne sont ni ajoutés ni réordonnés en cours de partie côté serveur).
     pub index: u32,
+    /// Joueur réseau propriétaire de cette entité, `None` pour une entité qui
+    /// n'appartient à personne (réservé pour de futurs monstres/décor animé
+    /// diffusés, cf. la limite documentée dans `AppState::network_snapshot` —
+    /// pas encore le cas aujourd'hui, seuls les joueurs réseau sont diffusés).
+    /// Sert au client à distinguer « mon propre joueur » (piloté localement en
+    /// prédiction, jamais écrasé par le snapshot) des « autres joueurs »
+    /// (affichés en fantômes interpolés) — sans ce champ, les deux étaient
+    /// indiscernables une fois reçus.
+    pub player_id: Option<PlayerId>,
     pub position: [f32; 3],
     /// Orientation autour de l'axe Y (radians) : suffisant pour un personnage/
     /// monstre au sol, évite d'envoyer un quaternion complet.
@@ -183,6 +192,7 @@ mod tests {
             entities: vec![
                 EntityDelta {
                     index: 0,
+                    player_id: Some(1),
                     position: [1.0, 0.0, -2.5],
                     yaw: 0.78,
                     visible: true,
@@ -190,6 +200,7 @@ mod tests {
                 },
                 EntityDelta {
                     index: 7,
+                    player_id: None,
                     position: [0.0, 0.0, 0.0],
                     yaw: 0.0,
                     visible: false,
@@ -227,6 +238,7 @@ mod tests {
         let entities: Vec<EntityDelta> = (0..16 + 4) // 16 joueurs + 4 monstres actifs
             .map(|i| EntityDelta {
                 index: i,
+                player_id: Some(i),
                 position: [i as f32, 0.0, -(i as f32)],
                 yaw: 0.3,
                 visible: true,

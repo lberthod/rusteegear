@@ -108,6 +108,7 @@ mod tests {
     fn delta(pos: [f32; 3], yaw: f32) -> EntityDelta {
         EntityDelta {
             index: 0,
+            player_id: None,
             position: pos,
             yaw,
             visible: true,
