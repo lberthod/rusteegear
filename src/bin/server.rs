@@ -26,7 +26,9 @@ use std::time::{Duration, Instant};
 
 use motor3derust::app::AppState;
 use motor3derust::app::multiplayer::NetworkInput;
-use motor3derust::net::firebase::{self, AuthSession, FirebaseConfig, PlayerProgress};
+use motor3derust::net::firebase::{
+    self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
+};
 use motor3derust::net::protocol::{ClientMsg, ServerMsg};
 use motor3derust::net::server_loop::NetServer;
 
@@ -162,6 +164,35 @@ fn award_progress(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobb
     }
 }
 
+/// Poste une entrée de classement pour chaque joueur réseau connu de Firebase
+/// (même score que `award_progress`, appelé juste après elle en fin de
+/// manche). Mêmes garanties : jamais fatal, juste logué en cas d'échec.
+fn post_leaderboard(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobby, score: u32) {
+    let Some((config, session)) = firebase else {
+        return;
+    };
+    let achieved_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    for id in lobby.firebase_uids.keys() {
+        let name = lobby
+            .names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| format!("Joueur {id}"));
+        let entry = LeaderboardEntry {
+            name,
+            score,
+            achieved_at_ms,
+        };
+        match firebase::post_leaderboard_entry(config, &session.id_token, &entry) {
+            Ok(()) => log::info!("Firebase : classement mis à jour pour le joueur {id} ({score})"),
+            Err(e) => log::warn!("Firebase : écriture classement du joueur {id} échouée ({e})"),
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
     log::info!("RusteeGear — serveur headless (Sprint 51) : démarrage d'une manche");
@@ -231,6 +262,7 @@ fn main() {
                 started.elapsed().as_secs_f32()
             );
             award_progress(&firebase, &lobby, app.score());
+            post_leaderboard(&firebase, &lobby, app.score());
             break;
         }
         if app.is_lost() {
@@ -240,6 +272,7 @@ fn main() {
                 started.elapsed().as_secs_f32()
             );
             award_progress(&firebase, &lobby, app.score());
+            post_leaderboard(&firebase, &lobby, app.score());
             break;
         }
         if started.elapsed() > MAX_DURATION {

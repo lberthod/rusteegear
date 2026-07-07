@@ -175,6 +175,36 @@ fn parse_presence_map(body: &str) -> Result<Vec<(String, Presence)>, String> {
         .collect()
 }
 
+/// Entrée du classement global (SPRINT_MMORPG.md, Sprint 59), sous
+/// `/leaderboard/{push_id}`.
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
+pub struct LeaderboardEntry {
+    pub name: String,
+    pub score: u32,
+    pub achieved_at_ms: u64,
+}
+
+/// Parse la réponse d'une lecture de `/leaderboard`, triée par score
+/// **décroissant** (meilleur score en premier) — `null` (aucune entrée pour
+/// l'instant) donne une liste vide, pas une erreur.
+fn parse_leaderboard(body: &str) -> Result<Vec<LeaderboardEntry>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let map = v
+        .as_object()
+        .ok_or_else(|| "réponse classement inattendue (pas un objet)".to_string())?;
+    let mut entries: Vec<LeaderboardEntry> = map
+        .values()
+        .map(|e| serde_json::from_value(e.clone()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Entrée de classement illisible : {e}"))?;
+    entries.sort_by_key(|e| std::cmp::Reverse(e.score));
+    Ok(entries)
+}
+
 /// Parse la réponse d'un appel `signUp`/`signInWithPassword` réussi. Séparé de
 /// l'appel réseau pour rester testable sans identifiants Firebase réels.
 fn parse_auth_response(body: &str) -> Result<AuthSession, String> {
@@ -447,12 +477,68 @@ mod net_io {
             .map(|(uid, _)| uid)
             .collect())
     }
+
+    /// Ajoute une entrée au classement global. `auth_token` explicite pour la
+    /// même raison qu'à `set_progress` (Sprint 57) : le score est une donnée
+    /// compétitive, seul le serveur de jeu doit pouvoir l'écrire — les règles
+    /// RTDB doivent refuser l'écriture au client (cf. le commentaire « Qui
+    /// écrit la progression ? »).
+    pub fn post_leaderboard_entry(
+        config: &FirebaseConfig,
+        auth_token: &str,
+        entry: &LeaderboardEntry,
+    ) -> Result<(), String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let url = rtdb_url(
+            &config.database_url,
+            "leaderboard",
+            &format!("auth={auth_token}"),
+        );
+        ureq::post(&url)
+            .timeout(TIMEOUT)
+            .send_json(serde_json::to_value(entry).map_err(|e| e.to_string())?)
+            .map(|_| ())
+            .map_err(|e| format!("Écriture du classement échouée : {e}"))
+    }
+
+    /// Les `limit` meilleurs scores, triés du plus haut au plus bas.
+    ///
+    /// **Limite assumée, non corrigée ici** : `/leaderboard` grossit sans
+    /// purge — chaque manche ajoute une entrée, jamais retirée. Cette fonction
+    /// ne lit que le nécessaire (`limitToLast` côté requête RTDB serait idéal,
+    /// mais RTDB REST trie par clé sans champ `orderBy` indexé côté serveur ici
+    /// — on lit tout puis on trie/tronque côté client, correct à l'échelle
+    /// visée mais **pas** pour un nœud qui grossirait sans limite). Documenté
+    /// dans SPRINT_MMORPG.md comme risque à traiter avant une mise en
+    /// production durable (garder un top N côté serveur, ex. purge périodique).
+    pub fn get_top_leaderboard(
+        config: &FirebaseConfig,
+        limit: usize,
+    ) -> Result<Vec<LeaderboardEntry>, String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let url = rtdb_url(&config.database_url, "leaderboard", "");
+        let resp = ureq::get(&url)
+            .timeout(TIMEOUT)
+            .call()
+            .map_err(|e| format!("Lecture du classement échouée : {e}"))?;
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+        let mut entries = parse_leaderboard(&text)?;
+        entries.truncate(limit);
+        Ok(entries)
+    }
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub use net_io::{
-    get_profile_name, get_progress, list_chat_messages, list_online_players, post_chat_message,
-    set_presence, set_profile_name, set_progress, sign_in, sign_up,
+    get_profile_name, get_progress, get_top_leaderboard, list_chat_messages, list_online_players,
+    post_chat_message, post_leaderboard_entry, set_presence, set_profile_name, set_progress,
+    sign_in, sign_up,
 };
 
 // --- Qui écrit la progression ? (SPRINT_MMORPG.md, Sprint 57) ---------------
@@ -622,5 +708,28 @@ mod tests {
         };
         assert!(is_online(&p, 10_000 + PRESENCE_TIMEOUT_MS - 1));
         assert!(!is_online(&p, 10_000 + PRESENCE_TIMEOUT_MS + 1));
+    }
+
+    #[test]
+    fn leaderboard_is_empty_when_nobody_has_scored_yet() {
+        assert_eq!(parse_leaderboard("null").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn leaderboard_is_sorted_by_score_descending() {
+        let body = r#"{
+            "-push1": {"name": "Alice", "score": 12, "achieved_at_ms": 1000},
+            "-push2": {"name": "Bob", "score": 42, "achieved_at_ms": 2000},
+            "-push3": {"name": "Zoé", "score": 7, "achieved_at_ms": 3000}
+        }"#;
+        let entries = parse_leaderboard(body).expect("classement valide");
+        let scores: Vec<u32> = entries.iter().map(|e| e.score).collect();
+        assert_eq!(scores, vec![42, 12, 7]);
+        assert_eq!(entries[0].name, "Bob");
+    }
+
+    #[test]
+    fn leaderboard_rejects_a_malformed_entry() {
+        assert!(parse_leaderboard(r#"{"-push1": {"name": "Alice"}}"#).is_err());
     }
 }

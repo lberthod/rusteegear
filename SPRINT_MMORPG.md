@@ -52,7 +52,7 @@
 | 56 | Firebase : comptes & auth | 🟢 |
 | 57 | Firebase : inventaire/progression | 🟢 |
 | 58 | Firebase : chat + présence | 🟢 |
-| 59 | Firebase : classement (leaderboard) | ⬜ |
+| 59 | Firebase : classement (leaderboard) | 🟢 |
 | 60 | Durcissement réseau & anti-triche de base | ⬜ |
 | 61 | Tests de charge & optimisation bande passante | ⬜ |
 | 62 | Déploiement serveur | ⬜ |
@@ -420,17 +420,28 @@ le rendu à 60 Hz).
   client — pas encore câblé (dépend de l'écran de connexion/lobby reporté), donc pas
   testable de bout en bout pour l'instant.
 
-### Sprint 59 — Classement (leaderboard)
+### Sprint 59 — Classement (leaderboard) 🟢 (backend + câblage serveur faits, UI reportée)
 **Objectif** : classement global des meilleurs scores.
-- [ ] Nœud RTDB `/leaderboard` (top scores, requête triée côté client via les query
-  params REST `orderBy`/`limitToLast`).
-- [ ] Écriture du score en fin de manche par le **serveur de jeu** (même raison
-  qu'au Sprint 57 : pas d'écriture client directe sur une donnée compétitive).
-- [ ] UI : écran classement accessible depuis le lobby.
-- **Fichiers** : `src/net/firebase.rs`, `src/bin/server.rs`, `src/editor/mod.rs`.
-- **Livrable** : un score de fin de manche apparaît dans le top classement affiché en jeu.
-- **Risques** : volumétrie — si `/leaderboard` grossit sans limite, prévoir une purge
-  (garder top N) plutôt qu'un nœud illimité.
+- [x] `LeaderboardEntry { name, score, achieved_at_ms }` sur `/leaderboard` :
+  `post_leaderboard_entry` (POST, `auth_token` explicite — même raison qu'au
+  Sprint 57, le score est une donnée compétitive, seul le serveur doit l'écrire),
+  `get_top_leaderboard(limit)` (tri décroissant par score, tronqué à `limit`).
+- [x] `src/bin/server.rs` (`post_leaderboard`) : appelée juste après
+  `award_progress` en fin de manche (victoire ou défaite), pour chaque joueur
+  réseau connu de Firebase. Mêmes garanties : jamais fatal, juste logué en cas
+  d'échec.
+- [x] 3 tests (vide, tri décroissant, entrée malformée).
+- [ ] **Reporté** : écran classement en jeu (dépend du lobby/de la connexion,
+  reportés aux Sprints 55-56 pour les mêmes raisons — UI non vérifiable ici).
+- **Fichiers** : `src/net/firebase.rs`, `src/bin/server.rs`.
+- **Livrable** : 126 tests lib + 1 test bin verts, clippy/fmt propres ; serveur
+  vérifié sans régression (tourne identiquement sans Firebase configuré).
+- **Risque non résolu, documenté dans le code** : `/leaderboard` grossit sans
+  purge — chaque manche ajoute une entrée, jamais retirée, et `get_top_leaderboard`
+  lit tout le nœud avant de trier/tronquer côté client (pas de requête RTDB
+  indexée côté serveur ici). Acceptable tant que le volume reste faible ; à
+  corriger (purge périodique ou requête indexée) avant une mise en production
+  avec un usage soutenu.
 
 ---
 
