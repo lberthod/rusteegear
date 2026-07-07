@@ -1491,6 +1491,42 @@ fn settings_window(
                 "Obtenir une clé DeepSeek",
                 "https://platform.deepseek.com/api_keys",
             );
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("Multijoueur — comptes (Firebase)");
+            ui.label("Clé API Web Firebase");
+            let resp_fb_key = ui.add(
+                egui::TextEdit::singleline(&mut settings.firebase_api_key)
+                    .password(true)
+                    .hint_text("AIza…")
+                    .desired_width(280.0),
+            );
+            if resp_fb_key.lost_focus() || resp_fb_key.changed() {
+                settings.save();
+            }
+            ui.label("URL Realtime Database");
+            let resp_fb_url = ui.add(
+                egui::TextEdit::singleline(&mut settings.firebase_database_url)
+                    .hint_text("https://xxx-default-rtdb.firebaseio.com")
+                    .desired_width(280.0),
+            );
+            if resp_fb_url.lost_focus() || resp_fb_url.changed() {
+                settings.save();
+            }
+            ui.label(
+                if settings.firebase_api_key.trim().is_empty()
+                    || settings.firebase_database_url.trim().is_empty()
+                {
+                    "❌ Configuration incomplète : comptes multijoueur désactivés"
+                } else {
+                    "✅ Configuration enregistrée"
+                },
+            );
+            ui.small(
+                "Clé publique par conception côté Firebase — la sécurité vient des règles \
+                 de la Realtime Database, pas du secret de cette clé (cf. SPRINT_MMORPG.md).",
+            );
         });
     panels.settings = open;
 }

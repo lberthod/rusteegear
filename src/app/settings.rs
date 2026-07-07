@@ -1,5 +1,7 @@
 //! Réglages utilisateur persistés (Sprint 33) : clé API DeepSeek pour la
-//! génération de scripts Lua par IA. Stockés dans `~/.motor3derust/settings.json`.
+//! génération de scripts Lua par IA, et (Sprint 56, SPRINT_MMORPG.md) config
+//! Firebase pour les comptes multijoueur. Stockés dans
+//! `~/.motor3derust/settings.json`.
 
 use std::path::PathBuf;
 
@@ -16,6 +18,15 @@ pub struct Settings {
     /// Température de génération (0 = déterministe, 1 = créatif).
     #[serde(default = "default_temperature")]
     pub deepseek_temperature: f32,
+    /// Clé API Web Firebase (Project Settings → Web API Key). Laisser vide pour
+    /// désactiver les comptes/backend annexe multijoueur (cf. `net::firebase`).
+    /// Publique par conception côté Firebase — la sécurité vient des **règles**
+    /// RTDB, pas du secret de cette clé (cf. commentaire dans `net::firebase`).
+    #[serde(default)]
+    pub firebase_api_key: String,
+    /// URL de la Realtime Database (ex. `https://xxx-default-rtdb.firebaseio.com`).
+    #[serde(default)]
+    pub firebase_database_url: String,
 }
 
 fn default_model() -> String {
@@ -32,6 +43,8 @@ impl Default for Settings {
             deepseek_api_key: String::new(),
             deepseek_model: default_model(),
             deepseek_temperature: default_temperature(),
+            firebase_api_key: String::new(),
+            firebase_database_url: String::new(),
         }
     }
 }

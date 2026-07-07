@@ -49,7 +49,7 @@
 | 53 | Transport WebSocket + connexion client | ✅ |
 | 54 | Prédiction client & interpolation | 🟢 |
 | 55 | Salons multijoueurs (lobby, join/leave) | 🟢 |
-| 56 | Firebase : comptes & auth | ⬜ |
+| 56 | Firebase : comptes & auth | 🟢 |
 | 57 | Firebase : inventaire/progression | ⬜ |
 | 58 | Firebase : chat + présence | ⬜ |
 | 59 | Firebase : classement (leaderboard) | ⬜ |
@@ -308,22 +308,41 @@ le rendu à 60 Hz).
 > Pas de SDK Rust officiel Firebase → accès via l'API REST (déjà `ureq` en dépendance
 > pour l'IA) + endpoint SSE de RTDB pour les mises à jour poussées (chat/présence).
 
-### Sprint 56 — Comptes & authentification
+### Sprint 56 — Comptes & authentification 🟢 (client REST fait, écran de connexion reporté)
 **Objectif** : identifier les joueurs de façon persistante entre les sessions.
-- [ ] Firebase Auth (REST : `signUp`/`signInWithPassword`) pour obtenir un `idToken`.
-- [ ] RTDB : nœud `/users/{uid}/profile` (pseudo, date de création) protégé par les
-  règles de sécurité RTDB (lecture publique du pseudo, écriture seulement par l'`uid`
-  propriétaire, vérifiée via `auth != null && auth.uid === $uid`).
-- [ ] Client : écran de connexion/inscription minimal (egui), token stocké en mémoire
-  (pas de fichier en clair).
-- [ ] Documenter noms de clé API/config dans les Paramètres (comme le modèle IA
-  DeepSeek existant dans `src/app/ai.rs`) — jamais commit de clé en dur.
-- **Fichiers** : nouveau `src/net/firebase.rs`, `src/editor/mod.rs` (écran connexion),
-  `src/app/settings.rs`.
-- **Livrable** : créer un compte, se reconnecter, pseudo affiché en jeu.
+- [x] `src/net/firebase.rs` (nouveau, desktop-only comme `client.rs`/`server_loop.rs` —
+  dépend de `ureq`, déjà gaté ainsi) : `sign_up`/`sign_in` (Firebase Auth REST,
+  `signUp`/`signInWithPassword`) → `AuthSession { uid, id_token }` ;
+  `set_profile_name`/`get_profile_name` (RTDB REST) pour le pseudo.
+- [x] Logique de parsing séparée de l'I/O réseau (`parse_auth_response`,
+  `parse_error_message`, `rtdb_url`) : testable sans identifiants Firebase réels.
+  6 tests (réponse réussie, réponse malformée, message d'erreur Firebase, URL avec/
+  sans slash final, URL avec/sans query string).
+- [x] Doc de sécurité en tête de module (règles RTDB requises **avant** d'exposer le
+  nœud en écriture — la clé API Web est publique par conception, ce n'est pas un
+  secret côté client).
+- [x] `Settings` (`app/settings.rs`) : `firebase_api_key`/`firebase_database_url`,
+  persistés comme la clé DeepSeek existante. Champs ajoutés au panneau **Paramètres**
+  de l'éditeur (`editor/mod.rs`), même convention que la section IA (auto-save au
+  changement, indicateur configuré/non configuré).
+- [ ] **Reporté** : écran de connexion/inscription en jeu (egui), stockage de la
+  session, affichage du pseudo. Décision assumée, deux raisons : (1) aucun compte
+  Firebase réel n'est configuré dans cet environnement pour valider un flux de
+  connexion de bout en bout (contrairement au protocole réseau, testable sans
+  service externe) ; (2) un écran de connexion est de l'UI `egui` non vérifiable
+  visuellement ici (même limite que le lobby reporté au Sprint 55). Le client REST
+  ci-dessus est en revanche complet et testé — brancher l'écran dessus est mécanique
+  une fois qu'il y a un vrai projet Firebase à pointer.
+- **Fichiers** : nouveau `src/net/firebase.rs` ; modifiés `src/app/settings.rs`,
+  `src/editor/mod.rs` (panneau Paramètres), `src/net/mod.rs`.
+- **Livrable** : 114 tests lib + 1 test bin verts, clippy/fmt propres ; `sign_up`/
+  `sign_in`/`set_profile_name`/`get_profile_name` prêts à l'emploi dès qu'une clé API
+  Web et une URL RTDB sont renseignées dans les Paramètres (non vérifié en conditions
+  réelles, faute de projet Firebase de test disponible ici).
 - **Risques** : les clés Firebase Web sont publiques par design (la sécurité vient des
   **règles RTDB**, pas du secret de la clé) — écrire les règles de sécurité *avant*
-  d'exposer le nœud en écriture, pas après.
+  d'exposer le nœud en écriture, pas après. Documenté dans le module, pas encore
+  vérifié contre un vrai projet Firebase.
 
 ### Sprint 57 — Inventaire & progression persistante
 **Objectif** : garder l'XP/objets d'un joueur entre les parties.

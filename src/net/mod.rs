@@ -14,4 +14,6 @@ pub mod protocol;
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod client;
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub mod firebase;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod server_loop;
