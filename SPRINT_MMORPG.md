@@ -53,7 +53,7 @@
 | 57 | Firebase : inventaire/progression | 🟢 |
 | 58 | Firebase : chat + présence | 🟢 |
 | 59 | Firebase : classement (leaderboard) | 🟢 |
-| 60 | Durcissement réseau & anti-triche de base | ⬜ |
+| 60 | Durcissement réseau & anti-triche de base | ✅ |
 | 61 | Tests de charge & optimisation bande passante | ⬜ |
 | 62 | Déploiement serveur | ⬜ |
 
@@ -447,21 +447,49 @@ le rendu à 60 Hz).
 
 ## PHASE Q — Robustesse & mise en production
 
-### Sprint 60 — Durcissement réseau & anti-triche de base
+### Sprint 60 — Durcissement réseau & anti-triche de base ✅ FAIT
 **Objectif** : le serveur ne fait confiance à aucune donnée client brute.
-- [ ] Validation serveur de tous les `Input` reçus (bornes de vitesse, cooldown
-  d'attaque réel côté serveur — pas seulement affiché côté client).
-- [ ] Timeout/reconnexion : un client qui ne répond plus est retiré proprement du
-  salon après délai ; un client qui se reconnecte dans la fenêtre de grâce reprend sa
-  place.
-- [ ] Tests dédiés (sur le modèle des tests gameplay existants nommés en intention,
-  ex. `server_rejects_attack_before_cooldown_elapsed`).
-- **Fichiers** : `src/net/server_loop.rs`, `src/app/combat.rs`, tests associés.
-- **Livrable** : un client modifié pour spammer des inputs invalides ne casse pas la
-  partie des autres joueurs (testé manuellement avec un client de test dédié).
-- **Risques** : périmètre volontairement limité — pas de détection d'aimbot/wallhack
-  ici (hors scope d'un jeu 2-16 joueurs solo-dev), seulement la validation serveur des
-  règles de jeu de base.
+- [x] **Bug réel trouvé et corrigé** : `sanitize_network_input` (`app/multiplayer.rs`)
+  rejette `NaN`/`Infinity` avant de mémoriser un `NetworkInput` — sans ce nettoyage,
+  un `NaN` reçu du réseau (octets bincode arbitraires d'un client modifié, pas
+  nécessairement un client légitime limité par des sliders egui) traverse
+  `f32::clamp` sans être filtré (`NaN < min`/`NaN > max` sont tous deux faux) et se
+  propage dans la position physique de l'objet, corrompant potentiellement la
+  simulation pour tout le monde. Testé (`a_nan_input_from_the_network_never_
+  corrupts_the_players_position`) : la position reste finie après plusieurs pas de
+  simulation avec un input `NaN` malveillant.
+- [x] **Attaque réseau + cooldown serveur** (nouveau, pas seulement un durcissement
+  de l'existant) : `update_network_attacks` — chaque joueur réseau peut désormais
+  frapper immédiatement à courte portée (`NETWORK_ATTACK_RANGE`, 1,2 m) quand son
+  `Input.attack` est vrai, avec un temps de recharge (`NETWORK_ATTACK_COOLDOWN`,
+  0,4 s) **validé côté serveur** — un client qui spamme `attack: true` à chaque
+  tick ne peut pas frapper plus vite que ce temps de recharge. Testé
+  (`server_rejects_attack_before_cooldown_elapsed`) : deux cibles à portée, un
+  spam d'attaques rapprochées n'en vainc qu'une, la seconde ne tombe qu'après le
+  temps de recharge écoulé.
+- [x] **Timeout client** (`src/bin/server.rs`) : `CLIENT_TIMEOUT` (10 s) — un joueur
+  sans le moindre message (même un `Input` inchangé, qu'un client légitime envoie à
+  chaque tick) est retiré de la partie par `evict_timed_out_players`, appelée une
+  fois par tick. Testé bout-en-bout à travers un vrai socket
+  (`a_silent_client_is_evicted_after_the_timeout`, avec un timeout court injecté en
+  paramètre pour ne pas attendre 10 s réelles dans le test).
+- [ ] **Reporté** : reprise de la même place lors d'une reconnexion dans la fenêtre
+  de grâce (nécessiterait une identité stable across reconnects, ex. `firebase_uid`
+  comme clé plutôt que le `PlayerId` de session — un vrai chantier, pas fait ici).
+  Un joueur qui timeout ou se déconnecte réapparaît aujourd'hui comme un nouveau
+  joueur s'il se reconnecte.
+- **Fichiers** : `src/app/multiplayer.rs`, `src/app/mod.rs` (appel dans
+  `advance_play`), `src/bin/server.rs`.
+- **Livrable** : 130 tests lib + 2 tests bin verts, clippy/fmt propres ; serveur
+  vérifié sans régression (tourne identiquement pour une manche locale).
+- **Limite documentée** : les attaques réseau (via `attack_at`) ne créditent pas
+  encore de score/son (contrairement à l'attaque du joueur local) — cohérent avec
+  la limite déjà documentée au Sprint 55 (santé/score pas encore individualisés
+  par joueur réseau). Elles font en revanche bien progresser les manches
+  (`update_waves` ne regarde que la visibilité des cibles, pas le score).
+- **Risques** : périmètre volontairement limité, comme prévu — pas de détection
+  d'aimbot/wallhack (hors scope d'un jeu 2-16 joueurs solo-dev), seulement la
+  validation serveur des règles de jeu de base (mouvement, cooldown, présence).
 
 ### Sprint 61 — Tests de charge & optimisation bande passante
 **Objectif** : confirmer que 16 joueurs/salon restent fluides et peu coûteux en réseau.
@@ -509,7 +537,7 @@ le rendu à 60 Hz).
 | Firebase RTDB — progression persistante | 57 | ⬜ |
 | Firebase RTDB — chat/présence | 58 | ⬜ |
 | Firebase RTDB — classement | 59 | ⬜ |
-| Anti-triche de base (validation serveur) | 60 | ⬜ |
+| Anti-triche de base (validation serveur) | 60 | ✅ |
 | Validation charge/perf réseau | 61 | ⬜ |
 | Mise en production (hors LAN) | 62 | ⬜ |
 

@@ -185,6 +185,9 @@ pub struct AppState {
     /// Dernier `Input` reçu de chaque joueur réseau (remplacé, pas cumulé : le
     /// client renvoie son état complet à chaque message).
     network_inputs: HashMap<crate::net::protocol::PlayerId, multiplayer::NetworkInput>,
+    /// Temps de recharge (s) restant avant la prochaine attaque possible de
+    /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`, Sprint 60).
+    network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
@@ -332,6 +335,7 @@ impl AppState {
             stagger: Vec::new(),
             network_players: HashMap::new(),
             network_inputs: HashMap::new(),
+            network_attack_cooldowns: HashMap::new(),
             show_grid: true,
             snap: false,
             camera: OrbitCamera::new(1.0),
@@ -1802,6 +1806,7 @@ impl AppState {
                 }
             }
             self.update_attack(dt);
+            self.update_network_attacks(dt);
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
             self.respawn_queue.retain(|&(i, at)| {

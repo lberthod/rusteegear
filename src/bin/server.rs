@@ -50,13 +50,31 @@ const DEFAULT_ADDR: &str = "127.0.0.1:7777";
 /// conditions réelles).
 const XP_PER_LEVEL: u32 = 1000;
 
+/// Durée sans le moindre message d'un joueur réseau (même un `Input` inchangé —
+/// cf. le protocole, un client légitime en envoie un par tick) au-delà de
+/// laquelle il est considéré perdu et retiré de la partie (Sprint 60). Un
+/// client frappé de silence radio (freeze, crash sans fermeture propre de la
+/// socket) ne doit pas laisser un objet fantôme immobile indéfiniment dans la
+/// manche des autres joueurs.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// État du salon côté binaire (pas dans `AppState`, qui ne connaît que les
-/// indices d'objets, cf. `app::multiplayer`) : nom affiché et `uid` Firebase
-/// de chaque joueur réseau connecté.
+/// indices d'objets, cf. `app::multiplayer`) : nom affiché, `uid` Firebase et
+/// dernière activité de chaque joueur réseau connecté.
 #[derive(Default)]
 struct Lobby {
     names: HashMap<u32, String>,
     firebase_uids: HashMap<u32, String>,
+    /// Horodatage du dernier message reçu de chaque joueur (cf. `CLIENT_TIMEOUT`).
+    last_seen: HashMap<u32, Instant>,
+}
+
+impl Lobby {
+    fn forget(&mut self, id: u32) {
+        self.names.remove(&id);
+        self.firebase_uids.remove(&id);
+        self.last_seen.remove(&id);
+    }
 }
 
 /// Traite un message reçu d'un client : fait entrer/sortir le joueur de la
@@ -64,6 +82,9 @@ struct Lobby {
 /// testable (cf. `tests::joining_moving_and_leaving_through_the_real_socket`)
 /// sans avoir à lancer le binaire complet.
 fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u32, msg: ClientMsg) {
+    if !matches!(msg, ClientMsg::Leave) {
+        lobby.last_seen.insert(id, Instant::now());
+    }
     match msg {
         ClientMsg::Join { name, firebase_uid } => {
             if app.spawn_network_player(id).is_some() {
@@ -98,11 +119,37 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
         }
         ClientMsg::Leave => {
             app.despawn_network_player(id);
-            lobby.names.remove(&id);
-            lobby.firebase_uids.remove(&id);
+            lobby.forget(id);
             log::info!("Joueur {id} quitte la partie");
             net.broadcast(&ServerMsg::PlayerLeft { player_id: id });
         }
+    }
+}
+
+/// Retire les joueurs réseau sans le moindre message depuis `timeout` (cf. la
+/// doc de `CLIENT_TIMEOUT`) — appelé une fois par tick avec `CLIENT_TIMEOUT`,
+/// après avoir traité les messages reçus. Symétrique à un `ClientMsg::Leave`
+/// explicite (même nettoyage), sauf que c'est le serveur qui l'initie faute de
+/// nouvelles du client. `timeout` en paramètre (pas seulement la constante) :
+/// permet aux tests d'utiliser un délai court plutôt que d'attendre 10 s réelles.
+fn evict_timed_out_players(
+    app: &mut AppState,
+    net: &NetServer,
+    lobby: &mut Lobby,
+    timeout: Duration,
+) {
+    let now = Instant::now();
+    let timed_out: Vec<u32> = lobby
+        .last_seen
+        .iter()
+        .filter(|&(_, &at)| now.duration_since(at) > timeout)
+        .map(|(&id, _)| id)
+        .collect();
+    for id in timed_out {
+        log::warn!("Joueur {id} : timeout ({timeout:?} sans message), retiré de la partie");
+        app.despawn_network_player(id);
+        lobby.forget(id);
+        net.broadcast(&ServerMsg::PlayerLeft { player_id: id });
     }
 }
 
@@ -237,6 +284,7 @@ fn main() {
             while let Ok((id, msg)) = net.inbox.try_recv() {
                 handle_message(&mut app, net, &mut lobby, id, msg);
             }
+            evict_timed_out_players(&mut app, net, &mut lobby, CLIENT_TIMEOUT);
         }
 
         app.advance_play();
@@ -369,5 +417,47 @@ mod tests {
             !app.scene.objects[object_index].visible,
             "l'objet du joueur parti doit être masqué"
         );
+    }
+
+    /// Sprint 60 : un joueur qui ne donne plus signe de vie (freeze, crash sans
+    /// `Leave` propre) doit être retiré après le délai de timeout, sans bloquer
+    /// la partie des autres. Utilise un `timeout` court (paramètre de
+    /// `evict_timed_out_players`) plutôt que `CLIENT_TIMEOUT` (10 s réelles).
+    #[test]
+    fn a_silent_client_is_evicted_after_the_timeout() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+        let mut app = AppState::new();
+        app.load_zombies_demo();
+        app.playing = true;
+        let mut lobby = Lobby::default();
+
+        let client = NetClient::connect(&url, "Silencieux", None).expect("connexion");
+        let ServerMsg::Welcome { player_id } = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu")
+        else {
+            panic!("premier message attendu : Welcome");
+        };
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        handle_message(&mut app, &net, &mut lobby, id, msg);
+        assert!(app.network_player_object(player_id).is_some());
+
+        // Aucun message pendant plus que le timeout court : le joueur doit être
+        // évincé au prochain passage de `evict_timed_out_players`.
+        let short_timeout = Duration::from_millis(50);
+        std::thread::sleep(Duration::from_millis(120));
+        evict_timed_out_players(&mut app, &net, &mut lobby, short_timeout);
+
+        assert_eq!(
+            app.network_player_object(player_id),
+            None,
+            "un joueur silencieux depuis plus que le timeout doit être retiré"
+        );
+        assert!(!lobby.last_seen.contains_key(&player_id));
     }
 }

@@ -23,6 +23,41 @@ pub struct NetworkInput {
     pub jump: bool,
 }
 
+/// Portée (m) de l'attaque réseau : un coup immédiat au contact, pas le
+/// missile homing avec préparation du joueur local (`app::combat`, qui
+/// dépend d'un unique `attack_charge`/`attack_projectile` par `AppState` —
+/// en avoir un par joueur réseau est un vrai chantier de refonte, hors scope
+/// ici). Volontairement courte : un coup à distance serait un simplement un
+/// substitut dégradé du système existant, pas une intention de design.
+const NETWORK_ATTACK_RANGE: f32 = 1.2;
+
+/// Temps de recharge (s) entre deux attaques d'un même joueur réseau — sans
+/// lui, un client qui maintient (ou spam) `attack: true` défairait tout ce
+/// qui entre en portée sans le moindre risque, cf. le même raisonnement que
+/// `Controller::attack_cooldown` pour le joueur local (`app::combat`).
+const NETWORK_ATTACK_COOLDOWN: f32 = 0.4;
+
+/// Nettoie un `NetworkInput` reçu du réseau avant de le mémoriser (cf.
+/// `AppState::set_network_input`) : rejette `NaN`/infini (remplacés par 0, le
+/// neutre pour un axe de déplacement) et borne les axes à `[-1, 1]` — la même
+/// borne que le joueur local (`inp.joy.0.clamp(-1.0, 1.0)`), appliquée ici à
+/// la source plutôt que de faire confiance à `sim_step` pour la répéter.
+fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
+    let clean = |v: f32| {
+        if v.is_finite() {
+            v.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+    NetworkInput {
+        move_x: clean(input.move_x),
+        move_y: clean(input.move_y),
+        attack: input.attack,
+        jump: input.jump,
+    }
+}
+
 impl AppState {
     /// Fait entrer un nouveau joueur réseau dans la partie : clone le premier
     /// objet « gabarit » pilotable trouvé dans la scène (le même gabarit que le
@@ -61,6 +96,7 @@ impl AppState {
             o.visible = false;
         }
         self.network_inputs.remove(&id);
+        self.network_attack_cooldowns.remove(&id);
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
@@ -68,9 +104,19 @@ impl AppState {
     /// le précédent (le client renvoie son état complet à chaque message, pas un
     /// delta, cf. `ClientMsg::Input`). Sans effet si `id` n'est pas (ou plus)
     /// connecté (message reçu après une déconnexion, par exemple).
+    ///
+    /// **Durcissement (Sprint 60)** : les valeurs brutes reçues du réseau ne
+    /// sont **jamais** dignes de confiance (cf. `sanitize_network_input`) — un
+    /// client modifié pourrait envoyer `NaN`/`Infinity` (bytes bincode arbitraires,
+    /// pas nécessairement produits par un client légitime passant par des sliders
+    /// egui bornés) ; sans nettoyage ici, un `NaN` se propagerait dans la
+    /// position physique de l'objet (`f32::clamp` ne filtre pas `NaN`, cf. la
+    /// sémantique de `f32::clamp` : les comparaisons avec `NaN` sont toujours
+    /// fausses) et corromprait la simulation pour tout le monde, pas seulement
+    /// ce joueur.
     pub fn set_network_input(&mut self, id: PlayerId, input: NetworkInput) {
         if let Some(slot) = self.network_inputs.get_mut(&id) {
-            *slot = input;
+            *slot = sanitize_network_input(input);
         }
     }
 
@@ -82,6 +128,39 @@ impl AppState {
     /// Nombre de joueurs réseau actuellement en jeu (hors joueur local).
     pub fn network_player_count(&self) -> usize {
         self.network_players.len()
+    }
+
+    /// Résout les attaques des joueurs réseau pour ce tick (Sprint 60) : décompte
+    /// les temps de recharge, puis pour chaque joueur dont l'`Input` demande une
+    /// attaque et dont le temps de recharge est écoulé, frappe immédiatement à
+    /// portée (`NETWORK_ATTACK_RANGE`) depuis sa position — validation **serveur**
+    /// du temps de recharge (`NETWORK_ATTACK_COOLDOWN`), pas seulement affichée
+    /// côté client : un client modifié qui renvoie `attack: true` à chaque tick
+    /// ne peut pas frapper plus vite que le temps de recharge imposé ici.
+    pub fn update_network_attacks(&mut self, dt: f32) {
+        for cd in self.network_attack_cooldowns.values_mut() {
+            *cd -= dt;
+        }
+        let ids: Vec<PlayerId> = self.network_players.keys().copied().collect();
+        for id in ids {
+            let ready = self
+                .network_attack_cooldowns
+                .get(&id)
+                .is_none_or(|cd| *cd <= 0.0);
+            let wants_attack = self.network_inputs.get(&id).is_some_and(|i| i.attack);
+            if !ready || !wants_attack {
+                continue;
+            }
+            let Some(index) = self.network_players.get(&id).copied() else {
+                continue;
+            };
+            let Some(pos) = self.scene.objects.get(index).map(|o| o.transform.position) else {
+                continue;
+            };
+            self.scene.attack_at(pos, NETWORK_ATTACK_RANGE);
+            self.network_attack_cooldowns
+                .insert(id, NETWORK_ATTACK_COOLDOWN);
+        }
     }
 
     /// Construit un `Snapshot` de tous les joueurs réseau, pour diffusion via
@@ -235,5 +314,154 @@ mod tests {
         let indices: Vec<u32> = snap.entities.iter().map(|e| e.index).collect();
         assert!(indices.contains(&(a as u32)));
         assert!(indices.contains(&(b as u32)));
+    }
+
+    #[test]
+    fn sanitize_replaces_non_finite_axes_with_zero() {
+        let dirty = NetworkInput {
+            move_x: f32::NAN,
+            move_y: f32::INFINITY,
+            attack: true,
+            jump: true,
+        };
+        let clean = sanitize_network_input(dirty);
+        assert_eq!(clean.move_x, 0.0);
+        assert_eq!(clean.move_y, 0.0);
+        // Les booléens ne sont pas concernés par le nettoyage numérique.
+        assert!(clean.attack);
+        assert!(clean.jump);
+    }
+
+    #[test]
+    fn sanitize_clamps_axes_to_unit_range() {
+        let dirty = NetworkInput {
+            move_x: 50.0,
+            move_y: -50.0,
+            attack: false,
+            jump: false,
+        };
+        let clean = sanitize_network_input(dirty);
+        assert_eq!(clean.move_x, 1.0);
+        assert_eq!(clean.move_y, -1.0);
+    }
+
+    #[test]
+    fn a_nan_input_from_the_network_never_corrupts_the_players_position() {
+        // Un client modifié pourrait envoyer des octets produisant un NaN (pas
+        // nécessairement un client légitime passant par des sliders bornés) :
+        // vérifie que la position reste finie après plusieurs pas de simulation.
+        let mut app = app_with_zombies_demo();
+        let a = app.spawn_network_player(1).unwrap();
+        app.set_network_input(
+            1,
+            NetworkInput {
+                move_x: f32::NAN,
+                move_y: f32::NAN,
+                attack: false,
+                jump: false,
+            },
+        );
+        app.playing = true;
+        for _ in 0..10 {
+            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        let pos = app.scene.objects[a].transform.position;
+        assert!(
+            pos.is_finite(),
+            "un NaN reçu du réseau ne doit jamais corrompre la position : {pos:?}"
+        );
+    }
+
+    /// Construit une scène minimale : un joueur pilotable au centre, et deux
+    /// cibles `attackable` à portée immédiate (cf. `NETWORK_ATTACK_RANGE`) —
+    /// de quoi vérifier que le temps de recharge serveur limite bien le nombre
+    /// de cibles vaincues par unité de temps, indépendamment de ce qu'un client
+    /// prétend envoyer.
+    fn scene_with_player_and_two_targets_in_range() -> crate::scene::Scene {
+        use crate::scene::{Combat, Controller, MeshKind, Scene, SceneObject, Transform};
+
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Joueur".into(),
+            transform: Transform::from_pos(Vec3::ZERO),
+            controller: Some(Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for i in 0..2 {
+            scene.objects.push(SceneObject {
+                name: format!("Cible {i}"),
+                mesh: MeshKind::Cube,
+                transform: Transform::from_pos(Vec3::new(0.3, 0.0, 0.0)),
+                combat: Some(Combat {
+                    attackable: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        scene
+    }
+
+    #[test]
+    fn server_rejects_attack_before_cooldown_elapsed() {
+        let mut app = AppState::new();
+        app.scene = scene_with_player_and_two_targets_in_range();
+        let player_index = app.spawn_network_player(1).unwrap();
+        // Les deux cibles sont à portée du point d'apparition du joueur réseau
+        // (décalé de +5 en X par `spawn_network_player`) : replace-les au même
+        // décalage pour rester dans `NETWORK_ATTACK_RANGE`.
+        let player_pos = app.scene.objects[player_index].transform.position;
+        for o in app.scene.objects.iter_mut() {
+            if o.combat.is_some() {
+                o.transform.position = player_pos;
+            }
+        }
+        app.playing = true;
+        app.set_network_input(
+            1,
+            NetworkInput {
+                move_x: 0.0,
+                move_y: 0.0,
+                attack: true,
+                jump: false,
+            },
+        );
+
+        // Plusieurs ticks rapprochés (bien en-deçà de NETWORK_ATTACK_COOLDOWN) :
+        // un client qui spamme `attack: true` ne doit vaincre qu'UNE cible.
+        for _ in 0..5 {
+            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.02);
+            app.advance_play();
+        }
+        let defeated_early: usize = app
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.combat.is_some() && !o.visible)
+            .count();
+        assert_eq!(
+            defeated_early, 1,
+            "le temps de recharge doit limiter à une seule cible vaincue malgré le spam"
+        );
+
+        // Après le temps de recharge, une nouvelle attaque doit passer.
+        for _ in 0..15 {
+            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        let defeated_later: usize = app
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.combat.is_some() && !o.visible)
+            .count();
+        assert_eq!(
+            defeated_later, 2,
+            "une fois le temps de recharge écoulé, la seconde cible doit tomber aussi"
+        );
     }
 }
