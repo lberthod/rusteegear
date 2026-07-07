@@ -51,7 +51,7 @@
 | 55 | Salons multijoueurs (lobby, join/leave) | 🟢 |
 | 56 | Firebase : comptes & auth | 🟢 |
 | 57 | Firebase : inventaire/progression | 🟢 |
-| 58 | Firebase : chat + présence | ⬜ |
+| 58 | Firebase : chat + présence | 🟢 |
 | 59 | Firebase : classement (leaderboard) | ⬜ |
 | 60 | Durcissement réseau & anti-triche de base | ⬜ |
 | 61 | Tests de charge & optimisation bande passante | ⬜ |
@@ -383,19 +383,42 @@ le rendu à 60 Hz).
   niveau/XP en jeu) — dépend de l'écran de connexion reporté au Sprint 56 ; même
   raison (pas d'UI vérifiable ici).
 
-### Sprint 58 — Chat de salon & présence
+### Sprint 58 — Chat de salon & présence 🟢 (REST fait, SSE temps réel reporté)
 **Objectif** : communication texte + liste des joueurs en ligne.
-- [ ] Nœud RTDB `/lobbies/{code}/chat` (liste de messages horodatés) + `/presence/{uid}`
-  (statut en ligne, `onDisconnect` RTDB pour nettoyer automatiquement à la déconnexion).
-- [ ] Client : écoute en SSE (flux `EventSource` du REST RTDB) pour recevoir les
-  nouveaux messages/présences sans polling.
-- [ ] UI chat minimal dans le lobby (egui).
-- **Fichiers** : `src/net/firebase.rs`, `src/editor/mod.rs`.
-- **Livrable** : deux clients dans le même salon voient les messages de l'autre en
-  temps quasi réel, et se voient apparaître/disparaître de la liste de présence.
-- **Risques** : SSE + `ureq` (bloquant) ne cohabitent pas bien avec la boucle `winit` —
-  probablement nécessaire de le faire tourner sur le même thread réseau que le
-  WebSocket de jeu (`tokio`), pas un `ureq` bloquant de plus sur le thread principal.
+- [x] `ChatMessage { sender, text, sent_at_ms }` sur `/lobbies/{code}/chat` :
+  `post_chat_message` (POST, clé générée par RTDB — n'écrase jamais les messages
+  existants), `list_chat_messages` (GET, tri par `sent_at_ms` croissant, `null` →
+  liste vide plutôt qu'erreur si le salon n'a pas encore de messages).
+- [x] `Presence { last_seen_ms }` sur `/presence/{uid}` : `set_presence` (heartbeat),
+  `list_online_players`/`is_online` (seuil `PRESENCE_TIMEOUT_MS`, 15 s).
+  **Limite assumée, documentée dans le module** : la présence RTDB « officielle »
+  (`onDisconnect()`) est une fonctionnalité **liée à la connexion WebSocket du SDK
+  JS/natif**, absente de l'API REST utilisée ici (pas de notion de connexion
+  persistante en HTTP requête/réponse). Cette implémentation fait donc un
+  **heartbeat périodique** plutôt qu'une vraie détection de déconnexion : un joueur
+  qui perd la connexion brutalement reste « en ligne » jusqu'à expiration du seuil
+  (15 s), au lieu d'une réaction immédiate. Acceptable à l'échelle visée (2-16
+  joueurs/salon).
+- [x] 6 tests (chat vide/trié/malformé, présence vide/multi-uid, seuil `is_online`).
+- [ ] **Reporté, décision assumée** : écoute en **SSE** (flux temps réel, sans
+  repoller) et **UI chat egui**. Deux raisons, cohérentes avec les sprints
+  précédents : (1) le risque explicitement noté dans ce document
+  (« SSE + `ureq` bloquant ne cohabitent pas bien avec `winit` ») se confirme à
+  l'implémentation — un flux SSE ouvre une connexion HTTP tenue indéfiniment, ce
+  qui demande la même gymnastique thread-dédié-avec-canal que `NetClient`/`NetServer`
+  (Sprint 53), pas un simple appel `ureq` de plus ; (2) aucune UI n'est vérifiable
+  visuellement dans cet environnement. Le **polling REST** (`list_chat_messages`/
+  `list_online_players`) fonctionne dès maintenant et couvre un chat de salon à
+  petite échelle (2-16 joueurs) sans le risque du SSE — un appel toutes les 1-2 s
+  suffit largement à cette échelle, quitte à migrer vers du SSE plus tard si le
+  volume de requêtes devient un problème réel (mesurable, pas anticipé).
+- **Fichiers** : `src/net/firebase.rs`.
+- **Livrable** : 123 tests lib + 1 test bin verts, clippy/fmt propres ; chat et
+  présence utilisables dès maintenant par polling (non vérifié contre un vrai
+  projet Firebase, même réserve qu'aux Sprints 56-57).
+- **Risques** : la présence heartbeat suppose un appel `set_presence` régulier côté
+  client — pas encore câblé (dépend de l'écran de connexion/lobby reporté), donc pas
+  testable de bout en bout pour l'instant.
 
 ### Sprint 59 — Classement (leaderboard)
 **Objectif** : classement global des meilleurs scores.

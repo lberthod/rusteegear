@@ -96,6 +96,85 @@ fn parse_progress_response(body: &str) -> Result<PlayerProgress, String> {
     serde_json::from_value(v).map_err(|e| format!("Progression Firebase illisible : {e}"))
 }
 
+/// Message de chat d'un salon (SPRINT_MMORPG.md, Sprint 58), sous
+/// `/lobbies/{code}/chat/{push_id}`.
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
+pub struct ChatMessage {
+    pub sender: String,
+    pub text: String,
+    /// Horodatage en millisecondes Unix, utilisé pour trier les messages (les
+    /// clés `push_id` générées par RTDB sont déjà triables chronologiquement,
+    /// mais un champ explicite reste plus lisible pour l'UI et les tests).
+    pub sent_at_ms: u64,
+}
+
+/// Parse la réponse d'une lecture de `/lobbies/{code}/chat` : RTDB renvoie un
+/// objet `{push_id: {..}, ...}` (ou `null` si le salon n'a aucun message),
+/// triée par `sent_at_ms` croissant (ordre d'affichage naturel d'un chat).
+fn parse_chat_messages(body: &str) -> Result<Vec<ChatMessage>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let map = v
+        .as_object()
+        .ok_or_else(|| "réponse chat inattendue (pas un objet)".to_string())?;
+    let mut messages: Vec<ChatMessage> = map
+        .values()
+        .map(|m| serde_json::from_value(m.clone()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Message de chat illisible : {e}"))?;
+    messages.sort_by_key(|m| m.sent_at_ms);
+    Ok(messages)
+}
+
+/// Présence d'un joueur (SPRINT_MMORPG.md, Sprint 58), sous `/presence/{uid}`.
+///
+/// **Limite assumée** : la présence RTDB "officielle" (SDK JS/natif) utilise
+/// `onDisconnect()`, une fonctionnalité **liée à la connexion WebSocket du SDK
+/// client**, absente de l'API REST utilisée ici (pas de notion de connexion
+/// persistante en HTTP requête/réponse). Cette implémentation REST-only fait
+/// donc un **heartbeat** : le client écrit régulièrement `last_seen_ms`, et un
+/// lecteur considère un joueur en ligne si `now - last_seen_ms` est sous un
+/// seuil (`PRESENCE_TIMEOUT_MS`) — un joueur qui perd la connexion brutalement
+/// reste "en ligne" jusqu'à expiration du seuil, contrairement à `onDisconnect`
+/// qui réagirait immédiatement. Acceptable à l'échelle visée (2-16 joueurs/
+/// salon), pas un problème à résoudre ici.
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
+pub struct Presence {
+    pub last_seen_ms: u64,
+}
+
+/// Seuil (ms) au-delà duquel un joueur sans heartbeat récent est considéré
+/// hors ligne (cf. le commentaire de `Presence`).
+pub const PRESENCE_TIMEOUT_MS: u64 = 15_000;
+
+/// `true` si `presence` correspond à un joueur en ligne à l'instant `now_ms`.
+pub fn is_online(presence: &Presence, now_ms: u64) -> bool {
+    now_ms.saturating_sub(presence.last_seen_ms) < PRESENCE_TIMEOUT_MS
+}
+
+/// Parse la réponse d'une lecture de `/presence` (tous les joueurs) : objet
+/// `{uid: {last_seen_ms}, ...}`, ou `null` si personne ne s'est jamais connecté.
+fn parse_presence_map(body: &str) -> Result<Vec<(String, Presence)>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let map = v
+        .as_object()
+        .ok_or_else(|| "réponse présence inattendue (pas un objet)".to_string())?;
+    map.iter()
+        .map(|(uid, p)| {
+            serde_json::from_value::<Presence>(p.clone())
+                .map(|p| (uid.clone(), p))
+                .map_err(|e| format!("Présence illisible pour {uid} : {e}"))
+        })
+        .collect()
+}
+
 /// Parse la réponse d'un appel `signUp`/`signInWithPassword` réussi. Séparé de
 /// l'appel réseau pour rester testable sans identifiants Firebase réels.
 fn parse_auth_response(body: &str) -> Result<AuthSession, String> {
@@ -274,11 +353,106 @@ mod net_io {
             .map(|_| ())
             .map_err(|e| format!("Écriture de la progression Firebase échouée : {e}"))
     }
+
+    /// Poste un message dans le chat d'un salon (`/lobbies/{code}/chat`, ajout
+    /// par clé générée par RTDB — POST, pas PUT, pour ne jamais écraser les
+    /// messages existants). Lecture publique attendue dans les règles (chat de
+    /// salon, pas de donnée sensible) ; écriture réservée aux membres connectés
+    /// (`auth != null`).
+    pub fn post_chat_message(
+        config: &FirebaseConfig,
+        lobby_code: &str,
+        auth_token: &str,
+        message: &ChatMessage,
+    ) -> Result<(), String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let path = format!("lobbies/{lobby_code}/chat");
+        let url = rtdb_url(&config.database_url, &path, &format!("auth={auth_token}"));
+        ureq::post(&url)
+            .timeout(TIMEOUT)
+            .send_json(serde_json::to_value(message).map_err(|e| e.to_string())?)
+            .map(|_| ())
+            .map_err(|e| format!("Envoi du message de chat échoué : {e}"))
+    }
+
+    /// Liste les messages d'un salon, triés du plus ancien au plus récent.
+    /// Simple lecture ponctuelle (pas de flux temps réel) — cf. le commentaire
+    /// de `stream_events` pour un suivi en direct via SSE.
+    pub fn list_chat_messages(
+        config: &FirebaseConfig,
+        lobby_code: &str,
+    ) -> Result<Vec<ChatMessage>, String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let path = format!("lobbies/{lobby_code}/chat");
+        let url = rtdb_url(&config.database_url, &path, "");
+        let resp = ureq::get(&url)
+            .timeout(TIMEOUT)
+            .call()
+            .map_err(|e| format!("Lecture du chat échouée : {e}"))?;
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+        parse_chat_messages(&text)
+    }
+
+    /// Écrit le heartbeat de présence du joueur (cf. le commentaire de
+    /// `Presence` : pas de vrai `onDisconnect` possible en REST-only). À
+    /// appeler périodiquement (quelques secondes) tant que le joueur est en jeu.
+    pub fn set_presence(
+        config: &FirebaseConfig,
+        uid: &str,
+        auth_token: &str,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let path = format!("presence/{uid}");
+        let url = rtdb_url(&config.database_url, &path, &format!("auth={auth_token}"));
+        let body = Presence {
+            last_seen_ms: now_ms,
+        };
+        ureq::put(&url)
+            .timeout(TIMEOUT)
+            .send_json(serde_json::to_value(body).map_err(|e| e.to_string())?)
+            .map(|_| ())
+            .map_err(|e| format!("Écriture de la présence échouée : {e}"))
+    }
+
+    /// Liste les joueurs considérés en ligne à l'instant `now_ms` (cf.
+    /// `is_online`) — lecture ponctuelle de `/presence`.
+    pub fn list_online_players(
+        config: &FirebaseConfig,
+        now_ms: u64,
+    ) -> Result<Vec<String>, String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let url = rtdb_url(&config.database_url, "presence", "");
+        let resp = ureq::get(&url)
+            .timeout(TIMEOUT)
+            .call()
+            .map_err(|e| format!("Lecture de la présence échouée : {e}"))?;
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+        let all = parse_presence_map(&text)?;
+        Ok(all
+            .into_iter()
+            .filter(|(_, p)| is_online(p, now_ms))
+            .map(|(uid, _)| uid)
+            .collect())
+    }
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub use net_io::{
-    get_profile_name, get_progress, set_profile_name, set_progress, sign_in, sign_up,
+    get_profile_name, get_progress, list_chat_messages, list_online_players, post_chat_message,
+    set_presence, set_profile_name, set_progress, sign_in, sign_up,
 };
 
 // --- Qui écrit la progression ? (SPRINT_MMORPG.md, Sprint 57) ---------------
@@ -395,5 +569,58 @@ mod tests {
     #[test]
     fn progress_rejects_a_malformed_node() {
         assert!(parse_progress_response(r#"{"level": "pas un nombre"}"#).is_err());
+    }
+
+    #[test]
+    fn chat_is_empty_when_the_lobby_has_no_messages_yet() {
+        assert_eq!(parse_chat_messages("null").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn chat_messages_are_sorted_oldest_first() {
+        let body = r#"{
+            "-push2": {"sender": "Bob", "text": "salut", "sent_at_ms": 2000},
+            "-push1": {"sender": "Alice", "text": "yo", "sent_at_ms": 1000}
+        }"#;
+        let messages = parse_chat_messages(body).expect("messages valides");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].sender, "Alice");
+        assert_eq!(messages[1].sender, "Bob");
+    }
+
+    #[test]
+    fn chat_rejects_a_malformed_message() {
+        assert!(parse_chat_messages(r#"{"-push1": {"sender": "Alice"}}"#).is_err());
+    }
+
+    #[test]
+    fn presence_map_is_empty_when_nobody_ever_connected() {
+        assert_eq!(parse_presence_map("null").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn presence_map_parses_every_uid() {
+        let body = r#"{
+            "uid-a": {"last_seen_ms": 1000},
+            "uid-b": {"last_seen_ms": 2000}
+        }"#;
+        let mut parsed = parse_presence_map(body).expect("présence valide");
+        parsed.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            parsed,
+            vec![
+                ("uid-a".to_string(), Presence { last_seen_ms: 1000 }),
+                ("uid-b".to_string(), Presence { last_seen_ms: 2000 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn is_online_within_the_timeout_window() {
+        let p = Presence {
+            last_seen_ms: 10_000,
+        };
+        assert!(is_online(&p, 10_000 + PRESENCE_TIMEOUT_MS - 1));
+        assert!(!is_online(&p, 10_000 + PRESENCE_TIMEOUT_MS + 1));
     }
 }
