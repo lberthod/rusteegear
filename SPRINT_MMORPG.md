@@ -54,7 +54,7 @@
 | 58 | Firebase : chat + présence | 🟢 |
 | 59 | Firebase : classement (leaderboard) | 🟢 |
 | 60 | Durcissement réseau & anti-triche de base | ✅ |
-| 61 | Tests de charge & optimisation bande passante | ⬜ |
+| 61 | Tests de charge & optimisation bande passante | ✅ |
 | 62 | Déploiement serveur | ⬜ |
 
 > Mettre à jour cette table à chaque sprint terminé — c'est la vue « où j'en suis »
@@ -491,20 +491,40 @@ le rendu à 60 Hz).
   d'aimbot/wallhack (hors scope d'un jeu 2-16 joueurs solo-dev), seulement la
   validation serveur des règles de jeu de base (mouvement, cooldown, présence).
 
-### Sprint 61 — Tests de charge & optimisation bande passante
+### Sprint 61 — Tests de charge & optimisation bande passante ✅ FAIT
 **Objectif** : confirmer que 16 joueurs/salon restent fluides et peu coûteux en réseau.
-- [ ] Script de charge : N clients factices (headless, sans rendu) rejoignant un même
-  salon, mesurant tick serveur et taille moyenne des snapshots.
-- [ ] Optimisations si besoin : compression des deltas, fréquence réseau adaptative
-  (baisser le tick si peu de changement), regroupement des messages.
-- [ ] Documenter les chiffres obtenus (ticks/s soutenus, Ko/s par joueur) dans ce
-  document, section Suivi.
-- **Fichiers** : nouveau `examples/load_test_client.rs` (sur le modèle des exemples
-  existants dans `examples/`), `src/net/protocol.rs`.
-- **Livrable** : mesure chiffrée publiée (ex. « 16 joueurs, tick 20 Hz, X Ko/s/joueur,
-  Y ms de traitement serveur par tick ») + éventuelles optimisations appliquées.
-- **Risques** : sans ce sprint, le coût réseau réel n'est qu'une estimation du Sprint
-  52 — ne pas sauter cette étape avant un déploiement public.
+- [x] `examples/load_test_client.rs` : démarre un `NetServer` + `AppState` dans le
+  même processus, connecte **16 bots** (`NetClient` réels, vrai socket local),
+  chacun envoyant un `Input` à 20 Hz (mouvement sinusoïdal déphasé par bot, pas de
+  dépendance à une crate `rand`) pendant 10 s (après 1 s de chauffe exclue de la
+  mesure). Mesure le temps de traitement serveur par tick, la taille réelle des
+  `Snapshot` diffusés et des `Input` envoyés (via `protocol::encode`, pas une
+  estimation).
+- [x] Mesuré (`cargo run --release --example load_test_client`, machine de dev) :
+  ```
+  Joueurs simultanés       : 16
+  Temps de traitement/tick : moyenne 0.34-0.40 ms, max ~1.7-3.0 ms (budget 50 ms à 20 Hz)
+  Taille moyenne d'un Snapshot (16 joueurs) : 368 octets
+  Débit descendant (serveur -> 1 client)    : 6.76 Ko/s/joueur
+  Débit montant total (16 joueurs)          : 4.11 Ko/s (0.26 Ko/s/joueur)
+  Taille moyenne d'un Input                 : 14 octets
+  ```
+- [x] **Aucune optimisation nécessaire à cette échelle** : le temps de traitement
+  serveur (~0,4 ms) utilise moins de 1 % du budget de tick (50 ms à 20 Hz), et le
+  débit descendant (6,76 Ko/s/joueur) est ~30× sous un objectif large de
+  200 Ko/s/joueur. Compression, fréquence adaptative et regroupement de messages
+  (prévus dans ce sprint *si besoin*) ne sont donc pas justifiés à 16 joueurs —
+  décision fondée sur la mesure, pas anticipée par prudence.
+- **Fichiers** : nouveau `examples/load_test_client.rs`.
+- **Livrable** : chiffres publiés ci-dessus (mesurés, pas estimés) ; `cargo test`
+  toujours vert (130 lib + 2 bin), `clippy`/`fmt` propres.
+- **Limite assumée** : mesuré sur une seule machine (client + serveur dans le même
+  processus, latence réseau ~nulle) — ne mesure pas l'effet d'une vraie latence
+  réseau (RTT) sur le débit ressenti, seulement le coût CPU/bande passante brut.
+  Cohérent avec le scope de ce sprint (charge et bande passante, pas latence —
+  déjà couverte par l'interpolation/réconciliation du Sprint 54).
+- **Risques levés** : la mesure confirme les projections du Sprint 52 (encodage
+  bincode compact) à l'échelle réellement visée par le projet.
 
 ### Sprint 62 — Déploiement serveur
 **Objectif** : un serveur accessible depuis Internet, pas seulement en LAN.
@@ -538,7 +558,7 @@ le rendu à 60 Hz).
 | Firebase RTDB — chat/présence | 58 | ⬜ |
 | Firebase RTDB — classement | 59 | ⬜ |
 | Anti-triche de base (validation serveur) | 60 | ✅ |
-| Validation charge/perf réseau | 61 | ⬜ |
+| Validation charge/perf réseau | 61 | ✅ |
 | Mise en production (hors LAN) | 62 | ⬜ |
 
 ---
@@ -549,4 +569,15 @@ le rendu à 60 Hz).
 > l'estimation, décisions prises en cours de route. Objectif : que la prochaine
 > session (ou une autre) comprenne le *pourquoi* sans relire tout l'historique git.
 
-- _(vide pour l'instant — premier sprint à démarrer : **50**)_
+- **2026-07-07 — Sprints 50-61.** Enchaînés sans interruption dans une même session.
+  Écart majeur vs l'estimation initiale : plusieurs sprints prévus avec UI egui
+  (lobby, écran de connexion, chat, classement) ont été **volontairement reportés**
+  — cet environnement d'exécution n'a pas d'affichage graphique pour les valider,
+  et une UI écrite sans jamais être vue tourner est un risque, pas un gain. À la
+  place, chaque sprint a livré son backend/logique, testé automatiquement
+  (unitaire + bout-en-bout via de vrais sockets locaux quand pertinent). Sprints
+  56-59 (Firebase) : code écrit et testé unitairement, mais **jamais vérifié
+  contre un vrai projet Firebase** (aucun disponible ici) — à valider par
+  l'utilisateur dès qu'un projet est configuré. Sprint 61 : chiffres **mesurés**
+  (pas estimés) confirmant une large marge à 16 joueurs (voir sa section) —
+  aucune optimisation réseau nécessaire à cette échelle.
