@@ -13,11 +13,20 @@
 //! joueur réseau — un vrai combat joueur-contre-joueur demande d'abord de donner
 //! à chaque joueur sa propre vie/win condition, hors scope de ce sprint (cf.
 //! `AppState::network_snapshot`, qui documente la même limite côté santé).
+//!
+//! **Progression Firebase (Sprint 57)** : optionnelle, activée par 4 variables
+//! d'environnement (`FIREBASE_API_KEY`, `FIREBASE_DATABASE_URL`,
+//! `FIREBASE_SERVER_EMAIL`, `FIREBASE_SERVER_PASSWORD` — un compte Firebase
+//! dédié au serveur, cf. le commentaire « Qui écrit la progression ? » dans
+//! `net::firebase`). Si absentes, le serveur tourne comme avant (pas de
+//! régression). En fin de manche, chaque joueur réseau connecté avec un
+//! `firebase_uid` (cf. `ClientMsg::Join`) reçoit son score de la manche en XP.
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use motor3derust::app::AppState;
 use motor3derust::app::multiplayer::NetworkInput;
+use motor3derust::net::firebase::{self, AuthSession, FirebaseConfig, PlayerProgress};
 use motor3derust::net::protocol::{ClientMsg, ServerMsg};
 use motor3derust::net::server_loop::NetServer;
 
@@ -34,19 +43,27 @@ const MAX_DURATION: Duration = Duration::from_secs(180);
 /// manuels avec plusieurs instances sur la même machine).
 const DEFAULT_ADDR: &str = "127.0.0.1:7777";
 
+/// XP nécessaire pour passer au niveau suivant (formule volontairement simple :
+/// un palier fixe, pas de courbe — à raffiner si besoin une fois testé en
+/// conditions réelles).
+const XP_PER_LEVEL: u32 = 1000;
+
+/// État du salon côté binaire (pas dans `AppState`, qui ne connaît que les
+/// indices d'objets, cf. `app::multiplayer`) : nom affiché et `uid` Firebase
+/// de chaque joueur réseau connecté.
+#[derive(Default)]
+struct Lobby {
+    names: HashMap<u32, String>,
+    firebase_uids: HashMap<u32, String>,
+}
+
 /// Traite un message reçu d'un client : fait entrer/sortir le joueur de la
 /// partie ou met à jour son `Input` courant. Extrait de `main` pour rester
 /// testable (cf. `tests::joining_moving_and_leaving_through_the_real_socket`)
 /// sans avoir à lancer le binaire complet.
-fn handle_message(
-    app: &mut AppState,
-    net: &NetServer,
-    player_names: &mut HashMap<u32, String>,
-    id: u32,
-    msg: ClientMsg,
-) {
+fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u32, msg: ClientMsg) {
     match msg {
-        ClientMsg::Join { name } => {
+        ClientMsg::Join { name, firebase_uid } => {
             if app.spawn_network_player(id).is_some() {
                 log::info!("Joueur {id} ({name}) entre en jeu");
                 net.broadcast(&ServerMsg::PlayerJoined {
@@ -56,7 +73,10 @@ fn handle_message(
             } else {
                 log::warn!("Joueur {id} ({name}) : aucun gabarit pilotable dans la scène");
             }
-            player_names.insert(id, name);
+            lobby.names.insert(id, name);
+            if let Some(uid) = firebase_uid {
+                lobby.firebase_uids.insert(id, uid);
+            }
         }
         ClientMsg::Input {
             move_x,
@@ -76,9 +96,68 @@ fn handle_message(
         }
         ClientMsg::Leave => {
             app.despawn_network_player(id);
-            player_names.remove(&id);
+            lobby.names.remove(&id);
+            lobby.firebase_uids.remove(&id);
             log::info!("Joueur {id} quitte la partie");
             net.broadcast(&ServerMsg::PlayerLeft { player_id: id });
+        }
+    }
+}
+
+/// Lit la config Firebase serveur depuis l'environnement et se connecte une
+/// fois (cf. le commentaire « Qui écrit la progression ? » dans
+/// `net::firebase`). `None` si les variables ne sont pas toutes présentes —
+/// la progression est alors simplement désactivée, pas une erreur fatale.
+fn connect_firebase_server() -> Option<(FirebaseConfig, AuthSession)> {
+    let api_key = std::env::var("FIREBASE_API_KEY").ok()?;
+    let database_url = std::env::var("FIREBASE_DATABASE_URL").ok()?;
+    let email = std::env::var("FIREBASE_SERVER_EMAIL").ok()?;
+    let password = std::env::var("FIREBASE_SERVER_PASSWORD").ok()?;
+    let config = FirebaseConfig {
+        api_key,
+        database_url,
+    };
+    match firebase::sign_in(&config, &email, &password) {
+        Ok(session) => {
+            log::info!(
+                "Firebase : connecté avec le compte serveur ({})",
+                session.uid
+            );
+            Some((config, session))
+        }
+        Err(e) => {
+            log::warn!(
+                "Firebase : connexion du compte serveur échouée ({e}) — progression désactivée"
+            );
+            None
+        }
+    }
+}
+
+/// Crédite le score de la manche en XP à chaque joueur réseau connu de
+/// Firebase. Les échecs (réseau, règles RTDB non configurées...) sont logués
+/// mais ne font pas planter le serveur — la progression est un bonus, pas une
+/// condition de fonctionnement du jeu.
+fn award_progress(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobby, score: u32) {
+    let Some((config, session)) = firebase else {
+        return;
+    };
+    for (id, uid) in &lobby.firebase_uids {
+        let previous = match firebase::get_progress(config, uid) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Firebase : lecture progression du joueur {id} échouée ({e})");
+                PlayerProgress::default()
+            }
+        };
+        let xp = previous.xp + score;
+        let level = 1 + xp / XP_PER_LEVEL;
+        let updated = PlayerProgress { level, xp };
+        match firebase::set_progress(config, uid, updated, &session.id_token) {
+            Ok(()) => {
+                log::info!("Firebase : joueur {id} ({uid}) → niveau {level}, {xp} XP (+{score})")
+            }
+            Err(e) => log::warn!("Firebase : écriture progression du joueur {id} échouée ({e})"),
         }
     }
 }
@@ -101,14 +180,19 @@ fn main() {
         }
     };
 
+    let firebase = connect_firebase_server();
+    if firebase.is_none() {
+        log::info!(
+            "Firebase désactivé (FIREBASE_API_KEY/DATABASE_URL/SERVER_EMAIL/SERVER_PASSWORD \
+             non renseignées) — pas de progression persistante pour cette manche"
+        );
+    }
+
     let mut app = AppState::new();
     app.load_zombies_demo();
     app.playing = true;
 
-    // Noms des joueurs réseau connectés (pour les logs et `PlayerJoined`) : `AppState`
-    // ne connaît que l'indice d'objet de chaque joueur (cf. `spawn_network_player`),
-    // pas son nom — gardé ici, côté binaire, plutôt que dans la lib.
-    let mut player_names: HashMap<u32, String> = HashMap::new();
+    let mut lobby = Lobby::default();
 
     let mut last_wave = app.wave;
     let mut last_score = app.score();
@@ -120,7 +204,7 @@ fn main() {
 
         if let Some(net) = &net {
             while let Ok((id, msg)) = net.inbox.try_recv() {
-                handle_message(&mut app, net, &mut player_names, id, msg);
+                handle_message(&mut app, net, &mut lobby, id, msg);
             }
         }
 
@@ -146,6 +230,7 @@ fn main() {
                 app.score(),
                 started.elapsed().as_secs_f32()
             );
+            award_progress(&firebase, &lobby, app.score());
             break;
         }
         if app.is_lost() {
@@ -154,6 +239,7 @@ fn main() {
                 app.score(),
                 started.elapsed().as_secs_f32()
             );
+            award_progress(&firebase, &lobby, app.score());
             break;
         }
         if started.elapsed() > MAX_DURATION {
@@ -189,9 +275,9 @@ mod tests {
         let mut app = AppState::new();
         app.load_zombies_demo();
         app.playing = true;
-        let mut player_names = HashMap::new();
+        let mut lobby = Lobby::default();
 
-        let client = NetClient::connect(&url, "Alice").expect("connexion du client");
+        let client = NetClient::connect(&url, "Alice", None).expect("connexion du client");
         let ServerMsg::Welcome { player_id } = client
             .inbox
             .recv_timeout(Duration::from_secs(2))
@@ -206,7 +292,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
         assert_eq!(id, player_id);
-        handle_message(&mut app, &net, &mut player_names, id, msg);
+        handle_message(&mut app, &net, &mut lobby, id, msg);
 
         let object_index = app
             .network_player_object(player_id)
@@ -223,7 +309,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Input attendu côté serveur");
-        handle_message(&mut app, &net, &mut player_names, id, msg);
+        handle_message(&mut app, &net, &mut lobby, id, msg);
 
         // Pas d'accès à `last_frame` (privé) depuis ce binaire externe : on avance
         // en temps réel, comme le fait réellement `main` (contrairement aux tests
@@ -244,7 +330,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Leave attendu côté serveur");
-        handle_message(&mut app, &net, &mut player_names, id, msg);
+        handle_message(&mut app, &net, &mut lobby, id, msg);
         assert_eq!(app.network_player_object(player_id), None);
         assert!(
             !app.scene.objects[object_index].visible,

@@ -50,7 +50,7 @@
 | 54 | Prédiction client & interpolation | 🟢 |
 | 55 | Salons multijoueurs (lobby, join/leave) | 🟢 |
 | 56 | Firebase : comptes & auth | 🟢 |
-| 57 | Firebase : inventaire/progression | ⬜ |
+| 57 | Firebase : inventaire/progression | 🟢 |
 | 58 | Firebase : chat + présence | ⬜ |
 | 59 | Firebase : classement (leaderboard) | ⬜ |
 | 60 | Durcissement réseau & anti-triche de base | ⬜ |
@@ -344,20 +344,44 @@ le rendu à 60 Hz).
   d'exposer le nœud en écriture, pas après. Documenté dans le module, pas encore
   vérifié contre un vrai projet Firebase.
 
-### Sprint 57 — Inventaire & progression persistante
+### Sprint 57 — Inventaire & progression persistante 🟢 (câblage serveur fait, non testé en conditions réelles)
 **Objectif** : garder l'XP/objets d'un joueur entre les parties.
-- [ ] Nœud RTDB `/users/{uid}/progress` (niveau, XP, objets débloqués).
-- [ ] Écriture en fin de manche (score → XP), lecture au login.
-- [ ] Résolution de conflit simple : dernière écriture serveur fait foi (le serveur de
-  jeu du Sprint 51 pousse la progression, pas le client, pour éviter la triche côté
-  client sur les gains).
-- **Fichiers** : `src/net/firebase.rs`, `src/bin/server.rs` (appel Firebase en fin de
-  manche), `src/app/combat.rs`.
-- **Livrable** : rejouer une seconde session affiche bien le niveau/XP cumulés de la
-  session précédente.
-- **Risques** : le serveur de jeu doit détenir ses propres identifiants Firebase
-  (service account / règles dédiées), différents du token utilisateur — à séparer
-  proprement pour ne pas donner au client un accès en écriture directe à sa progression.
+- [x] `PlayerProgress { level, xp }` (`net/firebase.rs`) ↔ `/users/{uid}/progress` ;
+  `get_progress` traite `null` (nœud absent, premier lancement) comme niveau 1/0 XP,
+  pas une erreur. `set_progress` prend un `auth_token` **explicite**, pas une
+  `AuthSession` de joueur (cf. point suivant). 3 tests de parsing.
+- [x] `ClientMsg::Join` gagne un champ `firebase_uid: Option<String>` (protocole
+  modifié, tests mis à jour) : un client connecté à Firebase le transmet au join,
+  pour que le serveur sache quel `uid` créditer. `None` = partie locale/anonyme,
+  aucun changement de comportement.
+- [x] **Qui écrit la progression ?** Documenté en détail dans `net::firebase` : le
+  client ne doit jamais écrire sa propre progression avec son propre token (triche
+  triviale sur les gains) — seul le **serveur de jeu**, avec un compte Firebase
+  dédié (`FIREBASE_SERVER_EMAIL`/`FIREBASE_SERVER_PASSWORD`, distinct des comptes
+  joueurs), doit pouvoir écrire `/users/*/progress`, via des règles RTDB dédiées.
+  Vraie mise en prod : Firebase Admin SDK (hors scope, pas de crate Rust mature) ;
+  ici, alternative REST « compte serveur + règles », documentée avec un exemple de
+  règles JSON.
+- [x] `src/bin/server.rs` : `connect_firebase_server()` lit 4 variables
+  d'environnement au démarrage, se connecte une fois (`sign_in`), continue sans
+  Firebase si absentes/en échec (log, pas de crash). `award_progress()` crédite le
+  score de la manche en XP à chaque joueur réseau connu de Firebase, à la fin de la
+  manche (victoire ou défaite) ; niveau = XP / 1000 (formule simple, à raffiner).
+  Toute erreur Firebase est loguée, jamais fatale (la progression est un bonus).
+- **Fichiers** : `src/net/firebase.rs`, `src/net/protocol.rs` (+ `client.rs`,
+  `server_loop.rs` mis à jour pour le nouveau champ), `src/bin/server.rs`.
+- **Livrable** : 117 tests lib + 1 test bin verts, clippy/fmt propres ; le serveur
+  tourne identiquement sans les variables Firebase (vérifié manuellement — log
+  « Firebase désactivé », aucune régression).
+- **Non vérifié, assumé** : le flux complet (compte serveur réel, règles RTDB
+  réellement déployées, écriture effective) n'a **pas** été testé contre un vrai
+  projet Firebase — aucun projet de test disponible dans cet environnement. Le
+  code est écrit pour être correct et dégrader proprement, mais « ça compile et la
+  logique est testée unitairement » n'est pas la même chose que « vérifié en
+  conditions réelles ». À valider dès qu'un projet Firebase est configuré.
+- **Reporté** : lecture de la progression **au login** côté client (afficher
+  niveau/XP en jeu) — dépend de l'écran de connexion reporté au Sprint 56 ; même
+  raison (pas d'UI vérifiable ici).
 
 ### Sprint 58 — Chat de salon & présence
 **Objectif** : communication texte + liste des joueurs en ligne.

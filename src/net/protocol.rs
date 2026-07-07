@@ -16,7 +16,15 @@ pub type PlayerId = u32;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
     /// Première trame envoyée à la connexion : demande à rejoindre le salon.
-    Join { name: String },
+    Join {
+        name: String,
+        /// `uid` Firebase (cf. `net::firebase::AuthSession`), si le joueur s'est
+        /// connecté avant de rejoindre (Sprint 56/57) — sert au serveur pour
+        /// créditer la progression de fin de manche au bon compte. `None` pour
+        /// une partie locale/anonyme (pas de régression : identique à l'absence
+        /// de compte).
+        firebase_uid: Option<String>,
+    },
     /// État des contrôles pour le tick courant (cf. `app::PlayerInput`, en plus
     /// compact — un client réseau ne pilote qu'un joueur, pas un overlay tactile
     /// complet). Envoyé à chaque tick client, même sans changement (le serveur ne
@@ -127,6 +135,11 @@ mod tests {
     fn client_msg_join_round_trips() {
         round_trip(ClientMsg::Join {
             name: "Loïc".to_string(),
+            firebase_uid: None,
+        });
+        round_trip(ClientMsg::Join {
+            name: "Loïc".to_string(),
+            firebase_uid: Some("uid-1234".to_string()),
         });
     }
 

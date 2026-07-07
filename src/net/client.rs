@@ -27,7 +27,14 @@ impl NetClient {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) et envoie immédiatement un
     /// `ClientMsg::Join`. Bloquant le temps de la connexion TCP/WebSocket initiale
     /// (raisonnable au lancement/join d'un salon, pas dans la boucle de rendu).
-    pub fn connect(url: &str, name: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    /// `firebase_uid` : `uid` obtenu par `net::firebase::sign_in`/`sign_up`, si le
+    /// joueur s'est connecté avant de rejoindre (cf. Sprint 57) ; `None` pour une
+    /// partie locale/anonyme.
+    pub fn connect(
+        url: &str,
+        name: &str,
+        firebase_uid: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let runtime = Runtime::new()?;
         let (ws, _response) = runtime.block_on(tokio_tungstenite::connect_async(url))?;
         let (mut sink, mut stream) = ws.split();
@@ -37,6 +44,7 @@ impl NetClient {
 
         let join = protocol::encode(&ClientMsg::Join {
             name: name.to_string(),
+            firebase_uid: firebase_uid.map(str::to_string),
         })?;
         out_tx.send(join)?;
 

@@ -131,7 +131,7 @@ async fn handle_connection(
         Message::Binary(b) => b,
         _ => return Err("première trame non binaire".into()),
     };
-    let ClientMsg::Join { name } = protocol::decode::<ClientMsg>(&join_bytes)? else {
+    let ClientMsg::Join { name, firebase_uid } = protocol::decode::<ClientMsg>(&join_bytes)? else {
         return Err("première trame n'est pas un Join".into());
     };
 
@@ -149,7 +149,7 @@ async fn handle_connection(
     // dans la partie (cf. `AppState::spawn_network_player`, Sprint 55). Une
     // défaillance d'envoi ici (thread principal arrêté) ne doit pas empêcher la
     // connexion de continuer, donc pas de `?`.
-    let _ = tx.send((id, ClientMsg::Join { name }));
+    let _ = tx.send((id, ClientMsg::Join { name, firebase_uid }));
 
     // Pompe sortante : relaie les messages poussés par `send_to`/`broadcast`
     // (thread principal) vers la socket, jusqu'à fermeture du canal ou erreur
@@ -210,7 +210,7 @@ mod tests {
         let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
         let url = format!("ws://{}", server.local_addr);
 
-        let client = NetClient::connect(&url, "Testeur").expect("connexion du client");
+        let client = NetClient::connect(&url, "Testeur", None).expect("connexion du client");
 
         let welcome = client
             .inbox
@@ -231,7 +231,8 @@ mod tests {
         assert_eq!(
             join_msg,
             ClientMsg::Join {
-                name: "Testeur".to_string()
+                name: "Testeur".to_string(),
+                firebase_uid: None,
             }
         );
 
@@ -266,8 +267,8 @@ mod tests {
         let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
         let url = format!("ws://{}", server.local_addr);
 
-        let a = NetClient::connect(&url, "A").expect("connexion A");
-        let b = NetClient::connect(&url, "B").expect("connexion B");
+        let a = NetClient::connect(&url, "A", None).expect("connexion A");
+        let b = NetClient::connect(&url, "B", None).expect("connexion B");
 
         let welcome_a = a.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
         let welcome_b = b.inbox.recv_timeout(Duration::from_secs(2)).unwrap();

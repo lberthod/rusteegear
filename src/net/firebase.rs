@@ -61,6 +61,41 @@ struct FirebaseErrorDetail {
     message: String,
 }
 
+/// Progression persistante d'un joueur (SPRINT_MMORPG.md, Sprint 57) : niveau
+/// et XP cumulés entre les parties, stockés sous `/users/{uid}/progress`.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, serde::Serialize)]
+pub struct PlayerProgress {
+    #[serde(default = "default_level")]
+    pub level: u32,
+    #[serde(default)]
+    pub xp: u32,
+}
+
+fn default_level() -> u32 {
+    1
+}
+
+impl Default for PlayerProgress {
+    fn default() -> Self {
+        Self {
+            level: default_level(),
+            xp: 0,
+        }
+    }
+}
+
+/// Parse la réponse RTDB d'une lecture de `/users/{uid}/progress` : `null`
+/// (nœud absent, premier lancement du joueur) donne la progression par défaut,
+/// pas une erreur.
+fn parse_progress_response(body: &str) -> Result<PlayerProgress, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+    if v.is_null() {
+        return Ok(PlayerProgress::default());
+    }
+    serde_json::from_value(v).map_err(|e| format!("Progression Firebase illisible : {e}"))
+}
+
 /// Parse la réponse d'un appel `signUp`/`signInWithPassword` réussi. Séparé de
 /// l'appel réseau pour rester testable sans identifiants Firebase réels.
 fn parse_auth_response(body: &str) -> Result<AuthSession, String> {
@@ -197,10 +232,77 @@ mod net_io {
             serde_json::from_str(&text).map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
         Ok(v.as_str().map(str::to_string))
     }
+
+    /// Lit la progression d'un joueur (`/users/{uid}/progress`) ; renvoie la
+    /// progression par défaut (niveau 1, 0 XP) si le nœud n'existe pas encore
+    /// (premier lancement de ce joueur).
+    pub fn get_progress(config: &FirebaseConfig, uid: &str) -> Result<PlayerProgress, String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let path = format!("users/{uid}/progress");
+        let url = rtdb_url(&config.database_url, &path, "");
+        let resp = ureq::get(&url)
+            .timeout(TIMEOUT)
+            .call()
+            .map_err(|e| format!("Lecture de la progression Firebase échouée : {e}"))?;
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+        parse_progress_response(&text)
+    }
+
+    /// Écrit la progression d'un joueur. `auth_token` est délibérément explicite
+    /// (pas pris sur une `AuthSession` du joueur) : cf. le commentaire
+    /// « Qui écrit la progression ? » en tête de module — c'est le **serveur de
+    /// jeu**, avec ses propres identifiants, qui doit appeler cette fonction en
+    /// fin de manche, jamais le client avec son propre token.
+    pub fn set_progress(
+        config: &FirebaseConfig,
+        uid: &str,
+        progress: PlayerProgress,
+        auth_token: &str,
+    ) -> Result<(), String> {
+        if config.database_url.trim().is_empty() {
+            return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
+        }
+        let path = format!("users/{uid}/progress");
+        let url = rtdb_url(&config.database_url, &path, &format!("auth={auth_token}"));
+        ureq::put(&url)
+            .timeout(TIMEOUT)
+            .send_json(serde_json::to_value(progress).map_err(|e| e.to_string())?)
+            .map(|_| ())
+            .map_err(|e| format!("Écriture de la progression Firebase échouée : {e}"))
+    }
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-pub use net_io::{get_profile_name, set_profile_name, sign_in, sign_up};
+pub use net_io::{
+    get_profile_name, get_progress, set_profile_name, set_progress, sign_in, sign_up,
+};
+
+// --- Qui écrit la progression ? (SPRINT_MMORPG.md, Sprint 57) ---------------
+//
+// `set_progress` prend un `auth_token` explicite plutôt que de dépendre d'une
+// `AuthSession` de joueur, parce que la progression (XP, niveau) est une
+// donnée **compétitive** : si le client pouvait l'écrire avec son propre
+// token, il pourrait s'attribuer n'importe quel score. Les règles RTDB
+// doivent donc refuser l'écriture au propriétaire (contrairement au profil,
+// cf. Sprint 56) et ne l'autoriser qu'à un compte serveur dédié, ex. :
+// ```json
+// "progress": { "$uid": {
+//   ".read": "auth != null && auth.uid === $uid",
+//   ".write": "auth != null && auth.uid === '<UID_DU_COMPTE_SERVEUR>'"
+// }}
+// ```
+// Le serveur de jeu (`src/bin/server.rs`) doit alors se connecter une fois au
+// démarrage avec un compte Firebase dédié (`sign_in`, cf. ci-dessus) et
+// réutiliser son `id_token` pour tous les appels `set_progress`. Une vraie
+// mise en production irait plus loin avec le **Firebase Admin SDK** (jeton
+// signé par compte de service, contourne les règles RTDB) — non implémenté
+// ici faute de crate Rust mature pour l'Admin SDK ; l'approche « compte
+// serveur dédié + règles » ci-dessus est une alternative REST-only suffisante
+// à l'échelle visée (2-16 joueurs/salon).
 
 #[cfg(test)]
 mod tests {
@@ -274,5 +376,24 @@ mod tests {
             url,
             "https://x.firebaseio.com/users/abc/profile.json?auth=tok123"
         );
+    }
+
+    #[test]
+    fn progress_defaults_to_level_one_zero_xp_when_the_node_is_absent() {
+        // RTDB renvoie littéralement `null` quand le nœud n'existe pas encore
+        // (premier lancement du joueur) — pas une erreur à traiter.
+        let progress = parse_progress_response("null").expect("null est un cas valide");
+        assert_eq!(progress, PlayerProgress { level: 1, xp: 0 });
+    }
+
+    #[test]
+    fn progress_parses_an_existing_node() {
+        let progress = parse_progress_response(r#"{"level": 4, "xp": 1250}"#).expect("nœud valide");
+        assert_eq!(progress, PlayerProgress { level: 4, xp: 1250 });
+    }
+
+    #[test]
+    fn progress_rejects_a_malformed_node() {
+        assert!(parse_progress_response(r#"{"level": "pas un nombre"}"#).is_err());
     }
 }
