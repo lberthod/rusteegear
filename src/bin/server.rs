@@ -35,11 +35,26 @@ use motor3derust::net::server_loop::NetServer;
 /// Cadence réseau visée pour le serveur (cf. SPRINT_MMORPG.md Sprint 51 : découplée
 /// du 60 Hz physique local, qui reste piloté par l'accumulateur à pas fixe existant
 /// dans `AppState::advance_play`).
-const SERVER_TICK: Duration = Duration::from_millis(50); // 20 Hz
+///
+/// **Relevée de 20 Hz à 50 Hz (2026-07-12)** : à 20 Hz, chaque fantôme distant
+/// n'a une position fraîche que toutes les 50 ms, et `RemoteEntity::sample`
+/// interpole *entre* les deux derniers snapshots reçus — donc affiche toujours
+/// un état vieux d'au moins un tick, en plus du round-trip réseau réel. Constaté
+/// en test réel : latence perçue trop grande sur le mouvement des autres
+/// joueurs. Le Sprint 61 a mesuré une large marge à 16 joueurs même à 20 Hz
+/// (30 threads OS, aucune limite CPU/réseau atteinte) — 60 Hz reste trivial à
+/// cette échelle (2 joueurs de test).
+///
+/// **Alignée sur 60 Hz (2026-07-12)**, la cadence de `advance_play`/la physique
+/// elle-même (`FIXED_DT` dans `AppState::advance_play`) : un tick réseau par
+/// pas physique, au lieu d'un rythme intermédiaire arbitraire — chaque
+/// `Snapshot` reflète alors un état fraîchement simulé, jamais un état déjà
+/// périmé de plusieurs pas physiques en attendant le prochain tick réseau.
+const SERVER_TICK: Duration = Duration::from_millis(16); // ~60 Hz
 
 /// Durée maximale d'une manche avant arrêt de sécurité (évite une boucle infinie si
 /// la manche ne se termine jamais, ex. bug de configuration de scène).
-const MAX_DURATION: Duration = Duration::from_secs(180);
+const MAX_DURATION: Duration = Duration::from_secs(1200);
 
 /// Adresse d'écoute par défaut ; `RUSTEEGEAR_SERVER_ADDR` pour surcharger (ex. tests
 /// manuels avec plusieurs instances sur la même machine).
@@ -56,7 +71,16 @@ const XP_PER_LEVEL: u32 = 1000;
 /// client frappé de silence radio (freeze, crash sans fermeture propre de la
 /// socket) ne doit pas laisser un objet fantôme immobile indéfiniment dans la
 /// manche des autres joueurs.
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+///
+/// **Relevé de 10 s à 60 s (constaté en test réel du 2026-07-12)** : le rendu
+/// desktop (`winit`/macOS) ralentit ou suspend `advance_play` — donc l'envoi
+/// d'`Input` — quand la fenêtre n'est plus au premier plan/est occultée (App
+/// Nap), et Android fait de même en arrière-plan. Un client légitime qui perd
+/// juste le focus quelques secondes se faisait éjecter par cette limite,
+/// silencieusement (aucune des deux apps ne détecte sa propre éviction),
+/// rendant le multijoueur quasi inutilisable dès qu'on changeait de fenêtre
+/// pour regarder autre chose.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// État du salon côté binaire (pas dans `AppState`, qui ne connaît que les
 /// indices d'objets, cf. `app::multiplayer`) : nom affiché, `uid` Firebase et
@@ -267,7 +291,15 @@ fn main() {
     }
 
     let mut app = AppState::new();
-    app.load_zombies_demo();
+    // Charge la même scène que les clients (le jeu réellement exporté, cf.
+    // `assets/player_scene.json`/`Scene::embedded_player`) plutôt que l'arène
+    // de test générique `Scene::mmorpg_demo` : le serveur est autoritaire sur
+    // les positions, transmises telles quelles aux clients (`network_snapshot`) —
+    // si sa scène diffère de la leur (géométrie/repère différents), un fantôme
+    // reçoit des coordonnées qui ne correspondent à rien de visible dans LEUR
+    // scène (constaté en conditions réelles : deux clients connectés plusieurs
+    // minutes sans jamais se voir, cf. le test manuel du 2026-07-12).
+    app.use_embedded_scene();
     // Masque le gabarit joueur local *avant* le premier join : sans ça, l'IA
     // le poursuit et sa santé s'épuise pendant l'attente du premier joueur,
     // terminant la manche en défaite avant même qu'un joueur ait pu se

@@ -54,10 +54,18 @@ pub enum ServerMsg {
     Event(GameEvent),
 }
 
-/// Delta d'état du monde pour un tick donné : uniquement les entités dont l'état a
-/// changé depuis le dernier snapshot envoyé à *ce* client (cf. §2 SPRINT_MMORPG.md,
-/// Sprint 52) — pas l'état complet de la scène à chaque tick, pour limiter la bande
-/// passante à N joueurs (Sprint 61 mesure et documente le coût réel).
+/// État des joueurs réseau pour un tick donné : **pas** un delta par client
+/// malgré le nom — `AppState::network_snapshot` (`app/multiplayer.rs`)
+/// diffuse l'état complet de tous les joueurs réseau à chaque tick, identique
+/// pour tous les clients (`NetServer::broadcast`, pas de `send_to`
+/// individualisé). Suffisant à l'échelle visée (mesuré au Sprint 61 :
+/// ~368 octets pour 16 joueurs, ~30x sous un budget large de 200 Ko/s/joueur)
+/// — pas l'état complet de *la scène* non plus, seulement les entités pilotées
+/// par un joueur réseau (les monstres/décor ne sont pas encore diffusés, cf.
+/// `network_snapshot`). Un vrai delta par client (mémoriser le dernier état
+/// envoyé à chaque `PlayerId`) resterait à faire si le nombre d'entités
+/// diffusées grandissait significativement (cf. `AUDIT_LATENCE_MULTIJOUEUR.md`
+/// §2.1, `SPRINTNETWORK.md` Sprint 70) — pas justifié aujourd'hui.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     /// Numéro de tick serveur (monotone), pour que le client ignore un snapshot

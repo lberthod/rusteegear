@@ -75,6 +75,12 @@ impl NetClient {
                         return;
                     }
                 };
+                // Cf. le même correctif côté serveur (`server_loop.rs`) : sans
+                // ça, l'algorithme de Nagle retarde nos petites trames fréquentes
+                // (`Input` à chaque frame) de plusieurs dizaines de ms.
+                if let Err(e) = ws.get_ref().get_ref().set_nodelay(true) {
+                    log::warn!("TCP_NODELAY impossible côté client : {e}");
+                }
                 let _ = ready_tx.send(Ok(()));
                 let (mut sink, mut stream) = ws.split();
 

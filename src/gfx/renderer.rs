@@ -847,9 +847,12 @@ impl Renderer {
         let won = app.has_won();
         let wave = app.wave;
         let mut restart = false;
+        let mut player_net_actions = None;
         let full_output = if app.player {
             if app.scene.mobile.any() {
-                Some(self.editor.run_player_overlay(
+                let net_status = app.net_status.clone();
+                let net_connected = app.is_connected();
+                let (output, actions) = self.editor.run_player_overlay(
                     &self.window,
                     &app.scene,
                     &mut app.input_state,
@@ -863,7 +866,11 @@ impl Renderer {
                     won,
                     wave,
                     &mut restart,
-                ))
+                    &net_status,
+                    net_connected,
+                );
+                player_net_actions = Some(actions);
+                Some(output)
             } else {
                 None
             }
@@ -952,6 +959,9 @@ impl Renderer {
             }
             if actions.load_ai_duel {
                 app.load_zombies_demo();
+            }
+            if actions.load_mmorpg {
+                app.load_mmorpg_demo();
             }
             if actions.load_roguelike {
                 app.load_roguelike_demo();
@@ -1104,6 +1114,15 @@ impl Renderer {
             }
             Some(full_output)
         };
+
+        if let Some(actions) = player_net_actions {
+            if let Some((url, name)) = actions.connect_to_server {
+                app.connect_to_server(&url, &name);
+            }
+            if actions.disconnect_from_server {
+                app.disconnect_from_server();
+            }
+        }
 
         // Bouton de fin de partie : « Niveau suivant » uniquement pour la démo contrôleur
         // à niveaux ; sinon « Rejouer » — y compris une victoire par manches (zombies) ou

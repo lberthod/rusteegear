@@ -190,14 +190,15 @@ pub struct AppState {
     /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`, Sprint 60).
     network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
     /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
-    /// a rejoint une partie en ligne. Desktop uniquement : `net::client` dépend
-    /// de `tokio`, absent des cibles mobiles (cf. `net/mod.rs`).
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    /// a rejoint une partie en ligne. Desktop + Android (Sprint 65) : `net::client`
+    /// dépend de `tokio`, pas encore ciblé sur iOS (cf. `net/mod.rs`).
+    #[cfg(not(target_os = "ios"))]
     net_client: Option<crate::net::client::NetClient>,
     /// Identifiant attribué par le serveur à ce client (`ServerMsg::Welcome`),
-    /// une fois connecté. Sert à ignorer sa propre entité dans les `Snapshot`
-    /// reçus (le joueur local reste piloté par prédiction, jamais écrasé par
-    /// le réseau, cf. `network_client::poll_network`).
+    /// une fois connecté. Sert à repérer sa propre entité dans les `Snapshot`
+    /// reçus (cf. `net_local_interp` : le serveur reste maître même de la
+    /// position du joueur local, `network_client::poll_network` se contente
+    /// d'afficher ce qu'il reçoit).
     net_player_id: Option<crate::net::protocol::PlayerId>,
     /// Message de statut réseau à afficher dans l'UI (connecté/déconnecté/erreur).
     pub net_status: String,
@@ -206,6 +207,24 @@ pub struct AppState {
     /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
     /// localement (le serveur est autoritaire sur eux).
     remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
+    /// Historique (2 derniers points) de la position du joueur **local** telle
+    /// que rapportée par le serveur — même mécanisme d'interpolation que les
+    /// fantômes des autres joueurs (`RemoteEntity`). Sert de référence
+    /// autoritative pour la réconciliation (`apply_local_network_position`) :
+    /// le joueur local reste piloté par prédiction immédiate (`sim_step`,
+    /// inchangé), le serveur ne corrige que si l'écart dépasse
+    /// `interpolation::SNAP_THRESHOLD` (cf. Sprint 54/2026-07-12 pour
+    /// l'historique de ce choix, ce commentaire décrivait encore l'ancien
+    /// comportement « sans prédiction » avant correction).
+    #[cfg(not(target_os = "ios"))]
+    net_local_interp: crate::net::interpolation::RemoteEntity,
+    /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur (Sprint 68,
+    /// `SPRINTNETWORK.md`) : `poll_network` est appelée une fois par frame de
+    /// rendu, potentiellement bien au-dessus du tick serveur — ce champ sert
+    /// à plafonner le débit d'envoi à `network_client::INPUT_SEND_INTERVAL`
+    /// plutôt que d'envoyer un message par frame affichée.
+    #[cfg(not(target_os = "ios"))]
+    net_last_input_sent: Option<std::time::Instant>,
     /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
     /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
     /// créditer la progression au bon compte (Sprint 57). `None` = partie
@@ -392,11 +411,15 @@ impl AppState {
             network_players: HashMap::new(),
             network_inputs: HashMap::new(),
             network_attack_cooldowns: HashMap::new(),
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            #[cfg(not(target_os = "ios"))]
             net_client: None,
             net_player_id: None,
             net_status: String::new(),
             remote_players: HashMap::new(),
+            #[cfg(not(target_os = "ios"))]
+            net_local_interp: crate::net::interpolation::RemoteEntity::default(),
+            #[cfg(not(target_os = "ios"))]
+            net_last_input_sent: None,
             firebase_uid: None,
             firebase_busy: false,
             firebase_tx,
@@ -1237,6 +1260,20 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Charge la démo « MMORPG » (cf. `Scene::mmorpg_demo`) : arène minimale sans
+    /// monstres/manches, dédiée au test multijoueur PC ↔ mobile (Sprint 65).
+    pub fn load_mmorpg_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::mmorpg_demo();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
     /// Charge la démo « Donjon » façon roguelike (cf. `Scene::roguelike_demo`) : 3 salles
     /// à vider une à une (portes fermées jusqu'à la manche suivante), arme de départ
     /// tirée au sort parmi 3 profils à chaque chargement.
@@ -1551,10 +1588,14 @@ impl AppState {
                     return;
                 } else if self.dragging
                     && !self.device_preview // en aperçu mobile : pas d'orbite souris (simule le tactile)
-                    && let Some((lx, ly)) = self.last_cursor
+                    && let Some((lx, _ly)) = self.last_cursor
                 {
+                    // Rotation horizontale seulement (le zoom vient du pinch/molette,
+                    // cf. `InputEvent::Scroll`) : l'angle de plongée (`pitch`) reste fixe,
+                    // façon caméra de suivi à la Zelda — un angle vertical libre rendait
+                    // le repère visuel instable (le sol/l'horizon basculaient au moindre
+                    // geste), demandé à corriger en conditions réelles le 2026-07-12.
                     self.camera.yaw -= (x - lx) as f32 * 0.005;
-                    self.camera.pitch += (y - ly) as f32 * 0.005;
                 }
                 self.last_cursor = Some((x, y));
             }
@@ -1934,6 +1975,12 @@ impl AppState {
             self.update_waves();
         }
 
+        // Position réseau du joueur local : appliquée *après* la physique (cf. sa
+        // doc) pour ne pas être aussitôt écrasée par `sim_step`, qui recalculerait
+        // sinon une position légèrement différente à partir de l'ancienne — d'où
+        // le dédoublement visuel constaté en test réel avant ce correctif.
+        self.apply_local_network_position();
+
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
         // Cible légèrement au-dessus du joueur (regarde le buste, voit plus loin devant).
         if self.scene.camera_follow
@@ -2081,9 +2128,13 @@ impl AppState {
             // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
             // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
             let inp = &self.input_state;
-            // Mouvement combiné joystick + clavier (flèches/WASD), borné à 1 par axe.
-            let mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
-            let my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+            // Mouvement combiné joystick + clavier (flèches/WASD), borné à 1 par axe,
+            // puis tourné selon la caméra (cf. `camera_relative_move`) : « en haut »
+            // sur le joystick éloigne le personnage de la caméra, comme dans un jeu
+            // à la Zelda, quelle que soit sa rotation actuelle.
+            let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
+            let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+            let (mx, my) = camera_relative_move(raw_mx, raw_my, self.camera.yaw);
             let (tilt, space) = (inp.tilt, inp.jump);
             let mut any_jump = false;
             // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`, Sprint 55) :
@@ -2422,6 +2473,26 @@ fn script_key(src: &str) -> u64 {
     h.finish()
 }
 
+/// Convertit une entrée joystick/clavier `(mx, my)` (axes de l'écran : droite/haut)
+/// en direction **monde** `(x, z)`, relative à l'orientation `yaw` de la caméra —
+/// façon caméra de suivi à la Zelda : pousser le joystick « en haut » éloigne le
+/// personnage de la caméra, quelle que soit sa rotation actuelle, plutôt que de
+/// toujours avancer selon les mêmes axes du monde (ce qui rendait le déplacement
+/// incohérent dès que la caméra pivotait — corrigé le 2026-07-12). `yaw = 0`
+/// laisse `(mx, my)` inchangé (compatible avec le comportement d'origine).
+///
+/// Appelée à la fois par `sim_step` (prédiction locale du joueur, caméra de *ce*
+/// client) et par `network_client::poll_network` (valeur envoyée au serveur) :
+/// le serveur, headless et sans caméra, reçoit ainsi directement une direction
+/// monde déjà correcte — il n'a pas besoin de connaître l'orientation de qui que
+/// ce soit.
+fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
+    let (sin_y, cos_y) = yaw.sin_cos();
+    let wx = mx * cos_y - my * sin_y;
+    let wz = -mx * sin_y - my * cos_y;
+    (wx, wz)
+}
+
 /// Cadence à pas fixe : ajoute le temps de la frame à l'accumulateur (borné contre la
 /// « spirale de la mort »), puis renvoie le nombre de sous-pas de `fixed_dt` à exécuter
 /// et l'accumulateur restant. Au-delà de `max` sous-pas, le reliquat est jeté (pas de
@@ -2598,6 +2669,27 @@ fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_relative_move_matches_world_axes_at_zero_yaw() {
+        // yaw=0 : comportement d'origine inchangé (droite=+X, haut=-Z), sinon tout
+        // déplacement solo/existant tournerait sans qu'aucune caméra n'ait bougé.
+        let (wx, wz) = camera_relative_move(1.0, 0.0, 0.0);
+        assert!((wx - 1.0).abs() < 1e-5 && wz.abs() < 1e-5);
+        let (wx, wz) = camera_relative_move(0.0, 1.0, 0.0);
+        assert!(wx.abs() < 1e-5 && (wz - -1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn camera_relative_move_rotates_forward_with_the_camera() {
+        // À 90° (caméra tournée d'un quart de tour), « avancer » (my=1) ne doit
+        // plus pointer vers -Z mais vers -X : le joystick doit suivre la caméra,
+        // pas rester bloqué sur les axes du monde (demandé le 2026-07-12, façon
+        // caméra de suivi à la Zelda).
+        let (wx, wz) = camera_relative_move(0.0, 1.0, std::f32::consts::FRAC_PI_2);
+        assert!((wx - -1.0).abs() < 1e-4, "wx={wx}");
+        assert!(wz.abs() < 1e-4, "wz={wz}");
+    }
 
     #[test]
     fn fixed_substeps_is_framerate_independent() {

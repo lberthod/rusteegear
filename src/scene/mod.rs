@@ -1818,6 +1818,97 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         }
     }
 
+    /// Démo « MMORPG » (Sprint 65) : arène minimale dédiée au test multijoueur
+    /// PC ↔ mobile — pas de monstres ni de manches (contrairement à
+    /// `zombies_demo`), juste un joueur pilotable (joystick + saut) sur une
+    /// carte simple avec quelques repères visuels statiques, pour voir
+    /// clairement un joueur desktop et un joueur APK se déplacer l'un par
+    /// rapport à l'autre (fantômes réseau, cf. `app::network_client`).
+    pub fn mmorpg_demo() -> Self {
+        let half = 12.0_f32;
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.2, 0.28, 0.24];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        joueur.color = [0.95, 0.6, 0.25];
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.5,
+            ..Default::default()
+        });
+
+        let mut objects = vec![sol, joueur];
+
+        // Murs de pourtour (enferment l'aire de jeu, ne servent qu'à ne pas tomber).
+        let mut wall = |name: &str, pos: Vec3, scale: Vec3| {
+            let mut w = demo_obj(name, MeshKind::Cube, pos);
+            w.transform = w.transform.with_scale(scale);
+            w.physics = PhysicsKind::Static;
+            w.color = [0.3, 0.32, 0.38];
+            objects.push(w);
+        };
+        wall(
+            "Mur Nord",
+            Vec3::new(0.0, 0.9, -half),
+            Vec3::new(2.0 * half, 1.8, 0.5),
+        );
+        wall(
+            "Mur Sud",
+            Vec3::new(0.0, 0.9, half),
+            Vec3::new(2.0 * half, 1.8, 0.5),
+        );
+        wall(
+            "Mur Est",
+            Vec3::new(half, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * half),
+        );
+        wall(
+            "Mur Ouest",
+            Vec3::new(-half, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * half),
+        );
+
+        // Repères visuels statiques (juste pour situer les déplacements, sans danger).
+        for (n, (x, z)) in [(-6.0_f32, -6.0), (6.0, -6.0), (-6.0, 6.0), (6.0, 6.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut repere = demo_obj(
+                &format!("Repère {}", n + 1),
+                MeshKind::Cylinder,
+                Vec3::new(x, 0.9, z),
+            );
+            repere.transform = repere.transform.with_scale(Vec3::new(1.0, 1.8, 1.0));
+            repere.physics = PhysicsKind::Static;
+            repere.color = [0.5, 0.45, 0.62];
+            objects.push(repere);
+        }
+
+        Scene {
+            objects,
+            camera_follow: true,
+            point_lights: vec![PointLight {
+                position: [0.0, 10.0, 0.0],
+                color: [0.9, 0.95, 1.0],
+                intensity: 1.2,
+                range: 30.0,
+                ..PointLight::default()
+            }],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Démo « Donjon » façon roguelike : 3 salles reliées par des portes (une salle à la
     /// fois, comme un couloir de progression), chacune gardée par un monstre — réutilise
     /// le système de manches (`Combat::wave`) de `zombies_demo` : un monstre par manche,
@@ -3496,6 +3587,25 @@ mod tests {
             .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
             .expect("un joueur pilotable");
         assert!(!player.controller.as_ref().unwrap().attack_button.is_empty());
+    }
+
+    #[test]
+    fn mmorpg_demo_is_a_bare_arena_with_no_monsters_and_mobile_controls_on() {
+        let s = Scene::mmorpg_demo();
+        assert!(
+            !s.objects.iter().any(|o| o.ai_chaser.is_some()),
+            "la démo MMORPG ne doit avoir aucun monstre (test de connectivité, pas de combat)"
+        );
+        assert!(
+            s.mobile.joystick,
+            "le joystick doit être actif par défaut, sans passer par l'éditeur (APK direct)"
+        );
+        let player = s
+            .objects
+            .iter()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("un joueur pilotable");
+        assert!(!player.controller.as_ref().unwrap().jump_button.is_empty());
     }
 
     #[test]

@@ -114,7 +114,13 @@ impl Physics {
                     _ => cuboid(),
                 },
             }
-            .restitution(0.5)
+            // Aucun rebond (0.0) : un personnage n'est pas une balle — à 0.5
+            // (valeur précédente), chaque atterrissage/contact avec un mur ou un
+            // autre joueur renvoyait la moitié de la vitesse d'impact, donnant un
+            // mouvement instable qui « bug » visuellement (constaté en test réel,
+            // 2026-07-12 : « comme une boule qui bug, pas fluide »). Rien dans le
+            // projet ne dépend d'un rebond (aucun mécanisme de type trampoline).
+            .restitution(0.0)
             .friction(0.6)
             .build();
             colliders.insert_with_parent(collider, handle, &mut bodies);
@@ -127,11 +133,21 @@ impl Physics {
             }
         }
 
+        // Plus d'itérations solveur que la valeur par défaut (4 → 8) : stabilise
+        // les contacts (sol, murs, entre joueurs) — avec `restitution(0.0)` seul,
+        // il restait un léger tremblement résiduel au repos/contact prolongé,
+        // moins perceptible avec un solveur plus précis. Coût négligeable à cette
+        // échelle (quelques corps dynamiques, pas des centaines).
+        let integration = IntegrationParameters {
+            num_solver_iterations: 8,
+            ..Default::default()
+        };
+
         Physics {
             bodies,
             colliders,
             gravity: Vector::new(0.0, -9.81, 0.0),
-            integration: IntegrationParameters::default(),
+            integration,
             pipeline: PhysicsPipeline::new(),
             islands: IslandManager::new(),
             broad: DefaultBroadPhase::new(),
@@ -165,6 +181,28 @@ impl Physics {
             }
         }
         jumped
+    }
+
+    /// Force la position du corps rigide (dynamique) de l'objet `index`, sans
+    /// effet s'il n'en a pas (objet statique/sans physique) — utilisé par la
+    /// réconciliation réseau du joueur local (`app::network_client::apply_
+    /// local_network_position`, Sprint 66bis, `SPRINTNETWORK.md`).
+    ///
+    /// **Nécessaire, pas cosmétique** : `step` recopie la pose du corps
+    /// rigide dans `scene.objects[index].transform` à *chaque* appel (sync à
+    /// sens unique physique → transform, jamais l'inverse) — écrire
+    /// directement dans `transform.position` sans passer par cette méthode
+    /// n'a donc d'effet que pour la frame courante ; `step` l'écrase dès le
+    /// tick suivant avec la position du corps rigide, resté inchangé. Bug
+    /// réel trouvé en testant l'app réellement (capture d'écran utilisateur :
+    /// personnage qui semble dupliqué/trembler entre deux points, la
+    /// correction n'ayant jamais persisté au-delà d'une frame).
+    pub fn set_position(&mut self, index: usize, pos: Vec3) {
+        if let Some(&(_, handle)) = self.dynamic.iter().find(|&&(i, _)| i == index)
+            && let Some(body) = self.bodies.get_mut(handle)
+        {
+            body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
+        }
     }
 
     /// Avance la simulation de `dt` et recopie les poses des corps dynamiques.

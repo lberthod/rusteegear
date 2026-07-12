@@ -121,6 +121,8 @@ pub struct UiActions {
     pub load_components_demo: bool,
     /// « Démo Vagues de zombies » : jeu local vs ordinateur, manches de monstres.
     pub load_ai_duel: bool,
+    /// « Démo MMORPG » : arène minimale dédiée au test multijoueur PC ↔ mobile.
+    pub load_mmorpg: bool,
     /// « Démo Donjon (roguelike) » : 3 salles à vider une à une, arme de départ aléatoire.
     pub load_roguelike: bool,
     /// « Démo Duel (Tekken/Smash) » : arène flottante, rival à plusieurs PV, ring out.
@@ -230,7 +232,7 @@ impl Editor {
             ai_scene_prompt: String::new(),
             ai_scene_replace: true,
             ai_history: Vec::new(),
-            mp_server_url: "ws://127.0.0.1:7777".to_string(),
+            mp_server_url: crate::app::network_client::DEFAULT_SERVER_URL.to_string(),
             mp_name: String::new(),
             mp_email: String::new(),
             mp_password: String::new(),
@@ -248,6 +250,10 @@ impl Editor {
 
     /// Mode Player : dessine **uniquement** les contrôles tactiles en surimpression
     /// (pas de panneaux d'éditeur) et met à jour l'état d'entrée lu par les scripts.
+    /// Depuis le Sprint 65, ajoute aussi un petit overlay Multijoueur (adresse +
+    /// pseudo + connecter/déconnecter) repliable, pour rejoindre un serveur
+    /// RusteeGear depuis un APK — les actions demandées sont renvoyées dans un
+    /// `UiActions` (même convention que `run`) pour être traitées par l'appelant.
     #[allow(clippy::too_many_arguments)] // états distincts à passer à l'overlay
     pub fn run_player_overlay(
         &mut self,
@@ -264,9 +270,14 @@ impl Editor {
         won: bool,
         wave: u32,
         restart: &mut bool,
-    ) -> egui::FullOutput {
+        net_status: &str,
+        net_connected: bool,
+    ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
+        let mut actions = UiActions::default();
+        let mp_server_url = &mut self.mp_server_url;
+        let mp_name = &mut self.mp_name;
         let output = self.ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
             let area = play_area_rect(ctx.content_rect(), device_preview, device_portrait);
@@ -297,10 +308,18 @@ impl Editor {
                 input_state.joy = (0.0, 0.0);
                 input_state.buttons.clear();
             }
+            mobile_multiplayer_overlay(
+                ctx,
+                mp_server_url,
+                mp_name,
+                net_status,
+                net_connected,
+                &mut actions,
+            );
         });
         self.winit_state
             .handle_platform_output(window, output.platform_output.clone());
-        output
+        (output, actions)
     }
 
     /// Transmet l'événement à egui. Retourne `true` si egui l'a consommé.
@@ -773,6 +792,17 @@ fn menu_fichier(ui: &mut egui::Ui, export: &mut export::ExportPanel, actions: &m
             .clicked()
         {
             actions.load_ai_duel = true;
+            ui.close();
+        }
+        if ui
+            .button("🌐  Démo MMORPG (test multijoueur PC ↔ mobile)")
+            .on_hover_text(
+                "Arène minimale sans monstres/manches : joueur pilotable (joystick + saut), \
+                 pensée pour voir un client desktop et un APK se déplacer l'un par rapport à l'autre",
+            )
+            .clicked()
+        {
+            actions.load_mmorpg = true;
             ui.close();
         }
         if ui
@@ -1596,6 +1626,64 @@ fn settings_window(
             );
         });
     panels.settings = open;
+}
+
+/// Overlay Multijoueur minimal pour le mode Player (mobile/APK, Sprint 65) :
+/// adresse + pseudo + connecter/déconnecter, replié par défaut pour ne pas
+/// gêner le joystick. Pas de compte Firebase/chat/classement ici — hors scope
+/// de ce premier test (cf. `multiplayer_window`, l'équivalent complet côté
+/// éditeur desktop).
+fn mobile_multiplayer_overlay(
+    ctx: &egui::Context,
+    server_url: &mut String,
+    name: &mut String,
+    net_status: &str,
+    net_connected: bool,
+    actions: &mut UiActions,
+) {
+    egui::Window::new("🌐")
+        .id(egui::Id::new("mobile_multiplayer"))
+        .collapsible(true)
+        .default_open(false)
+        .resizable(false)
+        // Décalage vertical généreux (pas seulement 8 px) : en plein écran immersif
+        // (NativeActivity Android), la zone de rendu passe sous la barre de statut
+        // système — un petit décalage laissait l'icône 🌐 cachée dessous, invisible
+        // et donc impossible à toucher (constaté en testant sur un vrai téléphone).
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 56.0))
+        .default_width(220.0)
+        .show(ctx, |ui| {
+            ui.label("Adresse du serveur");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(server_url).hint_text("ws://192.168.1.x:7777"),
+            );
+            ui.label("Pseudo");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(name).hint_text("Joueur"),
+            );
+            ui.add_space(4.0);
+            if net_connected {
+                if ui.button("🔌 Se déconnecter").clicked() {
+                    actions.disconnect_from_server = true;
+                }
+            } else {
+                let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
+                if ui
+                    .add_enabled(can_connect, egui::Button::new("▶ Se connecter"))
+                    .clicked()
+                {
+                    actions.connect_to_server = Some((server_url.clone(), name.clone()));
+                }
+            }
+            ui.add_space(4.0);
+            ui.small(if net_status.is_empty() {
+                "Non connecté"
+            } else {
+                net_status
+            });
+        });
 }
 
 /// Fenêtre « Multijoueur » : adresse du serveur + pseudo, connexion/déconnexion

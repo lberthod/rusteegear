@@ -116,8 +116,24 @@ impl AppState {
         // Écarte chaque joueur du gabarit d'origine (et des précédents) : sans ça,
         // deux corps rigides spawnés au même point s'interpénètrent et la physique
         // les sépare par une violente impulsion à la première étape de simulation.
-        let offset = (self.network_players.len() + 1) as f32 * 5.0;
-        template.transform.position.x += offset;
+        // Cercle serré autour du gabarit (pas une ligne qui s'éloigne de +5 m par
+        // joueur, cf. l'audit du 2026-07-12) : tous les joueurs démarrent proches
+        // les uns des autres, dans le même coin de la carte, pour pouvoir se voir
+        // et marcher les uns vers les autres dès la connexion plutôt que de devoir
+        // traverser toute l'arène.
+        const SPAWN_RADIUS: f32 = 3.0;
+        let n = self.network_players.len() as f32;
+        let angle = n * std::f32::consts::TAU / 8.0;
+        template.transform.position.x += angle.cos() * SPAWN_RADIUS;
+        template.transform.position.z += angle.sin() * SPAWN_RADIUS;
+        // Toujours visible, même si le gabarit d'origine est déjà masqué (cf. plus
+        // bas, et `hide_local_player_template` appelé avant le premier join) : sans
+        // ce reset, chaque joueur réseau hérite du `visible=false` du gabarit et
+        // `network_snapshot` diffuse cette invisibilité telle quelle — les clients
+        // ne voient alors jamais aucun fantôme, quelle que soit la justesse du reste
+        // du pipeline réseau (bug constaté en conditions réelles, 2026-07-12 : deux
+        // vrais clients connectés, positions bien reçues, `visible` toujours faux).
+        template.visible = true;
         let index = self.scene.objects.len();
         self.scene.objects.push(template);
         self.network_players.insert(id, index);
@@ -459,6 +475,33 @@ mod tests {
         let indices: Vec<u32> = snap.entities.iter().map(|e| e.index).collect();
         assert!(indices.contains(&(a as u32)));
         assert!(indices.contains(&(b as u32)));
+    }
+
+    #[test]
+    fn spawned_players_stay_visible_even_after_hiding_the_local_template() {
+        // Reproduit l'ordre réel du serveur headless (`src/bin/server.rs`) :
+        // `hide_local_player_template` masque le gabarit *avant* le premier
+        // join. Sans le correctif (`template.visible = true` dans
+        // `spawn_network_player`), chaque joueur réseau héritait de ce
+        // `visible=false` — invisible pour toujours dans le `Snapshot`, malgré
+        // des positions correctement transmises (bug constaté en conditions
+        // réelles le 2026-07-12 : deux vrais clients connectés, jamais l'un
+        // visible pour l'autre).
+        let mut app = app_with_zombies_demo();
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1).unwrap();
+        assert!(
+            app.scene.objects[index].visible,
+            "un joueur réseau tout juste spawné doit être visible, \
+             même si le gabarit d'origine a été masqué avant son arrivée"
+        );
+        let snap = app.network_snapshot(1);
+        let entity = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .expect("le joueur 1 doit figurer dans le snapshot");
+        assert!(entity.visible, "le snapshot diffusé doit refléter visible=true");
     }
 
     #[test]

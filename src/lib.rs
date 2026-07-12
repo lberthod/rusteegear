@@ -278,8 +278,27 @@ fn make_app(player: bool) -> App {
         app.state.playing = true;
         // En mode Player on joue le jeu exporté (scène embarquée), pas la démo de l'éditeur.
         app.state.use_embedded_scene();
+        // Connexion automatique au serveur RusteeGear par défaut (VPS) : sans
+        // ça, chaque test APK ↔ desktop demande de ressaisir l'adresse et un
+        // pseudo à la main des deux côtés avant de pouvoir se voir bouger.
+        // Reste un simple point de départ : la fenêtre/overlay Multijoueur
+        // permet toujours de se déconnecter et pointer ailleurs.
+        app.state
+            .connect_to_server(crate::app::network_client::DEFAULT_SERVER_URL, &guest_name());
     }
     app
+}
+
+/// Pseudo généré au hasard (« InvitéNNNN ») pour la connexion automatique en
+/// mode Player — évite d'exiger une saisie manuelle juste pour rejoindre le
+/// serveur par défaut. Basé sur l'horloge plutôt qu'une dépendance `rand`
+/// (aucune autre n'existe déjà dans le projet pour ce besoin ponctuel).
+fn guest_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("Invité{}", nanos % 10000)
 }
 
 /// Point d'entrée desktop (et iOS via le bin).

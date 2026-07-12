@@ -92,6 +92,14 @@ impl NetServer {
                             continue;
                         }
                     };
+                    // Sans ça, l'algorithme de Nagle retarde nos petites trames
+                    // fréquentes (`Input`/`Snapshot`, quelques dizaines d'octets,
+                    // plusieurs par seconde) jusqu'à ~40 ms pour les regrouper —
+                    // exactement le pire cas pour ce trafic, et une bonne part de
+                    // la latence perçue constatée en test réel (2026-07-12).
+                    if let Err(e) = stream.set_nodelay(true) {
+                        log::warn!("TCP_NODELAY impossible sur {peer} : {e}");
+                    }
                     let tx = tx.clone();
                     let outboxes = accept_outboxes.clone();
                     let next_id = accept_next_id.clone();

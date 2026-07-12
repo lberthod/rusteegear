@@ -1,8 +1,10 @@
-//! Client réseau desktop (SPRINT_MMORPG.md) : connecte l'éditeur/le player à un
-//! serveur RusteeGear (`src/bin/server.rs`) pour jouer à plusieurs. Desktop
-//! uniquement — sur mobile, les mêmes méthodes existent mais renvoient une
-//! erreur (même convention que `app::ai`, qui a la même contrainte : `net::client`
-//! dépend de `tokio`, absent des cibles mobiles, cf. `net/mod.rs`).
+//! Client réseau (SPRINT_MMORPG.md) : connecte l'éditeur/le player à un
+//! serveur RusteeGear (`src/bin/server.rs`) pour jouer à plusieurs. Desktop et
+//! Android depuis le Sprint 65 (pas encore iOS, cf. `net/mod.rs`) pour tout ce
+//! qui touche à *rejoindre une partie* (`connect_to_server`, `poll_network`…).
+//! Le compte Firebase/chat/classement reste desktop uniquement — sur Android
+//! et iOS, ces méthodes existent mais sont des no-op (même convention que
+//! `app::ai`, qui a la même contrainte : `ureq` n'est pas ciblé sur mobile).
 //!
 //! Le joueur local reste **piloté par prédiction**, exactement comme en solo
 //! (`sim_step` ne change pas) : ce module se contente d'envoyer son `Input` au
@@ -13,12 +15,56 @@
 
 use super::AppState;
 
+/// Serveur RusteeGear par défaut (VPS de l'utilisateur, cf. HANDOFF.md) : APK et
+/// build desktop `--player` s'y connectent automatiquement au lancement (voir
+/// `make_app` dans `lib.rs`), pour ne pas avoir à ressaisir l'adresse à chaque
+/// test — la connexion manuelle (fenêtre/overlay Multijoueur) reste disponible
+/// pour pointer ailleurs (ex. un serveur local pendant le développement).
+pub const DEFAULT_SERVER_URL: &str = "ws://179.237.71.235:80";
+
 /// Un autre joueur réseau, affiché comme un objet fantôme dans la scène locale.
 pub struct RemotePlayer {
     pub name: String,
     scene_index: usize,
     interp: crate::net::interpolation::RemoteEntity,
 }
+
+/// Fraction de l'écart comblée à chaque appel de `apply_local_network_position`
+/// quand `reconcile` dépasse `SNAP_THRESHOLD` (Sprint 66, corrigé au
+/// « Sprint 66bis » — cf. `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md`).
+///
+/// **Bug de la première version (2026-07-12), trouvé en testant réellement
+/// l'app** : elle figeait la position sur une interpolation entre deux points
+/// **captés une fois** (`from`/`to`) et maintenue pendant `120 ms`, écrasant
+/// à chaque frame ce que `sim_step`/`Physics::step` venaient de calculer à
+/// partir de l'input réel. Or `Physics::step` (`runtime/physics.rs`) recopie
+/// la pose du corps rigide dans `transform.position` à **chaque** tick, avant
+/// que cette fonction ne s'exécute (sync à sens unique physique → transform,
+/// jamais l'inverse) — donc toute correction qu'on y écrit est de toute façon
+/// remplacée par la vraie position physique dès le tick suivant. Figer
+/// l'écran sur une ligne entre deux points immobiles pendant que la vraie
+/// position continuait d'avancer produisait exactement le symptôme
+/// rapporté : personnage qui semble bloqué/trembler entre deux points,
+/// ignorant l'input pendant toute la fenêtre de correction.
+///
+/// Le correctif : ne jamais figer plusieurs frames sur une cible ancienne.
+/// Chaque frame où l'écart dépasse le seuil, on ne fait qu'un petit pas
+/// (`CORRECTION_PULL`) depuis la position **fraîche** de ce tick vers la
+/// position autoritative — jamais une valeur mémorisée. Le mouvement piloté
+/// par l'input n'est donc jamais interrompu ; seule une légère dérive vers la
+/// position serveur s'ajoute par-dessus, tick après tick, tant que l'écart
+/// reste significatif.
+const CORRECTION_PULL: f32 = 0.15;
+
+/// Intervalle minimal entre deux envois de `ClientMsg::Input` (Sprint 68,
+/// `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2) — aligné sur
+/// `SERVER_TICK` (`src/bin/server.rs`, ~60 Hz) : le serveur ne consomme
+/// l'input qu'une fois par tick, envoyer plus souvent (jusqu'à la fréquence
+/// d'affichage du client, potentiellement 144 Hz+) ne change rien au
+/// gameplay et gaspille de la bande passante des deux côtés. Constante
+/// dupliquée plutôt qu'importée de `src/bin/server.rs` : ce dernier est un
+/// binaire séparé (pas une dépendance de la lib), cf. `net/mod.rs`.
+const INPUT_SEND_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// Message de chat affichable — représentation universelle (contrairement à
 /// `net::firebase::ChatMessage`, absent des cibles mobiles) : permet à
@@ -38,12 +84,13 @@ pub struct LeaderboardLine {
     pub score: u32,
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(target_os = "ios"))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
     /// Remplace une connexion existante s'il y en avait une. Transmet
     /// `self.firebase_uid` au serveur s'il est connu (cf. `sign_in`/`sign_up`
-    /// ci-dessous) — `None` pour une partie anonyme.
+    /// ci-dessous, desktop uniquement — toujours `None` sur Android) — `None`
+    /// pour une partie anonyme.
     pub fn connect_to_server(&mut self, url: &str, name: &str) {
         self.disconnect_from_server();
         match crate::net::client::NetClient::connect(url, name, self.firebase_uid.as_deref()) {
@@ -59,6 +106,276 @@ impl AppState {
         }
     }
 
+    /// Quitte la partie en ligne (sans effet si non connecté) : prévient le
+    /// serveur, masque les fantômes des autres joueurs.
+    pub fn disconnect_from_server(&mut self) {
+        if let Some(client) = &self.net_client {
+            client.send(&crate::net::protocol::ClientMsg::Leave);
+        }
+        self.net_client = None;
+        self.net_player_id = None;
+        for rp in self.remote_players.values() {
+            if let Some(o) = self.scene.objects.get_mut(rp.scene_index) {
+                o.visible = false;
+            }
+        }
+        self.remote_players.clear();
+        self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
+        self.net_last_input_sent = None;
+        self.net_status = "Déconnecté".to_string();
+    }
+
+    /// `true` si une connexion au serveur est active.
+    pub fn is_connected(&self) -> bool {
+        self.net_client.is_some()
+    }
+
+    /// Appelé une fois par frame depuis `advance_play` : envoie l'input local,
+    /// draine les messages serveur, met à jour les fantômes des autres joueurs.
+    pub(super) fn poll_network(&mut self) {
+        #[cfg(not(target_os = "android"))]
+        {
+            self.poll_firebase();
+            self.poll_chat();
+            self.poll_leaderboard();
+        }
+        if self.net_client.is_none() {
+            return;
+        }
+
+        // Envoie l'input courant du joueur local, déjà tourné selon **notre**
+        // caméra (`camera_relative_move`, même calcul que `sim_step`) : le
+        // serveur (headless, sans caméra) reçoit ainsi directement une direction
+        // monde correcte pour ce joueur — il n'a pas à connaître l'orientation
+        // de qui que ce soit, chaque client fait sa propre conversion avant
+        // d'envoyer. Sans ça, la caméra de chaque joueur pourrait pointer dans
+        // une direction différente sans que son mouvement n'en tienne compte
+        // une fois reçu côté serveur.
+        //
+        // **Plafonné à `INPUT_SEND_INTERVAL` (Sprint 68)** : `poll_network` est
+        // appelée une fois par frame de rendu, potentiellement bien au-dessus
+        // du tick serveur (ex. 144 Hz) — sans ce plafond, la plupart des
+        // messages envoyés seraient jetés sans effet côté serveur (`set_
+        // network_input` remplace l'entrée précédente, il ne les cumule pas),
+        // pour un coût réseau/CPU inutile des deux côtés.
+        let now = std::time::Instant::now();
+        let should_send_input = self
+            .net_last_input_sent
+            .is_none_or(|last| now.duration_since(last) >= INPUT_SEND_INTERVAL);
+        if should_send_input {
+            let inp = &self.input_state;
+            let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
+            let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+            let (mx, my) = super::camera_relative_move(raw_mx, raw_my, self.camera.yaw);
+            let input = crate::net::protocol::ClientMsg::Input {
+                move_x: mx,
+                move_y: my,
+                attack: inp.attack,
+                jump: inp.jump,
+            };
+            if let Some(client) = &self.net_client {
+                client.send(&input);
+            }
+            self.net_last_input_sent = Some(now);
+        }
+
+        let messages: Vec<crate::net::protocol::ServerMsg> = match &self.net_client {
+            Some(client) => client.inbox.try_iter().collect(),
+            None => Vec::new(),
+        };
+        for msg in messages {
+            self.handle_server_msg(msg);
+        }
+
+        // `sample_delayed` (Sprint 67, `SPRINTNETWORK.md`) plutôt que `sample`
+        // à `now` directement : affiche les fantômes légèrement dans le passé
+        // (`interpolation::RENDER_DELAY`) pour rester fluide sous gigue
+        // réseau, cf. `AUDIT_LATENCE_MULTIJOUEUR.md` §2.4. Réutilise le `now`
+        // capturé plus haut (juste avant l'envoi éventuel de l'`Input`) plutôt
+        // que d'en reprendre un nouveau : les deux usages sont à quelques
+        // microsecondes d'écart, pas la peine d'un second appel système.
+        for rp in self.remote_players.values_mut() {
+            if let Some((pos, yaw, visible)) = rp.interp.sample_delayed(now)
+                && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
+            {
+                o.transform.position = pos;
+                o.transform.rotation = glam::Quat::from_rotation_y(yaw);
+                o.visible = visible;
+            }
+        }
+        // Le joueur local : cf. `apply_local_network_position`, appelée séparément
+        // par `advance_play` *après* la physique — appliquer la position réseau
+        // ici (avant `sim_step`) serait aussitôt écrasé par la simulation locale
+        // du même objet, produisant un aller-retour visible entre les deux
+        // positions à chaque frame (constaté en test réel : effet de dédoublement
+        // du personnage en mouvement, 2026-07-12).
+    }
+
+    /// Réconcilie le joueur local avec la position renvoyée par le serveur : à
+    /// appeler **après** la physique locale (`sim_step`).
+    ///
+    /// **Prédiction + réconciliation (2026-07-12)**, pas un simple écrasement :
+    /// une première version affichait telle quelle la position du serveur,
+    /// systématiquement — le serveur restait bien la seule source de vérité,
+    /// mais le joueur local attendait alors un aller-retour réseau complet
+    /// avant de voir le moindre mouvement, ce qui, aux ~150-250 ms de latence
+    /// réelle vers le VPS, rendait le jeu poisseux (constaté en test réel :
+    /// « pas fluide, pas temps réel »). `sim_step` continue donc de piloter le
+    /// joueur local en prédiction immédiate (comme en solo) ; le serveur reste
+    /// autoritaire mais ne **corrige** que si l'écart dépasse
+    /// `interpolation::SNAP_THRESHOLD` (triche, désync, perte de paquets) —
+    /// cf. `net::interpolation::reconcile`, écrit dès le Sprint 54 mais jamais
+    /// câblé jusqu'ici.
+    ///
+    /// **Correction par petits pas (Sprint 66, révisé — bug trouvé en testant
+    /// réellement l'app le 2026-07-12, cf. `SPRINTNETWORK.md`)** : une
+    /// première version mémorisait `from`/`to` une fois puis figeait la
+    /// position affichée sur une interpolation entre ces deux points figés
+    /// pendant `120 ms` — mais `Physics::step` (`runtime/physics.rs`) recopie
+    /// la pose du corps rigide dans `transform.position` à **chaque** tick,
+    /// avant que cette fonction ne s'exécute (sync à sens unique physique →
+    /// transform, jamais l'inverse). Cette correction figée écrasait donc,
+    /// frame après frame, la vraie position fraîchement calculée à partir de
+    /// l'input réel — le personnage semblait bloqué/trembler entre deux
+    /// points pendant toute la fenêtre de correction, ignorant l'input.
+    ///
+    /// Le correctif : ne jamais figer une cible. Chaque frame où l'écart
+    /// dépasse `SNAP_THRESHOLD`, on ne fait qu'un petit pas
+    /// (`CORRECTION_PULL`) depuis la position **fraîche** de ce tick
+    /// (`o.transform.position`, déjà mise à jour par `sim_step`/`Physics::
+    /// step` avant cet appel) vers `server_pos` — jamais une valeur
+    /// mémorisée d'un tick précédent. Le mouvement piloté par l'input n'est
+    /// donc jamais interrompu ; seule une légère dérive vers la position
+    /// serveur s'ajoute par-dessus, tant que l'écart reste significatif.
+    /// Rien à faire si non connecté ou si aucun snapshot n'est encore arrivé.
+    pub(super) fn apply_local_network_position(&mut self) {
+        if self.net_client.is_none() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some((server_pos, _yaw, visible)) = self.net_local_interp.sample(now)
+            && let Some(pi) = self.player_index()
+            && let Some(o) = self.scene.objects.get_mut(pi)
+        {
+            let correction = crate::net::interpolation::reconcile(o.transform.position, server_pos)
+                .map(|_| o.transform.position.lerp(server_pos, CORRECTION_PULL));
+            if let Some(new_pos) = correction {
+                o.transform.position = new_pos;
+            }
+            // L'orientation reste pilotée localement (input) : la corriger comme
+            // la position ferait tourner brutalement le personnage à chaque
+            // snapshot, pour un gain quasi nul (l'orientation ne sert pas à
+            // l'anti-triche ici).
+            o.visible = visible;
+
+            // **Indispensable, pas cosmétique** (bug trouvé en testant l'app
+            // réellement) : écrire uniquement dans `transform.position` ne
+            // survit qu'à la frame courante — `Physics::step` la recopie
+            // depuis le corps rigide à *chaque* tick (sync à sens unique
+            // physique → transform, jamais l'inverse), donc sans cet appel,
+            // la correction est effacée dès le tick suivant et ne progresse
+            // jamais : elle oscille indéfiniment entre la position physique
+            // (inchangée) et `server_pos`, un aller-retour visible à chaque
+            // frame (rapporté par l'utilisateur comme un personnage
+            // « dupliqué »/tremblant entre deux points).
+            if let Some(new_pos) = correction
+                && let Some(physics) = &mut self.physics
+            {
+                physics.set_position(pi, new_pos);
+            }
+        }
+    }
+
+    fn handle_server_msg(&mut self, msg: crate::net::protocol::ServerMsg) {
+        use crate::net::protocol::ServerMsg;
+        match msg {
+            ServerMsg::Welcome { player_id } => {
+                log::info!("Multijoueur : bienvenue, joueur {player_id}");
+                self.net_player_id = Some(player_id);
+                self.net_status = format!("Connecté (joueur {player_id})");
+            }
+            ServerMsg::PlayerJoined { player_id, name } => {
+                if Some(player_id) != self.net_player_id {
+                    log::info!("Multijoueur : « {name} » (joueur {player_id}) a rejoint");
+                    self.ensure_remote_player(player_id, &name);
+                }
+            }
+            ServerMsg::PlayerLeft { player_id } => {
+                log::info!("Multijoueur : joueur {player_id} est parti");
+                if let Some(rp) = self.remote_players.remove(&player_id)
+                    && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
+                {
+                    o.visible = false;
+                }
+            }
+            ServerMsg::Snapshot(snap) => {
+                let now = std::time::Instant::now();
+                for e in snap.entities {
+                    let Some(pid) = e.player_id else { continue };
+                    // Notre propre joueur : le serveur reste maître de sa
+                    // position lui aussi (pas de prédiction locale, cf. la doc
+                    // de `net_local_interp`) — même traitement que les autres
+                    // joueurs, appliqué à `player_index` plutôt qu'à un
+                    // fantôme dans `poll_network`.
+                    if Some(pid) == self.net_player_id {
+                        self.net_local_interp.push(e, now);
+                        continue;
+                    }
+                    let default_name = format!("Joueur {pid}");
+                    let rp = self.ensure_remote_player(pid, &default_name);
+                    rp.interp.push(e, now);
+                }
+            }
+            ServerMsg::Event(_) => {}
+        }
+    }
+
+    /// Renvoie le fantôme du joueur `id`, en le créant s'il n'existe pas
+    /// encore : clone du gabarit pilotable local, mais sans contrôleur ni
+    /// physique (affichage seul — le serveur est autoritaire sur sa position,
+    /// appliquée directement au `transform`, pas simulée localement).
+    fn ensure_remote_player(
+        &mut self,
+        id: crate::net::protocol::PlayerId,
+        name: &str,
+    ) -> &mut RemotePlayer {
+        if !self.remote_players.contains_key(&id) {
+            let template = self
+                .scene
+                .objects
+                .iter()
+                .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+                .cloned()
+                .unwrap_or_default();
+            let ghost = crate::scene::SceneObject {
+                name: format!("Joueur réseau {name}"),
+                controller: None,
+                physics: crate::runtime::physics::PhysicsKind::None,
+                // Masqué tant qu'aucun `Snapshot` n'est arrivé pour ce joueur.
+                visible: false,
+                ..template
+            };
+            let scene_index = self.scene.objects.len();
+            self.scene.objects.push(ghost);
+            self.remote_players.insert(
+                id,
+                RemotePlayer {
+                    name: name.to_string(),
+                    scene_index,
+                    interp: crate::net::interpolation::RemoteEntity::default(),
+                },
+            );
+        }
+        self.remote_players
+            .get_mut(&id)
+            .expect("vient d'être inséré juste au-dessus")
+    }
+}
+
+/// Compte Firebase, chat, classement : desktop uniquement (`ureq`/`net::firebase`
+/// ne ciblent pas mobile, cf. `Cargo.toml`/`net/mod.rs`).
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+impl AppState {
     /// `true` si un compte Firebase est associé à cette session (cf.
     /// `sign_in`/`sign_up`).
     pub fn has_firebase_account(&self) -> bool {
@@ -262,155 +579,6 @@ impl AppState {
             }
         }
     }
-
-    /// Quitte la partie en ligne (sans effet si non connecté) : prévient le
-    /// serveur, masque les fantômes des autres joueurs.
-    pub fn disconnect_from_server(&mut self) {
-        if let Some(client) = &self.net_client {
-            client.send(&crate::net::protocol::ClientMsg::Leave);
-        }
-        self.net_client = None;
-        self.net_player_id = None;
-        for rp in self.remote_players.values() {
-            if let Some(o) = self.scene.objects.get_mut(rp.scene_index) {
-                o.visible = false;
-            }
-        }
-        self.remote_players.clear();
-        self.net_status = "Déconnecté".to_string();
-    }
-
-    /// `true` si une connexion au serveur est active.
-    pub fn is_connected(&self) -> bool {
-        self.net_client.is_some()
-    }
-
-    /// Appelé une fois par frame depuis `advance_play` : envoie l'input local,
-    /// draine les messages serveur, met à jour les fantômes des autres joueurs.
-    pub(super) fn poll_network(&mut self) {
-        self.poll_firebase();
-        self.poll_chat();
-        self.poll_leaderboard();
-        if self.net_client.is_none() {
-            return;
-        }
-
-        // Envoie l'input courant du joueur local (même calcul que dans
-        // `sim_step` pour son propre pilotage) — le serveur en a besoin pour
-        // faire bouger *notre* objet côté autres clients.
-        let inp = &self.input_state;
-        let input = crate::net::protocol::ClientMsg::Input {
-            move_x: (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0),
-            move_y: (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0),
-            attack: inp.attack,
-            jump: inp.jump,
-        };
-        if let Some(client) = &self.net_client {
-            client.send(&input);
-        }
-
-        let messages: Vec<crate::net::protocol::ServerMsg> = match &self.net_client {
-            Some(client) => client.inbox.try_iter().collect(),
-            None => Vec::new(),
-        };
-        for msg in messages {
-            self.handle_server_msg(msg);
-        }
-
-        let now = std::time::Instant::now();
-        for rp in self.remote_players.values_mut() {
-            if let Some((pos, yaw, visible)) = rp.interp.sample(now)
-                && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
-            {
-                o.transform.position = pos;
-                o.transform.rotation = glam::Quat::from_rotation_y(yaw);
-                o.visible = visible;
-            }
-        }
-    }
-
-    fn handle_server_msg(&mut self, msg: crate::net::protocol::ServerMsg) {
-        use crate::net::protocol::ServerMsg;
-        match msg {
-            ServerMsg::Welcome { player_id } => {
-                log::info!("Multijoueur : bienvenue, joueur {player_id}");
-                self.net_player_id = Some(player_id);
-                self.net_status = format!("Connecté (joueur {player_id})");
-            }
-            ServerMsg::PlayerJoined { player_id, name } => {
-                if Some(player_id) != self.net_player_id {
-                    log::info!("Multijoueur : « {name} » (joueur {player_id}) a rejoint");
-                    self.ensure_remote_player(player_id, &name);
-                }
-            }
-            ServerMsg::PlayerLeft { player_id } => {
-                log::info!("Multijoueur : joueur {player_id} est parti");
-                if let Some(rp) = self.remote_players.remove(&player_id)
-                    && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
-                {
-                    o.visible = false;
-                }
-            }
-            ServerMsg::Snapshot(snap) => {
-                let now = std::time::Instant::now();
-                for e in snap.entities {
-                    let Some(pid) = e.player_id else { continue };
-                    // Notre propre joueur : piloté en local par prédiction,
-                    // jamais écrasé par le snapshot serveur (cf. la doc du
-                    // module — pas de réconciliation implémentée pour
-                    // l'instant, cf. SPRINT_MMORPG.md Sprint 54).
-                    if Some(pid) == self.net_player_id {
-                        continue;
-                    }
-                    let default_name = format!("Joueur {pid}");
-                    let rp = self.ensure_remote_player(pid, &default_name);
-                    rp.interp.push(e, now);
-                }
-            }
-            ServerMsg::Event(_) => {}
-        }
-    }
-
-    /// Renvoie le fantôme du joueur `id`, en le créant s'il n'existe pas
-    /// encore : clone du gabarit pilotable local, mais sans contrôleur ni
-    /// physique (affichage seul — le serveur est autoritaire sur sa position,
-    /// appliquée directement au `transform`, pas simulée localement).
-    fn ensure_remote_player(
-        &mut self,
-        id: crate::net::protocol::PlayerId,
-        name: &str,
-    ) -> &mut RemotePlayer {
-        if !self.remote_players.contains_key(&id) {
-            let template = self
-                .scene
-                .objects
-                .iter()
-                .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
-                .cloned()
-                .unwrap_or_default();
-            let ghost = crate::scene::SceneObject {
-                name: format!("Joueur réseau {name}"),
-                controller: None,
-                physics: crate::runtime::physics::PhysicsKind::None,
-                // Masqué tant qu'aucun `Snapshot` n'est arrivé pour ce joueur.
-                visible: false,
-                ..template
-            };
-            let scene_index = self.scene.objects.len();
-            self.scene.objects.push(ghost);
-            self.remote_players.insert(
-                id,
-                RemotePlayer {
-                    name: name.to_string(),
-                    scene_index,
-                    interp: crate::net::interpolation::RemoteEntity::default(),
-                },
-            );
-        }
-        self.remote_players
-            .get_mut(&id)
-            .expect("vient d'être inséré juste au-dessus")
-    }
 }
 
 /// Récupère les messages d'un salon et les convertit en `ChatLine`
@@ -431,10 +599,12 @@ fn fetch_chat_lines(
     })
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+/// iOS uniquement : `net::client` n'y est pas encore compilé (cf. `net/mod.rs`),
+/// contrairement à Android depuis le Sprint 65.
+#[cfg(target_os = "ios")]
 impl AppState {
     pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
-        self.net_status = "Multijoueur indisponible sur mobile".to_string();
+        self.net_status = "Multijoueur indisponible sur iOS".to_string();
     }
 
     pub fn disconnect_from_server(&mut self) {}
@@ -443,6 +613,15 @@ impl AppState {
         false
     }
 
+    pub(super) fn poll_network(&mut self) {}
+
+    pub(super) fn apply_local_network_position(&mut self) {}
+}
+
+/// Compte Firebase, chat, classement : hors mobile (iOS et Android), cf. le
+/// bloc desktop équivalent plus haut.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+impl AppState {
     pub fn has_firebase_account(&self) -> bool {
         false
     }
@@ -492,16 +671,17 @@ impl AppState {
         _limit: usize,
     ) {
     }
-
-    pub(super) fn poll_network(&mut self) {}
 }
 
 #[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    use glam::Vec3;
 
     use super::*;
     use crate::app::multiplayer::NetworkInput;
+    use crate::net::protocol::EntityDelta;
     use crate::net::protocol::{ClientMsg, ServerMsg};
     use crate::net::server_loop::NetServer;
 
@@ -691,6 +871,257 @@ mod tests {
                 .remote_players
                 .contains_key(&alice.net_player_id.expect("vérifié ci-dessus")),
             "Alice ne doit jamais avoir un fantôme d'elle-même"
+        );
+    }
+
+    /// Prépare un `AppState` connecté (vrai socket) avec un gabarit pilotable
+    /// chargé, prêt pour les tests de `apply_local_network_position` — la
+    /// même mise en place que `client_sees_a_ghost_for_the_other_player_but_
+    /// never_for_itself`, réduite à un seul client (ces tests ne portent que
+    /// sur la réconciliation du joueur local, pas sur les fantômes distants).
+    fn connected_app_with_a_player(net: &NetServer) -> AppState {
+        let url = format!("ws://{}", net.local_addr);
+        let mut app = AppState::new();
+        app.load_zombies_demo();
+        app.connect_to_server(&url, "Testeur");
+        assert!(app.is_connected());
+        app
+    }
+
+    /// Sprint 66 (`SPRINTNETWORK.md`, §2.3 de `AUDIT_LATENCE_MULTIJOUEUR.md`) :
+    /// un écart au-dessus de `SNAP_THRESHOLD` ne doit **jamais** faire sauter
+    /// le joueur local directement à la position autoritative en un seul
+    /// appel — seulement un petit pas (`CORRECTION_PULL`) vers elle.
+    #[test]
+    fn a_single_call_only_takes_a_small_step_toward_the_authoritative_position() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+
+        let pi = app.player_index().expect("gabarit pilotable");
+        let predicted = app.scene.objects[pi].transform.position;
+        // Écart largement au-dessus de SNAP_THRESHOLD (0,5 m).
+        let authoritative = predicted + Vec3::new(2.0, 0.0, 0.0);
+
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: authoritative.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+
+        app.apply_local_network_position();
+
+        let after_one_call = app.scene.objects[pi].transform.position;
+        assert_ne!(
+            after_one_call, authoritative,
+            "un seul appel ne doit jamais sauter directement à la valeur autoritative"
+        );
+        assert!(
+            after_one_call.distance(authoritative) > 1.0,
+            "un seul appel doit rester proche de la position prédite, pas de la cible : \
+             {after_one_call:?}"
+        );
+    }
+
+    /// Des appels répétés (sans qu'aucun mouvement local n'intervienne entre
+    /// eux) doivent faire converger progressivement la position vers la
+    /// valeur autoritative — le petit pas par appel n'est pas qu'un lissage
+    /// ponctuel, il finit par combler l'écart.
+    #[test]
+    fn repeated_calls_gradually_converge_toward_the_authoritative_position() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+
+        let pi = app.player_index().expect("gabarit pilotable");
+        let predicted = app.scene.objects[pi].transform.position;
+        let authoritative = predicted + Vec3::new(2.0, 0.0, 0.0);
+
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: authoritative.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+
+        let mut previous_distance = predicted.distance(authoritative);
+        for _ in 0..30 {
+            app.apply_local_network_position();
+            let current_distance = app.scene.objects[pi]
+                .transform
+                .position
+                .distance(authoritative);
+            assert!(
+                current_distance <= previous_distance,
+                "chaque appel doit rapprocher (ou laisser inchangé) l'écart, jamais l'agrandir"
+            );
+            previous_distance = current_distance;
+        }
+        // La correction s'arrête volontairement dès que l'écart repasse sous
+        // `SNAP_THRESHOLD` (cf. `interpolation::reconcile`) : un aller-retour
+        // réseau normal ne doit pas produire de micro-saccade perpétuelle.
+        // Converge donc jusqu'au seuil, pas jusqu'à zéro.
+        assert!(
+            previous_distance <= crate::net::interpolation::SNAP_THRESHOLD,
+            "après 30 appels, l'écart doit être retombé à SNAP_THRESHOLD ou moins : \
+             {previous_distance}"
+        );
+    }
+
+    /// **Bug réel trouvé en testant l'app réelle (2026-07-12)** : la première
+    /// version de ce sprint mémorisait une cible figée (`from`/`to`) et
+    /// écrasait `transform.position` avec une interpolation entre ces deux
+    /// points fixes pendant 120 ms — mais `Physics::step`
+    /// (`runtime/physics.rs`) recopie la pose du corps rigide dans
+    /// `transform.position` à *chaque* tick, avant cette fonction. Toute
+    /// correction figée sur une ancienne cible écrasait donc la vraie
+    /// position, fraîchement avancée par l'input réel, pendant toute la
+    /// fenêtre de correction — le joueur semblait bloqué/trembler entre deux
+    /// points, l'input étant purement ignoré. Ce test simule un mouvement
+    /// local (`sim_step`) entre deux appels de `apply_local_network_position`
+    /// et vérifie que ce mouvement **n'est jamais écrasé** : la position
+    /// finale doit refléter à la fois le mouvement local et un petit pas de
+    /// correction, jamais uniquement l'un ou l'autre.
+    #[test]
+    fn a_correction_never_discards_local_movement_that_happened_between_calls() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+
+        let pi = app.player_index().expect("gabarit pilotable");
+        let start = app.scene.objects[pi].transform.position;
+        let authoritative = start + Vec3::new(2.0, 0.0, 0.0);
+
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: authoritative.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+
+        app.apply_local_network_position();
+
+        // Simule ce que ferait `sim_step`/`Physics::step` au tick suivant :
+        // avance la position d'un mouvement local, sans rapport avec la
+        // correction réseau (ex. le joueur continue d'appuyer sur une touche).
+        let local_move = Vec3::new(0.0, 0.0, 5.0);
+        app.scene.objects[pi].transform.position += local_move;
+        let position_before_second_call = app.scene.objects[pi].transform.position;
+
+        app.apply_local_network_position();
+
+        let position_after_second_call = app.scene.objects[pi].transform.position;
+        // Avec l'ancien bug, `position_after_second_call` aurait été calculée
+        // à partir de `from`/`to` figés (sans rapport avec `local_move`) —
+        // ici, elle doit rester proche de `position_before_second_call` (un
+        // simple petit pas de correction par-dessus), pas revenir à une
+        // valeur qui ignore le mouvement local qui vient d'avoir lieu.
+        assert!(
+            position_after_second_call.distance(position_before_second_call) < 1.0,
+            "le mouvement local entre les deux appels ne doit pas être écrasé par la \
+             correction réseau : avant={position_before_second_call:?}, \
+             après={position_after_second_call:?}"
+        );
+    }
+
+    /// **Bug réel trouvé en testant l'app réellement (capture d'écran
+    /// utilisateur : personnage dupliqué/tremblant entre deux points),
+    /// cf. `SPRINTNETWORK.md` Sprint 66bis.** Avec la physique réellement
+    /// construite (`Physics::build`), une correction qui n'écrit que dans
+    /// `transform.position` sans passer par `Physics::set_position` est
+    /// effacée dès le tick physique suivant — `Physics::step` recopie la pose
+    /// du corps rigide (resté inchangé) par-dessus. Ce test simule
+    /// exactement cette séquence (correction, puis un tick physique, comme
+    /// le ferait `advance_play` à la frame suivante) et vérifie que la
+    /// correction **survit**.
+    #[test]
+    fn a_local_position_correction_survives_the_next_physics_step() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let pi = app.player_index().expect("gabarit pilotable");
+        let predicted = app.scene.objects[pi].transform.position;
+        let authoritative = predicted + Vec3::new(2.0, 0.0, 0.0);
+
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: authoritative.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+
+        app.apply_local_network_position();
+        assert_ne!(
+            app.scene.objects[pi].transform.position, predicted,
+            "la correction doit avoir déplacé la position affichée"
+        );
+
+        // Simule ce que ferait le tick physique suivant (`sim_step`/`Physics::
+        // step`, appelé avant `apply_local_network_position` en temps normal,
+        // cf. `advance_play`) : sans `Physics::set_position`, cette étape
+        // aurait ramené la position exactement à `predicted` (le corps
+        // rigide, jamais informé de la correction) — le bug exact rapporté.
+        app.physics
+            .as_mut()
+            .expect("construite ci-dessus")
+            .step(1.0 / 60.0, &mut app.scene);
+
+        let after_physics_step = app.scene.objects[pi].transform.position;
+        assert!(
+            after_physics_step.distance(predicted) > 0.1,
+            "la correction ne doit pas être effacée par le tick physique suivant : \
+             position retombée à {after_physics_step:?} (départ {predicted:?})"
+        );
+    }
+
+    /// Sprint 68 (`SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2) :
+    /// `poll_network` est appelée une fois par frame de rendu, potentiellement
+    /// bien plus souvent que le tick serveur — sans plafond, un client sur un
+    /// écran rapide enverrait un `Input` par frame affichée. Ce test appelle
+    /// `poll_network` en boucle serrée (sans dormir entre les appels, donc
+    /// bien plus vite que `INPUT_SEND_INTERVAL`) et vérifie que le serveur ne
+    /// reçoit qu'une poignée d'`Input`, pas un par appel.
+    #[test]
+    fn input_send_rate_is_capped_regardless_of_poll_network_call_rate() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+
+        // Vide le `Join` initial, seul le décompte des `Input` nous intéresse.
+        let _ = net.inbox.recv_timeout(Duration::from_secs(2));
+
+        const CALLS: usize = 500;
+        for _ in 0..CALLS {
+            app.poll_network();
+        }
+
+        let mut input_count = 0;
+        while net.inbox.try_recv().is_ok() {
+            input_count += 1;
+        }
+
+        assert!(
+            input_count < CALLS / 10,
+            "500 appels serrés à poll_network ne doivent envoyer qu'une poignée d'Input, \
+             pas un par appel (reçus : {input_count})"
         );
     }
 }
