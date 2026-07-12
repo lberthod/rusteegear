@@ -164,9 +164,10 @@ impl AppState {
             .is_none_or(|last| now.duration_since(last) >= INPUT_SEND_INTERVAL);
         if should_send_input {
             let inp = &self.input_state;
-            let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
-            let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
-            let (mx, my) = super::camera_relative_move(raw_mx, raw_my, self.camera.yaw);
+            let player_yaw = self
+                .player_object()
+                .map(|o| o.transform.rotation.to_euler(glam::EulerRot::YXZ).0);
+            let (mx, my) = network_move_axes(inp, self.camera.yaw, player_yaw);
             let input = crate::net::protocol::ClientMsg::Input {
                 move_x: mx,
                 move_y: my,
@@ -370,6 +371,34 @@ impl AppState {
             .get_mut(&id)
             .expect("vient d'être inséré juste au-dessus")
     }
+}
+
+/// Calcule la direction **monde** (`move_x`/`move_y`) à envoyer au serveur pour le
+/// joueur local, à partir de son `PlayerInput`, du yaw de la caméra (joystick/
+/// flèches, cf. `camera_relative_move`) et de son yaw propre s'il est connu (avance/
+/// recul clavier « tank », `key_thrust`).
+///
+/// **Bug corrigé (2026-07-12, constaté en test réel)** : `key_thrust` (W/S) n'était
+/// pas inclus ici — le serveur ne voyait donc jamais ce mouvement, et la
+/// réconciliation (`apply_local_network_position`) finissait par annuler la
+/// prédiction locale au bout de quelques secondes, donnant l'impression que le
+/// déplacement au clavier « buguait ». Même formule que `AppState::advance_play`
+/// (`-sin(yaw)`/`-cos(yaw)`) pour rester cohérent avec le mouvement prédit localement.
+fn network_move_axes(
+    inp: &super::PlayerInput,
+    camera_yaw: f32,
+    player_yaw: Option<f32>,
+) -> (f32, f32) {
+    let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
+    let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+    let (mut mx, mut my) = super::camera_relative_move(raw_mx, raw_my, camera_yaw);
+    if inp.key_thrust != 0.0
+        && let Some(yaw) = player_yaw
+    {
+        mx += inp.key_thrust * -yaw.sin();
+        my += inp.key_thrust * -yaw.cos();
+    }
+    (mx, my)
 }
 
 /// Compte Firebase, chat, classement : desktop uniquement (`ureq`/`net::firebase`
@@ -1123,5 +1152,41 @@ mod tests {
             "500 appels serrés à poll_network ne doivent envoyer qu'une poignée d'Input, \
              pas un par appel (reçus : {input_count})"
         );
+    }
+
+    #[test]
+    fn network_move_axes_includes_keyboard_thrust_along_the_players_own_yaw() {
+        // Bug corrigé : sans le yaw du joueur, W/S (contrôles tank) ne produisaient
+        // aucune direction monde à envoyer au serveur — le mouvement clavier restait
+        // invisible pour lui malgré la prédiction locale.
+        let inp = super::super::PlayerInput {
+            key_thrust: 1.0,
+            ..Default::default()
+        };
+        let yaw = 0.0_f32; // face à -Z (cf. `Physics::face_direction`)
+        let (mx, my) = network_move_axes(&inp, 0.0, Some(yaw));
+        assert!(
+            (mx - 0.0).abs() < 1e-5 && (my - -1.0).abs() < 1e-5,
+            "avancer (W) à yaw=0 doit donner une direction monde vers -Z : ({mx}, {my})"
+        );
+    }
+
+    #[test]
+    fn network_move_axes_is_neutral_without_thrust_or_camera_input() {
+        let inp = super::super::PlayerInput::default();
+        let (mx, my) = network_move_axes(&inp, 0.7, Some(1.2));
+        assert_eq!((mx, my), (0.0, 0.0));
+    }
+
+    #[test]
+    fn network_move_axes_ignores_thrust_when_player_yaw_is_unknown() {
+        // Objet sans corps physique/pas encore construit (`player_object` renvoie
+        // `None`) : ne doit pas paniquer, simplement ignorer la composante clavier.
+        let inp = super::super::PlayerInput {
+            key_thrust: 1.0,
+            ..Default::default()
+        };
+        let (mx, my) = network_move_axes(&inp, 0.0, None);
+        assert_eq!((mx, my), (0.0, 0.0));
     }
 }
