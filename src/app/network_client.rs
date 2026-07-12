@@ -154,6 +154,10 @@ impl AppState {
         self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
         self.net_local_history.clear();
         self.net_last_input_sent = None;
+        // Plus de snapshots à venir : oublie les projectiles serveur et masque le
+        // pool, sinon les dernières boules reçues resteraient figées à l'écran.
+        self.net_projectiles.clear();
+        self.sync_fireball_pool(&[]);
         self.net_status = "Déconnecté".to_string();
     }
 
@@ -376,8 +380,35 @@ impl AppState {
             }
             ServerMsg::Snapshot(snap) => {
                 let now = std::time::Instant::now();
+                // Boules de feu en vol côté serveur : mémorisées telles quelles,
+                // affichées par le pool local (cf. `sync_fireball_pool`, appelé
+                // par `update_fireballs` à chaque frame). Pas d'interpolation :
+                // à 60 Hz de snapshots pour un projectile qui vit ~1,5 s, le
+                // pas entre deux positions reçues est déjà sous le pixel utile.
+                self.net_projectiles = snap
+                    .projectiles
+                    .iter()
+                    .map(|p| glam::Vec3::from_array(*p))
+                    .collect();
                 for e in snap.entities {
-                    let Some(pid) = e.player_id else { continue };
+                    let Some(pid) = e.player_id else {
+                        // Entité sans propriétaire = monstre diffusé par le
+                        // serveur autoritaire (cf. `network_snapshot`) :
+                        // appliquée directement à l'objet de même indice — la
+                        // scène est la même des deux côtés (embarquée). Le
+                        // garde-fou `attackable` évite d'écraser un autre objet
+                        // si les scènes divergeaient (version différente).
+                        let i = e.index as usize;
+                        if let Some(o) = self.scene.objects.get_mut(i)
+                            && o.controller.is_none()
+                            && o.combat.as_ref().is_some_and(|c| c.attackable)
+                        {
+                            o.transform.position = glam::Vec3::from_array(e.position);
+                            o.transform.rotation = glam::Quat::from_rotation_y(e.yaw);
+                            o.visible = e.visible;
+                        }
+                        continue;
+                    };
                     // Notre propre joueur : le serveur reste maître de sa
                     // position lui aussi (pas de prédiction locale, cf. la doc
                     // de `net_local_interp`) — même traitement que les autres
@@ -391,6 +422,18 @@ impl AppState {
                     let rp = self.ensure_remote_player(pid, &default_name);
                     rp.interp.push(e, now);
                 }
+            }
+            // Évènements ponctuels : le seul exploité côté client est `Defeated`
+            // (monstre vaincu, ex. par la boule de feu d'un joueur) — son + flash
+            // immédiats, sans attendre le `visible: false` du prochain snapshot.
+            ServerMsg::Event(crate::net::protocol::GameEvent::Defeated { index }) => {
+                if let Some(o) = self.scene.objects.get_mut(index as usize)
+                    && o.combat.as_ref().is_some_and(|c| c.attackable)
+                {
+                    o.visible = false;
+                }
+                self.attack_flash = 1.0;
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
             }
             ServerMsg::Event(_) => {}
         }
@@ -480,11 +523,17 @@ fn network_input_msg(
         ctrl.is_some_and(|c| !c.jump_button.is_empty() && inp.buttons.contains(&c.jump_button));
     let touch_attack =
         ctrl.is_some_and(|c| !c.attack_button.is_empty() && inp.buttons.contains(&c.attack_button));
+    let touch_fire =
+        ctrl.is_some_and(|c| !c.fire_button.is_empty() && inp.buttons.contains(&c.fire_button));
     crate::net::protocol::ClientMsg::Input {
         move_x: mx,
         move_y: my,
         attack: inp.attack || touch_attack,
         jump: inp.jump || touch_jump,
+        // Boule de feu : touche clavier (K) ou bouton tactile nommé
+        // (`Controller::fire_button`) — le serveur simule le tir et sa recharge
+        // (cf. `app::fireball`), ce client ne fait qu'exprimer l'intention.
+        fire: inp.fire || touch_fire,
     }
 }
 
@@ -845,6 +894,7 @@ mod tests {
                     move_y,
                     attack,
                     jump,
+                    fire,
                 } => {
                     server_app.set_network_input(
                         id,
@@ -853,6 +903,7 @@ mod tests {
                             move_y,
                             attack,
                             jump,
+                            fire,
                         },
                     );
                 }
@@ -1419,6 +1470,7 @@ mod tests {
                 gyro: true,
                 jump_button: "Saut".into(),
                 attack_button: "Attaque".into(),
+                fire_button: "Feu".into(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1429,12 +1481,14 @@ mod tests {
         };
         inp.buttons.insert("Saut".into());
         inp.buttons.insert("Attaque".into());
+        inp.buttons.insert("Feu".into());
         let msg = network_input_msg(&inp, 0.0, Some(&obj));
         let crate::net::protocol::ClientMsg::Input {
             move_x,
             move_y,
             attack,
             jump,
+            fire,
         } = msg
         else {
             panic!("network_input_msg doit produire un ClientMsg::Input");
@@ -1443,6 +1497,10 @@ mod tests {
         assert!(
             attack,
             "le bouton tactile Attaque doit être transmis au serveur"
+        );
+        assert!(
+            fire,
+            "le bouton tactile Feu (boule de feu) doit être transmis au serveur"
         );
         // Gyroscope en convention joystick : le serveur applique `vz = -move_y`,
         // la prédiction locale `vz = -tilt.1` — donc move_y = tilt.1 tel quel.
@@ -1469,17 +1527,19 @@ mod tests {
             ..Default::default()
         };
         inp.buttons.insert("Saut".into());
+        inp.buttons.insert("Feu".into());
         let msg = network_input_msg(&inp, 0.0, Some(&obj));
         let crate::net::protocol::ClientMsg::Input {
             move_x,
             move_y,
             attack,
             jump,
+            fire,
         } = msg
         else {
             panic!("network_input_msg doit produire un ClientMsg::Input");
         };
-        assert!(!jump && !attack);
+        assert!(!jump && !attack && !fire);
         assert_eq!((move_x, move_y), (0.0, 0.0));
     }
 

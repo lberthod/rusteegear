@@ -4,6 +4,7 @@
 pub mod ai;
 pub mod build_config;
 mod combat;
+mod fireball;
 pub mod input;
 pub mod multiplayer;
 pub mod network_client;
@@ -113,6 +114,9 @@ pub struct PlayerInput {
     pub jump: bool,
     /// Attaque clavier (J) maintenue enfoncée.
     pub attack: bool,
+    /// Tir de boule de feu clavier (K) maintenu enfoncé — cf. `app::fireball` ;
+    /// le pendant tactile est le bouton nommé `Controller::fire_button`.
+    pub fire: bool,
 }
 
 impl PlayerInput {
@@ -236,6 +240,27 @@ pub struct AppState {
     /// Temps de recharge (s) restant avant la prochaine attaque possible de
     /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`, Sprint 60).
     network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
+    /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
+    /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
+    fireballs: Vec<fireball::Fireball>,
+    /// Temps de recharge (s) restant par **objet tireur** (indice dans
+    /// `scene.objects`) : la même table sert au joueur local (solo) et aux joueurs
+    /// réseau (serveur) — validation côté simulation, un client qui spamme
+    /// `fire: true` ne tire pas plus vite pour autant.
+    fireball_cooldowns: HashMap<usize, f32>,
+    /// Pool d'objets de scène (sphères émissives) réutilisés pour afficher les
+    /// boules de feu — créés à la demande, masqués quand inutilisés, jamais
+    /// retirés en cours de partie (retirer décalerait tous les indices).
+    fireball_pool: Vec<usize>,
+    /// Positions des boules de feu reçues du dernier `Snapshot` serveur (client
+    /// connecté uniquement) : affichées telles quelles via le pool.
+    net_projectiles: Vec<Vec3>,
+    /// Évènements de gameplay produits par la simulation (ex. monstre vaincu par
+    /// une boule de feu) à diffuser aux clients — drainés par le serveur headless
+    /// à chaque tick (cf. `take_net_events`). Reste vide hors serveur (le joueur
+    /// solo entend ses sons directement, il n'a personne à prévenir).
+    pending_net_events: Vec<crate::net::protocol::GameEvent>,
     /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
     /// a rejoint une partie en ligne. Desktop + Android (Sprint 65) : `net::client`
     /// dépend de `tokio`, pas encore ciblé sur iOS (cf. `net/mod.rs`).
@@ -473,6 +498,11 @@ impl AppState {
             network_players: HashMap::new(),
             network_inputs: HashMap::new(),
             network_attack_cooldowns: HashMap::new(),
+            fireballs: Vec::new(),
+            fireball_cooldowns: HashMap::new(),
+            fireball_pool: Vec::new(),
+            net_projectiles: Vec::new(),
+            pending_net_events: Vec::new(),
             #[cfg(not(target_os = "ios"))]
             net_client: None,
             net_player_id: None,
@@ -1217,6 +1247,10 @@ impl AppState {
         // nettoyage, `network_players` pointerait vers des indices obsolètes
         // après la restauration.
         self.clear_network_players();
+        // Même raison pour les boules de feu : le pool visuel vit dans
+        // `scene.objects`, ajouté en cours de partie — indices obsolètes après
+        // restauration (cf. `clear_fireballs`).
+        self.clear_fireballs();
         self.time = 0.0;
         self.sim_accumulator = 0.0;
         self.sim_prev_poses.clear();
@@ -1907,6 +1941,7 @@ impl AppState {
             self.scene.objects = self.play_snapshot.clone();
             // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
             self.clear_network_players();
+            self.clear_fireballs();
             self.physics = None;
             self.paused = false;
             self.hud_health = None;
@@ -2023,6 +2058,7 @@ impl AppState {
             }
             self.update_attack(dt);
             self.update_network_attacks(dt);
+            self.update_fireballs(dt);
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
             self.respawn_queue.retain(|&(i, at)| {

@@ -237,6 +237,15 @@ scope, prises dès le départ :
   robuste à la gigue), jamais téléportées à chaque tick réseau — et le joueur
   local est piloté en **prédiction immédiate**, réconciliée intelligemment
   avec le serveur (voir ci-dessous).
+- **Attaque à distance « boule de feu » + monstres sur la carte**
+  (`src/app/fireball.rs`, Sprint 78) : touche **K** ou bouton tactile
+  **« Feu »** (APK + aperçu desktop) ⇒ un projectile part devant le
+  personnage, en ligne droite, et frappe le premier obstacle physique (un mur
+  sert d'abri) ou monstre sur son chemin. La carte embarquée place 5 monstres
+  à abattre (dont un « chef » à 3 PV) ; le serveur autoritaire simule tirs et
+  recharge (le spam d'un client modifié ne tire pas plus vite), diffuse
+  monstres et projectiles dans le `Snapshot`, et chaque mise à mort atteint
+  tous les écrans (`GameEvent::Defeated` : son + flash immédiats).
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 
@@ -297,8 +306,8 @@ le développement). Historique sprint par sprint :
 
 - La vie et les conditions de victoire/défaite restent celles du joueur
   « gabarit » d'origine, pas encore individualisées par joueur réseau.
-- Les snapshots ne transmettent pas (encore) les monstres, seulement les
-  joueurs réseau.
+- Pas de dégâts joueur-contre-joueur : la boule de feu traverse les autres
+  joueurs (conséquence directe de la vie non individualisée ci-dessus).
 - L'IA de poursuite vise toujours un seul point (le joueur local), pas le
   joueur réseau le plus proche.
 - Pas de multi-salons : un processus serveur = un seul salon pour l'instant.

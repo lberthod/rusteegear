@@ -312,3 +312,31 @@ service `rusteegear-server` redémarré — serveur et clients tournent désorma
 sur le même commit (mêmes physique et conventions des deux côtés, les
 corrections deviennent marginales).
 **Fichiers** : `src/app/network_client.rs`, `src/runtime/physics.rs`.
+
+### Sprint 78 — Boule de feu + monstres sur la carte multijoueur ✅ FAIT
+Première **attaque à distance** du jeu en ligne : touche **K** (desktop) ou
+bouton tactile **« Feu »** (APK + aperçu desktop) ⇒ un projectile part
+**devant** le personnage (le long de son yaw, même convention que la poussée
+tank W), avance en ligne droite (12 m/s, ~18 m de portée) et frappe le
+premier objet sur son chemin : un **monstre** `attackable` est blessé/vaincu
+(`Scene::damage_attackable` — les PV comptent), un **obstacle physique**
+(mur, tour) éteint la boule — un mur sert donc d'abri. Simulation partagée
+(`src/app/fireball.rs`) : identique en solo (joueur local) et sur le serveur
+autoritaire (joueurs réseau via `ClientMsg::Input::fire`, recharge 0,9 s
+validée **côté serveur** par objet tireur — le spam d'un client modifié ne
+tire pas plus vite, même durcissement que l'attaque au contact). Un client
+connecté ne simule rien : il envoie l'intention et affiche les
+`Snapshot::projectiles` via un pool local de sphères émissives.
+La carte embarquée (`assets/player_scene.json`) place désormais **5 monstres**
+(4 réapparaissant après 12 s + un « chef » à 3 PV), diffusés dans le
+`Snapshot` avec `player_id: None` (le cas prévu de longue date par
+`EntityDelta`) : un monstre tué par un joueur disparaît sur tous les écrans,
+et l'évènement `GameEvent::Defeated` (nouvelle file `take_net_events`,
+diffusée par le serveur headless) déclenche son + flash immédiats chez tous
+les clients. Tests : vol/impact/abri/recharge/spam réseau/pool/évènements +
+garde-fou sur le contenu de la scène embarquée (un ré-export éditeur qui
+perdrait monstres ou bouton « Feu » casse un test).
+**Fichiers** : `src/app/fireball.rs` (nouveau), `src/net/protocol.rs`,
+`src/app/multiplayer.rs`, `src/app/network_client.rs`, `src/app/mod.rs`,
+`src/bin/server.rs`, `src/scene/mod.rs`, `src/lib.rs`,
+`assets/player_scene.json`.

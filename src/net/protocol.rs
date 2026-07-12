@@ -34,6 +34,10 @@ pub enum ClientMsg {
         move_y: f32,
         attack: bool,
         jump: bool,
+        /// Tir de boule de feu (attaque à distance, cf. `app::fireball`) : distinct
+        /// de `attack` (coup au contact) — le serveur valide son propre temps de
+        /// recharge, comme pour `attack`.
+        fire: bool,
     },
     /// Déconnexion volontaire (quitte le salon proprement).
     Leave,
@@ -72,6 +76,12 @@ pub struct Snapshot {
     /// reçu hors ordre (réseau) plutôt que de reculer dans le temps.
     pub tick: u32,
     pub entities: Vec<EntityDelta>,
+    /// Positions monde des boules de feu en vol (cf. `app::fireball`) : pas des
+    /// entités de `scene.objects` (elles naissent et meurent en quelques
+    /// secondes), donc pas des `EntityDelta` — chaque client les affiche via un
+    /// petit pool local de sphères (cf. `AppState::sync_fireball_pool`), sans
+    /// identité persistante à suivre d'un tick à l'autre.
+    pub projectiles: Vec<[f32; 3]>,
 }
 
 /// État minimal d'une entité de `scene.objects`, suffisant pour l'affichage/
@@ -167,6 +177,7 @@ mod tests {
             move_y: 1.0,
             attack: true,
             jump: false,
+            fire: true,
         });
     }
 
@@ -197,6 +208,7 @@ mod tests {
     fn server_msg_snapshot_round_trips() {
         round_trip(ServerMsg::Snapshot(Snapshot {
             tick: 12345,
+            projectiles: vec![[1.0, 1.4, -3.0], [0.0, 0.9, 4.2]],
             entities: vec![
                 EntityDelta {
                     index: 0,
@@ -256,6 +268,8 @@ mod tests {
         let snapshot = ServerMsg::Snapshot(Snapshot {
             tick: 999_999,
             entities,
+            // Quelques boules de feu en vol : le cas réaliste d'une manche animée.
+            projectiles: vec![[3.0, 1.4, -2.0]; 4],
         });
         let bytes = encode(&snapshot).expect("encodage");
         let per_entity = bytes.len() as f32 / 20.0;

@@ -281,6 +281,9 @@ impl ApplicationHandler for App {
                     match code {
                         KeyCode::Space => inp.jump = pressed,
                         KeyCode::KeyJ => inp.attack = pressed,
+                        // Boule de feu (attaque à distance, cf. `app::fireball`) :
+                        // voisine de J (Attaque) pour garder les deux sous la main.
+                        KeyCode::KeyK => inp.fire = pressed,
                         _ => {}
                     }
                     if is_move_key {

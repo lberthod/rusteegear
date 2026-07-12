@@ -1,7 +1,9 @@
 {
   "camera_follow": true,
   "game_camera": null,
-  "groups": [],
+  "groups": [
+    "Monstres"
+  ],
   "imported": [],
   "light": {
     "ambient": 0.25,
@@ -18,7 +20,8 @@
   },
   "mobile": {
     "buttons": [
-      "Saut"
+      "Saut",
+      "Feu"
     ],
     "health_bar": false,
     "joystick": false,
@@ -95,7 +98,8 @@
         "input": true,
         "jump_button": "Saut",
         "jump_height": 1.5,
-        "move_speed": 4.5
+        "move_speed": 4.5,
+        "fire_button": "Feu"
       },
       "deadly": false,
       "emissive": 0.0,
@@ -549,6 +553,266 @@
           1.2,
           5.0,
           1.2
+        ]
+      },
+      "trigger": false,
+      "vibrate_on_tap": 0,
+      "visible": true,
+      "weapon_pickup": null
+    },
+    {
+      "ai_chaser": null,
+      "audio": null,
+      "collider_shape": "Auto",
+      "color": [
+        0.85,
+        0.2,
+        0.15
+      ],
+      "combat": {
+        "attackable": true,
+        "is_attack_fx": false,
+        "wave": 0,
+        "hp": 1
+      },
+      "controller": null,
+      "deadly": false,
+      "emissive": 0.4,
+      "group": "Monstres",
+      "mesh": "Cube",
+      "metallic": 0.0,
+      "name": "Monstre nord",
+      "physics": "None",
+      "respawn_delay": 12.0,
+      "roughness": 0.8,
+      "script": "",
+      "tap_action": "None",
+      "tappable": false,
+      "texture": "",
+      "transform": {
+        "position": [
+          0.0,
+          0.9,
+          -8.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "trigger": false,
+      "vibrate_on_tap": 0,
+      "visible": true,
+      "weapon_pickup": null
+    },
+    {
+      "ai_chaser": null,
+      "audio": null,
+      "collider_shape": "Auto",
+      "color": [
+        0.85,
+        0.2,
+        0.15
+      ],
+      "combat": {
+        "attackable": true,
+        "is_attack_fx": false,
+        "wave": 0,
+        "hp": 1
+      },
+      "controller": null,
+      "deadly": false,
+      "emissive": 0.4,
+      "group": "Monstres",
+      "mesh": "Cube",
+      "metallic": 0.0,
+      "name": "Monstre est",
+      "physics": "None",
+      "respawn_delay": 12.0,
+      "roughness": 0.8,
+      "script": "",
+      "tap_action": "None",
+      "tappable": false,
+      "texture": "",
+      "transform": {
+        "position": [
+          8.0,
+          0.9,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "trigger": false,
+      "vibrate_on_tap": 0,
+      "visible": true,
+      "weapon_pickup": null
+    },
+    {
+      "ai_chaser": null,
+      "audio": null,
+      "collider_shape": "Auto",
+      "color": [
+        0.85,
+        0.2,
+        0.15
+      ],
+      "combat": {
+        "attackable": true,
+        "is_attack_fx": false,
+        "wave": 0,
+        "hp": 1
+      },
+      "controller": null,
+      "deadly": false,
+      "emissive": 0.4,
+      "group": "Monstres",
+      "mesh": "Cube",
+      "metallic": 0.0,
+      "name": "Monstre ouest",
+      "physics": "None",
+      "respawn_delay": 12.0,
+      "roughness": 0.8,
+      "script": "",
+      "tap_action": "None",
+      "tappable": false,
+      "texture": "",
+      "transform": {
+        "position": [
+          -8.0,
+          0.9,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "trigger": false,
+      "vibrate_on_tap": 0,
+      "visible": true,
+      "weapon_pickup": null
+    },
+    {
+      "ai_chaser": null,
+      "audio": null,
+      "collider_shape": "Auto",
+      "color": [
+        0.85,
+        0.2,
+        0.15
+      ],
+      "combat": {
+        "attackable": true,
+        "is_attack_fx": false,
+        "wave": 0,
+        "hp": 1
+      },
+      "controller": null,
+      "deadly": false,
+      "emissive": 0.4,
+      "group": "Monstres",
+      "mesh": "Cube",
+      "metallic": 0.0,
+      "name": "Monstre sud",
+      "physics": "None",
+      "respawn_delay": 12.0,
+      "roughness": 0.8,
+      "script": "",
+      "tap_action": "None",
+      "tappable": false,
+      "texture": "",
+      "transform": {
+        "position": [
+          0.0,
+          0.9,
+          8.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "trigger": false,
+      "vibrate_on_tap": 0,
+      "visible": true,
+      "weapon_pickup": null
+    },
+    {
+      "ai_chaser": null,
+      "audio": null,
+      "collider_shape": "Auto",
+      "color": [
+        0.55,
+        0.1,
+        0.6
+      ],
+      "combat": {
+        "attackable": true,
+        "is_attack_fx": false,
+        "wave": 0,
+        "hp": 3
+      },
+      "controller": null,
+      "deadly": false,
+      "emissive": 0.4,
+      "group": "Monstres",
+      "mesh": "Cube",
+      "metallic": 0.0,
+      "name": "Chef monstre",
+      "physics": "None",
+      "respawn_delay": 0.0,
+      "roughness": 0.8,
+      "script": "",
+      "tap_action": "None",
+      "tappable": false,
+      "texture": "",
+      "transform": {
+        "position": [
+          -8.0,
+          0.9,
+          -8.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.6,
+          1.6,
+          1.6
         ]
       },
       "trigger": false,

@@ -183,6 +183,14 @@ pub struct Controller {
     /// touche clavier Attaque (desktop) — cf. `PlayerInput::attack`.
     #[serde(default)]
     pub attack_button: String,
+    /// Nom du bouton tactile qui tire une boule de feu devant soi (vide = pas de tir
+    /// à distance). Combiné à la touche clavier Feu (K, desktop) — cf.
+    /// `PlayerInput::fire` et `app::fireball` : contrairement à `attack_button`
+    /// (coup au contact/missile verrouillé sur une cible), la boule de feu part en
+    /// ligne droite dans l'orientation du personnage et frappe le premier obstacle
+    /// physique ou monstre sur son chemin.
+    #[serde(default)]
+    pub fire_button: String,
     /// Portée (mètres) de l'attaque, centrée sur la position de l'objet.
     #[serde(default = "default_attack_range")]
     pub attack_range: f32,
@@ -223,6 +231,7 @@ impl Default for Controller {
             jump_button: String::new(),
             jump_height: default_jump_height(),
             attack_button: String::new(),
+            fire_button: String::new(),
             attack_range: default_attack_range(),
             attack_cooldown: default_attack_cooldown(),
             attack_windup: default_attack_windup(),

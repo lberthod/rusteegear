@@ -130,6 +130,7 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
             move_y,
             attack,
             jump,
+            fire,
         } => {
             app.set_network_input(
                 id,
@@ -138,6 +139,7 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
                     move_y,
                     attack,
                     jump,
+                    fire,
                 },
             );
         }
@@ -329,6 +331,12 @@ fn main() {
 
         if let Some(net) = &net {
             net.broadcast(&ServerMsg::Snapshot(app.network_snapshot(tick)));
+            // Évènements ponctuels produits par la simulation de ce tick (monstre
+            // vaincu par une boule de feu...) : diffusés une fois, pour que les
+            // clients jouent son/flash sans attendre de comparer deux snapshots.
+            for event in app.take_net_events() {
+                net.broadcast(&ServerMsg::Event(event));
+            }
         }
 
         if app.wave != last_wave {
@@ -422,6 +430,7 @@ mod tests {
             move_y: 0.0,
             attack: false,
             jump: false,
+            fire: false,
         });
         let (id, msg) = net
             .inbox

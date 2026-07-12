@@ -284,6 +284,7 @@ mod tests {
             move_y: -1.0,
             attack: true,
             jump: false,
+            fire: false,
         });
 
         let (id, msg) = server
@@ -298,6 +299,7 @@ mod tests {
                 move_y: -1.0,
                 attack: true,
                 jump: false,
+                fire: false,
             }
         );
     }

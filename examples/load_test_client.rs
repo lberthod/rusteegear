@@ -91,6 +91,7 @@ fn main() {
                     move_y,
                     attack,
                     jump,
+                    fire,
                 } => {
                     app.set_network_input(
                         id,
@@ -99,6 +100,7 @@ fn main() {
                             move_y,
                             attack,
                             jump,
+                            fire,
                         },
                     );
                 }
@@ -133,6 +135,7 @@ fn main() {
                     move_y: (t * 0.9 + phase).cos(),
                     attack: (t + phase) % 1.0 < 0.1,
                     jump: false,
+                    fire: false,
                 };
                 if let Ok(bytes) = protocol::encode(&input)
                     && now >= measure_from

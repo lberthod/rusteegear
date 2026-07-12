@@ -21,6 +21,9 @@ pub struct NetworkInput {
     pub move_y: f32,
     pub attack: bool,
     pub jump: bool,
+    /// Tir de boule de feu (cf. `app::fireball`) : recharge validée côté serveur
+    /// par objet tireur (`AppState::fireball_cooldowns`), comme `attack`.
+    pub fire: bool,
 }
 
 /// Portée (m) de l'attaque réseau : un coup immédiat au contact, pas le
@@ -55,6 +58,7 @@ fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
         move_y: clean(input.move_y),
         attack: input.attack,
         jump: input.jump,
+        fire: input.fire,
     }
 }
 
@@ -256,7 +260,7 @@ impl AppState {
     /// `None` pour l'instant ; individualiser la vie par joueur réseau est un
     /// prérequis pour un vrai combat joueur-contre-joueur (hors scope Sprint 55).
     pub fn network_snapshot(&self, tick: u32) -> Snapshot {
-        let entities = self
+        let mut entities: Vec<EntityDelta> = self
             .network_players
             .iter()
             .filter_map(|(&id, &index)| self.scene.objects.get(index).map(|o| (id, index, o)))
@@ -272,7 +276,38 @@ impl AppState {
                 }
             })
             .collect();
-        Snapshot { tick, entities }
+        // Monstres (`Combat::attackable`, hors joueurs et ancre FX) : diffusés
+        // avec `player_id: None` — le cas prévu de longue date par
+        // `EntityDelta::player_id`, activé avec l'attaque à distance : sans
+        // cette diffusion, chaque client simulerait/afficherait ses propres
+        // monstres, et un monstre tué par la boule de feu d'un joueur resterait
+        // debout sur l'écran des autres. Diffusés même masqués (mort = le
+        // `visible: false` doit atteindre tous les écrans), et **par valeur de
+        // scène partagée** : les indices coïncident car serveur et clients
+        // chargent la même scène embarquée (cf. `src/bin/server.rs`).
+        for (index, o) in self.scene.objects.iter().enumerate() {
+            let is_monster = o.controller.is_none()
+                && o.combat
+                    .as_ref()
+                    .is_some_and(|c| c.attackable && !c.is_attack_fx);
+            if !is_monster {
+                continue;
+            }
+            let (yaw, _, _) = o.transform.rotation.to_euler(glam::EulerRot::YXZ);
+            entities.push(EntityDelta {
+                index: index as u32,
+                player_id: None,
+                position: o.transform.position.to_array(),
+                yaw,
+                visible: o.visible,
+                health: None,
+            });
+        }
+        Snapshot {
+            tick,
+            entities,
+            projectiles: self.fireballs.iter().map(|fb| fb.pos.to_array()).collect(),
+        }
     }
 }
 
@@ -415,6 +450,7 @@ mod tests {
                 move_y: 0.0,
                 attack: false,
                 jump: false,
+                fire: false,
             },
         );
         assert_eq!(app.network_player_count(), 0);
@@ -436,6 +472,7 @@ mod tests {
                 move_y: 0.0,
                 attack: false,
                 jump: false,
+                fire: false,
             },
         );
         app.playing = true;
@@ -514,6 +551,7 @@ mod tests {
             move_y: f32::INFINITY,
             attack: true,
             jump: true,
+            fire: false,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 0.0);
@@ -530,6 +568,7 @@ mod tests {
             move_y: -50.0,
             attack: false,
             jump: false,
+            fire: false,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 1.0);
@@ -550,6 +589,7 @@ mod tests {
                 move_y: f32::NAN,
                 attack: false,
                 jump: false,
+                fire: false,
             },
         );
         app.playing = true;
@@ -619,6 +659,7 @@ mod tests {
                 move_y: 0.0,
                 attack: true,
                 jump: false,
+                fire: false,
             },
         );
 
