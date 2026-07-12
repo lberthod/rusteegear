@@ -129,6 +129,22 @@ pub struct AppState {
     tapped_obj: Option<usize>,
     /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
     sim_accumulator: f32,
+    /// Poses (position, rotation, échelle) de tous les objets après l'**avant-dernier**
+    /// pas de simulation à pas fixe. Couplé à `sim_curr_poses` pour l'interpolation de
+    /// rendu (cf. `advance_play`) : le rendu affiche un mélange des deux pondéré par
+    /// l'accumulateur, au lieu de la dernière pose brute — sans quoi une frame affiche
+    /// tantôt 0, tantôt 2 pas de simulation selon l'alignement rendu/60 Hz, un
+    /// à-coup visible en continu (« judder », constaté : déplacement « pas fluide »).
+    sim_prev_poses: Vec<(Vec3, Quat, Vec3)>,
+    /// Poses après le **dernier** pas de simulation — l'état « vrai » de la simulation,
+    /// restauré avant chaque nouveau pas (cf. `restore_sim_poses` : les transforms
+    /// affichés peuvent s'en écarter d'une fraction de pas à cause du mélange visuel).
+    sim_curr_poses: Vec<(Vec3, Quat, Vec3)>,
+    /// Poses telles qu'écrites par le **dernier** `blend_render_poses` : référence de
+    /// `restore_sim_poses` pour distinguer « transform encore égal au mélange » (à
+    /// restaurer) d'une écriture externe survenue depuis (à respecter). Vide = pas de
+    /// mélange valide (début de Play, scène modifiée).
+    sim_render_poses: Vec<(Vec3, Quat, Vec3)>,
     /// Temps de jeu (s) auquel tous les collectibles ont été ramassés (figé pour le HUD).
     win_time: Option<f32>,
     /// Partie perdue : le joueur a touché une zone mortelle (fige le jeu jusqu'au Stop).
@@ -399,6 +415,9 @@ impl AppState {
             input_state: PlayerInput::default(),
             tapped_obj: None,
             sim_accumulator: 0.0,
+            sim_prev_poses: Vec::new(),
+            sim_curr_poses: Vec::new(),
+            sim_render_poses: Vec::new(),
             win_time: None,
             lost: false,
             score: 0,
@@ -1164,6 +1183,9 @@ impl AppState {
         self.clear_network_players();
         self.time = 0.0;
         self.sim_accumulator = 0.0;
+        self.sim_prev_poses.clear();
+        self.sim_curr_poses.clear();
+        self.sim_render_poses.clear();
         self.win_time = None;
         self.lost = false;
         self.score = 0;
@@ -1858,6 +1880,11 @@ impl AppState {
             self.attack_projectile = None;
             self.attack_charge = None;
             self.stagger.clear();
+            // Poses d'interpolation de rendu périmées (la scène vient d'être restaurée
+            // depuis le snapshot d'édition) : ne surtout pas les mélanger au retour en Play.
+            self.sim_prev_poses.clear();
+            self.sim_curr_poses.clear();
+            self.sim_render_poses.clear();
             self.wave = 0;
             self.win_time = None;
             self.lost = false;
@@ -1865,8 +1892,12 @@ impl AppState {
             self.audio.stop_all();
         }
         if self.playing && !self.was_playing {
-            // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale).
+            // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale)
+            // et sans poses d'interpolation héritées d'une partie précédente.
             self.sim_accumulator = 0.0;
+            self.sim_prev_poses.clear();
+            self.sim_curr_poses.clear();
+            self.sim_render_poses.clear();
             self.win_time = None;
             self.lost = false;
             self.score = 0;
@@ -1894,9 +1925,26 @@ impl AppState {
         if !self.lost && self.win_time.is_none() {
             let (steps, acc) = fixed_substeps(self.sim_accumulator, dt, FIXED_DT, MAX_SUBSTEPS);
             self.sim_accumulator = acc;
+            // Avant de simuler, restaure l'état **exact** du dernier pas : les
+            // transforms affichés contiennent la pose *mélangée* du rendu précédent
+            // (cf. `blend_render_poses` ci-dessous), en retrait d'une fraction de pas
+            // — simuler depuis cette pose lissée cumulerait une dérive (l'orientation
+            // du joueur, notamment, est intégrée depuis `transform.rotation`).
+            if steps > 0 {
+                self.restore_sim_poses();
+            }
             for _ in 0..steps {
                 self.sim_step(FIXED_DT);
             }
+            // --- Interpolation de rendu (fluidité du déplacement, 2026-07-12) ---
+            // La simulation avance par pas fixes de 1/60 s, mais les frames de rendu
+            // ne s'alignent jamais exactement dessus (écran 120 Hz, gigue de frame…) :
+            // afficher la dernière pose brute donne un mouvement saccadé (« judder »,
+            // 0 pas simulé à une frame, 2 à la suivante). On affiche donc un mélange
+            // prev→curr pondéré par le temps restant dans l'accumulateur — le rendu
+            // retarde d'au plus un pas (≤ 16,7 ms), imperceptible, contre une
+            // trajectoire parfaitement continue à l'écran.
+            self.blend_render_poses(self.sim_accumulator / FIXED_DT);
 
             // Ramassage par contact : le joueur récupère les pièces qu'il traverse.
             // Score +1 par pièce ; les pièces bonus (respawn_delay>0) réapparaissent.
@@ -1995,7 +2043,11 @@ impl AppState {
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
         {
-            let t = (dt * 6.0).min(1.0);
+            // Forme exponentielle `1 - e^(-k·dt)` plutôt que `k·dt` borné : le taux de
+            // rattrapage devient indépendant du framerate (deux frames à 120 Hz lissent
+            // exactement comme une à 60 Hz), là où la forme linéaire sur-amortissait à
+            // bas FPS et créait de micro-à-coups de caméra sous gigue de frame.
+            let t = 1.0 - (-dt * 6.0).exp();
             self.camera.target = self.camera.target.lerp(p + Vec3::new(0.0, 0.8, 0.0), t);
         }
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
@@ -2285,6 +2337,109 @@ impl AppState {
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
             }
         }
+
+        // Instantané de fin de pas pour l'interpolation de rendu (cf. `advance_play`) :
+        // l'ancien « courant » devient le « précédent », puis on capture les poses
+        // fraîches de ce pas — physique **et** scripts (plateformes animées, pièces
+        // qui tournent… tout ce qui bouge à pas fixe profite du lissage).
+        std::mem::swap(&mut self.sim_prev_poses, &mut self.sim_curr_poses);
+        self.sim_curr_poses.clear();
+        self.sim_curr_poses
+            .extend(self.scene.objects.iter().map(|o| {
+                (
+                    o.transform.position,
+                    o.transform.rotation,
+                    o.transform.scale,
+                )
+            }));
+    }
+
+    /// Réécrit dans la scène les poses **exactes** du dernier pas de simulation,
+    /// annulant le mélange visuel de `blend_render_poses` — à appeler avant de
+    /// simuler de nouveaux pas. Sans effet si les instantanés ne correspondent pas
+    /// (objets ajoutés/retirés depuis : le prochain `sim_step` resynchronise).
+    ///
+    /// Un objet dont le transform a été **modifié de l'extérieur** depuis le dernier
+    /// mélange (réconciliation réseau, effet d'attaque à la frame, test, futur gizmo
+    /// d'édition en Play…) n'est pas restauré : sa nouvelle pose est l'intention de
+    /// celui qui l'a écrite, pas un artefact de mélange à annuler — la restaurer la
+    /// ramènerait en arrière et l'écriture externe ne « prendrait » jamais.
+    fn restore_sim_poses(&mut self) {
+        let n = self.scene.objects.len();
+        if self.sim_curr_poses.len() != n || self.sim_render_poses.len() != n {
+            return;
+        }
+        let ghosts = self.remote_player_scene_indices();
+        for (i, obj) in self.scene.objects.iter_mut().enumerate() {
+            if ghosts.contains(&i) || !pose_matches(&obj.transform, self.sim_render_poses[i]) {
+                continue;
+            }
+            let (p, r, s) = self.sim_curr_poses[i];
+            obj.transform.position = p;
+            obj.transform.rotation = r;
+            obj.transform.scale = s;
+        }
+    }
+
+    /// Interpolation de rendu (cf. `advance_play`) : écrit dans les transforms un
+    /// mélange des poses de l'avant-dernier (`alpha` = 0) et du dernier (`alpha` = 1)
+    /// pas de simulation. Purement visuel : l'état de simulation vit dans les corps
+    /// rigides et `sim_curr_poses`, restauré avant le pas suivant. Sans effet si les
+    /// instantanés ne couvrent pas la scène actuelle (début de Play, objet ajouté).
+    fn blend_render_poses(&mut self, alpha: f32) {
+        let n = self.scene.objects.len();
+        if self.sim_prev_poses.len() != n || self.sim_curr_poses.len() != n {
+            // Instantanés inexploitables (début de Play, objet ajouté) : invalide
+            // aussi les poses de rendu, sinon `restore_sim_poses` comparerait les
+            // transforms à un mélange d'une scène qui n'existe plus.
+            self.sim_render_poses.clear();
+            return;
+        }
+        let alpha = alpha.clamp(0.0, 1.0);
+        // Les « fantômes » réseau ont leur propre interpolation, pilotée par les
+        // snapshots serveur à la frame (cf. `poll_network`) : le mélange local les
+        // ferait revenir en arrière sur une pose de simulation qui ne les pilote pas.
+        let ghosts = self.remote_player_scene_indices();
+        self.sim_render_poses.clear();
+        for (i, obj) in self.scene.objects.iter_mut().enumerate() {
+            let (pp, pr, ps) = self.sim_prev_poses[i];
+            let (cp, cr, cs) = self.sim_curr_poses[i];
+            // Une **téléportation** (ancre FX déplacée sur la cible, respawn…) n'est
+            // pas un mouvement : l'interpoler tracerait une traînée entre les deux
+            // points. Au-delà d'un déplacement impossible en un seul pas de 1/60 s
+            // (`TELEPORT_SNAP_PER_STEP`), on claque directement sur la pose finale.
+            let teleported =
+                (cp - pp).length_squared() > TELEPORT_SNAP_PER_STEP * TELEPORT_SNAP_PER_STEP;
+            if !ghosts.contains(&i) {
+                if teleported {
+                    obj.transform.position = cp;
+                    obj.transform.rotation = cr;
+                    obj.transform.scale = cs;
+                } else {
+                    obj.transform.position = pp.lerp(cp, alpha);
+                    obj.transform.rotation = pr.slerp(cr, alpha);
+                    obj.transform.scale = ps.lerp(cs, alpha);
+                }
+            }
+            // Mémorise ce que le mélange vient d'écrire (pose des fantômes incluse,
+            // pour garder l'indexation alignée) : référence de `restore_sim_poses`
+            // pour détecter une écriture externe survenue après cette frame.
+            self.sim_render_poses.push((
+                obj.transform.position,
+                obj.transform.rotation,
+                obj.transform.scale,
+            ));
+        }
+    }
+
+    /// Indices de scène des autres joueurs réseau (« fantômes ») : leur pose est posée
+    /// chaque frame par l'interpolation réseau (cf. `poll_network`), jamais par la
+    /// simulation locale — l'interpolation de rendu ne doit pas y toucher.
+    fn remote_player_scene_indices(&self) -> std::collections::HashSet<usize> {
+        self.remote_players
+            .values()
+            .map(|rp| rp.scene_index)
+            .collect()
     }
 
     /// La partie est-elle perdue (joueur entré dans une zone mortelle) ?
@@ -2604,14 +2759,38 @@ fn rotate_towards(cur: f32, target: f32, max_step: f32) -> f32 {
 /// lentement le personnage même sans action du joueur (demandé le 2026-07-12).
 const JOYSTICK_DEADZONE: f32 = 0.15;
 
-/// Écrase `v` à zéro si sa longueur est sous `threshold` (rayon mort), sinon le laisse
-/// inchangé.
+/// Écrase `v` à zéro si sa longueur est sous `threshold` (rayon mort), puis
+/// **remappe** la plage utile `[threshold, 1]` vers `[0, 1]` (même direction).
+/// Sans ce remappage, l'entrée sautait d'un coup de 0 à `threshold` en sortant du
+/// rayon mort — un « cran » perceptible au joystick, l'inverse d'un départ
+/// progressif (fluidité du déplacement, 2026-07-12). Avec lui, la vitesse démarre
+/// à zéro exactement au bord du rayon mort et monte continûment jusqu'au plein
+/// débattement.
 fn apply_deadzone(v: (f32, f32), threshold: f32) -> (f32, f32) {
-    if v.0 * v.0 + v.1 * v.1 < threshold * threshold {
-        (0.0, 0.0)
-    } else {
-        v
+    let len = (v.0 * v.0 + v.1 * v.1).sqrt();
+    if len < threshold {
+        return (0.0, 0.0);
     }
+    let scaled = ((len - threshold) / (1.0 - threshold)).min(1.0);
+    (v.0 / len * scaled, v.1 / len * scaled)
+}
+
+/// Déplacement (m) au-delà duquel un écart entre deux pas de simulation consécutifs
+/// est traité comme une **téléportation** par l'interpolation de rendu (claqué sur la
+/// pose finale au lieu d'être interpolé, cf. `blend_render_poses`). 0,5 m en 1/60 s
+/// = 30 m/s : bien au-dessus de tout mouvement légitime du jeu (déplacement ≤ ~8 m/s,
+/// recul compris), bien en dessous d'un vrai respawn/effet téléporté (plusieurs mètres).
+const TELEPORT_SNAP_PER_STEP: f32 = 0.5;
+
+/// `true` si le transform est resté (à un epsilon de f32 près) sur la pose donnée —
+/// sert à `restore_sim_poses` pour détecter qu'une écriture externe a eu lieu depuis
+/// le dernier mélange de rendu. Comparaison à epsilon plutôt qu'exacte : par valeur
+/// écrite puis relue, l'égalité bit à bit tiendrait, mais un epsilon protège des
+/// copies intermédiaires éventuelles sans risquer de faux « externe ».
+fn pose_matches(t: &crate::scene::Transform, (p, r, s): (Vec3, Quat, Vec3)) -> bool {
+    (t.position - p).length_squared() < 1e-10
+        && (t.scale - s).length_squared() < 1e-10
+        && t.rotation.dot(r).abs() > 1.0 - 1e-6
 }
 
 fn clamp_move_vector(mx: f32, my: f32) -> (f32, f32) {
@@ -2837,9 +3016,113 @@ mod tests {
     }
 
     #[test]
-    fn apply_deadzone_leaves_a_deliberate_push_unchanged() {
+    fn apply_deadzone_preserves_direction_and_full_push() {
+        // Poussée franche : direction conservée, plein débattement (longueur 1) intact.
+        let (mx, my) = apply_deadzone((1.0, 0.0), JOYSTICK_DEADZONE);
+        assert!((mx - 1.0).abs() < 1e-5 && my.abs() < 1e-6);
         let (mx, my) = apply_deadzone((0.5, 0.3), JOYSTICK_DEADZONE);
-        assert!((mx - 0.5).abs() < 1e-6 && (my - 0.3).abs() < 1e-6);
+        // Remappée (donc un peu plus courte que l'entrée brute) mais même direction.
+        assert!(mx > 0.0 && my > 0.0, "même quadrant que l'entrée");
+        assert!((my / mx - 0.3 / 0.5).abs() < 1e-5, "direction conservée");
+        let len = (mx * mx + my * my).sqrt();
+        assert!(len > 0.0 && len < (0.5f32 * 0.5 + 0.3 * 0.3).sqrt());
+    }
+
+    #[test]
+    fn apply_deadzone_starts_from_zero_at_the_edge_of_the_deadzone() {
+        // Continuité au bord du rayon mort : juste au-dessus du seuil, l'entrée doit
+        // être quasi nulle (départ progressif), pas sauter d'un coup à ~0.15 — le
+        // « cran » perceptible que le remappage supprime (fluidité, 2026-07-12).
+        let (mx, my) = apply_deadzone((JOYSTICK_DEADZONE + 0.01, 0.0), JOYSTICK_DEADZONE);
+        let len = (mx * mx + my * my).sqrt();
+        assert!(
+            len < 0.05,
+            "l'entrée doit démarrer près de zéro au bord du rayon mort (len={len})"
+        );
+    }
+
+    #[test]
+    fn blend_render_poses_interpolates_between_the_last_two_sim_steps() {
+        let mut app = AppState::new();
+        let n = app.scene.objects.len();
+        // Delta de 0,1 m par pas (6 m/s : un déplacement normal, sous le seuil de
+        // téléportation) : à mi-accumulateur, le rendu doit être à mi-chemin.
+        app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+        app.sim_curr_poses = vec![(Vec3::new(0.1, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE); n];
+        app.blend_render_poses(0.5);
+        let p = app.scene.objects[0].transform.position;
+        assert!(
+            (p.x - 0.05).abs() < 1e-6,
+            "à mi-accumulateur, le rendu doit afficher la pose à mi-chemin (x={})",
+            p.x
+        );
+    }
+
+    #[test]
+    fn blend_render_poses_snaps_on_teleport_instead_of_streaking() {
+        // Une téléportation (respawn, ancre FX déplacée sur sa cible) ne doit pas être
+        // interpolée : le rendu claque directement sur la pose finale, sans traînée.
+        let mut app = AppState::new();
+        let n = app.scene.objects.len();
+        let target = Vec3::new(5.0, 0.5, -3.0);
+        app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+        app.sim_curr_poses = vec![(target, Quat::IDENTITY, Vec3::ONE); n];
+        app.blend_render_poses(0.5);
+        assert!(
+            (app.scene.objects[0].transform.position - target).length() < 1e-6,
+            "au-delà du seuil de téléportation, la pose finale doit être affichée telle quelle"
+        );
+    }
+
+    #[test]
+    fn restore_sim_poses_undoes_the_visual_blend_before_simulating() {
+        // La pose affichée (mélangée) ne doit jamais servir d'état de départ à la
+        // simulation : `restore_sim_poses` doit rétablir la pose exacte du dernier pas.
+        let mut app = AppState::new();
+        let n = app.scene.objects.len();
+        let curr = Vec3::new(0.2, 0.0, -0.1);
+        app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+        app.sim_curr_poses = vec![(curr, Quat::IDENTITY, Vec3::ONE); n];
+        app.blend_render_poses(0.25);
+        assert!((app.scene.objects[0].transform.position - curr * 0.25).length() < 1e-6);
+        app.restore_sim_poses();
+        assert!(
+            (app.scene.objects[0].transform.position - curr).length() < 1e-6,
+            "la pose de simulation exacte doit être rétablie avant le pas suivant"
+        );
+    }
+
+    #[test]
+    fn restore_sim_poses_respects_an_external_transform_write() {
+        // Une écriture externe du transform (réconciliation réseau, test, futur gizmo
+        // en Play) entre deux frames ne doit pas être annulée par la restauration :
+        // c'est une intention, pas un artefact de mélange.
+        let mut app = AppState::new();
+        let n = app.scene.objects.len();
+        app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+        app.sim_curr_poses = vec![(Vec3::new(0.1, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE); n];
+        app.blend_render_poses(0.5);
+        let moved = Vec3::new(50.0, 0.5, 50.0);
+        app.scene.objects[0].transform.position = moved;
+        app.restore_sim_poses();
+        assert!(
+            (app.scene.objects[0].transform.position - moved).length() < 1e-6,
+            "une pose écrite de l'extérieur doit survivre à la restauration"
+        );
+        // Un objet non touché, lui, est bien restauré sur la pose de simulation.
+        if n > 1 {
+            assert!((app.scene.objects[1].transform.position.x - 0.1).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn blend_render_poses_is_a_no_op_without_matching_snapshots() {
+        // Début de Play (instantanés vides) ou objet ajouté en cours de partie :
+        // le mélange ne doit pas écrire des poses obsolètes dans la scène.
+        let mut app = AppState::new();
+        let before = app.scene.objects[0].transform.position;
+        app.blend_render_poses(0.5);
+        assert_eq!(app.scene.objects[0].transform.position, before);
     }
 
     #[test]

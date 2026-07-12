@@ -25,7 +25,9 @@ pub const DEFAULT_SERVER_URL: &str = "ws://179.237.71.235:80";
 /// Un autre joueur réseau, affiché comme un objet fantôme dans la scène locale.
 pub struct RemotePlayer {
     pub name: String,
-    scene_index: usize,
+    // `pub(super)` : lu par `AppState::remote_player_scene_indices` (app/mod.rs) pour
+    // exclure les fantômes de l'interpolation de rendu locale.
+    pub(super) scene_index: usize,
     interp: crate::net::interpolation::RemoteEntity,
 }
 
