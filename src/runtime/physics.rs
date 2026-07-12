@@ -160,11 +160,26 @@ impl Physics {
         }
     }
 
-    /// Pilote un objet (corps `controlled`) : fixe la vitesse horizontale (joystick/gyro)
-    /// et déclenche un saut si demandé **et** que l'objet est au sol. La vitesse verticale
-    /// est sinon conservée (gravité). `jump_speed` = vitesse initiale du saut (m/s).
-    /// Renvoie `true` si un **saut** a effectivement été déclenché (objet au sol).
-    pub fn control(&mut self, index: usize, vx: f32, vz: f32, jump: bool, jump_speed: f32) -> bool {
+    /// Pilote un objet (corps `controlled`) : fait tendre la vitesse horizontale vers
+    /// `(vx, vz)` (joystick/gyro) et déclenche un saut si demandé **et** que l'objet est
+    /// au sol. La vitesse verticale est sinon conservée (gravité). `jump_speed` = vitesse
+    /// initiale du saut (m/s). `accel` (m/s²) borne la variation de vitesse horizontale
+    /// par seconde — `0.0` fixe la vitesse instantanément (comportement historique,
+    /// utilisé par l'IA/le recul qui n'ont pas besoin d'inertie). Une valeur positive
+    /// (mouvement du joueur, cf. `Controller::acceleration`) lisse départs et arrêts au
+    /// lieu d'un « on/off » robotique (demandé le 2026-07-12). Renvoie `true` si un
+    /// **saut** a effectivement été déclenché (objet au sol).
+    #[allow(clippy::too_many_arguments)] // paramètres physiques distincts d'un même appel
+    pub fn control(
+        &mut self,
+        index: usize,
+        vx: f32,
+        vz: f32,
+        jump: bool,
+        jump_speed: f32,
+        accel: f32,
+        dt: f32,
+    ) -> bool {
         let mut jumped = false;
         for &(i, handle) in &self.controlled {
             if i != index {
@@ -176,11 +191,91 @@ impl Physics {
                 let grounded = cur.y.abs() < 1.0;
                 let do_jump = jump && grounded;
                 let vy = if do_jump { jump_speed } else { cur.y };
-                body.set_linvel(Vector::new(vx, vy, vz), true);
+                let (nx, nz) = if accel > 0.0 {
+                    let dx = vx - cur.x;
+                    let dz = vz - cur.z;
+                    let dist = (dx * dx + dz * dz).sqrt();
+                    let max_step = accel * dt;
+                    if dist <= max_step || dist < 1e-6 {
+                        (vx, vz)
+                    } else {
+                        (cur.x + dx / dist * max_step, cur.z + dz / dist * max_step)
+                    }
+                } else {
+                    (vx, vz)
+                };
+                body.set_linvel(Vector::new(nx, vy, nz), true);
                 jumped |= do_jump;
             }
         }
         jumped
+    }
+
+    /// Oriente progressivement le corps pilotable `index` pour qu'il fasse face à la
+    /// direction de déplacement horizontale monde `(dir_x, dir_z)` (longueur quelconque,
+    /// ignorée si quasi nulle — le personnage garde alors son orientation courante).
+    /// Rotation à vitesse angulaire bornée `turn_speed` (rad/s), jamais instantanée : un
+    /// virage brutal à chaque frame paraît rigide (demandé le 2026-07-12, façon jeu
+    /// d'action troisième personne). `dir` doit être exprimé dans le même repère que
+    /// `camera_relative_move` (avant `yaw = 0` fait face à `-Z`).
+    ///
+    /// Écrit directement la rotation du corps rigide (autorisé malgré `lock_rotations()`,
+    /// qui bloque seulement la réponse aux forces/contacts, pas une pose imposée) — elle
+    /// est ensuite recopiée dans `transform.rotation` par `step`, comme la position.
+    pub fn face_direction(
+        &mut self,
+        index: usize,
+        dir_x: f32,
+        dir_z: f32,
+        turn_speed: f32,
+        dt: f32,
+    ) {
+        if dir_x * dir_x + dir_z * dir_z < 1e-6 || turn_speed <= 0.0 {
+            return;
+        }
+        // Inverse de `camera_relative_move` pour yaw=0 : « avancer » (my=1) donne un
+        // monde-espace (0,0,-1) — cf. tests `camera_relative_move_*` dans `app/mod.rs`.
+        let target_yaw = (-dir_x).atan2(-dir_z);
+        for &(i, handle) in &self.controlled {
+            if i != index {
+                continue;
+            }
+            if let Some(body) = self.bodies.get_mut(handle) {
+                let cur_yaw = body.rotation().to_scaled_axis().y;
+                let mut diff = (target_yaw - cur_yaw) % std::f32::consts::TAU;
+                if diff > std::f32::consts::PI {
+                    diff -= std::f32::consts::TAU;
+                } else if diff < -std::f32::consts::PI {
+                    diff += std::f32::consts::TAU;
+                }
+                let max_step = turn_speed * dt;
+                let new_yaw = if diff.abs() <= max_step {
+                    target_yaw
+                } else {
+                    cur_yaw + diff.signum() * max_step
+                };
+                body.set_rotation(rotation_from_angle(Vector::new(0.0, new_yaw, 0.0)), true);
+            }
+        }
+    }
+
+    /// Ajoute directement `delta_yaw` (radians) à l'orientation du corps pilotable
+    /// `index` — rotation manuelle immédiate (contrôles « tank » A/D du clavier), à la
+    /// différence de `face_direction` qui vise progressivement une direction de
+    /// déplacement calculée. Sans effet si `delta_yaw` est nul.
+    pub fn rotate_yaw(&mut self, index: usize, delta_yaw: f32) {
+        if delta_yaw == 0.0 {
+            return;
+        }
+        for &(i, handle) in &self.controlled {
+            if i != index {
+                continue;
+            }
+            if let Some(body) = self.bodies.get_mut(handle) {
+                let new_yaw = body.rotation().to_scaled_axis().y + delta_yaw;
+                body.set_rotation(rotation_from_angle(Vector::new(0.0, new_yaw, 0.0)), true);
+            }
+        }
     }
 
     /// Force la position du corps rigide (dynamique) de l'objet `index`, sans
@@ -257,7 +352,7 @@ mod tests {
         let mut phys = Physics::build(&scene);
         // Joystick poussé vers +X (vx = move_speed) pendant ~0,5 s.
         for _ in 0..30 {
-            phys.control(p, 4.0, 0.0, false, 0.0);
+            phys.control(p, 4.0, 0.0, false, 0.0, 0.0, 1.0 / 60.0);
             phys.step(1.0 / 60.0, &mut scene);
         }
         let x1 = scene.objects[p].transform.position.x;
@@ -274,16 +369,16 @@ mod tests {
         let mut phys = Physics::build(&scene);
         // Laisse le joueur se poser au sol (gravité) avant de sauter.
         for _ in 0..40 {
-            phys.control(p, 0.0, 0.0, false, 0.0);
+            phys.control(p, 0.0, 0.0, false, 0.0, 0.0, 1.0 / 60.0);
             phys.step(1.0 / 60.0, &mut scene);
         }
         let grounded_y = scene.objects[p].transform.position.y;
         // Impulsion de saut (vitesse pour ~1,6 m), puis on relâche.
         let jump_speed = (2.0 * 9.81 * 1.6_f32).sqrt();
-        phys.control(p, 0.0, 0.0, true, jump_speed);
+        phys.control(p, 0.0, 0.0, true, jump_speed, 0.0, 1.0 / 60.0);
         let mut max_y = grounded_y;
         for _ in 0..25 {
-            phys.control(p, 0.0, 0.0, false, 0.0);
+            phys.control(p, 0.0, 0.0, false, 0.0, 0.0, 1.0 / 60.0);
             phys.step(1.0 / 60.0, &mut scene);
             max_y = max_y.max(scene.objects[p].transform.position.y);
         }
@@ -301,13 +396,91 @@ mod tests {
         let mut phys = Physics::build(&scene);
         // Pousse fort vers +X pendant 3 s : sans mur il sortirait largement de l'aire.
         for _ in 0..180 {
-            phys.control(p, 8.0, 0.0, false, 0.0);
+            phys.control(p, 8.0, 0.0, false, 0.0, 0.0, 1.0 / 60.0);
             phys.step(1.0 / 60.0, &mut scene);
         }
         let x = scene.objects[p].transform.position.x;
         assert!(
             x < 7.2,
             "le joueur doit être bloqué par le mur de pourtour (x≈7), mais x={x}"
+        );
+    }
+
+    #[test]
+    fn control_with_acceleration_ramps_up_instead_of_snapping_to_target() {
+        let scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        // Accélération de 4 m/s² : après un seul pas de 1/60 s, la vitesse ne doit
+        // pas déjà valoir la cible (8 m/s) — contrairement à `accel = 0.0` (instantané).
+        phys.control(p, 8.0, 0.0, false, 0.0, 4.0, 1.0 / 60.0);
+        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
+        let vx = phys.bodies.get(handle).unwrap().linvel().x;
+        assert!(
+            vx > 0.0 && vx < 8.0,
+            "la vitesse doit monter progressivement, pas instantanément (vx={vx})"
+        );
+    }
+
+    #[test]
+    fn control_with_zero_acceleration_snaps_instantly_as_before() {
+        let scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        phys.control(p, 8.0, 0.0, false, 0.0, 0.0, 1.0 / 60.0);
+        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
+        let vx = phys.bodies.get(handle).unwrap().linvel().x;
+        assert!((vx - 8.0).abs() < 1e-5, "vx doit valoir la cible, vx={vx}");
+    }
+
+    #[test]
+    fn face_direction_turns_progressively_towards_the_movement_direction() {
+        let scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
+        assert!(
+            (phys
+                .bodies
+                .get(handle)
+                .unwrap()
+                .rotation()
+                .to_scaled_axis()
+                .y)
+                .abs()
+                < 1e-5,
+            "le joueur démarre face à -Z (yaw=0)"
+        );
+        // Direction monde (+X, 0) : d'après `camera_relative_move` (à yaw=-π/2, pousser
+        // le joystick vers l'avant produit ce même déplacement +X), ceci correspond à
+        // un yaw cible de -π/2. Une seule frame à vitesse angulaire bornée (2 rad/s,
+        // dt=1/60 s) ne doit pas atteindre la cible d'un coup.
+        phys.face_direction(p, 1.0, 0.0, 2.0, 1.0 / 60.0);
+        let yaw_after_one_step = phys
+            .bodies
+            .get(handle)
+            .unwrap()
+            .rotation()
+            .to_scaled_axis()
+            .y;
+        assert!(
+            yaw_after_one_step < 0.0 && yaw_after_one_step > -std::f32::consts::FRAC_PI_2,
+            "la rotation doit être progressive, pas instantanée (yaw={yaw_after_one_step})"
+        );
+        // Après suffisamment de pas, elle doit converger vers la cible (-π/2).
+        for _ in 0..200 {
+            phys.face_direction(p, 1.0, 0.0, 2.0, 1.0 / 60.0);
+        }
+        let yaw_final = phys
+            .bodies
+            .get(handle)
+            .unwrap()
+            .rotation()
+            .to_scaled_axis()
+            .y;
+        assert!(
+            (yaw_final - -std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+            "la rotation doit converger vers -π/2, yaw_final={yaw_final}"
         );
     }
 }

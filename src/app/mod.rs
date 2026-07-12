@@ -91,8 +91,17 @@ pub struct PlayerInput {
     /// Inclinaison (gyroscope/accéléromètre), chaque composante dans [-1, 1].
     /// Desktop : simulée aux flèches du clavier ; mobile : capteur natif (à brancher).
     pub tilt: (f32, f32),
-    /// Déplacement clavier (ordinateur) : flèches / WASD ; chaque composante dans [-1, 1].
+    /// Déplacement clavier (ordinateur), relatif à la caméra : flèches uniquement
+    /// (WASD pilote désormais des contrôles « tank », cf. `key_turn`) ; chaque
+    /// composante dans [-1, 1].
     pub key_move: (f32, f32),
+    /// Rotation clavier « tank » (A/D) : -1 = tourne à droite (A), +1 = tourne à
+    /// gauche (D) — indépendante de la caméra, contrairement à `key_move`. Cf.
+    /// `AppState::advance_play`.
+    pub key_turn: f32,
+    /// Avance/recul clavier « tank » (W/S), le long de l'orientation *actuelle* du
+    /// personnage plutôt que de la caméra : +1 = W (avance), -1 = S (recul).
+    pub key_thrust: f32,
     /// Saut clavier (Espace) maintenu enfoncé.
     pub jump: bool,
     /// Attaque clavier (J) maintenue enfoncée.
@@ -1177,8 +1186,8 @@ impl AppState {
         {
             self.camera.target = p + Vec3::new(0.0, 0.8, 0.0);
             if self.scene.game_camera.is_none() {
-                self.camera.pitch = 0.62;
-                self.camera.distance = 11.0;
+                self.camera.pitch = DEFAULT_CHASE_PITCH;
+                self.camera.distance = DEFAULT_CHASE_DISTANCE;
             }
         }
     }
@@ -1823,8 +1832,8 @@ impl AppState {
             {
                 self.camera.target = p + Vec3::new(0.0, 0.8, 0.0);
                 if self.scene.game_camera.is_none() {
-                    self.camera.pitch = 0.62; // ~35° de plongée
-                    self.camera.distance = 11.0;
+                    self.camera.pitch = DEFAULT_CHASE_PITCH;
+                    self.camera.distance = DEFAULT_CHASE_DISTANCE;
                 }
             }
             // Caméra de jeu : applique le point de vue défini pour la scène.
@@ -1989,7 +1998,6 @@ impl AppState {
             let t = (dt * 6.0).min(1.0);
             self.camera.target = self.camera.target.lerp(p + Vec3::new(0.0, 0.8, 0.0), t);
         }
-
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
         if self.damage_flash > 0.0 {
             self.damage_flash = (self.damage_flash - dt * 2.5).max(0.0);
@@ -2128,14 +2136,16 @@ impl AppState {
             // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
             // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
             let inp = &self.input_state;
-            // Mouvement combiné joystick + clavier (flèches/WASD), borné à 1 par axe,
+            // Mouvement combiné joystick/croix directionnelle + clavier (flèches/WASD),
             // puis tourné selon la caméra (cf. `camera_relative_move`) : « en haut »
             // sur le joystick éloigne le personnage de la caméra, comme dans un jeu
             // à la Zelda, quelle que soit sa rotation actuelle.
-            let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
-            let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+            let joy = apply_deadzone(inp.joy, JOYSTICK_DEADZONE);
+            let (raw_mx, raw_my) =
+                clamp_move_vector(joy.0 + inp.key_move.0, joy.1 + inp.key_move.1);
             let (mx, my) = camera_relative_move(raw_mx, raw_my, self.camera.yaw);
             let (tilt, space) = (inp.tilt, inp.jump);
+            let (key_turn, key_thrust) = (inp.key_turn, inp.key_thrust);
             let mut any_jump = false;
             // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`, Sprint 55) :
             // chacun a son propre `NetworkInput`, distinct de `self.input_state`
@@ -2174,13 +2184,39 @@ impl AppState {
                     vx += tilt.0 * ctrl.move_speed;
                     vz += -tilt.1 * ctrl.move_speed;
                 }
+                // Avance/recul « tank » (W/S clavier) : le long de l'orientation
+                // *actuelle* du personnage plutôt que de la caméra, contrairement au
+                // reste du déplacement (demandé le 2026-07-12). `-sin(yaw)`/`-cos(yaw)`
+                // = même formule que l'inverse de `camera_relative_move` (yaw=0 ⇒ avant
+                // = -Z, cf. `Physics::face_direction`).
+                if ctrl.input && net_input.is_none() && key_thrust != 0.0 {
+                    let yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
+                    vx += key_thrust * ctrl.move_speed * -yaw.sin();
+                    vz += key_thrust * ctrl.move_speed * -yaw.cos();
+                }
                 // Saut : bouton tactile nommé (joueur local), ou Espace au clavier
                 // (joueur local), ou demandé par l'`Input` réseau de ce joueur.
                 let jump = (!ctrl.jump_button.is_empty()
                     && self.input_state.buttons.contains(&ctrl.jump_button))
                     || (space && ctrl.input);
                 let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
-                any_jump |= phys.control(idx, vx, vz, jump, jump_speed);
+                any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
+                if net_input.is_none() {
+                    if ctrl.input && key_turn != 0.0 {
+                        // Rotation « tank » manuelle (A/D) : prioritaire sur la rotation
+                        // automatique vers la direction de déplacement, qui se
+                        // battrait sinon contre l'intention explicite du joueur.
+                        phys.rotate_yaw(idx, key_turn * ctrl.turn_speed * dt);
+                    } else {
+                        // Oriente le personnage face à sa direction de déplacement
+                        // (rotation progressive, pas instantanée) — seulement pour le
+                        // joueur *local* : les autres joueurs réseau reçoivent déjà
+                        // leur orientation du serveur (cf.
+                        // `network_client::apply_local_network_position`), l'écraser
+                        // ici avec notre propre calcul créerait un conflit d'autorité.
+                        phys.face_direction(idx, vx, vz, ctrl.turn_speed, dt);
+                    }
+                }
             }
             // Pilotage des « chasseurs » IA (cf. `AiChaser`) : direction directe vers la
             // position courante du joueur, recalculée chaque frame — une vraie poursuite
@@ -2202,7 +2238,7 @@ impl AppState {
                     } else {
                         (0.0, 0.0)
                     };
-                    phys.control(idx, vx, vz, false, 0.0);
+                    phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
                 }
             }
             // Recul (knockback, cf. `AppState::stagger`) : appliqué en dernier, après le
@@ -2210,7 +2246,7 @@ impl AppState {
             // pas immédiatement écrasé par la vitesse que le joystick ou la poursuite
             // viennent de recalculer.
             self.stagger.retain_mut(|(idx, vel, remaining)| {
-                phys.control(*idx, vel.x, vel.z, false, 0.0);
+                phys.control(*idx, vel.x, vel.z, false, 0.0, 0.0, dt);
                 *remaining -= dt;
                 *remaining > 0.0
             });
@@ -2453,6 +2489,16 @@ fn optimized_path(path: &str, max_px: u32) -> String {
     }
 }
 
+/// Angle de plongée (radians) de la caméra de suivi par défaut : resserré derrière
+/// l'épaule du personnage plutôt que le recul plus « isométrique » d'avant (~35°,
+/// `0.62`) — plus proche d'une vue façon jeu d'action à la troisième personne,
+/// demandé le 2026-07-12 (« vue derrière le personnage… genre FPS vue haut »).
+const DEFAULT_CHASE_PITCH: f32 = 0.75;
+
+/// Recul (mètres) de la caméra de suivi par défaut : plus proche que l'ancien 11.0,
+/// pour un cadrage plus serré façon caméra d'épaule.
+const DEFAULT_CHASE_DISTANCE: f32 = 7.0;
+
 /// Aligne une position sur la grille (pas de 0.5) si `snap` est actif.
 fn maybe_snap(p: Vec3, snap: bool) -> Vec3 {
     if !snap {
@@ -2491,6 +2537,40 @@ fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
     let wx = mx * cos_y - my * sin_y;
     let wz = -mx * sin_y - my * cos_y;
     (wx, wz)
+}
+
+/// Borne un vecteur de déplacement brut (somme joystick/croix + clavier) à une
+/// longueur de 1 — pas chaque axe indépendamment. Avant ce correctif,
+/// `(mx, my)` était clampé axe par axe (`clamp(-1.0, 1.0)` sur chaque
+/// composante) : en diagonale (ex. W+D tenus ensemble), le vecteur résultant
+/// `(1.0, 1.0)` a une longueur de √2 ≈ 1.41, soit un déplacement ~41 % plus
+/// rapide en diagonale qu'en ligne droite — un défaut classique de mouvement
+/// (« diagonal is faster ») qui rend le jeu moins agréable à manier
+/// (demandé le 2026-07-12 : optimiser le ressenti des déplacements).
+/// Rayon mort du joystick virtuel (0..1) : en-deçà, l'entrée est ramenée à zéro plutôt
+/// que transmise brute. Un joystick tactile/analogique imparfait ne revient pas
+/// toujours exactement au centre au repos — sans seuil, ce résidu ferait dériver
+/// lentement le personnage même sans action du joueur (demandé le 2026-07-12).
+const JOYSTICK_DEADZONE: f32 = 0.15;
+
+/// Écrase `v` à zéro si sa longueur est sous `threshold` (rayon mort), sinon le laisse
+/// inchangé.
+fn apply_deadzone(v: (f32, f32), threshold: f32) -> (f32, f32) {
+    if v.0 * v.0 + v.1 * v.1 < threshold * threshold {
+        (0.0, 0.0)
+    } else {
+        v
+    }
+}
+
+fn clamp_move_vector(mx: f32, my: f32) -> (f32, f32) {
+    let len_sq = mx * mx + my * my;
+    if len_sq > 1.0 {
+        let len = len_sq.sqrt();
+        (mx / len, my / len)
+    } else {
+        (mx, my)
+    }
 }
 
 /// Cadence à pas fixe : ajoute le temps de la frame à l'accumulateur (borné contre la
@@ -2678,6 +2758,46 @@ mod tests {
         assert!((wx - 1.0).abs() < 1e-5 && wz.abs() < 1e-5);
         let (wx, wz) = camera_relative_move(0.0, 1.0, 0.0);
         assert!(wx.abs() < 1e-5 && (wz - -1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn apply_deadzone_zeroes_a_residual_stick_reading() {
+        // Un joystick qui ne revient pas exactement au centre au repos ne doit pas
+        // faire dériver le personnage.
+        let (mx, my) = apply_deadzone((0.05, 0.02), JOYSTICK_DEADZONE);
+        assert!(mx.abs() < 1e-6 && my.abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_deadzone_leaves_a_deliberate_push_unchanged() {
+        let (mx, my) = apply_deadzone((0.5, 0.3), JOYSTICK_DEADZONE);
+        assert!((mx - 0.5).abs() < 1e-6 && (my - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clamp_move_vector_leaves_a_single_axis_unchanged() {
+        let (mx, my) = clamp_move_vector(1.0, 0.0);
+        assert!((mx - 1.0).abs() < 1e-6 && my.abs() < 1e-6);
+    }
+
+    #[test]
+    fn clamp_move_vector_normalizes_a_diagonal_to_unit_length() {
+        // Avant le correctif : (1.0, 1.0) restait tel quel (clamp par axe), donnant
+        // une longueur √2 — un déplacement en diagonale ~41 % plus rapide qu'en
+        // ligne droite. Le vecteur doit maintenant être ramené à une longueur de 1.
+        let (mx, my) = clamp_move_vector(1.0, 1.0);
+        let len = (mx * mx + my * my).sqrt();
+        assert!((len - 1.0).abs() < 1e-5, "longueur={len}");
+        // Toujours dans la même direction (diagonale), pas juste raccourci n'importe où.
+        assert!((mx - my).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clamp_move_vector_never_amplifies_a_short_vector() {
+        // Un joystick à mi-course (longueur < 1) ne doit pas être gonflé à 1 —
+        // seuls les vecteurs qui dépassent 1 sont ramenés à cette longueur.
+        let (mx, my) = clamp_move_vector(0.3, 0.0);
+        assert!((mx - 0.3).abs() < 1e-6 && my.abs() < 1e-6);
     }
 
     #[test]
@@ -4531,5 +4651,62 @@ mod tests {
     fn script_key_stable_and_distinct() {
         assert_eq!(script_key("obj.x = 1"), script_key("obj.x = 1"));
         assert_ne!(script_key("obj.x = 1"), script_key("obj.x = 2"));
+    }
+
+    #[test]
+    fn tank_controls_turn_then_thrust_move_the_player_along_its_own_facing() {
+        // Bout en bout : A/D (rotation manuelle) et W/S (avance/recul) doivent piloter le
+        // joueur indépendamment de la caméra, contrairement au joystick/flèches
+        // (demandé le 2026-07-12 : contrôles « tank »).
+        let mut app = AppState::new();
+        app.load_controller_demo();
+        app.playing = true;
+        let pi = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("la démo contrôleur a un joueur pilotable");
+
+        // D tenue (tourner à gauche, cf. doc `PlayerInput::key_turn`) : le yaw doit
+        // augmenter par rapport à sa valeur de départ (0). Peu de pas : avec
+        // `turn_speed` par défaut (10 rad/s), rester bien en-deçà de π pour ne pas
+        // « boucler » et fausser la lecture (`to_scaled_axis` ramène l'angle dans
+        // (-π, π]).
+        app.input_state.key_turn = 1.0;
+        for _ in 0..5 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        }
+        app.input_state.key_turn = 0.0;
+        let yaw = app.scene.objects[pi]
+            .transform
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+        assert!(
+            yaw > 0.1,
+            "D doit tourner le joueur vers la gauche, yaw={yaw}"
+        );
+
+        // Puis W tenue : le joueur doit avancer le long de cette orientation, pas vers
+        // le -Z monde qu'utiliserait un déplacement caméra-relative.
+        let p0 = app.scene.objects[pi].transform.position;
+        app.input_state.key_thrust = 1.0;
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        }
+        let moved = app.scene.objects[pi].transform.position - p0;
+        let expected_dir = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+        assert!(
+            moved.length() > 0.3,
+            "W doit faire avancer le joueur, déplacement={moved:?}"
+        );
+        assert!(
+            moved.normalize().dot(expected_dir) > 0.8,
+            "l'avance doit suivre l'orientation du joueur (yaw={yaw}), pas la caméra : \
+             déplacement={moved:?}, attendu≈{expected_dir:?}"
+        );
     }
 }

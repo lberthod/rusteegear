@@ -161,6 +161,18 @@ pub struct Controller {
     /// (style « endless runner »), l'entrée horizontale ne pilotant plus que la voie (X).
     #[serde(default)]
     pub auto_run_speed: f32,
+    /// Accélération/décélération (m/s²) appliquée à la vitesse horizontale de `input` :
+    /// 0 = vitesse imposée instantanément (comportement historique, robotique). Une
+    /// valeur positive lisse les départs/arrêts façon jeu d'action moderne (cf.
+    /// `Physics::control`) — demandé le 2026-07-12 pour un déplacement moins abrupt.
+    #[serde(default = "default_acceleration")]
+    pub acceleration: f32,
+    /// Vitesse de rotation (rad/s) à laquelle le personnage tourne progressivement
+    /// pour faire face à sa direction de déplacement (`input` uniquement — pas les
+    /// chasseurs IA ni le recul). 0 = pas de rotation automatique (comportement
+    /// historique). Cf. `Physics::face_direction`.
+    #[serde(default = "default_turn_speed")]
+    pub turn_speed: f32,
     /// Nom du bouton tactile qui fait sauter (vide = pas de saut).
     #[serde(default)]
     pub jump_button: String,
@@ -206,6 +218,8 @@ impl Default for Controller {
             gyro: false,
             move_speed: default_move_speed(),
             auto_run_speed: 0.0,
+            acceleration: default_acceleration(),
+            turn_speed: default_turn_speed(),
             jump_button: String::new(),
             jump_height: default_jump_height(),
             attack_button: String::new(),
@@ -542,6 +556,14 @@ fn default_move_speed() -> f32 {
     3.0
 }
 
+fn default_acceleration() -> f32 {
+    20.0
+}
+
+fn default_turn_speed() -> f32 {
+    10.0
+}
+
 impl Default for SceneObject {
     fn default() -> Self {
         Self {
@@ -641,6 +663,14 @@ pub struct GameCamera {
 pub struct MobileControls {
     /// Affiche un joystick virtuel (coin bas-gauche).
     pub joystick: bool,
+    /// Affiche une croix directionnelle (4 boutons haut/bas/gauche/droite,
+    /// coin bas-gauche) à la place du joystick — plus précis pour un
+    /// déplacement à 4 (ou 8) directions qu'un joystick analogique, au prix
+    /// de la finesse d'un angle libre. Prioritaire sur `joystick` si les deux
+    /// sont actifs (cf. `mobile_overlay`), pour ne jamais superposer les deux
+    /// dans le même coin de l'écran.
+    #[serde(default)]
+    pub dpad: bool,
     /// Boutons tactiles nommés (coin bas-droite).
     pub buttons: Vec<String>,
     /// Zone tactile plein écran : un tap n'importe où expose `input.btn.touch` au script.
@@ -657,7 +687,7 @@ pub struct MobileControls {
 impl MobileControls {
     /// Au moins un contrôle est-il actif ?
     pub fn any(&self) -> bool {
-        self.joystick || !self.buttons.is_empty() || self.touch_zone || self.health_bar
+        self.joystick || self.dpad || !self.buttons.is_empty() || self.touch_zone || self.health_bar
     }
 }
 

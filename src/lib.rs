@@ -33,6 +33,35 @@ struct App {
     touches: HashMap<u64, (f64, f64)>,
     orbiting: bool,
     pinch: Option<f32>,
+
+    /// Touches de déplacement actuellement enfoncées (WASD + flèches). Sert à
+    /// recalculer `key_move`/`tilt` à partir de **toutes** les touches tenues
+    /// à chaque pression/relâchement, plutôt que d'écraser l'axe avec la seule
+    /// touche qui vient de changer — cf. `recompute_move_axes`.
+    keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
+}
+
+/// Résout un axe (-1/0/1) à partir de l'état « tenu » des deux touches
+/// opposées. Fonction pure, testable sans dépendre de winit ou d'une fenêtre
+/// réelle.
+///
+/// **Correctif (2026-07-12, déplacements WASD)** : l'ancien code assignait
+/// directement `v` (0.0 ou 1.0 selon pressé/relâché) à l'axe pour la touche
+/// qui venait de changer, sans tenir compte de l'autre touche du même axe.
+/// Conséquence concrète : tenir A (gauche, axe=-1), puis appuyer D (droite,
+/// axe=+1) pendant que A est encore enfoncée, puis relâcher D — l'axe
+/// retombait à 0 (D relâchée écrit `v=0.0` sans condition) au lieu de revenir
+/// à -1 (A est pourtant toujours enfoncée). Ce bug rendait les changements de
+/// direction rapides (fréquents en jeu) imprécis/saccadés. En recalculant
+/// l'axe à partir de l'état actuel des **deux** touches à chaque changement,
+/// le résultat est toujours cohérent avec ce qui est réellement enfoncé.
+fn axis_from_held(negative: bool, positive: bool) -> f32 {
+    match (negative, positive) {
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        // Ni l'une ni l'autre, ou les deux à la fois (s'annulent) : neutre.
+        _ => 0.0,
+    }
 }
 
 impl App {
@@ -187,7 +216,20 @@ impl ApplicationHandler for App {
                 };
                 self.state.handle_input(InputEvent::Scroll { delta: d });
             }
-            WindowEvent::Touch(touch) => self.handle_touch(touch),
+            // En Player avec des contrôles tactiles actifs (joystick, croix
+            // directionnelle, boutons), un doigt ne doit **jamais** faire orbiter
+            // la caméra à la place d'agir sur un contrôle — même si `consumed`
+            // (egui) ne l'a pas repéré cette frame précise. Un appui immobile sur
+            // un bouton (la croix directionnelle, contrairement au joystick, ne
+            // génère quasiment aucun `TouchPhase::Moved` une fois le doigt posé)
+            // peut laisser l'état « survolé/enfoncé » d'egui en retard d'une frame
+            // : sans cette garde, ce trou laissait passer le toucher jusqu'à
+            // l'orbite caméra, qui bougeait la vue au lieu de déplacer le
+            // personnage (constaté en test réel sur l'APK, 2026-07-12). L'orbite
+            // tactile reste réservée à l'éditeur/l'aperçu (sans contrôles mobiles).
+            WindowEvent::Touch(touch) if !(self.state.player && self.state.scene.mobile.any()) => {
+                self.handle_touch(touch);
+            }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m,
             WindowEvent::KeyboardInput {
                 event: key_event, ..
@@ -217,24 +259,64 @@ impl ApplicationHandler for App {
                 // Contrôles « ordinateur » : flèches / WASD = déplacement, Espace = saut.
                 if let PhysicalKey::Code(code) = key_event.physical_key {
                     let pressed = key_event.state == ElementState::Pressed;
-                    let v = if pressed { 1.0 } else { 0.0 };
+                    let is_move_key = matches!(
+                        code,
+                        KeyCode::ArrowLeft
+                            | KeyCode::ArrowRight
+                            | KeyCode::ArrowUp
+                            | KeyCode::ArrowDown
+                            | KeyCode::KeyA
+                            | KeyCode::KeyD
+                            | KeyCode::KeyW
+                            | KeyCode::KeyS
+                    );
+                    if is_move_key {
+                        if pressed {
+                            self.keys_held.insert(code);
+                        } else {
+                            self.keys_held.remove(&code);
+                        }
+                    }
                     let inp = &mut self.state.input_state;
                     match code {
-                        KeyCode::ArrowLeft | KeyCode::KeyA => inp.key_move.0 = -v,
-                        KeyCode::ArrowRight | KeyCode::KeyD => inp.key_move.0 = v,
-                        KeyCode::ArrowUp | KeyCode::KeyW => inp.key_move.1 = v,
-                        KeyCode::ArrowDown | KeyCode::KeyS => inp.key_move.1 = -v,
                         KeyCode::Space => inp.jump = pressed,
                         KeyCode::KeyJ => inp.attack = pressed,
                         _ => {}
                     }
-                    // Les flèches alimentent aussi le gyroscope simulé (objets gyro_control).
-                    match code {
-                        KeyCode::ArrowLeft => inp.tilt.0 = -v,
-                        KeyCode::ArrowRight => inp.tilt.0 = v,
-                        KeyCode::ArrowUp => inp.tilt.1 = v,
-                        KeyCode::ArrowDown => inp.tilt.1 = -v,
-                        _ => {}
+                    if is_move_key {
+                        // Recalcule les axes à partir de **toutes** les touches
+                        // actuellement tenues (cf. `axis_from_held`) : sans ça,
+                        // relâcher une touche opposée à une autre encore enfoncée
+                        // remettait l'axe à 0 au lieu de revenir à la direction
+                        // encore tenue.
+                        let held = &self.keys_held;
+                        let arrow_left = held.contains(&KeyCode::ArrowLeft);
+                        let arrow_right = held.contains(&KeyCode::ArrowRight);
+                        let arrow_up = held.contains(&KeyCode::ArrowUp);
+                        let arrow_down = held.contains(&KeyCode::ArrowDown);
+                        let a = held.contains(&KeyCode::KeyA);
+                        let d = held.contains(&KeyCode::KeyD);
+                        let w = held.contains(&KeyCode::KeyW);
+                        let s = held.contains(&KeyCode::KeyS);
+
+                        let inp = &mut self.state.input_state;
+                        // Flèches : déplacement relatif à la caméra (comportement
+                        // inchangé, cf. `camera_relative_move`).
+                        inp.key_move.0 = axis_from_held(arrow_left, arrow_right);
+                        inp.key_move.1 = axis_from_held(arrow_down, arrow_up);
+                        // WASD : contrôles « tank », indépendants de la caméra. A/D
+                        // tournent le personnage sur lui-même (A = droite, D = gauche —
+                        // demandé le 2026-07-12) plutôt que de le faire strafer ; W/S
+                        // avancent/reculent le long de son orientation *actuelle* (cf.
+                        // `AppState::advance_play`). Tourner à droite fait décroître le
+                        // yaw (cf. `Physics::face_direction` : yaw=0 pointe vers -Z, et
+                        // tourner vers +X, à droite, correspond à un yaw négatif).
+                        inp.key_turn = axis_from_held(a, d);
+                        inp.key_thrust = axis_from_held(s, w);
+                        // Les flèches alimentent aussi le gyroscope simulé (objets
+                        // gyro_control) — WASD n'y touche pas (comportement inchangé).
+                        inp.tilt.0 = axis_from_held(arrow_left, arrow_right);
+                        inp.tilt.1 = axis_from_held(arrow_down, arrow_up);
                     }
                 }
             }
@@ -283,8 +365,10 @@ fn make_app(player: bool) -> App {
         // pseudo à la main des deux côtés avant de pouvoir se voir bouger.
         // Reste un simple point de départ : la fenêtre/overlay Multijoueur
         // permet toujours de se déconnecter et pointer ailleurs.
-        app.state
-            .connect_to_server(crate::app::network_client::DEFAULT_SERVER_URL, &guest_name());
+        app.state.connect_to_server(
+            crate::app::network_client::DEFAULT_SERVER_URL,
+            &guest_name(),
+        );
     }
     app
 }
@@ -344,5 +428,40 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
     let mut app = make_app(true); // mobile = mode player
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Boucle d'événements Android terminée sur erreur : {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn axis_from_held_is_neutral_when_neither_key_is_held() {
+        assert_eq!(axis_from_held(false, false), 0.0);
+    }
+
+    #[test]
+    fn axis_from_held_follows_the_single_held_key() {
+        assert_eq!(axis_from_held(true, false), -1.0);
+        assert_eq!(axis_from_held(false, true), 1.0);
+    }
+
+    #[test]
+    fn axis_from_held_cancels_out_when_both_keys_are_held() {
+        // Ex. A et D tenues ensemble : ni gauche ni droite, comme dans la
+        // plupart des jeux (pas de préférence arbitraire pour l'une ou l'autre).
+        assert_eq!(axis_from_held(true, true), 0.0);
+    }
+
+    #[test]
+    fn axis_from_held_returns_to_the_remaining_key_after_releasing_the_other() {
+        // Le bug corrigé : A tenue, D pressée puis relâchée — l'axe doit
+        // revenir à -1 (A toujours tenue), pas retomber à 0.
+        assert_eq!(axis_from_held(true, true), 0.0, "les deux tenues : neutre");
+        assert_eq!(
+            axis_from_held(true, false),
+            -1.0,
+            "D relâchée, A toujours tenue : doit revenir à gauche"
+        );
     }
 }

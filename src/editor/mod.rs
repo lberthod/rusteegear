@@ -1146,6 +1146,25 @@ fn menu_ajouter(
                 .clicked()
             {
                 m.joystick = !m.joystick;
+                // Mutuellement exclusif avec la croix directionnelle : les deux se
+                // dessinent dans le même coin de l'écran, jamais les deux à la fois.
+                if m.joystick {
+                    m.dpad = false;
+                }
+                ui.close();
+            }
+            if ui
+                .selectable_label(m.dpad, "🎮  Croix directionnelle (4 boutons)")
+                .on_hover_text(
+                    "Haut/bas/gauche/droite maintenus plutôt qu'un joystick analogique — \
+                     plus précis pour se déplacer",
+                )
+                .clicked()
+            {
+                m.dpad = !m.dpad;
+                if m.dpad {
+                    m.joystick = false;
+                }
                 ui.close();
             }
             if ui.button("🔘  Bouton tactile").clicked() {
@@ -2352,8 +2371,48 @@ fn mobile_overlay(
         }
     }
 
-    // --- Joystick (bas-gauche de la zone de jeu) ---
-    if cfg.joystick {
+    // --- Croix directionnelle (bas-gauche), à la place du joystick si activée :
+    // 4 boutons maintenus (haut/bas/gauche/droite) plutôt qu'un axe analogique —
+    // plus précis pour viser une direction exacte au pouce, au prix de l'angle
+    // libre du joystick. Combinaison de deux boutons adjacents (ex. haut+droite)
+    // = diagonale, exactement comme WASD au clavier.
+    if cfg.dpad {
+        let btn = 56.0;
+        let gap = 6.0;
+        let size = Vec2::splat(btn * 3.0 + gap * 2.0);
+        let pos = egui::pos2(area.left() + margin, area.bottom() - margin - size.y);
+        egui::Area::new("mobile_dpad".into())
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+                let cell = |col: f32, row: f32| {
+                    egui::Rect::from_min_size(
+                        rect.min + Vec2::new(col * (btn + gap), row * (btn + gap)),
+                        Vec2::splat(btn),
+                    )
+                };
+                let up = ui.put(cell(1.0, 0.0), egui::Button::new("▲").corner_radius(10.0));
+                let left = ui.put(cell(0.0, 1.0), egui::Button::new("◀").corner_radius(10.0));
+                let right = ui.put(cell(2.0, 1.0), egui::Button::new("▶").corner_radius(10.0));
+                let down = ui.put(cell(1.0, 2.0), egui::Button::new("▼").corner_radius(10.0));
+
+                let mut dx = 0.0f32;
+                let mut dy = 0.0f32;
+                if up.is_pointer_button_down_on() {
+                    dy += 1.0;
+                }
+                if down.is_pointer_button_down_on() {
+                    dy -= 1.0;
+                }
+                if left.is_pointer_button_down_on() {
+                    dx -= 1.0;
+                }
+                if right.is_pointer_button_down_on() {
+                    dx += 1.0;
+                }
+                input.joy = (dx, dy);
+            });
+    } else if cfg.joystick {
         let radius = 55.0;
         let pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
         egui::Area::new("mobile_joystick".into())

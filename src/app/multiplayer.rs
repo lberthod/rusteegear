@@ -501,7 +501,10 @@ mod tests {
             .iter()
             .find(|e| e.player_id == Some(1))
             .expect("le joueur 1 doit figurer dans le snapshot");
-        assert!(entity.visible, "le snapshot diffusé doit refléter visible=true");
+        assert!(
+            entity.visible,
+            "le snapshot diffusé doit refléter visible=true"
+        );
     }
 
     #[test]

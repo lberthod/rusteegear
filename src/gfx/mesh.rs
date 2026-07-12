@@ -348,6 +348,22 @@ pub fn capsule(color: [f32; 3]) -> MeshData {
     let radius = 0.25;
     let cyl_half = 0.5 - radius; // partie cylindrique : 0.25 de chaque côté
 
+    // Repère « visage » : patch sombre sur l'hémisphère haut (la tête), côté -Z local
+    // — c'est la direction que `Physics::face_direction` fait correspondre au
+    // déplacement (yaw=0 ⇒ le personnage avance vers -Z, cf. les tests
+    // `camera_relative_move_*`). Sans ça, la capsule est parfaitement symétrique en
+    // rotation : impossible de voir à l'écran vers où le personnage regarde une fois
+    // que la rotation-vers-le-déplacement a été ajoutée (demandé le 2026-07-12).
+    const FACE_COLOR: [f32; 3] = [0.08, 0.08, 0.08];
+    const FACE_ROW_MIN: u32 = 1;
+    const FACE_ROW_MAX: u32 = 5;
+    const FACE_CENTER: f32 = 3.0 * PI / 2.0; // -Z
+    const FACE_HALF_WIDTH: f32 = 0.55; // ± ~31°
+    let angular_dist = |theta: f32| {
+        let d = (theta - FACE_CENTER).rem_euclid(2.0 * PI);
+        d.min(2.0 * PI - d)
+    };
+
     let mut vertices = Vec::new();
     // Une grille (stack, sector) d'un pôle à l'autre, en décalant le centre des
     // hémisphères de ±cyl_half pour insérer le tube central.
@@ -363,10 +379,12 @@ pub fn capsule(color: [f32; 3]) -> MeshData {
             let theta = 2.0 * PI * j as f32 / sectors as f32;
             let (st, ct) = theta.sin_cos();
             let n = [sp * ct, cp, sp * st];
+            let is_face =
+                (FACE_ROW_MIN..=FACE_ROW_MAX).contains(&i) && angular_dist(theta) < FACE_HALF_WIDTH;
             vertices.push(Vertex {
                 position: [radius * n[0], radius * cp + y_off, radius * n[2]],
                 normal: n,
-                color,
+                color: if is_face { FACE_COLOR } else { color },
                 uv: [j as f32 / sectors as f32, t],
             });
         }
@@ -382,4 +400,33 @@ pub fn capsule(color: [f32; 3]) -> MeshData {
         }
     }
     MeshData { vertices, indices }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capsule_marks_the_minus_z_face_with_a_distinct_color() {
+        let base = [0.45, 0.7, 0.5];
+        let data = capsule(base);
+        let is_marked = |v: &Vertex| v.color != base;
+        // Un sommet proche de -Z (avant, cf. `Physics::face_direction`), sur la tête
+        // (z négatif dominant, y au-dessus du centre), doit porter la couleur du
+        // visage — sinon on ne peut pas voir vers où le personnage regarde.
+        assert!(
+            data.vertices
+                .iter()
+                .any(|v| v.position[2] < -0.15 && v.position[1] > 0.0 && is_marked(v)),
+            "aucun sommet marqué trouvé côté -Z (avant)"
+        );
+        // À l'opposé (+Z, dos), aucun sommet ne doit porter cette couleur.
+        assert!(
+            !data
+                .vertices
+                .iter()
+                .any(|v| v.position[2] > 0.15 && v.position[1] > 0.0 && is_marked(v)),
+            "un sommet marqué a été trouvé côté +Z (dos) — le repère visage doit rester devant"
+        );
+    }
 }

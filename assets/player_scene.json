@@ -21,9 +21,10 @@
       "Saut"
     ],
     "health_bar": false,
-    "joystick": true,
+    "joystick": false,
     "safe_area": false,
-    "touch_zone": false
+    "touch_zone": false,
+    "dpad": true
   },
   "objects": [
     {
