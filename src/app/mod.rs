@@ -243,6 +243,18 @@ pub struct AppState {
     /// comportement « sans prédiction » avant correction).
     #[cfg(not(target_os = "ios"))]
     net_local_interp: crate::net::interpolation::RemoteEntity,
+    /// Historique court (~1 s) des positions **prédites** du joueur local, une par
+    /// frame (cf. `apply_local_network_position`). La position renvoyée par le
+    /// serveur est en retard d'une latence aller-retour + un tick : la comparer à la
+    /// position prédite *instantanée* la déclare « désynchronisée » dès qu'on bouge
+    /// (écart ≈ vitesse × latence ≈ 1 m au-delà de `SNAP_THRESHOLD` à 4,5 m/s sur le
+    /// VPS réel) — d'où une correction continue qui freinait et faisait trembler le
+    /// personnage en pleine course (constaté en vidéo, 2026-07-12). La position
+    /// serveur est donc validée contre la **trajectoire récente** : si elle est
+    /// proche d'un point où l'on est réellement passé, on est en phase (le serveur
+    /// est juste en retard), pas de correction.
+    #[cfg(not(target_os = "ios"))]
+    net_local_history: std::collections::VecDeque<(std::time::Instant, Vec3)>,
     /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur (Sprint 68,
     /// `SPRINTNETWORK.md`) : `poll_network` est appelée une fois par frame de
     /// rendu, potentiellement bien au-dessus du tick serveur — ce champ sert
@@ -446,6 +458,8 @@ impl AppState {
             remote_players: HashMap::new(),
             #[cfg(not(target_os = "ios"))]
             net_local_interp: crate::net::interpolation::RemoteEntity::default(),
+            #[cfg(not(target_os = "ios"))]
+            net_local_history: std::collections::VecDeque::new(),
             #[cfg(not(target_os = "ios"))]
             net_last_input_sent: None,
             firebase_uid: None,

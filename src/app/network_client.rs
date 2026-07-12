@@ -58,6 +58,13 @@ pub struct RemotePlayer {
 /// reste significatif.
 const CORRECTION_PULL: f32 = 0.15;
 
+/// Fenêtre (s) de l'historique des positions prédites du joueur local
+/// (`net_local_history`) : doit couvrir la latence aller-retour vers le serveur,
+/// son tick et le retard d'interpolation — 1 s laisse une marge confortable
+/// au-dessus des ~150-250 ms mesurés vers le VPS réel, sans retenir assez de
+/// points pour coûter quoi que ce soit (une entrée par frame, ~60-120).
+const HISTORY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Intervalle minimal entre deux envois de `ClientMsg::Input` (Sprint 68,
 /// `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2) — aligné sur
 /// `SERVER_TICK` (`src/bin/server.rs`, ~60 Hz) : le serveur ne consomme
@@ -123,6 +130,7 @@ impl AppState {
         }
         self.remote_players.clear();
         self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
+        self.net_local_history.clear();
         self.net_last_input_sent = None;
         self.net_status = "Déconnecté".to_string();
     }
@@ -260,7 +268,30 @@ impl AppState {
             && let Some(pi) = self.player_index()
             && let Some(o) = self.scene.objects.get_mut(pi)
         {
+            // Historique de la trajectoire prédite (une entrée par frame, fenêtre
+            // `HISTORY_WINDOW`) : la position que le serveur renvoie date d'une
+            // latence + un tick — en pleine course, elle est *toujours* à
+            // vitesse × latence (≈ 1 m sur le VPS réel) derrière la prédiction.
+            self.net_local_history
+                .push_back((now, o.transform.position));
+            while let Some(&(t, _)) = self.net_local_history.front()
+                && now.duration_since(t) > HISTORY_WINDOW
+            {
+                self.net_local_history.pop_front();
+            }
+            // Vraie désynchronisation = la position serveur n'est **nulle part**
+            // sur notre trajectoire récente. Si elle est proche d'un point où l'on
+            // est réellement passé, le serveur est simplement en retard de la
+            // latence : corriger là-dessus (ancien comportement, comparaison à la
+            // seule position instantanée) déclenchait une traction continue dès
+            // qu'on bougeait — le personnage freinait par à-coups et tremblait à
+            // l'arrêt (constaté en vidéo, 2026-07-12, serveur VPS à ~200 ms).
+            let on_recent_path = self
+                .net_local_history
+                .iter()
+                .any(|&(_, p)| p.distance(server_pos) <= crate::net::interpolation::SNAP_THRESHOLD);
             let correction = crate::net::interpolation::reconcile(o.transform.position, server_pos)
+                .filter(|_| !on_recent_path)
                 .map(|_| o.transform.position.lerp(server_pos, CORRECTION_PULL));
             if let Some(new_pos) = correction {
                 o.transform.position = new_pos;
@@ -1005,6 +1036,60 @@ mod tests {
             previous_distance <= crate::net::interpolation::SNAP_THRESHOLD,
             "après 30 appels, l'écart doit être retombé à SNAP_THRESHOLD ou moins : \
              {previous_distance}"
+        );
+    }
+
+    /// **Bug réel constaté en vidéo (2026-07-12, serveur VPS à ~200 ms)** : la
+    /// position renvoyée par le serveur date d'une latence + un tick — en pleine
+    /// course à 4,5 m/s elle est *toujours* ~1 m derrière la prédiction, au-delà
+    /// de `SNAP_THRESHOLD`. L'ancienne comparaison à la seule position
+    /// *instantanée* déclenchait donc une traction arrière continue pendant tout
+    /// déplacement : vitesse en dents de scie et tremblement à l'arrêt, visibles
+    /// image par image dans l'enregistrement. Une position serveur **sur notre
+    /// trajectoire récente** signifie « en phase, juste en retard » : aucune
+    /// correction ne doit s'appliquer.
+    #[test]
+    fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+
+        let pi = app.player_index().expect("gabarit pilotable");
+        let start = app.scene.objects[pi].transform.position;
+        // 1. Serveur et client d'accord au départ : peuple l'historique avec `start`.
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: start.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+        app.apply_local_network_position();
+
+        // 2. Le joueur court 2 m devant (prédiction locale) ; le serveur, en
+        // retard d'une latence, renvoie encore la position de départ.
+        let ran_to = start + Vec3::new(2.0, 0.0, 0.0);
+        app.scene.objects[pi].transform.position = ran_to;
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: start.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+        app.apply_local_network_position();
+
+        assert_eq!(
+            app.scene.objects[pi].transform.position, ran_to,
+            "une position serveur en retard mais sur notre trajectoire ne doit \
+             déclencher aucune traction arrière"
         );
     }
 
