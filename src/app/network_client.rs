@@ -173,17 +173,7 @@ impl AppState {
             .net_last_input_sent
             .is_none_or(|last| now.duration_since(last) >= INPUT_SEND_INTERVAL);
         if should_send_input {
-            let inp = &self.input_state;
-            let player_yaw = self
-                .player_object()
-                .map(|o| o.transform.rotation.to_euler(glam::EulerRot::YXZ).0);
-            let (mx, my) = network_move_axes(inp, self.camera.yaw, player_yaw);
-            let input = crate::net::protocol::ClientMsg::Input {
-                move_x: mx,
-                move_y: my,
-                attack: inp.attack,
-                jump: inp.jump,
-            };
+            let input = network_input_msg(&self.input_state, self.camera.yaw, self.player_object());
             if let Some(client) = &self.net_client {
                 client.send(&input);
             }
@@ -417,6 +407,45 @@ impl AppState {
 /// prédiction locale au bout de quelques secondes, donnant l'impression que le
 /// déplacement au clavier « buguait ». Même formule que `AppState::advance_play`
 /// (`-sin(yaw)`/`-cos(yaw)`) pour rester cohérent avec le mouvement prédit localement.
+/// Construit le `ClientMsg::Input` envoyé au serveur à partir de l'état local
+/// **complet** — exactement les mêmes sources que la prédiction locale de
+/// `sim_step` : joystick/croix tactile + flèches (`network_move_axes`), poussée
+/// clavier W/S, gyroscope si l'objet joueur l'active, et saut/attaque venant
+/// aussi bien du clavier que des **boutons tactiles nommés**
+/// (`Controller::jump_button`/`attack_button`). Bug corrigé (2026-07-13, même
+/// famille que le signe W/S) : le message n'envoyait que `inp.jump`/`inp.attack`
+/// (clavier) — sur APK, sauter ou attaquer au bouton tactile restait invisible
+/// pour le serveur : le joueur sautait à l'écran (prédiction) mais jamais dans
+/// la simulation autoritaire, d'où corrections/incohérences en ligne.
+fn network_input_msg(
+    inp: &super::PlayerInput,
+    camera_yaw: f32,
+    player: Option<&crate::scene::SceneObject>,
+) -> crate::net::protocol::ClientMsg {
+    let player_yaw = player.map(|o| o.transform.rotation.to_euler(glam::EulerRot::YXZ).0);
+    let (mut mx, mut my) = network_move_axes(inp, camera_yaw, player_yaw);
+    let ctrl = player.and_then(|o| o.controller.as_ref());
+    if let Some(c) = ctrl {
+        // Gyroscope : la prédiction locale l'applique brut (pas caméra-relative,
+        // cf. `sim_step`) quand `Controller::gyro` est actif — même convention
+        // joystick que le reste (`move_y` positif = avant, le serveur nie en Z).
+        if c.gyro {
+            mx += inp.tilt.0;
+            my += inp.tilt.1;
+        }
+    }
+    let touch_jump =
+        ctrl.is_some_and(|c| !c.jump_button.is_empty() && inp.buttons.contains(&c.jump_button));
+    let touch_attack =
+        ctrl.is_some_and(|c| !c.attack_button.is_empty() && inp.buttons.contains(&c.attack_button));
+    crate::net::protocol::ClientMsg::Input {
+        move_x: mx,
+        move_y: my,
+        attack: inp.attack || touch_attack,
+        jump: inp.jump || touch_jump,
+    }
+}
+
 fn network_move_axes(
     inp: &super::PlayerInput,
     camera_yaw: f32,
@@ -1285,6 +1314,82 @@ mod tests {
                 "yaw={yaw} : serveur ({server_vx}, {server_vz}) ≠ local ({local_vx}, {local_vz})"
             );
         }
+    }
+
+    #[test]
+    fn network_input_msg_sends_touch_jump_attack_and_gyro_like_local_prediction() {
+        // Même famille que le bug de signe W/S (2026-07-13) : le message réseau ne
+        // partait que du clavier (`inp.jump`/`inp.attack`) — sur APK, le bouton
+        // tactile « Saut »/« Attaque » et le gyroscope pilotaient la prédiction
+        // locale mais restaient invisibles pour le serveur.
+        let obj = crate::scene::SceneObject {
+            controller: Some(crate::scene::Controller {
+                input: true,
+                gyro: true,
+                jump_button: "Saut".into(),
+                attack_button: "Attaque".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut inp = super::super::PlayerInput {
+            tilt: (0.3, 0.6),
+            ..Default::default()
+        };
+        inp.buttons.insert("Saut".into());
+        inp.buttons.insert("Attaque".into());
+        let msg = network_input_msg(&inp, 0.0, Some(&obj));
+        let crate::net::protocol::ClientMsg::Input {
+            move_x,
+            move_y,
+            attack,
+            jump,
+        } = msg
+        else {
+            panic!("network_input_msg doit produire un ClientMsg::Input");
+        };
+        assert!(jump, "le bouton tactile Saut doit être transmis au serveur");
+        assert!(
+            attack,
+            "le bouton tactile Attaque doit être transmis au serveur"
+        );
+        // Gyroscope en convention joystick : le serveur applique `vz = -move_y`,
+        // la prédiction locale `vz = -tilt.1` — donc move_y = tilt.1 tel quel.
+        assert!(
+            (move_x - 0.3).abs() < 1e-5 && (move_y - 0.6).abs() < 1e-5,
+            "l'inclinaison gyro doit partir dans les axes envoyés : ({move_x}, {move_y})"
+        );
+    }
+
+    #[test]
+    fn network_input_msg_ignores_gyro_and_buttons_the_controller_does_not_use() {
+        // Un objet joueur sans `gyro` et sans boutons nommés : l'inclinaison
+        // résiduelle du capteur et des boutons pressés par hasard ne doivent pas
+        // partir au serveur (le local les ignore aussi — mêmes sources des deux côtés).
+        let obj = crate::scene::SceneObject {
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut inp = super::super::PlayerInput {
+            tilt: (0.9, -0.4),
+            ..Default::default()
+        };
+        inp.buttons.insert("Saut".into());
+        let msg = network_input_msg(&inp, 0.0, Some(&obj));
+        let crate::net::protocol::ClientMsg::Input {
+            move_x,
+            move_y,
+            attack,
+            jump,
+        } = msg
+        else {
+            panic!("network_input_msg doit produire un ClientMsg::Input");
+        };
+        assert!(!jump && !attack);
+        assert_eq!((move_x, move_y), (0.0, 0.0));
     }
 
     #[test]
