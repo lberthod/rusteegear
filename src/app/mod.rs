@@ -2207,6 +2207,16 @@ impl AppState {
                         // automatique vers la direction de déplacement, qui se
                         // battrait sinon contre l'intention explicite du joueur.
                         phys.rotate_yaw(idx, key_turn * ctrl.turn_speed * dt);
+                    } else if ctrl.input && key_thrust != 0.0 {
+                        // W/S « tank » : le personnage garde son orientation, ne tourne
+                        // jamais pour « faire face » au déplacement. Bug corrigé
+                        // (2026-07-12, constaté en test réel) : en laissant tomber dans
+                        // la branche `face_direction` ci-dessous, tenir S (recul, vecteur
+                        // de vitesse pointant vers l'arrière) faisait pivoter le
+                        // personnage à 180° en continu — la direction de recul
+                        // recalculée à chaque frame à partir de ce nouveau cap créait
+                        // une trajectoire en spirale qui donnait l'impression que le
+                        // joueur restait bloqué/tournait sur lui-même au lieu de reculer.
                     } else {
                         // Oriente le personnage face à sa direction de déplacement
                         // (rotation progressive, pas instantanée) — seulement pour le
@@ -4707,6 +4717,45 @@ mod tests {
             moved.normalize().dot(expected_dir) > 0.8,
             "l'avance doit suivre l'orientation du joueur (yaw={yaw}), pas la caméra : \
              déplacement={moved:?}, attendu≈{expected_dir:?}"
+        );
+    }
+
+    #[test]
+    fn tank_controls_reversing_never_spins_the_player_around() {
+        // Bug réel constaté en jeu (2026-07-12) : tenir S en boucle faisait pivoter le
+        // personnage à 180° au lieu de simplement reculer, car le vecteur de vitesse
+        // (pointant vers l'arrière) était passé à `face_direction`, qui tournait alors
+        // le joueur pour lui « faire face » — recalculé chaque frame à partir du
+        // nouveau cap, ça partait en spirale et donnait l'impression de rester
+        // bloqué/tourner sur soi-même. L'orientation doit rester fixe pendant S.
+        let mut app = AppState::new();
+        app.load_controller_demo();
+        app.playing = true;
+        let pi = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("la démo contrôleur a un joueur pilotable");
+        let yaw0 = app.scene.objects[pi]
+            .transform
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+
+        app.input_state.key_thrust = -1.0; // S tenue
+        for _ in 0..90 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        }
+        let yaw1 = app.scene.objects[pi]
+            .transform
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+        assert!(
+            (yaw1 - yaw0).abs() < 1e-3,
+            "reculer (S) ne doit jamais faire tourner le personnage : yaw0={yaw0}, yaw1={yaw1}"
         );
     }
 }
