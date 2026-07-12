@@ -258,6 +258,16 @@ impl Physics {
         jumped
     }
 
+    /// Vitesse linéaire (m/s) du corps rigide dynamique de l'objet `index`,
+    /// `None` s'il n'en a pas. Sert au rattrapage doux à l'arrêt de la
+    /// réconciliation réseau (cf. `app::network_client`) : distinguer « joueur
+    /// immobile » (on peut aligner sans gêner) de « en plein déplacement ».
+    pub fn velocity(&self, index: usize) -> Option<Vec3> {
+        let &(_, handle) = self.dynamic.iter().find(|&&(i, _)| i == index)?;
+        let v = self.bodies.get(handle)?.linvel();
+        Some(Vec3::new(v.x, v.y, v.z))
+    }
+
     /// Force la position du corps rigide (dynamique) de l'objet `index`, sans
     /// effet s'il n'en a pas (objet statique/sans physique) — utilisé par la
     /// réconciliation réseau du joueur local (`app::network_client::apply_

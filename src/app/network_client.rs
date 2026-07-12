@@ -65,6 +65,28 @@ const CORRECTION_PULL: f32 = 0.15;
 /// points pour coûter quoi que ce soit (une entrée par frame, ~60-120).
 const HISTORY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Vitesse (m/s) sous laquelle le joueur local est considéré **immobile** pour le
+/// rattrapage doux à l'arrêt (cf. `IDLE_SETTLE_PULL`) — assez basse pour ne jamais
+/// se déclencher en cours de déplacement réel (vitesse de marche ≥ 3 m/s).
+const IDLE_SPEED_EPSILON: f32 = 0.15;
+
+/// Écart minimal (m) déclenchant le rattrapage à l'arrêt : en-deçà, les deux
+/// positions sont visuellement confondues — inutile d'écrire des micro-corrections
+/// sans fin (et de marquer le transform « modifié » pour l'interpolation de rendu).
+const IDLE_SETTLE_MIN: f32 = 0.03;
+
+/// Fraction de l'écart comblée par frame quand le joueur est **immobile** et que
+/// l'écart avec la position serveur est sous `SNAP_THRESHOLD` (donc ignoré par
+/// `reconcile`). Sans ce rattrapage, chaque client garde à l'arrêt un décalage
+/// permanent (jusqu'à ~0,5 m) avec la vérité serveur — le serveur du VPS (physique
+/// plus ancienne, freinage plus mou) s'arrête systématiquement quelques dizaines de
+/// cm plus loin que la prédiction locale. Constaté en comparant deux écrans au même
+/// instant (macOS vs APK, 2026-07-13) : les deux joueurs à l'arrêt n'étaient pas
+/// aux mêmes positions relatives sur les deux appareils. 5 %/frame ≈ imperceptible
+/// (~0,25 s pour combler la moitié de l'écart), et uniquement à l'arrêt — le
+/// ressenti en mouvement ne change pas.
+const IDLE_SETTLE_PULL: f32 = 0.05;
+
 /// Intervalle minimal entre deux envois de `ClientMsg::Input` (Sprint 68,
 /// `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2) — aligné sur
 /// `SERVER_TICK` (`src/bin/server.rs`, ~60 Hz) : le serveur ne consomme
@@ -280,9 +302,29 @@ impl AppState {
                 .net_local_history
                 .iter()
                 .any(|&(_, p)| p.distance(server_pos) <= crate::net::interpolation::SNAP_THRESHOLD);
-            let correction = crate::net::interpolation::reconcile(o.transform.position, server_pos)
-                .filter(|_| !on_recent_path)
-                .map(|_| o.transform.position.lerp(server_pos, CORRECTION_PULL));
+            let mut correction =
+                crate::net::interpolation::reconcile(o.transform.position, server_pos)
+                    .filter(|_| !on_recent_path)
+                    .map(|_| o.transform.position.lerp(server_pos, CORRECTION_PULL));
+            // Rattrapage doux à l'arrêt (cf. `IDLE_SETTLE_PULL`) : sous
+            // `SNAP_THRESHOLD`, `reconcile` ne corrige volontairement rien — mais un
+            // joueur immobile peut alors rester décalé en permanence de la position
+            // que les *autres* clients voient de lui. Immobile + écart notable ⇒ on
+            // converge lentement vers la vérité serveur, tous écrans alignés.
+            if correction.is_none() {
+                // `is_some_and` (pas `is_none_or`) : sans corps physique (mode
+                // édition, pause), on ne peut pas savoir si le joueur bouge — dans
+                // le doute, ne rien rattraper plutôt que de tirer un joueur en
+                // mouvement.
+                let at_rest = self
+                    .physics
+                    .as_ref()
+                    .and_then(|p| p.velocity(pi))
+                    .is_some_and(|v| v.length() < IDLE_SPEED_EPSILON);
+                if at_rest && o.transform.position.distance(server_pos) > IDLE_SETTLE_MIN {
+                    correction = Some(o.transform.position.lerp(server_pos, IDLE_SETTLE_PULL));
+                }
+            }
             if let Some(new_pos) = correction {
                 o.transform.position = new_pos;
             }
@@ -1132,6 +1174,52 @@ mod tests {
             app.scene.objects[pi].transform.position, ran_to,
             "une position serveur en retard mais sur notre trajectoire ne doit \
              déclencher aucune traction arrière"
+        );
+    }
+
+    /// **Constaté en comparant deux écrans au même instant (macOS vs APK,
+    /// 2026-07-13)** : à l'arrêt, les positions relatives des deux joueurs
+    /// différaient d'un appareil à l'autre. Sous `SNAP_THRESHOLD`, `reconcile`
+    /// ne corrige volontairement rien — mais le serveur (physique plus
+    /// ancienne) s'arrête quelques dizaines de cm plus loin que la prédiction
+    /// locale : chaque client gardait un décalage permanent avec la position
+    /// que les autres voient de lui. Un joueur **immobile** doit converger
+    /// doucement vers la vérité serveur.
+    #[test]
+    fn an_idle_player_softly_settles_onto_the_server_position() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+        // Corps physique présent et au repos (aucun pas simulé) : condition
+        // « immobile » du rattrapage.
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let pi = app.player_index().expect("gabarit pilotable");
+        let start = app.scene.objects[pi].transform.position;
+        // Écart *sous* SNAP_THRESHOLD : ignoré par `reconcile`, mais visible à
+        // l'écran (~0,3 m) — c'est le cas que le rattrapage doit combler.
+        let authoritative = start + Vec3::new(0.3, 0.0, 0.0);
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: authoritative.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+            },
+            Instant::now(),
+        );
+
+        for _ in 0..120 {
+            app.apply_local_network_position();
+        }
+        let dist = app.scene.objects[pi]
+            .transform
+            .position
+            .distance(authoritative);
+        assert!(
+            dist <= IDLE_SETTLE_MIN + 1e-3,
+            "immobile, le joueur doit finir aligné sur la position serveur (écart={dist})"
         );
     }
 
