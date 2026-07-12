@@ -2275,7 +2275,11 @@ impl AppState {
                         // Rotation « tank » manuelle (A/D) : prioritaire sur la rotation
                         // automatique vers la direction de déplacement, qui se
                         // battrait sinon contre l'intention explicite du joueur.
-                        cur_yaw + key_turn * ctrl.turn_speed * dt
+                        // Vitesse dédiée (`MANUAL_TURN_SPEED`), pas `turn_speed` : ce
+                        // dernier (10 rad/s ≈ 570°/s) est calibré pour *rattraper* une
+                        // direction, pas pour être **tenu** — tenu, il rend le pilotage
+                        // impossible à doser (un quart de tour par frame de retard).
+                        cur_yaw + key_turn * MANUAL_TURN_SPEED * dt
                     } else if key_thrust != 0.0 {
                         // W/S « tank » : le personnage garde son orientation, ne tourne
                         // jamais pour « faire face » au déplacement — sinon reculer
@@ -2283,10 +2287,13 @@ impl AppState {
                         // à 180° en continu (bug corrigé le 2026-07-12).
                         cur_yaw
                     } else if vx * vx + vz * vz > 1e-6 {
-                        // Rotation progressive vers la direction de déplacement
-                        // (joystick/flèches), pas instantanée.
+                        // Rotation vers la direction de déplacement en amorti
+                        // **exponentiel** (rapide au départ, doux à l'approche) plutôt
+                        // qu'à vitesse constante + arrêt sec (`rotate_towards`) : la
+                        // vitesse angulaire constante donnait un pivot mécanique qui
+                        // « claquait » en fin de course (audit qualité, 2026-07-12).
                         let target_yaw = (-vx).atan2(-vz);
-                        rotate_towards(cur_yaw, target_yaw, ctrl.turn_speed * dt)
+                        rotate_towards_smooth(cur_yaw, target_yaw, ctrl.turn_speed, dt)
                     } else {
                         cur_yaw
                     };
@@ -2724,25 +2731,37 @@ fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
     (wx, wz)
 }
 
-/// Fait tourner un angle `cur` (radians) vers `target` par le plus court chemin
-/// (jamais plus de π), borné à `max_step` radians pour cet appel — jamais un saut
-/// instantané. Utilisé pour l'orientation du joueur local (cf. `advance_play`),
-/// purement cinématique (n'implique plus le corps rigide, cf. la note dans
-/// `advance_play` : forcer une rotation sur un corps physique en contact avec le
-/// décor déstabilisait le solveur de contacts de rapier — vibrations visibles dès
-/// qu'on combinait beaucoup de rotation et de déplacement, corrigé le 2026-07-12).
-fn rotate_towards(cur: f32, target: f32, max_step: f32) -> f32 {
+/// Vitesse (rad/s) de la rotation « tank » manuelle (A/D tenus). Constante dédiée,
+/// distincte de `Controller::turn_speed` : ce dernier (10 rad/s) est un taux de
+/// *rattrapage* de l'orientation automatique (amorti exponentiel, la vitesse retombe
+/// en approchant la cible) — tenu en continu comme vitesse brute, il ferait tourner
+/// le personnage à ~570°/s, impossible à doser (audit qualité, 2026-07-12).
+/// 3 rad/s ≈ 170°/s : demi-tour en ~1 s, vif mais contrôlable.
+const MANUAL_TURN_SPEED: f32 = 3.0;
+
+/// Écart angulaire **signé le plus court** (radians, dans [-π, π]) de `cur` vers
+/// `target` — jamais plus d'un demi-tour, quel que soit l'enroulement des angles.
+fn shortest_angle(cur: f32, target: f32) -> f32 {
     let mut diff = (target - cur) % std::f32::consts::TAU;
     if diff > std::f32::consts::PI {
         diff -= std::f32::consts::TAU;
     } else if diff < -std::f32::consts::PI {
         diff += std::f32::consts::TAU;
     }
-    if diff.abs() <= max_step {
-        target
-    } else {
-        cur + diff.signum() * max_step
-    }
+    diff
+}
+
+/// Fait tourner `cur` (radians) vers `target` par le plus court chemin, en amorti
+/// **exponentiel** : chaque seconde comble une fraction `1 - e^(-rate)` de l'écart
+/// restant — rapide au départ, doux à l'approche, sans jamais « claquer » sur la
+/// cible (contrairement à l'ancienne rotation à vitesse constante + arrêt sec).
+/// La forme `1 - e^(-rate·dt)` rend le taux indépendant du framerate (deux pas de
+/// dt/2 = un pas de dt). Utilisé pour l'orientation du joueur local (cf.
+/// `advance_play`), purement cinématique — n'implique jamais le corps rigide :
+/// forcer une rotation sur un corps en contact avec le décor déstabilisait le
+/// solveur de contacts de rapier (vibrations, corrigé le 2026-07-12).
+fn rotate_towards_smooth(cur: f32, target: f32, rate: f32, dt: f32) -> f32 {
+    cur + shortest_angle(cur, target) * (1.0 - (-rate * dt).exp())
 }
 
 /// Borne un vecteur de déplacement brut (somme joystick/croix + clavier) à une
@@ -2981,20 +3000,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rotate_towards_is_bounded_by_max_step_and_takes_the_short_way() {
-        // Pas assez de marge pour atteindre la cible d'un coup : doit s'arrêter à
-        // max_step, pas sauter directement dessus.
-        let r = rotate_towards(0.0, 1.0, 0.2);
-        assert!((r - 0.2).abs() < 1e-5, "r={r}");
-        // Marge suffisante : atteint exactement la cible.
-        let r = rotate_towards(0.0, 0.1, 0.5);
-        assert!((r - 0.1).abs() < 1e-5, "r={r}");
-        // De 3.0 vers -3.0 avec une marge insuffisante pour l'atteindre d'un coup :
-        // le chemin direct (-6.0 rad) est plus long que par le « dos » du cercle
-        // (~0.28 rad) — ne doit jamais faire tourner le personnage du mauvais côté.
-        let r = rotate_towards(3.0, -3.0, 0.1);
-        let expected = 3.0 + 0.1 * (std::f32::consts::TAU - 6.0).signum();
-        assert!((r - expected).abs() < 1e-4, "r={r}, expected={expected}");
+    fn rotate_towards_smooth_eases_toward_the_target_the_short_way() {
+        // Progresse vers la cible sans jamais la dépasser (amorti, pas d'oscillation).
+        let r = rotate_towards_smooth(0.0, 1.0, 10.0, 1.0 / 60.0);
+        assert!(r > 0.0 && r < 1.0, "r={r}");
+        // De 3.0 vers -3.0 : le chemin direct (-6.0 rad) est plus long que par le
+        // « dos » du cercle (~0.28 rad) — ne doit jamais tourner du mauvais côté.
+        let r = rotate_towards_smooth(3.0, -3.0, 10.0, 1.0 / 60.0);
+        assert!(r > 3.0, "doit passer par le dos du cercle (r={r})");
+        // Ease-out : le pas suivant, plus proche de la cible, est plus petit — la
+        // rotation ralentit à l'approche au lieu de « claquer » à vitesse constante.
+        let first = rotate_towards_smooth(0.0, 1.0, 10.0, 1.0 / 60.0);
+        let second = rotate_towards_smooth(first, 1.0, 10.0, 1.0 / 60.0) - first;
+        assert!(
+            second < first,
+            "le pas doit décroître (1er={first}, 2e={second})"
+        );
+    }
+
+    #[test]
+    fn rotate_towards_smooth_is_framerate_independent() {
+        // Deux pas de dt/2 doivent donner (quasi) le même angle qu'un pas de dt :
+        // le lissage ne doit pas dépendre de la cadence de rendu/simulation.
+        let one_step = rotate_towards_smooth(0.0, 1.0, 10.0, 1.0 / 30.0);
+        let half = rotate_towards_smooth(0.0, 1.0, 10.0, 1.0 / 60.0);
+        let two_steps = rotate_towards_smooth(half, 1.0, 10.0, 1.0 / 60.0);
+        assert!(
+            (one_step - two_steps).abs() < 1e-4,
+            "1 pas de dt ({one_step}) doit égaler 2 pas de dt/2 ({two_steps})"
+        );
     }
 
     #[test]
@@ -5021,7 +5055,7 @@ mod tests {
 
         // D tenue (tourner à gauche, cf. doc `PlayerInput::key_turn`) : le yaw doit
         // augmenter par rapport à sa valeur de départ (0). Peu de pas : avec
-        // `turn_speed` par défaut (10 rad/s), rester bien en-deçà de π pour ne pas
+        // `MANUAL_TURN_SPEED` (3 rad/s), rester bien en-deçà de π pour ne pas
         // « boucler » et fausser la lecture (`to_scaled_axis` ramène l'angle dans
         // (-π, π]).
         app.input_state.key_turn = 1.0;

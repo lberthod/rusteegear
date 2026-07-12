@@ -23,6 +23,26 @@ pub enum ColliderShape {
     Capsule,
 }
 
+/// Multiplicateur d'accélération quand l'entrée **freine** (cible plus lente que la
+/// vitesse courante le long du mouvement : relâchement, demi-tour, virage serré).
+/// Départ progressif mais arrêt net : un freinage aussi mou que l'accélération donne
+/// un personnage « savonnette » qui glisse au-delà de l'intention du joueur — les
+/// jeux d'action freinent classiquement 1,5 à 2× plus fort qu'ils n'accélèrent.
+const BRAKE_FACTOR: f32 = 2.0;
+
+/// Fraction de l'accélération disponible **en l'air** : à 1.0 (ancien comportement),
+/// la trajectoire d'un saut se pilote comme au sol, effet « téléguidé » irréel. Une
+/// autorité réduite garde un ajustement possible mais laisse l'arc du saut engager —
+/// la direction se choisit surtout à l'impulsion, comme attendu d'un saut crédible.
+const AIR_CONTROL: f32 = 0.35;
+
+/// Multiplicateur de gravité pendant la **descente** d'un saut/d'une chute. La
+/// parabole symétrique de la gravité seule (montée = descente) donne un saut
+/// flottant, « lunaire » ; retomber plus vite qu'on ne monte rend le saut vif et
+/// lisible (recette standard des jeux de plateforme). N'affecte que la chute :
+/// la hauteur de saut (`jump_height`, atteinte à la montée) reste exacte.
+const FALL_GRAVITY_FACTOR: f32 = 1.6;
+
 pub struct Physics {
     bodies: RigidBodySet,
     colliders: ColliderSet,
@@ -162,12 +182,16 @@ impl Physics {
 
     /// Pilote un objet (corps `controlled`) : fait tendre la vitesse horizontale vers
     /// `(vx, vz)` (joystick/gyro) et déclenche un saut si demandé **et** que l'objet est
-    /// au sol. La vitesse verticale est sinon conservée (gravité). `jump_speed` = vitesse
-    /// initiale du saut (m/s). `accel` (m/s²) borne la variation de vitesse horizontale
-    /// par seconde — `0.0` fixe la vitesse instantanément (comportement historique,
-    /// utilisé par l'IA/le recul qui n'ont pas besoin d'inertie). Une valeur positive
-    /// (mouvement du joueur, cf. `Controller::acceleration`) lisse départs et arrêts au
-    /// lieu d'un « on/off » robotique (demandé le 2026-07-12). Renvoie `true` si un
+    /// au sol. La vitesse verticale est sinon conservée (gravité), avec une gravité
+    /// renforcée en descente (cf. `FALL_GRAVITY_FACTOR` : saut vif plutôt que
+    /// « lunaire »). `jump_speed` = vitesse initiale du saut (m/s). `accel` (m/s²)
+    /// borne la variation de vitesse horizontale par seconde — `0.0` fixe la vitesse
+    /// instantanément (comportement historique, utilisé par l'IA/le recul qui n'ont
+    /// pas besoin d'inertie). Une valeur positive (mouvement du joueur, cf.
+    /// `Controller::acceleration`) lisse départs et arrêts au lieu d'un « on/off »
+    /// robotique, avec un freinage plus fort que l'accélération (`BRAKE_FACTOR` :
+    /// arrêts nets) et une autorité réduite en l'air (`AIR_CONTROL` : arc de saut
+    /// crédible) — audit qualité du déplacement, 2026-07-12. Renvoie `true` si un
     /// **saut** a effectivement été déclenché (objet au sol).
     #[allow(clippy::too_many_arguments)] // paramètres physiques distincts d'un même appel
     pub fn control(
@@ -188,14 +212,37 @@ impl Physics {
             if let Some(body) = self.bodies.get_mut(handle) {
                 let cur = body.linvel();
                 // Au sol : vitesse verticale quasi nulle (heuristique simple, sans raycast).
+                // Effet secondaire bienvenu : le seuil large (< 1 m/s, soit ~0,1 s de chute
+                // libre) offre un « coyote time » naturel — sauter juste après avoir quitté
+                // un rebord fonctionne encore, comme dans les plateformers soignés.
                 let grounded = cur.y.abs() < 1.0;
                 let do_jump = jump && grounded;
-                let vy = if do_jump { jump_speed } else { cur.y };
+                let vy = if do_jump {
+                    jump_speed
+                } else if !grounded && cur.y < 0.0 {
+                    // Descente : gravité renforcée (cf. `FALL_GRAVITY_FACTOR`) — la part
+                    // de base (×1) est déjà intégrée par `step`, on n'ajoute que l'excès.
+                    cur.y - 9.81 * (FALL_GRAVITY_FACTOR - 1.0) * dt
+                } else {
+                    cur.y
+                };
                 let (nx, nz) = if accel > 0.0 {
+                    // Accélération effective : renforcée au freinage (la cible ne
+                    // prolonge pas la vitesse courante — relâchement, demi-tour,
+                    // virage : cf. `BRAKE_FACTOR`), réduite en l'air (`AIR_CONTROL`).
+                    let cur_sq = cur.x * cur.x + cur.z * cur.z;
+                    let braking = vx * cur.x + vz * cur.z < cur_sq - 1e-6;
+                    let mut a = accel;
+                    if braking {
+                        a *= BRAKE_FACTOR;
+                    }
+                    if !grounded {
+                        a *= AIR_CONTROL;
+                    }
                     let dx = vx - cur.x;
                     let dz = vz - cur.z;
                     let dist = (dx * dx + dz * dz).sqrt();
-                    let max_step = accel * dt;
+                    let max_step = a * dt;
                     if dist <= max_step || dist < 1e-6 {
                         (vx, vz)
                     } else {
@@ -352,6 +399,85 @@ mod tests {
         assert!(
             vx > 0.0 && vx < 8.0,
             "la vitesse doit monter progressivement, pas instantanément (vx={vx})"
+        );
+    }
+
+    #[test]
+    fn control_brakes_harder_than_it_accelerates() {
+        // Vitesse lancée à 8 m/s (accel 0 = instantané), puis cible 0 avec accel 20 :
+        // le freinage doit être `BRAKE_FACTOR` fois plus fort que l'accélération —
+        // arrêt net quand le joueur relâche, pas une glissade symétrique du départ.
+        let scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        phys.control(p, 8.0, 0.0, false, 0.0, 0.0, dt);
+        phys.control(p, 0.0, 0.0, false, 0.0, 20.0, dt);
+        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
+        let vx = phys.bodies.get(handle).unwrap().linvel().x;
+        let expected = 8.0 - 20.0 * BRAKE_FACTOR * dt;
+        assert!(
+            (vx - expected).abs() < 1e-4,
+            "le freinage doit appliquer accel×{BRAKE_FACTOR} (vx={vx}, attendu={expected})"
+        );
+    }
+
+    #[test]
+    fn control_has_reduced_authority_in_the_air() {
+        // En l'air (saut en cours), l'accélération horizontale doit être réduite à
+        // `AIR_CONTROL` : la trajectoire d'un saut s'engage à l'impulsion, elle ne se
+        // repilote pas librement comme au sol (effet « téléguidé » sinon).
+        let scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        // Saut : vitesse verticale nette (5 m/s) → plus « au sol » pour l'appel suivant.
+        phys.control(p, 0.0, 0.0, true, 5.0, 0.0, dt);
+        phys.control(p, 8.0, 0.0, false, 0.0, 20.0, dt);
+        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
+        let vx = phys.bodies.get(handle).unwrap().linvel().x;
+        let expected = 20.0 * AIR_CONTROL * dt;
+        assert!(
+            (vx - expected).abs() < 1e-4,
+            "en l'air, l'accélération doit être ×{AIR_CONTROL} (vx={vx}, attendu={expected})"
+        );
+    }
+
+    #[test]
+    fn control_makes_falling_faster_than_rising() {
+        // Gravité renforcée en descente (`FALL_GRAVITY_FACTOR`) : un saut retombe
+        // plus vite qu'il ne monte — saut vif et lisible, pas une parabole flottante.
+        let mut scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        // Se pose au sol, saute, puis laisse la simulation courir jusqu'à la chute.
+        for _ in 0..40 {
+            phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        phys.control(p, 0.0, 0.0, true, 6.0, 0.0, dt);
+        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
+        for _ in 0..200 {
+            if phys.bodies.get(handle).unwrap().linvel().y < -1.5 {
+                break;
+            }
+            phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        let vy_before = phys.bodies.get(handle).unwrap().linvel().y;
+        assert!(
+            vy_before < -1.5,
+            "le joueur doit être en chute (vy={vy_before})"
+        );
+        // Un appel `control` seul (sans pas de simulation) doit ajouter l'excès de
+        // gravité de chute — la part de base (×1) restant intégrée par `step`.
+        phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
+        let vy_after = phys.bodies.get(handle).unwrap().linvel().y;
+        let boost = 9.81 * (FALL_GRAVITY_FACTOR - 1.0) * dt;
+        assert!(
+            (vy_before - vy_after - boost).abs() < 1e-3,
+            "la chute doit être accélérée de {boost} m/s par pas (avant={vy_before}, après={vy_after})"
         );
     }
 
