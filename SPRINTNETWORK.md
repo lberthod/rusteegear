@@ -15,6 +15,12 @@ qui prouve le comportement, pas seulement « compile et tourne ».
 - [ ] Sprint 69 — Vérification géographique du serveur de test (infra, pas code) — 🔜 nécessite un accès réel au VPS de test, non fait ici
 - [x] Sprint 70 — Cohérence doc/code du `Snapshot` (option A : commentaire) ✅ FAIT
 - [ ] Sprint 71 — Transport non-TCP (conditionnel, à ne lancer que si 66-68 ne suffisent pas)
+- [x] Sprint 72 — Interpolation de rendu à pas fixe (fluidité visuelle) ✅ FAIT
+- [x] Sprint 73 — Game feel du déplacement (freinage, air control, chute, rotation) ✅ FAIT
+- [x] Sprint 74 — Réconciliation par trajectoire récente (fin du rubber-banding) ✅ FAIT
+- [x] Sprint 75 — Convention d'axes de la poussée W/S client → serveur ✅ FAIT
+- [x] Sprint 76 — Boutons tactiles/gyro dans l'Input réseau + pavé W/A/S/D ✅ FAIT
+- [x] Sprint 77 — Rattrapage doux à l'arrêt + serveur VPS aligné sur le même code ✅ FAIT
 
 ---
 
@@ -211,3 +217,98 @@ canaux de données WebRTC non fiables).
 - **Risques** : le plus gros chantier de cette liste — architecture de
   transport entière, à ne lancer que sur preuve mesurée, jamais par
   anticipation.
+
+---
+
+## Sprints 72-77 — Audit qualité du déplacement en ligne (2026-07-12 → 13)
+
+Série issue de tests **réels** : captures vidéo analysées image par image
+(traçage de la position du joueur sur 180 frames consécutives), captures
+d'écran comparées au même instant sur deux appareils (macOS vs APK), le tout
+contre le VPS réel (~200 ms de RTT). Chaque correctif est verrouillé par des
+tests de régression ; commits `0aa0b5d` → `1f00598`.
+
+### Sprint 72 — Interpolation de rendu à pas fixe ✅ FAIT (`0aa0b5d`)
+**Symptôme** : déplacement « pas fluide » même à haut FPS. **Cause** : la
+simulation avance par pas fixes de 1/60 s mais le rendu affichait la dernière
+pose brute — selon l'alignement frame/tick, une frame montre 0 ou 2 pas de
+simulation (« judder »). **Correctif** : le rendu affiche un mélange des deux
+derniers pas pondéré par l'accumulateur (`blend_render_poses`), l'état exact
+étant restauré avant chaque nouveau pas (`restore_sim_poses`). Les
+téléportations (respawn, ancre FX) claquent sans traînée
+(`TELEPORT_SNAP_PER_STEP`), les écritures externes du transform
+(réconciliation réseau, tests) survivent à la restauration, les fantômes
+réseau gardent leur interpolation serveur dédiée. Bonus : zone morte du
+joystick remappée `[seuil,1]→[0,1]` (départ progressif) et lissage caméra en
+`1-e^(-k·dt)` (indépendant du framerate).
+**Fichiers** : `src/app/mod.rs`, `src/app/network_client.rs`.
+
+### Sprint 73 — Game feel du déplacement ✅ FAIT (`e7695fe`)
+Constantes documentées dans `runtime/physics.rs` : `BRAKE_FACTOR = 2.0`
+(freinage 2× plus fort que l'accélération — arrêt net, fini l'effet
+« savonnette »), `AIR_CONTROL = 0.35` (l'arc d'un saut s'engage à
+l'impulsion), `FALL_GRAVITY_FACTOR = 1.6` (retombe plus vite qu'on ne monte,
+hauteur de saut inchangée). Rotation du personnage en amorti exponentiel
+(`rotate_towards_smooth`, indépendant du framerate) au lieu de vitesse
+constante + arrêt sec ; rotation tank manuelle A/D à vitesse dédiée
+(`MANUAL_TURN_SPEED = 3 rad/s` — `turn_speed` à 10 rad/s est un taux de
+rattrapage, pas une vitesse tenue). Tests mesurant chaque effet.
+**Fichiers** : `src/runtime/physics.rs`, `src/app/mod.rs`.
+
+### Sprint 74 — Réconciliation par trajectoire récente ✅ FAIT (`718fb1d`)
+**Symptôme (vidéo, mesuré)** : vitesse en dents de scie (2 à 12 px/frame à
+entrée constante), dérive + tremblement ~1,5 s après chaque arrêt. **Cause** :
+la position serveur date d'une latence + un tick — à 4,5 m/s elle est
+*toujours* ~1 m derrière la prédiction, au-delà de `SNAP_THRESHOLD` (0,5 m) ;
+la comparaison à la position instantanée déclenchait une traction arrière de
+15 % à chaque frame pendant tout déplacement. **Correctif** : historique 1 s
+des positions prédites (`net_local_history`) ; une position serveur proche
+d'un point de la trajectoire récente = « en phase, juste en retard » → aucune
+correction. Hors trajectoire (téléport, perte de paquets, triche) → corrigée
+par petits pas comme avant.
+**Fichiers** : `src/app/network_client.rs`, `src/app/mod.rs`.
+
+### Sprint 75 — Convention d'axes de la poussée W/S ✅ FAIT (`04c0cc6`)
+**Symptôme (jeu réel)** : en W/S, le déplacement part droit puis « repart
+dans une autre direction » après quelques mètres. **Cause** : bug de signe —
+`network_move_axes` envoyait la composante W/S en Z *monde*
+(`-cos(yaw)`) alors que le serveur attend la convention *joystick*
+(`move_y` positif = avant, il applique `vz = -move_y × vitesse`). Le serveur
+simulait W inversé en Z ; dès que sa trajectoire divergeait au-delà du seuil
+hors trajectoire récente, la réconciliation (Sprint 74) tirait le joueur à
+contresens. Le test unitaire existant verrouillait la mauvaise valeur.
+**Correctif** : `move_y = thrust × cos(yaw)` + test de bout en bout : pour
+plusieurs yaw, la vitesse reconstruite par la convention serveur doit être
+identique à la prédiction locale. Purement client — compatible avec un
+serveur ancien.
+**Fichiers** : `src/app/network_client.rs`.
+
+### Sprint 76 — Boutons tactiles/gyro dans l'Input réseau + pavé W/A/S/D ✅ FAIT (`62cf640`, `619b5a6`)
+Même famille que le Sprint 75 : le `ClientMsg::Input` ne partait que du
+clavier. Trois sources utilisées par la prédiction locale restaient
+invisibles pour le serveur : bouton tactile « Saut »
+(`Controller::jump_button` via `input.buttons`), bouton « Attaque », et
+l'inclinaison gyroscope. Le message est désormais construit par
+`network_input_msg()` à partir des sources exactes de `sim_step`. Et la
+croix directionnelle tactile devient un **pavé tank W/A/S/D** (lettres ASCII
+— les glyphes ▲▼ manquaient de la fonte egui sur Android, carrés vides
+constatés sur APK réel) : mêmes contrôles que le clavier, via des canaux
+dédiés `touch_thrust`/`touch_turn` cumulés au clavier
+(`PlayerInput::thrust()`/`turn()`) sans écrasement mutuel.
+**Fichiers** : `src/app/network_client.rs`, `src/app/mod.rs`,
+`src/editor/mod.rs`, `src/scene/mod.rs`.
+
+### Sprint 77 — Rattrapage doux à l'arrêt + serveur aligné ✅ FAIT (`1f00598`)
+**Symptôme (deux captures au même instant, macOS vs APK)** : à l'arrêt, les
+positions relatives des joueurs diffèrent d'un appareil à l'autre.
+**Cause** : `reconcile` ignore volontairement tout écart < 0,5 m, mais le
+serveur (physique plus ancienne au moment du constat) s'arrêtait quelques
+dizaines de cm plus loin que la prédiction — décalage permanent entre « où je
+me vois » et « où les autres me voient ». **Correctif** : joueur immobile
+(nouvelle méthode `Physics::velocity`, vitesse < 0,15 m/s) + écart > 3 cm ⇒
+convergence douce (5 %/frame) vers la position serveur, uniquement à l'arrêt.
+**Infra** : sources synchronisées sur le VPS, serveur recompilé sur place et
+service `rusteegear-server` redémarré — serveur et clients tournent désormais
+sur le même commit (mêmes physique et conventions des deux côtés, les
+corrections deviennent marginales).
+**Fichiers** : `src/app/network_client.rs`, `src/runtime/physics.rs`.

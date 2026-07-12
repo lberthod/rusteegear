@@ -233,9 +233,47 @@ scope, prises dès le départ :
   `bincode`, pas JSON — un `Snapshot` (position/orientation/santé/visibilité)
   pour 20 entités tient dans ~540 octets, largement sous le budget réseau visé.
 - **Mouvement lisse malgré la latence** (`src/net/interpolation.rs`) : les
-  entités distantes sont interpolées entre les deux derniers snapshots reçus
-  (jamais téléportées à chaque tick réseau), et la position prédite du joueur
-  local n'est corrigée que si l'écart avec le serveur devient significatif.
+  entités distantes sont interpolées légèrement dans le passé (`RENDER_DELAY`,
+  robuste à la gigue), jamais téléportées à chaque tick réseau — et le joueur
+  local est piloté en **prédiction immédiate**, réconciliée intelligemment
+  avec le serveur (voir ci-dessous).
+
+### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
+
+Le déplacement a fait l'objet d'un audit complet, mesuré image par image sur
+des captures vidéo réelles (VPS à ~200 ms de latence). Chaque correctif est
+verrouillé par un test de régression :
+
+- **Interpolation de rendu à pas fixe** (« fix your timestep ») : la
+  simulation avance par pas fixes de 1/60 s, mais le rendu affiche un mélange
+  des deux derniers pas pondéré par l'accumulateur — trajectoire continue à
+  l'écran quel que soit le framerate (fini le « judder » 0 pas/2 pas par
+  frame). Les téléportations claquent sans traînée, les écritures externes du
+  transform sont respectées.
+- **Game feel** (`runtime/physics.rs`) : freinage 2× plus fort que
+  l'accélération (arrêt net, virages qui accrochent), autorité aérienne
+  réduite à 35 % (arc de saut crédible), gravité de descente ×1,6 (saut vif,
+  pas « lunaire »), rotation du personnage en amorti exponentiel indépendant
+  du framerate, zone morte du joystick remappée (départ progressif).
+- **Réconciliation par trajectoire récente** : la position renvoyée par le
+  serveur date d'une latence — en pleine course elle est *toujours* ~1 m
+  derrière la prédiction. La comparer à la position instantanée déclenchait
+  une traction arrière permanente (rubber-banding filmé et mesuré : vitesse
+  en dents de scie de 2 à 12 px/frame). Le client garde 1 s d'historique de
+  sa trajectoire prédite : une position serveur *sur* cette trajectoire =
+  simplement en retard, aucune correction ; *hors* trajectoire = vraie
+  désynchronisation, corrigée par petits pas.
+- **Rattrapage doux à l'arrêt** : sous le seuil de correction (0,5 m), un
+  joueur immobile converge lentement (5 %/frame) vers la position serveur —
+  tous les écrans (macOS, APK) affichent les mêmes positions au repos, sans
+  toucher au ressenti en mouvement.
+- **Mêmes entrées des deux côtés** : le `ClientMsg::Input` est construit à
+  partir des sources exactes de la prédiction locale — clavier, **pavé
+  tactile W/A/S/D** (contrôles tank, identiques au clavier), boutons
+  tactiles nommés (Saut/Attaque) et gyroscope — avec la même convention
+  d'axes (un bug de signe sur la poussée W/S envoyée au serveur faisait
+  littéralement avancer le joueur *à l'envers* dans la simulation
+  autoritaire).
 
 ### Essayer le serveur dès maintenant
 
@@ -244,14 +282,16 @@ cargo run --bin server              # écoute sur 127.0.0.1:7777, lance une manc
 RUSTEEGEAR_SERVER_ADDR=0.0.0.0:9000 cargo run --bin server   # port/adresse au choix
 ```
 
-Le binaire tourne déjà en autonome (sans client, la manche se joue toute
-seule) et accepte de vraies connexions WebSocket — validé par des tests
-d'intégration bout-en-bout (`cargo test`) qui ouvrent un vrai socket local.
-**Ce qui manque encore pour jouer en vrai depuis l'éditeur** : brancher le
-client réseau (`src/net/client.rs`) dans la boucle `winit` et ajouter un écran
-de lobby — actuellement le seul client testé est celui des tests automatisés,
-pas encore l'éditeur graphique (cf. l'état sprint par sprint dans
-[SPRINT_MMORPG.md](SPRINT_MMORPG.md)).
+Le binaire tourne en autonome et accepte de vraies connexions WebSocket —
+validé par des tests d'intégration bout-en-bout (`cargo test`) qui ouvrent un
+vrai socket local, **et en conditions réelles** : un serveur tourne en continu
+sur un VPS (service systemd), et les builds « player » (desktop `--player` et
+APK Android) s'y **connectent automatiquement** au lancement — deux appareils
+se voient bouger, sauter et combattre en ligne. L'overlay Multijoueur permet
+de se déconnecter ou de pointer vers un autre serveur (ex. localhost pendant
+le développement). Historique sprint par sprint :
+[SPRINT_MMORPG.md](SPRINT_MMORPG.md) puis [SPRINTNETWORK.md](SPRINTNETWORK.md)
+(latence & qualité du déplacement en ligne).
 
 ### Limites connues (assumées, documentées dans le code)
 
