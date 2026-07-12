@@ -428,8 +428,18 @@ fn network_move_axes(
     if inp.key_thrust != 0.0
         && let Some(yaw) = player_yaw
     {
+        // Convention **joystick** attendue par le serveur (cf. `sim_step` :
+        // `vz += -move_y × vitesse`), pas du Z monde : `move_y` positif = avant
+        // (-Z à yaw 0). La composante monde de la poussée est `vz = -cos(yaw)`,
+        // donc `move_y = +cos(yaw)` une fois la négation du serveur appliquée.
+        // Bug corrigé (constaté en jeu réel, 2026-07-13) : `-yaw.cos()` envoyait
+        // au serveur une avance W **inversée en Z** — la prédiction locale
+        // partait devant, le serveur simulait l'arrière, et dès que l'écart
+        // sortait de la trajectoire récente (> `SNAP_THRESHOLD`), la
+        // réconciliation tirait le joueur vers cette position à contresens
+        // (« ça repart dans une autre direction »).
         mx += inp.key_thrust * -yaw.sin();
-        my += inp.key_thrust * -yaw.cos();
+        my += inp.key_thrust * yaw.cos();
     }
     (mx, my)
 }
@@ -1243,9 +1253,14 @@ mod tests {
 
     #[test]
     fn network_move_axes_includes_keyboard_thrust_along_the_players_own_yaw() {
-        // Bug corrigé : sans le yaw du joueur, W/S (contrôles tank) ne produisaient
-        // aucune direction monde à envoyer au serveur — le mouvement clavier restait
-        // invisible pour lui malgré la prédiction locale.
+        // Bug corrigé une première fois (sans le yaw du joueur, W/S ne produisait
+        // aucune direction à envoyer au serveur), puis une seconde (2026-07-13) :
+        // la composante `move_y` était envoyée en **Z monde** (`-cos(yaw)`) alors
+        // que le serveur attend la convention *joystick* (`move_y` positif =
+        // avant, il applique `vz = -move_y × vitesse`, cf. `sim_step`). Résultat
+        // en jeu réel : W prédit vers l'avant en local mais simulé vers l'arrière
+        // par le serveur — la réconciliation finissait par tirer le joueur à
+        // contresens en pleine course.
         let inp = super::super::PlayerInput {
             key_thrust: 1.0,
             ..Default::default()
@@ -1253,9 +1268,23 @@ mod tests {
         let yaw = 0.0_f32; // face à -Z (cf. `Physics::face_direction`)
         let (mx, my) = network_move_axes(&inp, 0.0, Some(yaw));
         assert!(
-            (mx - 0.0).abs() < 1e-5 && (my - -1.0).abs() < 1e-5,
-            "avancer (W) à yaw=0 doit donner une direction monde vers -Z : ({mx}, {my})"
+            (mx - 0.0).abs() < 1e-5 && (my - 1.0).abs() < 1e-5,
+            "avancer (W) à yaw=0 doit s'envoyer comme move_y=+1 (avant, convention \
+             joystick) : ({mx}, {my})"
         );
+        // Vérité de bout en bout : la convention serveur (`vz = -move_y`) doit
+        // redonner exactement la vitesse que la prédiction locale applique
+        // (`vz = thrust × -cos(yaw)`), pour tout yaw — sinon les deux simulations
+        // divergent et la réconciliation se met à « corriger » un joueur sain.
+        for yaw in [0.0_f32, 0.9, -2.3, std::f32::consts::PI] {
+            let (mx, my) = network_move_axes(&inp, 0.0, Some(yaw));
+            let (server_vx, server_vz) = (mx, -my);
+            let (local_vx, local_vz) = (-yaw.sin(), -yaw.cos());
+            assert!(
+                (server_vx - local_vx).abs() < 1e-5 && (server_vz - local_vz).abs() < 1e-5,
+                "yaw={yaw} : serveur ({server_vx}, {server_vz}) ≠ local ({local_vx}, {local_vz})"
+            );
+        }
     }
 
     #[test]
