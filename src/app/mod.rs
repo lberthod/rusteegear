@@ -2156,6 +2156,18 @@ impl AppState {
                 .iter()
                 .filter_map(|(id, &idx)| self.network_inputs.get(id).map(|inp| (idx, *inp)))
                 .collect();
+            // Orientation du joueur local : calculée ici puis appliquée **après**
+            // `phys.step()` ci-dessous, directement sur `transform.rotation` — jamais
+            // sur le corps rigide (cf. `set_position`/réconciliation réseau, même
+            // principe). Un corps *dynamique* en contact avec le décor (mur, pilier)
+            // dont on impose la rotation à chaque frame via `RigidBody::set_rotation`
+            // déstabilisait le solveur de contacts de rapier — vibrations visibles
+            // dès qu'on combinait beaucoup de rotation et de déplacement en même
+            // temps (constaté en test réel, 2026-07-12 : « du bruit, ça bug »).
+            // Inutile physiquement de toute façon : le collider est une capsule,
+            // parfaitement symétrique autour de l'axe Y, donc une rotation de lacet
+            // ne change jamais sa géométrie de collision.
+            let mut player_facing: Vec<(usize, f32)> = Vec::new();
             for (idx, obj) in self.scene.objects.iter().enumerate() {
                 let Some(ctrl) = &obj.controller else {
                     continue;
@@ -2201,31 +2213,32 @@ impl AppState {
                     || (space && ctrl.input);
                 let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
                 any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
-                if net_input.is_none() {
-                    if ctrl.input && key_turn != 0.0 {
+                // Oriente le personnage — seulement pour le joueur *local* : les autres
+                // joueurs réseau reçoivent déjà leur orientation du serveur (cf.
+                // `network_client::apply_local_network_position`), l'écraser ici avec
+                // notre propre calcul créerait un conflit d'autorité.
+                if ctrl.input && net_input.is_none() {
+                    let cur_yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
+                    let new_yaw = if key_turn != 0.0 {
                         // Rotation « tank » manuelle (A/D) : prioritaire sur la rotation
                         // automatique vers la direction de déplacement, qui se
                         // battrait sinon contre l'intention explicite du joueur.
-                        phys.rotate_yaw(idx, key_turn * ctrl.turn_speed * dt);
-                    } else if ctrl.input && key_thrust != 0.0 {
+                        cur_yaw + key_turn * ctrl.turn_speed * dt
+                    } else if key_thrust != 0.0 {
                         // W/S « tank » : le personnage garde son orientation, ne tourne
-                        // jamais pour « faire face » au déplacement. Bug corrigé
-                        // (2026-07-12, constaté en test réel) : en laissant tomber dans
-                        // la branche `face_direction` ci-dessous, tenir S (recul, vecteur
-                        // de vitesse pointant vers l'arrière) faisait pivoter le
-                        // personnage à 180° en continu — la direction de recul
-                        // recalculée à chaque frame à partir de ce nouveau cap créait
-                        // une trajectoire en spirale qui donnait l'impression que le
-                        // joueur restait bloqué/tournait sur lui-même au lieu de reculer.
+                        // jamais pour « faire face » au déplacement — sinon reculer
+                        // (vecteur de vitesse pointant vers l'arrière) le ferait pivoter
+                        // à 180° en continu (bug corrigé le 2026-07-12).
+                        cur_yaw
+                    } else if vx * vx + vz * vz > 1e-6 {
+                        // Rotation progressive vers la direction de déplacement
+                        // (joystick/flèches), pas instantanée.
+                        let target_yaw = (-vx).atan2(-vz);
+                        rotate_towards(cur_yaw, target_yaw, ctrl.turn_speed * dt)
                     } else {
-                        // Oriente le personnage face à sa direction de déplacement
-                        // (rotation progressive, pas instantanée) — seulement pour le
-                        // joueur *local* : les autres joueurs réseau reçoivent déjà
-                        // leur orientation du serveur (cf.
-                        // `network_client::apply_local_network_position`), l'écraser
-                        // ici avec notre propre calcul créerait un conflit d'autorité.
-                        phys.face_direction(idx, vx, vz, ctrl.turn_speed, dt);
-                    }
+                        cur_yaw
+                    };
+                    player_facing.push((idx, new_yaw));
                 }
             }
             // Pilotage des « chasseurs » IA (cf. `AiChaser`) : direction directe vers la
@@ -2261,6 +2274,13 @@ impl AppState {
                 *remaining > 0.0
             });
             phys.step(dt, &mut self.scene);
+            // Cf. la note plus haut : appliqué après `step` pour ne jamais passer par
+            // le corps rigide, qui écraserait sinon (et déstabiliserait) cette valeur.
+            for (idx, yaw) in player_facing {
+                if let Some(obj) = self.scene.objects.get_mut(idx) {
+                    obj.transform.rotation = Quat::from_rotation_y(yaw);
+                }
+            }
             if any_jump {
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
             }
@@ -2549,6 +2569,27 @@ fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
     (wx, wz)
 }
 
+/// Fait tourner un angle `cur` (radians) vers `target` par le plus court chemin
+/// (jamais plus de π), borné à `max_step` radians pour cet appel — jamais un saut
+/// instantané. Utilisé pour l'orientation du joueur local (cf. `advance_play`),
+/// purement cinématique (n'implique plus le corps rigide, cf. la note dans
+/// `advance_play` : forcer une rotation sur un corps physique en contact avec le
+/// décor déstabilisait le solveur de contacts de rapier — vibrations visibles dès
+/// qu'on combinait beaucoup de rotation et de déplacement, corrigé le 2026-07-12).
+fn rotate_towards(cur: f32, target: f32, max_step: f32) -> f32 {
+    let mut diff = (target - cur) % std::f32::consts::TAU;
+    if diff > std::f32::consts::PI {
+        diff -= std::f32::consts::TAU;
+    } else if diff < -std::f32::consts::PI {
+        diff += std::f32::consts::TAU;
+    }
+    if diff.abs() <= max_step {
+        target
+    } else {
+        cur + diff.signum() * max_step
+    }
+}
+
 /// Borne un vecteur de déplacement brut (somme joystick/croix + clavier) à une
 /// longueur de 1 — pas chaque axe indépendamment. Avant ce correctif,
 /// `(mx, my)` était clampé axe par axe (`clamp(-1.0, 1.0)` sur chaque
@@ -2759,6 +2800,23 @@ fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotate_towards_is_bounded_by_max_step_and_takes_the_short_way() {
+        // Pas assez de marge pour atteindre la cible d'un coup : doit s'arrêter à
+        // max_step, pas sauter directement dessus.
+        let r = rotate_towards(0.0, 1.0, 0.2);
+        assert!((r - 0.2).abs() < 1e-5, "r={r}");
+        // Marge suffisante : atteint exactement la cible.
+        let r = rotate_towards(0.0, 0.1, 0.5);
+        assert!((r - 0.1).abs() < 1e-5, "r={r}");
+        // De 3.0 vers -3.0 avec une marge insuffisante pour l'atteindre d'un coup :
+        // le chemin direct (-6.0 rad) est plus long que par le « dos » du cercle
+        // (~0.28 rad) — ne doit jamais faire tourner le personnage du mauvais côté.
+        let r = rotate_towards(3.0, -3.0, 0.1);
+        let expected = 3.0 + 0.1 * (std::f32::consts::TAU - 6.0).signum();
+        assert!((r - expected).abs() < 1e-4, "r={r}, expected={expected}");
+    }
 
     #[test]
     fn camera_relative_move_matches_world_axes_at_zero_yaw() {
