@@ -454,7 +454,10 @@ fn network_move_axes(
     let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
     let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
     let (mut mx, mut my) = super::camera_relative_move(raw_mx, raw_my, camera_yaw);
-    if inp.key_thrust != 0.0
+    // `thrust()` (clavier + pavé tactile W/A/S/D) et non `key_thrust` seul : le
+    // pavé de l'APK doit être vu par le serveur exactement comme le clavier.
+    let thrust = inp.thrust();
+    if thrust != 0.0
         && let Some(yaw) = player_yaw
     {
         // Convention **joystick** attendue par le serveur (cf. `sim_step` :
@@ -467,8 +470,8 @@ fn network_move_axes(
         // sortait de la trajectoire récente (> `SNAP_THRESHOLD`), la
         // réconciliation tirait le joueur vers cette position à contresens
         // (« ça repart dans une autre direction »).
-        mx += inp.key_thrust * -yaw.sin();
-        my += inp.key_thrust * yaw.cos();
+        mx += thrust * -yaw.sin();
+        my += thrust * yaw.cos();
     }
     (mx, my)
 }
@@ -1390,6 +1393,21 @@ mod tests {
         };
         assert!(!jump && !attack);
         assert_eq!((move_x, move_y), (0.0, 0.0));
+    }
+
+    #[test]
+    fn network_move_axes_includes_touch_pad_thrust_like_the_keyboard() {
+        // Le pavé tactile W/A/S/D (APK) doit être vu par le serveur exactement
+        // comme le W/S clavier : même conversion via l'orientation du joueur.
+        let inp = super::super::PlayerInput {
+            touch_thrust: 1.0,
+            ..Default::default()
+        };
+        let (mx, my) = network_move_axes(&inp, 0.0, Some(0.0));
+        assert!(
+            mx.abs() < 1e-5 && (my - 1.0).abs() < 1e-5,
+            "W tactile à yaw=0 doit s'envoyer comme move_y=+1 : ({mx}, {my})"
+        );
     }
 
     #[test]

@@ -102,10 +102,32 @@ pub struct PlayerInput {
     /// Avance/recul clavier « tank » (W/S), le long de l'orientation *actuelle* du
     /// personnage plutôt que de la caméra : +1 = W (avance), -1 = S (recul).
     pub key_thrust: f32,
+    /// Avance/recul « tank » du **pavé tactile W/A/S/D** (cf. l'overlay mobile,
+    /// `editor::mobile_overlay`) : canal séparé de `key_thrust` pour que le pavé
+    /// (réécrit chaque frame, 0 au relâchement) n'écrase jamais l'état clavier,
+    /// tenu par événements — les deux se cumulent via `thrust()`.
+    pub touch_thrust: f32,
+    /// Rotation « tank » du pavé tactile (A/D) — même principe que `touch_thrust`.
+    pub touch_turn: f32,
     /// Saut clavier (Espace) maintenu enfoncé.
     pub jump: bool,
     /// Attaque clavier (J) maintenue enfoncée.
     pub attack: bool,
+}
+
+impl PlayerInput {
+    /// Avance/recul « tank » effectif : clavier (W/S) + pavé tactile, borné à [-1, 1].
+    /// Toute la logique (prédiction locale `sim_step` **et** envoi réseau
+    /// `network_move_axes`) passe par ici — mêmes contrôles au clavier, au tactile
+    /// (APK) et en aperçu mobile desktop, sans qu'aucune source n'écrase l'autre.
+    pub fn thrust(&self) -> f32 {
+        (self.key_thrust + self.touch_thrust).clamp(-1.0, 1.0)
+    }
+
+    /// Rotation « tank » effective : clavier (A/D) + pavé tactile, borné à [-1, 1].
+    pub fn turn(&self) -> f32 {
+        (self.key_turn + self.touch_turn).clamp(-1.0, 1.0)
+    }
 }
 
 pub struct AppState {
@@ -2211,7 +2233,7 @@ impl AppState {
                 clamp_move_vector(joy.0 + inp.key_move.0, joy.1 + inp.key_move.1);
             let (mx, my) = camera_relative_move(raw_mx, raw_my, self.camera.yaw);
             let (tilt, space) = (inp.tilt, inp.jump);
-            let (key_turn, key_thrust) = (inp.key_turn, inp.key_thrust);
+            let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
             let mut any_jump = false;
             // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`, Sprint 55) :
             // chacun a son propre `NetworkInput`, distinct de `self.input_state`
@@ -3043,6 +3065,28 @@ mod tests {
             (one_step - two_steps).abs() < 1e-4,
             "1 pas de dt ({one_step}) doit égaler 2 pas de dt/2 ({two_steps})"
         );
+    }
+
+    #[test]
+    fn player_input_combines_keyboard_and_touch_tank_axes() {
+        // Le pavé tactile W/A/S/D et le clavier alimentent les mêmes axes « tank »
+        // sans s'écraser : cumulés, bornés à [-1, 1].
+        let inp = PlayerInput {
+            key_thrust: 1.0,
+            touch_thrust: 1.0,
+            key_turn: -1.0,
+            touch_turn: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(inp.thrust(), 1.0, "le cumul doit rester borné à 1");
+        assert!((inp.turn() - -0.5).abs() < 1e-6, "les sources se cumulent");
+        let touch_only = PlayerInput {
+            touch_thrust: -1.0,
+            touch_turn: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(touch_only.thrust(), -1.0, "le pavé seul suffit (APK)");
+        assert_eq!(touch_only.turn(), 1.0);
     }
 
     #[test]

@@ -663,12 +663,13 @@ pub struct GameCamera {
 pub struct MobileControls {
     /// Affiche un joystick virtuel (coin bas-gauche).
     pub joystick: bool,
-    /// Affiche une croix directionnelle (4 boutons haut/bas/gauche/droite,
-    /// coin bas-gauche) à la place du joystick — plus précis pour un
-    /// déplacement à 4 (ou 8) directions qu'un joystick analogique, au prix
-    /// de la finesse d'un angle libre. Prioritaire sur `joystick` si les deux
-    /// sont actifs (cf. `mobile_overlay`), pour ne jamais superposer les deux
-    /// dans le même coin de l'écran.
+    /// Affiche un pavé « tank » W/A/S/D (coin bas-gauche) à la place du
+    /// joystick : mêmes contrôles que le clavier desktop — W/S avance/recule le
+    /// long de l'orientation *actuelle* du personnage, A/D le fait pivoter
+    /// (cf. `PlayerInput::thrust`/`turn` ; demandé le 2026-07-13 pour retrouver
+    /// les contrôles tank sur APK). Prioritaire sur `joystick` si les deux sont
+    /// actifs (cf. `mobile_overlay`), pour ne jamais superposer les deux dans le
+    /// même coin de l'écran.
     #[serde(default)]
     pub dpad: bool,
     /// Boutons tactiles nommés (coin bas-droite).

@@ -306,6 +306,8 @@ impl Editor {
                 mobile_overlay(ctx, area, mobile, input_state);
             } else {
                 input_state.joy = (0.0, 0.0);
+                input_state.touch_thrust = 0.0;
+                input_state.touch_turn = 0.0;
                 input_state.buttons.clear();
             }
             mobile_multiplayer_overlay(
@@ -1154,10 +1156,10 @@ fn menu_ajouter(
                 ui.close();
             }
             if ui
-                .selectable_label(m.dpad, "🎮  Croix directionnelle (4 boutons)")
+                .selectable_label(m.dpad, "🎮  Pavé W/A/S/D (contrôles tank)")
                 .on_hover_text(
-                    "Haut/bas/gauche/droite maintenus plutôt qu'un joystick analogique — \
-                     plus précis pour se déplacer",
+                    "Mêmes contrôles que le clavier : W/S avance/recule le long de \
+                     l'orientation du personnage, A/D le fait pivoter",
                 )
                 .clicked()
             {
@@ -2348,6 +2350,8 @@ fn mobile_overlay(
     use egui::{Color32, Sense, Stroke, Vec2};
 
     input.joy = (0.0, 0.0);
+    input.touch_thrust = 0.0;
+    input.touch_turn = 0.0;
     input.buttons.clear();
 
     // Screen Safe Area : rentre les contrôles dans une marge sûre (encoche/bords).
@@ -2371,11 +2375,13 @@ fn mobile_overlay(
         }
     }
 
-    // --- Croix directionnelle (bas-gauche), à la place du joystick si activée :
-    // 4 boutons maintenus (haut/bas/gauche/droite) plutôt qu'un axe analogique —
-    // plus précis pour viser une direction exacte au pouce, au prix de l'angle
-    // libre du joystick. Combinaison de deux boutons adjacents (ex. haut+droite)
-    // = diagonale, exactement comme WASD au clavier.
+    // --- Pavé « tank » W/A/S/D (bas-gauche), à la place du joystick si activé :
+    // mêmes contrôles que le clavier desktop — W/S avance/recule le long de
+    // l'orientation *actuelle* du personnage, A/D le fait pivoter (demandé le
+    // 2026-07-13 : « les touches WASD disponibles sur APK et macOS »). L'ancienne
+    // croix directionnelle écrivait `input.joy` (déplacement caméra-relatif),
+    // un simple doublon discret du joystick — le pavé tank apporte, lui, le
+    // second schéma de contrôle du jeu au tactile.
     if cfg.dpad {
         let btn = 56.0;
         let gap = 6.0;
@@ -2391,26 +2397,35 @@ fn mobile_overlay(
                         Vec2::splat(btn),
                     )
                 };
-                let up = ui.put(cell(1.0, 0.0), egui::Button::new("▲").corner_radius(10.0));
-                let left = ui.put(cell(0.0, 1.0), egui::Button::new("◀").corner_radius(10.0));
-                let right = ui.put(cell(2.0, 1.0), egui::Button::new("▶").corner_radius(10.0));
-                let down = ui.put(cell(1.0, 2.0), egui::Button::new("▼").corner_radius(10.0));
+                // Lettres ASCII plutôt que ▲▼◀▶ : les triangles haut/bas manquaient
+                // de la fonte embarquée sur Android — carrés vides constatés sur
+                // l'APK réel (capture d'écran utilisateur, 2026-07-13).
+                let up = ui.put(cell(1.0, 0.0), egui::Button::new("W").corner_radius(10.0));
+                let left = ui.put(cell(0.0, 1.0), egui::Button::new("A").corner_radius(10.0));
+                let right = ui.put(cell(2.0, 1.0), egui::Button::new("D").corner_radius(10.0));
+                let down = ui.put(cell(1.0, 2.0), egui::Button::new("S").corner_radius(10.0));
 
-                let mut dx = 0.0f32;
-                let mut dy = 0.0f32;
+                let mut thrust = 0.0f32;
+                let mut turn = 0.0f32;
                 if up.is_pointer_button_down_on() {
-                    dy += 1.0;
+                    thrust += 1.0;
                 }
                 if down.is_pointer_button_down_on() {
-                    dy -= 1.0;
+                    thrust -= 1.0;
                 }
+                // Mêmes signes que le clavier (cf. `lib.rs` : `key_turn =
+                // axis_from_held(a, d)`) : A = -1, D = +1.
                 if left.is_pointer_button_down_on() {
-                    dx -= 1.0;
+                    turn -= 1.0;
                 }
                 if right.is_pointer_button_down_on() {
-                    dx += 1.0;
+                    turn += 1.0;
                 }
-                input.joy = (dx, dy);
+                // Canaux tactiles dédiés (cf. `PlayerInput::thrust`/`turn`) :
+                // réécrits chaque frame (0 au relâchement), cumulés avec le
+                // clavier sans jamais écraser son état, tenu par événements.
+                input.touch_thrust = thrust;
+                input.touch_turn = turn;
             });
     } else if cfg.joystick {
         let radius = 55.0;
