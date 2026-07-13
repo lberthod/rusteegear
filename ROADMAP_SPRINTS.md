@@ -786,12 +786,29 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   de fichier temporaire partagé entre threads de test) attrapé et corrigé avant qu'il ne
   devienne un échec intermittent en CI.
 
-#### Sprint 86 — Skinning GPU ⬜
+#### Sprint 86 — Skinning GPU 🟡 (cœur livré, intégration éditeur reportée)
 **Objectif** : le vertex shader déforme le mesh.
-- [ ] Palette de matrices en uniform buffer + **variant WGSL** de skinning (premier `#ifdef` maison).
-- **Fichiers** : `src/gfx/shaders/`, `src/gfx/renderer.rs`, `src/gfx/mesh.rs`.
-- **Livrable** : personnage Mixamo animé à 60 fps dans l'éditeur ; golden test dédié.
-- **Risque** : layouts de bind groups — c'est ici que le Sprint 80 paie.
+- [x] `SkinnedVertex` (type séparé de `Vertex` — les meshes statiques restent inchangés,
+      cf. `src/gfx/mesh.rs`), `shaders/skinned.wgsl` (vertex de skinning, **fragment
+      partagée** avec `main.wgsl` — aucune duplication de l'éclairage), palette de
+      matrices en storage buffer (groupe 4, capacité 128, tronque plutôt que déborder).
+- [x] `scene::import::compute_joint_matrices(skeleton, clip, time)` : matrice par joint
+      côté CPU, robuste à un ordre `Skeleton::joints` sans garantie parent-avant-enfant.
+- [x] **Vérifié visuellement** (pas juste compilé) : planche à charnière pondérée moitié
+      joint 0 fixe / moitié joint 1 pivotant, rendue à 0°/45°/-90° — courbe lisse
+      obtenue (preuve que le mélange de poids par sommet fonctionne, pas qu'un joint «
+      gagne »), transformée en golden test permanent ; bug injecté puis reverté pour
+      confirmer la détection (5.51 % de pixels divergents avant correctif).
+- [ ] Intégration éditeur (`SceneObject` référençant un skin+clip, lecture en Play,
+      personnage Mixamo animé dans l'éditeur à 60 fps) — reportée : touche `app/mod.rs`
+      (contesté pendant ce sprint) et exige des décisions de format de scène non prises.
+- **Fichiers livrés** : `src/gfx/mesh.rs`, `src/gfx/renderer.rs`, `src/gfx/shaders/skinned.wgsl`,
+  `src/scene/import.rs`, `tests/golden_skinning.rs`. **Restant** : `app/mod.rs`, `scene/mod.rs`
+  (format de `SceneObject`).
+- **Risque (confirmé, mais maîtrisé)** : les layouts de bind groups ont bien été le point
+  délicat annoncé — résolu en réutilisant le module `main.wgsl` pour l'étage fragment
+  (wgpu autorise des modules vertex/fragment distincts si `VsOut` correspond exactement),
+  évitant de dupliquer tout le code d'éclairage dans `skinned.wgsl`.
 
 #### Sprint 87 — Blending + state machine ⬜
 **Objectif** : des transitions douces pilotables en Lua.
