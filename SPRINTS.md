@@ -103,10 +103,9 @@ chemin de rendu. Détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
 
 ---
 
-## Sprints à venir — PHASE I : robustesse & découplage (Sprints 45–49) ⬜
+## PHASE I — robustesse & découplage (Sprints 45–49)
 
-Ce qui reste pour passer d'un
-**éditeur-produit jouable** à une **base robuste et distribuable**.
+Ce qui restait pour passer d'un **éditeur-produit jouable** à une **base robuste et distribuable**.
 
 | # | Sprint | Objectif | Couvre | État |
 |---|---|---|---|---|
@@ -116,8 +115,95 @@ Ce qui reste pour passer d'un
 | 48 | **Capteurs & assets mobiles** | **Gyroscope natif Android** (capteur réel → `tilt`), **vibration native**, **import d'assets sur mobile** (lever P10) | 🟠 P10 + mobile | ⬜ |
 | 49 | **Distribution signée** | **IPA signé en CI** (secrets), **notarisation macOS**, signature *distribution* store (Android/iOS) | 🟢 distribution | ⬜ |
 
-> **Pistes long terme (Phase J, non planifiées)** : WebGPU/WASM, ECS léger,
-> LOD / occlusion culling / fusion de meshes statiques, éditeur sur mobile.
+---
+
+## 🌐 Multijoueur en ligne (Sprints 50–82, + réseau 80/82) ✅ cœur livré
+
+VPS + WebSocket + Firebase (backend annexe) ; détail complet dans
+[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md) § « Multijoueur en ligne ». ⚠️ Les numéros **80** et
+**82** existent **deux fois** (une fois côté « réseau », une fois côté PHASE K solo) — le ROADMAP
+précise le tronc à chaque occurrence, s'y référer en cas de doute.
+
+| Sprints | Apport principal | État |
+|---|---|---|
+| 50 | Extraction du gameplay combat de `app/mod.rs` | ✅ |
+| 51–53 | Serveur headless, protocole & sérialisation, transport WebSocket | ✅ |
+| 54–55 | Prédiction client & interpolation, salons (lobby) | 🟢 (câblage UI au Sprint 63) |
+| 56–59 | Comptes/auth, inventaire persistant, chat/présence, classement (Firebase) | 🟢 (backends faits, quelques écrans/temps réel différés) |
+| 60–61 | Durcissement réseau & anti-triche de base, tests de charge & bande passante | ✅ |
+| 62 | Déploiement serveur | ⬜ (infra) |
+| 63–65 | Client réseau desktop (fenêtre Multijoueur), chat en jeu, classement en jeu | ✅ |
+| 66–68 | Lissage réconciliation joueur local, délai d'interpolation fantômes, plafond débit `Input` | ✅ |
+| 69 | Vérification géographique du serveur de test | ⬜ (infra, pas code) |
+| 70 | Cohérence doc/code du `Snapshot` | ✅ |
+| 71 | Transport non-TCP | ⬜ (conditionnel, non déclenché) |
+| 72–77 | Interpolation pas fixe, game feel, réconciliation trajectoire, axes W/S, boutons tactiles/gyro réseau, rattrapage doux + VPS aligné | ✅ |
+| 78–79 | Boule de feu + monstres sur la carte multi, visée réelle/multi-armes/changement d'arme | ✅ |
+| 80 (réseau) / 82 (réseau) | Vie individualisée + IA multi-cibles + soin coopératif, multi-salons | ✅ |
+
+---
+
+## PHASE K — Filet de sécurité (Sprints 80–83) ✅
+
+| # | Sprint | Apport principal | État |
+|---|---|---|---|
+| 80 | Golden tests de rendu | 🟢 |
+| 81 | Temps maîtrisé (time scale, step frame) | 🟢 |
+| 82 | Console développeur (cvars) | 🟢 |
+| 83 | Debug drawing + vues buffers | 🟢 |
+
+## PHASE L — Animation squelettale (Sprints 84–88) ✅
+
+| # | Sprint | Apport principal | État |
+|---|---|---|---|
+| 84–86 | Données de squelette, échantillonnage de clips, skinning GPU | 🟢 |
+| 87 | Intégration Play + blending + state machine | ✅ |
+| 88 | Animation répliquée (réseau) | ✅ |
+
+## PHASE M — Image (Sprints 89–92) ✅
+
+| # | Sprint | Apport principal | État |
+|---|---|---|---|
+| 89 | Ciel + brouillard | ✅ |
+| 90 | Cible HDR + tone mapping | ✅ |
+| 91 | Bloom + réglages | ✅ |
+| 92 | Mipmaps + tangentes | ✅ |
+
+## PHASE N — Chaîne gameplay (Sprints 93–99) 🟢
+
+| # | Sprint | Apport principal | État |
+|---|---|---|---|
+| 93 | File d'événements de gameplay (emit/on_event Lua) | ✅ |
+| 94 | **Cycle de vie + handles générationnels (`slotmap`)** | ⬜ **— gap resté ouvert dans l'enchaînement** |
+| 95 | GUID d'assets (`asset-id://`) + versioning de scènes | ✅ |
+| 96 | Prefabs (sous-arbre JSON + overrides) | 🟢 (mécanisme fait, UI éditeur restante) |
+| 97 | API Lua de scène (spawn/destroy/find_tag) | ✅ |
+| 98 | Sauvegarde de partie (`user://`) | ✅ (Android non vérifié sur appareil) |
+| 99 | Marqueurs temporels d'animation → événements | ✅ (démo de combat animée non câblée) |
+
+> **Sprint 94 en suspens** : sauté entre 93 et 95, alors que le reste de la Phase N est livré.
+> C'est le refactor le plus délicat annoncé (indices réseau + undo) — plus on construit dessus
+> (prefabs, spawn/destroy Lua), plus il coûtera cher a posteriori. À traiter avant d'aller trop
+> loin en Phase O.
+
+---
+
+## Sprints à venir — PHASE O : physique & feel (Sprints 100–103) ⬜
+
+| # | Sprint | Objectif | État |
+|---|---|---|---|
+| 100 | Trimesh + convexe | ⬜ |
+| 101 | CCD + couches de collision | ⬜ |
+| 102 | Requêtes gameplay + trigger exit | ⬜ |
+| 103 | **Character controller kinématique** — seul sprint qui menace l'acquis multijoueur, à faire **seul**, avec ré-audit complet de la prédiction réseau | ⬜ |
+
+## Pistes suivantes (Phases P → R, détail dans ROADMAP_SPRINTS.md)
+
+| Phase | Sprints | But | État |
+|---|---|---|---|
+| **P — Audio, HUD & confort** | 104 → 110 | Bus/panning audio, randomisation SFX, widgets HUD déclaratifs, manettes, hot-reload, snapping/profiler GPU, crash log + rustdoc | ⬜ |
+| **Q — Web, la vitrine** | 111 → 114 | wasm32/WebGPU, assets & audio web, multijoueur navigateur, vitrine publique | ⬜ |
+| **R — WebXR** | 115 → 117 | Spike session WebXR isolée, rendu stéréo + poses, tests XR automatisés (dépend de Q) | ⬜ |
 
 ---
 
@@ -133,9 +219,17 @@ Ce qui reste pour passer d'un
 | Optimisation mobile (mode perf, bake, POT) | 42 | 🟢 |
 | Objet jouable au joystick + saut + collisions (sans script) | 43 | ✅ |
 | Optimisations rendu (culling lumières, 0-alloc/frame) | 44 | ✅ |
-| Simulation pilotée par la cadence de rendu (découplée, pas fixe) | **45** | ✅ |
-| P4 — panics d'init (crash mobile) | **46** | ✅ |
-| Couverture de tests + skip-rebuild (par hash) | **47** | ✅ |
-| Gyroscope/vibration natifs + P10 (assets mobile) | **48** | ⬜ |
-| Distribution store signée (IPA CI / notarisation) | **49** | ⬜ |
-| LOD / occlusion / fusion meshes / WebGPU / ECS | Phase J (pistes) | ⬜ |
+| Simulation pilotée par la cadence de rendu (découplée, pas fixe) | 45 | ✅ |
+| P4 — panics d'init (crash mobile) | 46 | ✅ |
+| Couverture de tests + skip-rebuild (par hash) | 47 | ✅ |
+| Gyroscope/vibration natifs + P10 (assets mobile) | 48 | ⬜ |
+| Distribution store signée (IPA CI / notarisation) | 49 | ⬜ |
+| Multijoueur en ligne (serveur, réseau, Firebase, combat) | 50 → 82 | ✅ cœur livré |
+| Golden tests, temps maîtrisé, cvars, debug drawing | 80 → 83 (K) | 🟢 |
+| Animation squelettale + réplication réseau | 84 → 88 (L) | ✅ |
+| Ciel/fog, HDR/tone mapping, bloom, mipmaps | 89 → 92 (M) | ✅ |
+| Événements, GUID/versioning, prefabs, API Lua scène, save, anim notifies | 93 → 99 (N) | 🟢 (94 ⬜) |
+| Trimesh/CCD/requêtes/character controller | 100 → 103 (O) | ⬜ |
+| Audio bus/HUD widgets/manettes/hot-reload/profiler/crash log | 104 → 110 (P) | ⬜ |
+| WASM/WebGPU/multi navigateur/vitrine | 111 → 114 (Q) | ⬜ |
+| WebXR (spike, stéréo, tests) | 115 → 117 (R) | ⬜ |

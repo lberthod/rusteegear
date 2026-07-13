@@ -10,7 +10,7 @@ use winit::window::Window;
 
 use crate::app::GizmoMode;
 use crate::runtime::physics::PhysicsKind;
-use crate::scene::{MeshKind, Scene, Transform};
+use crate::scene::{HudLayout, MeshKind, Scene, Transform};
 
 pub struct Editor {
     ctx: egui::Context,
@@ -69,6 +69,11 @@ struct HudPreview {
     weapon_hud: bool,
     kills: bool,
     roster: bool,
+    /// 🖐 Repositionner (Sprint 98) : rend les overlays cochés glissables à la
+    /// souris ; leur position est alors écrite dans `Scene::hud_layout`. Séparé
+    /// de `open` pour ne pas activer le glisser par accident dès l'ouverture
+    /// du panneau.
+    reposition: bool,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -333,18 +338,30 @@ impl Editor {
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
             }
+            // Décalages persistés dans la scène (Scene::hud_layout, Sprint 98) : pas de
+            // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
+            // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
+            let mut layout = scene.hud_layout;
             wave_hud(ctx, area, scene, wave);
-            weapon_hud(ctx, area, weapon_label);
+            weapon_hud(ctx, area, weapon_label, &mut layout.weapon_hud, false);
             // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
             // affiché en Play, contrairement au score de `collectibles_hud` juste en
             // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
             // multijoueur n'en a pas — sans ce HUD dédié, le joueur ne voyait *aucun*
             // score, cf. audit en conditions réelles, 2026-07-13).
-            kills_hud(ctx, area, kills);
-            multiplayer_roster_panel(ctx, area, roster);
+            kills_hud(ctx, area, kills, &mut layout.kills, false);
+            multiplayer_roster_panel(ctx, area, roster, &mut layout.roster, false);
             if scene_has_ranged_weapon(scene) {
-                crosshair(ctx, area);
-                weapon_inventory_panel(ctx, area, weapon_inventory, selected_weapon, &mut actions);
+                crosshair(ctx, area, &mut layout.crosshair, false);
+                weapon_inventory_panel(
+                    ctx,
+                    area,
+                    weapon_inventory,
+                    selected_weapon,
+                    &mut layout.weapon_inventory,
+                    false,
+                    &mut actions,
+                );
             }
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
@@ -2265,9 +2282,61 @@ fn damage_vignette(ctx: &egui::Context, area: egui::Rect, intensity: f32) {
 /// HUD de l'arme à distance équipée (bas-centre, entre le pavé tank et les
 /// boutons tactiles) : libellé + rappel des raccourcis. Texte ASCII/latin
 /// uniquement — pas d'emoji, absents de la fonte egui embarquée sur Android
+/// Point d'ancrage réglable pour un élément HUD peint au pinceau (pas une
+/// `egui::Window`) : renvoie la position finale (`base` décalé par `offset`,
+/// cf. `Scene::hud_layout`) et, si `draggable` (🖐 Repositionner du panneau 👁
+/// Aperçu HUD), rend un hit-test glissable de taille `hit_size` centré dessus
+/// qui met `offset` à jour. `Ui::interact` (seul moyen d'obtenir une réponse
+/// de glisser sur un rect arbitraire — `Context::interact` n'existe pas dans
+/// egui) exige un `Ui` : on en emprunte un via une `egui::Area` invisible et
+/// fixe (repositionnée nous-mêmes chaque frame depuis `offset`, plutôt que de
+/// laisser egui mémoriser sa propre position — sinon changer de scène ne
+/// réinitialiserait pas la position affichée à celle de la nouvelle scène).
+fn hud_anchor(
+    ctx: &egui::Context,
+    id_source: &str,
+    base: egui::Pos2,
+    offset: &mut [f32; 2],
+    hit_size: egui::Vec2,
+    draggable: bool,
+) -> egui::Pos2 {
+    if draggable {
+        let pos = base + egui::vec2(offset[0], offset[1]);
+        let rect = egui::Rect::from_center_size(pos, hit_size);
+        let id = egui::Id::new(id_source);
+        egui::Area::new(id.with("area"))
+            .fixed_pos(rect.min)
+            .movable(false)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let response = ui.interact(rect, id, egui::Sense::drag());
+                if response.dragged() {
+                    offset[0] += response.drag_delta().x;
+                    offset[1] += response.drag_delta().y;
+                }
+                ui.painter().rect_stroke(
+                    rect,
+                    4.0,
+                    egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 210, 90)),
+                    egui::StrokeKind::Outside,
+                );
+            });
+    }
+    base + egui::vec2(offset[0], offset[1])
+}
+
 /// (cf. le pavé W/A/S/D : carrés vides constatés sur APK réel, 2026-07-13).
-fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
+fn weapon_hud(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    label: &str,
+    offset: &mut [f32; 2],
+    draggable: bool,
+) {
     use egui::{Align2, Color32, FontId};
+    let base = egui::pos2(area.center().x, area.bottom() - 24.0);
+    let box_size = egui::vec2(320.0, 44.0);
+    let center = hud_anchor(ctx, "hud_weapon", base, offset, box_size, draggable);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_weapon"),
@@ -2276,20 +2345,17 @@ fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
     // texte devient illisible sur un sol clair (vert olive, sable...) —
     // constaté en jeu réel, 2026-07-13. Une seule plaque sous les deux lignes,
     // pas une par ligne : plus net visuellement qu'un empilement de rectangles.
-    let bg = egui::Rect::from_center_size(
-        egui::pos2(area.center().x, area.bottom() - 24.0),
-        egui::vec2(320.0, 44.0),
-    );
+    let bg = egui::Rect::from_center_size(center, box_size);
     painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
-        egui::pos2(area.center().x, area.bottom() - 34.0),
+        center + egui::vec2(0.0, -10.0),
         Align2::CENTER_CENTER,
         format!("Arme : {label}"),
         FontId::proportional(16.0),
         Color32::from_rgb(255, 170, 80),
     );
     painter.text(
-        egui::pos2(area.center().x, area.bottom() - 14.0),
+        center + egui::vec2(0.0, 10.0),
         Align2::CENTER_CENTER,
         "K ou « Feu » : tirer — 1/2/3 ou « Arme » : changer",
         FontId::proportional(11.0),
@@ -2310,18 +2376,25 @@ fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
 /// déjà le coin haut-droite (ancrée à `y=56`, ~30 px de haut une fois
 /// repliée) — un premier essai à `y=86` la chevauchait encore pile sur son
 /// bord. `y=112` laisse une vraie marge en dessous.
-fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
+fn kills_hud(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    kills: u32,
+    offset: &mut [f32; 2],
+    draggable: bool,
+) {
     use egui::{Align2, Color32, FontId};
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("hud_kills"),
-    ));
     // Boîte alignée à droite avec une marge fixe (8 px) plutôt que centrée sur un
     // point à distance fixe du bord : centrer débordait de ~55 px au-delà de `area`
     // (donc par-dessus l'Inspecteur en mode Édition), la largeur de la boîte n'étant
     // pas prise en compte dans le calcul du centre.
     let box_size = egui::vec2(150.0, 30.0);
-    let pos = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
+    let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
+    let pos = hud_anchor(ctx, "hud_kills", base, offset, box_size, draggable);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_kills"),
+    ));
     let bg = egui::Rect::from_center_size(pos, box_size);
     painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
@@ -2345,20 +2418,36 @@ fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
 /// Positionné par rapport à `area` (la zone de jeu : cadre téléphone en
 /// Aperçu mobile, ou tout l'écran en player autonome) et non par rapport à
 /// l'écran de l'éditeur — sinon la fenêtre atterrit sur les panneaux
-/// Hiérarchie/Inspecteur au lieu de rester dans la scène de jeu.
+/// Hiérarchie/Inspecteur au lieu de rester dans la scène de jeu. `offset`
+/// (cf. `Scene::hud_layout`) reste appliqué même sans glisser, pour que la
+/// fenêtre revienne exactement là où elle a été placée après un changement
+/// de scène — une petite poignée 🖐 (via `hud_anchor`) permet de l'ajuster
+/// en mode Repositionner, plutôt que la barre de titre (qu'egui gérerait en
+/// interne et qu'on écraserait chaque frame avec `fixed_pos`).
+#[allow(clippy::too_many_arguments)]
 fn weapon_inventory_panel(
     ctx: &egui::Context,
     area: egui::Rect,
     weapons: &[(&str, [f32; 3])],
     selected: usize,
+    offset: &mut [f32; 2],
+    draggable: bool,
     actions: &mut UiActions,
 ) {
+    let pos = hud_anchor(
+        ctx,
+        "hud_inventory",
+        area.min + egui::vec2(8.0, 8.0),
+        offset,
+        egui::vec2(24.0, 24.0),
+        draggable,
+    );
     egui::Window::new("🎒 Inventaire")
         .id(egui::Id::new("weapon_inventory"))
         .collapsible(true)
         .default_open(false)
         .resizable(false)
-        .fixed_pos(area.min + egui::vec2(8.0, 8.0))
+        .fixed_pos(pos)
         .default_width(200.0)
         .show(ctx, |ui| {
             for (i, (label, color)) in weapons.iter().enumerate() {
@@ -2412,18 +2501,33 @@ fn roster_display_order(roster: &[RosterEntry]) -> Vec<&RosterEntry> {
 /// (roster vide sinon), à droite du bouton 🎒 Inventaire.
 ///
 /// Positionné par rapport à `area` (zone de jeu), pas l'écran de l'éditeur —
-/// même raison que `weapon_inventory_panel`.
-fn multiplayer_roster_panel(ctx: &egui::Context, area: egui::Rect, roster: &[RosterEntry]) {
+/// même raison que `weapon_inventory_panel`, y compris la poignée 🖐 plutôt
+/// que la barre de titre pour le glisser (cf. `hud_anchor`).
+fn multiplayer_roster_panel(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    roster: &[RosterEntry],
+    offset: &mut [f32; 2],
+    draggable: bool,
+) {
     use egui::Color32;
     if roster.is_empty() {
         return;
     }
+    let pos = hud_anchor(
+        ctx,
+        "hud_roster",
+        area.min + egui::vec2(216.0, 8.0),
+        offset,
+        egui::vec2(24.0, 24.0),
+        draggable,
+    );
     egui::Window::new("👥 Joueurs")
         .id(egui::Id::new("multiplayer_roster"))
         .collapsible(true)
         .default_open(false)
         .resizable(false)
-        .fixed_pos(area.min + egui::vec2(216.0, 8.0))
+        .fixed_pos(pos)
         .default_width(220.0)
         .show(ctx, |ui| {
             for (name, health, kills, is_self) in roster_display_order(roster) {
@@ -2473,6 +2577,12 @@ fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) {
     let mut open = preview.open;
     egui::Window::new("👁 Aperçu HUD")
         .open(&mut open)
+        // Position fixe (coin stratégique, sous la toolbar) plutôt que
+        // déplaçable : c'est un panneau de réglages, pas un élément de la
+        // scène de jeu (contrairement aux overlays qu'il pilote, eux bien
+        // glissables en 🖐 Repositionner) — inutile de la laisser traîner.
+        .movable(false)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 90.0))
         .resizable(false)
         .default_width(240.0)
         .show(ctx, |ui| {
@@ -2482,6 +2592,16 @@ fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) {
             ui.checkbox(&mut preview.weapon_hud, "Libellé de l'arme équipée");
             ui.checkbox(&mut preview.kills, "💀 Frags");
             ui.checkbox(&mut preview.roster, "👥 Joueurs (données d'exemple)");
+            ui.add_space(4.0);
+            ui.separator();
+            ui.checkbox(
+                &mut preview.reposition,
+                "🖐 Repositionner (glisser les éléments cochés)",
+            );
+            ui.small(
+                "La position de chaque élément est enregistrée dans la scène : elle \
+                 s'applique aussi en Play et dans le jeu exporté (APK/player).",
+            );
             ui.add_space(4.0);
             ui.small(
                 "En jeu, réticule et inventaire ne s'affichent que si le joueur a un \
@@ -2495,28 +2615,40 @@ fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) {
 /// mode Édition. Les éléments qui dépendent de l'état d'une partie en cours
 /// (frags, joueurs en ligne) utilisent des valeurs d'exemple plutôt que l'état
 /// réel (toujours à zéro/vide hors Play) — sinon l'aperçu n'aurait jamais rien
-/// à montrer.
+/// à montrer. `hud_layout` est celui de la scène (`Scene::hud_layout`) : en
+/// mode 🖐 Repositionner (`preview.reposition`), glisser un élément ici écrit
+/// directement dedans, donc s'applique aussi en Play et à l'export.
 #[allow(clippy::too_many_arguments)]
 fn hud_preview_overlays(
     ctx: &egui::Context,
     area: egui::Rect,
     preview: &HudPreview,
+    hud_layout: &mut HudLayout,
     weapon_label: &str,
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
     actions: &mut UiActions,
 ) {
+    let drag = preview.reposition;
     if preview.weapon_hud {
-        weapon_hud(ctx, area, weapon_label);
+        weapon_hud(ctx, area, weapon_label, &mut hud_layout.weapon_hud, drag);
     }
     if preview.kills {
-        kills_hud(ctx, area, 3);
+        kills_hud(ctx, area, 3, &mut hud_layout.kills, drag);
     }
     if preview.crosshair {
-        crosshair(ctx, area);
+        crosshair(ctx, area, &mut hud_layout.crosshair, drag);
     }
     if preview.weapon_inventory {
-        weapon_inventory_panel(ctx, area, weapon_inventory, selected_weapon, actions);
+        weapon_inventory_panel(
+            ctx,
+            area,
+            weapon_inventory,
+            selected_weapon,
+            &mut hud_layout.weapon_inventory,
+            drag,
+            actions,
+        );
     }
     if preview.roster {
         let sample: Vec<RosterEntry> = vec![
@@ -2524,7 +2656,7 @@ fn hud_preview_overlays(
             ("Alice".to_string(), Some(0.45), Some(5), false),
             ("Bob".to_string(), Some(1.0), Some(1), false),
         ];
-        multiplayer_roster_panel(ctx, area, &sample);
+        multiplayer_roster_panel(ctx, area, &sample, &mut hud_layout.roster, drag);
     }
 }
 
@@ -2542,13 +2674,20 @@ fn scene_has_ranged_weapon(scene: &Scene) -> bool {
 /// n'a aucun repère visuel, ce qui « ne fait pas vrai jeu » (demandé en jeu
 /// réel, 2026-07-13). Discrète (fines lignes blanches semi-transparentes),
 /// pour ne jamais gêner la lecture de la scène.
-fn crosshair(ctx: &egui::Context, area: egui::Rect) {
+fn crosshair(ctx: &egui::Context, area: egui::Rect, offset: &mut [f32; 2], draggable: bool) {
     use egui::{Color32, Stroke};
+    let c = hud_anchor(
+        ctx,
+        "hud_crosshair",
+        area.center(),
+        offset,
+        egui::vec2(24.0, 24.0),
+        draggable,
+    );
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_crosshair"),
     ));
-    let c = area.center();
     let stroke = Stroke::new(1.5, Color32::from_white_alpha(200));
     const GAP: f32 = 5.0;
     const LEN: f32 = 7.0;
@@ -3809,17 +3948,45 @@ fn build_ui(
         health_bar(root.ctx(), play_rect, h);
     }
     if *playing {
+        // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
+        // partie en cours (`draggable: false`) — le repositionnement se fait via
+        // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous.
         wave_hud(root.ctx(), play_rect, scene, wave);
-        weapon_hud(root.ctx(), play_rect, weapon_label);
-        kills_hud(root.ctx(), play_rect, kills);
-        multiplayer_roster_panel(root.ctx(), play_rect, roster);
+        weapon_hud(
+            root.ctx(),
+            play_rect,
+            weapon_label,
+            &mut scene.hud_layout.weapon_hud,
+            false,
+        );
+        kills_hud(
+            root.ctx(),
+            play_rect,
+            kills,
+            &mut scene.hud_layout.kills,
+            false,
+        );
+        multiplayer_roster_panel(
+            root.ctx(),
+            play_rect,
+            roster,
+            &mut scene.hud_layout.roster,
+            false,
+        );
         if scene_has_ranged_weapon(scene) {
-            crosshair(root.ctx(), play_rect);
+            crosshair(
+                root.ctx(),
+                play_rect,
+                &mut scene.hud_layout.crosshair,
+                false,
+            );
             weapon_inventory_panel(
                 root.ctx(),
                 play_rect,
                 weapon_inventory,
                 selected_weapon,
+                &mut scene.hud_layout.weapon_inventory,
+                false,
                 actions,
             );
         }
@@ -3828,6 +3995,7 @@ fn build_ui(
             root.ctx(),
             play_rect,
             hud_preview,
+            &mut scene.hud_layout,
             weapon_label,
             weapon_inventory,
             selected_weapon,
