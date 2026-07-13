@@ -370,11 +370,11 @@ le développement). Historique sprint par sprint :
 | **H** — **Jouabilité mobile sans script** (contrôleur joueur, saut, collisions, actions au tap) & **perf rendu** | 43 → 44 | ✅ |
 | **I** — Robustesse & découplage (pas fixe, init sans panic, tests + skip-rebuild) | 45 → 49 | 🟢 (48/49 mobile-only restants) |
 | *(Multijoueur en ligne)* — salons, serveur autoritaire, Firebase annexe, latence, PvE réseau | 50 → 89 | 🟢 voir **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** |
-| **K** — Filet de sécurité (golden tests rendu, RNG seedé, console dev, debug drawing) | 80 → 83 | ✅ |
+| **K** — Filet de sécurité (golden tests rendu, temps maîtrisé — time scale/step, console dev, debug drawing) | 80 → 83 | ✅ |
 | **L** — Animation squelettale (skinning glTF → blending → exposition Lua → réplication réseau) | 84 → 88 | ✅ |
 | **M** — Image (ciel + brouillard, HDR/tone mapping, bloom, mipmaps + tangentes) | 89 → 92 | ✅ |
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
-| **O** — Physique & feel (103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ⬜ |
+| **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | 🟢 (100/101 faits ; 102/103a-c restants) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
