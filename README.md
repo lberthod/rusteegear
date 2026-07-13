@@ -43,7 +43,7 @@ RusteeGear répond à un besoin précis :
 - **Pédagogique & maîtrise totale.** Chaque étage du pipeline (fenêtre → événements →
   état → rendu GPU → UI) est écrit à la main, lisible en une après-midi, sans
   abstraction magique. C'est un moteur que l'on peut **tenir entièrement dans sa tête**.
-- **Hackable et minimal.** ~10 000 lignes de Rust au total. Ajouter une primitive, un
+- **Hackable et minimal.** ~32 000 lignes de Rust au total. Ajouter une primitive, un
   type de collider ou une variable de script se fait en quelques lignes, sans se battre
   contre un framework.
 - **Portable par conception.** La logique (scène, caméra, entrées, picking) ne dépend
@@ -105,7 +105,7 @@ ce que ce projet cherche à écrire à la main pour l'apprendre.
 | Critère | RusteeGear (from scratch) | Bevy |
 |---|---|---|
 | **Objectif** | Comprendre/maîtriser un moteur | Produire des jeux efficacement |
-| **Taille du cœur** | ~10 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
+| **Taille du cœur** | ~32 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
 | **Architecture** | Scène = `Vec<SceneObject>`, explicite | ECS complet + ordonnanceur de systèmes |
 | **Rendu** | Pipeline `wgpu`/WGSL écrit à la main | Moteur de rendu intégré (PBR, etc.) |
 | **Courbe d'apprentissage** | On apprend *les concepts* | On apprend *le framework* |
@@ -372,7 +372,9 @@ le développement). Historique sprint par sprint :
 | *(Multijoueur en ligne)* — salons, serveur autoritaire, Firebase annexe, latence, PvE réseau | 50 → 89 | 🟢 voir **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** |
 | **K** — Filet de sécurité (golden tests rendu, RNG seedé, console dev, debug drawing) | 80 → 83 | ✅ |
 | **L** — Animation squelettale (skinning glTF → blending → exposition Lua → réplication réseau) | 84 → 88 | ✅ |
-| **M** — Image (ciel + brouillard livrés ; HDR/tone mapping, bloom, mipmaps à venir) | 89 → 92 | 🟢 |
+| **M** — Image (ciel + brouillard, HDR/tone mapping, bloom, mipmaps + tangentes) | 89 → 92 | ✅ |
+| **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
+| **O** — Physique & feel (103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ⬜ |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -474,10 +476,14 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
   **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
 - **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
-**En cours — Phase M, image** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
-ciel + brouillard livrés (Sprint 89) ; restent cible HDR + tone mapping (90), bloom
-(91), mipmaps + tangentes (92). Après quoi : Phase N (chaîne gameplay événementielle),
-O (physique & feel), P (audio/HUD/confort), Q (WASM/WebGPU, vitrine web), R (WebXR).
+**En cours — Phase O, physique & feel** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
+la Phase N (chaîne gameplay événementielle) est livrée pour l'essentiel (reste le
+Sprint 94, cycle de vie/handles génération­nels, reporté). La Phase O est scindée en
+trois sprints : **103a** (maintenabilité — découpage de `app/mod.rs`, `editor/mod.rs`,
+`scene/mod.rs` et de `AppState`, trop de responsabilités cumulées), **103b**
+(character controller kinématique) et **103c** (audit de la prédiction réseau après
+la migration). Après quoi : P (audio/HUD/confort), Q (WASM/WebGPU, vitrine web),
+R (WebXR).
 
 ---
 
