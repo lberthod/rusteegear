@@ -1865,6 +1865,8 @@ impl Renderer {
                 let weapon_label = app.selected_weapon_label();
                 let defeated = app.is_locally_defeated();
                 let kills = app.displayed_kill_count();
+                let weapon_inventory = app.ranged_weapon_display_info();
+                let selected_weapon = app.selected_weapon();
                 let (output, actions) = editor.run_player_overlay(
                     &window,
                     &app.scene,
@@ -1884,7 +1886,12 @@ impl Renderer {
                     weapon_label,
                     defeated,
                     kills,
+                    &weapon_inventory,
+                    selected_weapon,
                 );
+                if let Some(i) = actions.select_weapon {
+                    app.select_weapon(i);
+                }
                 player_net_actions = Some(actions);
                 Some(output)
             } else {
@@ -1905,6 +1912,8 @@ impl Renderer {
             let weapon_label = app.selected_weapon_label();
             let defeated = app.is_locally_defeated();
             let kills = app.displayed_kill_count();
+            let weapon_inventory = app.ranged_weapon_display_info();
+            let selected_weapon = app.selected_weapon();
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -1935,7 +1944,12 @@ impl Renderer {
                 weapon_label,
                 defeated,
                 kills,
+                &weapon_inventory,
+                selected_weapon,
             );
+            if let Some(i) = actions.select_weapon {
+                app.select_weapon(i);
+            }
             if actions.save {
                 app.save();
             }

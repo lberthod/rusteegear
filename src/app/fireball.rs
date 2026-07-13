@@ -336,6 +336,14 @@ impl AppState {
         RANGED_WEAPONS[self.selected_weapon].label
     }
 
+    /// Informations affichables de toutes les armes à distance (nom, couleur)
+    /// — pour un futur inventaire (`editor/mod.rs`), qui n'a pas accès à
+    /// `RangedWeapon` ni au module `fireball` (privé) : de simples tuples
+    /// plutôt qu'exposer le type interne.
+    pub fn ranged_weapon_display_info(&self) -> Vec<(&'static str, [f32; 3])> {
+        RANGED_WEAPONS.iter().map(|w| (w.label, w.color)).collect()
+    }
+
     /// Aligne le pool d'affichage (sphères émissives) sur `shots` (position +
     /// arme) : agrandit le pool à la demande, masque les sphères en trop, et
     /// applique couleur/taille de l'arme (une sphère du pool peut servir à un

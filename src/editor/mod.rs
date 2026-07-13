@@ -138,6 +138,9 @@ pub struct UiActions {
     pub load_brawl: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
+    /// Inventaire d'armes (cf. `weapon_inventory_panel`) : arme choisie par le
+    /// joueur, à appliquer via `AppState::select_weapon`.
+    pub select_weapon: Option<usize>,
     /// Fenêtre Multijoueur : « Se connecter » demandé (adresse, pseudo).
     pub connect_to_server: Option<(String, String)>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
@@ -287,6 +290,8 @@ impl Editor {
         weapon_label: &str,
         defeated: bool,
         kills: u32,
+        weapon_inventory: &[(&str, [f32; 3])],
+        selected_weapon: usize,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -316,6 +321,7 @@ impl Editor {
             kills_hud(ctx, area, kills);
             if scene_has_ranged_weapon(scene) {
                 crosshair(ctx, area);
+                weapon_inventory_panel(ctx, weapon_inventory, selected_weapon, &mut actions);
             }
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
@@ -390,6 +396,8 @@ impl Editor {
         weapon_label: &str,
         defeated: bool,
         kills: u32,
+        weapon_inventory: &[(&str, [f32; 3])],
+        selected_weapon: usize,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -459,6 +467,8 @@ impl Editor {
                 weapon_label,
                 defeated,
                 kills,
+                weapon_inventory,
+                selected_weapon,
                 &mut actions,
             );
         });
@@ -2291,6 +2301,55 @@ fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
     );
 }
 
+/// Inventaire d'armes à distance (fenêtre repliable, même mécanisme que
+/// `mobile_multiplayer_overlay` — l'état plié/déplié est géré par egui lui-même,
+/// pas par un champ dédié). Liste chaque arme connue (pastille de couleur +
+/// nom), surligne l'arme équipée, et permet d'en équiper une autre d'un clic
+/// — un vrai panneau d'inventaire plutôt que le simple cycle du bouton
+/// tactile « Arme » (Sprint 79), demandé en jeu réel pour « voir tout son
+/// inventaire » d'un coup. N'apparaît que si la scène a un joueur équipé
+/// d'une arme à distance (cf. `scene_has_ranged_weapon`).
+fn weapon_inventory_panel(
+    ctx: &egui::Context,
+    weapons: &[(&str, [f32; 3])],
+    selected: usize,
+    actions: &mut UiActions,
+) {
+    egui::Window::new("🎒 Inventaire")
+        .id(egui::Id::new("weapon_inventory"))
+        .collapsible(true)
+        .default_open(false)
+        .resizable(false)
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 56.0))
+        .default_width(200.0)
+        .show(ctx, |ui| {
+            for (i, (label, color)) in weapons.iter().enumerate() {
+                let equipped = i == selected;
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        rect,
+                        3.0,
+                        egui::Color32::from_rgb(
+                            (color[0] * 255.0) as u8,
+                            (color[1] * 255.0) as u8,
+                            (color[2] * 255.0) as u8,
+                        ),
+                    );
+                    let text = if equipped {
+                        format!("{label} (équipée)")
+                    } else {
+                        label.to_string()
+                    };
+                    if ui.add_enabled(!equipped, egui::Button::new(text)).clicked() {
+                        actions.select_weapon = Some(i);
+                    }
+                });
+            }
+        });
+}
+
 /// La scène a-t-elle un joueur pilotable équipé d'une arme à distance
 /// (`Controller::fire_button` non vide) ? Sert à n'afficher le réticule de
 /// visée que quand il a un sens — pas dans une démo sans tir à distance.
@@ -2750,6 +2809,8 @@ fn build_ui(
     weapon_label: &str,
     defeated: bool,
     kills: u32,
+    weapon_inventory: &[(&str, [f32; 3])],
+    selected_weapon: usize,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -3528,6 +3589,7 @@ fn build_ui(
         kills_hud(root.ctx(), play_rect, kills);
         if scene_has_ranged_weapon(scene) {
             crosshair(root.ctx(), play_rect);
+            weapon_inventory_panel(root.ctx(), weapon_inventory, selected_weapon, actions);
         }
     }
     if *playing && let Some((c, t)) = scene.collectibles() {

@@ -2410,6 +2410,26 @@ impl AppState {
             // bas FPS et créait de micro-à-coups de caméra sous gigue de frame.
             let t = 1.0 - (-dt * 6.0).exp();
             self.camera.target = self.camera.target.lerp(p + Vec3::new(0.0, 0.8, 0.0), t);
+            // Caméra qui pivote derrière l'orientation du joueur, **seulement** pour
+            // un personnage équipé d'une arme à distance (`fire_button`, cf. le
+            // réticule central de `editor::crosshair`) : sans ce suivi, le réticule
+            // (toujours au centre de l'écran) pointe dans la direction de VUE de la
+            // caméra, pas celle du TIR (`aim_yaw`, l'orientation du personnage) — les
+            // deux divergent dès qu'on tourne en tank (A/D) sans faire pivoter la
+            // caméra à la souris, qui n'existe pas au tactile. Signalé en jeu réel,
+            // 2026-07-13 : « le réticule ne suit pas quand j'avance ». Repos des
+            // autres démos (joystick, plateformes) intentionnellement inchangé : la
+            // caméra libre indépendante du personnage y est voulue, pas un défaut.
+            if self
+                .player_object()
+                .and_then(|o| o.controller.as_ref())
+                .is_some_and(|c| !c.fire_button.is_empty())
+                && let Some(player_yaw) = self
+                    .player_object()
+                    .map(|o| o.transform.rotation.to_euler(EulerRot::YXZ).0)
+            {
+                self.camera.yaw = rotate_towards_smooth(self.camera.yaw, player_yaw, 8.0, dt);
+            }
         }
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
         if self.damage_flash > 0.0 {
