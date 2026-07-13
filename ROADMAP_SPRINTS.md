@@ -1440,10 +1440,34 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/runtime/physics.rs`, `src/editor/mod.rs`. 298 tests lib + 4
   bin + 8 golden verts.
 
-#### Sprint 101 — CCD + couches de collision ⬜
-- [ ] Booléen `ccd` par objet ; `InteractionGroups` (couche + masque) dans l'inspecteur.
-- **Fichiers** : `src/runtime/physics.rs`, `src/scene/mod.rs`.
-- **Livrable** : le missile ne traverse plus un mur fin à haute vitesse (test de régression).
+#### Sprint 101 — CCD + couches de collision ✅ FAIT
+- [x] **`SceneObject::ccd: bool`** (`src/scene/mod.rs`) : active
+      `RigidBodyBuilder::ccd_enabled` (`src/runtime/physics.rs`) — désactivé par
+      défaut (coûteux), réservé aux objets qui en ont réellement besoin (missiles).
+- [x] **`collision_layer`/`collision_mask: u32`** (bits, `Group`/`InteractionGroups`
+      de rapier) : toutes les couches par défaut (`u32::MAX`) — aucune scène
+      existante ne change de comportement tant que ces champs ne sont pas réglés.
+      `Group::from_bits_truncate` plutôt qu'une conversion qui pourrait paniquer :
+      un JSON de scène ancien/corrompu ne doit pas faire planter l'entrée en Play.
+- [x] **Inspecteur** (`src/editor/mod.rs`) : case CCD + deux champs hexadécimaux
+      (couches/masque), affichés à côté du choix de forme de collider.
+- [x] **`Physics::set_velocity`** (nouveau, même famille que `set_position`) : impose
+      une vitesse initiale à un corps dynamique — nécessaire pour tester un
+      projectile qui doit partir vite dès sa création, sans passer par `control`
+      (pensé pour un joueur piloté, pas un missile).
+- [x] **Livrable vérifié** par 4 tests bout-en-bout (physique réelle) : un missile à
+      200 m/s traverse un mur fin de 5 cm par tunneling sans `ccd`, et s'arrête avec
+      `ccd` activé. Un missile dont `collision_mask` exclut la couche du mur le
+      traverse à vitesse modeste (sans avoir besoin de CCD) ; sans ce réglage, il est
+      bloqué normalement. **Trouvé en écrivant les tests** : un premier essai des
+      tests de masque semblait indiquer un bug de filtrage (le missile traversait le
+      mur même *sans* masque) — en réalité la gravité faisait tomber le missile sous
+      un mur de hauteur normale avant qu'il n'ait eu le temps de parcourir la
+      distance à vitesse modeste (aucun lien avec les couches de collision) ;
+      corrigé en agrandissant le mur des deux tests concernés, pas en touchant au
+      code de production.
+- **Fichiers** : `src/scene/mod.rs`, `src/runtime/physics.rs`, `src/editor/mod.rs`.
+  302 tests lib + 4 bin + 8 golden verts.
 
 #### Sprint 102 — Requêtes gameplay + trigger exit ⬜
 - [ ] `raycast(o, d, masque)` et `overlap_sphere()` en Lua via `QueryPipeline` ; événement `exited`.

@@ -3635,6 +3635,27 @@ fn build_ui(
                                         );
                                 }
                             });
+                            ui.checkbox(&mut obj.ccd, "CCD (anti-tunneling)").on_hover_text(
+                                "Détection de collision continue — pour un objet rapide et \
+                                 fin (missile) qui pourrait sinon traverser un mur mince sans \
+                                 jamais entrer en collision. Coûteux : à réserver aux objets \
+                                 qui en ont réellement besoin.",
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label("Couches (bits)");
+                                ui.add(egui::DragValue::new(&mut obj.collision_layer).hexadecimal(
+                                    8, false, true,
+                                ))
+                                .on_hover_text("Couche(s) que cet objet occupe.");
+                                ui.label("Masque");
+                                ui.add(egui::DragValue::new(&mut obj.collision_mask).hexadecimal(
+                                    8, false, true,
+                                ))
+                                .on_hover_text(
+                                    "Couches avec lesquelles cet objet entre en collision \
+                                     (toutes par défaut — 0xFFFFFFFF).",
+                                );
+                            });
                         }
                         ui.checkbox(&mut obj.tappable, "👆 Tactile (cliquable)")
                             .on_hover_text(

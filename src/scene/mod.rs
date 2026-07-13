@@ -534,6 +534,24 @@ pub struct SceneObject {
     /// Forme du collider (Auto = déduite du mesh).
     #[serde(default)]
     pub collider_shape: crate::runtime::physics::ColliderShape,
+    /// Détection de collision continue (Sprint 101) : évite qu'un corps rapide et fin
+    /// (missile, projectile) traverse un décor mince sans jamais entrer en collision
+    /// en un seul pas de simulation (« tunneling », cf. Sprint 100 — un `TriMesh` sans
+    /// épaisseur pouvait déjà être traversé par un objet lâché de trop haut). Coûteux
+    /// (calcul supplémentaire par pas) : `false` par défaut, réservé aux objets qui en
+    /// ont réellement besoin plutôt qu'activé partout par précaution.
+    #[serde(default)]
+    pub ccd: bool,
+    /// Couche(s) de collision de cet objet (bits, cf. `rapier3d::geometry::Group`) —
+    /// avec `collision_mask`, permet par exemple qu'un projectile ami traverse les
+    /// joueurs de sa propre équipe. Toutes les couches par défaut (`u32::MAX`) :
+    /// aucune scène existante ne change de comportement tant que ce champ n'est pas
+    /// explicitement réglé.
+    #[serde(default = "default_collision_mask")]
+    pub collision_layer: u32,
+    /// Couches avec lesquelles cet objet entre en collision (bits). Toutes par défaut.
+    #[serde(default = "default_collision_mask")]
+    pub collision_mask: u32,
     /// Son associé à l'objet (clip, autoplay, spatialisation) : `None` = aucun son —
     /// la grande majorité des objets d'une scène n'en ont pas. Composant optionnel
     /// (regroupe 3 champs auparavant plats), même logique que `controller`.
@@ -821,6 +839,9 @@ impl Default for SceneObject {
             script: String::new(),
             physics: PhysicsKind::None,
             collider_shape: crate::runtime::physics::ColliderShape::Auto,
+            ccd: false,
+            collision_layer: default_collision_mask(),
+            collision_mask: default_collision_mask(),
             audio: None,
             group: String::new(),
             color: white(),
@@ -872,6 +893,12 @@ fn white() -> [f32; 3] {
 
 fn default_physics() -> PhysicsKind {
     PhysicsKind::None
+}
+
+/// Toutes les couches (Sprint 101) : défaut pour `collision_layer`/`collision_mask`,
+/// équivalent à l'absence de filtrage — le comportement d'avant ce sprint.
+fn default_collision_mask() -> u32 {
+    u32::MAX
 }
 
 #[derive(Serialize, Deserialize, Default)]

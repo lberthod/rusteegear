@@ -111,6 +111,11 @@ impl Physics {
             if controllable {
                 builder = builder.lock_rotations();
             }
+            // CCD (Sprint 101) : cf. la doc de `SceneObject::ccd` — seulement les
+            // objets qui en ont explicitement besoin (missiles/projectiles rapides).
+            if obj.ccd {
+                builder = builder.ccd_enabled(true);
+            }
             let body = builder
                 .translation(Vector::new(t.position.x, t.position.y, t.position.z))
                 .rotation(Vector::new(rotvec.x, rotvec.y, rotvec.z))
@@ -218,6 +223,17 @@ impl Physics {
             // projet ne dépend d'un rebond (aucun mécanisme de type trampoline).
             .restitution(0.0)
             .friction(0.6)
+            // Couches de collision (Sprint 101) : `Group::from_bits_truncate` ignore
+            // silencieusement les bits au-delà de 32 plutôt que de paniquer sur une
+            // valeur mal formée — un JSON de scène corrompu/ancien ne doit pas faire
+            // planter l'entrée en Play. `And` : les deux objets doivent s'accepter
+            // mutuellement (cf. la doc de `InteractionGroups`), le mode le plus
+            // intuitif pour une paire couche/masque.
+            .collision_groups(InteractionGroups::new(
+                Group::from_bits_truncate(obj.collision_layer),
+                Group::from_bits_truncate(obj.collision_mask),
+                InteractionTestMode::And,
+            ))
             .build();
             colliders.insert_with_parent(collider, handle, &mut bodies);
 
@@ -363,6 +379,17 @@ impl Physics {
             && let Some(body) = self.bodies.get_mut(handle)
         {
             body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
+        }
+    }
+
+    /// Impose la vitesse linéaire d'un corps dynamique (Sprint 101) : utile pour un
+    /// projectile qui doit partir à une vitesse connue dès sa création, plutôt que de
+    /// l'accélérer progressivement comme le ferait `control` pour un joueur piloté.
+    pub fn set_velocity(&mut self, index: usize, v: Vec3) {
+        if let Some(&(_, handle)) = self.dynamic.iter().find(|&&(i, _)| i == index)
+            && let Some(body) = self.bodies.get_mut(handle)
+        {
+            body.set_linvel(Vector::new(v.x, v.y, v.z), true);
         }
     }
 
@@ -599,6 +626,142 @@ mod tests {
             y > -1.5,
             "TriMesh sur un corps dynamique doit se replier sur ConvexHull, pas \
              laisser tomber l'objet indéfiniment (y={y})"
+        );
+    }
+
+    /// Mur fin (5 cm d'épaisseur) + missile positionné juste devant, à `x=5` — cf.
+    /// `ccd`. Index 0 = mur, 1 = missile.
+    fn missile_and_thin_wall(ccd: bool) -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Mur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.0, 0.0))
+                .with_scale(Vec3::new(0.05, 2.0, 2.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Missile".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(0.1)),
+            physics: PhysicsKind::Dynamic,
+            ccd,
+            ..Default::default()
+        });
+        scene
+    }
+
+    /// Livrable du Sprint 101 : un missile assez rapide pour traverser un mur fin en
+    /// un seul pas de simulation (le même « tunneling » rencontré en écrivant les
+    /// tests du Sprint 100, cf. `drop_ball`) ne doit plus le faire une fois `ccd`
+    /// activé.
+    #[test]
+    fn ccd_prevents_a_fast_missile_from_tunneling_through_a_thin_wall() {
+        let mut scene = missile_and_thin_wall(true);
+        let mut phys = Physics::build(&scene);
+        phys.set_velocity(1, Vec3::new(200.0, 0.0, 0.0));
+        for _ in 0..30 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x = scene.objects[1].transform.position.x;
+        assert!(
+            x < 5.0,
+            "avec ccd, le missile doit être arrêté par le mur fin (x={x})"
+        );
+    }
+
+    /// Contre-épreuve : sans `ccd`, le même missile à la même vitesse traverse le mur
+    /// — la preuve que le test précédent mesure bien l'effet de `ccd`, pas autre
+    /// chose (ex. un mur mal placé).
+    #[test]
+    fn without_ccd_the_same_fast_missile_tunnels_through_the_wall() {
+        let mut scene = missile_and_thin_wall(false);
+        let mut phys = Physics::build(&scene);
+        phys.set_velocity(1, Vec3::new(200.0, 0.0, 0.0));
+        for _ in 0..30 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x = scene.objects[1].transform.position.x;
+        assert!(
+            x > 5.0,
+            "sans ccd, le missile doit traverser le mur fin par tunneling (x={x})"
+        );
+    }
+
+    /// Livrable secondaire du Sprint 101 : `collision_mask` doit pouvoir faire
+    /// ignorer une couche précise — un missile qui ne collisionne pas la couche du
+    /// mur (`collision_mask` sans le bit du mur) doit le traverser à vitesse normale
+    /// (pas besoin de `ccd` ici, la vitesse reste modeste).
+    #[test]
+    fn a_collision_mask_lets_a_projectile_ignore_a_specific_layer() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Mur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            // Très haut (pas juste 2 m) : à 3 m/s le missile met ~1,7 s à atteindre le
+            // mur, largement assez pour que la gravité le fasse tomber sous un mur de
+            // hauteur normale avant d'y arriver — un mur haut isole le test de cet
+            // effet, pour ne mesurer que le filtrage par couche.
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.0, 0.0))
+                .with_scale(Vec3::new(0.5, 100.0, 2.0)),
+            physics: PhysicsKind::Static,
+            collision_layer: 0b010, // couche 2
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Missile".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(0.1)),
+            physics: PhysicsKind::Dynamic,
+            collision_mask: 0b101, // couches 1 et 3 — pas la couche 2 du mur
+            ..Default::default()
+        });
+        let mut phys = Physics::build(&scene);
+        phys.set_velocity(1, Vec3::new(3.0, 0.0, 0.0));
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x = scene.objects[1].transform.position.x;
+        assert!(
+            x > 5.0,
+            "un missile dont le masque exclut la couche du mur doit le traverser (x={x})"
+        );
+    }
+
+    /// Contre-épreuve : sans réglage de masque (défaut = toutes les couches), le même
+    /// missile à la même vitesse est bloqué normalement par le mur.
+    #[test]
+    fn without_a_mask_the_same_projectile_collides_normally() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Mur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            // Très haut : cf. le commentaire équivalent dans le test précédent — sans
+            // ça, la gravité ferait passer le missile sous un mur de hauteur normale
+            // avant qu'il n'ait le temps de parcourir les 5 m à cette vitesse modeste.
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.0, 0.0))
+                .with_scale(Vec3::new(0.5, 100.0, 2.0)),
+            physics: PhysicsKind::Static,
+            collision_layer: 0b010,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Missile".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(0.1)),
+            physics: PhysicsKind::Dynamic,
+            ..Default::default()
+        });
+        let mut phys = Physics::build(&scene);
+        phys.set_velocity(1, Vec3::new(3.0, 0.0, 0.0));
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x = scene.objects[1].transform.position.x;
+        assert!(
+            x < 5.0,
+            "sans masque, le missile doit être bloqué normalement par le mur (x={x})"
         );
     }
 
