@@ -314,6 +314,9 @@ impl Editor {
             // multijoueur n'en a pas — sans ce HUD dédié, le joueur ne voyait *aucun*
             // score, cf. audit en conditions réelles, 2026-07-13).
             kills_hud(ctx, area, kills);
+            if scene_has_ranged_weapon(scene) {
+                crosshair(ctx, area);
+            }
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
             }
@@ -2232,6 +2235,15 @@ fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
         egui::Order::Foreground,
         egui::Id::new("hud_weapon"),
     ));
+    // Plaque de fond semi-transparente (comme `health_bar`) : sans elle, le
+    // texte devient illisible sur un sol clair (vert olive, sable...) —
+    // constaté en jeu réel, 2026-07-13. Une seule plaque sous les deux lignes,
+    // pas une par ligne : plus net visuellement qu'un empilement de rectangles.
+    let bg = egui::Rect::from_center_size(
+        egui::pos2(area.center().x, area.bottom() - 24.0),
+        egui::vec2(320.0, 44.0),
+    );
+    painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
         egui::pos2(area.center().x, area.bottom() - 34.0),
         Align2::CENTER_CENTER,
@@ -2244,7 +2256,7 @@ fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
         Align2::CENTER_CENTER,
         "K ou « Feu » : tirer — 1/2/3 ou « Arme » : changer",
         FontId::proportional(11.0),
-        Color32::from_white_alpha(150),
+        Color32::from_white_alpha(180),
     );
 }
 
@@ -2252,24 +2264,77 @@ fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
 /// progression pour un futur MMORPG, cf. `AppState::displayed_kill_count`),
 /// ou simplement le score solo hors ligne — un seul nombre, la distinction
 /// entre les deux modes est déjà résolue par `displayed_kill_count`.
-/// Indépendant de `collectibles_hud` (juste en dessous), qui ne s'affiche que
-/// si la scène a des collectibles — la carte multijoueur n'en a pas, donc
-/// sans ce HUD dédié, aucun score n'était jamais visible en ligne.
+/// Indépendant de `collectibles_hud` (plus bas), qui ne s'affiche que si la
+/// scène a des collectibles — la carte multijoueur n'en a pas, donc sans ce
+/// HUD dédié, aucun score n'était jamais visible en ligne.
+///
+/// **Position sous l'overlay Multijoueur** (constaté en jeu réel,
+/// 2026-07-13) : la fenêtre repliable `mobile_multiplayer_overlay` occupe
+/// déjà le coin haut-droite (ancrée à `y=56`, ~30 px de haut une fois
+/// repliée) — un premier essai à `y=86` la chevauchait encore pile sur son
+/// bord. `y=112` laisse une vraie marge en dessous.
 fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_kills"),
     ));
-    // top()+86 : sous les trois lignes de `collectibles_hud` (18/42/64), pour ne
-    // jamais les chevaucher sur une scène qui aurait exceptionnellement les deux.
+    let pos = egui::pos2(area.right() - 20.0, area.top() + 112.0);
+    let bg = egui::Rect::from_center_size(pos, egui::vec2(150.0, 30.0));
+    painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
-        egui::pos2(area.right() - 20.0, area.top() + 86.0),
-        Align2::RIGHT_CENTER,
+        pos,
+        Align2::CENTER_CENTER,
         format!("💀 Frags : {kills}"),
         FontId::proportional(18.0),
-        Color32::from_rgb(230, 140, 100),
+        Color32::from_rgb(255, 170, 130),
     );
+}
+
+/// La scène a-t-elle un joueur pilotable équipé d'une arme à distance
+/// (`Controller::fire_button` non vide) ? Sert à n'afficher le réticule de
+/// visée que quand il a un sens — pas dans une démo sans tir à distance.
+fn scene_has_ranged_weapon(scene: &Scene) -> bool {
+    scene.objects.iter().any(|o| {
+        o.controller
+            .as_ref()
+            .is_some_and(|c| c.input && !c.fire_button.is_empty())
+    })
+}
+
+/// Réticule de visée (centre de l'écran) : petite croix + point central,
+/// dessinée en Play dès que la scène a un contrôleur d'arme à distance
+/// (`fire_button` non vide) — sans lui, viser une cible avec la boule de feu
+/// n'a aucun repère visuel, ce qui « ne fait pas vrai jeu » (demandé en jeu
+/// réel, 2026-07-13). Discrète (fines lignes blanches semi-transparentes),
+/// pour ne jamais gêner la lecture de la scène.
+fn crosshair(ctx: &egui::Context, area: egui::Rect) {
+    use egui::{Color32, Stroke};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_crosshair"),
+    ));
+    let c = area.center();
+    let stroke = Stroke::new(1.5, Color32::from_white_alpha(200));
+    const GAP: f32 = 5.0;
+    const LEN: f32 = 7.0;
+    painter.line_segment(
+        [egui::pos2(c.x - GAP - LEN, c.y), egui::pos2(c.x - GAP, c.y)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(c.x + GAP, c.y), egui::pos2(c.x + GAP + LEN, c.y)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(c.x, c.y - GAP - LEN), egui::pos2(c.x, c.y - GAP)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(c.x, c.y + GAP), egui::pos2(c.x, c.y + GAP + LEN)],
+        stroke,
+    );
+    painter.circle_filled(c, 1.5, Color32::from_white_alpha(230));
 }
 
 fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
@@ -3454,6 +3519,9 @@ fn build_ui(
         wave_hud(root.ctx(), play_rect, scene, wave);
         weapon_hud(root.ctx(), play_rect, weapon_label);
         kills_hud(root.ctx(), play_rect, kills);
+        if scene_has_ranged_weapon(scene) {
+            crosshair(root.ctx(), play_rect);
+        }
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);
