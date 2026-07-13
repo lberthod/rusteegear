@@ -341,10 +341,10 @@ impl Editor {
             // multijoueur n'en a pas — sans ce HUD dédié, le joueur ne voyait *aucun*
             // score, cf. audit en conditions réelles, 2026-07-13).
             kills_hud(ctx, area, kills);
-            multiplayer_roster_panel(ctx, roster);
+            multiplayer_roster_panel(ctx, area, roster);
             if scene_has_ranged_weapon(scene) {
                 crosshair(ctx, area);
-                weapon_inventory_panel(ctx, weapon_inventory, selected_weapon, &mut actions);
+                weapon_inventory_panel(ctx, area, weapon_inventory, selected_weapon, &mut actions);
             }
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
@@ -2336,8 +2336,14 @@ fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
 /// tactile « Arme » (Sprint 79), demandé en jeu réel pour « voir tout son
 /// inventaire » d'un coup. N'apparaît que si la scène a un joueur équipé
 /// d'une arme à distance (cf. `scene_has_ranged_weapon`).
+///
+/// Positionné par rapport à `area` (la zone de jeu : cadre téléphone en
+/// Aperçu mobile, ou tout l'écran en player autonome) et non par rapport à
+/// l'écran de l'éditeur — sinon la fenêtre atterrit sur les panneaux
+/// Hiérarchie/Inspecteur au lieu de rester dans la scène de jeu.
 fn weapon_inventory_panel(
     ctx: &egui::Context,
+    area: egui::Rect,
     weapons: &[(&str, [f32; 3])],
     selected: usize,
     actions: &mut UiActions,
@@ -2347,7 +2353,7 @@ fn weapon_inventory_panel(
         .collapsible(true)
         .default_open(false)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 56.0))
+        .fixed_pos(area.min + egui::vec2(8.0, 8.0))
         .default_width(200.0)
         .show(ctx, |ui| {
             for (i, (label, color)) in weapons.iter().enumerate() {
@@ -2399,7 +2405,10 @@ fn roster_display_order(roster: &[RosterEntry]) -> Vec<&RosterEntry> {
 /// GAMEDESIGN_EN_LIGNE.md §3.4 mais n'était affiché nulle part — sans ce
 /// panneau, impossible de savoir qui mène la partie. N'apparaît qu'en ligne
 /// (roster vide sinon), à droite du bouton 🎒 Inventaire.
-fn multiplayer_roster_panel(ctx: &egui::Context, roster: &[RosterEntry]) {
+///
+/// Positionné par rapport à `area` (zone de jeu), pas l'écran de l'éditeur —
+/// même raison que `weapon_inventory_panel`.
+fn multiplayer_roster_panel(ctx: &egui::Context, area: egui::Rect, roster: &[RosterEntry]) {
     use egui::Color32;
     if roster.is_empty() {
         return;
@@ -2409,7 +2418,7 @@ fn multiplayer_roster_panel(ctx: &egui::Context, roster: &[RosterEntry]) {
         .collapsible(true)
         .default_open(false)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_TOP, egui::vec2(216.0, 56.0))
+        .fixed_pos(area.min + egui::vec2(216.0, 8.0))
         .default_width(220.0)
         .show(ctx, |ui| {
             for (name, health, kills, is_self) in roster_display_order(roster) {
@@ -2502,7 +2511,7 @@ fn hud_preview_overlays(
         crosshair(ctx, area);
     }
     if preview.weapon_inventory {
-        weapon_inventory_panel(ctx, weapon_inventory, selected_weapon, actions);
+        weapon_inventory_panel(ctx, area, weapon_inventory, selected_weapon, actions);
     }
     if preview.roster {
         let sample: Vec<RosterEntry> = vec![
@@ -2510,7 +2519,7 @@ fn hud_preview_overlays(
             ("Alice".to_string(), Some(0.45), Some(5), false),
             ("Bob".to_string(), Some(1.0), Some(1), false),
         ];
-        multiplayer_roster_panel(ctx, &sample);
+        multiplayer_roster_panel(ctx, area, &sample);
     }
 }
 
@@ -3798,10 +3807,16 @@ fn build_ui(
         wave_hud(root.ctx(), play_rect, scene, wave);
         weapon_hud(root.ctx(), play_rect, weapon_label);
         kills_hud(root.ctx(), play_rect, kills);
-        multiplayer_roster_panel(root.ctx(), roster);
+        multiplayer_roster_panel(root.ctx(), play_rect, roster);
         if scene_has_ranged_weapon(scene) {
             crosshair(root.ctx(), play_rect);
-            weapon_inventory_panel(root.ctx(), weapon_inventory, selected_weapon, actions);
+            weapon_inventory_panel(
+                root.ctx(),
+                play_rect,
+                weapon_inventory,
+                selected_weapon,
+                actions,
+            );
         }
     } else if hud_preview.open {
         hud_preview_overlays(
