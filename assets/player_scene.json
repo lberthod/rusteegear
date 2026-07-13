@@ -565,9 +565,7 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": {
-        "speed": 2.2
-      },
+      "ai_chaser": null,
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -619,9 +617,7 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": {
-        "speed": 2.2
-      },
+      "ai_chaser": null,
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -673,9 +669,7 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": {
-        "speed": 2.2
-      },
+      "ai_chaser": null,
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -727,9 +721,7 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": {
-        "speed": 2.2
-      },
+      "ai_chaser": null,
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -781,9 +773,7 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": {
-        "speed": 1.6
-      },
+      "ai_chaser": null,
       "audio": null,
       "collider_shape": "Auto",
       "color": [

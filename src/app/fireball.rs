@@ -844,13 +844,18 @@ mod tests {
              (trouvés : {})",
             monsters.len()
         );
-        // GAMEDESIGN_EN_LIGNE.md §3.2 : des monstres immobiles ne mettent jamais
-        // la vie individualisée (§3.1) à l'épreuve — ils doivent réellement
-        // poursuivre les joueurs, pas seulement encaisser des tirs à distance.
+        // Revenu à des cibles statiques (2026-07-13, audit en conditions réelles) :
+        // `ai_chaser` (Sprint 80, poursuite active) a été retiré de la carte
+        // embarquée — malgré le plafond de chasseurs actifs (Sprint 85) et la
+        // portée de détection réseau (Sprint 86), la poursuite restait perçue
+        // comme un bug par un joueur solo réel (« les monstres bougent, tout
+        // bug »). Des cibles immobiles, abattues à distance, ne peuvent
+        // structurellement plus produire ce ressenti — la vie individualisée
+        // (§3.1) reste utile dès qu'un vrai danger mobile sera réintroduit.
         assert!(
-            monsters.iter().all(|o| o.ai_chaser.is_some()),
-            "les monstres de la carte multijoueur doivent poursuivre les joueurs \
-             (`ai_chaser`), pas rester immobiles"
+            monsters.iter().all(|o| o.ai_chaser.is_none()),
+            "les monstres de la carte multijoueur doivent rester des cibles \
+             statiques, pas des chasseurs mobiles (`ai_chaser`)"
         );
     }
 
