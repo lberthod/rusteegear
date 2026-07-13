@@ -262,6 +262,13 @@ pub struct AppState {
     /// (`hud_health`, pensé pour un seul joueur local) côté multijoueur — un
     /// joueur peut désormais mourir sans que la manche entière échoue pour tous.
     network_health: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Frags individualisés par joueur réseau (cf. `app::health`) : nombre de
+    /// monstres vaincus par **ce** joueur depuis sa connexion, toutes méthodes
+    /// confondues (attaque au contact, boule de feu) — brique de progression
+    /// pour un futur MMORPG (contribution individuelle, pas un score de salon
+    /// partagé). Diffusé à tous via `EntityDelta::kills`, pas seulement au
+    /// joueur concerné.
+    network_kills: HashMap<crate::net::protocol::PlayerId, u32>,
     /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
     /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
     /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
@@ -328,6 +335,11 @@ pub struct AppState {
     /// avant le premier snapshot.
     #[cfg(not(target_os = "ios"))]
     net_local_health: Option<f32>,
+    /// Frags individualisés connus du joueur local (brique de progression pour
+    /// un futur MMORPG) — même principe que `net_local_health` : lu tel quel
+    /// du dernier `Snapshot`. `None` hors ligne ou avant le premier snapshot.
+    #[cfg(not(target_os = "ios"))]
+    net_local_kills: Option<u32>,
     /// Historique court (~1 s) des positions **prédites** du joueur local, une par
     /// frame (cf. `apply_local_network_position`). La position renvoyée par le
     /// serveur est en retard d'une latence aller-retour + un tick : la comparer à la
@@ -576,6 +588,7 @@ impl AppState {
             network_inputs: HashMap::new(),
             network_attack_cooldowns: HashMap::new(),
             network_health: HashMap::new(),
+            network_kills: HashMap::new(),
             fireballs: Vec::new(),
             fireball_cooldowns: HashMap::new(),
             fireball_pool: Vec::new(),
@@ -592,6 +605,8 @@ impl AppState {
             net_local_interp: crate::net::interpolation::RemoteEntity::default(),
             #[cfg(not(target_os = "ios"))]
             net_local_health: None,
+            #[cfg(not(target_os = "ios"))]
+            net_local_kills: None,
             #[cfg(not(target_os = "ios"))]
             net_local_history: std::collections::VecDeque::new(),
             #[cfg(not(target_os = "ios"))]

@@ -202,7 +202,7 @@ impl AppState {
         for fb in flying {
             match self.fireball_impact(&fb) {
                 Some(Impact::Monster(i)) => {
-                    self.resolve_fireball_hit(i, fb.pos, RANGED_WEAPONS[fb.weapon].damage)
+                    self.resolve_fireball_hit(i, fb.pos, RANGED_WEAPONS[fb.weapon].damage, fb.owner)
                 }
                 Some(Impact::Obstacle) => {}
                 None => survivors.push(fb),
@@ -280,11 +280,13 @@ impl AppState {
         None
     }
 
-    /// Résout l'impact sur le monstre `i` : dégâts de l'arme, score, son, flash,
-    /// respawn, et évènement réseau `Defeated` si le coup l'achève (diffusé par le
-    /// serveur headless, cf. `take_net_events` — les clients y réagissent une
-    /// fois, son + flash, sans attendre le prochain `Snapshot`).
-    fn resolve_fireball_hit(&mut self, i: usize, at: Vec3, damage: u32) {
+    /// Résout l'impact sur le monstre `i` : dégâts de l'arme, score, frag
+    /// individualisé si le tireur est un joueur réseau (`owner`, brique de
+    /// progression pour un futur MMORPG), son, flash, respawn, et évènement
+    /// réseau `Defeated` si le coup l'achève (diffusé par le serveur headless,
+    /// cf. `take_net_events` — les clients y réagissent une fois, son + flash,
+    /// sans attendre le prochain `Snapshot`).
+    fn resolve_fireball_hit(&mut self, i: usize, at: Vec3, damage: u32, owner: usize) {
         let defeated = self.scene.damage_attackable_by(i, damage);
         self.attack_flash = 1.0;
         if let Some(fx) = self.attack_fx_index()
@@ -296,6 +298,9 @@ impl AppState {
         }
         if defeated {
             self.score += 1;
+            if let Some(shooter_id) = self.network_player_id_at(owner) {
+                self.credit_kill(shooter_id);
+            }
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
             self.pending_net_events
                 .push(GameEvent::Defeated { index: i as u32 });
@@ -581,6 +586,43 @@ mod tests {
         // Et le snapshot diffusé doit exposer le projectile aux clients.
         let snap = app.network_snapshot(1);
         assert_eq!(snap.projectiles.len(), 1);
+    }
+
+    /// Brique de progression pour un futur MMORPG (GAMEDESIGN_EN_LIGNE.md) : un
+    /// monstre vaincu par la boule de feu d'un joueur réseau crédite **ce**
+    /// joueur d'un frag, pas un score de salon partagé.
+    #[test]
+    fn a_network_players_fireball_kill_credits_their_kill_count() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1).unwrap();
+        assert_eq!(app.network_player_kills(1), Some(0));
+        // `spawn_network_player` décale le joueur réseau sur un cercle autour du
+        // gabarit d'origine (cf. sa doc) : réaligne le monstre sur ce nouveau
+        // point de tir plutôt que de recalculer un `aim_yaw`, pour rester au
+        // plus près de `scene_with_monster_ahead` (monstre droit devant à -Z).
+        let shooter_pos = app.scene.objects[index].transform.position;
+        app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        app.set_network_input(
+            1,
+            NetworkInput {
+                fire: true,
+                ..net_input()
+            },
+        );
+
+        advance(&mut app, 40, 0.05);
+
+        assert!(
+            !app.scene.objects[MONSTER].visible,
+            "le monstre droit devant doit être vaincu par la boule de feu"
+        );
+        assert_eq!(
+            app.network_player_kills(1),
+            Some(1),
+            "le tireur doit être crédité du frag"
+        );
     }
 
     /// Sprint 80 (GAMEDESIGN_EN_LIGNE.md §3.1) : un joueur réseau vaincu (0 PV)

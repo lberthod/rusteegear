@@ -180,6 +180,7 @@ mod tests {
             visible: true,
             health: None,
             anim_clip: String::new(),
+            kills: None,
         }
     }
 

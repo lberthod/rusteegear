@@ -200,6 +200,9 @@ impl AppState {
         // `app::health`.
         self.network_health
             .insert(id, crate::app::health::MAX_HEALTH);
+        // Frags individualisés (brique de progression pour un futur MMORPG) :
+        // chaque nouvelle connexion démarre à 0, comme la vie.
+        self.network_kills.insert(id, 0);
         // Masque le gabarit d'origine : personne ne le pilote (ni un joueur
         // réseau — chacun a son propre clone — ni un joueur local, le serveur
         // étant headless). Sans ça, `player_index` continuerait de le désigner
@@ -226,6 +229,7 @@ impl AppState {
         self.network_inputs.remove(&id);
         self.network_attack_cooldowns.remove(&id);
         self.network_health.remove(&id);
+        self.network_kills.remove(&id);
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
@@ -246,6 +250,7 @@ impl AppState {
         self.network_inputs.clear();
         self.network_attack_cooldowns.clear();
         self.network_health.clear();
+        self.network_kills.clear();
     }
 
     /// Enregistre l'input reçu d'un joueur réseau pour le tick courant : remplace
@@ -273,9 +278,37 @@ impl AppState {
         self.network_players.get(&id).copied()
     }
 
+    /// Recherche inverse de `network_player_object` : quel joueur réseau pilote
+    /// l'objet `index` ? `None` si `index` n'est celui d'aucun joueur réseau
+    /// (joueur local, monstre, décor...). Sert à créditer le bon joueur d'un
+    /// frag quand seul l'indice de l'objet tireur est connu (cf.
+    /// `fireball::resolve_fireball_hit`).
+    pub(super) fn network_player_id_at(&self, index: usize) -> Option<PlayerId> {
+        self.network_players
+            .iter()
+            .find(|&(_, &i)| i == index)
+            .map(|(&id, _)| id)
+    }
+
+    /// Crédite `id` d'un frag (brique de progression pour un futur MMORPG,
+    /// GAMEDESIGN_EN_LIGNE.md) — sans effet si `id` n'est pas (ou plus)
+    /// connecté (cible vaincue par un tir dont le tireur s'est déconnecté
+    /// entre-temps, ex. un projectile encore en vol).
+    pub(super) fn credit_kill(&mut self, id: PlayerId) {
+        if let Some(count) = self.network_kills.get_mut(&id) {
+            *count += 1;
+        }
+    }
+
     /// Nombre de joueurs réseau actuellement en jeu (hors joueur local).
     pub fn network_player_count(&self) -> usize {
         self.network_players.len()
+    }
+
+    /// Frags du joueur réseau `id` (brique de progression pour un futur
+    /// MMORPG), `None` s'il n'est pas connecté.
+    pub fn network_player_kills(&self, id: PlayerId) -> Option<u32> {
+        self.network_kills.get(&id).copied()
     }
 
     /// Résout les attaques des joueurs réseau pour ce tick (Sprint 60) : décompte
@@ -310,7 +343,10 @@ impl AppState {
             let Some(pos) = self.scene.objects.get(index).map(|o| o.transform.position) else {
                 continue;
             };
-            self.scene.attack_at(pos, NETWORK_ATTACK_RANGE);
+            let defeated = self.scene.attack_at(pos, NETWORK_ATTACK_RANGE);
+            if !defeated.is_empty() {
+                *self.network_kills.entry(id).or_insert(0) += defeated.len() as u32;
+            }
             self.network_attack_cooldowns
                 .insert(id, NETWORK_ATTACK_COOLDOWN);
         }
@@ -337,6 +373,7 @@ impl AppState {
                     yaw,
                     visible: o.visible,
                     health: self.network_health.get(&id).copied(),
+                    kills: Some(self.network_kills.get(&id).copied().unwrap_or(0)),
                     anim_clip: o
                         .animation
                         .as_ref()
@@ -370,6 +407,7 @@ impl AppState {
                 yaw,
                 visible: o.visible,
                 health: None,
+                kills: None,
                 anim_clip: o
                     .animation
                     .as_ref()
@@ -890,6 +928,59 @@ mod tests {
         assert_eq!(
             defeated_later, 2,
             "une fois le temps de recharge écoulé, la seconde cible doit tomber aussi"
+        );
+    }
+
+    /// Brique de progression pour un futur MMORPG (GAMEDESIGN_EN_LIGNE.md) : un
+    /// monstre vaincu au contact crédite le tireur d'un frag individualisé,
+    /// diffusé à tous via `EntityDelta::kills` (pas seulement au joueur
+    /// concerné — voir le score de chacun est un vrai signal compétitif en
+    /// coopératif).
+    #[test]
+    fn a_contact_kill_credits_the_attacking_players_kill_count() {
+        let mut app = AppState::new();
+        app.scene = scene_with_player_and_two_targets_in_range();
+        let player_index = app.spawn_network_player(1).unwrap();
+        let player_pos = app.scene.objects[player_index].transform.position;
+        for o in app.scene.objects.iter_mut() {
+            if o.combat.is_some() {
+                o.transform.position = player_pos;
+            }
+        }
+        app.playing = true;
+        assert_eq!(app.network_player_kills(1), Some(0));
+        app.set_network_input(
+            1,
+            NetworkInput {
+                move_x: 0.0,
+                move_y: 0.0,
+                aim_yaw: 0.0,
+                attack: true,
+                jump: false,
+                fire: false,
+                weapon: 0,
+                heal: false,
+            },
+        );
+
+        app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.02);
+        app.advance_play();
+
+        assert_eq!(
+            app.network_player_kills(1),
+            Some(1),
+            "vaincre un monstre au contact doit créditer le tireur d'un frag"
+        );
+        let snap = app.network_snapshot(1);
+        let entity = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .expect("le joueur 1 doit figurer dans le snapshot");
+        assert_eq!(
+            entity.kills,
+            Some(1),
+            "le frag doit être diffusé dans le Snapshot, pas seulement connu localement"
         );
     }
 }

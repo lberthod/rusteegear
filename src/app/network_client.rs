@@ -35,6 +35,10 @@ pub struct RemotePlayer {
     /// visuellement, contrairement à un mouvement) — `None` tant qu'aucun
     /// snapshot ne l'a renseignée.
     pub health: Option<f32>,
+    /// Frags individualisés (brique de progression pour un futur MMORPG,
+    /// GAMEDESIGN_EN_LIGNE.md) — même provenance que `health` : lus tels
+    /// quels du dernier `Snapshot`, `None` tant qu'aucun n'est arrivé.
+    pub kills: Option<u32>,
 }
 
 /// Fraction de l'écart comblée à chaque appel de `apply_local_network_position`
@@ -159,6 +163,7 @@ impl AppState {
         self.remote_players.clear();
         self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
         self.net_local_health = None;
+        self.net_local_kills = None;
         self.net_local_history.clear();
         self.net_last_input_sent = None;
         // Plus de snapshots à venir : oublie les projectiles serveur et masque le
@@ -185,18 +190,37 @@ impl AppState {
         self.is_connected() && self.net_local_health.is_some_and(|h| h <= 0.0)
     }
 
+    /// Frags à afficher au HUD (brique de progression pour un futur MMORPG) :
+    /// le compteur individualisé du serveur si connecté (`net_local_kills`,
+    /// `None` avant le premier snapshot ⇒ 0 affiché), sinon le score solo
+    /// (`self.score`, qui compte déjà chaque monstre vaincu localement — un
+    /// seul joueur, pas besoin d'individualiser).
+    pub fn displayed_kill_count(&self) -> u32 {
+        if self.is_connected() {
+            self.net_local_kills.unwrap_or(0)
+        } else {
+            self.score()
+        }
+    }
+
     /// Liste des joueurs de la partie en ligne pour le HUD (GAMEDESIGN_EN_LIGNE.md
-    /// §3.4 — identité et vie des autres joueurs affichées) : `(nom, vie 0..1 ou
-    /// `None` avant le premier snapshot, soi-même ?)`. Vide si non connecté.
-    pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, bool)> {
+    /// §3.4 — identité, vie et frags des autres joueurs affichées) : `(nom, vie
+    /// 0..1 ou `None` avant le premier snapshot, frags, soi-même ?)`. Vide si
+    /// non connecté.
+    pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, Option<u32>, bool)> {
         if !self.is_connected() {
             return Vec::new();
         }
-        let mut roster = vec![("Vous".to_string(), self.net_local_health, true)];
+        let mut roster = vec![(
+            "Vous".to_string(),
+            self.net_local_health,
+            self.net_local_kills,
+            true,
+        )];
         roster.extend(
             self.remote_players
                 .values()
-                .map(|rp| (rp.name.clone(), rp.health, false)),
+                .map(|rp| (rp.name.clone(), rp.health, rp.kills, false)),
         );
         roster
     }
@@ -474,12 +498,14 @@ impl AppState {
                     // fantôme dans `poll_network`.
                     if Some(pid) == self.net_player_id {
                         self.net_local_health = e.health;
+                        self.net_local_kills = e.kills;
                         self.net_local_interp.push(e, now);
                         continue;
                     }
                     let default_name = format!("Joueur {pid}");
                     let rp = self.ensure_remote_player(pid, &default_name);
                     rp.health = e.health;
+                    rp.kills = e.kills;
                     rp.interp.push(e, now);
                 }
             }
@@ -543,6 +569,7 @@ impl AppState {
                     scene_index,
                     interp: crate::net::interpolation::RemoteEntity::default(),
                     health: None,
+                    kills: None,
                 },
             );
         }
@@ -895,8 +922,12 @@ impl AppState {
         false
     }
 
-    pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, bool)> {
+    pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, Option<u32>, bool)> {
         Vec::new()
+    }
+
+    pub fn displayed_kill_count(&self) -> u32 {
+        self.score()
     }
 
     pub(super) fn poll_network(&mut self) {}
@@ -1251,6 +1282,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );
@@ -1291,6 +1323,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );
@@ -1345,6 +1378,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );
@@ -1363,6 +1397,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );
@@ -1405,6 +1440,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );
@@ -1454,6 +1490,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );
@@ -1512,6 +1549,7 @@ mod tests {
                 visible: true,
                 health: None,
                 anim_clip: String::new(),
+                kills: None,
             },
             Instant::now(),
         );

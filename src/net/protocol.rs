@@ -165,6 +165,16 @@ pub struct EntityDelta {
     /// sont diffusées (cf. Sprint 61, aucune optimisation nécessaire à cette échelle).
     #[serde(default)]
     pub anim_clip: String,
+    /// Frags individualisés (GAMEDESIGN_EN_LIGNE.md — brique de progression pour
+    /// un futur MMORPG) : nombre de monstres vaincus par **ce** joueur réseau
+    /// depuis sa connexion (attaque au contact et boule de feu confondues, cf.
+    /// `AppState::network_kills`). `Some` uniquement pour les entités-joueur,
+    /// comme `health` — `None` pour les monstres/décor. Diffusé à tous (pas
+    /// seulement au joueur concerné) : affiche le score de chacun dans le
+    /// salon, pas seulement le sien — la contribution individuelle est un vrai
+    /// signal social/compétitif en coopératif.
+    #[serde(default)]
+    pub kills: Option<u32>,
 }
 
 /// Évènement ponctuel de gameplay, distinct d'un `Snapshot` (état continu) : le
@@ -299,6 +309,7 @@ mod tests {
                     visible: true,
                     health: Some(0.75),
                     anim_clip: String::new(),
+                    kills: Some(3),
                 },
                 EntityDelta {
                     index: 7,
@@ -308,6 +319,7 @@ mod tests {
                     visible: false,
                     health: None,
                     anim_clip: String::new(),
+                    kills: None,
                 },
             ],
         }));
@@ -348,6 +360,7 @@ mod tests {
                 visible: true,
                 health: Some(0.9),
                 anim_clip: String::new(),
+                kills: Some(i),
             })
             .collect();
         let snapshot = ServerMsg::Snapshot(Snapshot {
