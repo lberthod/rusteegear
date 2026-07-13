@@ -49,6 +49,26 @@ pub struct Editor {
     mp_chat_input: String,
     /// Commande en cours de saisie dans la Console (Sprint 82).
     console_input: String,
+    /// Réglages du panneau « Aperçu HUD » (Sprint 93).
+    hud_preview: HudPreview,
+}
+
+/// Réglages du panneau « 👁 Aperçu HUD » : quels overlays de jeu (réticule,
+/// inventaire, joueurs…) prévisualiser en mode Édition, sans passer par Play —
+/// pour voir/positionner ces éléments sans lancer la simulation. État
+/// purement éditeur (pas persisté dans la scène, contrairement à `Controller`
+/// ou `MobileControls`) : c'est une bascule d'aperçu, pas une config de jeu.
+/// Quand connecté en Play, le tableau des joueurs affiche déjà les vrais
+/// joueurs — l'aperçu ici sert juste à voir la fenêtre en Édition, avec des
+/// données d'exemple.
+#[derive(Default)]
+struct HudPreview {
+    open: bool,
+    crosshair: bool,
+    weapon_inventory: bool,
+    weapon_hud: bool,
+    kills: bool,
+    roster: bool,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -253,6 +273,7 @@ impl Editor {
             mp_lobby_code: "default".to_string(),
             mp_chat_input: String::new(),
             console_input: String::new(),
+            hud_preview: HudPreview::default(),
         }
     }
 
@@ -422,6 +443,7 @@ impl Editor {
         let mp_lobby_code = &mut self.mp_lobby_code;
         let mp_chat_input = &mut self.mp_chat_input;
         let console_input = &mut self.console_input;
+        let hud_preview = &mut self.hud_preview;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -473,6 +495,7 @@ impl Editor {
                 weapon_inventory,
                 selected_weapon,
                 roster,
+                hud_preview,
                 &mut actions,
             );
         });
@@ -2426,6 +2449,71 @@ fn multiplayer_roster_panel(ctx: &egui::Context, roster: &[RosterEntry]) {
 /// La scène a-t-elle un joueur pilotable équipé d'une arme à distance
 /// (`Controller::fire_button` non vide) ? Sert à n'afficher le réticule de
 /// visée que quand il a un sens — pas dans une démo sans tir à distance.
+/// Fenêtre « 👁 Aperçu HUD » (Sprint 93) : cases à cocher pour prévisualiser en
+/// Édition les overlays normalement réservés à Play (réticule, inventaire,
+/// joueurs…), sans lancer la simulation — utile pour ajuster leur position ou
+/// leur lisibilité. État purement éditeur : rien ici n'est écrit dans la
+/// scène (contrairement à `Controller::fire_button`, qui décide de leur
+/// affichage réel en jeu).
+fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) {
+    let mut open = preview.open;
+    egui::Window::new("👁 Aperçu HUD")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(240.0)
+        .show(ctx, |ui| {
+            ui.small("Affiche ces éléments en Édition, comme en Play :");
+            ui.checkbox(&mut preview.crosshair, "🎯 Réticule");
+            ui.checkbox(&mut preview.weapon_inventory, "🎒 Inventaire d'armes");
+            ui.checkbox(&mut preview.weapon_hud, "Libellé de l'arme équipée");
+            ui.checkbox(&mut preview.kills, "💀 Frags");
+            ui.checkbox(&mut preview.roster, "👥 Joueurs (données d'exemple)");
+            ui.add_space(4.0);
+            ui.small(
+                "En jeu, réticule et inventaire ne s'affichent que si le joueur a un \
+                 bouton 🔥 Feu configuré (Inspecteur › 🧩 Composants mobiles).",
+            );
+        });
+    preview.open = open;
+}
+
+/// Dessine les overlays cochés dans `HudPreview` par-dessus la zone de jeu, en
+/// mode Édition. Les éléments qui dépendent de l'état d'une partie en cours
+/// (frags, joueurs en ligne) utilisent des valeurs d'exemple plutôt que l'état
+/// réel (toujours à zéro/vide hors Play) — sinon l'aperçu n'aurait jamais rien
+/// à montrer.
+#[allow(clippy::too_many_arguments)]
+fn hud_preview_overlays(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    preview: &HudPreview,
+    weapon_label: &str,
+    weapon_inventory: &[(&str, [f32; 3])],
+    selected_weapon: usize,
+    actions: &mut UiActions,
+) {
+    if preview.weapon_hud {
+        weapon_hud(ctx, area, weapon_label);
+    }
+    if preview.kills {
+        kills_hud(ctx, area, 3);
+    }
+    if preview.crosshair {
+        crosshair(ctx, area);
+    }
+    if preview.weapon_inventory {
+        weapon_inventory_panel(ctx, weapon_inventory, selected_weapon, actions);
+    }
+    if preview.roster {
+        let sample: Vec<RosterEntry> = vec![
+            ("Vous".to_string(), Some(0.8), Some(3), true),
+            ("Alice".to_string(), Some(0.45), Some(5), false),
+            ("Bob".to_string(), Some(1.0), Some(1), false),
+        ];
+        multiplayer_roster_panel(ctx, &sample);
+    }
+}
+
 fn scene_has_ranged_weapon(scene: &Scene) -> bool {
     scene.objects.iter().any(|o| {
         o.controller
@@ -2885,10 +2973,13 @@ fn build_ui(
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
     roster: &[RosterEntry],
+    hud_preview: &mut HudPreview,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings);
+    // Fenêtre « 👁 Aperçu HUD » (Sprint 93) : prévisualiser les overlays de jeu en Édition.
+    hud_preview_window(root.ctx(), hud_preview);
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer_window(
         root.ctx(),
@@ -3078,6 +3169,18 @@ fn build_ui(
                 {
                     *device_portrait = !*device_portrait;
                 }
+            }
+            // Aperçu HUD (Sprint 93) : voir réticule/inventaire/joueurs en Édition,
+            // sans passer par Play (cf. `HudPreview`).
+            if ui
+                .selectable_label(hud_preview.open, "👁 Aperçu HUD")
+                .on_hover_text(
+                    "Prévisualise les overlays de jeu (réticule, inventaire, joueurs…) \
+                     en Édition, sans lancer Play",
+                )
+                .clicked()
+            {
+                hud_preview.open = !hud_preview.open;
             }
             if ui
                 .selectable_label(scene.camera_follow, "🎥 Suivi")
@@ -3700,6 +3803,16 @@ fn build_ui(
             crosshair(root.ctx(), play_rect);
             weapon_inventory_panel(root.ctx(), weapon_inventory, selected_weapon, actions);
         }
+    } else if hud_preview.open {
+        hud_preview_overlays(
+            root.ctx(),
+            play_rect,
+            hud_preview,
+            weapon_label,
+            weapon_inventory,
+            selected_weapon,
+            actions,
+        );
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);
