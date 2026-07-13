@@ -729,12 +729,18 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - **Livrable** : 6 commandes testées bout en bout (`AppState` réel) — jamais de panique sur
   une saisie invalide, toujours un message de retour (usage ou erreur explicite).
 
-#### Sprint 83 — Debug drawing + vues buffers ⬜
+#### Sprint 83 — Debug drawing + vues buffers 🟡 (partiel)
 **Objectif** : voir ce que le moteur calcule.
-- [ ] `debug.line()/box()/sphere()` en Rust **et** Lua, sur le pipeline gizmo, vidé chaque frame.
-- [ ] Sélecteur de vue (normales, depth) dans la toolbar.
-- **Fichiers** : `src/gfx/`, `src/runtime/mod.rs`.
-- **Livrable** : raycast de picking et trajectoire du missile visualisés dans la démo.
+- [x] `AppState::debug_line/debug_box/debug_sphere` **côté Rust**, sur le pipeline gizmo
+      (buffer dédié, redimensionné au doublement), vidé après chaque frame de rendu — branché
+      sur `render()` et `render_scene_headless`. Vérifié visuellement (exemple jetable).
+- [ ] Exposition **Lua** (`debug.line()` côté script) — reportée : `run_script` a 16 sites
+      d'appel (14 dans les tests), un ajout de paramètre y est un chantier à part entière.
+- [ ] Sélecteur de vue (normales, depth) dans la toolbar — pas commencé.
+- **Fichiers livrés** : `src/app/mod.rs`, `src/gfx/renderer.rs`. **Restant** : `src/runtime/mod.rs`
+  (Lua), `src/gfx/` (vues buffers).
+- **Livrable** : le clic de sélection en mode édition visualise le rayon de picking (ligne
+  jaune) — la trajectoire du missile en Lua attend l'exposition Lua ci-dessus.
 
 ### PHASE L — Animation squelettale (84 → 88)
 
