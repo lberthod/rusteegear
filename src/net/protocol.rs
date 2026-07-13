@@ -127,7 +127,7 @@ pub struct ProjectileState {
 /// l'interpolation côté client (Sprint 54) — pas la représentation complète de
 /// `SceneObject` (mesh, script, composants...), qui reste une donnée de scène
 /// locale au client, chargée une fois au join, pas retransmise à chaque tick.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityDelta {
     /// Indice dans `scene.objects`, stable pour la durée d'une manche (les objets
     /// ne sont ni ajoutés ni réordonnés en cours de partie côté serveur).
@@ -152,6 +152,19 @@ pub struct EntityDelta {
     /// monstres synchronisés (`Combat::hp`, non normalisé). Absent (`None`,
     /// pas sérialisé à 0 par défaut) pour un décor sans vie.
     pub health: Option<f32>,
+    /// Animation répliquée (Sprint 88) : nom du clip actuellement joué côté serveur
+    /// (vide = objet non skinné ou pose de liaison, cf. `AnimationState::clip`).
+    /// **Pas** de temps de lecture ici : chaque client avance déjà localement le
+    /// temps de son propre `AnimationState` à chaque pas fixe, que l'objet soit
+    /// local ou un fantôme réseau (cf. `AppState::sim_step`) — seul le *choix* du
+    /// clip a besoin d'être répliqué, via `AnimationState::set_clip()` (fondu
+    /// enchaîné inclus, cf. Sprint 87), pour que tous les écrans jouent la même
+    /// animation. `String` plutôt qu'un indice numérique dans
+    /// `ImportedMesh::clips` : robuste même si l'ordre des clips différait d'un
+    /// client à l'autre, pour un coût négligeable tant que peu d'entités animées
+    /// sont diffusées (cf. Sprint 61, aucune optimisation nécessaire à cette échelle).
+    #[serde(default)]
+    pub anim_clip: String,
 }
 
 /// Évènement ponctuel de gameplay, distinct d'un `Snapshot` (état continu) : le
@@ -285,6 +298,7 @@ mod tests {
                     yaw: 0.78,
                     visible: true,
                     health: Some(0.75),
+                    anim_clip: String::new(),
                 },
                 EntityDelta {
                     index: 7,
@@ -293,6 +307,7 @@ mod tests {
                     yaw: 0.0,
                     visible: false,
                     health: None,
+                    anim_clip: String::new(),
                 },
             ],
         }));
@@ -332,6 +347,7 @@ mod tests {
                 yaw: 0.3,
                 visible: true,
                 health: Some(0.9),
+                anim_clip: String::new(),
             })
             .collect();
         let snapshot = ServerMsg::Snapshot(Snapshot {

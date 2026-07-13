@@ -337,6 +337,11 @@ impl AppState {
                     yaw,
                     visible: o.visible,
                     health: self.network_health.get(&id).copied(),
+                    anim_clip: o
+                        .animation
+                        .as_ref()
+                        .map(|a| a.clip.clone())
+                        .unwrap_or_default(),
                 }
             })
             .collect();
@@ -365,6 +370,11 @@ impl AppState {
                 yaw,
                 visible: o.visible,
                 health: None,
+                anim_clip: o
+                    .animation
+                    .as_ref()
+                    .map(|a| a.clip.clone())
+                    .unwrap_or_default(),
             });
         }
         Snapshot {
@@ -646,6 +656,46 @@ mod tests {
         let indices: Vec<u32> = snap.entities.iter().map(|e| e.index).collect();
         assert!(indices.contains(&(a as u32)));
         assert!(indices.contains(&(b as u32)));
+    }
+
+    #[test]
+    fn network_snapshot_reports_the_player_animation_clip() {
+        // Sprint 88 : le clip joué par un joueur réseau (s'il a un
+        // `AnimationState`) doit atterrir dans son `EntityDelta`, pour que les
+        // autres écrans jouent la même animation sur son fantôme.
+        let mut app = app_with_zombies_demo();
+        let a = app.spawn_network_player(1).unwrap();
+        app.scene.objects[a].animation = Some(crate::scene::AnimationState {
+            clip: "run".into(),
+            time: 0.0,
+            speed: 1.0,
+            prev_clip: String::new(),
+            prev_time: 0.0,
+            blend: 1.0,
+        });
+
+        let snap = app.network_snapshot(1);
+        let entity = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .expect("le joueur 1 doit figurer dans le snapshot");
+        assert_eq!(entity.anim_clip, "run");
+    }
+
+    #[test]
+    fn network_snapshot_leaves_anim_clip_empty_without_animation_state() {
+        // Un joueur sans `AnimationState` (mesh non skinné) ne doit pas planter
+        // ni inventer un clip — champ vide, comme documenté.
+        let mut app = app_with_zombies_demo();
+        app.spawn_network_player(1).unwrap();
+        let snap = app.network_snapshot(1);
+        let entity = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .expect("le joueur 1 doit figurer dans le snapshot");
+        assert!(entity.anim_clip.is_empty());
     }
 
     #[test]

@@ -269,6 +269,17 @@ impl AppState {
                 o.transform.rotation = glam::Quat::from_rotation_y(yaw);
                 o.visible = visible;
             }
+            // Animation répliquée (Sprint 88) : le clip n'est **pas** interpolé
+            // comme la position (cf. `RemoteEntity::latest_anim_clip`) — juste
+            // poussé dans `AnimationState::set_clip()` du fantôme dès qu'il
+            // change, pour bénéficier du même fondu enchaîné qu'en solo.
+            if let Some(clip) = rp.interp.latest_anim_clip()
+                && !clip.is_empty()
+                && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
+                && let Some(state) = o.animation.as_mut()
+            {
+                state.set_clip(clip);
+            }
         }
         // Le joueur local : cf. `apply_local_network_position`, appelée séparément
         // par `advance_play` *après* la physique — appliquer la position réseau
@@ -446,6 +457,13 @@ impl AppState {
                             o.transform.position = glam::Vec3::from_array(e.position);
                             o.transform.rotation = glam::Quat::from_rotation_y(e.yaw);
                             o.visible = e.visible;
+                            // Animation répliquée (Sprint 88) : même mécanisme que
+                            // pour les fantômes de joueurs, cf. `poll_network`.
+                            if !e.anim_clip.is_empty()
+                                && let Some(state) = o.animation.as_mut()
+                            {
+                                state.set_clip(e.anim_clip);
+                            }
                         }
                         continue;
                     };
@@ -1232,6 +1250,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );
@@ -1271,6 +1290,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );
@@ -1324,6 +1344,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );
@@ -1341,6 +1362,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );
@@ -1382,6 +1404,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );
@@ -1430,6 +1453,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );
@@ -1487,6 +1511,7 @@ mod tests {
                 yaw: 0.0,
                 visible: true,
                 health: None,
+                anim_clip: String::new(),
             },
             Instant::now(),
         );

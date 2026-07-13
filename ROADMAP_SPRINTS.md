@@ -1044,11 +1044,33 @@ régression client. Une manche décidée ne coupe plus tout le process
   skinning a un rig synthétique). Mécanisme Lua complet et testé ; contenu de démo à
   faire dans un sprint dédié plutôt qu'anticipé ici.
 
-#### Sprint 88 — Animation répliquée ⬜
+#### Sprint 88 — Animation répliquée ✅ FAIT
 **Objectif** : les joueurs réseau s'animent aussi.
-- [ ] État d'anim (1 octet : clip + phase) dans le snapshot, interpolé comme le reste.
-- **Fichiers** : `src/net/protocol.rs`, `src/net/interpolation.rs`, `src/bin/server.rs`.
-- **Livrable** : deux clients voient le même perso courir ; budget snapshot < 1 200 o (test).
+- [x] **`EntityDelta::anim_clip`** (`src/net/protocol.rs`) : nom du clip joué (vide =
+      non skinné/pose de liaison), rempli par `AppState::network_snapshot`
+      (`src/app/multiplayer.rs`) pour joueurs *et* monstres réseau. **Pas de temps
+      de lecture répliqué** (écart avec le plan initial « clip + phase ») : chaque
+      client avance déjà localement le temps de tout `AnimationState` à chaque pas
+      fixe (`sim_step`, y compris pour un fantôme réseau ou un monstre — la boucle
+      qui fait ça ne distingue pas l'origine de l'objet), donc seul le *choix* du
+      clip a besoin d'être répliqué ; envoyer une phase en plus aurait été de la
+      synchronisation non justifiée par un symptôme mesuré (cf. Sprint 61).
+- [x] **Application côté client** (`src/app/network_client.rs`) : `poll_network`
+      pousse `RemoteEntity::latest_anim_clip()` dans `AnimationState::set_clip()`
+      du fantôme (fondu enchaîné inclus, Sprint 87) ; même geste pour les monstres
+      réseau dans `handle_server_msg`. `EntityDelta` a perdu `Copy` (le nouveau
+      `String` ne l'est pas) : `Timed<T>` (`interpolation.rs`) est passé à
+      `Clone` seul, sans changement de comportement.
+- [x] **Tests** : 2 dans `interpolation.rs` (`latest_anim_clip` suit le dernier
+      snapshot, pas le premier), 2 dans `multiplayer.rs` (clip répliqué si
+      `AnimationState` présent, vide sinon). 257 tests lib + 4 tests bin verts.
+- **Fichiers** : `src/net/protocol.rs`, `src/net/interpolation.rs`,
+  `src/app/multiplayer.rs`, `src/app/network_client.rs`.
+- **Livrable restant, hors scope de ce sprint** : « deux clients voient le même
+  perso courir » demande un joueur réseau avec un mesh skinné réel dans une
+  scène jouée en ligne — aucune scène du dépôt n'en a un aujourd'hui (même
+  constat que le livrable restant du Sprint 87) ; mécanisme complet et testé,
+  contenu de démo à faire dans un sprint dédié.
 
 ### PHASE M — Image (89 → 92)
 

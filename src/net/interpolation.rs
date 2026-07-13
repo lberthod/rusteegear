@@ -16,7 +16,7 @@ use super::protocol::EntityDelta;
 /// Une valeur horodatée à l'heure de réception **locale** (pas le tick serveur) :
 /// on interpole en temps client réel, pas en ticks réseau, pour rester correct
 /// quel que soit le jitter du réseau.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Timed<T> {
     at: Instant,
     value: T,
@@ -81,8 +81,8 @@ impl RemoteEntity {
         }
         // `history` est trié par `at` croissant (append-only via `push_back`) :
         // trouve la paire consécutive qui encadre `at`.
-        for pair in Vec::from_iter(self.history.iter().copied()).windows(2) {
-            let (prev, next) = (pair[0], pair[1]);
+        for pair in Vec::from_iter(self.history.iter().cloned()).windows(2) {
+            let (prev, next) = (&pair[0], &pair[1]);
             if prev.at <= at && at <= next.at {
                 let span = next.at.saturating_duration_since(prev.at).as_secs_f32();
                 let t = if span <= 1e-6 {
@@ -111,6 +111,18 @@ impl RemoteEntity {
     /// des corrections inutiles).
     pub fn sample_delayed(&self, now: Instant) -> Option<(Vec3, f32, bool)> {
         self.sample(now.checked_sub(RENDER_DELAY).unwrap_or(now))
+    }
+
+    /// Dernier clip d'animation connu pour cette entité (Sprint 88, réplication de
+    /// l'animation). Contrairement à la position, on ne l'interpole pas dans le
+    /// temps : chaque client avance déjà localement le temps de lecture de son
+    /// propre `AnimationState` à chaque pas fixe, qu'il s'agisse d'un objet local
+    /// ou d'un fantôme réseau (cf. `AppState::sim_step`) — seul le *choix* du
+    /// clip a besoin d'être répliqué, via `AnimationState::set_clip()` (fondu
+    /// enchaîné inclus, cf. Sprint 87). `None` tant qu'aucun snapshot n'est
+    /// encore arrivé.
+    pub fn latest_anim_clip(&self) -> Option<&str> {
+        self.history.back().map(|t| t.value.anim_clip.as_str())
     }
 }
 
@@ -167,6 +179,7 @@ mod tests {
             yaw,
             visible: true,
             health: None,
+            anim_clip: String::new(),
         }
     }
 
@@ -185,6 +198,29 @@ mod tests {
         assert_eq!(pos, Vec3::new(1.0, 0.0, 2.0));
         assert_eq!(yaw, 0.5);
         assert!(visible);
+    }
+
+    #[test]
+    fn latest_anim_clip_is_none_before_any_snapshot() {
+        let e = RemoteEntity::default();
+        assert_eq!(e.latest_anim_clip(), None);
+    }
+
+    #[test]
+    fn latest_anim_clip_tracks_the_most_recent_snapshot() {
+        // Sprint 88 : le clip répliqué doit refléter le dernier snapshot reçu, pas
+        // le premier — contrairement à la position, jamais interpolé/mélangé.
+        let mut e = RemoteEntity::default();
+        let t0 = Instant::now();
+        let mut idle = delta([0.0, 0.0, 0.0], 0.0);
+        idle.anim_clip = "idle".into();
+        e.push(idle, t0);
+        assert_eq!(e.latest_anim_clip(), Some("idle"));
+
+        let mut run = delta([1.0, 0.0, 0.0], 0.0);
+        run.anim_clip = "run".into();
+        e.push(run, t0 + Duration::from_millis(50));
+        assert_eq!(e.latest_anim_clip(), Some("run"));
     }
 
     #[test]
