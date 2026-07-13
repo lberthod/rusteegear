@@ -840,6 +840,41 @@ pub struct Scene {
     /// Caméra de jeu : point de vue appliqué à l'entrée en mode Play (None = orbite éditeur).
     #[serde(default)]
     pub game_camera: Option<GameCamera>,
+    /// Ciel (dégradé horizon/zénith) + brouillard exponentiel (Sprint 89).
+    #[serde(default)]
+    pub sky: Sky,
+}
+
+/// Fond de scène (Sprint 89) : dégradé de ciel dessiné derrière toute la géométrie,
+/// et brouillard exponentiel mélangé dans le shader PBR selon la distance à la caméra.
+///
+/// **Par défaut identique à l'ancien fond fixe** (`0.07, 0.08, 0.1`, la même couleur que
+/// l'ancien `wgpu::Color` codé en dur du clear) : `horizon_color == zenith_color` produit
+/// un dégradé plat visuellement indiscernable de l'ancien rendu, et `fog_density = 0.0`
+/// désactive le brouillard — aucune scène existante (ni ses goldens) ne change d'aspect
+/// tant que ces champs ne sont pas explicitement réglés dans l'inspecteur.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct Sky {
+    /// Couleur du ciel près de l'horizon (direction de vue quasi horizontale).
+    pub horizon_color: [f32; 3],
+    /// Couleur du ciel au zénith (direction de vue vers le haut).
+    pub zenith_color: [f32; 3],
+    /// Couleur vers laquelle le brouillard mélange les objets lointains.
+    pub fog_color: [f32; 3],
+    /// Densité du brouillard exponentiel (0 = désactivé). Le facteur de mélange est
+    /// `1 - exp(-distance * fog_density)` — cf. `main.wgsl`.
+    pub fog_density: f32,
+}
+
+impl Default for Sky {
+    fn default() -> Self {
+        Self {
+            horizon_color: [0.07, 0.08, 0.1],
+            zenith_color: [0.07, 0.08, 0.1],
+            fog_color: [0.07, 0.08, 0.1],
+            fog_density: 0.0,
+        }
+    }
 }
 
 /// Point de vue de jeu (mêmes paramètres que la caméra orbitale), appliqué en Play.
@@ -2574,6 +2609,7 @@ end"
             },
             camera_follow: true,
             game_camera: None,
+            sky: Sky::default(),
         }
     }
 }
@@ -2871,6 +2907,7 @@ impl Scene {
             mobile: MobileControls::default(),
             camera_follow: false,
             game_camera: None,
+            sky: Sky::default(),
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -2951,6 +2988,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             },
             camera_follow: true,
             game_camera: None,
+            sky: Sky::default(),
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -3060,6 +3098,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             },
             camera_follow: spec.camera_follow,
             game_camera: None,
+            sky: Sky::default(),
         })
     }
 

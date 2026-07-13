@@ -24,7 +24,7 @@
 
 use motor3derust::app::AppState;
 use motor3derust::gfx::renderer::Renderer;
-use motor3derust::scene::{Light, MeshKind, PointLight, Scene, SceneObject, Transform};
+use motor3derust::scene::{Light, MeshKind, PointLight, Scene, SceneObject, Sky, Transform};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
@@ -181,4 +181,50 @@ fn golden_primitives_lights() {
         return; // pas de GPU dans cet environnement (cf. `render_headless`) : rien à vérifier
     };
     assert_matches_golden("primitives_lights.png", &pixels, WIDTH, HEIGHT);
+}
+
+/// Sprint 89 (ciel + brouillard) : même scène que `scene_primitives_lights`, avec un
+/// ciel horizon/zénith distinct et un brouillard dense — si `Sky` n'était pas
+/// réellement câblée jusqu'au shader (uniform mal rempli, pipeline pas dessiné...),
+/// ce golden serait indiscernable de `primitives_lights.png` malgré des réglages
+/// très différents.
+fn scene_sky_and_fog() -> Scene {
+    Scene {
+        sky: Sky {
+            horizon_color: [0.9, 0.55, 0.25],
+            zenith_color: [0.05, 0.1, 0.35],
+            fog_color: [0.6, 0.65, 0.75],
+            fog_density: 0.35,
+        },
+        ..scene_primitives_lights()
+    }
+}
+
+#[test]
+fn golden_sky_and_fog() {
+    let Some(pixels) = render_headless(scene_sky_and_fog()) else {
+        return;
+    };
+    assert_matches_golden("sky_and_fog.png", &pixels, WIDTH, HEIGHT);
+}
+
+/// Un ciel/brouillard distinct doit produire une image mesurablement différente de la
+/// scène de référence sans ciel réglé — filet de sécurité si les deux golden ci-dessus
+/// étaient un jour régénérés par erreur à partir de la même image (feraient passer le
+/// test de non-régression sans jamais avoir vérifié que le réglage a un effet réel).
+#[test]
+fn sky_and_fog_settings_change_the_render() {
+    let Some(base) = render_headless(scene_primitives_lights()) else {
+        return;
+    };
+    let Some(with_sky) = render_headless(scene_sky_and_fog()) else {
+        return;
+    };
+    let ratio = diff_ratio(&base, &with_sky);
+    assert!(
+        ratio > 0.2,
+        "un ciel/brouillard nettement différent devrait changer une bonne partie de \
+         l'image, seuls {:.2}% des pixels divergent",
+        ratio * 100.0
+    );
 }

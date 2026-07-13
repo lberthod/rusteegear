@@ -1074,10 +1074,32 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ### PHASE M — Image (89 → 92)
 
-#### Sprint 89 — Ciel + brouillard ⬜
-- [ ] Gradient procédural (ou cubemap) sur cube inversé + **fog exponentiel** dans le shader PBR.
-- **Fichiers** : `src/gfx/shaders/`, `src/scene/mod.rs`, `src/editor/mod.rs`.
-- **Livrable** : réglages dans l'inspecteur de scène ; goldens mis à jour.
+#### Sprint 89 — Ciel + brouillard ✅ FAIT
+- [x] **Ciel** (`src/gfx/shaders/sky.wgsl`, nouveau) : dégradé horizon/zénith, dessiné en
+      premier dans la passe principale via un triangle plein écran sans vertex buffer
+      (pas de cube inversé — inutile ici), profondeur `Always`/pas d'écriture pour ne
+      jamais l'emporter sur la géométrie réelle. La direction de vue est reconstruite à
+      partir de `Camera::inv_view_proj` (nouveau champ, calculé une fois par frame dans
+      `write_uniforms`) plutôt qu'un dégradé fixe en espace écran : sinon le ciel resterait
+      immobile pendant qu'on oriente la caméra, un défaut visible immédiatement en testant.
+- [x] **Brouillard exponentiel** dans `main.wgsl` (`fs_main`) : `1 - exp(-distance *
+      density)`, mélangé vers `fog_color` juste avant le retour final.
+- [x] **`scene::Sky`** (`src/scene/mod.rs`) : `horizon_color`/`zenith_color`/`fog_color`/
+      `fog_density` sur `Scene`, `#[serde(default)]`. Par défaut, `horizon_color ==
+      zenith_color == [0.07, 0.08, 0.1]` (l'ancienne couleur de clear fixe) et
+      `fog_density = 0.0` : aucune scène existante ne change d'aspect tant que
+      l'inspecteur n'y touche pas — le golden `primitives_lights.png` passe sans
+      régénération.
+- [x] **Inspecteur** (`src/editor/mod.rs`) : section « 🌫 Ciel & brouillard » sous
+      l'éclairage, 3 couleurs + un curseur de densité.
+- [x] **Goldens** : nouveau `tests/golden/sky_and_fog.png` (ciel/brouillard nettement
+      réglés) + `sky_and_fog_settings_change_the_render` (garde-fou : vérifie que ce
+      réglage change bien >20 % des pixels par rapport à la scène de référence, pour
+      détecter un uniform mal câblé qui laisserait le rendu inchangé malgré des valeurs
+      différentes). 257 tests lib + 4 tests bin (inchangés, ce sprint n'ajoute aucun test
+      unitaire, seulement des golden) + 3 golden render + 1 golden skinning verts.
+- **Fichiers** : `src/gfx/shaders/sky.wgsl` (nouveau), `src/gfx/shaders/main.wgsl`,
+  `src/gfx/renderer.rs`, `src/scene/mod.rs`, `src/editor/mod.rs`, `tests/golden_render.rs`.
 
 #### Sprint 90 — Cible HDR + tone mapping ⬜
 - [ ] Rendu dans `Rgba16Float` + passe plein écran ACES (ou AgX).

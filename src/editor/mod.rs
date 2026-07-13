@@ -2944,6 +2944,25 @@ fn build_ui(
                         ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.0));
                     });
                 });
+                ui.collapsing("🌫 Ciel & brouillard", |ui| {
+                    let sky = &mut scene.sky;
+                    ui.horizontal(|ui| {
+                        ui.label("Ciel — horizon");
+                        ui.color_edit_button_rgb(&mut sky.horizon_color);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Ciel — zénith");
+                        ui.color_edit_button_rgb(&mut sky.zenith_color);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Brouillard");
+                        ui.color_edit_button_rgb(&mut sky.fog_color);
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut sky.fog_density, 0.0..=1.0)
+                            .text("densité du brouillard"),
+                    );
+                });
                 if !scene.point_lights.is_empty() {
                     ui.collapsing(
                         format!("💡 Lumières ponctuelles ({})", scene.point_lights.len()),

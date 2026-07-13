@@ -3,6 +3,10 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     eye: vec4<f32>, // position caméra (xyz) pour le spéculaire
+    // Inverse de `view_proj` (Sprint 89), utilisé par `sky.wgsl` seul — WGSL permet à
+    // un shader de ne déclarer qu'un préfixe du buffer réel (cf. `gizmo.wgsl`, qui ne
+    // déclare même pas `eye`) ; recopié ici surtout pour la lisibilité du layout réel.
+    inv_view_proj: mat4x4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -19,6 +23,11 @@ struct Light {
     light_vp: mat4x4<f32>, // view-projection de la lumière (shadow map)
     num_points: vec4<f32>, // x = nombre de lumières ponctuelles
     points: array<PointLight, 8>,
+    // Ciel + brouillard (Sprint 89). `sky_horizon`/`sky_zenith` sont lus par `sky.wgsl`
+    // (fond de scène), pas ici : recopiés pour que l'offset de `fog` reste correct.
+    sky_horizon: vec4<f32>,
+    sky_zenith: vec4<f32>,
+    fog: vec4<f32>, // rgb = couleur, w = densité (0 = désactivé)
 };
 @group(0) @binding(1) var<uniform> light: Light;
 
@@ -169,5 +178,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Émission (l'objet brille de sa propre couleur) + surbrillance de sélection.
     color = color + albedo * emissive;
     color = color + in.highlight * vec3<f32>(0.35, 0.3, 0.0);
+
+    // Brouillard exponentiel (Sprint 89) : mélange vers `fog.rgb` en fonction de la
+    // distance à la caméra — `density = 0` (par défaut) laisse `color` inchangée
+    // (`fog_amount` reste à 0 quelle que soit la distance).
+    let fog_dist = length(camera.eye.xyz - in.world_pos);
+    let fog_amount = clamp(1.0 - exp(-fog_dist * light.fog.w), 0.0, 1.0);
+    color = mix(color, light.fog.rgb, fog_amount);
     return vec4<f32>(color, 1.0);
 }

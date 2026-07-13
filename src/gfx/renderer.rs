@@ -46,6 +46,12 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     /// Position de la caméra (xyz), pour le terme spéculaire. w inutilisé.
     eye: [f32; 4],
+    /// Inverse de `view_proj` (Sprint 89) : déplie un point NDC du plan lointain en
+    /// position monde, pour reconstruire la direction de vue dans `sky.wgsl` sans
+    /// dépendre d'un dégradé fixe en espace écran (qui resterait immobile si la
+    /// caméra pivote). Inutilisé par les autres shaders (`main.wgsl`/`skinned.wgsl`/
+    /// `gizmo.wgsl` ne déclarent qu'un préfixe de cet uniform, WGSL l'autorise).
+    inv_view_proj: [[f32; 4]; 4],
 }
 
 #[repr(C)]
@@ -76,6 +82,12 @@ struct SceneUniform {
     light_vp: [[f32; 4]; 4],
     num_points: [f32; 4], // x = nombre de lumières ponctuelles actives
     points: [PointLightU; crate::scene::MAX_POINT_LIGHTS],
+    /// Ciel + brouillard (Sprint 89) : ajoutés en fin de struct pour ne décaler aucun
+    /// des offsets existants ci-dessus (moins de risque de désync avec les shaders qui
+    /// ne déclarent qu'un préfixe de cet uniform).
+    sky_horizon: [f32; 4], // rgb, w inutilisé
+    sky_zenith: [f32; 4], // rgb, w inutilisé
+    fog: [f32; 4],        // rgb = couleur, w = densité
 }
 
 const SHADOW_SIZE: u32 = 1024;
@@ -113,6 +125,8 @@ pub struct Renderer {
     pub size: winit::dpi::PhysicalSize<u32>,
 
     pipeline: wgpu::RenderPipeline,
+    /// Fond de ciel (Sprint 89), dessiné en premier dans la passe principale.
+    sky_pipeline: wgpu::RenderPipeline,
     depth_view: wgpu::TextureView,
     model_layout: wgpu::BindGroupLayout,
 
@@ -480,6 +494,60 @@ impl Renderer {
             cache: None,
         });
 
+        // --- Ciel (Sprint 89) : triangle plein écran sans vertex buffer, dessiné en
+        // premier dans la passe principale (avant la géométrie), profondeur à `Always`/
+        // pas d'écriture pour ne jamais l'emporter sur un objet réel ni polluer le depth
+        // buffer que la passe de géométrie s'apprête à remplir. Réutilise `camera_layout`
+        // (groupe 0) : mêmes `camera`/`light` que `pipeline`, aucun bind group dédié.
+        let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sky_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/sky.wgsl").into()),
+        });
+        let sky_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky_pipeline_layout"),
+            bind_group_layouts: &[Some(&camera_layout)],
+            immediate_size: 0,
+        });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky_pipeline"),
+            layout: Some(&sky_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs_sky"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: Some("fs_sky"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // --- Skinning GPU (Sprint 86) : palette de joints (groupe 4), pipeline vertex
         // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
         // même `fs_main` : un seul endroit qui connaît l'éclairage).
@@ -763,6 +831,7 @@ impl Renderer {
             config,
             size,
             pipeline,
+            sky_pipeline,
             depth_view,
             model_layout,
             camera_buf,
@@ -1139,9 +1208,13 @@ impl Renderer {
     /// N'écrit le buffer d'un objet que si sa pose ou sa surbrillance a changé.
     fn write_uniforms(&mut self, app: &AppState) {
         let eye = app.camera.eye();
+        let view_proj = app.camera.view_proj();
         let camera_uniform = CameraUniform {
-            view_proj: app.camera.view_proj().to_cols_array_2d(),
+            view_proj: view_proj.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
+            // `view_proj` est toujours inversible (projection perspective + vue
+            // rigide, jamais dégénérée) : pas de garde-fou nécessaire ici.
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
         };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
@@ -1206,6 +1279,24 @@ impl Renderer {
             light_vp: light_vp.to_cols_array_2d(),
             num_points: [count as f32, 0.0, 0.0, 0.0],
             points,
+            sky_horizon: [
+                app.scene.sky.horizon_color[0],
+                app.scene.sky.horizon_color[1],
+                app.scene.sky.horizon_color[2],
+                0.0,
+            ],
+            sky_zenith: [
+                app.scene.sky.zenith_color[0],
+                app.scene.sky.zenith_color[1],
+                app.scene.sky.zenith_color[2],
+                0.0,
+            ],
+            fog: [
+                app.scene.sky.fog_color[0],
+                app.scene.sky.fog_color[1],
+                app.scene.sky.fog_color[2],
+                app.scene.sky.fog_density.max(0.0),
+            ],
         };
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
@@ -1941,6 +2032,11 @@ impl Renderer {
             pass.set_viewport(dx, dy, dw, dh, 0.0, 1.0);
             pass.set_scissor_rect(dx as u32, dy as u32, dw as u32, dh as u32);
 
+            // Ciel (Sprint 89) : dessiné en premier, derrière tout le reste.
+            pass.set_pipeline(&self.sky_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+
             // Grille de référence au sol (depth-testée), en mode édition uniquement.
             if app.show_grid && !app.player && !app.device_preview {
                 pass.set_pipeline(&self.grid_pipeline);
@@ -2201,6 +2297,12 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+
+            // Ciel (Sprint 89) : même geste que dans `render()`.
+            pass.set_pipeline(&self.sky_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
