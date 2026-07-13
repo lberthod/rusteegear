@@ -1411,7 +1411,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   sur des marqueurs — mécanisme complet et testé (marqueurs → événements → scripts),
   contenu skinné/démo à faire séparément (même situation que les Sprints 95-98).
 
-### PHASE O — Physique & feel (100 → 103)
+### PHASE O — Physique & feel (100 → 103c)
 
 #### Sprint 100 — Trimesh + convexe ✅ FAIT
 - [x] **`ColliderShape::TriMesh`/`ConvexHull`** (`src/runtime/physics.rs`) : construits
@@ -1450,13 +1450,27 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/runtime/physics.rs`, `src/runtime/mod.rs`.
 - **Livrable** : capteur de sol et cône de vision scriptés en Lua, visualisés au debug drawing (Sprint 83).
 
-#### Sprint 103 — Character controller kinématique ⬜
+#### Sprint 103a — Maintenabilité : découpage de `app/mod.rs` ⬜
+**Objectif** : extraire des sous-systèmes hors de `app/mod.rs` (7180 lignes, cf. `AUDIT.md` §7.4) avant d'y ajouter la physique de contrôleur.
+- [ ] Extraire des sous-systèmes (combat, IA, etc.) hors de `app/mod.rs` dans des modules dédiés.
+- [ ] Réduire `app/mod.rs` à l'orchestration (state machine, boucle principale).
+- **Fichiers** : `src/app/mod.rs`, `src/app/combat.rs` et nouveaux modules extraits.
+- **Livrable** : taille de `app/mod.rs` réduite significativement ; comportement inchangé ; tests existants verts.
+- **Risque** : refactor pur, sans nouvelle fonctionnalité — le faire **seul**, pas de sprint gameplay en parallèle, pour limiter les conflits de merge.
+
+#### Sprint 103b — Character controller kinématique ⬜
 **Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.
 - [ ] Migration vers `KinematicCharacterController` de rapier.
-- [ ] **Audit complet de la prédiction réseau** derrière, façon sprints 72–77.
 - **Fichiers** : `src/runtime/physics.rs`, `src/app/multiplayer.rs`, `src/bin/server.rs`.
-- **Livrable** : escalier montable en solo et en ligne ; tests de réconciliation verts ; aucun rubber-banding à 100 ms simulées.
+- **Livrable** : escalier montable en solo et en ligne.
 - **Risque** : seul sprint qui menace l'acquis multijoueur — le faire **seul**, pas groupé.
+
+#### Sprint 103c — Audit complet de la prédiction réseau ⬜
+**Objectif** : revalider la prédiction/réconciliation réseau après la migration du contrôleur, façon sprints 72–77.
+- [ ] Vérifier la réconciliation client/serveur sur le nouveau contrôleur cinématique.
+- [ ] Tests de non-régression rubber-banding à latence simulée.
+- **Fichiers** : `src/app/network_client.rs`, `src/net/interpolation.rs`, `src/bin/server.rs`.
+- **Livrable** : tests de réconciliation verts ; aucun rubber-banding à 100 ms simulées.
 
 ### PHASE P — Audio, HUD & confort (104 → 110, sprints tampons insérables après K)
 
