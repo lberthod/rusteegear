@@ -128,6 +128,24 @@ impl AppState {
     /// réseau), mais toujours simulé par la physique indéfiniment, et chaque
     /// spawn en trop reconstruit toute la physique de la scène (coût qui
     /// grandit avec le nombre d'objets).
+    ///
+    /// **Recyclage des emplacements orphelins (audit en conditions réelles,
+    /// 2026-07-13)** : `despawn_network_player` ne retire jamais l'objet du
+    /// `Vec` (juste `visible = false`, cf. sa doc — retirer décalerait les
+    /// indices des joueurs encore connectés). Sans recyclage, un salon qui
+    /// voit beaucoup de va-et-vient (reconnexions, tests, joueurs qui
+    /// abandonnent) accumule un clone du gabarit par `Join` **pour toujours**
+    /// — chacun avec son propre corps physique dynamique, simulé à chaque pas
+    /// même invisible (`controller.input` rend l'objet « controllable »
+    /// indépendamment de sa visibilité, contrairement à `ai_chaser`). Sur un
+    /// salon de longue durée (le salon partagé par défaut, potentiellement
+    /// des heures), ça grossit sans borne et alourdit chaque `Physics::build`
+    /// (reconstruit à chaque join/leave) — un vrai risque de à-coups perçus
+    /// comme des blocages de mouvement en jeu. On réutilise donc en priorité
+    /// un clone déjà présent (`controller.input`, hors gabarit d'origine) qui
+    /// n'appartient plus à aucun joueur connu, avant d'en pousser un nouveau —
+    /// borne la taille de la scène au pic de joueurs *simultanés* jamais
+    /// atteint, pas au nombre cumulé de connexions depuis le démarrage.
     pub fn spawn_network_player(&mut self, id: PlayerId) -> Option<usize> {
         if let Some(&existing) = self.network_players.get(&id) {
             return Some(existing);
@@ -137,6 +155,11 @@ impl AppState {
             .objects
             .iter()
             .position(|o| o.controller.as_ref().is_some_and(|c| c.input))?;
+        let reusable_index = self.scene.objects.iter().enumerate().position(|(i, o)| {
+            i != template_index
+                && o.controller.as_ref().is_some_and(|c| c.input)
+                && !self.network_players.values().any(|&v| v == i)
+        });
         let mut template = self.scene.objects[template_index].clone();
         // Écarte chaque joueur du gabarit d'origine (et des précédents) : sans ça,
         // deux corps rigides spawnés au même point s'interpénètrent et la physique
@@ -159,8 +182,17 @@ impl AppState {
         // du pipeline réseau (bug constaté en conditions réelles, 2026-07-12 : deux
         // vrais clients connectés, positions bien reçues, `visible` toujours faux).
         template.visible = true;
-        let index = self.scene.objects.len();
-        self.scene.objects.push(template);
+        let index = match reusable_index {
+            Some(i) => {
+                self.scene.objects[i] = template;
+                i
+            }
+            None => {
+                let i = self.scene.objects.len();
+                self.scene.objects.push(template);
+                i
+            }
+        };
         self.network_players.insert(id, index);
         self.network_inputs.insert(id, NetworkInput::default());
         // Vie individualisée (GAMEDESIGN_EN_LIGNE.md §3.1) : chaque joueur
@@ -454,6 +486,63 @@ mod tests {
             !app.scene.objects[index].visible,
             "l'objet doit rester en place (indices stables) mais devenir invisible"
         );
+    }
+
+    /// Audit en conditions réelles (2026-07-13) : sans recyclage, chaque
+    /// `Join` pousse un nouveau clone dans `scene.objects`, pour toujours —
+    /// un salon de longue durée (beaucoup de va-et-vient) grossit sans borne
+    /// et alourdit chaque `Physics::build` (reconstruit à chaque join/leave),
+    /// perçu en jeu comme des à-coups/blocages de mouvement. Vérifie qu'un
+    /// nouveau joueur qui rejoint APRÈS le départ d'un précédent réutilise
+    /// son emplacement au lieu d'en créer un troisième.
+    #[test]
+    fn a_new_player_reuses_a_slot_left_by_a_departed_one_instead_of_growing_the_scene() {
+        let mut app = app_with_zombies_demo();
+        let before = app.scene.objects.len();
+
+        let first = app.spawn_network_player(1).unwrap();
+        assert_eq!(app.scene.objects.len(), before + 1);
+        app.despawn_network_player(1);
+
+        let second = app.spawn_network_player(2).unwrap();
+
+        assert_eq!(
+            second, first,
+            "le second joueur doit récupérer l'emplacement laissé par le premier"
+        );
+        assert_eq!(
+            app.scene.objects.len(),
+            before + 1,
+            "la scène ne doit pas grossir tant qu'il ne dépasse jamais 1 joueur simultané"
+        );
+        assert!(
+            app.scene.objects[second].visible,
+            "l'emplacement recyclé doit redevenir visible pour son nouveau joueur"
+        );
+    }
+
+    /// Complète le test précédent : avec deux joueurs simultanés, un 3e qui
+    /// rejoint pendant que les deux premiers sont encore là doit bien obtenir
+    /// un nouvel objet (rien à recycler) — le recyclage ne doit jamais faire
+    /// partager un objet à deux joueurs connectés en même temps.
+    #[test]
+    fn simultaneous_players_never_share_a_recycled_slot() {
+        let mut app = app_with_zombies_demo();
+        let a = app.spawn_network_player(1).unwrap();
+        let b = app.spawn_network_player(2).unwrap();
+        assert_ne!(a, b);
+
+        app.despawn_network_player(1);
+        // Pendant que 2 est toujours connecté, 3 rejoint : doit récupérer
+        // l'emplacement de 1 (le seul orphelin), jamais celui de 2.
+        let c = app.spawn_network_player(3).unwrap();
+
+        assert_eq!(
+            c, a,
+            "le 3e joueur doit recycler l'emplacement du 1er, parti"
+        );
+        assert_ne!(c, b, "jamais l'emplacement d'un joueur encore connecté");
+        assert_eq!(app.network_player_count(), 2);
     }
 
     /// Régression AUDIT_MMORPG.md §4.2 : `restart_game` remet `scene.objects` à
