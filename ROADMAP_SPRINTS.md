@@ -734,13 +734,15 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [x] `AppState::debug_line/debug_box/debug_sphere` **côté Rust**, sur le pipeline gizmo
       (buffer dédié, redimensionné au doublement), vidé après chaque frame de rendu — branché
       sur `render()` et `render_scene_headless`. Vérifié visuellement (exemple jetable).
-- [ ] Exposition **Lua** (`debug.line()` côté script) — reportée : `run_script` a 16 sites
-      d'appel (14 dans les tests), un ajout de paramètre y est un chantier à part entière.
+- [x] Exposition **Lua** : `debug.line(x1,y1,z1,x2,y2,z2,r,g,b)`, même mécanique que
+      `vibrate()`/`set_health()` (table accumulatrice relue après `func.call`). Les 16 sites
+      d'appel de `run_script` (1 production + 15 tests) mis à jour ; `debug.box`/`debug.sphere`
+      restent Rust-only (un script peut composer des lignes lui-même au besoin).
 - [ ] Sélecteur de vue (normales, depth) dans la toolbar — pas commencé.
-- **Fichiers livrés** : `src/app/mod.rs`, `src/gfx/renderer.rs`. **Restant** : `src/runtime/mod.rs`
-  (Lua), `src/gfx/` (vues buffers).
+- **Fichiers** : `src/app/mod.rs` (`run_script`, API Rust + Lua), `src/gfx/renderer.rs`
+  (pipeline). **Restant** : `src/gfx/` (vues buffers).
 - **Livrable** : le clic de sélection en mode édition visualise le rayon de picking (ligne
-  jaune) — la trajectoire du missile en Lua attend l'exposition Lua ci-dessus.
+  jaune) ; un script peut désormais tracer sa propre trajectoire avec `debug.line()`.
 
 ### PHASE L — Animation squelettale (84 → 88)
 
