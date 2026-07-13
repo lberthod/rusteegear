@@ -286,6 +286,7 @@ impl Editor {
         net_connected: bool,
         weapon_label: &str,
         defeated: bool,
+        kills: u32,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -307,6 +308,12 @@ impl Editor {
             }
             wave_hud(ctx, area, scene, wave);
             weapon_hud(ctx, area, weapon_label);
+            // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
+            // affiché en Play, contrairement au score de `collectibles_hud` juste en
+            // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
+            // multijoueur n'en a pas — sans ce HUD dédié, le joueur ne voyait *aucun*
+            // score, cf. audit en conditions réelles, 2026-07-13).
+            kills_hud(ctx, area, kills);
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
             }
@@ -379,6 +386,7 @@ impl Editor {
         leaderboard: &[crate::app::network_client::LeaderboardLine],
         weapon_label: &str,
         defeated: bool,
+        kills: u32,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -447,6 +455,7 @@ impl Editor {
                 leaderboard,
                 weapon_label,
                 defeated,
+                kills,
                 &mut actions,
             );
         });
@@ -2239,6 +2248,30 @@ fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
     );
 }
 
+/// Frags (haut-droite) : compteur individualisé en multijoueur (brique de
+/// progression pour un futur MMORPG, cf. `AppState::displayed_kill_count`),
+/// ou simplement le score solo hors ligne — un seul nombre, la distinction
+/// entre les deux modes est déjà résolue par `displayed_kill_count`.
+/// Indépendant de `collectibles_hud` (juste en dessous), qui ne s'affiche que
+/// si la scène a des collectibles — la carte multijoueur n'en a pas, donc
+/// sans ce HUD dédié, aucun score n'était jamais visible en ligne.
+fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_kills"),
+    ));
+    // top()+86 : sous les trois lignes de `collectibles_hud` (18/42/64), pour ne
+    // jamais les chevaucher sur une scène qui aurait exceptionnellement les deux.
+    painter.text(
+        egui::pos2(area.right() - 20.0, area.top() + 86.0),
+        Align2::RIGHT_CENTER,
+        format!("💀 Frags : {kills}"),
+        FontId::proportional(18.0),
+        Color32::from_rgb(230, 140, 100),
+    );
+}
+
 fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
     if wave == 0 {
         return;
@@ -2651,6 +2684,7 @@ fn build_ui(
     leaderboard: &[crate::app::network_client::LeaderboardLine],
     weapon_label: &str,
     defeated: bool,
+    kills: u32,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -3419,6 +3453,7 @@ fn build_ui(
     if *playing {
         wave_hud(root.ctx(), play_rect, scene, wave);
         weapon_hud(root.ctx(), play_rect, weapon_label);
+        kills_hud(root.ctx(), play_rect, kills);
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);

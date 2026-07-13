@@ -1590,6 +1590,7 @@ impl Renderer {
                 let net_connected = app.is_connected();
                 let weapon_label = app.selected_weapon_label();
                 let defeated = app.is_locally_defeated();
+                let kills = app.displayed_kill_count();
                 let (output, actions) = editor.run_player_overlay(
                     &window,
                     &app.scene,
@@ -1608,6 +1609,7 @@ impl Renderer {
                     net_connected,
                     weapon_label,
                     defeated,
+                    kills,
                 );
                 player_net_actions = Some(actions);
                 Some(output)
@@ -1628,6 +1630,7 @@ impl Renderer {
             let has_firebase_account = app.has_firebase_account();
             let weapon_label = app.selected_weapon_label();
             let defeated = app.is_locally_defeated();
+            let kills = app.displayed_kill_count();
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -1657,6 +1660,7 @@ impl Renderer {
                 &app.leaderboard,
                 weapon_label,
                 defeated,
+                kills,
             );
             if actions.save {
                 app.save();
