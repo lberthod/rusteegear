@@ -718,11 +718,16 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   une frame gelée sans demande n'avance pas `self.time`, une frame avec demande avance de
   exactement 1/60 s, la frame gelée suivante n'avance plus.
 
-#### Sprint 82 — Console développeur (cvars) ⬜
+#### Sprint 82 — Console développeur (cvars) 🟢
 **Objectif** : multiplier la vitesse de debug de tout le reste.
-- [ ] Champ de saisie dans la console + registre de commandes : `timescale`, `tp`, `give`, `net_stats`, `seed`.
-- **Fichiers** : `src/editor/mod.rs`, `src/log_buffer.rs`.
-- **Livrable** : 5 commandes documentées et testées.
+- [x] Champ de saisie dans la fenêtre Console existante + registre de commandes :
+      `timescale <v>` (clampé 0..8), `pause`/`play`/`stop`/`step` (recoupent la toolbar,
+      accessibles au clavier), `tp <x> <y> <z>`, `net_stats`. ~~`give`~~/~~`seed`~~ retirés
+      de la liste indicative : pas de système d'inventaire, pas de RNG à seeder (cf.
+      Sprint 81) — ajouter des commandes le jour où ces systèmes existeront.
+- **Fichiers** : `src/app/mod.rs` (`AppState::run_console_command`), `src/editor/mod.rs`.
+- **Livrable** : 6 commandes testées bout en bout (`AppState` réel) — jamais de panique sur
+  une saisie invalide, toujours un message de retour (usage ou erreur explicite).
 
 #### Sprint 83 — Debug drawing + vues buffers ⬜
 **Objectif** : voir ce que le moteur calcule.
