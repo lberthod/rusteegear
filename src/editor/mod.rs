@@ -292,6 +292,7 @@ impl Editor {
         kills: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
+        roster: &[RosterEntry],
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -319,6 +320,7 @@ impl Editor {
             // multijoueur n'en a pas — sans ce HUD dédié, le joueur ne voyait *aucun*
             // score, cf. audit en conditions réelles, 2026-07-13).
             kills_hud(ctx, area, kills);
+            multiplayer_roster_panel(ctx, roster);
             if scene_has_ranged_weapon(scene) {
                 crosshair(ctx, area);
                 weapon_inventory_panel(ctx, weapon_inventory, selected_weapon, &mut actions);
@@ -398,6 +400,7 @@ impl Editor {
         kills: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
+        roster: &[RosterEntry],
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -469,6 +472,7 @@ impl Editor {
                 kills,
                 weapon_inventory,
                 selected_weapon,
+                roster,
                 &mut actions,
             );
         });
@@ -2350,6 +2354,75 @@ fn weapon_inventory_panel(
         });
 }
 
+/// Entrée du tableau des joueurs en ligne, telle que produite par
+/// `network_client::multiplayer_roster` : `(nom, vie 0..1 ou None avant le
+/// premier snapshot, frags, soi-même ?)`.
+pub type RosterEntry = (String, Option<f32>, Option<u32>, bool);
+
+/// Classement à afficher dans `multiplayer_roster_panel` : trié par frags
+/// décroissants (le tri est stable, donc à égalité l'ordre d'origine — soi
+/// d'abord — est conservé), frags inconnus comptés 0.
+fn roster_display_order(roster: &[RosterEntry]) -> Vec<&RosterEntry> {
+    let mut sorted: Vec<&RosterEntry> = roster.iter().collect();
+    sorted.sort_by_key(|(_, _, kills, _)| std::cmp::Reverse(kills.unwrap_or(0)));
+    sorted
+}
+
+/// Tableau des joueurs de la partie en ligne (fenêtre repliable, même
+/// mécanisme que `weapon_inventory_panel` : l'état plié/déplié est géré par
+/// egui). L'équivalent du « TAB » des FPS : pseudo, mini barre de vie et
+/// frags de chaque joueur connecté, classés par frags décroissants, avec sa
+/// propre ligne surlignée. `multiplayer_roster` (réseau) existait depuis
+/// GAMEDESIGN_EN_LIGNE.md §3.4 mais n'était affiché nulle part — sans ce
+/// panneau, impossible de savoir qui mène la partie. N'apparaît qu'en ligne
+/// (roster vide sinon), à droite du bouton 🎒 Inventaire.
+fn multiplayer_roster_panel(ctx: &egui::Context, roster: &[RosterEntry]) {
+    use egui::Color32;
+    if roster.is_empty() {
+        return;
+    }
+    egui::Window::new("👥 Joueurs")
+        .id(egui::Id::new("multiplayer_roster"))
+        .collapsible(true)
+        .default_open(false)
+        .resizable(false)
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(216.0, 56.0))
+        .default_width(220.0)
+        .show(ctx, |ui| {
+            for (name, health, kills, is_self) in roster_display_order(roster) {
+                ui.horizontal(|ui| {
+                    // Mini barre de vie : fond gris, remplissage vert→rouge selon la vie.
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(36.0, 10.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, Color32::from_gray(60));
+                    if let Some(h) = health {
+                        let h = h.clamp(0.0, 1.0);
+                        let fill = egui::Rect::from_min_size(
+                            rect.min,
+                            egui::vec2(rect.width() * h, rect.height()),
+                        );
+                        let color = if h > 0.5 {
+                            Color32::from_rgb(110, 200, 110)
+                        } else if h > 0.25 {
+                            Color32::from_rgb(230, 180, 80)
+                        } else {
+                            Color32::from_rgb(220, 90, 80)
+                        };
+                        ui.painter().rect_filled(fill, 2.0, color);
+                    }
+                    if *is_self {
+                        ui.strong(format!("{name} (toi)"));
+                    } else {
+                        ui.label(name);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(format!("💀 {}", kills.unwrap_or(0)));
+                    });
+                });
+            }
+        });
+}
+
 /// La scène a-t-elle un joueur pilotable équipé d'une arme à distance
 /// (`Controller::fire_button` non vide) ? Sert à n'afficher le réticule de
 /// visée que quand il a un sens — pas dans une démo sans tir à distance.
@@ -2811,6 +2884,7 @@ fn build_ui(
     kills: u32,
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
+    roster: &[RosterEntry],
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -3587,6 +3661,7 @@ fn build_ui(
         wave_hud(root.ctx(), play_rect, scene, wave);
         weapon_hud(root.ctx(), play_rect, weapon_label);
         kills_hud(root.ctx(), play_rect, kills);
+        multiplayer_roster_panel(root.ctx(), roster);
         if scene_has_ranged_weapon(scene) {
             crosshair(root.ctx(), play_rect);
             weapon_inventory_panel(root.ctx(), weapon_inventory, selected_weapon, actions);
@@ -3680,4 +3755,27 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
                 .prefix("z "),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Le tableau des joueurs (👥) classe par frags décroissants, frags
+    /// inconnus (avant premier snapshot) comptés 0, et conserve l'ordre
+    /// d'origine à égalité (tri stable ⇒ soi-même reste devant).
+    #[test]
+    fn roster_trie_par_frags_decroissants() {
+        let roster: Vec<RosterEntry> = vec![
+            ("Vous".into(), Some(1.0), Some(2), true),
+            ("Alice".into(), Some(0.5), Some(5), false),
+            ("Bob".into(), None, None, false),
+            ("Chloé".into(), Some(0.2), Some(2), false),
+        ];
+        let ordered: Vec<&str> = roster_display_order(&roster)
+            .iter()
+            .map(|(name, _, _, _)| name.as_str())
+            .collect();
+        assert_eq!(ordered, ["Alice", "Vous", "Chloé", "Bob"]);
+    }
 }

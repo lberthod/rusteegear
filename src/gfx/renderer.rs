@@ -1965,6 +1965,7 @@ impl Renderer {
                 let kills = app.displayed_kill_count();
                 let weapon_inventory = app.ranged_weapon_display_info();
                 let selected_weapon = app.selected_weapon();
+                let roster = app.multiplayer_roster();
                 let (output, actions) = editor.run_player_overlay(
                     &window,
                     &app.scene,
@@ -1986,6 +1987,7 @@ impl Renderer {
                     kills,
                     &weapon_inventory,
                     selected_weapon,
+                    &roster,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -2012,6 +2014,7 @@ impl Renderer {
             let kills = app.displayed_kill_count();
             let weapon_inventory = app.ranged_weapon_display_info();
             let selected_weapon = app.selected_weapon();
+            let roster = app.multiplayer_roster();
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -2044,6 +2047,7 @@ impl Renderer {
                 kills,
                 &weapon_inventory,
                 selected_weapon,
+                &roster,
             );
             if let Some(i) = actions.select_weapon {
                 app.select_weapon(i);
