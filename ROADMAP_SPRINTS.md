@@ -1469,10 +1469,43 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/scene/mod.rs`, `src/runtime/physics.rs`, `src/editor/mod.rs`.
   302 tests lib + 4 bin + 8 golden verts.
 
-#### Sprint 102 — Requêtes gameplay + trigger exit ⬜
-- [ ] `raycast(o, d, masque)` et `overlap_sphere()` en Lua via `QueryPipeline` ; événement `exited`.
-- **Fichiers** : `src/runtime/physics.rs`, `src/runtime/mod.rs`.
+#### Sprint 102 — Requêtes gameplay + trigger exit ✅ FAIT
+- [x] **`Physics::raycast`/`overlap_sphere`** (`src/runtime/physics.rs`) : requêtes
+      spatiales via le `QueryPipeline` de rapier — `raycast` renvoie le premier
+      collider touché (point d'impact, distance, index d'objet via un nouveau
+      `collider_owner: HashMap<ColliderHandle, usize>` qui couvre **tous** les
+      colliders, statiques inclus, contrairement à `dynamic`/`controlled`) ;
+      `overlap_sphere` renvoie les index dans un rayon. Même filtrage par couche que
+      `collision_layer`/`collision_mask` (Sprint 101, bits partagés). Reconstruisent
+      une broad-phase **jetable** à chaque appel plutôt que de réutiliser celle de
+      `step` : **trouvé en écrivant les tests** — peupler directement la BVH
+      incrémentale de la simulation cassait la physique réelle (chasseurs/joueur
+      téléportés, cf. les tests d'IA qui ont viré au rouge) en perturbant son suivi
+      interne des colliders modifiés entre deux pas.
+- [x] **`raycast()`/`overlap_sphere()` côté Lua** (`src/app/mod.rs`, `run_script`) :
+      fermetures **scopées** (`lua.scope`, pas `lua.create_function`) — seules du
+      fichier à emprunter `&Physics` au lieu de ne capturer que des valeurs
+      possédées/clonées comme le reste de l'API Lua. `raycast` renvoie une table
+      `{x,y,z,dist}` ou `nil` ; `overlap_sphere` un compte (pas une liste d'index —
+      un script n'a de toute façon pas de handle direct sur un autre objet, cf.
+      `find_tag`, Sprint 97). `physics` vaut `None` hors mode Play : les deux
+      fonctions renvoient alors « rien touché » sans planter.
+- [x] **`obj.exited`** (`AppState::trigger_prev`, `sim_step`) : symétrique de
+      `obj.triggered` — vrai le tick où le contact avec une zone `trigger` vient de
+      cesser (différence entre l'ensemble déclenché du tick précédent et celui de ce
+      tick), pas seulement « pas en contact ».
+- [x] **Livrable vérifié** par 10 tests bout-en-bout (5 `runtime::physics`, physique
+      réelle ; 5 `app`, au niveau Lua) : capteur de sol (`raycast` vers le bas,
+      distance/point d'impact lus dans le script puis visualisés via `debug.line`,
+      Sprint 83) et cône de vision (`overlap_sphere` pour la détection de proximité,
+      brique du test d'angle/ligne de vue qu'un script ferait ensuite avec
+      `find_tag` + `raycast`).
+- **Fichiers** : `src/runtime/physics.rs`, `src/app/mod.rs` (`run_script`, pas prévu
+  au départ — nécessaire pour exposer `raycast`/`overlap_sphere`/`obj.exited` aux
+  scripts, même schéma que les autres API Lua ajoutées aux sprints précédents,
+  ex. Sprint 97/99).
 - **Livrable** : capteur de sol et cône de vision scriptés en Lua, visualisés au debug drawing (Sprint 83).
+  312 tests lib + 4 bin + 8 golden verts.
 
 #### Sprint 103a — Maintenabilité : découpage des gros modules & AppState ⬜
 **Objectif** : réduire le risque des futurs changements gameplay/UI/réseau/script en cassant les fichiers-mastodontes avant d'y ajouter la physique de contrôleur (cf. `AUDIT.md` §7.4).

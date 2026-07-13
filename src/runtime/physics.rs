@@ -72,6 +72,21 @@ pub struct Physics {
     dynamic: Vec<(usize, RigidBodyHandle)>,
     /// (index d'objet, handle) pour les objets **pilotables** (joystick/gyro/saut).
     controlled: Vec<(usize, RigidBodyHandle)>,
+    /// Collider → index d'objet, pour **tous** les colliders construits (statiques
+    /// inclus, contrairement à `dynamic`/`controlled` qui ne suivent que ce qui doit
+    /// être recopié/piloté chaque frame) — Sprint 102 : nécessaire pour retrouver quel
+    /// objet une requête spatiale (`raycast`/`overlap_sphere`) a touché.
+    collider_owner: std::collections::HashMap<ColliderHandle, usize>,
+}
+
+/// Résultat d'un `Physics::raycast` (Sprint 102) : point d'impact (monde), distance
+/// parcourue depuis l'origine, et index de l'objet touché (`None` si le collider
+/// touché n'a pas été retrouvé dans `collider_owner` — ne doit pas arriver en
+/// pratique, tous les colliders construits par `build` y sont enregistrés).
+pub struct RaycastHit {
+    pub point: Vec3,
+    pub distance: f32,
+    pub index: Option<usize>,
 }
 
 impl Physics {
@@ -81,6 +96,7 @@ impl Physics {
         let mut colliders = ColliderSet::new();
         let mut dynamic = Vec::new();
         let mut controlled = Vec::new();
+        let mut collider_owner = std::collections::HashMap::new();
 
         for (i, obj) in scene.objects.iter().enumerate() {
             // Un objet pilotable (joystick/gyro/saut) OU une IA poursuivante **visible**
@@ -235,7 +251,8 @@ impl Physics {
                 InteractionTestMode::And,
             ))
             .build();
-            colliders.insert_with_parent(collider, handle, &mut bodies);
+            let collider_handle = colliders.insert_with_parent(collider, handle, &mut bodies);
+            collider_owner.insert(collider_handle, i);
 
             if is_dynamic {
                 dynamic.push((i, handle));
@@ -269,6 +286,7 @@ impl Physics {
             ccd: CCDSolver::new(),
             dynamic,
             controlled,
+            collider_owner,
         }
     }
 
@@ -391,6 +409,82 @@ impl Physics {
         {
             body.set_linvel(Vector::new(v.x, v.y, v.z), true);
         }
+    }
+
+    /// Broad-phase **jetable**, reconstruite à la volée pour une requête spatiale
+    /// ponctuelle (`raycast`/`overlap_sphere`, Sprint 102) — délibérément distincte de
+    /// `self.broad` (la BVH incrémentale que `step` fait vivre d'un pas à l'autre) :
+    /// la peupler nous-mêmes ici évite de perturber son état interne (compteurs de
+    /// changement, détection de première passe) entre deux pas de simulation, ce qui
+    /// a fait dérailler la physique réelle en test (chasseurs/joueur téléportés) lors
+    /// d'un premier essai avec une BVH partagée. Reconstruire à chaque appel coûte
+    /// O(nombre de colliders) — acceptable à l'échelle d'un script par tick, pas
+    /// d'un appel par frame et par pixel.
+    fn query_broad_phase(&self) -> DefaultBroadPhase {
+        let mut broad = DefaultBroadPhase::new();
+        let handles: Vec<ColliderHandle> = self.collider_owner.keys().copied().collect();
+        broad.update(
+            &self.integration,
+            &self.colliders,
+            &self.bodies,
+            &handles,
+            &[],
+            &mut Vec::new(),
+        );
+        broad
+    }
+
+    /// Lance un rayon dans le monde physique (Sprint 102), via le `QueryPipeline` de
+    /// rapier — brique de `raycast()` côté Lua (`src/app/mod.rs`) : capteur de sol
+    /// (rayon vers le bas), ligne de vue d'un cône de vision, etc. `mask` filtre les
+    /// colliders par couche (mêmes bits que `collision_layer`/`collision_mask`, Sprint
+    /// 101) : seuls les colliders dont la couche recoupe `mask` sont touchés. `dir`
+    /// n'a pas besoin d'être normalisé ; direction nulle → `None` sans planter plutôt
+    /// que de diviser par zéro (`Vec3::try_normalize`).
+    pub fn raycast(&self, origin: Vec3, dir: Vec3, max_toi: f32, mask: u32) -> Option<RaycastHit> {
+        let dir = dir.try_normalize()?;
+        let broad = self.query_broad_phase();
+        let query = broad.as_query_pipeline(
+            self.narrow.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            QueryFilter::new().groups(InteractionGroups::new(
+                Group::ALL,
+                Group::from_bits_truncate(mask),
+                InteractionTestMode::And,
+            )),
+        );
+        let ray = Ray::new(origin, dir);
+        let (handle, toi) = query.cast_ray(&ray, max_toi.max(0.0), true)?;
+        Some(RaycastHit {
+            point: origin + dir * toi,
+            distance: toi,
+            index: self.collider_owner.get(&handle).copied(),
+        })
+    }
+
+    /// Renvoie les index d'objets dont le collider recoupe une sphère de `radius`
+    /// centrée en `center` (Sprint 102, `QueryPipeline::intersect_shape`) — brique
+    /// d'`overlap_sphere()` côté Lua : détection de proximité (ennemis dans un rayon,
+    /// zone d'effet), sans avoir à lancer un rayon par direction possible. Même
+    /// filtrage par couche que `raycast`.
+    pub fn overlap_sphere(&self, center: Vec3, radius: f32, mask: u32) -> Vec<usize> {
+        let broad = self.query_broad_phase();
+        let query = broad.as_query_pipeline(
+            self.narrow.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            QueryFilter::new().groups(InteractionGroups::new(
+                Group::ALL,
+                Group::from_bits_truncate(mask),
+                InteractionTestMode::And,
+            )),
+        );
+        let ball = Ball::new(radius.max(0.0));
+        query
+            .intersect_shape(Pose::from_translation(center), &ball)
+            .filter_map(|(handle, _)| self.collider_owner.get(&handle).copied())
+            .collect()
     }
 
     /// Avance la simulation de `dt` et recopie les poses des corps dynamiques.
@@ -941,5 +1035,175 @@ mod tests {
         let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
         let vx = phys.bodies.get(handle).unwrap().linvel().x;
         assert!((vx - 8.0).abs() < 1e-5, "vx doit valoir la cible, vx={vx}");
+    }
+
+    /// Sol plat (index 0) + mur vertical (index 1), tous deux statiques — sert aux
+    /// tests du Sprint 102 (`raycast`/`overlap_sphere`, `QueryPipeline`).
+    fn ground_and_wall_scene() -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Mur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.0, 0.0))
+                .with_scale(Vec3::new(0.5, 2.0, 2.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene
+    }
+
+    /// Livrable du Sprint 102 : `raycast` doit trouver le collider le plus proche sur
+    /// la trajectoire et identifier l'objet touché — brique du « capteur de sol »
+    /// (rayon vers le bas) et du « cône de vision » (ligne de vue vers une cible).
+    #[test]
+    fn raycast_hits_the_nearest_collider_and_reports_its_object_index() {
+        let scene = ground_and_wall_scene();
+        let phys = Physics::build(&scene);
+        // Vers le bas depuis 5 m au-dessus du sol (demi-épaisseur 0.5, face haute à
+        // y=-0.5) : capteur de sol typique.
+        let hit = phys
+            .raycast(
+                Vec3::new(0.0, 5.0, 0.0),
+                Vec3::new(0.0, -1.0, 0.0),
+                100.0,
+                u32::MAX,
+            )
+            .expect("le rayon vers le bas doit toucher le sol");
+        assert_eq!(hit.index, Some(0), "doit identifier l'objet « Sol »");
+        assert!(
+            (hit.distance - 5.5).abs() < 0.05,
+            "distance attendue ~5.5 m (dist={})",
+            hit.distance
+        );
+        assert!(
+            (hit.point.y - -0.5).abs() < 0.05,
+            "le point d'impact doit être sur la face haute du sol (y={})",
+            hit.point.y
+        );
+
+        // Vers +X depuis l'origine : ligne de vue vers le mur.
+        let hit_wall = phys
+            .raycast(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 100.0, u32::MAX)
+            .expect("le rayon vers le mur doit toucher quelque chose");
+        assert_eq!(hit_wall.index, Some(1), "doit identifier l'objet « Mur »");
+
+        // Vers le haut : rien au-dessus des deux objets, aucun impact.
+        assert!(
+            phys.raycast(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 100.0, u32::MAX)
+                .is_none(),
+            "un rayon vers le ciel ne doit rien toucher"
+        );
+    }
+
+    /// Contre-épreuve : direction nulle → `None` sans diviser par zéro (`try_normalize`).
+    #[test]
+    fn raycast_with_a_zero_direction_returns_none_instead_of_panicking() {
+        let scene = ground_and_wall_scene();
+        let phys = Physics::build(&scene);
+        assert!(
+            phys.raycast(Vec3::ZERO, Vec3::ZERO, 100.0, u32::MAX)
+                .is_none()
+        );
+    }
+
+    /// Livrable secondaire : `mask` doit filtrer les colliders par couche, mêmes bits
+    /// que `collision_layer`/`collision_mask` (Sprint 101) — un rayon ne doit toucher
+    /// que les colliders dont la couche recoupe le masque demandé.
+    #[test]
+    fn raycast_mask_filters_by_collision_layer() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Mur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.0, 0.0))
+                .with_scale(Vec3::new(0.5, 2.0, 2.0)),
+            physics: PhysicsKind::Static,
+            collision_layer: 0b010, // couche 2
+            ..Default::default()
+        });
+        let phys = Physics::build(&scene);
+        let origin = Vec3::ZERO;
+        let dir = Vec3::new(1.0, 0.0, 0.0);
+        assert!(
+            phys.raycast(origin, dir, 100.0, 0b010).is_some(),
+            "un masque incluant la couche du mur doit le toucher"
+        );
+        assert!(
+            phys.raycast(origin, dir, 100.0, 0b101).is_none(),
+            "un masque excluant la couche du mur ne doit rien toucher"
+        );
+    }
+
+    /// Livrable du Sprint 102 : `overlap_sphere` doit détecter les colliders à portée
+    /// et ignorer ceux hors de la sphère — brique du « cône de vision » (détection de
+    /// proximité avant même de tester l'angle/la ligne de vue).
+    #[test]
+    fn overlap_sphere_finds_colliders_within_radius_and_ignores_far_ones() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Proche".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(1.0, 0.0, 0.0))
+                .with_scale(Vec3::splat(0.2)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Loin".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(20.0, 0.0, 0.0))
+                .with_scale(Vec3::splat(0.2)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        let phys = Physics::build(&scene);
+
+        let near_only = phys.overlap_sphere(Vec3::ZERO, 2.0, u32::MAX);
+        assert_eq!(
+            near_only,
+            vec![0],
+            "seul l'objet proche doit être détecté (trouvé={near_only:?})"
+        );
+
+        let mut both = phys.overlap_sphere(Vec3::ZERO, 25.0, u32::MAX);
+        both.sort_unstable();
+        assert_eq!(
+            both,
+            vec![0, 1],
+            "un rayon suffisant doit détecter les deux objets (trouvé={both:?})"
+        );
+    }
+
+    /// Même filtrage par couche que `raycast` (mêmes bits `collision_layer`/`mask`).
+    #[test]
+    fn overlap_sphere_mask_filters_by_collision_layer() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Capteur".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(1.0, 0.0, 0.0))
+                .with_scale(Vec3::splat(0.2)),
+            physics: PhysicsKind::Static,
+            collision_layer: 0b010, // couche 2
+            ..Default::default()
+        });
+        let phys = Physics::build(&scene);
+        assert_eq!(
+            phys.overlap_sphere(Vec3::ZERO, 2.0, 0b010),
+            vec![0],
+            "un masque incluant la couche du capteur doit le détecter"
+        );
+        assert!(
+            phys.overlap_sphere(Vec3::ZERO, 2.0, 0b101).is_empty(),
+            "un masque excluant la couche du capteur ne doit rien détecter"
+        );
     }
 }

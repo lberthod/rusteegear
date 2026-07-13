@@ -203,6 +203,12 @@ pub struct AppState {
     /// intra-tick : peu importe quel objet émet ou écoute en premier dans la boucle
     /// des scripts, tous les auditeurs voient l'événement au même tick.
     game_events: Vec<String>,
+    /// Zones de déclenchement actives au tick **précédent** (Sprint 102, `sim_step`) :
+    /// indices d'objets `trigger` en contact avec le joueur au tick d'avant. Sert à
+    /// détecter la sortie (`obj.exited`) — le tick où un objet quitte cet ensemble sans
+    /// y être revenu — plutôt que de la déduire uniquement de `obj.triggered` qui ne
+    /// dit que « en contact maintenant », jamais « vient de cesser de l'être ».
+    trigger_prev: std::collections::HashSet<usize>,
     /// Variables de script persistantes (Sprint 98), lues/écrites en Lua via
     /// `save.get("clé")`/`save.set("clé", valeur)` — contrairement à `game_events`,
     /// ne se vide jamais toute seule : c'est l'état que `runtime::savegame::SaveGame`
@@ -590,6 +596,7 @@ impl AppState {
             lost: false,
             score: 0,
             game_events: Vec::new(),
+            trigger_prev: std::collections::HashSet::new(),
             lua_vars: std::collections::HashMap::new(),
             respawn_queue: Vec::new(),
             level: 1,
@@ -1377,6 +1384,7 @@ impl AppState {
         self.lost = false;
         self.score = 0;
         self.game_events.clear();
+        self.trigger_prev.clear();
         self.lua_vars.clear();
         self.respawn_queue.clear();
         self.hud_health = None;
@@ -2309,6 +2317,7 @@ impl AppState {
             self.lost = false;
             self.score = 0;
             self.game_events.clear();
+            self.trigger_prev.clear();
             self.lua_vars.clear();
             self.respawn_queue.clear();
             self.time = 0.0;
@@ -2591,6 +2600,13 @@ impl AppState {
             }
             None => std::collections::HashSet::new(),
         };
+        // Sortie de zone (Sprint 102) : objets `trigger` qui étaient en contact au tick
+        // précédent (`trigger_prev`) et ne le sont plus ce tick-ci — exposé aux scripts
+        // via `obj.exited`, symétrique de `obj.triggered`. Calculé avant de remplacer
+        // `trigger_prev` par `triggered` (sinon la différence serait toujours vide).
+        let exited: std::collections::HashSet<usize> =
+            self.trigger_prev.difference(&triggered).copied().collect();
+        self.trigger_prev = triggered.clone();
         let mut vibrations: Vec<f32> = Vec::new();
         // Événements de gameplay (Sprint 93) : ceux émis au tick précédent (scripts ou
         // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
@@ -2682,6 +2698,8 @@ impl AppState {
                 &mut vibrations,
                 &mut health,
                 &mut self.debug_lines,
+                exited.contains(&idx),
+                self.physics.as_ref(),
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
@@ -3541,6 +3559,8 @@ fn run_script(
     vib_out: &mut Vec<f32>,
     health_out: &mut Option<f32>,
     debug_out: &mut Vec<(Vec3, Vec3, [f32; 3])>,
+    exited: bool,
+    physics: Option<&crate::runtime::physics::Physics>,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -3558,6 +3578,11 @@ fn run_script(
     obj.set("b", color[2])?;
     obj.set("tapped", tapped)?;
     obj.set("triggered", triggered)?;
+    // `obj.exited` (Sprint 102) : symétrique de `triggered` — vrai le tick où le
+    // contact avec cette zone `trigger` vient de cesser (cf. `AppState::trigger_prev`
+    // dans `sim_step`), pas juste « pas en contact » (qui vaudrait aussi tant que le
+    // joueur n'est jamais entré).
+    obj.set("exited", exited)?;
     // `obj.anim` (Sprint 87) : clip actuellement joué, lu en écriture après l'appel pour
     // piloter la FSM depuis Lua (`obj.anim = "run"` démarre un fondu enchaîné vers ce
     // clip). N'existe que pour les objets skinnés ; ignoré silencieusement sinon, comme
@@ -3755,7 +3780,65 @@ fn run_script(
     g.set("find_tag", find_tag)?;
     g.set("save", save_api)?;
     g.set("debug", debug_api)?;
-    let call_result = func.call::<()>(());
+    // `raycast`/`overlap_sphere` (Sprint 102) : requêtes spatiales via le `QueryPipeline`
+    // de rapier (`Physics::raycast`/`overlap_sphere`) — capteur de sol (rayon vers le
+    // bas), cône de vision (ligne de vue vers une cible trouvée par `find_tag`), etc.
+    // Fermetures **scopées** (`lua.scope`, contrairement aux autres fonctions Lua
+    // ci-dessus qui ne capturent que des valeurs possédées/clonées) : elles empruntent
+    // `physics` (`&Physics`, pas `'static`, coûteux à cloner par script/tick). Une
+    // fermeture scopée expire à la fin du bloc `lua.scope` — `func.call` doit donc
+    // avoir lieu *dans* ce bloc, pas après. `physics` vaut `None` hors mode Play (pas
+    // de monde physique construit) : les deux fonctions renvoient alors « rien touché »
+    // plutôt que de planter.
+    let call_result = lua.scope(|scope| {
+        let raycast_fn = scope.create_function(
+            |lua,
+             (ox, oy, oz, dx, dy, dz, max_dist, mask): (
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                Option<u32>,
+            )| {
+                let hit = physics.and_then(|p| {
+                    p.raycast(
+                        Vec3::new(ox, oy, oz),
+                        Vec3::new(dx, dy, dz),
+                        max_dist,
+                        mask.unwrap_or(u32::MAX),
+                    )
+                });
+                match hit {
+                    Some(h) => {
+                        let out = lua.create_table()?;
+                        out.set("x", h.point.x)?;
+                        out.set("y", h.point.y)?;
+                        out.set("z", h.point.z)?;
+                        out.set("dist", h.distance)?;
+                        Ok(mlua::Value::Table(out))
+                    }
+                    None => Ok(mlua::Value::Nil),
+                }
+            },
+        )?;
+        let overlap_sphere_fn = scope.create_function(
+            |_, (x, y, z, radius, mask): (f32, f32, f32, f32, Option<u32>)| {
+                let count = physics
+                    .map(|p| {
+                        p.overlap_sphere(Vec3::new(x, y, z), radius, mask.unwrap_or(u32::MAX))
+                            .len()
+                    })
+                    .unwrap_or(0);
+                Ok(count as i64)
+            },
+        )?;
+        g.set("raycast", raycast_fn)?;
+        g.set("overlap_sphere", overlap_sphere_fn)?;
+        func.call::<()>(())
+    });
 
     // Recopié même si le script a levé une erreur ensuite (propager `?` sans reposer
     // `vars` perdrait tout ce que ce script avait écrit avant l'erreur — cf.
@@ -4457,6 +4540,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
@@ -4485,6 +4570,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
@@ -4522,6 +4609,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut debug_out,
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(debug_out.len(), 2);
@@ -4568,6 +4657,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(events_out, vec!["porte".to_string()]);
@@ -4708,6 +4799,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -4805,6 +4898,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(t.position.x, 42.0);
@@ -4975,6 +5070,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         let state = anim.unwrap();
@@ -5021,6 +5118,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         let state = anim.unwrap();
@@ -5059,6 +5158,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(col, [0.5, 0.5, 0.5]);
@@ -5083,6 +5184,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
@@ -5117,6 +5220,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
@@ -5140,6 +5245,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
@@ -5178,6 +5285,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert!((t.position.x - 1.0).abs() < 1e-5);
@@ -5212,6 +5321,8 @@ mod tests {
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(health, Some(0.5));
@@ -5247,6 +5358,8 @@ mod tests {
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(health, Some(0.7));
@@ -5271,6 +5384,8 @@ mod tests {
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert!(
@@ -5299,6 +5414,8 @@ mod tests {
                 &mut Vec::new(),
                 &mut health,
                 &mut Vec::new(),
+                false,
+                None,
             )
             .unwrap();
         }
@@ -5349,6 +5466,8 @@ mod tests {
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
+                false,
+                None,
             )
             .unwrap();
             let mut t1 = e.transform;
@@ -5373,6 +5492,8 @@ mod tests {
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
+                false,
+                None,
             )
             .unwrap();
             assert!(
@@ -6867,6 +6988,8 @@ mod tests {
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -6910,6 +7033,8 @@ mod tests {
             &mut vib,
             &mut None,
             &mut Vec::new(),
+            false,
+            None,
         )
         .unwrap();
         assert_eq!(vib, vec![80.0]);
@@ -7176,5 +7301,277 @@ mod tests {
             (yaw1 - yaw0).abs() < 1e-3,
             "reculer (S) ne doit jamais faire tourner le personnage : yaw0={yaw0}, yaw1={yaw1}"
         );
+    }
+
+    /// Sol plat statique seul (comme `physics::tests::ground_and_wall_scene`, sans le
+    /// mur) — sert au « capteur de sol » scripté en Lua (Sprint 102).
+    fn floor_only_scene() -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: MeshKind::Cube,
+            transform: Transform::from_pos(Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene
+    }
+
+    #[test]
+    fn raycast_lua_ground_sensor_reports_hit_point_and_draws_a_debug_line() {
+        // Livrable du Sprint 102 : un « capteur de sol » scripté en Lua — un rayon vers
+        // le bas via `raycast()`, visualisé au debug drawing (Sprint 83) jusqu'au point
+        // d'impact renvoyé.
+        let scene = floor_only_scene();
+        let phys = crate::runtime::physics::Physics::build(&scene);
+        let lua = Lua::new();
+        let src = "local hit = raycast(0, 5, 0, 0, -1, 0, 100)\n\
+                   if hit then\n\
+                     obj.y = hit.dist\n\
+                     debug.line(0, 5, 0, hit.x, hit.y, hit.z, 0, 1, 0)\n\
+                   end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut debug_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut debug_out,
+            false,
+            Some(&phys),
+        )
+        .unwrap();
+        assert!(
+            (t.position.y - 5.5).abs() < 0.05,
+            "hit.dist doit valoir ~5.5 m (y={})",
+            t.position.y
+        );
+        assert_eq!(debug_out.len(), 1, "le capteur doit dessiner une ligne");
+        let (a, b, color) = debug_out[0];
+        assert_eq!(a, Vec3::new(0.0, 5.0, 0.0));
+        assert!((b.y - -0.5).abs() < 0.05, "point d'impact au sol (b={b})");
+        assert_eq!(color, [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn raycast_lua_returns_nil_when_nothing_is_hit() {
+        let scene = floor_only_scene();
+        let phys = crate::runtime::physics::Physics::build(&scene);
+        let lua = Lua::new();
+        // Vers le haut : rien au-dessus du sol, `raycast` doit renvoyer `nil`.
+        let src = "if raycast(0, 5, 0, 0, 1, 0, 100) == nil then obj.x = 42.0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            Some(&phys),
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 42.0);
+    }
+
+    #[test]
+    fn raycast_lua_without_a_physics_world_returns_nil_instead_of_panicking() {
+        // Hors mode Play (`self.physics == None`, cf. `AppState::advance_play`) : les
+        // scripts qui appellent `raycast`/`overlap_sphere` ne doivent pas planter,
+        // juste ne rien trouver.
+        let lua = Lua::new();
+        let src = "if raycast(0,0,0, 1,0,0, 10) == nil then obj.x = 1.0 end\n\
+                   obj.y = overlap_sphere(0, 0, 0, 5)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 1.0);
+        assert_eq!(t.position.y, 0.0);
+    }
+
+    /// Deux sphères statiques (proche/loin) — sert au « cône de vision » scripté en
+    /// Lua (Sprint 102, détection de proximité avant le test d'angle/ligne de vue).
+    fn near_and_far_spheres_scene() -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Proche".into(),
+            mesh: MeshKind::Sphere,
+            transform: Transform::from_pos(Vec3::new(1.0, 0.0, 0.0)).with_scale(Vec3::splat(0.2)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Loin".into(),
+            mesh: MeshKind::Sphere,
+            transform: Transform::from_pos(Vec3::new(20.0, 0.0, 0.0)).with_scale(Vec3::splat(0.2)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene
+    }
+
+    #[test]
+    fn overlap_sphere_lua_counts_only_colliders_within_radius() {
+        // Brique du « cône de vision » : compter ce qui se trouve à portée avant même
+        // de tester l'angle — `overlap_sphere()` renvoie un compte, pas une liste
+        // d'objets (les scripts n'ont pas de handle direct sur les autres objets,
+        // seulement des positions via `find_tag`, cf. Sprint 97).
+        let scene = near_and_far_spheres_scene();
+        let phys = crate::runtime::physics::Physics::build(&scene);
+        let lua = Lua::new();
+        let src = "obj.x = overlap_sphere(0, 0, 0, 2)\n\
+                   obj.y = overlap_sphere(0, 0, 0, 25)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            Some(&phys),
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 1.0, "seule la sphère proche est à 2 m");
+        assert_eq!(t.position.y, 2.0, "les deux sphères sont à moins de 25 m");
+    }
+
+    #[test]
+    fn obj_exited_is_true_only_on_the_tick_a_trigger_zone_is_left() {
+        // Symétrique de `script_reacts_to_trigger` (`obj.triggered`, Sprint 66bis) :
+        // `obj.exited` (Sprint 102) doit être vrai exactement le tick où le contact
+        // cesse, pas avant (encore en contact) ni après (déjà retombé à faux ailleurs).
+        let lua = Lua::new();
+        let src = "if obj.exited then obj.y = 9.0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
+        let input = PlayerInput::default();
+        // Encore en contact (`triggered`) : pas de sortie, `exited` doit être faux.
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            true,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.y, 0.0);
+        // Le contact vient de cesser : `exited` doit être vrai ce tick.
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.y, 9.0);
     }
 }
