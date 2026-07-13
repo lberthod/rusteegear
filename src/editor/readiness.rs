@@ -227,7 +227,7 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
 /// Dimensions d'une texture, en résolvant les schémas `asset://` / `bundle://`
 /// (lecture mémoire) ou un chemin disque (lecture de l'en-tête seule). `None` si introuvable.
 fn texture_dimensions(path: &str) -> Option<(u32, u32)> {
-    if path.starts_with(crate::assets::ASSET_SCHEME) || path.starts_with(crate::assets::SCHEME) {
+    if crate::assets::is_known_scheme(path) {
         let bytes = crate::assets::read_bytes(path)?;
         return image::load_from_memory(&bytes)
             .ok()

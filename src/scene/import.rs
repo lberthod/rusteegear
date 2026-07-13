@@ -8,7 +8,7 @@ use crate::gfx::mesh::{MeshData, Vertex};
 /// `bundle://`) et ses buffers, sans encore en extraire de géométrie — partagé par
 /// `load_gltf` et `load_gltf_skeleton`.
 fn read_document(path: &str) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
-    if path.starts_with(crate::assets::SCHEME) || path.starts_with(crate::assets::ASSET_SCHEME) {
+    if crate::assets::is_known_scheme(path) {
         let bytes =
             crate::assets::read_bytes(path).ok_or_else(|| format!("asset introuvable : {path}"))?;
         let (doc, buffers, _images) =

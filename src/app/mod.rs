@@ -1183,11 +1183,7 @@ impl AppState {
     /// Rassemble les assets externes (textures, sons, modèles) dans le dossier de
     /// projet et réécrit les chemins en `asset://…` (portable). Renvoie le nombre réécrit.
     pub fn collect_assets(&mut self) -> usize {
-        let is_external = |p: &str| {
-            !p.is_empty()
-                && !p.starts_with(crate::assets::ASSET_SCHEME)
-                && !p.starts_with(crate::assets::SCHEME)
-        };
+        let is_external = |p: &str| !p.is_empty() && !crate::assets::is_known_scheme(p);
         let any = self.scene.objects.iter().any(|o| {
             is_external(&o.texture) || o.audio.as_ref().is_some_and(|a| is_external(&a.clip))
         }) || self.scene.imported.iter().any(|m| is_external(&m.path));
@@ -3200,6 +3196,12 @@ fn scene_path() -> String {
 /// Chemin de la copie optimisée d'une texture (`foo.png` → `foo_opt2048.png`).
 /// Conserve le schéma `asset://`/`bundle://` éventuel ; sinon écrit à côté du fichier.
 fn optimized_path(path: &str, max_px: u32) -> String {
+    // Une référence `asset-id://<uuid>` (Sprint 95) n'a pas de nom de fichier en soi —
+    // la résoudre d'abord vers son `asset://<nom>` courant, sinon le nom dérivé serait
+    // l'uuid tel quel (illisible, et incohérent d'une exécution à l'autre si l'asset
+    // est renommé entre-temps).
+    let path = crate::assets::resolve_asset_id(path).unwrap_or_else(|| path.to_string());
+    let path = path.as_str();
     for scheme in [crate::assets::ASSET_SCHEME, crate::assets::SCHEME] {
         if let Some(key) = path.strip_prefix(scheme) {
             let stem = std::path::Path::new(key)

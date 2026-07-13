@@ -1240,11 +1240,42 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : détruire un objet en Play n'invalide aucune référence (tests).
 - **Risque** : le refactor le plus délicat du plan — il touche les indices du réseau et de l'undo.
 
-#### Sprint 95 — GUID d'assets + versioning de scènes ⬜
-- [ ] Manifeste `uuid → chemin` ; les scènes référencent l'uuid.
-- [ ] Champ `version` + migrations à la lecture des JSON (sur les defaults serde existants).
-- **Fichiers** : `src/assets.rs`, `src/scene/mod.rs`.
-- **Livrable** : renommer un asset ne casse plus une scène (test) ; une scène v1 se charge en v2.
+#### Sprint 95 — GUID d'assets + versioning de scènes ✅ FAIT
+- [x] **Manifeste `uuid → nom de fichier`** (`src/assets.rs`, `AssetManifest`, persisté
+      dans `assets_dir()/manifest.json`) : nouveau schéma `asset-id://<uuid>`, résolu par
+      `resolve_asset_id` avant les schémas existants dans `read_bytes`. `import_to_assets`
+      délivre désormais ce schéma pour tout nouvel import (`register_asset`, idempotent
+      par nom) ; les scènes déjà écrites avec un `asset://<nom>` en dur ne sont **pas**
+      migrées rétroactivement — un asset doit être ré-importé/enregistré pour devenir
+      rename-safe (documenté, pas un oubli).
+  - `is_known_scheme()` centralise ce qui était un `starts_with(SCHEME) ||
+    starts_with(ASSET_SCHEME)` répété à 4 endroits (`scene/import.rs`, `runtime/audio.rs`,
+    `editor/readiness.rs`, `AppState::collect_assets`) — chacun aurait dû être mis à jour
+    séparément pour reconnaître `asset-id://` sans ce point de passage unique.
+  - `rename_asset(id, new_name)` renomme le fichier **et** met à jour le manifeste,
+    gardant l'uuid stable — c'est le mécanisme qui rend le renommage transparent.
+  - Logique testable sans toucher `~/.motor3derust/assets/` ni l'environnement global :
+    `register_asset`/`resolve_asset_id`/`rename_asset` délèguent à des variantes `_at(dir,
+    …)` paramétrées par répertoire, exercées avec un dossier temporaire par test.
+- [x] **`Scene::version`** (`#[serde(default)]`, 0 = legacy) + `Scene::migrate()`,
+      appelée par `Scene::load` après désérialisation. **Aucune migration réelle
+      n'existe encore** dans ce projet (rien n'a encore changé de forme au point de
+      dépasser un simple `#[serde(default)]`, documenté ainsi dans le code plutôt que
+      d'inventer un historique) : le seul correctif appliqué à `version == 0` —
+      dédoublonner `groups` — est une vraie correction d'hygiène pour un JSON
+      ancien/modifié à la main, pas une migration de façade. Idempotente : une scène
+      déjà à `CURRENT_VERSION` n'est pas retouchée, même avec des doublons volontaires.
+- [x] **Tests** : 5 dans `assets.rs` (idempotence par nom, résolution après renommage,
+      uuid/renommage inconnus, `is_known_scheme`) + 2 dans `scene/mod.rs` (une scène
+      legacy sans champ `version` du tout se charge à `CURRENT_VERSION` avec `groups`
+      dédoublonnés ; `migrate` laisse une scène déjà à jour intacte). 277 tests lib + 4
+      bin + 8 golden verts.
+- **Fichiers** : `src/assets.rs`, `src/scene/mod.rs`, `src/scene/import.rs`,
+  `src/runtime/audio.rs`, `src/editor/readiness.rs`, `src/app/mod.rs`
+  (`collect_assets`, `optimized_path`).
+- **Livrable restant, hors scope de ce sprint** : pas d'UI de renommage dans le
+  navigateur d'assets de l'éditeur — `rename_asset` existe et est testé côté moteur,
+  reste à câbler un bouton/champ dans `src/editor/mod.rs`.
 
 #### Sprint 96 — Prefabs ⬜
 - [ ] Sous-arbre JSON référencé par GUID + **overrides par instance** ; instanciation depuis le navigateur d'assets.

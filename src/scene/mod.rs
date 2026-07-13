@@ -857,6 +857,12 @@ pub struct Scene {
     /// Ciel (dégradé horizon/zénith) + brouillard exponentiel (Sprint 89).
     #[serde(default)]
     pub sky: Sky,
+    /// Version du schéma JSON (Sprint 95) : `0` = scène antérieure à ce champ
+    /// (« legacy »), migrée automatiquement par `Scene::load` (cf. `migrate`). Ne pas
+    /// relire à la main ; sert seulement à savoir quelles migrations restent à
+    /// appliquer, jamais à décider d'un comportement de gameplay.
+    #[serde(default)]
+    pub version: u32,
 }
 
 /// Fond de scène (Sprint 89) : dégradé de ciel dessiné derrière toute la géométrie,
@@ -2636,6 +2642,7 @@ end"
             camera_follow: true,
             game_camera: None,
             sky: Sky::default(),
+            version: Scene::CURRENT_VERSION,
         }
     }
 }
@@ -2934,6 +2941,7 @@ impl Scene {
             camera_follow: false,
             game_camera: None,
             sky: Sky::default(),
+            version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -3015,6 +3023,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             camera_follow: true,
             game_camera: None,
             sky: Sky::default(),
+            version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
                     name: "Sol".into(),
@@ -3125,6 +3134,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             camera_follow: spec.camera_follow,
             game_camera: None,
             sky: Sky::default(),
+            version: Scene::CURRENT_VERSION,
         })
     }
 
@@ -3138,8 +3148,34 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 
     pub fn load(path: &str) -> std::io::Result<Scene> {
         let json = std::fs::read_to_string(path)?;
-        serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        let mut scene: Scene = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        scene.migrate();
+        Ok(scene)
+    }
+
+    /// Version courante du schéma JSON de `Scene` (Sprint 95).
+    pub const CURRENT_VERSION: u32 = 1;
+
+    /// Met `self` à jour au schéma courant : applique les migrations manquantes selon
+    /// `version`, puis stampe `CURRENT_VERSION`. Idempotente (une scène déjà à jour ne
+    /// fait rien) — appelée par `load` après toute désérialisation depuis le disque ;
+    /// inutile pour une scène construite en mémoire (démos, `Scene::default()`), déjà
+    /// valide sans historique à corriger.
+    ///
+    /// **Aucune migration réelle n'existe encore** dans ce projet (rien n'a encore
+    /// changé de forme au point de dépasser un simple `#[serde(default)]`) : le seul
+    /// correctif appliqué ici — dédoublonner `groups` — est une vraie correction
+    /// d'hygiène pour un JSON ancien ou modifié à la main (des doublons de groupe ne
+    /// plantent rien mais dupliquent l'entrée dans la hiérarchie de l'éditeur), pas une
+    /// migration de schéma inventée après coup pour la forme. Le prochain vrai
+    /// changement de schéma cassant ajoutera un bras `if self.version < N` ici.
+    fn migrate(&mut self) {
+        if self.version == 0 {
+            let mut seen = std::collections::HashSet::new();
+            self.groups.retain(|g| seen.insert(g.clone()));
+        }
+        self.version = Self::CURRENT_VERSION;
     }
 }
 
@@ -3651,6 +3687,42 @@ mod tests {
             "visible doit défauter à true (sinon invisible)"
         );
         assert_eq!(s.objects[0].tap_action, TapAction::None);
+    }
+
+    #[test]
+    fn a_legacy_json_file_loads_at_the_current_version() {
+        // Sprint 95, le livrable : « une scène v1 se charge en v2 » — ici, une scène
+        // sans champ `version` du tout (fichier antérieur à ce sprint) doit ressortir
+        // de `Scene::load` au numéro courant, migrations appliquées.
+        let json = r#"{"objects":[],"groups":["A","A","B"]}"#;
+        let path = std::env::temp_dir().join(format!(
+            "rusteegear_legacy_scene_test_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, json).unwrap();
+        let scene = Scene::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(scene.version, Scene::CURRENT_VERSION);
+        assert_eq!(
+            scene.groups,
+            vec!["A".to_string(), "B".to_string()],
+            "la migration doit dédoublonner les groupes d'une scène legacy (version 0)"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_scene_already_at_the_current_version_is_left_untouched_by_migrate() {
+        // `migrate` ne doit rien changer à une scène déjà à jour, même avec des
+        // doublons de groupe (probablement volontaires — l'utilisateur a pu les
+        // recréer après le Sprint 95) : le nettoyage n'est appliqué qu'à `version == 0`.
+        let mut scene = Scene {
+            groups: vec!["A".into(), "A".into()],
+            version: Scene::CURRENT_VERSION,
+            ..Default::default()
+        };
+        scene.migrate();
+        assert_eq!(scene.groups, vec!["A".to_string(), "A".to_string()]);
+        assert_eq!(scene.version, Scene::CURRENT_VERSION);
     }
 
     #[test]

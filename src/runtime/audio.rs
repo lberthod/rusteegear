@@ -59,8 +59,7 @@ impl Audio {
             return;
         }
         // Asset embarqué/projet : décodage immédiat depuis la mémoire.
-        if path.starts_with(crate::assets::SCHEME) || path.starts_with(crate::assets::ASSET_SCHEME)
-        {
+        if crate::assets::is_known_scheme(path) {
             match crate::assets::read_bytes(path) {
                 Some(bytes) => match StaticSoundData::from_cursor(std::io::Cursor::new(bytes)) {
                     Ok(data) => {
