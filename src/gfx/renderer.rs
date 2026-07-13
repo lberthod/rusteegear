@@ -92,8 +92,10 @@ struct InstanceDraw {
 }
 
 pub struct Renderer {
-    pub window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    /// `None` en rendu headless (Sprint 80 : tests de non-régression visuelle) — pas de
+    /// fenêtre, pas de surface d'écran, pas d'UI egui.
+    pub window: Option<Arc<Window>>,
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -143,7 +145,7 @@ pub struct Renderer {
     /// Bind groups de texture par chemin ; "" = texture blanche par défaut.
     textures: HashMap<String, wgpu::BindGroup>,
 
-    editor: Editor,
+    editor: Option<Editor>,
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
     backend: String,
 }
@@ -151,15 +153,35 @@ pub struct Renderer {
 impl Renderer {
     pub async fn new(window: Arc<Window>) -> Result<Renderer, String> {
         let size = window.inner_size();
+        Self::new_impl(Some(window), size).await
+    }
+
+    /// Rendu headless : pas de fenêtre ni de surface d'écran (Sprint 80, golden tests).
+    /// `compatible_surface: None` à la création de l'adaptateur ; format fixe
+    /// (`Rgba8UnormSrgb`) puisqu'il n'y a pas de surface pour en dicter un.
+    pub async fn new_headless(width: u32, height: u32) -> Result<Renderer, String> {
+        let size = winit::dpi::PhysicalSize::new(width.max(1), height.max(1));
+        Self::new_impl(None, size).await
+    }
+
+    async fn new_impl(
+        window: Option<Arc<Window>>,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) -> Result<Renderer, String> {
         let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| format!("Création de la surface impossible : {e}"))?;
+        let surface = match &window {
+            Some(w) => Some(
+                instance
+                    .create_surface(w.clone())
+                    .map_err(|e| format!("Création de la surface impossible : {e}"))?,
+            ),
+            None => None,
+        };
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
             })
             .await
@@ -180,21 +202,31 @@ impl Renderer {
 
         let backend = format!("{:?}", adapter.get_info().backend);
 
-        let caps = surface.get_capabilities(&adapter);
-        // GPU dégénéré (surface incompatible) : `caps.formats`/`alpha_modes` peuvent être
-        // vides → on remonte une erreur claire au lieu de paniquer en indexant `[0]`.
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .or_else(|| caps.formats.first().copied())
-            .ok_or_else(|| "Aucun format de surface supporté par le GPU".to_string())?;
-        let alpha_mode = caps
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| "Aucun mode alpha de surface supporté par le GPU".to_string())?;
+        let (format, alpha_mode) = match &surface {
+            Some(s) => {
+                let caps = s.get_capabilities(&adapter);
+                // GPU dégénéré (surface incompatible) : `caps.formats`/`alpha_modes` peuvent
+                // être vides → on remonte une erreur claire au lieu de paniquer en indexant `[0]`.
+                let format = caps
+                    .formats
+                    .iter()
+                    .copied()
+                    .find(|f| f.is_srgb())
+                    .or_else(|| caps.formats.first().copied())
+                    .ok_or_else(|| "Aucun format de surface supporté par le GPU".to_string())?;
+                let alpha_mode =
+                    caps.alpha_modes.first().copied().ok_or_else(|| {
+                        "Aucun mode alpha de surface supporté par le GPU".to_string()
+                    })?;
+                (format, alpha_mode)
+            }
+            // Rendu headless : pas de surface pour dicter un format → fixe, stable d'une
+            // machine à l'autre (comparaison de pixels des golden tests).
+            None => (
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::CompositeAlphaMode::Opaque,
+            ),
+        };
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -207,7 +239,9 @@ impl Renderer {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
+        if let Some(s) = &surface {
+            s.configure(&device, &config);
+        }
 
         // --- Caméra + lumière (bind group 0) ---
         let camera_buf = create_uniform(&device, "camera", std::mem::size_of::<CameraUniform>());
@@ -569,7 +603,9 @@ impl Renderer {
         }
 
         let depth_view = create_depth_view(&device, &config);
-        let editor = Editor::new(&device, config.format, &window);
+        let editor = window
+            .as_ref()
+            .map(|w| Editor::new(&device, config.format, w));
 
         Ok(Renderer {
             window,
@@ -614,16 +650,22 @@ impl Renderer {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
+        let Some(surface) = self.surface.as_ref() else {
+            return; // rendu headless : pas de surface à reconfigurer
+        };
         self.size = new_size;
         self.config.width = new_size.width;
         self.config.height = new_size.height;
-        self.surface.configure(&self.device, &self.config);
+        surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, &self.config);
     }
 
     /// Transmet l'événement à l'UI. Retourne `true` s'il a été consommé par egui.
     pub fn on_ui_event(&mut self, event: &winit::event::WindowEvent) -> bool {
-        self.editor.on_window_event(&self.window, event)
+        let (Some(window), Some(editor)) = (self.window.as_ref(), self.editor.as_mut()) else {
+            return false; // rendu headless : pas d'UI
+        };
+        editor.on_window_event(window, event)
     }
 
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
@@ -824,11 +866,14 @@ impl Renderer {
         // 0. Acquérir la surface EN PREMIER. Si indisponible, on sort avant de lancer
         //    egui : sinon on jetterait le `textures_delta` de la frame (atlas de police),
         //    ce qui désynchronise le renderer egui (panic).
+        let Some(surface) = self.surface.as_ref() else {
+            return; // rendu headless : `render_scene_headless` est le chemin utilisé
+        };
         use wgpu::CurrentSurfaceTexture as C;
-        let frame = match self.surface.get_current_texture() {
+        let frame = match surface.get_current_texture() {
             C::Success(t) | C::Suboptimal(t) => t,
             C::Outdated | C::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 return;
             }
             C::Timeout | C::Occluded => return,
@@ -836,6 +881,12 @@ impl Renderer {
                 log::error!("surface validation error");
                 return;
             }
+        };
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let Some(mut editor) = self.editor.take() else {
+            return;
         };
 
         // 1. Construire l'UI éditeur. En mode player : pas de panneaux, mais on
@@ -853,8 +904,8 @@ impl Renderer {
                 let net_status = app.net_status.clone();
                 let net_connected = app.is_connected();
                 let weapon_label = app.selected_weapon_label();
-                let (output, actions) = self.editor.run_player_overlay(
-                    &self.window,
+                let (output, actions) = editor.run_player_overlay(
+                    &window,
                     &app.scene,
                     &mut app.input_state,
                     app.device_preview,
@@ -888,8 +939,8 @@ impl Renderer {
             let net_connected = app.is_connected();
             let has_firebase_account = app.has_firebase_account();
             let weapon_label = app.selected_weapon_label();
-            let (full_output, actions) = self.editor.run(
-                &self.window,
+            let (full_output, actions) = editor.run(
+                &window,
                 &mut app.scene,
                 &mut app.selection,
                 &mut app.selected,
@@ -983,7 +1034,7 @@ impl Renderer {
                 app.disconnect_from_server();
             }
             if let Some((email, password)) = actions.firebase_sign_in {
-                let settings = self.editor.settings();
+                let settings = editor.settings();
                 app.request_firebase_sign_in(
                     settings.firebase_api_key.clone(),
                     settings.firebase_database_url.clone(),
@@ -992,7 +1043,7 @@ impl Renderer {
                 );
             }
             if let Some((email, password)) = actions.firebase_sign_up {
-                let settings = self.editor.settings();
+                let settings = editor.settings();
                 app.request_firebase_sign_up(
                     settings.firebase_api_key.clone(),
                     settings.firebase_database_url.clone(),
@@ -1001,7 +1052,7 @@ impl Renderer {
                 );
             }
             if let Some((lobby_code, sender_name, text)) = actions.send_chat_message {
-                let settings = self.editor.settings();
+                let settings = editor.settings();
                 app.request_send_chat_message(
                     settings.firebase_api_key.clone(),
                     settings.firebase_database_url.clone(),
@@ -1011,7 +1062,7 @@ impl Renderer {
                 );
             }
             if let Some(lobby_code) = actions.refresh_chat {
-                let settings = self.editor.settings();
+                let settings = editor.settings();
                 app.request_refresh_chat(
                     settings.firebase_api_key.clone(),
                     settings.firebase_database_url.clone(),
@@ -1019,7 +1070,7 @@ impl Renderer {
                 );
             }
             if actions.refresh_leaderboard {
-                let settings = self.editor.settings();
+                let settings = editor.settings();
                 app.request_refresh_leaderboard(
                     settings.firebase_api_key.clone(),
                     settings.firebase_database_url.clone(),
@@ -1459,7 +1510,7 @@ impl Renderer {
 
         // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
         let extra = match full_output {
-            Some(output) => self.editor.paint(
+            Some(output) => editor.paint(
                 &self.device,
                 &self.queue,
                 &mut encoder,
@@ -1469,10 +1520,248 @@ impl Renderer {
             ),
             None => Vec::new(),
         };
+        self.editor = Some(editor);
 
         self.queue
             .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
         frame.present();
+    }
+
+    /// Rendu headless d'une scène dans une texture hors-écran : passe d'ombre + passe
+    /// principale, **sans** grille, gizmos ni UI egui (Sprint 80 : golden tests de
+    /// non-régression visuelle). Le pipeline utilisé — mêmes shaders, mêmes bind groups —
+    /// est celui de [`Renderer::render`] : un shader qui dérive fait dériver les deux.
+    /// Retourne les pixels RGBA8 (`width`×`height`, 4 octets/pixel, sans padding de ligne).
+    pub fn render_scene_headless(
+        &mut self,
+        app: &mut AppState,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        self.sync_objects(&app.scene);
+        self.sync_imported(&app.scene);
+        self.sync_textures(&app.scene);
+        app.camera.aspect = width as f32 / (height as f32).max(1.0);
+        self.write_uniforms(app);
+
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("headless_target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Depth dédiée à la taille demandée (peut différer de `self.depth_view`, qui suit
+        // la taille de la fenêtre en mode interactif).
+        let depth = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("headless_depth"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("headless_encoder"),
+            });
+
+        // Passe d'ombre — identique à celle de `render()`, sans les gizmos ni l'UI.
+        {
+            let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("headless_shadow_pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            spass.set_pipeline(&self.shadow_pipeline);
+            spass.set_bind_group(0, &self.camera_bind_group, &[]);
+            spass.set_bind_group(1, &self.models_bind_group, &[]);
+            let plan = &self.draw_plan;
+            let objs = &app.scene.objects;
+            let mut i = 0;
+            while i < plan.len() {
+                let mi = objs[plan[i].obj].mesh;
+                let mut j = i + 1;
+                while j < plan.len() && objs[plan[j].obj].mesh == mi {
+                    j += 1;
+                }
+                if let Some(mesh) = self.resolve_mesh(mi) {
+                    spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                    spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    let mut k = i;
+                    while k < j {
+                        if !objs[plan[k].obj].visible {
+                            k += 1;
+                            continue;
+                        }
+                        let run = k;
+                        while k < j && objs[plan[k].obj].visible {
+                            k += 1;
+                        }
+                        spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    }
+                }
+                i = j;
+            }
+        }
+
+        // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("headless_main_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.07,
+                            g: 0.08,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+            pass.set_bind_group(1, &self.models_bind_group, &[]);
+
+            let plan = &self.draw_plan;
+            let objs = &app.scene.objects;
+            let mut i = 0;
+            while i < plan.len() {
+                let mi = objs[plan[i].obj].mesh;
+                let tex_key = &objs[plan[i].obj].texture;
+                let mut group_end = i + 1;
+                while group_end < plan.len()
+                    && objs[plan[group_end].obj].mesh == mi
+                    && &objs[plan[group_end].obj].texture == tex_key
+                {
+                    group_end += 1;
+                }
+                if let Some(mesh) = self.resolve_mesh(mi) {
+                    let tex = self
+                        .textures
+                        .get(tex_key)
+                        .unwrap_or_else(|| &self.textures[""]);
+                    pass.set_bind_group(3, tex, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                    pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    let mut k = i;
+                    while k < group_end {
+                        if !plan[k].visible {
+                            k += 1;
+                            continue;
+                        }
+                        let run = k;
+                        while k < group_end && plan[k].visible {
+                            k += 1;
+                        }
+                        pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    }
+                }
+                i = group_end;
+            }
+        }
+
+        // Lecture des pixels : wgpu impose que `bytes_per_row` soit un multiple de
+        // `COPY_BYTES_PER_ROW_ALIGNMENT` (256) → on copie avec ce padding puis on le retire.
+        let bytes_per_pixel = 4u32;
+        let unpadded = width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = unpadded.div_ceil(align) * align;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("headless_readback"),
+            size: (padded * height) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        // Le callback de `map_async` est invoqué par `poll` ci-dessus : à ce stade le
+        // résultat est déjà dans le canal.
+        let _ = rx.recv();
+        let mapped = slice.get_mapped_range();
+        let mut out = vec![0u8; (unpadded * height) as usize];
+        for y in 0..height {
+            let src_start = (y * padded) as usize;
+            let dst_start = (y * unpadded) as usize;
+            out[dst_start..dst_start + unpadded as usize]
+                .copy_from_slice(&mapped[src_start..src_start + unpadded as usize]);
+        }
+        drop(mapped);
+        readback.unmap();
+        out
     }
 }
 

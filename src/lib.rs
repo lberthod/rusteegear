@@ -338,8 +338,10 @@ impl ApplicationHandler for App {
     /// économiser CPU/batterie sur desktop tout en restant réactif aux entrées
     /// et aux chargements asynchrones.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(renderer) = &self.renderer {
-            renderer.window.request_redraw();
+        if let Some(renderer) = &self.renderer
+            && let Some(window) = &renderer.window
+        {
+            window.request_redraw();
         }
         if self.state.is_active() {
             event_loop.set_control_flow(ControlFlow::Poll);

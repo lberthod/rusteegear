@@ -3,3 +3,6 @@
 /packaging/release.keystore
 packaging/ios-xcode/Motor3DeRust.xcodeproj/
 packaging/ios-xcode/build/
+# Golden tests de rendu (Sprint 80) : image obtenue écrite pour inspection en cas
+# d'échec — jamais la référence elle-même (tests/golden/*.png, versionnée).
+tests/golden/*.actual.png
