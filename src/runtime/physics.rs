@@ -21,6 +21,19 @@ pub enum ColliderShape {
     Box,
     Sphere,
     Capsule,
+    /// Collider fidèle à la géométrie importée (Sprint 100) : un triangle par
+    /// triangle du mesh — pour un **décor statique** uniquement (`TriMesh` n'a pas
+    /// de volume défini, rapier refuse un corps dynamique avec ce collider ; sans
+    /// garde-fou, un objet dynamique en TriMesh traverserait tout sans jamais entrer
+    /// en collision). Coûteux par rapport aux primitives, mais exact — un décor à la
+    /// silhouette complexe (rochers, architecture) n'a plus besoin d'un `Box`/
+    /// `ConvexHull` approximatif.
+    TriMesh,
+    /// Enveloppe convexe des vertices importés (Sprint 100) : plus fidèle qu'un
+    /// `Box`, plus léger qu'un `TriMesh`, et **utilisable en dynamique**
+    /// (contrairement à `TriMesh`) — le bon choix par défaut pour un décor importé
+    /// non convexe qu'on veut quand même pouvoir faire bouger.
+    ConvexHull,
 }
 
 /// Multiplicateur d'accélération quand l'entrée **freine** (cible plus lente que la
@@ -120,11 +133,74 @@ impl Physics {
                 let half = (he.y.abs() - r).max(0.01);
                 ColliderBuilder::capsule_y(half, r)
             };
+            // Vertices bruts du mesh importé, mis à l'échelle de l'objet (Sprint 100) —
+            // même principe que `he` ci-dessus pour les primitives : le collider rapier
+            // n'a pas de transform d'échelle séparée, l'échelle doit être bakée dans la
+            // géométrie fournie. `None` pour tout ce qui n'est pas `MeshKind::Imported`
+            // (primitives) ou dont l'import n'a pas encore chargé de données.
+            let imported_points = || -> Option<Vec<Vec3>> {
+                let MeshKind::Imported(idx) = obj.mesh else {
+                    return None;
+                };
+                let data = &scene.imported.get(idx as usize)?.data;
+                if data.vertices.is_empty() {
+                    return None;
+                }
+                Some(
+                    data.vertices
+                        .iter()
+                        .map(|v| Vec3::from(v.position) * t.scale)
+                        .collect(),
+                )
+            };
+            // Silhouette exacte (Sprint 100) : un triangle rapier par triangle du mesh
+            // importé. Réservé au décor **statique** par l'appelant (cf. `ColliderShape::
+            // TriMesh` ci-dessous) — `TriMesh` n'a pas de propriétés de masse définies,
+            // rapier ne sait pas en faire un corps dynamique cohérent.
+            let trimesh = || -> Option<ColliderBuilder> {
+                let MeshKind::Imported(idx) = obj.mesh else {
+                    return None;
+                };
+                let data = &scene.imported.get(idx as usize)?.data;
+                if data.indices.len() < 3 {
+                    return None;
+                }
+                let points = imported_points()?;
+                let tris: Vec<[u32; 3]> = data
+                    .indices
+                    .chunks_exact(3)
+                    .map(|c| [c[0], c[1], c[2]])
+                    .collect();
+                SharedShape::trimesh(points, tris)
+                    .ok()
+                    .map(ColliderBuilder::new)
+            };
+            // Enveloppe convexe (Sprint 100) : plus fidèle qu'une boîte, et — contrairement
+            // à `TriMesh` — utilisable sur un corps dynamique (volume défini, propriétés
+            // de masse calculables).
+            let convex_hull = || -> Option<ColliderBuilder> {
+                Some(ColliderBuilder::new(SharedShape::convex_hull(
+                    &imported_points()?,
+                )?))
+            };
             // Forme explicite si demandée, sinon déduite du mesh.
             let collider = match obj.collider_shape {
                 ColliderShape::Box => cuboid(),
                 ColliderShape::Sphere => ball(),
                 ColliderShape::Capsule => capsule(),
+                ColliderShape::TriMesh => {
+                    if is_dynamic {
+                        log::warn!(
+                            "{} : collider TriMesh demandé sur un corps dynamique (sans \
+                             propriétés de masse définies) — repli sur ConvexHull.",
+                            obj.name
+                        );
+                        convex_hull().unwrap_or_else(cuboid)
+                    } else {
+                        trimesh().unwrap_or_else(cuboid)
+                    }
+                }
+                ColliderShape::ConvexHull => convex_hull().unwrap_or_else(cuboid),
                 ColliderShape::Auto => match obj.mesh {
                     MeshKind::Sphere => ball(),
                     MeshKind::Capsule => capsule(),
@@ -322,7 +398,209 @@ impl Physics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
+    use crate::scene::{ImportedMesh, Scene, SceneObject};
+
+    /// Décor triangulaire (Sprint 100) : un seul triangle plat couvrant la moitié
+    /// « arrière-gauche » du carré `[-1, 1] × [-1, 1]` (z=0 fixe) — sa boîte englobante
+    /// est le carré entier, mais sa silhouette réelle laisse le coin « avant-droit »
+    /// (x>0, z>0 environ) complètement vide. Un collider `Box`/`Auto` (bounding box)
+    /// bloquerait donc n'importe où sur tout le carré ; un `TriMesh`/`ConvexHull`
+    /// fidèle ne bloque que sur la moitié réellement couverte — c'est exactement la
+    /// différence que ce sprint doit démontrer.
+    fn wedge_scene(shape: ColliderShape) -> Scene {
+        use crate::gfx::mesh::{MeshData, Vertex};
+        let v = |x: f32, z: f32| Vertex {
+            position: [x, 0.0, z],
+            normal: [0.0, 1.0, 0.0],
+            color: [1.0, 1.0, 1.0],
+            uv: [0.0, 0.0],
+        };
+        let data = MeshData {
+            vertices: vec![v(-1.0, -1.0), v(1.0, -1.0), v(-1.0, 1.0)],
+            // Ordre choisi pour une normale +Y (règle de la main droite) : une boule
+            // qui tombe dessus doit heurter la face « du dessus », pas le dos du
+            // triangle (trouvé en testant réellement — l'ordre [0,1,2] donne une
+            // normale vers -Y et la boule tombait au travers malgré un TriMesh construit
+            // avec succès).
+            indices: vec![0, 2, 1],
+        };
+        let mut imported = ImportedMesh {
+            name: "Coin".into(),
+            ..Default::default()
+        };
+        imported.data = data;
+        // `local_aabb` (utilisé par le repli `Auto`/`Box`) lit ces champs directement,
+        // pas les vertices de `data` — sans eux, la boîte englobante serait nulle et
+        // les deux tests seraient des faux positifs (tout tomberait à travers, y
+        // compris le cas `Auto` censé bloquer).
+        imported.aabb_min = Vec3::new(-1.0, -0.05, -1.0);
+        imported.aabb_max = Vec3::new(1.0, 0.05, 1.0);
+        let mut scene = Scene::default();
+        scene.imported.push(imported);
+        scene.objects.push(SceneObject {
+            name: "Décor".into(),
+            mesh: crate::scene::MeshKind::Imported(0),
+            physics: PhysicsKind::Static,
+            collider_shape: shape,
+            ..Default::default()
+        });
+        scene
+    }
+
+    /// Départ bas (0.5 m, pas 3 m) : un `TriMesh` n'a pas d'épaisseur, et une boule
+    /// qui tombe assez vite peut le traverser en un seul pas de simulation sans jamais
+    /// être détectée en collision (tunneling) — la CCD qui corrigerait ça sur un corps
+    /// dynamique rapide est le sujet du **Sprint 101** (`ccd` par objet), pas de celui-ci.
+    /// Une chute courte reste assez lente pour ne pas tunneliser, sans avoir besoin
+    /// d'anticiper ce mécanisme.
+    fn drop_ball(scene: &mut Scene, name: &str, x: f32, z: f32) -> usize {
+        scene.objects.push(SceneObject {
+            name: name.into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(x, 0.5, z))
+                .with_scale(Vec3::splat(0.2)),
+            physics: PhysicsKind::Dynamic,
+            ..Default::default()
+        });
+        scene.objects.len() - 1
+    }
+
+    /// Livrable du Sprint 100 : un décor importé (`TriMesh`) doit bloquer une boule
+    /// qui tombe sur sa silhouette réelle, et **laisser tomber** une boule au-dessus
+    /// d'un coin vide de sa boîte englobante — la preuve que le collider suit la
+    /// géométrie, pas juste l'AABB (déjà le comportement `Auto`/`Box` d'avant ce sprint).
+    #[test]
+    fn a_trimesh_collider_follows_the_actual_silhouette_not_the_bounding_box() {
+        let mut scene = wedge_scene(ColliderShape::TriMesh);
+        let covered = drop_ball(&mut scene, "Boule couverte", -0.5, -0.5);
+        let empty_corner = drop_ball(&mut scene, "Boule coin vide", 0.6, 0.6);
+        let mut phys = Physics::build(&scene);
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let y_covered = scene.objects[covered].transform.position.y;
+        let y_empty = scene.objects[empty_corner].transform.position.y;
+        assert!(
+            y_covered > -0.5,
+            "au-dessus du triangle, la boule doit être arrêtée près du sol (y={y_covered})"
+        );
+        assert!(
+            y_empty < -1.0,
+            "au-dessus du coin vide, la boule doit être passée à travers (y={y_empty})"
+        );
+    }
+
+    /// Contre-épreuve : **sans** le repli `TriMesh` de ce sprint (`Auto`, la boîte
+    /// englobante du triangle), la même boule « coin vide » resterait bloquée — la
+    /// preuve que le test précédent mesure bien la fidélité du collider, pas autre
+    /// chose (ex. une gravité qui ne s'applique jamais).
+    #[test]
+    fn without_trimesh_the_bounding_box_wrongly_blocks_the_empty_corner() {
+        let mut scene = wedge_scene(ColliderShape::Auto);
+        let empty_corner = drop_ball(&mut scene, "Boule coin vide", 0.6, 0.6);
+        let mut phys = Physics::build(&scene);
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let y_empty = scene.objects[empty_corner].transform.position.y;
+        assert!(
+            y_empty > -1.0,
+            "avec un collider en boîte englobante, la boule doit être (à tort) \
+             bloquée au-dessus du coin vide (y={y_empty})"
+        );
+    }
+
+    /// Petit tétraèdre (4 points non coplanaires) : un `ConvexHull` en a besoin pour
+    /// un volume 3D bien défini — contrairement au triangle plat de `wedge_scene`,
+    /// suffisant pour `TriMesh` (une surface) mais dégénéré comme volume.
+    fn tetrahedron_mesh() -> ImportedMesh {
+        use crate::gfx::mesh::{MeshData, Vertex};
+        let v = |x: f32, y: f32, z: f32| Vertex {
+            position: [x, y, z],
+            normal: [0.0, 1.0, 0.0],
+            color: [1.0, 1.0, 1.0],
+            uv: [0.0, 0.0],
+        };
+        let data = MeshData {
+            vertices: vec![
+                v(-0.2, -0.2, -0.2),
+                v(0.2, -0.2, -0.2),
+                v(0.0, -0.2, 0.2),
+                v(0.0, 0.2, 0.0),
+            ],
+            indices: vec![0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2],
+        };
+        let mut imported = ImportedMesh {
+            name: "Rocher".into(),
+            ..Default::default()
+        };
+        imported.data = data;
+        imported.aabb_min = Vec3::splat(-0.2);
+        imported.aabb_max = Vec3::splat(0.2);
+        imported
+    }
+
+    fn floor_and_falling_rock(shape: ColliderShape) -> Scene {
+        let mut scene = Scene::default();
+        scene.imported.push(tetrahedron_mesh());
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Rocher".into(),
+            mesh: crate::scene::MeshKind::Imported(0),
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.3, 0.0)),
+            physics: PhysicsKind::Dynamic,
+            collider_shape: shape,
+            ..Default::default()
+        });
+        scene
+    }
+
+    /// Livrable du Sprint 100, second cas : contrairement à `TriMesh` (pas de
+    /// propriétés de masse), un `ConvexHull` doit fonctionner sur un corps
+    /// **dynamique** — c'est tout l'intérêt de proposer les deux formes plutôt qu'une
+    /// seule. Un rocher importé tombe sur un sol et doit s'y arrêter, pas le traverser
+    /// (ce qui arriverait si `SharedShape::convex_hull` échouait silencieusement et
+    /// que le repli `cuboid()` était lui-même mal dimensionné).
+    #[test]
+    fn a_convex_hull_collider_works_on_a_dynamic_body() {
+        let mut scene = floor_and_falling_rock(ColliderShape::ConvexHull);
+        let mut phys = Physics::build(&scene);
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let y = scene.objects[1].transform.position.y;
+        assert!(
+            y > -1.5,
+            "le rocher (ConvexHull, dynamique) doit se poser sur le sol, pas le \
+             traverser (y={y})"
+        );
+    }
+
+    /// Garde-fou : demander `TriMesh` sur un corps dynamique ne doit ni planter ni
+    /// laisser l'objet traverser indéfiniment le décor — `Physics::build` doit se
+    /// replier sur `ConvexHull` (cf. le `log::warn!` correspondant), avec le même
+    /// comportement observable que le test précédent.
+    #[test]
+    fn requesting_trimesh_on_a_dynamic_body_falls_back_to_convex_hull() {
+        let mut scene = floor_and_falling_rock(ColliderShape::TriMesh);
+        let mut phys = Physics::build(&scene);
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let y = scene.objects[1].transform.position.y;
+        assert!(
+            y > -1.5,
+            "TriMesh sur un corps dynamique doit se replier sur ConvexHull, pas \
+             laisser tomber l'objet indéfiniment (y={y})"
+        );
+    }
 
     /// Index de l'objet pilotable (`controller.input`) dans la scène.
     fn player_index(scene: &Scene) -> usize {

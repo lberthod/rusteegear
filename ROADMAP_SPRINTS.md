@@ -1411,10 +1411,32 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ### PHASE O — Physique & feel (100 → 103)
 
-#### Sprint 100 — Trimesh + convexe ⬜
-- [ ] `ConvexHull`/`TriMesh` rapier construits depuis les vertices glTF ; choix dans l'inspecteur.
-- **Fichiers** : `src/runtime/physics.rs`, `src/editor/mod.rs`.
-- **Livrable** : un décor importé se collisionne fidèlement (démo + test).
+#### Sprint 100 — Trimesh + convexe ✅ FAIT
+- [x] **`ColliderShape::TriMesh`/`ConvexHull`** (`src/runtime/physics.rs`) : construits
+      depuis les vertices bruts de `ImportedMesh::data` (mis à l'échelle de l'objet,
+      comme les demi-dimensions des primitives) — `SharedShape::trimesh`/
+      `convex_hull` de rapier. `TriMesh` réservé au décor **statique** (pas de
+      propriétés de masse définies) : demandé sur un corps dynamique, repli
+      automatique sur `ConvexHull` (`log::warn!`) plutôt que de planter ou de laisser
+      un objet traverser le décor sans jamais entrer en collision.
+- [x] **Choix dans l'inspecteur** (`src/editor/mod.rs`) : « Enveloppe convexe »/
+      « Silhouette exacte », visibles seulement pour un objet `MeshKind::Imported`
+      (n'ont pas de sens pour une primitive Cube/Sphère/...).
+- [x] **Livrable vérifié** par 4 tests bout-en-bout (physique réelle, pas une
+      assertion sur la forme construite) : une boule tombe sur un décor triangulaire
+      dont la boîte englobante couvre un coin **vide** de sa silhouette réelle — avec
+      `TriMesh`, elle s'arrête sur le triangle et traverse le coin vide ; avec `Auto`
+      (contre-épreuve), la boîte englobante bloque à tort ce même coin. Un rocher
+      importé (tétraèdre) tombe sur un sol en `ConvexHull` dynamique et s'y arrête ;
+      la même scène en `TriMesh` (dynamique) se replie sur `ConvexHull` sans jamais
+      tomber indéfiniment. **Trouvé en écrivant les tests** : un `TriMesh` n'a pas
+      d'épaisseur — une boule lâchée de trop haut le traversait par tunneling (aucun
+      contact détecté en un seul pas de simulation, symptôme identique à l'absence
+      de collider) ; corrigé en lâchant les boules de test d'assez bas pour ne pas
+      tunneliser, plutôt que d'anticiper la CCD par objet du **Sprint 101**, hors
+      scope ici.
+- **Fichiers** : `src/runtime/physics.rs`, `src/editor/mod.rs`. 298 tests lib + 4
+  bin + 8 golden verts.
 
 #### Sprint 101 — CCD + couches de collision ⬜
 - [ ] Booléen `ccd` par objet ; `InteractionGroups` (couche + masque) dans l'inspecteur.

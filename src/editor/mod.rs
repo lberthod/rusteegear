@@ -3615,6 +3615,25 @@ fn build_ui(
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Box, "Box");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Sphere, "Sphère");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Capsule, "Capsule");
+                                // TriMesh/ConvexHull (Sprint 100) : n'ont de sens que pour un
+                                // modèle importé — leur géométrie vient des vertices du glTF,
+                                // rien de tel n'existe pour une primitive (Cube/Sphère/...).
+                                if matches!(obj.mesh, crate::scene::MeshKind::Imported(_)) {
+                                    ui.selectable_value(
+                                        &mut obj.collider_shape,
+                                        Cs::ConvexHull,
+                                        "Enveloppe convexe",
+                                    )
+                                    .on_hover_text(
+                                        "Fidèle à la forme importée, utilisable en dynamique.",
+                                    );
+                                    ui.selectable_value(&mut obj.collider_shape, Cs::TriMesh, "Silhouette exacte")
+                                        .on_hover_text(
+                                            "Un triangle par triangle du mesh — décor statique \
+                                             uniquement (repli automatique sur Enveloppe convexe \
+                                             si l'objet est dynamique).",
+                                        );
+                                }
                             });
                         }
                         ui.checkbox(&mut obj.tappable, "👆 Tactile (cliquable)")
