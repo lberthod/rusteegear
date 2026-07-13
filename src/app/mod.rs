@@ -203,6 +203,12 @@ pub struct AppState {
     /// intra-tick : peu importe quel objet émet ou écoute en premier dans la boucle
     /// des scripts, tous les auditeurs voient l'événement au même tick.
     game_events: Vec<String>,
+    /// Variables de script persistantes (Sprint 98), lues/écrites en Lua via
+    /// `save.get("clé")`/`save.set("clé", valeur)` — contrairement à `game_events`,
+    /// ne se vide jamais toute seule : c'est l'état que `runtime::savegame::SaveGame`
+    /// capture/restaure (avec le score et les positions). Global au jeu, pas par objet
+    /// : n'importe quel script peut lire ce qu'un autre a écrit le même tick ou avant.
+    pub(crate) lua_vars: std::collections::HashMap<String, f64>,
     /// File de réapparition : (index de pièce, temps de jeu auquel la rendre visible).
     respawn_queue: Vec<(usize, f32)>,
     /// Niveau courant de la démo contrôleur (1-based).
@@ -584,6 +590,7 @@ impl AppState {
             lost: false,
             score: 0,
             game_events: Vec::new(),
+            lua_vars: std::collections::HashMap::new(),
             respawn_queue: Vec::new(),
             level: 1,
             device_preview: false,
@@ -1370,6 +1377,7 @@ impl AppState {
         self.lost = false;
         self.score = 0;
         self.game_events.clear();
+        self.lua_vars.clear();
         self.respawn_queue.clear();
         self.hud_health = None;
         self.damage_flash = 0.0;
@@ -1403,6 +1411,48 @@ impl AppState {
     /// Score courant (pièces ramassées) — affiché au HUD.
     pub fn score(&self) -> u32 {
         self.score
+    }
+
+    /// Capture l'état de partie courant dans une `SaveGame` (Sprint 98) : score,
+    /// position de chaque objet, variables de script (`save.get`/`save.set` en Lua).
+    pub fn capture_save(&self) -> crate::runtime::savegame::SaveGame {
+        crate::runtime::savegame::SaveGame {
+            version: crate::runtime::savegame::SaveGame::CURRENT_VERSION,
+            score: self.score,
+            positions: self
+                .scene
+                .objects
+                .iter()
+                .map(|o| o.transform.position.to_array())
+                .collect(),
+            lua_vars: self.lua_vars.clone(),
+        }
+    }
+
+    /// Restaure une `SaveGame` sur la scène **actuellement chargée** (Sprint 98) : les
+    /// positions s'appliquent objet par objet dans l'ordre, jusqu'au plus court des
+    /// deux tableaux — une scène qui a changé depuis la sauvegarde (objets ajoutés/
+    /// retirés) ne plante pas, elle restaure juste ce qui correspond encore.
+    pub fn apply_save(&mut self, save: &crate::runtime::savegame::SaveGame) {
+        self.score = save.score;
+        for (obj, pos) in self.scene.objects.iter_mut().zip(&save.positions) {
+            obj.transform.position = Vec3::from_array(*pos);
+        }
+        self.lua_vars = save.lua_vars.clone();
+    }
+
+    /// Sauvegarde la partie courante dans le slot `slot` (`user://save_<slot>.json`).
+    pub fn save_game(&self, slot: &str) -> Result<(), String> {
+        self.capture_save().save_to_slot(slot)
+    }
+
+    /// Charge le slot `slot` et l'applique à la scène actuellement chargée. `Err` si
+    /// le slot est vide/introuvable ou le JSON invalide — la scène n'est alors pas
+    /// modifiée (l'erreur est renvoyée avant tout appel à `apply_save`).
+    pub fn load_game(&mut self, slot: &str) -> Result<(), String> {
+        let save = crate::runtime::savegame::SaveGame::load_from_slot(slot)?;
+        self.apply_save(&save);
+        Ok(())
     }
 
     /// Incrémente le score de `n` points en émettant un événement `score:N` par valeur
@@ -2259,6 +2309,7 @@ impl AppState {
             self.lost = false;
             self.score = 0;
             self.game_events.clear();
+            self.lua_vars.clear();
             self.respawn_queue.clear();
             self.time = 0.0;
             // Relit la qualité visée (modifiable dans le panneau Export sans redémarrer
@@ -2606,6 +2657,7 @@ impl AppState {
                 &tagged,
                 &mut spawns_this_obj,
                 &mut destroy_requested,
+                &mut self.lua_vars,
                 &mut vibrations,
                 &mut health,
                 &mut self.debug_lines,
@@ -3463,6 +3515,7 @@ fn run_script(
     tagged: &[(String, Vec3)],
     spawn_out: &mut Vec<(String, Vec3)>,
     destroy_out: &mut bool,
+    vars: &mut std::collections::HashMap<String, f64>,
     vib_out: &mut Vec<f32>,
     health_out: &mut Option<f32>,
     debug_out: &mut Vec<(Vec3, Vec3, [f32; 3])>,
@@ -3644,6 +3697,27 @@ fn run_script(
         Ok(out)
     })?;
 
+    // `save.get("clé")`/`save.set("clé", valeur)` (Sprint 98) : état de script
+    // persistant, capturé par `runtime::savegame::SaveGame` avec le score et les
+    // positions. Partagé (pas par objet) : les scripts s'exécutent séquentiellement
+    // dans la boucle de `sim_step`, donc un script voit déjà ce qu'un précédent a
+    // écrit ce même tick — cohérent avec l'ordre naturel d'exécution, pas besoin
+    // d'un décalage d'un tick comme pour les événements du Sprint 93 (ceux-là
+    // *doivent* attendre le tick suivant pour être indépendants de l'ordre des
+    // scripts ; ici l'ordre séquentiel est simplement accepté tel quel).
+    let vars_cell = std::rc::Rc::new(std::cell::RefCell::new(std::mem::take(vars)));
+    let vars_get = vars_cell.clone();
+    let save_get =
+        lua.create_function(move |_, key: String| Ok(vars_get.borrow().get(&key).copied()))?;
+    let vars_set = vars_cell.clone();
+    let save_set = lua.create_function(move |_, (key, val): (String, f64)| {
+        vars_set.borrow_mut().insert(key, val);
+        Ok(())
+    })?;
+    let save_api = lua.create_table()?;
+    save_api.set("get", save_get)?;
+    save_api.set("set", save_set)?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
@@ -3657,8 +3731,19 @@ fn run_script(
     g.set("on_event", on_event)?;
     g.set("spawn", spawn)?;
     g.set("find_tag", find_tag)?;
+    g.set("save", save_api)?;
     g.set("debug", debug_api)?;
-    func.call::<()>(())?;
+    let call_result = func.call::<()>(());
+
+    // Recopié même si le script a levé une erreur ensuite (propager `?` sans reposer
+    // `vars` perdrait tout ce que ce script avait écrit avant l'erreur — cf.
+    // `std::mem::take` plus haut, qui a vidé `*vars` dans la cellule). `.clone()`
+    // plutôt que `Rc::try_unwrap` : `lua` réutilise la même table de globales d'un
+    // appel à l'autre, rien ne garantit que le garbage collector Lua ait déjà
+    // libéré les fermetures `save.get`/`save.set` de cet appel précis au moment où
+    // on arrive ici — `try_unwrap` échouerait alors silencieusement.
+    *vars = vars_cell.borrow().clone();
+    call_result?;
 
     if destroy_tbl.get::<bool>("d").unwrap_or(false) {
         *destroy_out = true;
@@ -4346,6 +4431,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4373,6 +4459,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4409,6 +4496,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut debug_out,
@@ -4454,6 +4542,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4593,6 +4682,7 @@ mod tests {
             &tagged,
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4664,6 +4754,89 @@ mod tests {
     }
 
     #[test]
+    fn script_save_set_persists_and_save_get_reads_it_back() {
+        // Sprint 98 : `save.set`/`save.get` doivent partager le même état que
+        // `AppState::lua_vars` — c'est cet état que `SaveGame` capture/restaure.
+        let lua = Lua::new();
+        let src = "save.set('pv_max', 42.0); obj.x = save.get('pv_max')";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut vars = std::collections::HashMap::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut vars,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 42.0);
+        assert_eq!(vars.get("pv_max"), Some(&42.0));
+    }
+
+    #[test]
+    fn saving_and_loading_a_game_restores_score_position_and_lua_vars() {
+        // Le livrable du Sprint 98 : la progression (score, positions, variables de
+        // script) doit survivre à une sauvegarde puis un chargement — testé bout en
+        // bout via `AppState::save_game`/`load_game`, qui écrivent réellement dans
+        // `user://` (comme le ferait le jeu réel sur desktop ou Android).
+        let slot = format!(
+            "__sprint98_test_{}_{}__",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::default();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            transform: Transform::from_pos(Vec3::new(3.0, 1.0, -2.0)),
+            ..Default::default()
+        });
+        app.score = 7;
+        app.lua_vars.insert("niveau".to_string(), 4.0);
+
+        app.save_game(&slot).expect("sauvegarde impossible");
+
+        // Simule une reprise de partie : score/position/variables sont remis à zéro
+        // avant le chargement (ex. l'app vient de redémarrer).
+        app.score = 0;
+        app.scene.objects[0].transform.position = Vec3::ZERO;
+        app.lua_vars.clear();
+
+        app.load_game(&slot).expect("chargement impossible");
+
+        assert_eq!(app.score, 7);
+        assert_eq!(
+            app.scene.objects[0].transform.position,
+            Vec3::new(3.0, 1.0, -2.0)
+        );
+        assert_eq!(app.lua_vars.get("niveau"), Some(&4.0));
+
+        // Nettoyage : ce test écrit réellement dans `~/.motor3derust/save/`.
+        if let Some(dir) = crate::assets::user_dir() {
+            let _ = std::fs::remove_file(dir.join(format!("save_{slot}.json")));
+        }
+    }
+
+    #[test]
     fn script_setting_obj_anim_starts_a_crossfade() {
         // Sprint 87 (exposition Lua) : `obj.anim = "run"` doit atterrir dans
         // `AnimationState` via `set_clip`, avec le fondu enchaîné qu'il déclenche
@@ -4698,6 +4871,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4743,6 +4917,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4780,6 +4955,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4803,6 +4979,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4836,6 +5013,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4858,6 +5036,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4895,6 +5074,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4928,6 +5108,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4962,6 +5143,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4985,6 +5167,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -5012,6 +5195,7 @@ mod tests {
                 &[],
                 &mut Vec::new(),
                 &mut false,
+                &mut std::collections::HashMap::new(),
                 &mut Vec::new(),
                 &mut health,
                 &mut Vec::new(),
@@ -5061,6 +5245,7 @@ mod tests {
                 &[],
                 &mut Vec::new(),
                 &mut false,
+                &mut std::collections::HashMap::new(),
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
@@ -5084,6 +5269,7 @@ mod tests {
                 &[],
                 &mut Vec::new(),
                 &mut false,
+                &mut std::collections::HashMap::new(),
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
@@ -6577,6 +6763,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -6619,6 +6806,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &mut false,
+            &mut std::collections::HashMap::new(),
             &mut vib,
             &mut None,
             &mut Vec::new(),

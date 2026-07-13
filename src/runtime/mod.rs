@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod physics;
+pub mod savegame;
 pub mod sfx;
 
 /// Retour haptique : déclenche une vibration de `ms` millisecondes.

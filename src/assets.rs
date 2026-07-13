@@ -178,6 +178,55 @@ pub fn assets_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".motor3derust").join("assets"))
 }
 
+/// Préfixe d'une donnée **utilisateur** (Sprint 98) — sauvegardes de partie, distinct
+/// des assets de projet (`asset://`, en lecture pour l'essentiel) : ce schéma désigne
+/// un dossier écrit **par le jeu lui-même** en cours de Play, sur desktop comme sur
+/// Android (où `$HOME` n'existe pas — cf. `set_android_data_dir`).
+pub const USER_SCHEME: &str = "user://";
+
+/// Chemin fourni par `android_app.internal_data_path()` (cf. `lib.rs::android_main`),
+/// seule façon d'obtenir un dossier écrivable garanti sur Android — il n'existe pas de
+/// `$HOME` là-bas. `OnceLock` : posé une fois au démarrage, jamais réécrit ensuite.
+#[cfg(target_os = "android")]
+static ANDROID_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn set_android_data_dir(path: PathBuf) {
+    let _ = ANDROID_DATA_DIR.set(path);
+}
+
+/// Dossier des données utilisateur (`user://`) : sur Android, celui posé par
+/// `set_android_data_dir` (`None` s'il n'a pas encore été appelé — ne devrait pas
+/// arriver après `android_main`, mais pas de panique pour autant, juste un save
+/// silencieusement indisponible) ; ailleurs, `~/.motor3derust/save/`, à côté du
+/// dossier `assets/` mais distinct (données écrites par le jeu, pas importées par
+/// l'éditeur).
+pub fn user_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        ANDROID_DATA_DIR.get().cloned()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let home = std::env::var("HOME").ok()?;
+        Some(PathBuf::from(home).join(".motor3derust").join("save"))
+    }
+}
+
+/// Lit les octets d'un fichier `user://<nom>` (sauvegarde de partie). `None` si le
+/// dossier utilisateur est indisponible ou si le fichier n'existe pas encore (première
+/// utilisation — pas une erreur).
+pub fn read_user_bytes(name: &str) -> Option<Vec<u8>> {
+    std::fs::read(user_dir()?.join(name)).ok()
+}
+
+/// Écrit `data` dans `user://<nom>`, en créant le dossier utilisateur si besoin.
+pub fn write_user_bytes(name: &str, data: &[u8]) -> Result<(), String> {
+    let dir = user_dir().ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(name), data).map_err(|e| e.to_string())
+}
+
 /// Lit les octets d'un chemin quel que soit son schéma : `asset-id://` (référence
 /// stable, résolue puis relue récursivement — Sprint 95), `bundle://` (embarqué),
 /// `asset://` (dossier projet, repli sur le bundle), ou chemin disque classique.

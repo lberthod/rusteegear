@@ -430,6 +430,17 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
 
+    // Sauvegarde de partie (Sprint 98) : seule façon d'obtenir un dossier écrivable
+    // garanti sur Android (`$HOME` n'existe pas) — posé une fois, avant tout accès à
+    // `assets::user_dir()` (`AppState::save_game`/`load_game`, en cours de Play).
+    match android_app.internal_data_path() {
+        Some(path) => crate::assets::set_android_data_dir(path),
+        None => log::error!(
+            "Chemin de stockage interne Android indisponible : les sauvegardes de \
+             partie ne fonctionneront pas cette session."
+        ),
+    }
+
     let event_loop = match EventLoop::builder().with_android_app(android_app).build() {
         Ok(el) => el,
         Err(e) => {

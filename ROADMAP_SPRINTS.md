@@ -1344,10 +1344,42 @@ régression client. Une manche décidée ne coupe plus tout le process
   coroutines), contenu de démo à faire séparément (même situation que les Sprints
   95/96 : mécanisme moteur avant contenu/UI).
 
-#### Sprint 98 — user:// + sauvegarde de partie ⬜
-- [ ] Schéma `user://` (crate `dirs`) ; save game à slots (positions, score, variables Lua, seed), versionné.
-- **Fichiers** : `src/assets.rs`, `src/runtime/mod.rs`.
-- **Livrable** : progression sauvegardée/restaurée sur desktop **et** Android.
+#### Sprint 98 — user:// + sauvegarde de partie ✅ FAIT (Android non vérifié sur appareil)
+- [x] **Schéma `user://`** (`src/assets.rs`) : **sans** la crate `dirs` (pas de nouvelle
+      dépendance — même choix qu'au Sprint 95 avec `uuid`) — desktop réutilise
+      `$HOME` (`~/.motor3derust/save/`, à côté de `assets/` mais distinct : données
+      **écrites** par le jeu, pas importées par l'éditeur) ; Android n'a pas de
+      `$HOME`, donc `assets::set_android_data_dir` pose une fois le chemin fourni par
+      `android_app.internal_data_path()` (`android-activity`), appelé dans
+      `lib.rs::android_main` avant la boucle d'événements.
+- [x] **`SaveGame`** (`src/runtime/savegame.rs`, nouveau) : `version`, `score`,
+      `positions` (une par objet de `scene.objects`, dans l'ordre), `lua_vars`.
+      Versionnée comme les scènes (Sprint 95) — `version` toujours forcée à
+      `CURRENT_VERSION` à l'écriture. **Pas de `seed`** : aucun RNG seedable
+      n'existe dans ce moteur à ce jour (écarté explicitement au Sprint 80, cf. plus
+      haut dans ce fichier) — rien à sauvegarder de ce côté, un champ inventé aurait
+      été un mensonge de plus qu'à corriger plus tard.
+- [x] **`save.get("clé")`/`save.set("clé", valeur)` en Lua** : nouveau
+      `AppState::lua_vars` (persistant, contrairement à `game_events` du Sprint 93 qui
+      se vide chaque tick), lu/écrit séquentiellement par les scripts dans l'ordre de
+      `sim_step` — pas de décalage d'un tick nécessaire ici (contrairement aux
+      événements) puisque l'ordre d'exécution est déjà déterministe et accepté tel
+      quel.
+- [x] **`AppState::save_game`/`load_game`** : points d'entrée haut niveau
+      (`capture_save`/`apply_save` + écriture/lecture `user://`) — pas encore de
+      bouton dans l'éditeur/le player, cf. le livrable restant.
+- [x] **Livrable vérifié sur desktop** : test bout en bout `saving_and_loading_a_game_
+      restores_score_position_and_lua_vars` — score, position d'objet et variable Lua
+      remis à zéro puis restaurés après un aller-retour disque réel par
+      `save_game`/`load_game`. 288 tests lib + 4 bin + 8 golden verts.
+- **Fichiers** : `src/assets.rs`, `src/runtime/savegame.rs` (nouveau),
+  `src/runtime/mod.rs`, `src/app/mod.rs`, `src/lib.rs` (`android_main`).
+- **Livrable restant, hors scope de ce sprint** : « **et** Android » non vérifié —
+  code écrit contre l'API réelle d'`android-activity` (`internal_data_path`), mais
+  jamais tourné sur un appareil (aucun matériel disponible dans cet environnement,
+  même situation que le Sprint 48 « Capteurs & assets mobiles »). Pas de bouton
+  Sauvegarder/Charger dans l'éditeur/le player — mécanisme complet et testé, UI à
+  faire séparément (même situation que les Sprints 95/96/97).
 
 #### Sprint 99 — Anim notifies ⬜
 - [ ] Marqueurs temporels sur les clips → événements du Sprint 93 (bruits de pas, fenêtres de hit).
