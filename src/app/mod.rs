@@ -211,6 +211,11 @@ pub struct AppState {
     /// config persistée à chaque entrée en Play, pilote le nombre de lumières
     /// ponctuelles envoyées au shader (perf en mode interactif « Basse » qualité).
     pub render_quality: crate::app::build_config::RenderQuality,
+    /// Bloom activé pour ce build (Sprint 91, `build_config::BuildConfig::bloom`) :
+    /// relu comme `render_quality` ci-dessus. Combiné à
+    /// `RenderQuality::bloom_enabled()` (opt-out automatique sur qualité « Basse ») —
+    /// les deux doivent être vrais pour que le renderer calcule le bloom.
+    pub bloom_enabled: bool,
     /// Intensité (1 = pic, décroît vers 0) du flash de dégâts (vignette rouge HUD),
     /// déclenché quand `hud_health` baisse. Purement cosmétique (retour de coup).
     pub damage_flash: f32,
@@ -576,6 +581,7 @@ impl AppState {
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
             hud_health: None,
             render_quality: crate::app::build_config::BuildConfig::load().render_quality,
+            bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
             damage_flash: 0.0,
             attack_flash: 0.0,
             wave: 0,
@@ -2236,7 +2242,9 @@ impl AppState {
             self.time = 0.0;
             // Relit la qualité visée (modifiable dans le panneau Export sans redémarrer
             // l'app) : s'applique dès ce lancement de Play, pas seulement au build exporté.
-            self.render_quality = crate::app::build_config::BuildConfig::load().render_quality;
+            let cfg = crate::app::build_config::BuildConfig::load();
+            self.render_quality = cfg.render_quality;
+            self.bloom_enabled = cfg.bloom;
         }
         self.was_playing = self.playing;
 

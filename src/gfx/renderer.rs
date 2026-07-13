@@ -90,6 +90,16 @@ struct SceneUniform {
     fog: [f32; 4],        // rgb = couleur, w = densité
 }
 
+/// Paramètre du bloom (Sprint 91, groupe dédié du `tonemap_pipeline`) : juste
+/// l'intensité, dans son propre petit uniform plutôt que dans `SceneUniform` — le
+/// tone mapping est une passe séparée avec son propre bind group, pas de raison de
+/// lui faire porter tout `Light`/`Camera` pour un seul flottant.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct BloomUniform {
+    intensity: [f32; 4], // x = intensité, yzw inutilisés (alignement std140)
+}
+
 const SHADOW_SIZE: u32 = 1024;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -101,6 +111,12 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// `Rgba16Float` : suffisant pour la plage dynamique visée ici (contrairement à
 /// `Rgba32Float`, filtrable nativement sans extension GPU supplémentaire).
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// Nombre de niveaux de la chaîne de mips du bloom (Sprint 91) : mip 0 = moitié de la
+/// résolution HDR, chaque niveau suivant moitié du précédent. 4 est un compromis
+/// raisonnable — assez pour un halo doux qui s'étend sur plusieurs pixels, sans
+/// multiplier les passes plein écran par frame (2×(N-1) + 1 = 7 passes ici).
+const BLOOM_MIP_LEVELS: u32 = 4;
 
 /// Skinning GPU (Sprint 86-87) : matrices par instance skinnée dans la palette de
 /// joints — généreux pour un rig réel (Mixamo : ~50-65 os).
@@ -143,6 +159,16 @@ pub struct Renderer {
     /// dans `resize()`, comme `depth_view`. Les chemins headless/test créent la leur en
     /// local (taille demandée par l'appelant, indépendante de la fenêtre).
     hdr_view: wgpu::TextureView,
+    /// Chaîne de bloom (Sprint 91), cf. `render_bloom` — trois pipelines partageant
+    /// `bloom_sample_layout` (seuil, downsample, upsample) et une petite texture à
+    /// plusieurs mips en mode fenêtré (`bloom_mip_views`, redimensionnée dans
+    /// `resize()` comme `hdr_view`).
+    bloom_threshold_pipeline: wgpu::RenderPipeline,
+    bloom_downsample_pipeline: wgpu::RenderPipeline,
+    bloom_upsample_pipeline: wgpu::RenderPipeline,
+    bloom_sample_layout: wgpu::BindGroupLayout,
+    bloom_intensity_buf: wgpu::Buffer,
+    bloom_mip_views: Vec<wgpu::TextureView>,
     depth_view: wgpu::TextureView,
     model_layout: wgpu::BindGroupLayout,
 
@@ -573,6 +599,32 @@ impl Renderer {
             label: Some("tonemap_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/tonemap.wgsl").into()),
         });
+        // `bloom_sample_layout` (Sprint 91) : texture + sampler seuls, partagée par les
+        // 3 passes de la chaîne de bloom (seuil, downsample, upsample) — plus légère que
+        // `tonemap_layout` ci-dessous, qui porte en plus la texture de bloom déjà
+        // remontée et son intensité.
+        let bloom_sample_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("bloom_sample_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
         let tonemap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tonemap_layout"),
             entries: &[
@@ -590,6 +642,28 @@ impl Renderer {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Bloom (Sprint 91) : texture déjà remontée à sa taille pleine par le
+                // filtrage bilinéaire du sampler (cf. `Renderer::render_bloom`).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -640,6 +714,101 @@ impl Renderer {
             cache: None,
         });
         let hdr_view = create_hdr_view(&device, size.width, size.height);
+
+        // --- Bloom (Sprint 91) : seuil + chaîne de mips down/upsample, cf.
+        // `Renderer::render_bloom`. Les 3 passes partagent `bloom_sample_layout` (texture
+        // + sampler) et le shader `bloom.wgsl` ; seul le blend state distingue
+        // downsample (REPLACE) d'upsample (ADD, accumule sur le niveau déjà rempli par
+        // la descente).
+        let bloom_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bloom_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/bloom.wgsl").into()),
+        });
+        let bloom_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("bloom_pipeline_layout"),
+                bind_group_layouts: &[Some(&bloom_sample_layout)],
+                immediate_size: 0,
+            });
+        fn make_bloom_pipeline(
+            device: &wgpu::Device,
+            layout: &wgpu::PipelineLayout,
+            shader: &wgpu::ShaderModule,
+            label: &str,
+            entry_point: &'static str,
+            blend: wgpu::BlendState,
+        ) -> wgpu::RenderPipeline {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_bloom"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: HDR_FORMAT,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        }
+        let bloom_threshold_pipeline = make_bloom_pipeline(
+            &device,
+            &bloom_pipeline_layout,
+            &bloom_shader,
+            "bloom_threshold_pipeline",
+            "fs_threshold",
+            wgpu::BlendState::REPLACE,
+        );
+        let bloom_downsample_pipeline = make_bloom_pipeline(
+            &device,
+            &bloom_pipeline_layout,
+            &bloom_shader,
+            "bloom_downsample_pipeline",
+            "fs_sample",
+            wgpu::BlendState::REPLACE,
+        );
+        let bloom_upsample_pipeline = make_bloom_pipeline(
+            &device,
+            &bloom_pipeline_layout,
+            &bloom_shader,
+            "bloom_upsample_pipeline",
+            "fs_sample",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+        );
+        let bloom_intensity_buf = create_uniform(&device, "bloom_intensity", 16);
+        let bloom_mip_views = create_bloom_mip_views(&device, size.width, size.height);
 
         // --- Skinning GPU (Sprint 86) : palette de joints (groupe 4), pipeline vertex
         // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
@@ -929,6 +1098,12 @@ impl Renderer {
             tonemap_layout,
             tonemap_sampler,
             hdr_view,
+            bloom_threshold_pipeline,
+            bloom_downsample_pipeline,
+            bloom_upsample_pipeline,
+            bloom_sample_layout,
+            bloom_intensity_buf,
+            bloom_mip_views,
             depth_view,
             model_layout,
             camera_buf,
@@ -981,6 +1156,8 @@ impl Renderer {
         surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, &self.config);
         self.hdr_view = create_hdr_view(&self.device, new_size.width, new_size.height);
+        self.bloom_mip_views =
+            create_bloom_mip_views(&self.device, new_size.width, new_size.height);
     }
 
     /// Recrée `debug_vbuf` en le doublant tant qu'il ne peut pas contenir `n` sommets
@@ -1226,7 +1403,10 @@ impl Renderer {
         }
 
         // Tone mapping (Sprint 90) : HDR → `view` (le format lu par `finish_and_read_rgba`).
-        self.tonemap(&mut encoder, &hdr_view, &view);
+        // Pas de bloom ici (Sprint 91) : ce chemin sert uniquement au golden test de
+        // skinning, qui n'a pas besoin du post-effet — `hdr_view` réutilisée comme
+        // source de bloom factice, neutralisée par une intensité à 0.
+        self.tonemap(&mut encoder, &hdr_view, &hdr_view, 0.0, &view);
 
         self.finish_and_read_rgba(encoder, &target, width, height)
     }
@@ -1501,17 +1681,103 @@ impl Renderer {
         }
     }
 
-    /// Passe de tone mapping (Sprint 90) : lit `hdr_source` (`HDR_FORMAT`, rempli par la
-    /// passe principale) et écrit le résultat tonemappé dans `output`, qui doit être au
-    /// format d'affichage final (`config.format`). Partagée par les trois chemins de
-    /// rendu (`render`, `render_scene_headless`, `render_skinned_test`) : un seul endroit
-    /// qui connaît la courbe ACES.
+    /// Chaîne de bloom (Sprint 91) : seuil (`hdr_source` → `mip_views[0]`), descente
+    /// (`mip_views[i]` → `mip_views[i+1]`, remplace), puis remontée (`mip_views[i+1]` →
+    /// `mip_views[i]`, additionne) — `mip_views[0]` porte le résultat final en sortie,
+    /// à moitié résolution HDR, remonté à pleine taille par le filtrage bilinéaire du
+    /// sampler quand `tonemap()` l'échantillonne.
+    fn render_bloom(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_source: &wgpu::TextureView,
+        mip_views: &[wgpu::TextureView],
+    ) {
+        let bind = |src: &wgpu::TextureView| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bloom_bg"),
+                layout: &self.bloom_sample_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.tonemap_sampler),
+                    },
+                ],
+            })
+        };
+        let draw_into = |encoder: &mut wgpu::CommandEncoder,
+                         pipeline: &wgpu::RenderPipeline,
+                         bind_group: &wgpu::BindGroup,
+                         target: &wgpu::TextureView| {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bloom_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        };
+
+        let threshold_bg = bind(hdr_source);
+        draw_into(
+            encoder,
+            &self.bloom_threshold_pipeline,
+            &threshold_bg,
+            &mip_views[0],
+        );
+        for i in 0..mip_views.len() - 1 {
+            let bg = bind(&mip_views[i]);
+            draw_into(
+                encoder,
+                &self.bloom_downsample_pipeline,
+                &bg,
+                &mip_views[i + 1],
+            );
+        }
+        for i in (0..mip_views.len() - 1).rev() {
+            let bg = bind(&mip_views[i + 1]);
+            draw_into(encoder, &self.bloom_upsample_pipeline, &bg, &mip_views[i]);
+        }
+    }
+
+    /// Passe de tone mapping (Sprint 90) + composition du bloom (Sprint 91) : lit
+    /// `hdr_source` (`HDR_FORMAT`, rempli par la passe principale) et `bloom_source`
+    /// (résultat de `render_bloom`, `mip_views[0]`), écrit le résultat dans `output`
+    /// (format d'affichage final, `config.format`). Partagée par les trois chemins de
+    /// rendu (`render`, `render_scene_headless`, `render_skinned_test`) : un seul
+    /// endroit qui connaît la courbe ACES. `bloom_intensity` à 0 (opt-out mobile, cf.
+    /// `RenderQuality::bloom_enabled`) neutralise `bloom_source` quel que soit son
+    /// contenu — pas besoin d'une texture noire dédiée.
     fn tonemap(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         hdr_source: &wgpu::TextureView,
+        bloom_source: &wgpu::TextureView,
+        bloom_intensity: f32,
         output: &wgpu::TextureView,
     ) {
+        self.queue.write_buffer(
+            &self.bloom_intensity_buf,
+            0,
+            bytemuck::bytes_of(&BloomUniform {
+                intensity: [bloom_intensity, 0.0, 0.0, 0.0],
+            }),
+        );
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap_bg"),
             layout: &self.tonemap_layout,
@@ -1523,6 +1789,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.tonemap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(bloom_source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.bloom_intensity_buf.as_entire_binding(),
                 },
             ],
         });
@@ -2267,9 +2541,26 @@ impl Renderer {
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
+        // Bloom (Sprint 91) : passes de seuil/downsample/upsample sautées entièrement
+        // si désactivé (opt-out mobile, `RenderQuality::bloom_enabled`) — pas seulement
+        // neutralisées côté shader, un vrai gain de perf sur le palier visé.
+        let bloom_intensity = if app.bloom_enabled && app.render_quality.bloom_enabled() {
+            app.scene.sky.bloom_intensity
+        } else {
+            0.0
+        };
+        if bloom_intensity > 0.0 {
+            self.render_bloom(&mut encoder, &self.hdr_view, &self.bloom_mip_views);
+        }
         // Tone mapping (Sprint 90) : HDR → `view` (format d'affichage réel), avant l'UI
         // (l'UI egui reste en LDR, peinte par-dessus l'image déjà tonemappée).
-        self.tonemap(&mut encoder, &self.hdr_view, &view);
+        self.tonemap(
+            &mut encoder,
+            &self.hdr_view,
+            &self.bloom_mip_views[0],
+            bloom_intensity,
+            &view,
+        );
 
         // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
         let extra = match full_output {
@@ -2344,6 +2635,9 @@ impl Renderer {
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
         // Cible HDR (Sprint 90), locale à cet appel — cf. `hdr_view` de `render()`.
         let hdr_view = create_hdr_view(&self.device, width, height);
+        // Chaîne de bloom (Sprint 91), locale à cet appel — cf. `bloom_mip_views` de
+        // `render()`.
+        let bloom_mip_views = create_bloom_mip_views(&self.device, width, height);
 
         // Debug drawing (Sprint 83) : même logique que `render()` (préparer + vider avant
         // les passes, dessiner après les meshes texturés dans la passe principale).
@@ -2521,8 +2815,23 @@ impl Renderer {
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
+        // Bloom (Sprint 91) : cf. commentaire équivalent dans `render()`.
+        let bloom_intensity = if app.bloom_enabled && app.render_quality.bloom_enabled() {
+            app.scene.sky.bloom_intensity
+        } else {
+            0.0
+        };
+        if bloom_intensity > 0.0 {
+            self.render_bloom(&mut encoder, &hdr_view, &bloom_mip_views);
+        }
         // Tone mapping (Sprint 90) : HDR → `view` (le format lu par `finish_and_read_rgba`).
-        self.tonemap(&mut encoder, &hdr_view, &view);
+        self.tonemap(
+            &mut encoder,
+            &hdr_view,
+            &bloom_mip_views[0],
+            bloom_intensity,
+            &view,
+        );
 
         self.finish_and_read_rgba(encoder, &target, width, height)
     }
@@ -2904,4 +3213,40 @@ fn create_hdr_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Text
         view_formats: &[],
     });
     texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// Chaîne de mips du bloom (Sprint 91) : une texture à `BLOOM_MIP_LEVELS` niveaux,
+/// démarrant à moitié de la résolution HDR (`width`/`height` = celles de `hdr_view`) —
+/// une vue par niveau (`base_mip_level` fixé, `mip_level_count: 1`), utilisable aussi
+/// bien comme cible de rendu que comme texture échantillonnée (jamais les deux à la
+/// fois dans la même passe).
+fn create_bloom_mip_views(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> Vec<wgpu::TextureView> {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bloom_chain"),
+        size: wgpu::Extent3d {
+            width: (width / 2).max(2),
+            height: (height / 2).max(2),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: BLOOM_MIP_LEVELS,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: HDR_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    (0..BLOOM_MIP_LEVELS)
+        .map(|level| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("bloom_mip_view"),
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        })
+        .collect()
 }

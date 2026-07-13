@@ -62,6 +62,15 @@ impl RenderQuality {
             RenderQuality::High => crate::scene::MAX_POINT_LIGHTS,
         }
     }
+
+    /// Bloom activé pour ce niveau de qualité (Sprint 91) : opt-out sur « Basse » — la
+    /// chaîne de mips down/upsample ajoute plusieurs passes plein écran par frame, un
+    /// coût qu'un appareil visant ce palier (cf. `light_budget`) n'a pas à payer. Ni
+    /// `Sky::bloom_intensity`, ni le shader ne changent : le réglage scène reste ce
+    /// qu'il est, seule son application est coupée en amont (cf. `write_uniforms`).
+    pub fn bloom_enabled(self) -> bool {
+        !matches!(self, RenderQuality::Low)
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +96,31 @@ mod tests {
         // Ordre croissant strict : plus de qualité = plus de lumières.
         assert!(RenderQuality::Low.light_budget() < RenderQuality::Medium.light_budget());
         assert!(RenderQuality::Medium.light_budget() < RenderQuality::High.light_budget());
+    }
+
+    #[test]
+    fn bloom_is_only_disabled_on_low_quality() {
+        // Sprint 91 : l'opt-out mobile ne concerne que le palier le plus bas — Medium
+        // et High doivent laisser le bloom s'exprimer (sous réserve de `BuildConfig::
+        // bloom` et de l'intensité de la scène, gérés séparément).
+        assert!(!RenderQuality::Low.bloom_enabled());
+        assert!(RenderQuality::Medium.bloom_enabled());
+        assert!(RenderQuality::High.bloom_enabled());
+    }
+
+    #[test]
+    fn old_build_config_json_without_bloom_field_loads_with_default_enabled() {
+        // Round-trip rétrocompatible (même logique que `msaa`/`shadows`) : un fichier
+        // de config sauvegardé avant le Sprint 91 n'a pas le champ `bloom` — doit se
+        // charger avec le bloom activé par défaut plutôt que de rejeter le JSON.
+        let old_json = r#"{
+            "app_name": "MonJeu",
+            "bundle_id": "com.exemple.monjeu",
+            "version": "1.0.0",
+            "build_number": 1
+        }"#;
+        let cfg: BuildConfig = serde_json::from_str(old_json).expect("JSON pré-Sprint 91");
+        assert!(cfg.bloom);
     }
 }
 
@@ -158,6 +192,13 @@ pub struct BuildConfig {
     /// Anti-aliasing MSAA (1 = désactivé, 2 ou 4 = échantillons).
     #[serde(default = "default_msaa")]
     pub msaa: u32,
+    /// Bloom activé pour ce build (Sprint 91) : combiné à `RenderQuality::
+    /// bloom_enabled()` (opt-out automatique sur qualité « Basse ») — les deux
+    /// doivent être vrais pour que le renderer calcule le halo (cf. `AppState::
+    /// bloom_enabled`). Un opt-out manuel indépendant de la qualité reste possible
+    /// (ex. un build « Moyenne » qui veut quand même couper le bloom).
+    #[serde(default = "default_true")]
+    pub bloom: bool,
 }
 
 impl Default for BuildConfig {
@@ -179,6 +220,7 @@ impl Default for BuildConfig {
             target_fps: default_fps(),
             shadows: default_true(),
             msaa: default_msaa(),
+            bloom: default_true(),
         }
     }
 }

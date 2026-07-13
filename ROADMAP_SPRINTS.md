@@ -1125,10 +1125,42 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/gfx/shaders/tonemap.wgsl` (nouveau), `src/gfx/renderer.rs`,
   `tests/golden_render.rs`.
 
-#### Sprint 91 — Bloom + réglages ⬜
-- [ ] Chaîne de mips down/upsample ; intensité dans les paramètres et `build_config` (comme le MSAA).
-- **Fichiers** : `src/gfx/renderer.rs`, `src/app/build_config.rs`.
-- **Livrable** : la boule de feu rayonne ; opt-out mobile documenté.
+#### Sprint 91 — Bloom + réglages ✅ FAIT
+- [x] **Chaîne de mips down/upsample** (`src/gfx/shaders/bloom.wgsl`, nouveau) : seuil
+      (extrait les pixels dont la radiance HDR dépasse 1.0) → `BLOOM_MIP_LEVELS = 4`
+      niveaux de descente (remplace) → remontée (additionne) — une texture à
+      plusieurs mips (`Renderer::bloom_mip_views`, une vue par niveau), 3 pipelines
+      partageant le même shader/layout (seul le blend state change downsample vs
+      upsample). `mip_views[0]` (résultat final, moitié résolution HDR) composé dans
+      `tonemap.wgsl` — le filtrage bilinéaire du sampler fait le dernier upsample
+      vers la pleine résolution au passage.
+- [x] **Réglages** : `scene::Sky::bloom_intensity` (curseur scène, section « 🌫 Ciel &
+      brouillard » de l'inspecteur) **et** `BuildConfig::bloom` (case à cocher,
+      panneau Export, comme `msaa`) — les deux doivent être vrais, en plus de
+      `RenderQuality::bloom_enabled()`, pour que le renderer calcule le halo
+      (`AppState::bloom_enabled`, relu comme `render_quality`).
+- [x] **Opt-out mobile documenté** : `RenderQuality::bloom_enabled()` coupe le bloom
+      sur qualité « Basse » (les passes GPU sont **sautées**, pas juste neutralisées
+      côté shader — vrai gain de perf) ; le préréglage « ⚡ Performance » du panneau
+      Export coche cet opt-out (`bloom = false`).
+- [x] **Tests** : golden `bloom.png` (halo net et visible) +
+      `bloom_intensity_visibly_spreads_light_around_the_bright_object` (garde-fou :
+      le halo doit déborder du contour de l'objet, pas seulement changer ses pixels
+      déjà brillants — ce que le tone mapping seul ferait) + 2 tests
+      `RenderQuality::bloom_enabled`/rétrocompatibilité JSON de `BuildConfig::bloom`.
+      Les 3 scènes de référence existantes (`primitives_lights`, `sky_and_fog`,
+      l'émissif surexposé du Sprint 90) désactivent explicitement le bloom
+      (`bloom_intensity: 0.0`) pour rester des goldens à une seule variable —
+      **aucune régénération nécessaire**. 261 tests lib + 4 tests bin + 6 golden
+      render + 1 golden skinning verts.
+- **Fichiers** : `src/gfx/shaders/bloom.wgsl` (nouveau), `src/gfx/shaders/tonemap.wgsl`,
+  `src/gfx/renderer.rs`, `src/scene/mod.rs` (`Sky::bloom_intensity`),
+  `src/app/build_config.rs` (`BuildConfig::bloom`, `RenderQuality::bloom_enabled`),
+  `src/app/mod.rs` (`AppState::bloom_enabled`), `src/editor/mod.rs` (curseur scène),
+  `src/editor/export.rs` (case à cocher build), `tests/golden_render.rs`.
+- **Livrable restant, hors scope de ce sprint** : même constat que les Sprints 87-90 —
+  « la boule de feu rayonne » en jeu réel demande de vérifier `app::fireball` avec
+  un émissif réglé en pratique (mécanisme prêt, contenu/tuning à faire séparément).
 
 #### Sprint 92 — Mipmaps + tangentes ⬜
 - [ ] Mips générés à l'import (blits chaînés) ; tangentes `mikktspace` quand absentes.

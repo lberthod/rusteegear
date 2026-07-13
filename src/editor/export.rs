@@ -357,15 +357,20 @@ impl ExportPanel {
                                 ui.selectable_value(&mut self.config.msaa, n, label);
                             }
                         });
+                        ui.checkbox(&mut self.config.bloom, "Bloom").on_hover_text(
+                            "Halo autour des zones surexposées (Sprint 91) ; coupé \
+                             automatiquement en qualité Basse même si coché ici.",
+                        );
                         ui.weak("Persisté + transmis au build ; appliqué par le player là où c'est pris en charge.");
                         if ui
                             .button("⚡ Préréglage performance")
-                            .on_hover_text("Qualité basse, ombres off, MSAA off, 60 FPS")
+                            .on_hover_text("Qualité basse, ombres off, MSAA off, bloom off, 60 FPS")
                             .clicked()
                         {
                             self.config.render_quality = RenderQuality::Low;
                             self.config.shadows = false;
                             self.config.msaa = 1;
+                            self.config.bloom = false;
                             self.config.target_fps = 60;
                         }
                     });

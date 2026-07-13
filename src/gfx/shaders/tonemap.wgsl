@@ -1,11 +1,21 @@
-// Tone mapping (Sprint 90) : passe plein écran (triangle sans vertex buffer, même
-// technique que `sky.wgsl`) qui lit la cible HDR (`Rgba16Float`, remplie par la passe
-// principale — ciel, objets, gizmos, debug drawing, skinning) et écrit le résultat dans
-// le format d'affichage final. Sans cette passe, toute valeur > 1 (émissifs, spéculaire
-// fort) serait purement écrêtée au lieu de rouler en douceur vers le blanc.
+// Tone mapping (Sprint 90) + composition du bloom (Sprint 91) : passe plein écran
+// (triangle sans vertex buffer, même technique que `sky.wgsl`) qui lit la cible HDR
+// (`Rgba16Float`, remplie par la passe principale — ciel, objets, gizmos, debug
+// drawing, skinning), y ajoute le halo calculé par `bloom.wgsl` (déjà remonté à pleine
+// résolution par le filtrage bilinéaire du sampler, cf. `Renderer::render_bloom`), puis
+// écrit le résultat dans le format d'affichage final. Sans le tone mapping, toute valeur
+// > 1 (émissifs, spéculaire fort) serait purement écrêtée au lieu de rouler en douceur
+// vers le blanc.
 
 @group(0) @binding(0) var hdr_tex: texture_2d<f32>;
 @group(0) @binding(1) var hdr_samp: sampler;
+@group(0) @binding(2) var bloom_tex: texture_2d<f32>;
+struct BloomParams {
+    // x = intensité (0 = désactivé, cf. `RenderQuality::bloom_enabled` — l'opt-out
+    // mobile met cette valeur à 0 sans changer le shader). yzw inutilisés (alignement).
+    intensity: vec4<f32>,
+};
+@group(0) @binding(3) var<uniform> bloom: BloomParams;
 
 struct VsOut {
     @builtin(position) clip_position: vec4<f32>,
@@ -41,5 +51,7 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_tonemap(in: VsOut) -> @location(0) vec4<f32> {
     let hdr = textureSample(hdr_tex, hdr_samp, in.uv).rgb;
-    return vec4<f32>(aces_tonemap(hdr), 1.0);
+    let bloom_col = textureSample(bloom_tex, hdr_samp, in.uv).rgb;
+    let combined = hdr + bloom_col * bloom.intensity.x;
+    return vec4<f32>(aces_tonemap(combined), 1.0);
 }

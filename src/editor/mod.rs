@@ -3061,6 +3061,13 @@ fn build_ui(
                         egui::Slider::new(&mut sky.fog_density, 0.0..=1.0)
                             .text("densité du brouillard"),
                     );
+                    ui.add(
+                        egui::Slider::new(&mut sky.bloom_intensity, 0.0..=3.0).text("bloom"),
+                    );
+                    ui.weak(
+                        "Halo autour des zones dont la radiance dépasse 1.0 (émissifs, \
+                         spéculaire fort) ; coupé automatiquement en qualité Basse.",
+                    );
                 });
                 if !scene.point_lights.is_empty() {
                     ui.collapsing(

@@ -81,6 +81,13 @@ fn scene_primitives_lights() -> Scene {
             spot_dir: [0.0, -1.0, 0.0],
             spot_angle: 0.0,
         }],
+        // Bloom désactivé (Sprint 91 par défaut ailleurs) : ce golden isole
+        // volontairement l'éclairage/les ombres, pas le post-effet — cf.
+        // `scene_bloom()` pour un golden dédié au bloom.
+        sky: Sky {
+            bloom_intensity: 0.0,
+            ..Sky::default()
+        },
         ..Default::default()
     }
 }
@@ -195,6 +202,7 @@ fn scene_sky_and_fog() -> Scene {
             zenith_color: [0.05, 0.1, 0.35],
             fog_color: [0.6, 0.65, 0.75],
             fog_density: 0.35,
+            bloom_intensity: 0.0,
         },
         ..scene_primitives_lights()
     }
@@ -250,6 +258,11 @@ fn scene_overbright_emissive() -> Scene {
             ambient: 0.0,
             ..Default::default()
         },
+        // Bloom désactivé : ce test isole le tone mapping, pas le halo de `scene_bloom()`.
+        sky: Sky {
+            bloom_intensity: 0.0,
+            ..Sky::default()
+        },
         ..Default::default()
     }
 }
@@ -274,5 +287,47 @@ fn overbright_emissive_keeps_its_hue_instead_of_clipping_to_white() {
     assert!(
         g < 250 || b < 250,
         "un émissif surexposé ne doit pas s'écrêter en blanc pur (r={r}, g={g}, b={b})"
+    );
+}
+
+/// Sprint 91 (bloom) : même scène surexposée que `scene_overbright_emissive`, avec un
+/// bloom explicitement activé — permet de prouver que le halo dépasse réellement les
+/// contours de l'objet (pas juste un effet local sur les pixels déjà brillants, ce que
+/// le tone mapping seul fait déjà).
+fn scene_bloom() -> Scene {
+    Scene {
+        sky: Sky {
+            bloom_intensity: 1.5,
+            ..Sky::default()
+        },
+        ..scene_overbright_emissive()
+    }
+}
+
+#[test]
+fn golden_bloom() {
+    let Some(pixels) = render_headless(scene_bloom()) else {
+        return;
+    };
+    assert_matches_golden("bloom.png", &pixels, WIDTH, HEIGHT);
+}
+
+/// Garde-fou (même logique que `sky_and_fog_settings_change_the_render`) : le bloom
+/// doit visiblement étaler de la lumière **autour** de l'objet surexposé, pas
+/// seulement changer ses pixels déjà brillants (que le tone mapping seul ferait aussi).
+#[test]
+fn bloom_intensity_visibly_spreads_light_around_the_bright_object() {
+    let Some(off) = render_headless(scene_overbright_emissive()) else {
+        return;
+    };
+    let Some(on) = render_headless(scene_bloom()) else {
+        return;
+    };
+    let ratio = diff_ratio(&off, &on);
+    assert!(
+        ratio > 0.02,
+        "le bloom devrait étaler un halo mesurable autour de l'objet surexposé, \
+         seuls {:.2}% des pixels divergent entre bloom off/on",
+        ratio * 100.0
     );
 }

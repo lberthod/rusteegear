@@ -864,6 +864,17 @@ pub struct Sky {
     /// Densité du brouillard exponentiel (0 = désactivé). Le facteur de mélange est
     /// `1 - exp(-distance * fog_density)` — cf. `main.wgsl`.
     pub fog_density: f32,
+    /// Intensité du bloom (0 = désactivé, Sprint 91) : halo ajouté aux zones dont la
+    /// radiance HDR dépasse 1.0 (émissifs, spéculaire fort). L'opt-out mobile ne
+    /// touche pas ce champ — cf. `RenderQuality::bloom_enabled`, qui coupe
+    /// l'application du réglage (et les passes GPU correspondantes) sans changer la
+    /// scène elle-même.
+    #[serde(default = "default_bloom_intensity")]
+    pub bloom_intensity: f32,
+}
+
+fn default_bloom_intensity() -> f32 {
+    0.6
 }
 
 impl Default for Sky {
@@ -873,6 +884,7 @@ impl Default for Sky {
             zenith_color: [0.07, 0.08, 0.1],
             fog_color: [0.07, 0.08, 0.1],
             fog_density: 0.0,
+            bloom_intensity: default_bloom_intensity(),
         }
     }
 }
