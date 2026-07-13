@@ -1096,6 +1096,10 @@ impl Renderer {
             if actions.step_frame {
                 app.request_step();
             }
+            if let Some(cmd) = actions.console_command {
+                let result = app.run_console_command(&cmd);
+                log::info!("> {cmd}\n{result}");
+            }
             if let Some(clip) = actions.play_audio {
                 app.play_audio(&clip);
             }

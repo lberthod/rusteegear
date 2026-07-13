@@ -47,6 +47,8 @@ pub struct Editor {
     mp_lobby_code: String,
     /// Message en cours de saisie dans le chat de la fenêtre Multijoueur.
     mp_chat_input: String,
+    /// Commande en cours de saisie dans la Console (Sprint 82).
+    console_input: String,
 }
 
 /// Visibilité et état des fenêtres flottantes des menus « Aide » et « Outils ».
@@ -107,6 +109,9 @@ pub struct UiActions {
     pub redo: bool,
     /// « ⏭ » (Sprint 81) : avance d'exactement un pas fixe pendant la pause.
     pub step_frame: bool,
+    /// Commande saisie dans la console (Sprint 82), à exécuter via
+    /// `AppState::run_console_command`.
+    pub console_command: Option<String>,
     /// « Nouveau projet » : vide la scène.
     pub new_scene: bool,
     /// « Démo mobile » : charge une scène jouable (joystick + saut).
@@ -240,6 +245,7 @@ impl Editor {
             mp_password: String::new(),
             mp_lobby_code: "default".to_string(),
             mp_chat_input: String::new(),
+            console_input: String::new(),
         }
     }
 
@@ -385,6 +391,7 @@ impl Editor {
         let mp_password = &mut self.mp_password;
         let mp_lobby_code = &mut self.mp_lobby_code;
         let mp_chat_input = &mut self.mp_chat_input;
+        let console_input = &mut self.console_input;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -424,6 +431,7 @@ impl Editor {
                 mp_password,
                 mp_lobby_code,
                 mp_chat_input,
+                console_input,
                 net_status,
                 net_connected,
                 chat_messages,
@@ -1305,15 +1313,39 @@ fn tool_windows(
     scene: &Scene,
     export: &export::ExportPanel,
     status: &StatusInfo,
+    console_input: &mut String,
+    actions: &mut UiActions,
 ) {
-    // --- Console (logs en mémoire) ---
+    // --- Console (logs en mémoire + commandes, Sprint 82) ---
     egui::Window::new("🖥  Console")
         .open(&mut panels.console)
-        .default_size([460.0, 280.0])
+        .default_size([460.0, 320.0])
         .show(ctx, |ui| {
             if ui.button("🧹  Effacer").clicked() {
                 crate::log_buffer::clear();
             }
+            ui.separator();
+            // Champ de commande : `timescale <valeur>`, `pause`, `play`, `step`, `tp <x> <y> <z>`,
+            // `net_stats` (cf. AppState::run_console_command — liste complète en survol).
+            ui.horizontal(|ui| {
+                let resp = ui
+                    .add(
+                        egui::TextEdit::singleline(console_input)
+                            .hint_text("timescale 0.5 · pause · play · step · tp 0 1 0 · net_stats")
+                            .desired_width(ui.available_width() - 70.0),
+                    )
+                    .on_hover_text(
+                        "Commandes : timescale <v> · pause · play · stop · step · \
+                         tp <x> <y> <z> · net_stats",
+                    );
+                let submit = ui.button("Exécuter").clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                if submit && !console_input.trim().is_empty() {
+                    actions.console_command = Some(console_input.trim().to_string());
+                    console_input.clear();
+                    resp.request_focus();
+                }
+            });
             ui.separator();
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
@@ -2552,6 +2584,7 @@ fn build_ui(
     mp_password: &mut String,
     mp_lobby_code: &mut String,
     mp_chat_input: &mut String,
+    console_input: &mut String,
     net_status: &str,
     net_connected: bool,
     chat_messages: &[crate::app::network_client::ChatLine],
@@ -2598,7 +2631,15 @@ fn build_ui(
     // Fenêtre flottante « Build & Export » (Sprint 19).
     export.ui(root.ctx(), scene);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
-    tool_windows(root.ctx(), panels, scene, export, status);
+    tool_windows(
+        root.ctx(),
+        panels,
+        scene,
+        export,
+        status,
+        console_input,
+        actions,
+    );
 
     // Bandeau d'état (bas) : FPS, nombre d'objets, mode, backend GPU.
     egui::Panel::bottom("status_bar").show_inside(root, |ui| {
