@@ -223,7 +223,7 @@ impl AppState {
                         AttackMode::Zone => {
                             let defeated = self.scene.attack_zone_at(p, range);
                             if !defeated.is_empty() {
-                                self.score += defeated.len() as u32;
+                                self.add_score(defeated.len() as u32);
                                 crate::runtime::sfx::play(
                                     &mut self.audio,
                                     crate::runtime::sfx::Sfx::Defeat,
@@ -263,7 +263,7 @@ impl AppState {
                     let defeated = self.scene.damage_attackable(i);
                     self.attack_flash = 1.0;
                     if defeated {
-                        self.score += 1;
+                        self.add_score(1);
                         crate::runtime::sfx::play(
                             &mut self.audio,
                             crate::runtime::sfx::Sfx::Defeat,
@@ -331,7 +331,7 @@ impl AppState {
             }
             if self.scene.deadly_at(o.transform.position) {
                 self.scene.objects[i].visible = false;
-                self.score += 1;
+                self.add_score(1);
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
             }
         }

@@ -1204,10 +1204,33 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ### PHASE N — Chaîne gameplay (93 → 99)
 
-#### Sprint 93 — Événements ⬜
-- [ ] File `Vec<GameEvent>` drainée chaque tick fixe ; `emit()` / `on_event` en Lua.
-- **Fichiers** : `src/app/mod.rs`, `src/runtime/mod.rs`.
-- **Livrable** : une porte s'ouvre quand le score atteint 3, sans couplage direct.
+#### Sprint 93 — Événements ✅ FAIT
+- [x] **File d'événements** (`AppState::game_events`, `Vec<String>` — des noms plutôt
+      qu'un enum `GameEvent` : les émetteurs/auditeurs principaux sont des scripts Lua,
+      un enum Rust fermé les brimerait) : drainée au début de chaque tick fixe
+      (`sim_step`), les événements émis pendant un tick sont **délivrés au suivant**
+      puis jetés — le décalage rend l'ordre des objets dans la boucle des scripts
+      indifférent (pas de « l'auditeur doit venir après l'émetteur »), et la
+      consommation en un tick borne la file.
+- [x] **Lua** : `emit("nom")` (accumulateur relu après l'appel, même patron que
+      `vibrate`/`debug.line`) et `on_event("nom") -> bool` (ensemble des événements
+      reçus ce tick). +2 paramètres à `run_script`, 18 sites d'appel mis à jour.
+- [x] **Événements moteur** : `score:N` émis à chaque point marqué, via un nouveau
+      point de passage unique `AppState::add_score(n)` qui remplace les 6 sites
+      `self.score += …` de production (pièces, arme, attaque au contact, attaque de
+      zone, boule de feu, zone mortelle) — un `score:N` par valeur **traversée**, pas
+      seulement la valeur finale (2 pièces le même tick ne font pas sauter `score:3`).
+- [x] **Livrable vérifié** : test bout-en-bout `a_door_opens_on_score_3_without_direct_
+      coupling` — une porte scriptée `if on_event('score:3') then obj.y = 10 end`
+      s'ouvre quand le joueur ramasse 3 pièces, sans référencer ni pièces ni joueur.
+      **Trouvé en l'écrivant** : le jeu gèle une fois gagné (`advance_play`), donc un
+      événement émis au tick de la victoire n'est jamais délivré — cas documenté dans
+      le test (la porte du livrable s'ouvre *en cours de partie*). +1 test unitaire
+      `run_script` (emit → events_out ; on_event vrai/faux ; pas de livraison
+      intra-tick). 270 tests lib + 4 bin verts.
+- **Fichiers** : `src/app/mod.rs` (file, `add_score`, `run_script`),
+  `src/app/combat.rs`, `src/app/fireball.rs` (routage par `add_score`) — pas
+  `src/runtime/mod.rs` (la table Lua vit dans `run_script`, pas dans `runtime`).
 
 #### Sprint 94 — Cycle de vie + handles générationnels ⬜
 **Objectif** : créer/détruire des objets en Play sans invalider de références.

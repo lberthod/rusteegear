@@ -297,7 +297,7 @@ impl AppState {
             o.visible = true;
         }
         if defeated {
-            self.score += 1;
+            self.add_score(1);
             if let Some(shooter_id) = self.network_player_id_at(owner) {
                 self.credit_kill(shooter_id);
             }

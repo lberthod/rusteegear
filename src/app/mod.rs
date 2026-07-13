@@ -194,6 +194,15 @@ pub struct AppState {
     lost: bool,
     /// Score : nombre total de pièces ramassées dans la partie (bonus respawn inclus).
     score: u32,
+    /// File d'événements de gameplay (Sprint 93) : noms émis pendant le tick courant
+    /// (par un script via `emit("nom")`, ou par le moteur — ex. `score:N` à chaque
+    /// point marqué), **délivrés aux scripts au tick fixe suivant** via
+    /// `on_event("nom")` puis jetés — un événement se consomme en un tick, il ne
+    /// s'accumule pas (sinon `on_event` resterait vrai pour toujours et la file
+    /// grossirait sans borne). Le décalage d'un tick évite tout ordre de traitement
+    /// intra-tick : peu importe quel objet émet ou écoute en premier dans la boucle
+    /// des scripts, tous les auditeurs voient l'événement au même tick.
+    game_events: Vec<String>,
     /// File de réapparition : (index de pièce, temps de jeu auquel la rendre visible).
     respawn_queue: Vec<(usize, f32)>,
     /// Niveau courant de la démo contrôleur (1-based).
@@ -574,6 +583,7 @@ impl AppState {
             win_time: None,
             lost: false,
             score: 0,
+            game_events: Vec::new(),
             respawn_queue: Vec::new(),
             level: 1,
             device_preview: false,
@@ -1363,6 +1373,7 @@ impl AppState {
         self.win_time = None;
         self.lost = false;
         self.score = 0;
+        self.game_events.clear();
         self.respawn_queue.clear();
         self.hud_health = None;
         self.damage_flash = 0.0;
@@ -1396,6 +1407,19 @@ impl AppState {
     /// Score courant (pièces ramassées) — affiché au HUD.
     pub fn score(&self) -> u32 {
         self.score
+    }
+
+    /// Incrémente le score de `n` points en émettant un événement `score:N` par valeur
+    /// **traversée** (Sprint 93) — pas seulement la valeur finale : deux pièces
+    /// ramassées le même tick ne doivent pas faire sauter `score:3` pour un script qui
+    /// l'attend via `on_event`. Point de passage unique de **tous** les gains de score
+    /// (pièces, armes, attaques, boule de feu, zones mortelles) : c'est ce qui rend
+    /// l'événement fiable — un script n'a pas à savoir *comment* le point a été marqué.
+    pub(crate) fn add_score(&mut self, n: u32) {
+        for _ in 0..n {
+            self.score += 1;
+            self.game_events.push(format!("score:{}", self.score));
+        }
     }
 
     /// Passe au niveau suivant (boucle au niveau 1 après le dernier) et le charge en Play.
@@ -2238,6 +2262,7 @@ impl AppState {
             self.win_time = None;
             self.lost = false;
             self.score = 0;
+            self.game_events.clear();
             self.respawn_queue.clear();
             self.time = 0.0;
             // Relit la qualité visée (modifiable dans le panneau Export sans redémarrer
@@ -2306,7 +2331,7 @@ impl AppState {
                 let now = self.time;
                 let hit = self.scene.collect_at(p, 0.7);
                 if !hit.is_empty() {
-                    self.score += hit.len() as u32;
+                    self.add_score(hit.len() as u32);
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Pickup);
                     for i in hit {
                         let d = self.scene.objects[i].respawn_delay;
@@ -2328,7 +2353,7 @@ impl AppState {
                         ctrl.attack_windup = w.windup;
                         ctrl.attack_mode = w.mode;
                     }
-                    self.score += 1;
+                    self.add_score(1);
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Pickup);
                     log::info!(
                         "Arme trouvée : « {} » équipée (portée {:.1} m, recharge {:.2} s, préparation {:.2} s)",
@@ -2501,6 +2526,11 @@ impl AppState {
             None => std::collections::HashSet::new(),
         };
         let mut vibrations: Vec<f32> = Vec::new();
+        // Événements de gameplay (Sprint 93) : ceux émis au tick précédent (scripts ou
+        // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
+        // de ce tick s'accumulent dans `events_out` et seront délivrés au suivant.
+        let events_in = std::mem::take(&mut self.game_events);
+        let mut events_out: Vec<String> = Vec::new();
         // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
         // que les appels `damage()` de cette frame s'appliquent après, sans s'annuler.
         const HEALTH_REGEN_PER_S: f32 = 0.25;
@@ -2559,6 +2589,8 @@ impl AppState {
                 &self.input_state,
                 tapped,
                 triggered.contains(&idx),
+                &events_in,
+                &mut events_out,
                 &mut vibrations,
                 &mut health,
                 &mut self.debug_lines,
@@ -2566,6 +2598,9 @@ impl AppState {
                 log::error!("Script '{}' : {e}", obj.name);
             }
         }
+        // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
+        // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
+        self.game_events = events_out;
         // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
         // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
         // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
@@ -3380,6 +3415,8 @@ fn run_script(
     input: &PlayerInput,
     tapped: bool,
     triggered: bool,
+    events_in: &[String],
+    events_out: &mut Vec<String>,
     vib_out: &mut Vec<f32>,
     health_out: &mut Option<f32>,
     debug_out: &mut Vec<(Vec3, Vec3, [f32; 3])>,
@@ -3485,6 +3522,25 @@ fn run_script(
     let debug_api = lua.create_table()?;
     debug_api.set("line", debug_line)?;
 
+    // Événements de gameplay (Sprint 93). `emit("nom")` accumule (délivré à tous les
+    // scripts au tick suivant, cf. `AppState::game_events`) ; `on_event("nom")` teste
+    // les événements reçus ce tick. Un ensemble (nom → true) plutôt qu'une liste à
+    // parcourir côté Lua : `on_event` est le geste attendu dans un script — « ce tick,
+    // est-ce arrivé ? » — pas l'itération sur tout ce qui s'est passé.
+    let emit_tbl = lua.create_table()?;
+    let emit_ref = emit_tbl.clone();
+    let emit = lua.create_function(move |_, name: String| {
+        emit_ref.push(name)?;
+        Ok(())
+    })?;
+    let received = lua.create_table()?;
+    for name in events_in {
+        received.set(name.as_str(), true)?;
+    }
+    let on_event = lua.create_function(move |_, name: String| {
+        Ok(received.get::<bool>(name.as_str()).unwrap_or(false))
+    })?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
@@ -3494,8 +3550,14 @@ fn run_script(
     g.set("vibrate", vibrate)?;
     g.set("set_health", set_health)?;
     g.set("damage", damage)?;
+    g.set("emit", emit)?;
+    g.set("on_event", on_event)?;
     g.set("debug", debug_api)?;
     func.call::<()>(())?;
+
+    for name in emit_tbl.sequence_values::<String>().flatten() {
+        events_out.push(name);
+    }
 
     for v in vib.sequence_values::<f32>().flatten() {
         vib_out.push(v);
@@ -4151,6 +4213,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4173,6 +4237,8 @@ mod tests {
             &empty,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4204,6 +4270,8 @@ mod tests {
             &PlayerInput::default(),
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut debug_out,
@@ -4217,6 +4285,118 @@ mod tests {
         assert_eq!(
             debug_out[1],
             (Vec3::new(-1.0, 0.0, 0.0), Vec3::ZERO, [0.0, 1.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn script_emit_lands_in_events_out_and_on_event_reads_events_in() {
+        // Sprint 93 : `emit("x")` doit atterrir dans `events_out` (délivré au tick
+        // suivant par `sim_step`), et `on_event` doit refléter exactement `events_in`
+        // — vrai pour un nom reçu, faux pour tout le reste (y compris ce qu'on est en
+        // train d'émettre : pas de livraison intra-tick, cf. doc de `game_events`).
+        let lua = Lua::new();
+        let src = "emit('porte'); if on_event('score:3') then obj.y = 9 end; \
+                   if on_event('porte') then obj.x = 9 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut events_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &["score:3".to_string()],
+            &mut events_out,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(events_out, vec!["porte".to_string()]);
+        assert!(
+            (t.position.y - 9.0).abs() < 1e-5,
+            "on_event('score:3') devait être vrai (événement reçu)"
+        );
+        assert!(
+            t.position.x.abs() < 1e-5,
+            "on_event('porte') devait être faux : un emit de ce tick n'est pas \
+             délivré au même tick"
+        );
+    }
+
+    #[test]
+    fn a_door_opens_on_score_3_without_direct_coupling() {
+        // Livrable du Sprint 93, bout en bout (App réel) : une « porte » scriptée
+        // s'ouvre quand le score atteint 3, sans référencer ni les pièces ni le
+        // joueur — elle n'écoute que l'événement `score:3` émis par le moteur
+        // (`add_score`). Les 3 pièces sont sur le joueur : toutes ramassées le même
+        // tick, précisément le cas où émettre seulement la valeur *finale* du score
+        // ferait rater l'événement.
+        let mut app = AppState::new();
+        let mut scene = crate::scene::Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for i in 0..3 {
+            scene.objects.push(crate::scene::SceneObject {
+                name: format!("Pièce {i}"),
+                mesh: crate::scene::MeshKind::Sphere,
+                transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0))
+                    .with_scale(Vec3::splat(0.3)),
+                tap_action: crate::scene::TapAction::Hide,
+                ..Default::default()
+            });
+        }
+        // Une 4e pièce hors de portée : sans elle, ramasser les 3 premières gagne la
+        // partie le même tick — et le jeu **gèle** une fois gagné (cf. `advance_play`),
+        // l'événement `score:3` ne serait jamais délivré. Le livrable vise une porte
+        // qui s'ouvre *en cours de partie*, pas à l'écran de victoire.
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Pièce lointaine".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(50.0, 1.0, 50.0))
+                .with_scale(Vec3::splat(0.3)),
+            tap_action: crate::scene::TapAction::Hide,
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Porte".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 1.0, 0.0)),
+            script: "if on_event('score:3') then obj.y = 10 end".into(),
+            ..Default::default()
+        });
+        app.scene = scene;
+        app.playing = true;
+        for _ in 0..10 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert_eq!(app.score, 3, "les 3 pièces doivent être ramassées");
+        let door = app
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Porte")
+            .unwrap();
+        assert!(
+            (door.transform.position.y - 10.0).abs() < 1e-4,
+            "la porte devait s'ouvrir sur l'événement score:3 (y = {})",
+            door.transform.position.y
         );
     }
 
@@ -4250,6 +4430,8 @@ mod tests {
             &PlayerInput::default(),
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4290,6 +4472,8 @@ mod tests {
             &PlayerInput::default(),
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4322,6 +4506,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4340,6 +4526,8 @@ mod tests {
             &input,
             true,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4368,6 +4556,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4385,6 +4575,8 @@ mod tests {
             &input,
             false,
             true,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4417,6 +4609,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4445,6 +4639,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4474,6 +4670,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4492,6 +4690,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4514,6 +4714,8 @@ mod tests {
                 &input,
                 false,
                 false,
+                &[],
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut health,
                 &mut Vec::new(),
@@ -4558,6 +4760,8 @@ mod tests {
                 &input,
                 false,
                 false,
+                &[],
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
@@ -4576,6 +4780,8 @@ mod tests {
                 &input,
                 false,
                 false,
+                &[],
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
@@ -6064,6 +6270,8 @@ mod tests {
             &input,
             false,
             false,
+            &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -6101,6 +6309,8 @@ mod tests {
             &input,
             true,
             false,
+            &[],
+            &mut Vec::new(),
             &mut vib,
             &mut None,
             &mut Vec::new(),
