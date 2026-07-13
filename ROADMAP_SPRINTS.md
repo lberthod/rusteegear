@@ -24,13 +24,15 @@
 | **H — Jouabilité mobile sans script** | — | Objet jouable au doigt, rendu zéro-alloc |
 | **I — Robustesse & découplage** | 45 → 49 | Pas fixe, init sans panic, capteurs, signature |
 | *(Multijoueur en ligne)* | 50 → 79 (+ 80, 82 réseau) | Voir section **🌐 Multijoueur en ligne** ci-dessous |
-| **K — Filet de sécurité** | 80 → 83 | Golden tests rendu, RNG seedé, console dev, debug drawing |
+| **K — Filet de sécurité** | 80 → 83 | Golden tests rendu, temps maîtrisé (time scale/step), console dev, debug drawing |
 | **L — Animation squelettale** | 84 → 88 | Skinning glTF → blending → réplication réseau |
 | **M — Image** | 89 → 92 | Ciel/fog, HDR + tone mapping, bloom, mipmaps |
 | **N — Chaîne gameplay** | 93 → 99 | Événements → prefabs → spawn/destroy Lua → save |
 | **O — Physique & feel** | 100 → 103 | Exposer rapier (trimesh, CCD, couches), character controller |
 | **P — Audio, HUD & confort** | 104 → 110 | Bus/panning, widgets HUD, manettes, hot-reload, profiler GPU |
 | **Q — Web (ex-« pistes Phase J »)** | 111 → 114 | WASM/WebGPU, multijoueur navigateur, vitrine publique |
+| **R — WebXR** | 115 → 117 | Casque dans le navigateur (spike isolé → rendu stéréo → tests IWE) |
+| **S — Extensions quasi-gratuites** | 118 → 127 | Suites peu coûteuses de K/L/M/N/O/P (audio confort, post-effets HDR, SSAO, pipeline assets, outillage éditeur…) pour dépasser 100/200 sur la grille des 200 fonctionnalités |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
 > Les faire avant C évite de réécrire des features sur plusieurs cibles.
@@ -1558,6 +1560,103 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ---
 
+### PHASE S — Extensions quasi-gratuites (118 → 127)
+
+> Issue du même **audit comparatif à 200 fonctionnalités** que les phases K→Q
+> (Godot / Unity / Unreal / RusteeGear, 2026-07-13, re-vérifié dans le code le
+> 13 juillet après les sprints 80→99) : une fois K, L, M et N livrées, le score
+> RusteeGear sur la grille remonte à ~82–85 / 200, encore loin de la barre
+> symbolique de 100. Plutôt que d'inventer de nouveaux chantiers, ces 10 sprints
+> activent des items déjà catalogués dans l'audit comme « quasi gratuits » ou
+> « une petite marche » une fois un prérequis précis posé — et ce prérequis
+> (bus audio, cible HDR, manifeste GUID, skinning GPU, triggers) est justement
+> livré par K/L/M/N/O. Avec S, la projection franchit **~101–104 / 200** — une
+> projection de lecture de grille, pas une mesure, tant que ces sprints ne sont
+> pas livrés. **Aucun refus assumé (🔴) n'est reconsidéré** : pas de boîte noire
+> (FMOD/Wwise), pas de GI/Nanite, pas de consoles. Sprints insérables n'importe
+> où après leurs prérequis respectifs — même logique de réservoir que P.
+
+#### Sprint 118 — Audio confort (DSP, reverb, ducking, musique adaptative) ⬜
+**Objectif** : transformer le bus musique/SFX (Sprint 104) en mixeur complet.
+- [ ] Reverb/EQ/limiteur natifs à `kira` sur le bus SFX.
+- [ ] Zones de réverbération : triggers (Sprint 89) qui changent le send.
+- [ ] Ducking : automation de volume du bus musique quand le SFX joue.
+- [ ] Musique adaptative : 2 layers en crossfade (même mécanique que le crossfade d'animation, Sprint 87).
+- **Fichiers** : `src/runtime/audio.rs`.
+- **Livrable** : une zone de danger assourdit la musique ; les pas d'un combat font baisser la musique puis remonter (ducking) ; 2 layers de musique se croisent sans coupure.
+- **Prérequis livré** : bus musique/SFX + panning (Sprint 104).
+
+#### Sprint 119 — Post-effets HDR (exposition auto, grading, vignette) ⬜
+**Objectif** : finir la chaîne HDR (Sprint 90) avec ses effets quasi gratuits.
+- [ ] Exposition auto : histogramme compute sur la cible HDR.
+- [ ] Color grading : LUT 3D appliquée dans la passe finale.
+- [ ] Vignette : ~3 lignes dans la passe finale.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
+- **Livrable** : une scène très sombre puis très claire s'expose automatiquement ; une LUT de test change visiblement l'ambiance ; vignette activable/désactivable.
+- **Prérequis livré** : cible HDR + tone mapping (Sprint 90).
+
+#### Sprint 120 — SSAO ⬜
+- [ ] Occlusion ambiante hémisphère + blur, branchée sur la cible HDR.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
+- **Livrable** : les coins et recoins d'une scène de test s'assombrissent visiblement par rapport au rendu sans SSAO (comparaison avant/après).
+- **Prérequis livré** : cible HDR (Sprint 90).
+
+#### Sprint 121 — Variants de shaders + cache ⬜
+- [ ] Quelques `#ifdef` maison (ombres on/off, skinning) assemblés à la compilation des pipelines.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
+- **Livrable** : un objet non skinné et un objet skinné cohabitent dans la même scène sans repli sur un unique pipeline monolithique.
+- **Prérequis livré** : skinning GPU (Sprint 86).
+
+#### Sprint 122 — Forces de zone (vent, buoyancy) ⬜
+- [ ] Force appliquée aux corps rapier dans un trigger.
+- **Fichiers** : `src/runtime/physics.rs`, `src/app/mod.rs`.
+- **Livrable** : un objet dynamique traversant une zone de vent est visiblement poussé ; retrouve son comportement normal en sortant.
+- **Prérequis livré** : triggers + événement exit (Sprint 102).
+
+#### Sprint 123 — Pipeline assets, extensions ⬜
+- [ ] Presets qualité par plateforme (généralisation de la réduction mobile existante).
+- [ ] Graphe de dépendances d'assets depuis le manifeste GUID (Sprint 95).
+- [ ] Règles de budget (polycount, tailles) dans le contrôle qualité APK existant.
+- [ ] Normalisation loudness à l'import audio.
+- **Fichiers** : `src/assets.rs`.
+- **Livrable** : renommer/déplacer un asset référencé ailleurs le signale avant l'export ; un import audio trop fort est normalisé.
+- **Prérequis livré** : manifeste GUID (Sprint 95).
+
+#### Sprint 124 — Compression Zstd des packs embarqués ⬜
+- [ ] Crate `zstd` sur le blob d'assets embarqué dans le player.
+- **Fichiers** : `src/assets.rs`, `packaging/`.
+- **Livrable** : taille du `.apk`/`.dmg` mesurée avant/après, réduction documentée.
+
+#### Sprint 125 — Outillage éditeur (recherche de références, profilers, breakpoints Lua) ⬜
+- [ ] Graphe de références sur le manifeste GUID (« qui utilise cet asset ? »).
+- [ ] Profiler CPU : vue timeline par-dessus les spans `tracing` existants.
+- [ ] Profiler mémoire : compteurs par sous-système (au lieu du seul total global).
+- [ ] Hooks de debug `mlua` pour des breakpoints Lua basiques.
+- **Fichiers** : `src/editor/mod.rs`, `src/app/mod.rs`.
+- **Livrable** : supprimer un asset référencé ailleurs est signalé avant coup ; un script Lua peut être mis en pause à une ligne donnée.
+
+#### Sprint 126 — Terrain sculpté + placement assisté ⬜
+- [ ] Brosse de hauteur (raycast → heightmap → re-upload de la texture de terrain).
+- [ ] Scatter aléatoire d'instances.
+- [ ] Drop physique : laisser rapier poser les objets scattérés au sol.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : une brosse en mode édition creuse/soulève le terrain visiblement ; un scatter de rochers tombe et se stabilise au sol sans intervention manuelle.
+- **Prérequis livré** : raycast Lua/éditeur (Sprint 102).
+
+#### Sprint 127 — Localisation + abilities généralisées ⬜
+- [ ] Table de clés FR/EN pour le texte runtime (pas l'éditeur). RTL : hors scope, assumé.
+- [ ] `combat.rs` (homing, knockback, manches) généralisé en données déclaratives (coût, cooldown, effets à durée) — sans viser l'abstraction complète d'un GAS façon Unreal.
+- **Fichiers** : `src/app/combat.rs`, `src/assets.rs`.
+- **Livrable** : la démo contrôleur passe en anglais par un réglage ; une nouvelle capacité de combat s'ajoute par des données, sans nouveau code Rust.
+
+> **Définition de « terminé » S** : dix chantiers 🟠 déjà documentés comme peu coûteux
+> sont livrés, sans qu'aucun refus assumé (🔴) n'ait été reconsidéré — mixeur audio
+> complet, chaîne HDR finie (expo/grading/vignette/SSAO), pipeline assets et
+> outillage éditeur étoffés, terrain sculptable, moteur utilisable en anglais.
+> Projection : ~101–104 / 200 sur la grille des 200 fonctionnalités.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
@@ -1589,6 +1688,11 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **R** : une scène RusteeGear s'affiche **en stéréo dans un casque** (simulé via
   Immersive Web Emulator ou réel via navigateur), poses tête/contrôleurs prises en
   compte, interactions XR de base validées par des scénarios rejouables.
+- **S** : mixeur audio complet (DSP, ducking, musique adaptative), chaîne HDR finie
+  (exposition auto, grading, vignette, SSAO), pipeline assets et outillage éditeur
+  étoffés, terrain sculptable, moteur localisable — score projeté ~101–104 / 200
+  sur la grille des 200 fonctionnalités, sans qu'un seul refus assumé (🔴) n'ait
+  été reconsidéré.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
