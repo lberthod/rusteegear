@@ -90,7 +90,9 @@ impl MeshKind {
     }
 }
 
-/// Géométrie importée d'un fichier glTF. `data`/`aabb` sont reconstruits au chargement.
+/// Géométrie importée d'un fichier glTF. `data`/`aabb`/`skeleton`/`clips` sont
+/// reconstruits au chargement (jamais sérialisés — juste dérivés de `path`, cf.
+/// `reload_imported`).
 #[derive(Serialize, Deserialize, Default)]
 pub struct ImportedMesh {
     pub name: String,
@@ -101,6 +103,46 @@ pub struct ImportedMesh {
     pub aabb_min: Vec3,
     #[serde(skip)]
     pub aabb_max: Vec3,
+    /// Squelette du glTF (Sprint 84), `None` si le fichier n'a pas de skin — un mesh
+    /// statique n'a simplement rien à squeletter.
+    #[serde(skip)]
+    pub skeleton: Option<import::Skeleton>,
+    /// Clips d'animation du glTF (Sprint 85), liés aux joints de `skeleton` ci-dessus.
+    /// Vide si le fichier n'a ni skin ni animation.
+    #[serde(skip)]
+    pub clips: Vec<import::Clip>,
+    /// Poids de peau par sommet (Sprint 84), alignés avec `data.vertices` — nécessaires
+    /// pour construire le mesh GPU skinné (Sprint 86 : `gfx::mesh::SkinnedVertex`).
+    #[serde(skip)]
+    pub vertex_skins: Vec<import::VertexSkin>,
+}
+
+impl ImportedMesh {
+    /// Recharge `skeleton`/`clips`/`vertex_skins` depuis `path` (Sprints 84-85). Reparse
+    /// le glTF séparément de `data` (`import::load_gltf`) : un peu redondant (deux passes
+    /// sur le même fichier), mais garde le squelettage entièrement optionnel et sans
+    /// coût pour les meshes statiques, qui restent sur le seul chemin `load_gltf`
+    /// existant. Silencieux en cas d'erreur de lecture (log seulement) : l'absence de
+    /// squelette ne doit pas empêcher un mesh statique de s'afficher normalement.
+    pub fn load_skinning(&mut self) {
+        self.skeleton = None;
+        self.clips.clear();
+        self.vertex_skins.clear();
+        match import::load_gltf_skeleton(&self.path) {
+            Ok(Some((skeleton, vertex_skins))) => {
+                self.skeleton = Some(skeleton);
+                self.vertex_skins = vertex_skins;
+            }
+            Ok(None) => {} // pas de skin : mesh statique, rien à faire
+            Err(e) => log::error!("Lecture du squelette de {} échouée : {e}", self.path),
+        }
+        if self.skeleton.is_some() {
+            match import::load_gltf_clips(&self.path) {
+                Ok(clips) => self.clips = clips,
+                Err(e) => log::error!("Lecture des clips de {} échouée : {e}", self.path),
+            }
+        }
+    }
 }
 
 /// Composant optionnel : son associé à un `SceneObject` (clip, autoplay, spatialisation).
@@ -2666,6 +2708,7 @@ impl Scene {
                 }
                 Err(e) => log::error!("Rechargement de {} échoué : {e}", m.path),
             }
+            m.load_skinning();
         }
     }
 
@@ -2909,6 +2952,52 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_mesh_load_skinning_populates_skeleton_clips_and_vertex_skins() {
+        // Réutilise la fixture .glb du Sprint 84 (`import::tests`) plutôt que d'en
+        // reconstruire une : elle est déjà vérifiée correcte, seule la *plomberie*
+        // `ImportedMesh::load_skinning` (Sprint 87) est nouvelle ici.
+        let path = import::tests::write_temp_glb(
+            &import::tests::skinned_triangle_glb(),
+            "scene_load_skinning",
+        );
+        let mut m = ImportedMesh {
+            path: path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        m.load_skinning();
+        let _ = std::fs::remove_file(&path);
+
+        let skeleton = m.skeleton.expect("la fixture a un skin");
+        assert_eq!(skeleton.joints.len(), 2);
+        assert_eq!(
+            m.vertex_skins.len(),
+            3,
+            "un VertexSkin par sommet du triangle"
+        );
+        // Cette fixture n'a pas de bloc "animations" : pas de clip, mais pas d'erreur
+        // non plus (skin sans animation = squelette utilisable en pose de liaison seule).
+        assert!(m.clips.is_empty());
+    }
+
+    #[test]
+    fn imported_mesh_load_skinning_leaves_a_static_mesh_untouched() {
+        let path = import::tests::write_temp_glb(
+            &import::tests::unskinned_triangle_glb(),
+            "scene_load_skinning_static",
+        );
+        let mut m = ImportedMesh {
+            path: path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        m.load_skinning();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(m.skeleton.is_none());
+        assert!(m.clips.is_empty());
+        assert!(m.vertex_skins.is_empty());
+    }
 
     #[test]
     fn hue_to_rgb_primary_colors() {

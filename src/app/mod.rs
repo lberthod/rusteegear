@@ -2994,13 +2994,20 @@ impl AppState {
             .unwrap_or("Modèle")
             .to_string();
         let idx = self.scene.imported.len() as u32;
-        self.scene.imported.push(ImportedMesh {
+        let mut imported = ImportedMesh {
             name: name.clone(),
             path,
             data,
             aabb_min: min,
             aabb_max: max,
-        });
+            skeleton: None,
+            clips: Vec::new(),
+            vertex_skins: Vec::new(),
+        };
+        // Squelette/clips (Sprints 84-85) : reparse le fichier séparément, cf.
+        // `ImportedMesh::load_skinning` — silencieux si le mesh est statique.
+        imported.load_skinning();
+        self.scene.imported.push(imported);
         // Recadrage auto : centrer à l'origine, mise à l'échelle ~2 u.
         let size = max - min;
         let s = 2.0 / size.max_element().max(1e-3);

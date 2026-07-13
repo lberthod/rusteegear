@@ -533,7 +533,7 @@ pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f3
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Empile un chunk GLB (type + données, alignées à 4 octets — JSON en espaces,
@@ -550,7 +550,7 @@ mod tests {
     /// (« Root » racine, « Child » son enfant) squelettant un unique triangle, avec des
     /// poids de peau non triviaux — de quoi vérifier hiérarchie, noms, poses de liaison
     /// et `VertexSkin` sans dépendre d'un fichier externe (ex. export Mixamo réel).
-    fn skinned_triangle_glb() -> Vec<u8> {
+    pub(crate) fn skinned_triangle_glb() -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         // POSITION (VEC3 f32 × 3)
         for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
@@ -701,7 +701,7 @@ mod tests {
     /// Un `.glb` minimal **sans** skin : juste un triangle statique (POSITION/NORMAL),
     /// pour vérifier qu'un mesh statique ne fait pas échouer `load_gltf_skeleton` — il
     /// n'a simplement rien à squeletter.
-    fn unskinned_triangle_glb() -> Vec<u8> {
+    pub(crate) fn unskinned_triangle_glb() -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
             for c in p {
@@ -756,7 +756,7 @@ mod tests {
     /// (« failed to fill whole buffer », intermittent selon l'ordonnancement des threads).
     static TEMP_GLB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    fn write_temp_glb(bytes: &[u8], name: &str) -> std::path::PathBuf {
+    pub(crate) fn write_temp_glb(bytes: &[u8], name: &str) -> std::path::PathBuf {
         let n = TEMP_GLB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "rusteegear_test_{name}_{}_{n}.glb",
