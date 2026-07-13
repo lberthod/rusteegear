@@ -425,6 +425,18 @@ pub struct Clip {
 }
 
 impl Clip {
+    /// Clip sans piste de joint (Sprint 99) : pour les tests d'échange
+    /// notifies/événements, qui n'ont besoin que de `name`/`duration` — `tracks` reste
+    /// privé (jamais construit à la main hors de ce module), d'où ce constructeur
+    /// plutôt qu'un accès direct au champ depuis `app::mod` (tests de `notifies_crossed`).
+    pub fn without_tracks(name: impl Into<String>, duration: f32) -> Self {
+        Self {
+            name: name.into(),
+            duration,
+            tracks: std::collections::HashMap::new(),
+        }
+    }
+
     /// Échantillonne le clip à `time` (secondes, rebouclé automatiquement sur `duration` —
     /// négatif ou au-delà de la durée sont tous les deux ramenés dans `[0, duration)` par
     /// `rem_euclid`, jamais d'extrapolation ni de panique sur une valeur hors bornes).

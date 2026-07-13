@@ -1381,10 +1381,33 @@ régression client. Une manche décidée ne coupe plus tout le process
   Sauvegarder/Charger dans l'éditeur/le player — mécanisme complet et testé, UI à
   faire séparément (même situation que les Sprints 95/96/97).
 
-#### Sprint 99 — Anim notifies ⬜
-- [ ] Marqueurs temporels sur les clips → événements du Sprint 93 (bruits de pas, fenêtres de hit).
-- **Fichiers** : `src/app/combat.rs`, `src/runtime/mod.rs`.
-- **Livrable** : le coup du mode combat ne touche que pendant sa fenêtre d'animation.
+#### Sprint 99 — Anim notifies ✅ FAIT (démo de combat animée non câblée)
+- [x] **`ImportedMesh::notifies: HashMap<clip, Vec<(temps, nom)>>`** (`src/scene/mod.rs`)
+      — **sérialisé**, contrairement à `clips`/`skeleton` (entièrement rederivés du
+      glTF à chaque chargement) : un marqueur est authored à la main, le format glTF
+      n'a pas de notion standard de marqueur, donc rien à en dériver.
+- [x] **`notifies_crossed(markers, prev_time, cur_time, duration)`** (`src/scene/
+      mod.rs`) : fonction pure, gère le bouclage de fin de clip (un pas qui traverse
+      la fin ne doit pas manquer un marqueur proche de `duration`) et le temps figé
+      (vitesse nulle ⇒ rien ne se déclenche en boucle). 5 tests unitaires.
+- [x] **Câblage `sim_step`** : la boucle d'avance d'animation (Sprint 87) calcule les
+      marqueurs franchis et les injecte dans `events_in` **ce même tick** (pas de
+      décalage d'un tick comme les événements du Sprint 93 : cette boucle s'exécute
+      entièrement avant qu'aucun script ne tourne, donc aucune ambiguïté d'ordre à
+      éviter) — un événement `anim:<nom>` par marqueur franchi, lisible via
+      `on_event` (Sprint 93).
+- [x] **Livrable vérifié** : test bout-en-bout `an_anim_notify_gates_the_combat_hit_
+      window` — un objet animé avec deux marqueurs (`hit_open`/`hit_close`) sur un
+      clip synthétique, script qui n'ouvre la fenêtre (`save.set`, Sprint 98) qu'entre
+      les deux. 294 tests lib + 4 bin + 8 golden verts.
+- **Fichiers** : `src/scene/mod.rs`, `src/scene/import.rs` (`Clip::without_tracks`,
+  constructeur de test), `src/app/mod.rs` (`sim_step`) — pas `src/app/combat.rs`/
+  `src/runtime/mod.rs` : le système de combat mêlée (`attack_windup`) reste sur
+  timer fixe, aucune scène du dépôt n'a de personnage animé à retimer dessus (même
+  constat que les Sprints 87-89 : aucune démo skinnée n'existe encore).
+- **Livrable restant, hors scope de ce sprint** : pas de retimage du mode combat réel
+  sur des marqueurs — mécanisme complet et testé (marqueurs → événements → scripts),
+  contenu skinné/démo à faire séparément (même situation que les Sprints 95-98).
 
 ### PHASE O — Physique & feel (100 → 103)
 

@@ -2532,8 +2532,16 @@ impl AppState {
         // Avance la lecture des clips d'animation squelettale (Sprint 87) : indépendant
         // des scripts/tap actions ci-dessous — un objet skinné anime, script ou pas.
         // Le bouclage lui-même vit dans `Clip::sample_joint` (Sprint 85), pas ici.
-        for obj in self.scene.objects.iter_mut() {
+        // Marqueurs temporels (Sprint 99) : accumulés ici, délivrés aux scripts **ce
+        // même tick** (fusionnés dans `events_in` plus bas) — contrairement aux
+        // événements du Sprint 93 qui attendent le tick suivant pour rester
+        // indépendants de l'ordre des scripts, cette boucle-ci s'exécute entièrement
+        // avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
+        let mut anim_notify_events: Vec<String> = Vec::new();
+        let scene = &mut self.scene;
+        for obj in scene.objects.iter_mut() {
             if let Some(anim) = obj.animation.as_mut() {
+                let prev_time = anim.time;
                 anim.time += dt * anim.speed;
                 // Fondu enchaîné (Sprint 87) : le clip quitté continue de jouer pendant
                 // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
@@ -2544,6 +2552,17 @@ impl AppState {
                     anim.blend = (anim.blend
                         + dt / crate::scene::AnimationState::CROSSFADE_SECONDS)
                         .min(1.0);
+                }
+                if let crate::scene::MeshKind::Imported(mesh_idx) = obj.mesh
+                    && let Some(imported) = scene.imported.get(mesh_idx as usize)
+                    && let Some(markers) = imported.notifies.get(&anim.clip)
+                    && let Some(clip) = imported.clips.iter().find(|c| c.name == anim.clip)
+                {
+                    for name in
+                        crate::scene::notifies_crossed(markers, prev_time, anim.time, clip.duration)
+                    {
+                        anim_notify_events.push(format!("anim:{name}"));
+                    }
                 }
             }
         }
@@ -2576,7 +2595,9 @@ impl AppState {
         // Événements de gameplay (Sprint 93) : ceux émis au tick précédent (scripts ou
         // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
         // de ce tick s'accumulent dans `events_out` et seront délivrés au suivant.
-        let events_in = std::mem::take(&mut self.game_events);
+        let mut events_in = std::mem::take(&mut self.game_events);
+        // Marqueurs d'animation (Sprint 99) franchis plus haut, livrés ce même tick.
+        events_in.extend(anim_notify_events);
         let mut events_out: Vec<String> = Vec::new();
         // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
         // que les appels `damage()` de cette frame s'appliquent après, sans s'annuler.
@@ -3211,6 +3232,7 @@ impl AppState {
             clips: Vec::new(),
             vertex_skins: Vec::new(),
             tangents: Vec::new(),
+            notifies: std::collections::HashMap::new(),
         };
         // Squelette/clips (Sprints 84-85) + tangentes (Sprint 92) : reparse le fichier
         // séparément, cf. `ImportedMesh::load_skinning` — silencieux si le mesh est
@@ -4834,6 +4856,84 @@ mod tests {
         if let Some(dir) = crate::assets::user_dir() {
             let _ = std::fs::remove_file(dir.join(format!("save_{slot}.json")));
         }
+    }
+
+    #[test]
+    fn an_anim_notify_gates_the_combat_hit_window() {
+        // Livrable du Sprint 99 : le coup ne doit « toucher » (ici : le script met
+        // `in_window` à 1 via `save.set`) que pendant la fenêtre d'animation délimitée
+        // par deux marqueurs (`hit_open`/`hit_close`), pas avant, pas après.
+        let mut imported = crate::scene::ImportedMesh {
+            name: "Guerrier".into(),
+            ..Default::default()
+        };
+        imported
+            .clips
+            .push(crate::scene::import::Clip::without_tracks("attaque", 1.0));
+        imported.notifies.insert(
+            "attaque".to_string(),
+            vec![
+                (0.3, "hit_open".to_string()),
+                (0.6, "hit_close".to_string()),
+            ],
+        );
+        let mut scene = crate::scene::Scene::default();
+        scene.imported.push(imported);
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Guerrier".into(),
+            mesh: crate::scene::MeshKind::Imported(0),
+            animation: Some(crate::scene::AnimationState {
+                clip: "attaque".into(),
+                time: 0.0,
+                speed: 1.0,
+                prev_clip: String::new(),
+                prev_time: 0.0,
+                blend: 1.0,
+            }),
+            script: "\
+                if on_event('anim:hit_open') then save.set('in_window', 1) end\n\
+                if on_event('anim:hit_close') then save.set('in_window', 0) end"
+                .into(),
+            ..Default::default()
+        });
+        let mut app = AppState::new();
+        app.scene = scene;
+        app.playing = true;
+
+        let advance_one_tick = |app: &mut AppState| {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        };
+
+        // ~0.2 s : avant `hit_open` (0.3 s), la fenêtre ne doit pas encore être ouverte.
+        for _ in 0..12 {
+            advance_one_tick(&mut app);
+        }
+        assert_eq!(
+            app.lua_vars.get("in_window"),
+            None,
+            "la fenêtre ne doit pas encore être ouverte avant 0.3 s"
+        );
+
+        // ~0.35 s : après `hit_open`, avant `hit_close` — fenêtre ouverte.
+        for _ in 0..9 {
+            advance_one_tick(&mut app);
+        }
+        assert_eq!(
+            app.lua_vars.get("in_window"),
+            Some(&1.0),
+            "la fenêtre doit être ouverte entre 0.3 s et 0.6 s"
+        );
+
+        // ~0.8 s : après `hit_close` — fenêtre refermée.
+        for _ in 0..27 {
+            advance_one_tick(&mut app);
+        }
+        assert_eq!(
+            app.lua_vars.get("in_window"),
+            Some(&0.0),
+            "la fenêtre doit être refermée après 0.6 s"
+        );
     }
 
     #[test]

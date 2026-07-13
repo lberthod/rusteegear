@@ -123,6 +123,15 @@ pub struct ImportedMesh {
     /// même logique que `skeleton` avant le skinning GPU (Sprint 86).
     #[serde(skip)]
     pub tangents: Vec<[f32; 4]>,
+    /// Marqueurs temporels par nom de clip (Sprint 99) : `(temps en secondes dans le
+    /// clip, nom d'événement)`. **Sérialisé** — contrairement à `clips` ci-dessus,
+    /// entièrement rederivé du glTF à chaque chargement (le format n'a pas de notion
+    /// standard de marqueur) : ce champ-ci est authored à la main (éditeur ou test), il
+    /// doit donc survivre à la sauvegarde/au chargement de la scène. Un événement
+    /// `anim:<nom>` (cf. `AppState::game_events`, Sprint 93) est émis quand la lecture
+    /// d'un clip franchit son temps — cf. `notifies_crossed`.
+    #[serde(default)]
+    pub notifies: std::collections::HashMap<String, Vec<(f32, String)>>,
 }
 
 impl ImportedMesh {
@@ -897,6 +906,26 @@ pub struct Scene {
     /// appliquer, jamais à décider d'un comportement de gameplay.
     #[serde(default)]
     pub version: u32,
+    /// Décalages des overlays HUD (réticule, arme, frags, inventaire, joueurs) par
+    /// rapport à leur position par défaut — réglables en les glissant dans l'éditeur
+    /// (panneau 👁 Aperçu HUD › 🖐 Repositionner), Sprint 98. Persistés dans la scène :
+    /// s'appliquent donc aussi bien en Play qu'en jeu exporté (APK/player), pas
+    /// seulement à l'aperçu éditeur.
+    #[serde(default)]
+    pub hud_layout: HudLayout,
+}
+
+/// Cf. `Scene::hud_layout`. Chaque champ est un décalage `[x, y]` en pixels par
+/// rapport à la position par défaut de l'élément — `[0.0, 0.0]` (le défaut) donne
+/// exactement le placement d'origine, donc les scènes existantes ne changent pas.
+#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct HudLayout {
+    pub crosshair: [f32; 2],
+    pub weapon_hud: [f32; 2],
+    pub kills: [f32; 2],
+    pub weapon_inventory: [f32; 2],
+    pub roster: [f32; 2],
 }
 
 /// Fond de scène (Sprint 89) : dégradé de ciel dessiné derrière toute la géométrie,
@@ -3311,6 +3340,46 @@ fn load_prefab_object(asset_id: &str) -> Option<SceneObject> {
     serde_json::from_value(load_prefab_value(asset_id)?).ok()
 }
 
+/// Marqueurs franchis entre deux temps de lecture d'un clip de durée `duration`
+/// (Sprint 99), rebouclé exactement comme `Clip::sample_joint` (`rem_euclid`). Gère le
+/// passage du bouclage : un marqueur proche de la fin (ex. 0.95 s d'un clip de 1 s)
+/// n'est pas manqué même si la lecture vient de reboucler à 0 sur ce même pas — sans
+/// ce cas, un pas qui traverse la fin du clip (`prev_time` proche de `duration`,
+/// `cur_time` proche de 0 après `rem_euclid`) donnerait `cur < prev` et l'intervalle
+/// naïf `[prev, cur)` ne contiendrait jamais rien.
+pub fn notifies_crossed(
+    markers: &[(f32, String)],
+    prev_time: f32,
+    cur_time: f32,
+    duration: f32,
+) -> Vec<String> {
+    if duration <= 0.0 || markers.is_empty() {
+        return Vec::new();
+    }
+    let prev = prev_time.rem_euclid(duration);
+    let cur = cur_time.rem_euclid(duration);
+    if prev_time == cur_time {
+        return Vec::new(); // temps figé (vitesse nulle, pause) : rien à franchir.
+    }
+    let mut hit = Vec::new();
+    if cur >= prev {
+        for (t, name) in markers {
+            if *t >= prev && *t < cur {
+                hit.push(name.clone());
+            }
+        }
+    } else {
+        // Le pas a traversé la fin du clip (bouclage) : deux tronçons, [prev,
+        // duration) puis [0, cur).
+        for (t, name) in markers {
+            if *t >= prev || *t < cur {
+                hit.push(name.clone());
+            }
+        }
+    }
+    hit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3969,6 +4038,42 @@ mod tests {
         // Ne doit pas paniquer, et laisser l'objet inchangé (prefab introuvable).
         scene.sync_prefab_instances();
         assert_eq!(scene.objects[0].name, "Orpheline");
+    }
+
+    #[test]
+    fn notifies_crossed_detects_a_marker_within_a_simple_forward_step() {
+        let markers = vec![(0.5, "hit".to_string())];
+        let hit = notifies_crossed(&markers, 0.4, 0.6, 1.0);
+        assert_eq!(hit, vec!["hit".to_string()]);
+    }
+
+    #[test]
+    fn notifies_crossed_ignores_a_marker_outside_the_step() {
+        let markers = vec![(0.5, "hit".to_string())];
+        assert!(notifies_crossed(&markers, 0.6, 0.8, 1.0).is_empty());
+    }
+
+    #[test]
+    fn notifies_crossed_handles_the_wraparound_at_the_end_of_the_clip() {
+        // Le pas traverse la fin du clip (0.95 -> 0.05 après rebouclage) : un marqueur
+        // proche de la fin (0.97) doit être détecté malgré `cur < prev`.
+        let markers = vec![(0.97, "fin".to_string())];
+        let hit = notifies_crossed(&markers, 0.95, 1.05, 1.0);
+        assert_eq!(hit, vec!["fin".to_string()]);
+    }
+
+    #[test]
+    fn notifies_crossed_is_empty_when_time_is_frozen() {
+        // Vitesse nulle (pause, `AnimationState::speed == 0`) : rien ne doit se
+        // déclencher en boucle à chaque tick sous prétexte que `prev == cur`.
+        let markers = vec![(0.5, "hit".to_string())];
+        assert!(notifies_crossed(&markers, 0.5, 0.5, 1.0).is_empty());
+    }
+
+    #[test]
+    fn notifies_crossed_is_empty_for_a_zero_duration_clip() {
+        let markers = vec![(0.0, "hit".to_string())];
+        assert!(notifies_crossed(&markers, 0.0, 0.1, 0.0).is_empty());
     }
 
     #[test]
