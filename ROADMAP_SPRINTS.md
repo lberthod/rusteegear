@@ -809,7 +809,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   (wgpu autorise des modules vertex/fragment distincts si `VsOut` correspond exactement),
   évitant de dupliquer tout le code d'éclairage dans `skinned.wgsl`.
 
-#### Sprint 87 — Intégration Play + blending + state machine 🟡 (intégration livrée, blending/FSM restants)
+#### Sprint 87 — Intégration Play + blending + state machine 🟡 (Rust livré, exposition Lua restante)
 **Objectif** : des transitions douces pilotables en Lua.
 - [x] **Intégration Play/rendu** (reportée du Sprint 86) : `SceneObject.animation`
       (clip + temps + vitesse), `sim_step` avance le temps (compatible `time_scale`,
@@ -818,13 +818,25 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
       personnages animés distincts par frame, chacun sa propre palette de joints).
       Vérifié par un test d'intégration bout en bout (rend la même scène à deux temps,
       vérifie que les pixels diffèrent réellement) — pas seulement les briques isolées.
-- [ ] Lerp idle↔run pondéré par la vitesse + FSM minimale (`obj.anim = "run"`) — reste
-      à faire : aujourd'hui un objet joue **un seul** clip, pas de transition entre deux.
+- [x] **Fondu enchaîné (crossfade)** : `AnimationState::set_clip()` démarre une
+      transition (`prev_clip`/`prev_time`/`blend`, durée fixe `CROSSFADE_SECONDS = 0.2s`,
+      le clip quitté continue de jouer pendant le fondu) ; `compute_joint_matrices_blended`
+      mélange les deux clips au niveau des poses **locales** par joint (lerp
+      translation/échelle, nlerp rotation) avant de composer la hiérarchie une seule
+      fois — mélanger des matrices monde aurait été faux pour la rotation. Vérifié par
+      3 tests CPU (extrémités, milieu, clamp) + 1 test de rendu bout en bout.
+- [ ] Exposition Lua (`obj.anim = "run"`) — reste à faire : touche les 16 sites d'appel
+      de `run_script`, un chantier à part (cf. Sprint 83, où le même geste a déjà été
+      fait pour `debug.line()`). Sans elle, la FSM elle-même (choisir *quand* transiter)
+      doit encore être pilotée côté Rust ; le mécanisme de transition est complet et
+      utilisable dès qu'un appelant Rust choisit un clip.
 - **Fichiers livrés** : `src/scene/mod.rs` (`AnimationState`), `src/app/mod.rs` (`sim_step`),
   `src/gfx/renderer.rs` (`draw_plan_skinned`, `prepare_skinned_draws`,
-  `draw_skinned_objects`), `src/scene/import.rs` (`ImportedMesh::skinned_mesh_data`).
-  **Restant** : `src/app/mod.rs`, `src/runtime/mod.rs` (FSM Lua).
-- **Livrable restant** : le joueur de la démo court, s'arrête, saute — sans à-coup.
+  `draw_skinned_objects`), `src/scene/import.rs` (`ImportedMesh::skinned_mesh_data`,
+  `compute_joint_matrices_blended`). **Restant** : `src/app/mod.rs` (`run_script`),
+  `src/runtime/mod.rs` (FSM Lua).
+- **Livrable restant** : le joueur de la démo court, s'arrête, saute — sans à-coup, piloté
+  par le script du joueur plutôt que par du code Rust ad hoc.
 
 #### Sprint 88 — Animation répliquée ⬜
 **Objectif** : les joueurs réseau s'animent aussi.
