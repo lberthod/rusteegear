@@ -1179,6 +1179,7 @@ impl Renderer {
                 let net_status = app.net_status.clone();
                 let net_connected = app.is_connected();
                 let weapon_label = app.selected_weapon_label();
+                let defeated = app.is_locally_defeated();
                 let (output, actions) = editor.run_player_overlay(
                     &window,
                     &app.scene,
@@ -1196,6 +1197,7 @@ impl Renderer {
                     &net_status,
                     net_connected,
                     weapon_label,
+                    defeated,
                 );
                 player_net_actions = Some(actions);
                 Some(output)
@@ -1215,6 +1217,7 @@ impl Renderer {
             let net_connected = app.is_connected();
             let has_firebase_account = app.has_firebase_account();
             let weapon_label = app.selected_weapon_label();
+            let defeated = app.is_locally_defeated();
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -1243,6 +1246,7 @@ impl Renderer {
                 has_firebase_account,
                 &app.leaderboard,
                 weapon_label,
+                defeated,
             );
             if actions.save {
                 app.save();

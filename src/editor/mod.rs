@@ -285,6 +285,7 @@ impl Editor {
         net_status: &str,
         net_connected: bool,
         weapon_label: &str,
+        defeated: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -311,6 +312,8 @@ impl Editor {
             }
             if lost {
                 lose_banner(ctx, area);
+            } else if defeated {
+                defeated_banner(ctx, area);
             }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
             if (won || lost) && restart_button(ctx, area, won) {
@@ -375,6 +378,7 @@ impl Editor {
         has_firebase_account: bool,
         leaderboard: &[crate::app::network_client::LeaderboardLine],
         weapon_label: &str,
+        defeated: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -442,6 +446,7 @@ impl Editor {
                 has_firebase_account,
                 leaderboard,
                 weapon_label,
+                defeated,
                 &mut actions,
             );
         });
@@ -2369,6 +2374,37 @@ fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
     );
 }
 
+/// Bannière « Vaincu » pour un joueur réseau à 0 PV (GAMEDESIGN_EN_LIGNE.md
+/// §3.1) : sans elle, la mort en multijoueur n'avait **aucun** retour
+/// persistant à l'écran — juste un flash rouge d'un tiers de seconde
+/// (`damage_flash`) puis plus rien, l'objet devenant invisible en silence.
+/// Un joueur qui meurt se retrouvait donc face à un écran figé/vide sans
+/// explication, indiscernable d'un vrai bug (constaté en jeu réel, 2026-07-13).
+/// Distincte de `lose_banner` (`self.lost`, pensé pour un joueur local unique
+/// touchant une zone mortelle) : ici la manche **continue** pour les autres,
+/// ce n'est pas une défaite de salon — pas de bouton Rejouer, juste l'attente.
+fn defeated_banner(ctx: &egui::Context, area: egui::Rect) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_defeated"),
+    ));
+    painter.text(
+        area.center(),
+        Align2::CENTER_CENTER,
+        "Vaincu — spectateur",
+        FontId::proportional(36.0),
+        Color32::from_rgb(230, 90, 80),
+    );
+    painter.text(
+        egui::pos2(area.center().x, area.center().y + 34.0),
+        Align2::CENTER_CENTER,
+        "En attente de la prochaine manche…",
+        FontId::proportional(15.0),
+        Color32::from_white_alpha(200),
+    );
+}
+
 /// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
 /// Renvoie `true` s'il est cliqué (pour relancer la partie, y compris sur APK).
 fn restart_button(ctx: &egui::Context, area: egui::Rect, won: bool) -> bool {
@@ -2614,6 +2650,7 @@ fn build_ui(
     has_firebase_account: bool,
     leaderboard: &[crate::app::network_client::LeaderboardLine],
     weapon_label: &str,
+    defeated: bool,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -3369,6 +3406,8 @@ fn build_ui(
     }
     if *playing && lost {
         lose_banner(root.ctx(), play_rect);
+    } else if *playing && defeated {
+        defeated_banner(root.ctx(), play_rect);
     }
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
     if *playing && (won || lost) && restart_button(root.ctx(), play_rect, won) {

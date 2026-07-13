@@ -173,6 +173,18 @@ impl AppState {
         self.net_client.is_some()
     }
 
+    /// `true` si ce joueur réseau est vaincu (0 PV, GAMEDESIGN_EN_LIGNE.md §3.1)
+    /// — spectateur pour le reste de la manche. Dérivé de `net_local_health`
+    /// (déjà tenu à jour depuis le dernier `Snapshot`, cf. `handle_server_msg`)
+    /// plutôt qu'un champ dédié à maintenir en synchronisation. Sert au HUD
+    /// (`defeated_banner`, `editor/mod.rs`) : sans retour explicite ici, un
+    /// joueur qui meurt voyait son personnage disparaître en silence — un
+    /// flash rouge d'un tiers de seconde puis un écran figé, indiscernable
+    /// d'un vrai bug (constaté en jeu réel, 2026-07-13).
+    pub fn is_locally_defeated(&self) -> bool {
+        self.is_connected() && self.net_local_health.is_some_and(|h| h <= 0.0)
+    }
+
     /// Liste des joueurs de la partie en ligne pour le HUD (GAMEDESIGN_EN_LIGNE.md
     /// §3.4 — identité et vie des autres joueurs affichées) : `(nom, vie 0..1 ou
     /// `None` avant le premier snapshot, soi-même ?)`. Vide si non connecté.
@@ -861,6 +873,10 @@ impl AppState {
         false
     }
 
+    pub fn is_locally_defeated(&self) -> bool {
+        false
+    }
+
     pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, bool)> {
         Vec::new()
     }
@@ -1147,6 +1163,51 @@ mod tests {
         app.connect_to_server(&url, "Testeur");
         assert!(app.is_connected());
         app
+    }
+
+    /// Bout-en-bout (vrai socket) : `is_locally_defeated()` doit refléter la
+    /// vie **réelle** connue du serveur (`net_local_health`, mise à jour à
+    /// chaque `Snapshot`), pas un état local présumé — sans ce garde-fou HUD
+    /// (`defeated_banner`, `editor/mod.rs`), un joueur à 0 PV disparaissait de
+    /// l'écran sans le moindre message (juste le flash rouge d'un tiers de
+    /// seconde), indiscernable d'un bug (constaté en jeu réel, 2026-07-13).
+    #[test]
+    fn is_locally_defeated_reflects_the_servers_health_once_it_reaches_zero() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut server_app = AppState::new();
+        server_app.load_zombies_demo();
+        server_app.playing = true;
+
+        let mut app = connected_app_with_a_player(&net);
+        for tick in 0..15 {
+            std::thread::sleep(Duration::from_millis(20));
+            server_tick(&mut server_app, &net, tick);
+            app.poll_network();
+        }
+        assert!(
+            !app.is_locally_defeated(),
+            "un joueur fraîchement connecté, en pleine santé, n'est pas vaincu"
+        );
+
+        // Vainc le joueur directement côté serveur (0 PV), sans dépendre d'un
+        // vrai contact monstre — ce test isole la propagation Snapshot → HUD,
+        // pas le combat lui-même (déjà couvert par `src/app/health.rs`).
+        let id = app.net_player_id.expect("connecté, donc un id attribué");
+        server_app.network_health.insert(id, 0.0);
+        if let Some(&index) = server_app.network_players.get(&id) {
+            server_app.scene.objects[index].visible = false;
+        }
+        for tick in 15..30 {
+            std::thread::sleep(Duration::from_millis(20));
+            server_tick(&mut server_app, &net, tick);
+            app.poll_network();
+        }
+
+        assert!(
+            app.is_locally_defeated(),
+            "une fois la vie serveur tombée à 0, le client doit le savoir (net_local_health={:?})",
+            app.net_local_health
+        );
     }
 
     /// Sprint 66 (`SPRINTNETWORK.md`, §2.3 de `AUDIT_LATENCE_MULTIJOUEUR.md`) :
