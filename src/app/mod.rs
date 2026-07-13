@@ -2462,6 +2462,7 @@ impl AppState {
                 triggered.contains(&idx),
                 &mut vibrations,
                 &mut health,
+                &mut self.debug_lines,
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
@@ -3204,6 +3205,7 @@ fn run_script(
     triggered: bool,
     vib_out: &mut Vec<f32>,
     health_out: &mut Option<f32>,
+    debug_out: &mut Vec<(Vec3, Vec3, [f32; 3])>,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -3267,6 +3269,40 @@ fn run_script(
         Ok(())
     })?;
 
+    // `debug.line(x1,y1,z1,x2,y2,z2,r,g,b)` (Sprint 83) : visualise un raycast, une ligne
+    // de vue, une trajectoire — visible une frame, comme `AppState::debug_line` côté Rust.
+    // Accumule un segment de 9 nombres par appel, décodé après `func.call`.
+    let debug_tbl = lua.create_table()?;
+    let debug_ref = debug_tbl.clone();
+    let debug_line =
+        lua.create_function(
+            move |_,
+                  (x1, y1, z1, x2, y2, z2, r, g, b): (
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+            )| {
+                debug_ref.push(x1)?;
+                debug_ref.push(y1)?;
+                debug_ref.push(z1)?;
+                debug_ref.push(x2)?;
+                debug_ref.push(y2)?;
+                debug_ref.push(z2)?;
+                debug_ref.push(r)?;
+                debug_ref.push(g)?;
+                debug_ref.push(b)?;
+                Ok(())
+            },
+        )?;
+    let debug_api = lua.create_table()?;
+    debug_api.set("line", debug_line)?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
@@ -3276,6 +3312,7 @@ fn run_script(
     g.set("vibrate", vibrate)?;
     g.set("set_health", set_health)?;
     g.set("damage", damage)?;
+    g.set("debug", debug_api)?;
     func.call::<()>(())?;
 
     for v in vib.sequence_values::<f32>().flatten() {
@@ -3283,6 +3320,14 @@ fn run_script(
     }
     if let Ok(h) = hud.get::<f32>("h") {
         *health_out = Some(h);
+    }
+    let flat: Vec<f32> = debug_tbl.sequence_values::<f32>().flatten().collect();
+    for chunk in flat.chunks_exact(9) {
+        debug_out.push((
+            Vec3::new(chunk[0], chunk[1], chunk[2]),
+            Vec3::new(chunk[3], chunk[4], chunk[5]),
+            [chunk[6], chunk[7], chunk[8]],
+        ));
     }
 
     t.position = Vec3::new(obj.get("x")?, obj.get("y")?, obj.get("z")?);
@@ -3830,6 +3875,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
@@ -3850,10 +3896,48 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
         assert!((t2.position.y).abs() < 1e-5);
+    }
+
+    #[test]
+    fn script_debug_line_is_read_back_into_debug_out() {
+        // Sprint 83 : `debug.line(...)` côté Lua doit atterrir dans `debug_out`, avec les
+        // mêmes coordonnées/couleur que ce que le script a passé — un appel par ligne de
+        // script, deux appels ici pour vérifier qu'ils s'accumulent sans s'écraser.
+        let lua = Lua::new();
+        let src = "debug.line(0,0,0, 1,2,3, 1,0,0); debug.line(-1,0,0, 0,0,0, 0,1,0)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut debug_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &mut Vec::new(),
+            &mut None,
+            &mut debug_out,
+        )
+        .unwrap();
+        assert_eq!(debug_out.len(), 2);
+        assert_eq!(
+            debug_out[0],
+            (Vec3::ZERO, Vec3::new(1.0, 2.0, 3.0), [1.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            debug_out[1],
+            (Vec3::new(-1.0, 0.0, 0.0), Vec3::ZERO, [0.0, 1.0, 0.0])
+        );
     }
 
     #[test]
@@ -3878,6 +3962,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(col, [0.5, 0.5, 0.5]);
@@ -3894,6 +3979,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
@@ -3920,6 +4006,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
@@ -3935,6 +4022,7 @@ mod tests {
             true,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
@@ -3965,6 +4053,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t.position.x - 1.0).abs() < 1e-5);
@@ -3991,6 +4080,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut health,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(health, Some(0.5));
@@ -4018,6 +4108,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut health,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(health, Some(0.7));
@@ -4034,6 +4125,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut health,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!(
@@ -4054,6 +4146,7 @@ mod tests {
                 false,
                 &mut Vec::new(),
                 &mut health,
+                &mut Vec::new(),
             )
             .unwrap();
         }
@@ -4096,6 +4189,7 @@ mod tests {
                 false,
                 &mut Vec::new(),
                 &mut None,
+                &mut Vec::new(),
             )
             .unwrap();
             let mut t1 = e.transform;
@@ -4112,6 +4206,7 @@ mod tests {
                 false,
                 &mut Vec::new(),
                 &mut None,
+                &mut Vec::new(),
             )
             .unwrap();
             assert!(
@@ -5457,6 +5552,7 @@ mod tests {
             false,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(
@@ -5481,7 +5577,18 @@ mod tests {
         let input = PlayerInput::default();
         let mut vib = Vec::new();
         run_script(
-            &lua, &func, &mut t, &mut col, 0.016, 0.0, &input, true, false, &mut vib, &mut None,
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            0.016,
+            0.0,
+            &input,
+            true,
+            false,
+            &mut vib,
+            &mut None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(vib, vec![80.0]);
