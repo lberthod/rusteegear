@@ -757,10 +757,18 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ### PHASE L — Animation squelettale (84 → 88)
 
-#### Sprint 84 — Données de squelette ⬜
+#### Sprint 84 — Données de squelette 🟢
 **Objectif** : lire `joints`/`weights`/bind poses du glTF — données pures, sans rendu.
-- **Fichiers** : `src/scene/import.rs`, `src/scene/mod.rs`.
-- **Livrable** : round-trip testé sur un perso Mixamo (bones, parentés, inverse bind matrices).
+- [x] `scene::import::load_gltf_skeleton(path)` : hiérarchie de joints (nom, parent,
+      transform de liaison, matrice inverse de liaison) + poids de peau par sommet
+      (`JOINTS_0`/`WEIGHTS_0`, jusqu'à 4 os). `Vertex`/`MeshData` inchangés — le rendu
+      (skinning GPU) arrive au Sprint 86.
+- **Fichiers** : `src/scene/import.rs` (`load_gltf` existant intact, juste factorisé via
+  `read_document`, partagé avec la nouvelle fonction).
+- **Livrable** : round-trip testé sur un `.glb` minimal construit à la main (2 joints en
+  chaîne parent/enfant, poids non triviaux) — pas de fixture Mixamo réelle dans le dépôt,
+  mais 5 tests couvrant hiérarchie/noms/poses de liaison/poids, dont 2 qui exercent l'API
+  publique de bout en bout (fichier temporaire réel, avec et sans skin).
 
 #### Sprint 85 — Échantillonnage de clips ⬜
 **Objectif** : jouer un clip (keyframes, interpolation, boucle) côté CPU.
