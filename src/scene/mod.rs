@@ -591,7 +591,7 @@ pub struct SceneObject {
 /// pose de liaison figée (mesh skinné mais immobile) — même logique que `Controller`/
 /// `Combat` : la plupart des objets, même skinnés, n'ont pas forcément besoin d'un clip
 /// qui tourne (ex. un décor posé en pose figée).
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AnimationState {
     /// Nom du clip à jouer (doit correspondre à un `Clip::name` de
     /// `ImportedMesh::clips`) ; vide ou introuvable ⇒ pose de liaison.
@@ -604,10 +604,68 @@ pub struct AnimationState {
     /// Multiplicateur de vitesse de lecture (1.0 = normal, 0 = figé sur `time` courant).
     #[serde(default = "default_anim_speed")]
     pub speed: f32,
+    /// Clip quitté pendant une transition en fondu (Sprint 87) ; vide = pas de transition
+    /// en cours, `clip` se lit pur. Renseigné par `set_clip` quand `clip` change.
+    #[serde(default)]
+    pub prev_clip: String,
+    /// Position de lecture de `prev_clip` au moment du changement, avancée comme `time`
+    /// tant que la transition dure (le clip quitté continue de jouer pendant le fondu,
+    /// il ne se fige pas).
+    #[serde(default)]
+    pub prev_time: f32,
+    /// Progression du fondu 0..1 (0 = `prev_clip` pur, 1 = `clip` pur — transition
+    /// terminée). Avance de `dt / crossfade` à chaque pas fixe (cf. `AppState::sim_step`).
+    /// `1.0` par défaut : un `AnimationState` fraîchement créé joue `clip` pur, pas mélangé
+    /// à un `prev_clip` vide.
+    #[serde(default = "default_anim_blend")]
+    pub blend: f32,
+}
+
+impl AnimationState {
+    /// Durée du fondu enchaîné entre deux clips (secondes) — cf. Sprint 87.
+    pub const CROSSFADE_SECONDS: f32 = 0.2;
+
+    /// Change le clip joué, en démarrant un fondu enchaîné depuis le clip actuel si
+    /// `clip` diffère réellement (sans effet si on redemande le clip déjà en cours — pas
+    /// de fondu ni de redémarrage à chaque frame si un script réaffecte `obj.anim` en
+    /// boucle avec la même valeur). Le nouveau clip repart de `time = 0.0` — convention
+    /// simple et prévisible plutôt que de préserver la phase.
+    pub fn set_clip(&mut self, clip: impl Into<String>) {
+        let clip = clip.into();
+        if clip == self.clip {
+            return;
+        }
+        self.prev_clip = std::mem::replace(&mut self.clip, clip);
+        self.prev_time = self.time;
+        self.time = 0.0;
+        self.blend = 0.0;
+    }
 }
 
 fn default_anim_speed() -> f32 {
     1.0
+}
+
+fn default_anim_blend() -> f32 {
+    1.0
+}
+
+impl Default for AnimationState {
+    // Manuel plutôt que `#[derive(Default)]` : `blend` doit valoir 1.0 (« pas de
+    // transition en cours ») par défaut, comme pour la désérialisation JSON
+    // (`#[serde(default = "default_anim_blend")]`) — `derive(Default)` donnerait 0.0
+    // (`f32::default()`), ce qui lirait un `AnimationState` fraîchement créé comme
+    // mélangé à un `prev_clip` vide plutôt que jouant `clip` pur.
+    fn default() -> Self {
+        Self {
+            clip: String::new(),
+            time: 0.0,
+            speed: default_anim_speed(),
+            prev_clip: String::new(),
+            prev_time: 0.0,
+            blend: default_anim_blend(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -3069,6 +3127,7 @@ mod tests {
                     clip: clip_name,
                     time,
                     speed: 1.0,
+                    ..Default::default()
                 }),
                 ..Default::default()
             });
@@ -3092,6 +3151,107 @@ mod tests {
              linéaire testée séparément dans import::tests) ne semble pas atteindre le \
              rendu — la chaîne SceneObject → prepare_skinned_draws → shader est cassée \
              quelque part"
+        );
+    }
+
+    /// Intégration bout en bout du fondu enchaîné (Sprint 87) : un `SceneObject` en
+    /// pleine transition (`blend` intermédiaire, `prev_clip` renseigné) doit produire un
+    /// rendu **différent** de la pose de liaison pure et du clip cible pur — preuve que
+    /// `prepare_skinned_draws` prend bien la branche mélangée (`compute_joint_matrices_blended`)
+    /// à travers le rendu réel, pas seulement testée isolément côté CPU
+    /// (`blended_joint_matrices_*` dans `import::tests`). `prev_clip` pointe vers un nom
+    /// de clip inexistant : `find_clip` retombe sur la pose de liaison pour ce côté du
+    /// mélange, un cas valide (transition depuis un état non animé) et pratique à
+    /// construire sans fixture à deux clips.
+    #[test]
+    fn scene_object_crossfade_renders_differently_from_either_pure_endpoint() {
+        let bytes = import::tests::animated_skinned_glb();
+        let path = import::tests::write_temp_glb(&bytes, "scene_object_crossfade_integration");
+
+        let render_with = |anim: AnimationState| -> Option<Vec<u8>> {
+            let mut renderer =
+                match pollster::block_on(crate::gfx::renderer::Renderer::new_headless(64, 64)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!(
+                            "scene_object_crossfade_integration : pas de GPU headless ({e}) \
+                             — test sauté."
+                        );
+                        return None;
+                    }
+                };
+            let mut app = crate::app::AppState::default();
+            app.scene.light.ambient = 0.4;
+            let (data, aabb_min, aabb_max) =
+                import::load_gltf(path.to_str().unwrap()).expect("glTF de test valide");
+            let mut imported = ImportedMesh {
+                path: path.to_str().unwrap().to_string(),
+                data,
+                aabb_min,
+                aabb_max,
+                ..Default::default()
+            };
+            imported.load_skinning();
+            app.scene.imported.push(imported);
+            app.scene.objects.push(SceneObject {
+                mesh: MeshKind::Imported(0),
+                transform: Transform::default(),
+                color: [0.9, 0.5, 0.2],
+                animation: Some(anim),
+                ..Default::default()
+            });
+            Some(renderer.render_scene_headless(&mut app, 64, 64))
+        };
+
+        let clip_name = {
+            let mut m = ImportedMesh {
+                path: path.to_str().unwrap().to_string(),
+                ..Default::default()
+            };
+            m.load_skinning();
+            m.clips[0].name.clone()
+        };
+
+        let base = AnimationState {
+            clip: clip_name,
+            time: 1.0, // clip cible pur : à t=1.0, translation (10,0,0) — cf. fixture Sprint 85
+            speed: 1.0,
+            prev_clip: "PoseDeLiaisonInexistante".into(), // cf. doc du test
+            prev_time: 0.0,
+            blend: 1.0,
+        };
+        let Some(pure_target) = render_with(base.clone()) else {
+            return; // pas de GPU
+        };
+        let mut mid = base.clone();
+        mid.blend = 0.5;
+        let Some(mid_transition) = render_with(mid) else {
+            return;
+        };
+        let mut pure_bind = base;
+        pure_bind.blend = 0.0;
+        let Some(pure_bind_pose) = render_with(pure_bind) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&path);
+
+        // Comparaison volontairement limitée à « mi-transition vs pose de liaison pure » :
+        // à blend=1.0 la translation du clip (10 unités sur X, fixture Sprint 85) pousse
+        // l'objet hors du petit cadre 64×64 de ce test, rendant blend=0.5 et blend=1.0
+        // visuellement indiscernables (les deux hors champ) bien que les matrices de
+        // joints diffèrent réellement entre les deux (déjà prouvé au niveau CPU par
+        // `blended_joint_matrices_at_midpoint_interpolate_translation`). La pose de
+        // liaison, elle, reste à l'origine — toujours dans le cadre, comparaison fiable.
+        let differs = |a: &[u8], b: &[u8]| a.iter().zip(b).any(|(x, y)| x.abs_diff(*y) > 8);
+        assert!(
+            differs(&mid_transition, &pure_bind_pose),
+            "à mi-transition, le rendu ne doit pas être identique à la pose de liaison pure \
+             — le fondu ne semble pas atteindre le rendu réel"
+        );
+        assert!(
+            differs(&pure_target, &pure_bind_pose),
+            "précondition : le clip cible pur doit lui-même différer de la pose de liaison \
+             (sinon toute cette comparaison serait vide de sens)"
         );
     }
 

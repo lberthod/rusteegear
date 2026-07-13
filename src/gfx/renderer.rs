@@ -886,13 +886,26 @@ impl Renderer {
             };
             // Sans `AnimationState` (ou clip introuvable/vide) : pose de liaison figée,
             // pas une erreur — un mesh skinné a le droit de rester immobile (décor posé).
-            let clip = obj
-                .animation
-                .as_ref()
+            let find_clip = |name: &str| imported.clips.iter().find(|c| c.name == name);
+            let anim = obj.animation.as_ref();
+            let clip = anim
                 .filter(|a| !a.clip.is_empty())
-                .and_then(|a| imported.clips.iter().find(|c| c.name == a.clip));
-            let time = obj.animation.as_ref().map(|a| a.time).unwrap_or(0.0);
-            let matrices = crate::scene::import::compute_joint_matrices(skeleton, clip, time);
+                .and_then(|a| find_clip(&a.clip));
+            let time = anim.map(|a| a.time).unwrap_or(0.0);
+            // Fondu enchaîné (Sprint 87) : `blend < 1.0` tant qu'une transition est en
+            // cours (cf. `AppState::sim_step`) — mélange avec le clip quitté au niveau
+            // des poses locales, pas des matrices monde (`compute_joint_matrices_blended`).
+            let matrices = match anim.filter(|a| a.blend < 1.0 && !a.prev_clip.is_empty()) {
+                Some(a) => crate::scene::import::compute_joint_matrices_blended(
+                    skeleton,
+                    find_clip(&a.prev_clip),
+                    a.prev_time,
+                    clip,
+                    time,
+                    a.blend,
+                ),
+                None => crate::scene::import::compute_joint_matrices(skeleton, clip, time),
+            };
             offsets.push(self.write_joint_matrices(slot, &matrices));
         }
         offsets

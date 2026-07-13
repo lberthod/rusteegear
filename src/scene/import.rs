@@ -263,22 +263,20 @@ struct TrackQuat {
     interp: Interp,
 }
 
+/// Interpolation linéaire normalisée (nlerp) de deux quaternions : prend le chemin le
+/// plus court (inverse `b` si son produit scalaire avec `a` est négatif), lerp des 4
+/// composantes, puis normalise. C'est ce que spécifie glTF pour l'interpolation
+/// « Linear » des rotations — pas slerp, moins coûteux et suffisant à fréquence
+/// d'échantillonnage normale. Partagé par `TrackQuat::sample` (Sprint 85) et
+/// `compute_joint_matrices_blended` (Sprint 87, crossfade entre deux clips).
+fn nlerp(a: Quat, b: Quat, t: f32) -> Quat {
+    let b = if a.dot(b) < 0.0 { -b } else { b };
+    (a * (1.0 - t) + b * t).normalize()
+}
+
 impl TrackQuat {
     fn sample(&self, time: f32) -> Quat {
-        // nlerp (interpolation linéaire normalisée), pas slerp : c'est ce que spécifie
-        // glTF pour l'interpolation « Linear » des rotations (lerp des 4 composantes,
-        // en prenant le chemin le plus court, puis normalisation) — moins coûteux que
-        // slerp et suffisant pour des clips à fréquence d'échantillonnage normale.
-        sample_keyed(
-            &self.times,
-            time,
-            self.interp,
-            |i| self.values[i],
-            |a, b, t| {
-                let b = if a.dot(b) < 0.0 { -b } else { b };
-                (a * (1.0 - t) + b * t).normalize()
-            },
-        )
+        sample_keyed(&self.times, time, self.interp, |i| self.values[i], nlerp)
     }
 }
 
@@ -473,18 +471,45 @@ fn decompose(m: Mat4) -> (Vec3, Quat, Vec3) {
     (translation, rotation, scale)
 }
 
-/// Calcule, pour chaque joint d'un `Skeleton`, la matrice à envoyer au shader de skinning
-/// (Sprint 86) : `monde_du_joint(pose animée ou de liaison) * inverse_bind` — la partie
+/// Transform locale (T, R, S) d'un joint à un instant donné : pose de liaison, avec les
+/// composantes que le clip anime réellement écrasées (`JointPose`, Sprint 85 — chaque
+/// champ `Option`, jamais de valeur neutre inventée pour une composante non animée).
+/// `clip = None` ⇒ pose de liaison pure. Partagé par `compute_joint_matrices` (un clip)
+/// et `compute_joint_matrices_blended` (Sprint 87, deux clips mélangés).
+fn local_pose(
+    joint: &Joint,
+    joint_index: usize,
+    clip: Option<&Clip>,
+    time: f32,
+) -> (Vec3, Quat, Vec3) {
+    let (bind_t, bind_r, bind_s) = decompose(joint.bind_local);
+    match clip {
+        Some(clip) => {
+            let pose = clip.sample_joint(joint_index, time);
+            (
+                pose.translation.unwrap_or(bind_t),
+                pose.rotation.unwrap_or(bind_r),
+                pose.scale.unwrap_or(bind_s),
+            )
+        }
+        None => (bind_t, bind_r, bind_s),
+    }
+}
+
+/// Résout la hiérarchie monde d'un squelette à partir d'une transform locale par joint —
+/// partagé par `compute_joint_matrices` et `compute_joint_matrices_blended` (Sprint 87),
+/// qui ne diffèrent que par la façon dont `local_of` calcule cette transform (un clip,
+/// ou un mélange de deux). Renvoie `monde_du_joint * inverse_bind` : la partie
 /// `inverse_bind` annule la pose de liaison pour ne laisser que le **déplacement** depuis
 /// cette pose, ce qui est ce qu'un sommet en espace de liaison doit subir.
-///
-/// `clip = None` ⇒ pose de liaison pure (équivalent à un modèle statique : chaque matrice
-/// résultante est proche de l'identité, à l'erreur de précision flottante près — cf. test).
 ///
 /// Robuste à un ordre de `Skeleton::joints` où un parent n'est **pas** garanti apparaître
 /// avant ses enfants (le glTF ne l'impose pas, même si c'est l'usage courant des
 /// exportateurs) : résolution par vagues plutôt que par simple parcours linéaire.
-pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f32) -> Vec<Mat4> {
+fn resolve_world_matrices(
+    skeleton: &Skeleton,
+    local_of: impl Fn(usize, &Joint) -> Mat4,
+) -> Vec<Mat4> {
     let n = skeleton.joints.len();
     let mut world: Vec<Option<Mat4>> = vec![None; n];
     let mut remaining: Vec<usize> = (0..n).collect();
@@ -500,18 +525,7 @@ pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f3
             if !parent_ready {
                 return true; // pas encore résolvable : on retente à la vague suivante
             }
-            let (bind_t, bind_r, bind_s) = decompose(joint.bind_local);
-            let local = match clip {
-                Some(clip) => {
-                    let pose = clip.sample_joint(i, time);
-                    Mat4::from_scale_rotation_translation(
-                        pose.scale.unwrap_or(bind_s),
-                        pose.rotation.unwrap_or(bind_r),
-                        pose.translation.unwrap_or(bind_t),
-                    )
-                }
-                None => joint.bind_local,
-            };
+            let local = local_of(i, joint);
             let parent_world = joint
                 .parent
                 .and_then(|p| world[p])
@@ -530,6 +544,46 @@ pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f3
     (0..n)
         .map(|i| world[i].unwrap_or(Mat4::IDENTITY) * skeleton.joints[i].inverse_bind)
         .collect()
+}
+
+/// Calcule, pour chaque joint d'un `Skeleton`, la matrice à envoyer au shader de skinning
+/// (Sprint 86). `clip = None` ⇒ pose de liaison pure (équivalent à un modèle statique :
+/// chaque matrice résultante est proche de l'identité, à l'erreur de précision flottante
+/// près — cf. test).
+pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f32) -> Vec<Mat4> {
+    resolve_world_matrices(skeleton, |i, joint| {
+        let (t, r, s) = local_pose(joint, i, clip, time);
+        Mat4::from_scale_rotation_translation(s, r, t)
+    })
+}
+
+/// Comme `compute_joint_matrices`, mais mélange (crossfade) deux clips (Sprint 87 :
+/// transitions douces entre états d'animation, ex. idle→run). Le mélange se fait au
+/// niveau de la pose **locale** de chaque joint — translation/échelle en lerp, rotation
+/// en nlerp — **avant** de composer la hiérarchie une seule fois avec le résultat.
+/// Mélanger des matrices **monde** directement serait faux pour la rotation (une matrice
+/// n'interpole pas linéairement comme un quaternion) ; mélanger au niveau local est la
+/// pratique standard de blending d'animation squelettale.
+///
+/// `blend` : 0.0 = `clip_a` pur, 1.0 = `clip_b` pur, clampé entre les deux.
+pub fn compute_joint_matrices_blended(
+    skeleton: &Skeleton,
+    clip_a: Option<&Clip>,
+    time_a: f32,
+    clip_b: Option<&Clip>,
+    time_b: f32,
+    blend: f32,
+) -> Vec<Mat4> {
+    let blend = blend.clamp(0.0, 1.0);
+    resolve_world_matrices(skeleton, |i, joint| {
+        let (ta, ra, sa) = local_pose(joint, i, clip_a, time_a);
+        let (tb, rb, sb) = local_pose(joint, i, clip_b, time_b);
+        Mat4::from_scale_rotation_translation(
+            sa.lerp(sb, blend),
+            nlerp(ra, rb, blend),
+            ta.lerp(tb, blend),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1059,5 +1113,81 @@ pub(crate) mod tests {
     fn joint_matrices_never_panics_or_infinite_loops_on_an_empty_skeleton() {
         let matrices = compute_joint_matrices(&Skeleton::default(), None, 0.0);
         assert!(matrices.is_empty());
+    }
+
+    #[test]
+    fn blended_joint_matrices_at_the_extremes_match_the_unblended_result() {
+        let path = write_temp_glb(&animated_skinned_glb(), "blend_extremes");
+        let (skeleton, _) = load_gltf_skeleton(path.to_str().unwrap()).unwrap().unwrap();
+        let clips = load_gltf_clips(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let clip = &clips[0];
+
+        let pure_a = compute_joint_matrices(&skeleton, Some(clip), 0.0);
+        let blended_at_0 =
+            compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 0.0);
+        for (p, b) in pure_a.iter().zip(&blended_at_0) {
+            assert!(
+                p.abs_diff_eq(*b, 1e-5),
+                "blend=0.0 doit être identique au clip A pur : {p:?} vs {b:?}"
+            );
+        }
+
+        let pure_b = compute_joint_matrices(&skeleton, Some(clip), 1.0);
+        let blended_at_1 =
+            compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 1.0);
+        for (p, b) in pure_b.iter().zip(&blended_at_1) {
+            assert!(
+                p.abs_diff_eq(*b, 1e-5),
+                "blend=1.0 doit être identique au clip B pur : {p:?} vs {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn blended_joint_matrices_at_midpoint_interpolate_translation() {
+        let path = write_temp_glb(&animated_skinned_glb(), "blend_midpoint");
+        let (skeleton, _) = load_gltf_skeleton(path.to_str().unwrap()).unwrap().unwrap();
+        let clips = load_gltf_clips(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let clip = &clips[0];
+
+        // Joint 0 : translation linéaire de (0,0,0) à t=0 vers (10,0,0) à t=1 (fixture du
+        // Sprint 85). Mélanger clip A (t=0, translation (0,0,0)) et clip B (t=1,
+        // translation (10,0,0)) à blend=0.5 doit donner (5,0,0) — le lerp attendu.
+        let matrices =
+            compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 0.5);
+        let translation = matrices[0].col(3).truncate();
+        assert!(
+            (translation - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-4,
+            "blend=0.5 doit donner le milieu de la translation, obtenu {translation:?}"
+        );
+    }
+
+    #[test]
+    fn blended_joint_matrices_clamp_out_of_range_blend_values() {
+        let path = write_temp_glb(&animated_skinned_glb(), "blend_clamp");
+        let (skeleton, _) = load_gltf_skeleton(path.to_str().unwrap()).unwrap().unwrap();
+        let clips = load_gltf_clips(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let clip = &clips[0];
+
+        let over = compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 5.0);
+        let at_1 = compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 1.0);
+        for (o, a) in over.iter().zip(&at_1) {
+            assert!(
+                o.abs_diff_eq(*a, 1e-5),
+                "blend > 1.0 doit être clampé à 1.0"
+            );
+        }
+        let under =
+            compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, -5.0);
+        let at_0 = compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 0.0);
+        for (u, a) in under.iter().zip(&at_0) {
+            assert!(
+                u.abs_diff_eq(*a, 1e-5),
+                "blend < 0.0 doit être clampé à 0.0"
+            );
+        }
     }
 }

@@ -2420,6 +2420,16 @@ impl AppState {
         for obj in self.scene.objects.iter_mut() {
             if let Some(anim) = obj.animation.as_mut() {
                 anim.time += dt * anim.speed;
+                // Fondu enchaîné (Sprint 87) : le clip quitté continue de jouer pendant
+                // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
+                // `CROSSFADE_SECONDS` — au-delà, plus rien à faire (transition terminée,
+                // `prev_clip` ignoré par le rendu tant que `blend == 1.0`).
+                if anim.blend < 1.0 {
+                    anim.prev_time += dt * anim.speed;
+                    anim.blend = (anim.blend
+                        + dt / crate::scene::AnimationState::CROSSFADE_SECONDS)
+                        .min(1.0);
+                }
             }
         }
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
@@ -3799,6 +3809,7 @@ mod tests {
                 clip: "Run".into(),
                 time: 0.0,
                 speed: 2.0,
+                ..Default::default()
             }),
             ..Default::default()
         });
@@ -3818,6 +3829,52 @@ mod tests {
         app.scene.objects.push(SceneObject::default());
         app.sim_step(0.1);
         assert!(app.scene.objects[0].animation.is_none());
+    }
+
+    #[test]
+    fn sim_step_advances_a_crossfade_towards_completion_and_stops() {
+        use crate::scene::AnimationState;
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        let mut anim = AnimationState {
+            clip: "Idle".into(),
+            ..Default::default()
+        };
+        assert_eq!(anim.blend, 1.0, "pas de transition en cours au départ");
+        anim.set_clip("Run"); // démarre le fondu
+        assert_eq!(anim.blend, 0.0);
+        assert_eq!(anim.prev_clip, "Idle");
+        app.scene.objects.push(SceneObject {
+            animation: Some(anim),
+            ..Default::default()
+        });
+
+        // CROSSFADE_SECONDS = 0.2s : un pas de 0.1s doit avancer blend à ~0.5, pas plus.
+        app.sim_step(0.1);
+        let anim = app.scene.objects[0].animation.as_ref().unwrap();
+        assert!(
+            (anim.blend - 0.5).abs() < 1e-4,
+            "blend attendu ≈0.5 après 0.1s de fondu (durée 0.2s), obtenu {}",
+            anim.blend
+        );
+        assert!(
+            anim.prev_time > 0.0,
+            "le clip quitté doit continuer d'avancer pendant le fondu"
+        );
+
+        // Encore 0.2s (au-delà de la durée du fondu) : blend clampé à 1.0, jamais au-delà.
+        app.sim_step(0.2);
+        let anim = app.scene.objects[0].animation.as_ref().unwrap();
+        assert_eq!(anim.blend, 1.0, "blend ne doit jamais dépasser 1.0");
+
+        // Transition terminée : encore un pas, prev_time ne doit plus avancer.
+        let prev_time_after = anim.prev_time;
+        app.sim_step(0.1);
+        assert_eq!(
+            app.scene.objects[0].animation.as_ref().unwrap().prev_time,
+            prev_time_after,
+            "prev_time ne doit plus bouger une fois la transition terminée"
+        );
     }
 
     #[test]
