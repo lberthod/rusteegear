@@ -168,6 +168,23 @@ immobiles) — sans quoi la vie individualisée du §3.1 n'aurait aucun effet
 observable en jeu. Test de régression : un monstre loin de deux joueurs finit
 par se rapprocher du plus proche, pas de celui arrivé en premier.
 
+**Correctif d'équilibrage (Sprint 85, audit en conditions réelles)** :
+un joueur a signalé en jeu réel (APK) que « tout est attiré là-bas très
+rapidement » — diagnostic via un client de test connecté au VPS (positions/
+vie des entités du `Snapshot` observées en direct) : pas de bug physique
+(taux de dégâts et positions corrects), mais les 5 monstres convergeant
+**tous en même temps** sur l'unique joueur connecté (le cas le plus courant
+en test solo), l'acculant contre un mur en quelques secondes sans fenêtre de
+riposte. `MAX_ACTIVE_CHASERS_PER_TARGET = 2` (`src/app/mod.rs`) : au plus 2
+chasseurs, les plus proches d'une cible donnée (recalculé chaque frame),
+avancent réellement vers elle ; les autres restent en place, toujours
+visibles/menaçants mais pas en train de foncer — un chasseur relégué reprend
+la poursuite dès qu'un des deux premiers meurt ou s'éloigne. Correctif
+purement serveur (aucun changement de protocole), redéployé immédiatement
+sur le VPS. Test de régression : sur 3 chasseurs visant la même cible à
+distances croissantes, seuls les 2 plus proches avancent notablement en
+30 pas de simulation, le 3e reste sur place.
+
 ### 3.3 Multi-salons (lobby) ✅ FAIT (Sprint 82)
 
 **Problème.** `src/bin/server.rs` sert un seul salon par process. Pour
