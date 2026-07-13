@@ -94,8 +94,33 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let light_dir = normalize(light.dir.xyz);
     let n = normalize(in.world_normal);
+
+    // Vue de debug (Sprint 83) : remplace l'éclairage par une lecture directe d'une
+    // grandeur du pipeline. Encodée dans light.ambient.y (0 = éclairé, 1 = normales,
+    // 2 = profondeur) — cf. `AppState::DebugView` / `write_uniforms` côté Rust.
+    let debug_view = light.ambient.y;
+    if debug_view > 1.5 {
+        // Profondeur linéarisée (near = celui de OrbitCamera::view_proj, 0.1) : la
+        // profondeur NDC brute écrase presque toute la scène près de 1.0 (non-linéaire),
+        // illisible en debug. Normalisée sur `debug_far` (échelle visuelle des niveaux
+        // RusteeGear — compacts, mobile — pas le plan lointain réel de la caméra, 100 :
+        // avec 100, la quasi-totalité d'une scène typique resterait dans le même blanc
+        // écrasé). 1.0 = proche (blanc), 0.0 = à `debug_far` ou au-delà (noir).
+        let near = 0.1;
+        let real_far = 100.0;
+        let debug_far = 20.0;
+        let z_ndc = in.clip_position.z;
+        let z_view = (near * real_far) / (real_far - z_ndc * (real_far - near));
+        let d = 1.0 - clamp((z_view - near) / (debug_far - near), 0.0, 1.0);
+        return vec4<f32>(d, d, d, 1.0);
+    }
+    if debug_view > 0.5 {
+        let n_color = n * 0.5 + vec3<f32>(0.5, 0.5, 0.5);
+        return vec4<f32>(n_color, 1.0);
+    }
+
+    let light_dir = normalize(light.dir.xyz);
     let diffuse = max(dot(n, light_dir), 0.0);
     let shadow = shadow_factor(in.world_pos);
     let tex = textureSample(albedo_tex, albedo_samp, in.uv).rgb;

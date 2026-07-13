@@ -386,6 +386,8 @@ pub struct AppState {
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
     pub snap: bool,
+    /// Vue de debug du rendu (Sprint 83) : Éclairé/Normales/Profondeur.
+    pub debug_view: DebugView,
     pub camera: OrbitCamera,
 
     viewport: (f32, f32),
@@ -465,6 +467,40 @@ pub enum GizmoMode {
     Translate,
     Rotate,
     Scale,
+}
+
+/// Vue de debug du rendu principal (Sprint 83) : remplace l'éclairage par une
+/// visualisation directe d'une grandeur du pipeline. Encodé en `f32` (0/1/2) dans un canal
+/// inutilisé de l'uniform d'éclairage (`SceneUniform::ambient.y`) plutôt que d'agrandir
+/// l'uniform — cf. `write_uniforms` et `main.wgsl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DebugView {
+    #[default]
+    Shaded,
+    /// Normales monde, remappées en couleur (`n * 0.5 + 0.5`).
+    Normals,
+    /// Profondeur NDC brute (0 = près du plan proche, 1 = loin) — non linéarisée.
+    Depth,
+}
+
+impl DebugView {
+    pub(crate) fn as_uniform(self) -> f32 {
+        match self {
+            DebugView::Shaded => 0.0,
+            DebugView::Normals => 1.0,
+            DebugView::Depth => 2.0,
+        }
+    }
+
+    pub const ALL: [DebugView; 3] = [DebugView::Shaded, DebugView::Normals, DebugView::Depth];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DebugView::Shaded => "Éclairé",
+            DebugView::Normals => "Normales",
+            DebugView::Depth => "Profondeur",
+        }
+    }
 }
 
 /// Longueur (monde) des axes / rayon des anneaux du gizmo. Partagée picking ↔ rendu.
@@ -575,6 +611,7 @@ impl AppState {
             leaderboard_rx,
             show_grid: true,
             snap: false,
+            debug_view: DebugView::default(),
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
@@ -3794,6 +3831,18 @@ mod tests {
             assert!(((*a - center).length() - 3.0).abs() < 1e-4);
             assert!(((*b - center).length() - 3.0).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn debug_view_defaults_to_shaded_and_encodes_distinct_uniform_values() {
+        // `AppState::new()` doit démarrer en rendu normal (pas en vue de debug par
+        // surprise) ; les 3 vues doivent être distinguables côté shader (main.wgsl
+        // branche sur `> 0.5` / `> 1.5`), donc strictement croissantes.
+        assert_eq!(AppState::new().debug_view, DebugView::Shaded);
+        let shaded = DebugView::Shaded.as_uniform();
+        let normals = DebugView::Normals.as_uniform();
+        let depth = DebugView::Depth.as_uniform();
+        assert!(shaded < normals && normals < depth);
     }
 
     /// Invariant : la primaire (si présente) appartient toujours à l'ensemble sélectionné.

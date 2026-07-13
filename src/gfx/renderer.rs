@@ -832,7 +832,9 @@ impl Renderer {
         let scene_uniform = SceneUniform {
             light_dir: [l.dir[0], l.dir[1], l.dir[2], 0.0],
             light_color: [l.color[0], l.color[1], l.color[2], 0.0],
-            ambient: [l.ambient, 0.0, 0.0, 0.0],
+            // .y : vue de debug (Sprint 83) — canal inutilisé jusqu'ici, réutilisé plutôt
+            // que d'agrandir l'uniform. Décodé dans `main.wgsl`.
+            ambient: [l.ambient, app.debug_view.as_uniform(), 0.0, 0.0],
             light_vp: light_vp.to_cols_array_2d(),
             num_points: [count as f32, 0.0, 0.0, 0.0],
             points,
@@ -971,6 +973,7 @@ impl Renderer {
                 ai_busy: app.ai_busy,
                 grid: app.show_grid,
                 snap: app.snap,
+                debug_view: app.debug_view,
             };
             let net_status = app.net_status.clone();
             let net_connected = app.is_connected();
@@ -1211,6 +1214,9 @@ impl Renderer {
             }
             if actions.toggle_snap {
                 app.snap = !app.snap;
+            }
+            if let Some(view) = actions.set_debug_view {
+                app.debug_view = view;
             }
             Some(full_output)
         };

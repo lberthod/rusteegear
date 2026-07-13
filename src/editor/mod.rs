@@ -90,6 +90,8 @@ pub struct StatusInfo<'a> {
     pub grid: bool,
     /// L'aimantation (snap) est-elle active ?
     pub snap: bool,
+    /// Vue de debug active (Sprint 83) : Éclairé/Normales/Profondeur.
+    pub debug_view: crate::app::DebugView,
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
@@ -202,6 +204,8 @@ pub struct UiActions {
     pub toggle_grid: bool,
     /// Basculer l'aimantation (snap) au déplacement.
     pub toggle_snap: bool,
+    /// Nouvelle vue de debug demandée (Sprint 83) : Éclairé/Normales/Profondeur.
+    pub set_debug_view: Option<crate::app::DebugView>,
 }
 
 impl Editor {
@@ -2805,6 +2809,18 @@ fn build_ui(
                 .clicked()
             {
                 actions.toggle_snap = true;
+            }
+            // Vue de debug (Sprint 83) : remplace l'éclairage par les normales ou la
+            // profondeur, pour voir directement ce que le pipeline calcule.
+            ui.separator();
+            ui.label("👁");
+            for view in crate::app::DebugView::ALL {
+                if ui
+                    .selectable_label(status.debug_view == view, view.label())
+                    .clicked()
+                {
+                    actions.set_debug_view = Some(view);
+                }
             }
             // Build APK + Run Device : différenciateurs du moteur (passent à la ligne si étroit).
             ui.separator();
