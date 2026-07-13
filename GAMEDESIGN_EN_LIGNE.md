@@ -434,3 +434,38 @@ tous verts.
 **Reporté** : la sélection du salon dans l'UI (fenêtre Multijoueur) — même
 réserve que §3.4, en attendant que `editor/mod.rs` soit stable côté session
 parallèle.
+
+### Sprint réseau — Compteur de frags individualisé ✅ FAIT
+
+Demandé explicitement (« optimise les actions, rajoute un compteur de kill,
+petite pierre pour un futur MMORPG ») : `AppState::network_kills`, un
+compteur par `PlayerId` (pas un score de salon partagé comme `score()`),
+incrémenté par les deux méthodes d'élimination existantes — attaque au
+contact (`update_network_attacks`) et boule de feu (`resolve_fireball_hit`,
+qui gagne un paramètre `owner` pour identifier le tireur responsable).
+Diffusé à tous via `EntityDelta::kills` (`Option<u32>`, même convention que
+`health`) : chaque client voit le score de chacun, pas seulement le sien —
+un vrai signal compétitif/social en coopératif, et la première vraie
+récompense individualisée du jeu (jusqu'ici, `score()` divisait
+artificiellement une contribution collective). C'est explicitement la
+brique de base d'un futur système de progression MMORPG : XP/récompenses
+qui suivent la contribution réelle d'un joueur, pas un score moyen.
+
+Côté client (`network_client.rs`) : `net_local_kills` (même mécanisme que
+`net_local_health`), `RemotePlayer::kills`, `multiplayer_roster()` étendu à
+4-uplets `(nom, vie, frags, soi-même)`, et `displayed_kill_count()` qui
+unifie l'affichage solo (`score()`) et réseau (`net_local_kills`) pour un
+futur HUD sans avoir à distinguer les deux modes au point d'appel.
+
+**Reporté** : le HUD affichant réellement ce compteur à l'écran —
+`editor/mod.rs` avait une autre session active dessus au moment de ce sprint
+(ciel/brouillard, Sprint 89) ; même réserve déjà appliquée au roster (§3.4)
+et à la sélection de salon (§3.3). `displayed_kill_count()`/
+`multiplayer_roster()` sont prêts à être branchés dès que ce fichier est
+stable — pas de nouveau travail de fond nécessaire, juste l'affichage.
+
+**Protocole** : `EntityDelta` gagne un champ, incompatible en binaire avec
+les anciens clients — serveur VPS redéployé et apps client reconstruites
+dans la foulée (même règle que chaque évolution de `net::protocol`
+jusqu'ici). 4 nouveaux tests (contact + boule de feu créditent le bon
+tireur réseau, diffusé dans le `Snapshot`). 259 tests, fmt/clippy propres.
