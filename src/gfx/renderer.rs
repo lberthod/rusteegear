@@ -129,6 +129,13 @@ pub struct Renderer {
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
 
+    // --- debug drawing (Sprint 83) : mêmes pipeline/format que les gizmos, buffer
+    //     séparé et redimensionnable (le nombre de segments n'est pas borné à l'avance,
+    //     contrairement aux gizmos de manipulation). Vidé (`AppState::debug_lines`)
+    //     après chaque frame de rendu.
+    debug_vbuf: wgpu::Buffer,
+    debug_capacity: usize,
+
     // --- grille de référence au sol (depth-testée, dans la passe principale) ---
     grid_pipeline: wgpu::RenderPipeline,
     grid_vbuf: wgpu::Buffer,
@@ -549,6 +556,18 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // Debug drawing (Sprint 83) : capacité initiale modeste (256 segments), doublée à
+        // la demande (cf. `ensure_debug_capacity`) — le volume dépend du gameplay, pas
+        // connu à l'avance contrairement aux gizmos de manipulation.
+        const INITIAL_DEBUG_CAPACITY: usize = 512; // 512 sommets = 256 segments
+        let debug_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("debug_vbuf"),
+            size: (INITIAL_DEBUG_CAPACITY * std::mem::size_of::<GizmoVertex>())
+                as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // --- Pipeline grille : même shader lignes, mais AVEC test de profondeur
         //     (la grille au sol passe correctement derrière les objets). ---
         let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -632,6 +651,8 @@ impl Renderer {
             last_render_hash: 0,
             gizmo_pipeline,
             gizmo_vbuf,
+            debug_vbuf,
+            debug_capacity: INITIAL_DEBUG_CAPACITY,
             grid_pipeline,
             grid_vbuf,
             grid_count,
@@ -658,6 +679,22 @@ impl Renderer {
         self.config.height = new_size.height;
         surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, &self.config);
+    }
+
+    /// Recrée `debug_vbuf` en le doublant tant qu'il ne peut pas contenir `n` sommets
+    /// (Sprint 83), même politique de croissance que `create_models_buffer`.
+    fn ensure_debug_capacity(&mut self, n: usize) {
+        if n <= self.debug_capacity {
+            return;
+        }
+        let cap = n.next_power_of_two().max(64);
+        self.debug_vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("debug_vbuf"),
+            size: (cap * std::mem::size_of::<GizmoVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.debug_capacity = cap;
     }
 
     /// Transmet l'événement à l'UI. Retourne `true` s'il a été consommé par egui.
@@ -1358,6 +1395,35 @@ impl Renderer {
             verts.len() as u32
         };
 
+        // Debug drawing (Sprint 83) : segments accumulés pendant la frame (picking,
+        // gameplay), dessinés une fois puis vidés — jamais persistants d'une frame à
+        // l'autre, contrairement aux gizmos de manipulation ci-dessus.
+        let debug_count = {
+            let verts: Vec<GizmoVertex> = app
+                .debug_lines
+                .iter()
+                .flat_map(|&(a, b, color)| {
+                    [
+                        GizmoVertex {
+                            position: a.to_array(),
+                            color,
+                        },
+                        GizmoVertex {
+                            position: b.to_array(),
+                            color,
+                        },
+                    ]
+                })
+                .collect();
+            app.debug_lines.clear();
+            if !verts.is_empty() {
+                self.ensure_debug_capacity(verts.len());
+                self.queue
+                    .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
+            }
+            verts.len() as u32
+        };
+
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1514,6 +1580,14 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.gizmo_vbuf.slice(..));
                 pass.draw(0..gizmo_count, 0..1);
             }
+
+            // Debug drawing (Sprint 83) : même pipeline lignes, buffer dédié.
+            if debug_count > 0 {
+                pass.set_pipeline(&self.gizmo_pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
+                pass.draw(0..debug_count, 0..1);
+            }
         }
 
         // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
@@ -1585,6 +1659,34 @@ impl Renderer {
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Debug drawing (Sprint 83) : même logique que `render()` (préparer + vider avant
+        // les passes, dessiner après les meshes texturés dans la passe principale).
+        let debug_count = {
+            let verts: Vec<GizmoVertex> = app
+                .debug_lines
+                .iter()
+                .flat_map(|&(a, b, color)| {
+                    [
+                        GizmoVertex {
+                            position: a.to_array(),
+                            color,
+                        },
+                        GizmoVertex {
+                            position: b.to_array(),
+                            color,
+                        },
+                    ]
+                })
+                .collect();
+            app.debug_lines.clear();
+            if !verts.is_empty() {
+                self.ensure_debug_capacity(verts.len());
+                self.queue
+                    .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
+            }
+            verts.len() as u32
+        };
 
         let mut encoder = self
             .device
@@ -1712,6 +1814,14 @@ impl Renderer {
                     }
                 }
                 i = group_end;
+            }
+
+            // Debug drawing (Sprint 83).
+            if debug_count > 0 {
+                pass.set_pipeline(&self.gizmo_pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
+                pass.draw(0..debug_count, 0..1);
             }
         }
 
