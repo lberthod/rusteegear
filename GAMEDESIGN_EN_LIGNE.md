@@ -185,6 +185,25 @@ sur le VPS. Test de régression : sur 3 chasseurs visant la même cible à
 distances croissantes, seuls les 2 plus proches avancent notablement en
 30 pas de simulation, le 3e reste sur place.
 
+**Correctif complémentaire (Sprint 86, toujours signalé après le plafond)** :
+le plafond étale l'*arrivée* des chasseurs dans le temps, mais avec un seul
+joueur réseau connecté, il n'empêche pas la convergence *finale* — au bout
+d'assez de temps, tous les monstres de la carte se relaient jusqu'à l'unique
+cible, même partis de l'autre bout de l'arène (24×24 m). `CHASER_DETECT_RANGE`
+(9 m, `src/app/mod.rs`) : un chasseur au-delà de cette distance reste
+totalement immobile, quelle que soit la cible la plus proche — vérifié en
+direct sur le VPS (client de diagnostic) : sur 5 monstres, seuls les 2 déjà
+proches du point d'apparition avancent, les 3 autres restent figés à leur
+position de départ. **Limité au cas réseau** (`!network_players.is_empty()`) :
+une première version universelle cassait le ring-out de `Scene::brawl_demo`
+en solo — ce duel compte sur un rival qui revient toujours vers le joueur
+après un recul pour ne pas tomber dans le vide de l'arène ; sans ce retour
+(chasseur immobile une fois repoussé trop loin), le rival finissait par
+tomber avant le 3e coup (régression détectée par
+`brawl_demo_rival_survives_two_hits_then_falls_on_the_third`, corrigée en
+scopant le correctif au réseau). Test de régression : un chasseur à 20 m
+d'un unique joueur réseau reste immobile sur 3 s de simulation.
+
 ### 3.3 Multi-salons (lobby) ✅ FAIT (Sprint 82)
 
 **Problème.** `src/bin/server.rs` sert un seul salon par process. Pour
