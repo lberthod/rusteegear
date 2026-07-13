@@ -2316,8 +2316,13 @@ fn kills_hud(ctx: &egui::Context, area: egui::Rect, kills: u32) {
         egui::Order::Foreground,
         egui::Id::new("hud_kills"),
     ));
-    let pos = egui::pos2(area.right() - 20.0, area.top() + 112.0);
-    let bg = egui::Rect::from_center_size(pos, egui::vec2(150.0, 30.0));
+    // Boîte alignée à droite avec une marge fixe (8 px) plutôt que centrée sur un
+    // point à distance fixe du bord : centrer débordait de ~55 px au-delà de `area`
+    // (donc par-dessus l'Inspecteur en mode Édition), la largeur de la boîte n'étant
+    // pas prise en compte dans le calcul du centre.
+    let box_size = egui::vec2(150.0, 30.0);
+    let pos = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
+    let bg = egui::Rect::from_center_size(pos, box_size);
     painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
         pos,
