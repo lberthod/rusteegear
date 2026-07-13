@@ -786,12 +786,13 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   de fichier temporaire partagé entre threads de test) attrapé et corrigé avant qu'il ne
   devienne un échec intermittent en CI.
 
-#### Sprint 86 — Skinning GPU 🟡 (cœur livré, intégration éditeur reportée)
+#### Sprint 86 — Skinning GPU 🟢
 **Objectif** : le vertex shader déforme le mesh.
 - [x] `SkinnedVertex` (type séparé de `Vertex` — les meshes statiques restent inchangés,
       cf. `src/gfx/mesh.rs`), `shaders/skinned.wgsl` (vertex de skinning, **fragment
       partagée** avec `main.wgsl` — aucune duplication de l'éclairage), palette de
-      matrices en storage buffer (groupe 4, capacité 128, tronque plutôt que déborder).
+      matrices en storage buffer (groupe 4, capacité 128 par instance, tronque plutôt
+      que déborder).
 - [x] `scene::import::compute_joint_matrices(skeleton, clip, time)` : matrice par joint
       côté CPU, robuste à un ordre `Skeleton::joints` sans garantie parent-avant-enfant.
 - [x] **Vérifié visuellement** (pas juste compilé) : planche à charnière pondérée moitié
@@ -799,22 +800,31 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
       obtenue (preuve que le mélange de poids par sommet fonctionne, pas qu'un joint «
       gagne »), transformée en golden test permanent ; bug injecté puis reverté pour
       confirmer la détection (5.51 % de pixels divergents avant correctif).
-- [ ] Intégration éditeur (`SceneObject` référençant un skin+clip, lecture en Play,
-      personnage Mixamo animé dans l'éditeur à 60 fps) — reportée : touche `app/mod.rs`
-      (contesté pendant ce sprint) et exige des décisions de format de scène non prises.
-- **Fichiers livrés** : `src/gfx/mesh.rs`, `src/gfx/renderer.rs`, `src/gfx/shaders/skinned.wgsl`,
-  `src/scene/import.rs`, `tests/golden_skinning.rs`. **Restant** : `app/mod.rs`, `scene/mod.rs`
-  (format de `SceneObject`).
+- [x] **Intégration éditeur** (Sprint 87) : `SceneObject.animation`, lecture en Play,
+      dessin réel dans `render()`/`render_scene_headless()` — cf. Sprint 87 ci-dessous.
+- **Fichiers** : `src/gfx/mesh.rs`, `src/gfx/renderer.rs`, `src/gfx/shaders/skinned.wgsl`,
+  `src/scene/import.rs`, `src/scene/mod.rs`, `src/app/mod.rs`, `tests/golden_skinning.rs`.
 - **Risque (confirmé, mais maîtrisé)** : les layouts de bind groups ont bien été le point
   délicat annoncé — résolu en réutilisant le module `main.wgsl` pour l'étage fragment
   (wgpu autorise des modules vertex/fragment distincts si `VsOut` correspond exactement),
   évitant de dupliquer tout le code d'éclairage dans `skinned.wgsl`.
 
-#### Sprint 87 — Blending + state machine ⬜
+#### Sprint 87 — Intégration Play + blending + state machine 🟡 (intégration livrée, blending/FSM restants)
 **Objectif** : des transitions douces pilotables en Lua.
-- [ ] Lerp idle↔run pondéré par la vitesse + FSM minimale (`obj.anim = "run"`).
-- **Fichiers** : `src/app/mod.rs`, `src/runtime/mod.rs`.
-- **Livrable** : le joueur de la démo court, s'arrête, saute — sans à-coup.
+- [x] **Intégration Play/rendu** (reportée du Sprint 86) : `SceneObject.animation`
+      (clip + temps + vitesse), `sim_step` avance le temps (compatible `time_scale`,
+      Sprint 81), `Renderer` dessine chaque objet skinné individuellement (`joint_buf`
+      à créneaux + offset dynamique, `MAX_SKINNED_INSTANCES = 8` — plusieurs
+      personnages animés distincts par frame, chacun sa propre palette de joints).
+      Vérifié par un test d'intégration bout en bout (rend la même scène à deux temps,
+      vérifie que les pixels diffèrent réellement) — pas seulement les briques isolées.
+- [ ] Lerp idle↔run pondéré par la vitesse + FSM minimale (`obj.anim = "run"`) — reste
+      à faire : aujourd'hui un objet joue **un seul** clip, pas de transition entre deux.
+- **Fichiers livrés** : `src/scene/mod.rs` (`AnimationState`), `src/app/mod.rs` (`sim_step`),
+  `src/gfx/renderer.rs` (`draw_plan_skinned`, `prepare_skinned_draws`,
+  `draw_skinned_objects`), `src/scene/import.rs` (`ImportedMesh::skinned_mesh_data`).
+  **Restant** : `src/app/mod.rs`, `src/runtime/mod.rs` (FSM Lua).
+- **Livrable restant** : le joueur de la démo court, s'arrête, saute — sans à-coup.
 
 #### Sprint 88 — Animation répliquée ⬜
 **Objectif** : les joueurs réseau s'animent aussi.
