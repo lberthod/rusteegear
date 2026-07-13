@@ -82,6 +82,17 @@ const SHADOW_SIZE: u32 = 1024;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// Skinning GPU (Sprint 86-87) : matrices par instance skinnée dans la palette de
+/// joints — généreux pour un rig réel (Mixamo : ~50-65 os).
+const JOINT_CAPACITY: usize = 128;
+/// Nombre d'objets skinnés distincts dessinables dans une même frame (Sprint 87) : un
+/// créneau par instance dans `Renderer::joint_buf`, sélectionné au dessin par offset
+/// dynamique. Augmenter est un changement d'une ligne si besoin.
+const MAX_SKINNED_INSTANCES: usize = 8;
+/// Taille en octets d'un créneau de la palette de joints — un objet skinné à la fois.
+const JOINT_SLOT_BYTES: wgpu::BufferAddress =
+    (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress;
+
 /// Descripteur d'une instance dans le plan de rendu (ordre = index dans le buffer storage).
 struct InstanceDraw {
     /// Index de l'objet dans `scene.objects` (mesh/texture relus au draw, sans clone).
@@ -111,12 +122,23 @@ pub struct Renderer {
 
     meshes: HashMap<MeshKind, GpuMesh>,
     imported_gpu: Vec<GpuMesh>,
+    /// Mesh GPU skinné (Sprint 87), aligné avec `imported_gpu`/`Scene::imported` :
+    /// `None` pour un import statique (pas de skin), `Some` sinon. Séparé de
+    /// `imported_gpu` plutôt qu'un enum : le mesh statique reste disponible même pour un
+    /// objet skinné (utile si un jour un LOD non skinné est voulu), et la grande majorité
+    /// des entrées n'ont simplement rien ici.
+    imported_gpu_skinned: Vec<Option<GpuMesh>>,
     /// Données d'instances de tous les objets (groupe 1, storage), indexées par `instance_index`.
     models_buf: wgpu::Buffer,
     models_bind_group: wgpu::BindGroup,
     models_capacity: usize,
     /// Plan de rendu de la frame : un descripteur par objet, dans l'ordre du buffer d'instances.
     draw_plan: Vec<InstanceDraw>,
+    /// Objets skinnés (Sprint 87) : (indice scène, instance_index dans `models_buf`),
+    /// hors du batching de `draw_plan` (chaque objet a sa propre palette de joints,
+    /// dessiné individuellement par `draw_skinned_objects`). Leurs `ModelUniform` occupent
+    /// la queue de `models_buf`, après les objets statiques de `draw_plan`.
+    draw_plan_skinned: Vec<(usize, u32)>,
     /// Tampons réutilisés chaque frame (évite deux allocations par frame).
     order_scratch: Vec<usize>,
     models_scratch: Vec<ModelUniform>,
@@ -461,6 +483,12 @@ impl Renderer {
         // --- Skinning GPU (Sprint 86) : palette de joints (groupe 4), pipeline vertex
         // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
         // même `fs_main` : un seul endroit qui connaît l'éclairage).
+        // Décalage dynamique (Sprint 87, intégration Play) : plusieurs objets skinnés
+        // distincts peuvent être dessinés dans la même frame, chacun avec sa propre
+        // palette de joints — un seul gros buffer, un « créneau » par instance, sélectionné
+        // au dessin via un offset dynamique plutôt que de réécrire le buffer entre chaque
+        // draw (ce qui ne fonctionnerait pas : `queue.write_buffer` n'est pas ordonné avec
+        // les draw calls d'un encoder pas encore soumis).
         let joint_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("joint_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -468,20 +496,15 @@ impl Renderer {
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
             }],
         });
-        // Capacité généreuse pour un rig squelettal réel (Mixamo : ~50-65 os) ; pas
-        // encore de croissance à la volée (`ensure_debug_capacity` a le motif si besoin
-        // un jour) — un dépassement écrirait hors buffer, donc `write_joint_matrices`
-        // (plus bas) tronque plutôt que de paniquer ou de corrompre la mémoire GPU.
-        const JOINT_CAPACITY: usize = 128;
         let joint_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("joint_buf"),
-            size: (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress,
+            size: JOINT_SLOT_BYTES * MAX_SKINNED_INSTANCES as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -490,7 +513,11 @@ impl Renderer {
             layout: &joint_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: joint_buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &joint_buf,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(JOINT_SLOT_BYTES),
+                }),
             }],
         });
         let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -743,10 +770,12 @@ impl Renderer {
             camera_bind_group,
             meshes,
             imported_gpu: Vec::new(),
+            imported_gpu_skinned: Vec::new(),
             models_buf,
             models_bind_group,
             models_capacity,
             draw_plan: Vec::new(),
+            draw_plan_skinned: Vec::new(),
             order_scratch: Vec::new(),
             models_scratch: Vec::new(),
             last_sort_len: usize::MAX,
@@ -803,11 +832,21 @@ impl Renderer {
         self.debug_capacity = cap;
     }
 
-    /// Envoie la palette de matrices de joints au GPU (Sprint 86). Tronque silencieusement
-    /// (avec un `log::warn!`) au-delà de `joint_capacity` plutôt que de paniquer ou
-    /// d'écrire hors buffer — un rig anormalement gros dégraderait l'anim plutôt que de
-    /// planter le rendu.
-    fn write_joint_matrices(&mut self, matrices: &[glam::Mat4]) {
+    /// Envoie la palette de matrices de joints d'**une** instance skinnée au GPU, dans son
+    /// créneau `slot` du buffer partagé (Sprint 86-87 : offset dynamique, cf. commentaire
+    /// sur `JOINT_SLOT_BYTES`). Tronque silencieusement (`log::warn!`) au-delà de
+    /// `joint_capacity` plutôt que de paniquer ou d'écrire hors créneau — un rig
+    /// anormalement gros dégraderait l'anim plutôt que de planter le rendu. `slot` au-delà
+    /// de `MAX_SKINNED_INSTANCES` est ignoré (même logique).
+    ///
+    /// Renvoie l'offset dynamique (octets) à passer à `set_bind_group(4, .., &[offset])`.
+    fn write_joint_matrices(&mut self, slot: usize, matrices: &[glam::Mat4]) -> u32 {
+        if slot >= MAX_SKINNED_INSTANCES {
+            log::warn!(
+                "skinning : créneau {slot} au-delà de la capacité ({MAX_SKINNED_INSTANCES}) — objet ignoré"
+            );
+            return 0;
+        }
         let n = matrices.len().min(self.joint_capacity);
         if matrices.len() > self.joint_capacity {
             log::warn!(
@@ -817,15 +856,89 @@ impl Renderer {
             );
         }
         let raw: Vec<[[f32; 4]; 4]> = matrices[..n].iter().map(|m| m.to_cols_array_2d()).collect();
+        let offset = slot as wgpu::BufferAddress * JOINT_SLOT_BYTES;
         self.queue
-            .write_buffer(&self.joint_buf, 0, bytemuck::cast_slice(&raw));
+            .write_buffer(&self.joint_buf, offset, bytemuck::cast_slice(&raw));
+        offset as u32
     }
 
-    /// Rendu headless d'**un** mesh skinné, en une seule instance (Sprint 86 — chemin de
-    /// test/vérification dédié, pas encore branché sur `render`/`render_scene_headless` :
-    /// l'intégration éditeur — `SceneObject` animé, lecture en Play — reste à faire, cf.
-    /// ROADMAP_SPRINTS.md). `app` ne sert qu'à fournir caméra + lumière (`write_uniforms`) ;
-    /// sa scène n'est pas dessinée ici.
+    /// Calcule et envoie au GPU la palette de joints de chaque objet skinné visible de la
+    /// frame (Sprint 87 — `self.draw_plan_skinned`, déjà construit par `write_uniforms`),
+    /// **avant** toute passe de rendu (cf. commentaire aux sites d'appel : `write_buffer`
+    /// n'est pas ordonné avec les draw calls d'un encoder pas encore soumis). Renvoie les
+    /// offsets dynamiques, dans l'ordre de `draw_plan_skinned`, à passer à
+    /// `set_bind_group(4, .., &[offset])` lors du dessin réel dans la passe.
+    fn prepare_skinned_draws(&mut self, scene: &Scene) -> Vec<u32> {
+        let mut offsets = Vec::with_capacity(self.draw_plan_skinned.len());
+        for (slot, &(obj_idx, _instance)) in self.draw_plan_skinned.clone().iter().enumerate() {
+            let obj = &scene.objects[obj_idx];
+            let MeshKind::Imported(mesh_idx) = obj.mesh else {
+                offsets.push(0);
+                continue;
+            };
+            let Some(imported) = scene.imported.get(mesh_idx as usize) else {
+                offsets.push(0);
+                continue;
+            };
+            let Some(skeleton) = &imported.skeleton else {
+                offsets.push(0);
+                continue;
+            };
+            // Sans `AnimationState` (ou clip introuvable/vide) : pose de liaison figée,
+            // pas une erreur — un mesh skinné a le droit de rester immobile (décor posé).
+            let clip = obj
+                .animation
+                .as_ref()
+                .filter(|a| !a.clip.is_empty())
+                .and_then(|a| imported.clips.iter().find(|c| c.name == a.clip));
+            let time = obj.animation.as_ref().map(|a| a.time).unwrap_or(0.0);
+            let matrices = crate::scene::import::compute_joint_matrices(skeleton, clip, time);
+            offsets.push(self.write_joint_matrices(slot, &matrices));
+        }
+        offsets
+    }
+
+    /// Dessine les objets skinnés de `self.draw_plan_skinned`, un draw individuel par
+    /// objet (chacun avec sa propre palette de joints — pas de batching possible ici,
+    /// contrairement aux objets statiques). `offsets` doit venir de
+    /// `prepare_skinned_draws` sur la même frame, dans le même ordre.
+    fn draw_skinned_objects<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        scene: &Scene,
+        offsets: &[u32],
+    ) {
+        for (&(obj_idx, instance_index), &offset) in self.draw_plan_skinned.iter().zip(offsets) {
+            let obj = &scene.objects[obj_idx];
+            let MeshKind::Imported(mesh_idx) = obj.mesh else {
+                continue;
+            };
+            let Some(Some(gpu_mesh)) = self.imported_gpu_skinned.get(mesh_idx as usize) else {
+                continue;
+            };
+            let tex = self
+                .textures
+                .get(&obj.texture)
+                .unwrap_or(&self.textures[""]);
+            pass.set_pipeline(&self.skinned_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.models_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+            pass.set_bind_group(3, tex, &[]);
+            pass.set_bind_group(4, &self.joint_bind_group, &[offset]);
+            pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
+            pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(
+                0..gpu_mesh.num_indices,
+                0,
+                instance_index..instance_index + 1,
+            );
+        }
+    }
+
+    /// Rendu headless d'**un** mesh skinné, en une seule instance (Sprint 86, chemin de
+    /// test/vérification dédié — pas piloté par `draw_plan_skinned`). `app` ne sert qu'à
+    /// fournir caméra + lumière (`write_uniforms`) ; sa scène n'est pas dessinée ici.
     pub fn render_skinned_test(
         &mut self,
         app: &mut AppState,
@@ -837,7 +950,7 @@ impl Renderer {
     ) -> Vec<u8> {
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
         self.write_uniforms(app);
-        self.write_joint_matrices(joint_matrices);
+        let joint_offset = self.write_joint_matrices(0, joint_matrices);
 
         let gpu_mesh = crate::gfx::mesh::GpuMesh::new_skinned(&self.device, mesh);
 
@@ -924,7 +1037,7 @@ impl Renderer {
             pass.set_bind_group(1, &self.models_bind_group, &[]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
             pass.set_bind_group(3, &self.textures[""], &[]);
-            pass.set_bind_group(4, &self.joint_bind_group, &[]);
+            pass.set_bind_group(4, &self.joint_bind_group, &[joint_offset]);
             pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
             pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..gpu_mesh.num_indices, 0, 0..1);
@@ -964,8 +1077,14 @@ impl Renderer {
     /// Construit les `GpuMesh` des modèles importés pas encore chargés sur GPU.
     fn sync_imported(&mut self, scene: &Scene) {
         while self.imported_gpu.len() < scene.imported.len() {
-            let data = &scene.imported[self.imported_gpu.len()].data;
-            self.imported_gpu.push(GpuMesh::new(&self.device, data));
+            let m = &scene.imported[self.imported_gpu.len()];
+            self.imported_gpu.push(GpuMesh::new(&self.device, &m.data));
+            // Skinning GPU (Sprint 87) : mesh skinné en plus du statique si le glTF a un
+            // skin (`ImportedMesh::skeleton`) — `None` sinon, la grande majorité des imports.
+            let skinned = m
+                .skinned_mesh_data()
+                .map(|d| GpuMesh::new_skinned(&self.device, &d));
+            self.imported_gpu_skinned.push(skinned);
         }
     }
 
@@ -1115,6 +1234,12 @@ impl Renderer {
         self.draw_plan.clear();
         for &i in order.iter() {
             let obj = &app.scene.objects[i];
+            // Skinning GPU (Sprint 87) : un objet skinné a sa propre palette de joints,
+            // incompatible avec le batching par instances de ce plan — dessiné à part par
+            // `draw_skinned_objects`, jamais ici (sinon il apparaîtrait deux fois).
+            if is_skinned(&app.scene, obj.mesh) {
+                continue;
+            }
             let model = obj.transform.matrix();
             let highlight = app.highlight_of(i);
             // Matrice normale = inverse-transposée du bloc 3×3 (correct en scale non uniforme).
@@ -1131,6 +1256,38 @@ impl Renderer {
                 visible: obj.visible && aabb_visible(&planes, model, lmin, lmax),
             });
         }
+
+        // Objets skinnés (Sprint 87) : leur ModelUniform occupe la queue de `models`,
+        // après tous les objets statiques ci-dessus — `draw_skinned_objects` s'en sert
+        // comme `base_instance` pour un draw individuel par objet (chacun avec sa propre
+        // palette de joints, incompatible avec le batching des statiques).
+        self.draw_plan_skinned.clear();
+        for &i in order.iter() {
+            let obj = &app.scene.objects[i];
+            if !is_skinned(&app.scene, obj.mesh) || !obj.visible {
+                continue;
+            }
+            let model = obj.transform.matrix();
+            // Culling AABB approximatif : basé sur la pose de liaison (`aabb_min/max` de
+            // l'import), pas sur l'enveloppe réelle de la pose animée — simplification
+            // assumée (déplacement des os hors de cette boîte possible sur une anim
+            // ample), commune même dans des moteurs de production comme premier jet.
+            let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
+            if !aabb_visible(&planes, model, lmin, lmax) {
+                continue;
+            }
+            let highlight = app.highlight_of(i);
+            let normal3 = glam::Mat3::from_mat4(model).inverse().transpose();
+            let instance_index = models.len() as u32;
+            models.push(ModelUniform {
+                model: model.to_cols_array_2d(),
+                normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
+                params: [highlight, obj.metallic, obj.roughness, obj.emissive],
+                color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
+            });
+            self.draw_plan_skinned.push((i, instance_index));
+        }
+
         if !models.is_empty() {
             self.queue
                 .write_buffer(&self.models_buf, 0, bytemuck::cast_slice(models));
@@ -1512,6 +1669,11 @@ impl Renderer {
         };
         app.camera.aspect = dw / dh.max(1.0);
         self.write_uniforms(app);
+        // Skinning GPU (Sprint 87) : joint_buf entièrement rempli AVANT la passe (comme
+        // les lignes de debug ci-dessous) — `queue.write_buffer` n'est pas ordonné avec
+        // les draw calls d'un encoder pas encore soumis, donc rien de tout ça ne peut
+        // être fait entre deux `draw_indexed` de la passe principale plus bas.
+        let skinned_offsets = self.prepare_skinned_draws(&app.scene);
 
         // Préparer les lignes du gizmo + marqueurs de lumières (jamais en player/aperçu mobile).
         let gizmo_count = if app.player || app.device_preview {
@@ -1834,6 +1996,10 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
                 pass.draw(0..debug_count, 0..1);
             }
+
+            // Objets skinnés (Sprint 87) : un draw individuel par objet, palettes déjà
+            // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
+            self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
         // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
@@ -1871,6 +2037,8 @@ impl Renderer {
         self.sync_textures(&app.scene);
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
         self.write_uniforms(app);
+        // Skinning GPU (Sprint 87) : cf. commentaire équivalent dans `render()`.
+        let skinned_offsets = self.prepare_skinned_draws(&app.scene);
 
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("headless_target"),
@@ -2069,6 +2237,9 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
                 pass.draw(0..debug_count, 0..1);
             }
+
+            // Objets skinnés (Sprint 87) : cf. commentaire équivalent dans `render()`.
+            self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
         self.finish_and_read_rgba(encoder, &target, width, height)
@@ -2140,6 +2311,19 @@ impl Renderer {
         drop(mapped);
         readback.unmap();
         out
+    }
+}
+
+/// `true` si `mesh` référence un import glTF skinné (Sprint 87) — c'est-à-dire dont
+/// `ImportedMesh::skeleton` est renseigné. Toujours `false` pour les primitives, qui ne
+/// sont jamais skinnées.
+fn is_skinned(scene: &Scene, mesh: MeshKind) -> bool {
+    match mesh {
+        MeshKind::Imported(i) => scene
+            .imported
+            .get(i as usize)
+            .is_some_and(|m| m.skeleton.is_some()),
+        _ => false,
     }
 }
 

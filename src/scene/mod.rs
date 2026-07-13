@@ -143,6 +143,48 @@ impl ImportedMesh {
             }
         }
     }
+
+    /// Combine `data.vertices` (position/normale/couleur/uv) et `vertex_skins`
+    /// (joints/poids) en un `SkinnedMeshData` prêt pour le GPU (Sprint 86-87). `None` si
+    /// le mesh n'a pas de squelette, ou si les deux tableaux ont désynchronisé (ne devrait
+    /// jamais arriver — les deux sont construits dans le même ordre par
+    /// `import::build_from`/`read_vertex_skins`, cf. Sprint 84 — mais un mesh statique
+    /// rendu avec des données incohérentes serait pire qu'un mesh simplement pas skinné).
+    pub fn skinned_mesh_data(&self) -> Option<crate::gfx::mesh::SkinnedMeshData> {
+        self.skeleton.as_ref()?;
+        if self.data.vertices.len() != self.vertex_skins.len() {
+            log::error!(
+                "{} : {} sommets mais {} poids de peau — squelette ignoré",
+                self.path,
+                self.data.vertices.len(),
+                self.vertex_skins.len()
+            );
+            return None;
+        }
+        let vertices = self
+            .data
+            .vertices
+            .iter()
+            .zip(&self.vertex_skins)
+            .map(|(v, s)| crate::gfx::mesh::SkinnedVertex {
+                position: v.position,
+                normal: v.normal,
+                color: v.color,
+                uv: v.uv,
+                joints: [
+                    s.joints[0] as u32,
+                    s.joints[1] as u32,
+                    s.joints[2] as u32,
+                    s.joints[3] as u32,
+                ],
+                weights: s.weights,
+            })
+            .collect();
+        Some(crate::gfx::mesh::SkinnedMeshData {
+            vertices,
+            indices: self.data.indices.clone(),
+        })
+    }
 }
 
 /// Composant optionnel : son associé à un `SceneObject` (clip, autoplay, spatialisation).
@@ -538,6 +580,34 @@ pub struct SceneObject {
     /// > 0 ⇒ pièce **bonus** (score continu), hors objectif de victoire.
     #[serde(default)]
     pub respawn_delay: f32,
+    /// Animation squelettale (Sprint 87) : `None` pour la grande majorité des objets —
+    /// seuls les meshes importés skinnés (`ImportedMesh::skeleton` renseigné) en ont un
+    /// usage réel ; sans effet sur un mesh statique (aucun joint à animer).
+    #[serde(default)]
+    pub animation: Option<AnimationState>,
+}
+
+/// Composant optionnel : lecture d'un clip d'animation squelettale (Sprint 87). `None` =
+/// pose de liaison figée (mesh skinné mais immobile) — même logique que `Controller`/
+/// `Combat` : la plupart des objets, même skinnés, n'ont pas forcément besoin d'un clip
+/// qui tourne (ex. un décor posé en pose figée).
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct AnimationState {
+    /// Nom du clip à jouer (doit correspondre à un `Clip::name` de
+    /// `ImportedMesh::clips`) ; vide ou introuvable ⇒ pose de liaison.
+    #[serde(default)]
+    pub clip: String,
+    /// Position de lecture (secondes), rebouclée automatiquement par `Clip::sample_joint`.
+    /// Avance de `dt` à chaque pas de simulation fixe en Play (cf. `AppState::sim_step`).
+    #[serde(default)]
+    pub time: f32,
+    /// Multiplicateur de vitesse de lecture (1.0 = normal, 0 = figé sur `time` courant).
+    #[serde(default = "default_anim_speed")]
+    pub speed: f32,
+}
+
+fn default_anim_speed() -> f32 {
+    1.0
 }
 
 fn default_true() -> bool {
@@ -656,6 +726,7 @@ impl Default for SceneObject {
             visible: true,
             deadly: false,
             respawn_delay: 0.0,
+            animation: None,
         }
     }
 }
@@ -2953,6 +3024,77 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 mod tests {
     use super::*;
 
+    /// Intégration bout en bout (Sprint 87) : un `SceneObject.animation` fait bouger un
+    /// mesh skinné à travers `Renderer::render_scene_headless`, pas seulement les briques
+    /// isolées (déjà testées ailleurs : `Clip::sample_joint`, `ImportedMesh::load_skinning`,
+    /// `skinned_mesh_data`, le pipeline GPU via `tests/golden_skinning.rs`). Sauté (pas en
+    /// échec) sans GPU headless — même raison que `tests/golden_render.rs` (CI Linux sans
+    /// GPU) : cf. Sprint 80.
+    #[test]
+    fn scene_object_animation_moves_a_skinned_mesh_through_the_full_render_path() {
+        let bytes = import::tests::animated_skinned_glb();
+        let path = import::tests::write_temp_glb(&bytes, "scene_object_animation_integration");
+
+        let render_at = |time: f32| -> Option<Vec<u8>> {
+            let mut renderer =
+                match pollster::block_on(crate::gfx::renderer::Renderer::new_headless(64, 64)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!(
+                            "scene_object_animation_integration : pas de GPU headless ({e}) \
+                             — test sauté."
+                        );
+                        return None;
+                    }
+                };
+            let mut app = crate::app::AppState::default();
+            app.scene.light.ambient = 0.4;
+            let (data, aabb_min, aabb_max) =
+                import::load_gltf(path.to_str().unwrap()).expect("glTF de test valide");
+            let mut imported = ImportedMesh {
+                path: path.to_str().unwrap().to_string(),
+                data,
+                aabb_min,
+                aabb_max,
+                ..Default::default()
+            };
+            imported.load_skinning();
+            let clip_name = imported.clips[0].name.clone();
+            app.scene.imported.push(imported);
+            app.scene.objects.push(SceneObject {
+                mesh: MeshKind::Imported(0),
+                transform: Transform::default(),
+                color: [0.9, 0.5, 0.2],
+                animation: Some(AnimationState {
+                    clip: clip_name,
+                    time,
+                    speed: 1.0,
+                }),
+                ..Default::default()
+            });
+            Some(renderer.render_scene_headless(&mut app, 64, 64))
+        };
+
+        let (Some(at_0), Some(at_1)) = (render_at(0.0), render_at(1.0)) else {
+            return; // pas de GPU : rien à comparer (message déjà expliqué ci-dessus)
+        };
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(at_0.len(), at_1.len());
+        let differing = at_0
+            .iter()
+            .zip(&at_1)
+            .filter(|(a, b)| a.abs_diff(**b) > 8)
+            .count();
+        assert!(
+            differing > 0,
+            "l'image à t=0 et t=1 est identique : l'animation du joint (translation \
+             linéaire testée séparément dans import::tests) ne semble pas atteindre le \
+             rendu — la chaîne SceneObject → prepare_skinned_draws → shader est cassée \
+             quelque part"
+        );
+    }
+
     #[test]
     fn imported_mesh_load_skinning_populates_skeleton_clips_and_vertex_skins() {
         // Réutilise la fixture .glb du Sprint 84 (`import::tests`) plutôt que d'en
@@ -2997,6 +3139,49 @@ mod tests {
         assert!(m.skeleton.is_none());
         assert!(m.clips.is_empty());
         assert!(m.vertex_skins.is_empty());
+    }
+
+    #[test]
+    fn skinned_mesh_data_combines_geometry_and_skin_weights() {
+        let bytes = import::tests::skinned_triangle_glb();
+        let path = import::tests::write_temp_glb(&bytes, "scene_skinned_mesh_data");
+        let (data, aabb_min, aabb_max) = import::load_gltf(path.to_str().unwrap()).unwrap();
+        let mut m = ImportedMesh {
+            path: path.to_str().unwrap().to_string(),
+            data,
+            aabb_min,
+            aabb_max,
+            ..Default::default()
+        };
+        m.load_skinning();
+        let _ = std::fs::remove_file(&path);
+
+        let skinned = m.skinned_mesh_data().expect("mesh skinné : Some attendu");
+        assert_eq!(skinned.vertices.len(), 3);
+        assert_eq!(skinned.indices, m.data.indices);
+        // Sommet 2 de la fixture (cf. Sprint 84) : joints [0,1,0,0], poids [0.5,0.5,0,0].
+        assert_eq!(skinned.vertices[2].joints, [0, 1, 0, 0]);
+        assert_eq!(skinned.vertices[2].weights, [0.5, 0.5, 0.0, 0.0]);
+        // Géométrie transportée telle quelle depuis `data.vertices`.
+        assert_eq!(skinned.vertices[0].position, m.data.vertices[0].position);
+    }
+
+    #[test]
+    fn skinned_mesh_data_is_none_for_a_static_mesh() {
+        let bytes = import::tests::unskinned_triangle_glb();
+        let path = import::tests::write_temp_glb(&bytes, "scene_skinned_mesh_data_static");
+        let (data, aabb_min, aabb_max) = import::load_gltf(path.to_str().unwrap()).unwrap();
+        let mut m = ImportedMesh {
+            path: path.to_str().unwrap().to_string(),
+            data,
+            aabb_min,
+            aabb_max,
+            ..Default::default()
+        };
+        m.load_skinning();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(m.skinned_mesh_data().is_none());
     }
 
     #[test]

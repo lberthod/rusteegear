@@ -2414,6 +2414,14 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
+        // Avance la lecture des clips d'animation squelettale (Sprint 87) : indépendant
+        // des scripts/tap actions ci-dessous — un objet skinné anime, script ou pas.
+        // Le bouclage lui-même vit dans `Clip::sample_joint` (Sprint 85), pas ici.
+        for obj in self.scene.objects.iter_mut() {
+            if let Some(anim) = obj.animation.as_mut() {
+                anim.time += dt * anim.speed;
+            }
+        }
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
         // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
         // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les
@@ -3747,6 +3755,36 @@ mod tests {
             "sans nouvelle demande, le temps ne doit plus avancer : time={}",
             app.time
         );
+    }
+
+    #[test]
+    fn sim_step_advances_animation_time_scaled_by_speed() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            animation: Some(crate::scene::AnimationState {
+                clip: "Run".into(),
+                time: 0.0,
+                speed: 2.0,
+            }),
+            ..Default::default()
+        });
+        app.sim_step(0.1);
+        let anim = app.scene.objects[0].animation.as_ref().unwrap();
+        assert!(
+            (anim.time - 0.2).abs() < 1e-6,
+            "0.1s à vitesse 2x doit avancer time de 0.2s, obtenu {}",
+            anim.time
+        );
+    }
+
+    #[test]
+    fn sim_step_leaves_objects_without_animation_untouched() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject::default());
+        app.sim_step(0.1);
+        assert!(app.scene.objects[0].animation.is_none());
     }
 
     #[test]

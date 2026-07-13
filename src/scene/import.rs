@@ -795,7 +795,7 @@ pub(crate) mod tests {
     /// joint 0, keyframes t=0→(0,0,0), t=1→(10,0,0), t=2→(10,0,0) ; scale (step) sur le
     /// joint 1, keyframes t=0→(1,1,1), t=1→(2,2,2). Assez pour exercer interpolation
     /// linéaire, palier (step), bouclage et durée multi-canaux dans un seul clip.
-    fn animated_skinned_glb() -> Vec<u8> {
+    pub(crate) fn animated_skinned_glb() -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
             for c in p {
