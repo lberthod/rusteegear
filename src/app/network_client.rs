@@ -29,6 +29,12 @@ pub struct RemotePlayer {
     // exclure les fantômes de l'interpolation de rendu locale.
     pub(super) scene_index: usize,
     interp: crate::net::interpolation::RemoteEntity,
+    /// Dernière vie connue (0..1, cf. `app::health`, GAMEDESIGN_EN_LIGNE.md
+    /// §3.1/§3.4) : lue telle quelle du dernier `Snapshot` reçu, **pas**
+    /// interpolée comme la position (une vie n'a pas besoin d'être lissée
+    /// visuellement, contrairement à un mouvement) — `None` tant qu'aucun
+    /// snapshot ne l'a renseignée.
+    pub health: Option<f32>,
 }
 
 /// Fraction de l'écart comblée à chaque appel de `apply_local_network_position`
@@ -152,6 +158,7 @@ impl AppState {
         }
         self.remote_players.clear();
         self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
+        self.net_local_health = None;
         self.net_local_history.clear();
         self.net_last_input_sent = None;
         // Plus de snapshots à venir : oublie les projectiles serveur et masque le
@@ -164,6 +171,22 @@ impl AppState {
     /// `true` si une connexion au serveur est active.
     pub fn is_connected(&self) -> bool {
         self.net_client.is_some()
+    }
+
+    /// Liste des joueurs de la partie en ligne pour le HUD (GAMEDESIGN_EN_LIGNE.md
+    /// §3.4 — identité et vie des autres joueurs affichées) : `(nom, vie 0..1 ou
+    /// `None` avant le premier snapshot, soi-même ?)`. Vide si non connecté.
+    pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, bool)> {
+        if !self.is_connected() {
+            return Vec::new();
+        }
+        let mut roster = vec![("Vous".to_string(), self.net_local_health, true)];
+        roster.extend(
+            self.remote_players
+                .values()
+                .map(|rp| (rp.name.clone(), rp.health, false)),
+        );
+        roster
     }
 
     /// Appelé une fois par frame depuis `advance_play` : envoie l'input local,
@@ -420,11 +443,13 @@ impl AppState {
                     // joueurs, appliqué à `player_index` plutôt qu'à un
                     // fantôme dans `poll_network`.
                     if Some(pid) == self.net_player_id {
+                        self.net_local_health = e.health;
                         self.net_local_interp.push(e, now);
                         continue;
                     }
                     let default_name = format!("Joueur {pid}");
                     let rp = self.ensure_remote_player(pid, &default_name);
+                    rp.health = e.health;
                     rp.interp.push(e, now);
                 }
             }
@@ -439,6 +464,16 @@ impl AppState {
                 }
                 self.attack_flash = 1.0;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
+            }
+            // Un joueur réseau vient de tomber à 0 PV (GAMEDESIGN_EN_LIGNE.md
+            // §3.1) : réagit seulement si c'est **nous** (son) — la disparition
+            // d'un allié est déjà visible (son fantôme se masque, cf. le
+            // `Snapshot` suivant), pas la peine de sonoriser la mort de chacun.
+            ServerMsg::Event(crate::net::protocol::GameEvent::PlayerDown { player_id }) => {
+                if Some(player_id) == self.net_player_id {
+                    self.damage_flash = 1.0;
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+                }
             }
             ServerMsg::Event(_) => {}
         }
@@ -477,6 +512,7 @@ impl AppState {
                     name: name.to_string(),
                     scene_index,
                     interp: crate::net::interpolation::RemoteEntity::default(),
+                    health: None,
                 },
             );
         }
@@ -531,6 +567,8 @@ fn network_input_msg(
         ctrl.is_some_and(|c| !c.attack_button.is_empty() && inp.buttons.contains(&c.attack_button));
     let touch_fire =
         ctrl.is_some_and(|c| !c.fire_button.is_empty() && inp.buttons.contains(&c.fire_button));
+    let touch_heal =
+        ctrl.is_some_and(|c| !c.heal_button.is_empty() && inp.buttons.contains(&c.heal_button));
     crate::net::protocol::ClientMsg::Input {
         move_x: mx,
         move_y: my,
@@ -546,6 +584,9 @@ fn network_input_msg(
         // (cf. `app::fireball`), ce client ne fait qu'exprimer l'intention.
         fire: inp.fire || touch_fire,
         weapon,
+        // Soin coopératif (cf. `app::health`) : touche clavier (H) ou bouton
+        // tactile nommé (`Controller::heal_button`) — résolu côté serveur.
+        heal: inp.heal || touch_heal,
     }
 }
 
@@ -820,6 +861,10 @@ impl AppState {
         false
     }
 
+    pub fn multiplayer_roster(&self) -> Vec<(String, Option<f32>, bool)> {
+        Vec::new()
+    }
+
     pub(super) fn poll_network(&mut self) {}
 
     pub(super) fn apply_local_network_position(&mut self) {}
@@ -909,6 +954,7 @@ mod tests {
                     jump,
                     fire,
                     weapon,
+                    heal,
                 } => {
                     server_app.set_network_input(
                         id,
@@ -920,6 +966,7 @@ mod tests {
                             jump,
                             fire,
                             weapon,
+                            heal,
                         },
                     );
                 }

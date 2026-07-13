@@ -290,6 +290,8 @@ impl ApplicationHandler for App {
                         // Boule de feu (attaque à distance, cf. `app::fireball`) :
                         // voisine de J (Attaque) pour garder les deux sous la main.
                         KeyCode::KeyK => inp.fire = pressed,
+                        // Soin coopératif (cf. `app::health`) : voisine de J/K.
+                        KeyCode::KeyH => inp.heal = pressed,
                         _ => {}
                     }
                     if is_move_key {

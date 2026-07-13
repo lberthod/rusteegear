@@ -5,6 +5,7 @@ pub mod ai;
 pub mod build_config;
 mod combat;
 mod fireball;
+mod health;
 pub mod input;
 pub mod multiplayer;
 pub mod network_client;
@@ -117,6 +118,10 @@ pub struct PlayerInput {
     /// Tir de boule de feu clavier (K) maintenu enfoncé — cf. `app::fireball` ;
     /// le pendant tactile est le bouton nommé `Controller::fire_button`.
     pub fire: bool,
+    /// Soin clavier (H) maintenu enfoncé — cf. `app::health` ; le pendant
+    /// tactile est le bouton nommé `Controller::heal_button`. Sans effet en
+    /// solo (pas d'allié) : n'a d'effet réel qu'en ligne, résolu côté serveur.
+    pub heal: bool,
 }
 
 impl PlayerInput {
@@ -160,6 +165,9 @@ pub struct AppState {
     /// ni le pas fixe lui-même (`FIXED_DT` reste 1/60 s : seul le nombre de pas exécutés
     /// par frame change). Utile pour déboguer la physique et le réseau au ralenti.
     pub time_scale: f32,
+    /// Pas unique demandé pendant la pause (Sprint 81, cf. `request_step`) : consommé
+    /// (remis à `false`) au tout début du prochain `advance_play`.
+    step_requested: bool,
     /// Poses (position, rotation, échelle) de tous les objets après l'**avant-dernier**
     /// pas de simulation à pas fixe. Couplé à `sim_curr_poses` pour l'interpolation de
     /// rendu (cf. `advance_play`) : le rendu affiche un mélange des deux pondéré par
@@ -245,6 +253,11 @@ pub struct AppState {
     /// Temps de recharge (s) restant avant la prochaine attaque possible de
     /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`, Sprint 60).
     network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Vie individualisée de chaque joueur réseau (0..1, cf. `app::health`,
+    /// GAMEDESIGN_EN_LIGNE.md §3.1) : remplace le champ scalaire unique
+    /// (`hud_health`, pensé pour un seul joueur local) côté multijoueur — un
+    /// joueur peut désormais mourir sans que la manche entière échoue pour tous.
+    network_health: HashMap<crate::net::protocol::PlayerId, f32>,
     /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
     /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
     /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
@@ -304,6 +317,13 @@ pub struct AppState {
     /// comportement « sans prédiction » avant correction).
     #[cfg(not(target_os = "ios"))]
     net_local_interp: crate::net::interpolation::RemoteEntity,
+    /// Dernière vie connue du joueur local (0..1, cf. `app::health`,
+    /// GAMEDESIGN_EN_LIGNE.md §3.1/§3.4) : lue telle quelle du dernier
+    /// `Snapshot` reçu pour notre propre `PlayerId` — même principe que
+    /// `RemotePlayer::health` pour les autres joueurs. `None` hors ligne ou
+    /// avant le premier snapshot.
+    #[cfg(not(target_os = "ios"))]
+    net_local_health: Option<f32>,
     /// Historique court (~1 s) des positions **prédites** du joueur local, une par
     /// frame (cf. `apply_local_network_position`). La position renvoyée par le
     /// serveur est en retard d'une latence aller-retour + un tick : la comparer à la
@@ -489,6 +509,7 @@ impl AppState {
             tapped_obj: None,
             sim_accumulator: 0.0,
             time_scale: 1.0,
+            step_requested: false,
             sim_prev_poses: Vec::new(),
             sim_curr_poses: Vec::new(),
             sim_render_poses: Vec::new(),
@@ -513,6 +534,7 @@ impl AppState {
             network_players: HashMap::new(),
             network_inputs: HashMap::new(),
             network_attack_cooldowns: HashMap::new(),
+            network_health: HashMap::new(),
             fireballs: Vec::new(),
             fireball_cooldowns: HashMap::new(),
             fireball_pool: Vec::new(),
@@ -527,6 +549,8 @@ impl AppState {
             remote_players: HashMap::new(),
             #[cfg(not(target_os = "ios"))]
             net_local_interp: crate::net::interpolation::RemoteEntity::default(),
+            #[cfg(not(target_os = "ios"))]
+            net_local_health: None,
             #[cfg(not(target_os = "ios"))]
             net_local_history: std::collections::VecDeque::new(),
             #[cfg(not(target_os = "ios"))]
@@ -1880,6 +1904,15 @@ impl AppState {
         Some(v.dot(w).atan2(v.dot(u)))
     }
 
+    /// Demande l'exécution d'exactement un pas fixe de simulation à la prochaine frame,
+    /// même en pause (Sprint 81 : bouton « ⏭ » de la toolbar). Sans effet si l'app n'est
+    /// pas en Play — la pause n'a alors aucun sens.
+    pub fn request_step(&mut self) {
+        if self.playing {
+            self.step_requested = true;
+        }
+    }
+
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
@@ -1998,8 +2031,12 @@ impl AppState {
         self.was_playing = self.playing;
 
         // En pause : on reste en mode Play (snapshot conservé) mais on gèle la
-        // simulation (ni scripts, ni physique, ni avance du temps).
-        if !self.playing || self.paused {
+        // simulation (ni scripts, ni physique, ni avance du temps) — sauf si un pas
+        // unique a été demandé (Sprint 81, cf. `request_step`) : dans ce cas on laisse
+        // passer exactement cette frame pour avancer d'un pas fixe, puis on regèle.
+        let step_once = self.paused && self.step_requested;
+        self.step_requested = false;
+        if !self.playing || (self.paused && !step_once) {
             self.sim_accumulator = 0.0;
             return;
         }
@@ -2011,7 +2048,15 @@ impl AppState {
         const MAX_SUBSTEPS: u32 = 5;
         // Time scale (Sprint 81) : n'affecte que le temps *consommé* par la simulation,
         // jamais `dt` lui-même (déjà utilisé ci-dessus pour le FPS affiché) ni `FIXED_DT`.
-        let sim_dt = dt * self.time_scale.max(0.0);
+        // Pas unique en pause : force exactement un pas, indépendamment de `time_scale`
+        // (`self.sim_accumulator` vaut 0 en entrant ici, cf. le early-return ci-dessus
+        // qui le remet à 0 à chaque frame gelée → accumulateur + FIXED_DT = exactement
+        // un pas dans `fixed_substeps`).
+        let sim_dt = if step_once {
+            FIXED_DT
+        } else {
+            dt * self.time_scale.max(0.0)
+        };
         // Jeu figé une fois gagné ou perdu (l'écran de fin attend « Rejouer »).
         if !self.lost && self.win_time.is_none() {
             let (steps, acc) = fixed_substeps(self.sim_accumulator, sim_dt, FIXED_DT, MAX_SUBSTEPS);
@@ -2079,6 +2124,12 @@ impl AppState {
             self.update_attack(dt);
             self.update_network_attacks(dt);
             self.update_fireballs(dt);
+            // Vie individualisée des joueurs réseau (contact monstre, régénération
+            // hors combat) puis soin coopératif — après les dégâts de ce tick, pour
+            // qu'un soin ne soit pas aussitôt annulé par un contact déjà résolu
+            // (cf. GAMEDESIGN_EN_LIGNE.md §3.1/§3.6).
+            self.update_network_health(dt);
+            self.update_network_heal(dt);
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
             self.respawn_queue.retain(|&(i, at)| {
@@ -2275,7 +2326,25 @@ impl AppState {
         }
 
         // 2. physique (écrase les poses des corps dynamiques)
-        let chase_target = self.player_position();
+        // Cibles de poursuite pour l'IA (`AiChaser`, cf. plus bas) : en solo, le
+        // seul joueur local ; en réseau, **chaque** joueur réseau **vivant**
+        // (GAMEDESIGN_EN_LIGNE.md §3.2 — avant ce correctif, un monstre ne
+        // poursuivait jamais que le premier joueur à avoir rejoint, `self.
+        // player_position()` désignant sur le serveur headless le premier objet
+        // visible piloté trouvé, donc le joueur 1, jamais le 2e+ quelle que soit
+        // sa proximité). `player_position()` reste utilisé tel quel en solo (pas
+        // de joueurs réseau) : aucun changement de comportement pour ce cas.
+        let candidate_targets: Vec<Vec3> = if self.network_players.is_empty() {
+            self.player_position().into_iter().collect()
+        } else {
+            self.network_players
+                .iter()
+                .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
+                .filter_map(|(_, &idx)| self.scene.objects.get(idx))
+                .filter(|o| o.visible)
+                .map(|o| o.transform.position)
+                .collect()
+        };
         if let Some(phys) = &mut self.physics {
             // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
             // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
@@ -2295,9 +2364,16 @@ impl AppState {
             // chacun a son propre `NetworkInput`, distinct de `self.input_state`
             // (qui ne pilote que l'objet « joueur local », clavier/tactile/gyro de
             // cette instance — ex. l'éditeur desktop, ou un client sans réseau).
+            // Un joueur vaincu (0 PV, GAMEDESIGN_EN_LIGNE.md §3.1) est exclu de
+            // cette table : `net_input` devient `None` pour son objet, qui
+            // retombe alors sur la branche locale ci-dessous (`inp.state`) — sans
+            // effet indésirable sur un serveur headless, dont l'entrée locale
+            // reste toujours neutre (aucun joueur ne pilote le serveur lui-même).
+            // Spectateur immobile jusqu'à la fin de la manche, comme voulu.
             let network_by_index: HashMap<usize, multiplayer::NetworkInput> = self
                 .network_players
                 .iter()
+                .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
                 .filter_map(|(id, &idx)| self.network_inputs.get(id).map(|inp| (idx, *inp)))
                 .collect();
             // Orientation du joueur local : calculée ici puis appliquée **après**
@@ -2406,7 +2482,7 @@ impl AppState {
             // Pilotage des « chasseurs » IA (cf. `AiChaser`) : direction directe vers la
             // position courante du joueur, recalculée chaque frame — une vraie poursuite
             // réactive (jeu local vs IA), pas une trajectoire fixe scriptée à l'avance.
-            if let Some(target) = chase_target {
+            if !candidate_targets.is_empty() {
                 for (idx, obj) in self.scene.objects.iter().enumerate() {
                     let Some(ai) = &obj.ai_chaser else { continue };
                     // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
@@ -2415,6 +2491,18 @@ impl AppState {
                     if !obj.visible {
                         continue;
                     }
+                    // Cible la plus proche parmi `candidate_targets` (GAMEDESIGN_EN_LIGNE.md
+                    // §3.2) : recalculée chaque frame, comme l'ancienne cible unique — un
+                    // monstre peut donc changer de proie s'il en approche une plus proche.
+                    let target = candidate_targets
+                        .iter()
+                        .copied()
+                        .min_by(|a, b| {
+                            let da = (*a - obj.transform.position).length_squared();
+                            let db = (*b - obj.transform.position).length_squared();
+                            da.total_cmp(&db)
+                        })
+                        .expect("candidate_targets vérifié non vide ci-dessus");
                     let to_target = target - obj.transform.position;
                     let dir = Vec3::new(to_target.x, 0.0, to_target.z);
                     let (vx, vz) = if dir.length_squared() > 1e-6 {
@@ -4071,6 +4159,90 @@ mod tests {
         assert!(
             dist1 < dist0 - 1.0,
             "le chasseur doit se rapprocher du joueur (dist0={dist0}, dist1={dist1})"
+        );
+    }
+
+    /// GAMEDESIGN_EN_LIGNE.md §3.2 (audit) : avant ce correctif, `chase_target`
+    /// était un point unique (`self.player_position()`) — sur un serveur
+    /// headless avec plusieurs joueurs réseau, cela désignait toujours le
+    /// premier joueur à avoir rejoint (le premier objet visible piloté trouvé
+    /// dans `scene.objects`), jamais le second même s'il était bien plus
+    /// proche. Un monstre doit désormais poursuivre le joueur réseau **vivant**
+    /// le plus proche, recalculé chaque frame.
+    #[test]
+    fn ai_chaser_pursues_the_nearest_network_player_not_just_the_first_joined() {
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(60.0, 1.0, 60.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let mut joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut chaser = crate::scene::SceneObject {
+            name: "Chasseur".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.5, -20.0)),
+            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            ..Default::default()
+        };
+        chaser.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, joueur, chaser],
+            ..Default::default()
+        };
+        app.playing = true;
+        app.hide_local_player_template();
+        let p1 = app.spawn_network_player(1).unwrap();
+        let p2 = app.spawn_network_player(2).unwrap();
+        let chaser_idx = 2; // sol=0, joueur(masqué)=1, chasseur=2, puis p1/p2 ajoutés ensuite.
+        // Repositionne explicitement les deux joueurs (plutôt que de dépendre
+        // de la géométrie de spawn de `spawn_network_player`, qui les place
+        // proches l'un de l'autre sans garantir lequel est le plus près du
+        // chasseur) : p1 loin de tout, p2 juste devant le chasseur.
+        app.scene.objects[p1].transform.position = Vec3::new(0.0, 1.0, 30.0);
+        app.scene.objects[p2].transform.position = Vec3::new(0.0, 1.0, -15.0);
+        // Reconstruit la physique après avoir déplacé les objets « à la main » :
+        // sans ça, les corps rigides (créés par `spawn_network_player` avec
+        // l'ancienne position) écraseraient ce repositionnement dès le premier
+        // pas de simulation (`Physics::step` recopie la pose du corps rigide
+        // dans `transform`, jamais l'inverse).
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        let dist_to_p2_before = (app.scene.objects[chaser_idx].transform.position
+            - app.scene.objects[p2].transform.position)
+            .length();
+
+        for _ in 0..60 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+
+        let chaser_pos = app.scene.objects[chaser_idx].transform.position;
+        let dist_to_p1 = (chaser_pos - app.scene.objects[p1].transform.position).length();
+        let dist_to_p2 = (chaser_pos - app.scene.objects[p2].transform.position).length();
+        assert!(
+            dist_to_p2 < dist_to_p2_before - 1.0,
+            "le chasseur doit se rapprocher du joueur réseau le plus proche (p2) : \
+             avant={dist_to_p2_before}, après={dist_to_p2}"
+        );
+        assert!(
+            dist_to_p2 < dist_to_p1,
+            "le chasseur doit finir plus proche de p2 (le plus proche au départ) que de \
+             p1 (le premier à avoir rejoint) : dist_p1={dist_to_p1}, dist_p2={dist_to_p2}"
         );
     }
 

@@ -178,7 +178,9 @@ impl AppState {
             .network_players
             .iter()
             .filter_map(|(id, &index)| self.network_inputs.get(id).map(|inp| (index, inp)))
-            .filter(|(index, inp)| inp.fire && !self.fireball_cooldowns.contains_key(index))
+            .filter(|(index, inp)| {
+                inp.fire && !self.fireball_cooldowns.contains_key(index) && self.is_alive_at(*index)
+            })
             .map(|(index, inp)| (index, inp.aim_yaw, clamp_weapon(inp.weapon)))
             .collect();
         for (index, yaw, weapon) in shooters {
@@ -488,6 +490,7 @@ mod tests {
             jump: false,
             fire: false,
             weapon: 0,
+            heal: false,
         }
     }
 
@@ -578,6 +581,37 @@ mod tests {
         // Et le snapshot diffusé doit exposer le projectile aux clients.
         let snap = app.network_snapshot(1);
         assert_eq!(snap.projectiles.len(), 1);
+    }
+
+    /// Sprint 80 (GAMEDESIGN_EN_LIGNE.md §3.1) : un joueur réseau vaincu (0 PV)
+    /// devient spectateur — son `fire: true` ne doit plus rien déclencher, même
+    /// si son objet est encore techniquement présent dans `scene.objects`.
+    #[test]
+    fn a_defeated_network_player_cannot_fire() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1).unwrap();
+        app.network_health.insert(1, 0.0);
+        // Un vrai mort est masqué (cf. `health::update_network_health`) : sans
+        // ça, la régénération passive (objet toujours visible, donc considéré
+        // « vivant mais blessé ») ramènerait sa vie au-dessus de 0 dès la
+        // frame suivante, invalidant le test.
+        app.scene.objects[index].visible = false;
+        app.set_network_input(
+            1,
+            NetworkInput {
+                fire: true,
+                ..net_input()
+            },
+        );
+
+        advance(&mut app, 5, 0.02);
+
+        assert_eq!(
+            app.fireballs.len(),
+            0,
+            "un joueur vaincu ne doit plus pouvoir tirer"
+        );
     }
 
     /// Sprint 79 (audit) : la direction du tir réseau vient de l'`aim_yaw` envoyé
@@ -784,7 +818,7 @@ mod tests {
     #[test]
     fn the_embedded_scene_ships_monsters_and_the_fire_button() {
         let scene = Scene::embedded_player();
-        for button in ["Feu", "Arme"] {
+        for button in ["Feu", "Arme", "Soin"] {
             assert!(
                 scene.mobile.buttons.iter().any(|b| b == button),
                 "l'overlay tactile (APK/aperçu desktop) doit proposer le bouton « {button} »"
@@ -798,15 +832,25 @@ mod tests {
         let ctrl = player.controller.as_ref().unwrap();
         assert_eq!(ctrl.fire_button, "Feu");
         assert_eq!(ctrl.weapon_button, "Arme");
-        let monsters = scene
+        assert_eq!(ctrl.heal_button, "Soin");
+        let monsters: Vec<_> = scene
             .objects
             .iter()
             .filter(|o| o.controller.is_none() && o.combat.as_ref().is_some_and(|c| c.attackable))
-            .count();
+            .collect();
         assert!(
-            monsters >= 4,
+            monsters.len() >= 4,
             "la carte multijoueur doit placer des monstres à abattre à distance \
-             (trouvés : {monsters})"
+             (trouvés : {})",
+            monsters.len()
+        );
+        // GAMEDESIGN_EN_LIGNE.md §3.2 : des monstres immobiles ne mettent jamais
+        // la vie individualisée (§3.1) à l'épreuve — ils doivent réellement
+        // poursuivre les joueurs, pas seulement encaisser des tirs à distance.
+        assert!(
+            monsters.iter().all(|o| o.ai_chaser.is_some()),
+            "les monstres de la carte multijoueur doivent poursuivre les joueurs \
+             (`ai_chaser`), pas rester immobiles"
         );
     }
 

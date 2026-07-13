@@ -253,6 +253,15 @@ scope, prises dès le départ :
   leur arme : couleur/taille fidèles sur tous les écrans) dans le `Snapshot`,
   et chaque mise à mort atteint tous les écrans (`GameEvent::Defeated` :
   son + flash immédiats).
+- **Vie individualisée, monstres qui poursuivent vraiment, soin coopératif**
+  (`src/app/health.rs`, Sprint 80 — voir [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md)) :
+  chaque joueur réseau a désormais sa propre vie (plus un champ unique par
+  salon) — un joueur peut mourir (spectateur, objet masqué) sans mettre fin
+  à la manche pour les autres, tant qu'il en reste un debout. Les monstres
+  poursuivent le joueur réseau vivant le plus proche (avant ce sprint, ils
+  ne visaient jamais que le premier arrivé). Touche **H** ou bouton tactile
+  **« Soin »** : soigne en continu l'allié blessé le plus proche à portée,
+  résolu côté serveur.
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 
@@ -311,12 +320,14 @@ le développement). Historique sprint par sprint :
 
 ### Limites connues (assumées, documentées dans le code)
 
-- La vie et les conditions de victoire/défaite restent celles du joueur
-  « gabarit » d'origine, pas encore individualisées par joueur réseau.
 - Pas de dégâts joueur-contre-joueur : la boule de feu traverse les autres
-  joueurs (conséquence directe de la vie non individualisée ci-dessus).
-- L'IA de poursuite vise toujours un seul point (le joueur local), pas le
-  joueur réseau le plus proche.
+  joueurs (la vie est individualisée depuis le Sprint 80, mais le PvP reste
+  un choix de design à part, cf. GAMEDESIGN_EN_LIGNE.md §3.7 — sur demande
+  seulement).
+- Pas de réanimation d'un allié à 0 PV : la mort est un statut de spectateur
+  permanent pour le reste de la manche (décision assumée, Sprint 80).
+- Pas de rôles/classes : tous les joueurs partagent le même profil (le soin
+  coopératif est universel, pas réservé à une classe « Soutien »).
 - Pas de multi-salons : un processus serveur = un seul salon pour l'instant.
 
 ---

@@ -197,6 +197,12 @@ pub struct Controller {
     /// `AppState::update_fireballs`) : un seul bouton suffit à l'écran tactile.
     #[serde(default)]
     pub weapon_button: String,
+    /// Nom du bouton tactile qui soigne l'allié blessé le plus proche à portée
+    /// (vide = pas de soin au tactile). Pendant tactile de la touche clavier
+    /// Soin (H) — cf. `app::health`, GAMEDESIGN_EN_LIGNE.md §3.6 : action
+    /// continue (pas d'appui unique), résolue et validée côté serveur.
+    #[serde(default)]
+    pub heal_button: String,
     /// Portée (mètres) de l'attaque, centrée sur la position de l'objet.
     #[serde(default = "default_attack_range")]
     pub attack_range: f32,
@@ -239,6 +245,7 @@ impl Default for Controller {
             attack_button: String::new(),
             fire_button: String::new(),
             weapon_button: String::new(),
+            heal_button: String::new(),
             attack_range: default_attack_range(),
             attack_cooldown: default_attack_cooldown(),
             attack_windup: default_attack_windup(),

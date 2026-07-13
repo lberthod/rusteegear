@@ -1,7 +1,8 @@
 //! Test fumée post-déploiement : rejoint le serveur réel (VPS par défaut, URL en
 //! argument sinon), vérifie que les snapshots se décodent (protocole aligné des
-//! deux côtés), que les monstres y figurent, et qu'un `fire: true` produit un
-//! projectile en vol côté serveur.
+//! deux côtés), que les monstres y figurent, qu'un `fire: true` produit un
+//! projectile en vol côté serveur, et que la vie individualisée par joueur
+//! (GAMEDESIGN_EN_LIGNE.md §3.1) est bien exposée dans le `Snapshot`.
 //!
 //! ```bash
 //! cargo run --example smoke_vps                    # VPS de production
@@ -37,6 +38,7 @@ fn main() {
                     jump: false,
                     fire: true,
                     weapon: 1,
+                    heal: false,
                 });
                 fired = true;
             }
@@ -50,6 +52,13 @@ fn main() {
                         monsters,
                         s.projectiles.len()
                     );
+                    if let Some(me) = s.entities.iter().find(|e| e.player_id.is_some()) {
+                        println!("Vie du premier joueur diffusée : {:?}", me.health);
+                        assert!(
+                            me.health.is_some(),
+                            "la vie individualisée d'un joueur doit être diffusée (Sprint 80)"
+                        );
+                    }
                     got_snapshot = true;
                 }
                 if fired && !s.projectiles.is_empty() {

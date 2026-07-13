@@ -133,6 +133,7 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
             jump,
             fire,
             weapon,
+            heal,
         } => {
             app.set_network_input(
                 id,
@@ -144,6 +145,7 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
                     jump,
                     fire,
                     weapon,
+                    heal,
                 },
             );
         }
@@ -362,7 +364,11 @@ fn main() {
             post_leaderboard(&firebase, &lobby, app.score());
             break;
         }
-        if app.is_lost() {
+        // `is_room_lost()` (pas `is_lost()`, pensé pour un joueur local unique) :
+        // en multijoueur, la défaite de salon n'arrive que si TOUS les joueurs
+        // réseau connus sont vaincus (GAMEDESIGN_EN_LIGNE.md §3.1) — un seul
+        // joueur qui meurt devient spectateur, la manche continue pour les autres.
+        if app.is_room_lost() {
             log::info!(
                 "Manche terminée : défaite, score final {} (en {:.1} s)",
                 app.score(),
@@ -437,6 +443,7 @@ mod tests {
             jump: false,
             fire: false,
             weapon: 0,
+            heal: false,
         });
         let (id, msg) = net
             .inbox

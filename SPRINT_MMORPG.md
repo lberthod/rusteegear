@@ -726,3 +726,68 @@ jamais relié à une UI).
   l'exposer. Prochaine étape naturelle si l'utilisateur veut aller plus loin :
   tester réellement deux instances de l'éditeur l'une contre l'autre (lui
   seul peut le faire, cet environnement n'a pas d'affichage).
+
+### Sprint 80 — Vie individualisée, IA multi-cibles, soin coopératif ✅ FAIT
+Traduction en code de [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md) §3.1/
+§3.2/§3.4/§3.6, dans l'ordre de priorité qu'il recommandait.
+
+**§3.1 — Vie individualisée (nouveau `src/app/health.rs`).**
+`AppState::network_health: HashMap<PlayerId, f32>` remplace, côté
+multijoueur, le champ `hud_health` scalaire (pensé pour un joueur local
+unique) : chaque joueur réseau a sa propre vie (0..1), drainée au contact
+d'un monstre `AiChaser` visible et régénérée passivement hors contact. Un
+joueur à 0 PV devient **spectateur** (objet masqué, mouvement/attaque/tir
+ignorés côté serveur) sans mettre fin à la manche pour les autres —
+`AppState::is_room_lost()` (défaite de *salon*, tous vaincus) remplace
+`is_lost()` dans `src/bin/server.rs` dès qu'un salon a des joueurs réseau ;
+`is_lost()` reste inchangé en solo, aucune régression. `EntityDelta::health`
+(prévu de longue date, jamais rempli) porte désormais la vie de chaque
+joueur ; `GameEvent::PlayerDown` prévient les clients d'une mort (son, une
+fois, pour soi-même seulement).
+
+**§3.2 — IA multi-cibles.** `chase_target` (point unique, `self.
+player_position()` — désignait toujours le premier joueur réseau à avoir
+rejoint sur un serveur headless) devient `candidate_targets: Vec<Vec3>` :
+en solo inchangé, en réseau chaque joueur **vivant** et visible. Chaque
+`AiChaser` recalcule sa cible la plus proche à chaque frame. Les 5 monstres
+de la carte embarquée portent désormais `ai_chaser` (ils poursuivent
+réellement, sinon la vie individualisée du §3.1 n'aurait aucun effet
+observable).
+
+**§3.6 — Soin coopératif.** Touche **H** ou bouton tactile **« Soin »**
+(`Controller::heal_button`, nouveau) : maintenu, soigne en continu l'allié
+vivant le plus proche et blessé à 2,5 m (0,2 PV/s), résolu et validé côté
+serveur (`update_network_heal`) — universel (pas de gate par rôle, §3.5 non
+traité ce sprint) et sans réanimation (mort = spectateur permanent pour la
+manche, décision assumée).
+
+**§3.4 — Vie/identité affichées : backend fait, HUD reporté.**
+`RemotePlayer::health`/`AppState::net_local_health` mémorisent la dernière
+vie reçue par joueur ; `AppState::multiplayer_roster()` expose `(nom, vie,
+soi-même ?)`. Le panneau HUD lui-même est **reporté** : une autre session
+travaillait en parallèle sur `src/editor/mod.rs`/`src/gfx/renderer.rs`
+(Sprint 81, `time_scale`) au moment de ce sprint — cf. l'incident ci-dessous.
+
+**Incident de session concurrente (géré, aucune perte).** Une autre session
+Claude Code éditait ce dépôt en parallèle. Deux ajouts à
+`src/net/protocol.rs` (`ClientMsg::Input::heal`, `GameEvent::PlayerDown`) ont
+été silencieusement écrasés une première fois (le fichier réécrit sans ces
+champs, alors que l'outil d'édition rapportait un succès) ; détecté en
+relisant le fichier avant l'étape suivante, refait et vérifié par `grep`
+immédiat après chaque édition sur ce fichier. Une collision plus visible
+(erreurs de compilation) est ensuite survenue sur `editor/mod.rs`/
+`renderer.rs` pendant que l'autre session y ajoutait `time_scale` — résolue
+en attendant que cette session atteigne un état stable plutôt que de
+continuer à enfiler des paramètres dans les mêmes signatures. Cf.
+`concurrent-sessions-hazard` (mémoire du projet).
+
+**Tests** : 10 nouveaux dans `health.rs` (contact, régénération, mort,
+entrées ignorées après la mort, salon perdu seulement si tous vaincus, soin
+en/hors portée, priorité au plus blessé), 2 dans `fireball.rs`/`mod.rs`
+(tir bloqué après la mort, poursuite du joueur réseau le plus proche) — 209
+tests au total, tous verts ; `cargo fmt`/`clippy --all-targets -D warnings`
+propres.
+**Fichiers** : `src/app/health.rs` (nouveau), `src/net/protocol.rs`,
+`src/app/mod.rs`, `src/app/multiplayer.rs`, `src/app/fireball.rs`,
+`src/app/network_client.rs`, `src/bin/server.rs`, `src/scene/mod.rs`,
+`src/lib.rs`, `assets/player_scene.json`, `examples/*.rs`.

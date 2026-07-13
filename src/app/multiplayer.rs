@@ -31,6 +31,8 @@ pub struct NetworkInput {
     /// Arme à distance sélectionnée (indice dans `fireball::RANGED_WEAPONS`,
     /// borné par `sanitize_network_input`).
     pub weapon: u8,
+    /// Soin d'un allié proche (cf. `app::health`) : résolu et validé côté serveur.
+    pub heal: bool,
 }
 
 /// Portée (m) de l'attaque réseau : un coup immédiat au contact, pas le
@@ -77,6 +79,7 @@ fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
         // Borné à la table réelle dès la réception : le reste du code peut
         // indexer `RANGED_WEAPONS` sans re-vérifier.
         weapon: super::fireball::clamp_weapon(input.weapon) as u8,
+        heal: input.heal,
     }
 }
 
@@ -160,6 +163,11 @@ impl AppState {
         self.scene.objects.push(template);
         self.network_players.insert(id, index);
         self.network_inputs.insert(id, NetworkInput::default());
+        // Vie individualisée (GAMEDESIGN_EN_LIGNE.md §3.1) : chaque joueur
+        // réseau démarre à pleine vie, indépendamment des autres — cf.
+        // `app::health`.
+        self.network_health
+            .insert(id, crate::app::health::MAX_HEALTH);
         // Masque le gabarit d'origine : personne ne le pilote (ni un joueur
         // réseau — chacun a son propre clone — ni un joueur local, le serveur
         // étant headless). Sans ça, `player_index` continuerait de le désigner
@@ -185,6 +193,7 @@ impl AppState {
         }
         self.network_inputs.remove(&id);
         self.network_attack_cooldowns.remove(&id);
+        self.network_health.remove(&id);
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
@@ -204,6 +213,7 @@ impl AppState {
         self.network_players.clear();
         self.network_inputs.clear();
         self.network_attack_cooldowns.clear();
+        self.network_health.clear();
     }
 
     /// Enregistre l'input reçu d'un joueur réseau pour le tick courant : remplace
@@ -243,6 +253,10 @@ impl AppState {
     /// du temps de recharge (`NETWORK_ATTACK_COOLDOWN`), pas seulement affichée
     /// côté client : un client modifié qui renvoie `attack: true` à chaque tick
     /// ne peut pas frapper plus vite que le temps de recharge imposé ici.
+    ///
+    /// **Vaincu = pas d'attaque** (GAMEDESIGN_EN_LIGNE.md §3.1) : un joueur à
+    /// 0 PV est spectateur, son `Input` continue d'arriver (le client ne sait
+    /// pas qu'il doit arrêter d'envoyer) mais le serveur l'ignore.
     pub fn update_network_attacks(&mut self, dt: f32) {
         for cd in self.network_attack_cooldowns.values_mut() {
             *cd -= dt;
@@ -254,7 +268,8 @@ impl AppState {
                 .get(&id)
                 .is_none_or(|cd| *cd <= 0.0);
             let wants_attack = self.network_inputs.get(&id).is_some_and(|i| i.attack);
-            if !ready || !wants_attack {
+            let alive = self.network_health.get(&id).copied().unwrap_or(1.0) > 0.0;
+            if !ready || !wants_attack || !alive {
                 continue;
             }
             let Some(index) = self.network_players.get(&id).copied() else {
@@ -272,11 +287,10 @@ impl AppState {
     /// Construit un `Snapshot` de tous les joueurs réseau, pour diffusion via
     /// `ServerMsg::Snapshot` (cf. `net::server_loop::NetServer::broadcast`).
     ///
-    /// Limite connue (documentée, pas corrigée ici) : la santé par joueur n'est
-    /// pas encore individualisée — `hud_health` reste un champ unique côté
-    /// `AppState`, pensé pour un seul joueur local. `EntityDelta::health` est donc
-    /// `None` pour l'instant ; individualiser la vie par joueur réseau est un
-    /// prérequis pour un vrai combat joueur-contre-joueur (hors scope Sprint 55).
+    /// **Vie individualisée (GAMEDESIGN_EN_LIGNE.md §3.1)** : `health` porte
+    /// désormais la vie propre de chaque joueur (`app::health`), plus le champ
+    /// scalaire unique d'avant — chaque client voit la vie de chacun, pas
+    /// seulement la sienne (cf. `network_client::RemotePlayer::health`).
     pub fn network_snapshot(&self, tick: u32) -> Snapshot {
         let mut entities: Vec<EntityDelta> = self
             .network_players
@@ -290,7 +304,7 @@ impl AppState {
                     position: o.transform.position.to_array(),
                     yaw,
                     visible: o.visible,
-                    health: None,
+                    health: self.network_health.get(&id).copied(),
                 }
             })
             .collect();
@@ -478,6 +492,7 @@ mod tests {
                 jump: false,
                 fire: false,
                 weapon: 0,
+                heal: false,
             },
         );
         assert_eq!(app.network_player_count(), 0);
@@ -502,6 +517,7 @@ mod tests {
                 jump: false,
                 fire: false,
                 weapon: 0,
+                heal: false,
             },
         );
         app.playing = true;
@@ -583,6 +599,7 @@ mod tests {
             jump: true,
             fire: false,
             weapon: 0,
+            heal: false,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 0.0);
@@ -602,6 +619,7 @@ mod tests {
             jump: false,
             fire: false,
             weapon: 0,
+            heal: false,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 1.0);
@@ -625,6 +643,7 @@ mod tests {
                 jump: false,
                 fire: false,
                 weapon: 0,
+                heal: false,
             },
         );
         app.playing = true;
@@ -697,6 +716,7 @@ mod tests {
                 jump: false,
                 fire: false,
                 weapon: 0,
+                heal: false,
             },
         );
 

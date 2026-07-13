@@ -287,6 +287,7 @@ mod tests {
             jump: false,
             fire: false,
             weapon: 0,
+            heal: false,
         });
 
         let (id, msg) = server
@@ -304,6 +305,7 @@ mod tests {
                 jump: false,
                 fire: false,
                 weapon: 0,
+                heal: false,
             }
         );
     }

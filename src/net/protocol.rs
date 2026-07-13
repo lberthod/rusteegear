@@ -52,6 +52,10 @@ pub enum ClientMsg {
         /// RANGED_WEAPONS`, borné côté serveur) : envoyée à chaque tick comme le
         /// reste de l'état (pas un évènement « changement d'arme » à fiabiliser).
         weapon: u8,
+        /// Soin d'un allié proche (cf. `app::health`, GAMEDESIGN_EN_LIGNE.md §3.6) :
+        /// maintenu à portée d'un allié blessé, transfère des PV au fil du temps.
+        /// Résolu et validé **côté serveur** (portée, cible, débit), comme le reste.
+        heal: bool,
     },
     /// Déconnexion volontaire (quitte le salon proprement).
     Leave,
@@ -129,8 +133,11 @@ pub struct EntityDelta {
     /// monstre au sol, évite d'envoyer un quaternion complet.
     pub yaw: f32,
     pub visible: bool,
-    /// `Some` uniquement pour les entités qui portent une vie (cf. `Combat::hp`) ;
-    /// absent (donc `None`, pas sérialisé à 0 par défaut) pour un décor.
+    /// `Some` uniquement pour les entités qui portent une vie : les joueurs
+    /// réseau (0..1, cf. `app::health`, GAMEDESIGN_EN_LIGNE.md §3.1 — vie
+    /// individualisée par joueur, plus le champ scalaire unique d'avant) et les
+    /// monstres synchronisés (`Combat::hp`, non normalisé). Absent (`None`,
+    /// pas sérialisé à 0 par défaut) pour un décor sans vie.
     pub health: Option<f32>,
 }
 
@@ -138,10 +145,22 @@ pub struct EntityDelta {
 /// client peut y réagir une fois (son, flash HUD) sans avoir à comparer deux états.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GameEvent {
-    WaveStart { wave: u32 },
-    Defeated { index: u32 },
+    WaveStart {
+        wave: u32,
+    },
+    Defeated {
+        index: u32,
+    },
     Win,
     Lose,
+    /// Un joueur réseau vient de tomber à 0 PV (cf. `app::health`,
+    /// GAMEDESIGN_EN_LIGNE.md §3.1) : devient spectateur pour le reste de la
+    /// manche (objet masqué, entrées ignorées côté serveur). Diffusé une fois,
+    /// pas un état continu — chaque client y réagit une fois (son) plutôt que de
+    /// comparer deux snapshots.
+    PlayerDown {
+        player_id: PlayerId,
+    },
 }
 
 /// Erreur de (dé)sérialisation d'un message réseau.
@@ -202,6 +221,7 @@ mod tests {
             jump: false,
             fire: true,
             weapon: 2,
+            heal: true,
         });
     }
 
@@ -269,6 +289,7 @@ mod tests {
         round_trip(ServerMsg::Event(GameEvent::Defeated { index: 5 }));
         round_trip(ServerMsg::Event(GameEvent::Win));
         round_trip(ServerMsg::Event(GameEvent::Lose));
+        round_trip(ServerMsg::Event(GameEvent::PlayerDown { player_id: 7 }));
     }
 
     #[test]

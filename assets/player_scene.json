@@ -22,7 +22,8 @@
     "buttons": [
       "Saut",
       "Feu",
-      "Arme"
+      "Arme",
+      "Soin"
     ],
     "health_bar": false,
     "joystick": false,
@@ -101,7 +102,8 @@
         "jump_height": 1.5,
         "move_speed": 4.5,
         "fire_button": "Feu",
-        "weapon_button": "Arme"
+        "weapon_button": "Arme",
+        "heal_button": "Soin"
       },
       "deadly": false,
       "emissive": 0.0,
@@ -563,7 +565,9 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": null,
+      "ai_chaser": {
+        "speed": 2.2
+      },
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -615,7 +619,9 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": null,
+      "ai_chaser": {
+        "speed": 2.2
+      },
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -667,7 +673,9 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": null,
+      "ai_chaser": {
+        "speed": 2.2
+      },
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -719,7 +727,9 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": null,
+      "ai_chaser": {
+        "speed": 2.2
+      },
       "audio": null,
       "collider_shape": "Auto",
       "color": [
@@ -771,7 +781,9 @@
       "weapon_pickup": null
     },
     {
-      "ai_chaser": null,
+      "ai_chaser": {
+        "speed": 1.6
+      },
       "audio": null,
       "collider_shape": "Auto",
       "color": [
