@@ -94,6 +94,14 @@ const SHADOW_SIZE: u32 = 1024;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// Cible de rendu HDR (Sprint 90) : la scène (ciel, grille, objets, gizmos, debug
+/// drawing, skinning) est dessinée dans cette texture intermédiaire — pas directement
+/// dans le format d'affichage final — pour que les valeurs > 1 (émissifs, spéculaire
+/// fort) restent représentables au lieu d'être écrêtées avant même le tone mapping.
+/// `Rgba16Float` : suffisant pour la plage dynamique visée ici (contrairement à
+/// `Rgba32Float`, filtrable nativement sans extension GPU supplémentaire).
+const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// Skinning GPU (Sprint 86-87) : matrices par instance skinnée dans la palette de
 /// joints — généreux pour un rig réel (Mixamo : ~50-65 os).
 const JOINT_CAPACITY: usize = 128;
@@ -127,6 +135,14 @@ pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     /// Fond de ciel (Sprint 89), dessiné en premier dans la passe principale.
     sky_pipeline: wgpu::RenderPipeline,
+    /// Tone mapping HDR → LDR (Sprint 90), dessiné après la passe principale.
+    tonemap_pipeline: wgpu::RenderPipeline,
+    tonemap_layout: wgpu::BindGroupLayout,
+    tonemap_sampler: wgpu::Sampler,
+    /// Cible HDR (Sprint 90) de la passe principale en mode fenêtré — redimensionnée
+    /// dans `resize()`, comme `depth_view`. Les chemins headless/test créent la leur en
+    /// local (taille demandée par l'appelant, indépendante de la fenêtre).
+    hdr_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     model_layout: wgpu::BindGroupLayout,
 
@@ -467,7 +483,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: HDR_FORMAT,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -521,7 +537,7 @@ impl Renderer {
                 module: &sky_shader,
                 entry_point: Some("fs_sky"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: HDR_FORMAT,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -547,6 +563,83 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+
+        // --- Tone mapping (Sprint 90) : passe plein écran qui convertit `HDR_FORMAT`
+        // (rempli par `pipeline`/`sky_pipeline`/`grid_pipeline`/`gizmo_pipeline`/
+        // `skinned_pipeline` ci-dessus) vers `config.format`, le format d'affichage réel
+        // — c'est la seule pipeline de cette fonction qui cible encore `config.format`
+        // directement, exprès : elle est le dernier maillon avant présentation/lecture.
+        let tonemap_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tonemap_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/tonemap.wgsl").into()),
+        });
+        let tonemap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tonemap_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let tonemap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tonemap_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let tonemap_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("tonemap_pipeline_layout"),
+                bind_group_layouts: &[Some(&tonemap_layout)],
+                immediate_size: 0,
+            });
+        let tonemap_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tonemap_pipeline"),
+            layout: Some(&tonemap_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &tonemap_shader,
+                entry_point: Some("vs_tonemap"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &tonemap_shader,
+                entry_point: Some("fs_tonemap"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let hdr_view = create_hdr_view(&device, size.width, size.height);
 
         // --- Skinning GPU (Sprint 86) : palette de joints (groupe 4), pipeline vertex
         // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
@@ -617,7 +710,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: HDR_FORMAT,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -714,7 +807,7 @@ impl Renderer {
                 module: &gizmo_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: HDR_FORMAT,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -780,7 +873,7 @@ impl Renderer {
                 module: &gizmo_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: HDR_FORMAT,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -832,6 +925,10 @@ impl Renderer {
             size,
             pipeline,
             sky_pipeline,
+            tonemap_pipeline,
+            tonemap_layout,
+            tonemap_sampler,
+            hdr_view,
             depth_view,
             model_layout,
             camera_buf,
@@ -883,6 +980,7 @@ impl Renderer {
         self.config.height = new_size.height;
         surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, &self.config);
+        self.hdr_view = create_hdr_view(&self.device, new_size.width, new_size.height);
     }
 
     /// Recrée `debug_vbuf` en le doublant tant qu'il ne peut pas contenir `n` sommets
@@ -1078,6 +1176,8 @@ impl Renderer {
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        // Cible HDR (Sprint 90), locale à cet appel — cf. `hdr_view` de `render()`.
+        let hdr_view = create_hdr_view(&self.device, width, height);
 
         let mut encoder = self
             .device
@@ -1088,7 +1188,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("skinned_test_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &hdr_view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -1124,6 +1224,9 @@ impl Renderer {
             pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..gpu_mesh.num_indices, 0, 0..1);
         }
+
+        // Tone mapping (Sprint 90) : HDR → `view` (le format lu par `finish_and_read_rgba`).
+        self.tonemap(&mut encoder, &hdr_view, &view);
 
         self.finish_and_read_rgba(encoder, &target, width, height)
     }
@@ -1396,6 +1499,52 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.models_buf, 0, bytemuck::cast_slice(models));
         }
+    }
+
+    /// Passe de tone mapping (Sprint 90) : lit `hdr_source` (`HDR_FORMAT`, rempli par la
+    /// passe principale) et écrit le résultat tonemappé dans `output`, qui doit être au
+    /// format d'affichage final (`config.format`). Partagée par les trois chemins de
+    /// rendu (`render`, `render_scene_headless`, `render_skinned_test`) : un seul endroit
+    /// qui connaît la courbe ACES.
+    fn tonemap(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_source: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+    ) {
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tonemap_bg"),
+            layout: &self.tonemap_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr_source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.tonemap_sampler),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("tonemap_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.tonemap_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     pub fn render(&mut self, app: &mut AppState) {
@@ -1998,10 +2147,13 @@ impl Renderer {
         }
 
         {
+            // Sprint 90 : la passe principale dessine dans `hdr_view` (HDR_FORMAT),
+            // pas directement dans `view` — `self.tonemap()` fait le dernier maillon
+            // vers le format d'affichage, après cette passe.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.hdr_view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -2111,6 +2263,10 @@ impl Renderer {
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
+        // Tone mapping (Sprint 90) : HDR → `view` (format d'affichage réel), avant l'UI
+        // (l'UI egui reste en LDR, peinte par-dessus l'image déjà tonemappée).
+        self.tonemap(&mut encoder, &self.hdr_view, &view);
+
         // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
         let extra = match full_output {
             Some(output) => editor.paint(
@@ -2182,6 +2338,8 @@ impl Renderer {
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        // Cible HDR (Sprint 90), locale à cet appel — cf. `hdr_view` de `render()`.
+        let hdr_view = create_hdr_view(&self.device, width, height);
 
         // Debug drawing (Sprint 83) : même logique que `render()` (préparer + vider avant
         // les passes, dessiner après les meshes texturés dans la passe principale).
@@ -2267,11 +2425,13 @@ impl Renderer {
         }
 
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
+        // Dessine dans `hdr_view` (Sprint 90) ; `self.tonemap()` fait le dernier pas
+        // vers `view`, juste avant la lecture des pixels.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("headless_main_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &hdr_view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -2356,6 +2516,9 @@ impl Renderer {
             // Objets skinnés (Sprint 87) : cf. commentaire équivalent dans `render()`.
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
+
+        // Tone mapping (Sprint 90) : HDR → `view` (le format lu par `finish_and_read_rgba`).
+        self.tonemap(&mut encoder, &hdr_view, &view);
 
         self.finish_and_read_rgba(encoder, &target, width, height)
     }
@@ -2712,6 +2875,28 @@ fn create_depth_view(
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// Texture HDR intermédiaire (Sprint 90) : cible de la passe principale avant tone
+/// mapping. `width`/`height` explicites plutôt qu'une `SurfaceConfiguration` : réutilisée
+/// aussi bien par le chemin fenêtré (taille de la fenêtre) que par les rendus headless
+/// (taille demandée par l'appelant, indépendante de toute fenêtre).
+fn create_hdr_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("hdr_color"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: HDR_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     texture.create_view(&wgpu::TextureViewDescriptor::default())

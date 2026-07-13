@@ -1101,10 +1101,29 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/gfx/shaders/sky.wgsl` (nouveau), `src/gfx/shaders/main.wgsl`,
   `src/gfx/renderer.rs`, `src/scene/mod.rs`, `src/editor/mod.rs`, `tests/golden_render.rs`.
 
-#### Sprint 90 — Cible HDR + tone mapping ⬜
-- [ ] Rendu dans `Rgba16Float` + passe plein écran ACES (ou AgX).
-- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
-- **Livrable** : les émissifs saturent proprement au lieu d'écrêter.
+#### Sprint 90 — Cible HDR + tone mapping ✅ FAIT
+- [x] **Cible HDR** (`HDR_FORMAT = Rgba16Float`) : les 5 pipelines de la passe
+      principale (`pipeline`, `sky_pipeline`, `grid_pipeline`, `gizmo_pipeline`,
+      `skinned_pipeline`) dessinent désormais dans une texture intermédiaire
+      (`hdr_view`, persistante et redimensionnée dans `resize()` comme `depth_view`)
+      plutôt que directement dans le format d'affichage — sans ça, une valeur > 1
+      (émissif, spéculaire fort) serait écrêtée *avant* même d'atteindre un
+      éventuel tone mapping.
+- [x] **Tone mapping ACES** (`src/gfx/shaders/tonemap.wgsl`, nouveau) : passe plein
+      écran (même technique que `sky.wgsl`) qui échantillonne `hdr_view` et
+      applique l'approximation filmique de Narkowicz (2015) avant d'écrire dans le
+      format final — partagée par `render()`/`render_scene_headless()`/
+      `render_skinned_test()` via un unique helper `Renderer::tonemap()`.
+- [x] **Tests** : golden `overbright_emissive_keeps_its_hue_instead_of_clipping_to_white`
+      — un émissif dont le canal rouge dépasse largement 1.0 doit rester teinté
+      (rouge dominant, pas blanc pur), la preuve concrète du livrable annoncé.
+      Les 3 goldens existants (`primitives_lights`, `sky_and_fog`, `skinned_hinge_
+      bent90`) régénérés (`UPDATE_GOLDEN=1`) : la courbe ACES modifie le contraste
+      de **toute** l'image, y compris en dessous de 1.0, donc même les scènes sans
+      surexposition changent visuellement (vérifié à l'œil avant régénération —
+      toujours la même scène, juste un contraste différent, aucune régression).
+- **Fichiers** : `src/gfx/shaders/tonemap.wgsl` (nouveau), `src/gfx/renderer.rs`,
+  `tests/golden_render.rs`.
 
 #### Sprint 91 — Bloom + réglages ⬜
 - [ ] Chaîne de mips down/upsample ; intensité dans les paramètres et `build_config` (comme le MSAA).

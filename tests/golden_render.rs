@@ -228,3 +228,51 @@ fn sky_and_fog_settings_change_the_render() {
         ratio * 100.0
     );
 }
+
+/// Sprint 90 (HDR + tone mapping) : le livrable annoncé est que les émissifs
+/// « saturent proprement au lieu d'écrêter ». Sans passe HDR, un canal de couleur qui
+/// dépasse 1.0 (ici le rouge, `color.r * emissive = 1.0 * 4.0`) serait purement écrêté
+/// à blanc pur (255,255,255) — la teinte de l'objet disparaîtrait complètement,
+/// indiscernable d'une source blanche. Avec la courbe ACES, la teinte doit rester
+/// perceptible (le rouge doit rester le canal dominant) même très surexposée.
+fn scene_overbright_emissive() -> Scene {
+    let hot = SceneObject {
+        name: "Surexposé".into(),
+        mesh: MeshKind::Sphere,
+        transform: Transform::from_pos(glam::Vec3::ZERO),
+        color: [1.0, 0.4, 0.4],
+        emissive: 4.0,
+        ..Default::default()
+    };
+    Scene {
+        objects: vec![hot],
+        light: Light {
+            ambient: 0.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn overbright_emissive_keeps_its_hue_instead_of_clipping_to_white() {
+    let Some(pixels) = render_headless(scene_overbright_emissive()) else {
+        return;
+    };
+    // Pixel central : la caméra orbitale par défaut vise l'origine, où se trouve
+    // l'objet — son centre projette donc au centre de l'image.
+    let idx = ((HEIGHT / 2 * WIDTH + WIDTH / 2) * 4) as usize;
+    let (r, g, b) = (
+        pixels[idx] as i32,
+        pixels[idx + 1] as i32,
+        pixels[idx + 2] as i32,
+    );
+    assert!(
+        r > g + 5,
+        "le rouge doit rester le canal dominant malgré la surexposition (r={r}, g={g}, b={b})"
+    );
+    assert!(
+        g < 250 || b < 250,
+        "un émissif surexposé ne doit pas s'écrêter en blanc pur (r={r}, g={g}, b={b})"
+    );
+}
