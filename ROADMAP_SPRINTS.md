@@ -770,10 +770,21 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   mais 5 tests couvrant hiérarchie/noms/poses de liaison/poids, dont 2 qui exercent l'API
   publique de bout en bout (fichier temporaire réel, avec et sans skin).
 
-#### Sprint 85 — Échantillonnage de clips ⬜
+#### Sprint 85 — Échantillonnage de clips 🟢
 **Objectif** : jouer un clip (keyframes, interpolation, boucle) côté CPU.
-- **Fichiers** : `src/scene/import.rs`, `src/app/mod.rs`.
-- **Livrable** : un clip joue à la bonne vitesse (test sur timestamps), visible sur un cube parenté à un bone.
+- [x] `scene::import::load_gltf_clips(path)` + `Clip::sample_joint(joint, time)` : canaux
+      translation/rotation/scale, interpolation Linear (nlerp pour les rotations, conforme
+      à la spec glTF) ou Step ; bouclage automatique (`rem_euclid`, robuste aux temps
+      négatifs) ; `CubicSpline` ignoré (non géré) plutôt que mal interpolé en silence.
+- [ ] Intégration visuelle (cube parenté à un bone dans l'éditeur) — reportée : nécessite
+      la hiérarchie parent/enfant de transforms (item du noyau encore ◐, cf. audit 200
+      fonctionnalités) et touche `app/mod.rs`. Le CPU pur est testé et fonctionnel
+      indépendamment de cette intégration.
+- **Fichiers** : `src/scene/import.rs` seul (`app/mod.rs` pas encore touché — voir ci-dessus).
+- **Livrable** : vitesse d'interpolation vérifiée à des timestamps précis (test), bouclage
+  et palier (step) vérifiés. Un vrai bug de fixture de test (race condition sur un chemin
+  de fichier temporaire partagé entre threads de test) attrapé et corrigé avant qu'il ne
+  devienne un échec intermittent en CI.
 
 #### Sprint 86 — Skinning GPU ⬜
 **Objectif** : le vertex shader déforme le mesh.
