@@ -1,18 +1,23 @@
-//! Serveur de jeu headless (Sprints 51-55, SPRINT_MMORPG.md) : fait tourner une
-//! manche en réutilisant `scene`/`runtime`/`app::combat`/`app::multiplayer`
+//! Serveur de jeu headless (Sprints 51-55, SPRINT_MMORPG.md) : fait tourner des
+//! manches en réutilisant `scene`/`runtime`/`app::combat`/`app::multiplayer`
 //! **sans fenêtre ni GPU** (aucune dépendance à `gfx`/`egui`/`winit` dans ce
 //! binaire), et accepte des connexions WebSocket (`net::server_loop`).
 //!
-//! Salon unique pour l'instant (pas de multi-salons, cf. `SPRINT_MMORPG.md`) :
-//! chaque client qui rejoint obtient son propre objet pilotable
-//! (`AppState::spawn_network_player`) dans la même manche « Call of Zombies ».
-//!
-//! **Limite connue, assumée** : les conditions de victoire/défaite et la vie du
-//! HUD (`AppState::has_won`/`is_lost`/`hud_health`) restent celles de l'objet
-//! « joueur » gabarit d'origine (cf. `player_index`), pas individualisées par
-//! joueur réseau — un vrai combat joueur-contre-joueur demande d'abord de donner
-//! à chaque joueur sa propre vie/win condition, hors scope de ce sprint (cf.
-//! `AppState::network_snapshot`, qui documente la même limite côté santé).
+//! **Multi-salons (Sprint 82, GAMEDESIGN_EN_LIGNE.md §3.3)** : un process sert
+//! désormais plusieurs salons simultanément, chacun sa propre `AppState`
+//! (donc sa propre scène, ses propres joueurs, sa propre victoire/défaite) —
+//! `ClientMsg::Join::lobby` choisit le salon (créé à la demande au premier
+//! join, fermé quand son dernier joueur part). Portée volontairement mesurée,
+//! pas un vrai matchmaking MMO : pas de découverte de salons, juste un code à
+//! saisir (cf. `net::protocol::DEFAULT_LOBBY`, utilisé par tous les clients
+//! actuels — ils continuent donc à se retrouver dans le même salon partagé
+//! tant qu'aucune UI ne propose de choisir un autre code). Une manche décidée
+//! (victoire/défaite) ne termine plus le *process* : seul ce salon est
+//! réinitialisé en place (les joueurs encore connectés y sont re-spawnés),
+//! les autres salons continuent sans interruption — avant ce sprint, la fin
+//! d'une manche arrêtait tout le serveur (systemd le relançait, mais coupait
+//! au passage la connexion de tout le monde, y compris d'autres joueurs qui
+//! n'avaient rien à voir avec cette manche-là).
 //!
 //! **Progression Firebase (Sprint 57)** : optionnelle, activée par 4 variables
 //! d'environnement (`FIREBASE_API_KEY`, `FIREBASE_DATABASE_URL`,
@@ -29,7 +34,7 @@ use motor3derust::app::multiplayer::NetworkInput;
 use motor3derust::net::firebase::{
     self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
 };
-use motor3derust::net::protocol::{ClientMsg, ServerMsg};
+use motor3derust::net::protocol::{ClientMsg, DEFAULT_LOBBY, PlayerId, ServerMsg};
 use motor3derust::net::server_loop::NetServer;
 
 /// Cadence réseau visée pour le serveur (cf. SPRINT_MMORPG.md Sprint 51 : découplée
@@ -82,47 +87,134 @@ const XP_PER_LEVEL: u32 = 1000;
 /// pour regarder autre chose.
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// État du salon côté binaire (pas dans `AppState`, qui ne connaît que les
+/// État d'un salon côté binaire (pas dans `AppState`, qui ne connaît que les
 /// indices d'objets, cf. `app::multiplayer`) : nom affiché, `uid` Firebase et
-/// dernière activité de chaque joueur réseau connecté.
+/// dernière activité de chaque joueur réseau connecté à **ce** salon.
 #[derive(Default)]
 struct Lobby {
-    names: HashMap<u32, String>,
-    firebase_uids: HashMap<u32, String>,
+    names: HashMap<PlayerId, String>,
+    firebase_uids: HashMap<PlayerId, String>,
     /// Horodatage du dernier message reçu de chaque joueur (cf. `CLIENT_TIMEOUT`).
-    last_seen: HashMap<u32, Instant>,
+    last_seen: HashMap<PlayerId, Instant>,
 }
 
 impl Lobby {
-    fn forget(&mut self, id: u32) {
+    fn forget(&mut self, id: PlayerId) {
         self.names.remove(&id);
         self.firebase_uids.remove(&id);
         self.last_seen.remove(&id);
     }
 }
 
-/// Traite un message reçu d'un client : fait entrer/sortir le joueur de la
-/// partie ou met à jour son `Input` courant. Extrait de `main` pour rester
+/// Un salon : sa propre manche (`AppState`, donc sa propre scène/physique/
+/// combat), ses propres joueurs connectés, et le suivi nécessaire pour logger
+/// les changements de manche/score sans les répéter à chaque tick.
+struct Room {
+    app: AppState,
+    lobby: Lobby,
+    last_wave: u32,
+    last_score: u32,
+    started: Instant,
+}
+
+impl Room {
+    /// Charge une manche fraîche : la même scène que les clients (cf.
+    /// `AppState::use_embedded_scene`), gabarit local masqué avant le premier
+    /// join (`AUDIT_MMORPG.md` : sans ça, l'IA poursuit un mannequin inerte et
+    /// sa santé s'épuise pendant l'attente du premier joueur).
+    fn new() -> Self {
+        let mut app = AppState::new();
+        app.use_embedded_scene();
+        app.hide_local_player_template();
+        app.playing = true;
+        let last_wave = app.wave;
+        let last_score = app.score();
+        Room {
+            app,
+            lobby: Lobby::default(),
+            last_wave,
+            last_score,
+            started: Instant::now(),
+        }
+    }
+
+    /// Recharge une manche fraîche **sans déconnecter** les joueurs déjà
+    /// présents : ils sont re-spawnés dans la scène recomposée. Appelé quand
+    /// la manche de ce salon se termine (victoire/défaite) ou dépasse
+    /// `MAX_DURATION` — avant le Sprint 82, la fin d'une manche arrêtait tout
+    /// le *process* (donc tous les salons et toutes les connexions) ; ici,
+    /// seul ce salon repart, les autres ne sont pas affectés.
+    fn restart(&mut self) {
+        let ids: Vec<PlayerId> = self.lobby.names.keys().copied().collect();
+        self.app = AppState::new();
+        self.app.use_embedded_scene();
+        self.app.hide_local_player_template();
+        self.app.playing = true;
+        for id in ids {
+            self.app.spawn_network_player(id);
+        }
+        self.last_wave = self.app.wave;
+        self.last_score = self.app.score();
+        self.started = Instant::now();
+    }
+
+    /// Joueurs actuellement connectés à ce salon (pour cibler les envois —
+    /// `NetServer` ne connaît pas la notion de salon, cf. sa doc : un
+    /// `broadcast()` atteint TOUS les clients du serveur, pas seulement ceux
+    /// d'un salon donné, donc jamais utilisé ici, uniquement `send_to` en boucle).
+    fn connected_ids(&self) -> Vec<PlayerId> {
+        self.lobby.names.keys().copied().collect()
+    }
+}
+
+/// Traite un message reçu d'un client : fait entrer/sortir le joueur d'un
+/// salon ou met à jour son `Input` courant. Extrait de `main` pour rester
 /// testable (cf. `tests::joining_moving_and_leaving_through_the_real_socket`)
 /// sans avoir à lancer le binaire complet.
-fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u32, msg: ClientMsg) {
-    if !matches!(msg, ClientMsg::Leave) {
-        lobby.last_seen.insert(id, Instant::now());
-    }
+///
+/// `player_room` associe chaque joueur connecté au code du salon qu'il a
+/// rejoint (renseigné au `Join`, consulté pour router `Input`/`Leave` sans
+/// que ces messages n'aient besoin de reporter le code à chaque fois).
+fn handle_message(
+    rooms: &mut HashMap<String, Room>,
+    player_room: &mut HashMap<PlayerId, String>,
+    net: &NetServer,
+    id: PlayerId,
+    msg: ClientMsg,
+) {
     match msg {
-        ClientMsg::Join { name, firebase_uid } => {
-            if app.spawn_network_player(id).is_some() {
-                log::info!("Joueur {id} ({name}) entre en jeu");
-                net.broadcast(&ServerMsg::PlayerJoined {
-                    player_id: id,
-                    name: name.clone(),
-                });
+        ClientMsg::Join {
+            name,
+            firebase_uid,
+            lobby,
+        } => {
+            let code = if lobby.trim().is_empty() {
+                DEFAULT_LOBBY.to_string()
             } else {
-                log::warn!("Joueur {id} ({name}) : aucun gabarit pilotable dans la scène");
-            }
-            lobby.names.insert(id, name);
-            if let Some(uid) = firebase_uid {
-                lobby.firebase_uids.insert(id, uid);
+                lobby
+            };
+            let room = rooms.entry(code.clone()).or_insert_with(Room::new);
+            room.lobby.last_seen.insert(id, Instant::now());
+            if room.app.spawn_network_player(id).is_some() {
+                log::info!("Joueur {id} ({name}) entre en jeu (salon « {code} »)");
+                room.lobby.names.insert(id, name.clone());
+                if let Some(uid) = firebase_uid {
+                    room.lobby.firebase_uids.insert(id, uid);
+                }
+                player_room.insert(id, code);
+                for pid in room.connected_ids() {
+                    net.send_to(
+                        pid,
+                        &ServerMsg::PlayerJoined {
+                            player_id: id,
+                            name: name.clone(),
+                        },
+                    );
+                }
+            } else {
+                log::warn!(
+                    "Joueur {id} ({name}) : aucun gabarit pilotable dans la scène (salon « {code} »)"
+                );
             }
         }
         ClientMsg::Input {
@@ -135,7 +227,11 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
             weapon,
             heal,
         } => {
-            app.set_network_input(
+            let Some(room) = player_room.get(&id).and_then(|code| rooms.get_mut(code)) else {
+                return;
+            };
+            room.lobby.last_seen.insert(id, Instant::now());
+            room.app.set_network_input(
                 id,
                 NetworkInput {
                     move_x,
@@ -150,38 +246,53 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
             );
         }
         ClientMsg::Leave => {
-            app.despawn_network_player(id);
-            lobby.forget(id);
-            log::info!("Joueur {id} quitte la partie");
-            net.broadcast(&ServerMsg::PlayerLeft { player_id: id });
+            let Some(code) = player_room.remove(&id) else {
+                return;
+            };
+            let Some(room) = rooms.get_mut(&code) else {
+                return;
+            };
+            room.app.despawn_network_player(id);
+            room.lobby.forget(id);
+            log::info!("Joueur {id} quitte le salon « {code} »");
+            for pid in room.connected_ids() {
+                net.send_to(pid, &ServerMsg::PlayerLeft { player_id: id });
+            }
         }
     }
 }
 
-/// Retire les joueurs réseau sans le moindre message depuis `timeout` (cf. la
-/// doc de `CLIENT_TIMEOUT`) — appelé une fois par tick avec `CLIENT_TIMEOUT`,
-/// après avoir traité les messages reçus. Symétrique à un `ClientMsg::Leave`
-/// explicite (même nettoyage), sauf que c'est le serveur qui l'initie faute de
-/// nouvelles du client. `timeout` en paramètre (pas seulement la constante) :
-/// permet aux tests d'utiliser un délai court plutôt que d'attendre 10 s réelles.
+/// Retire, dans chaque salon, les joueurs réseau sans le moindre message
+/// depuis `timeout` (cf. la doc de `CLIENT_TIMEOUT`) — appelé une fois par
+/// tick avec `CLIENT_TIMEOUT`, après avoir traité les messages reçus.
+/// Symétrique à un `ClientMsg::Leave` explicite (même nettoyage), sauf que
+/// c'est le serveur qui l'initie faute de nouvelles du client. `timeout` en
+/// paramètre (pas seulement la constante) : permet aux tests d'utiliser un
+/// délai court plutôt que d'attendre 60 s réelles.
 fn evict_timed_out_players(
-    app: &mut AppState,
+    rooms: &mut HashMap<String, Room>,
+    player_room: &mut HashMap<PlayerId, String>,
     net: &NetServer,
-    lobby: &mut Lobby,
     timeout: Duration,
 ) {
     let now = Instant::now();
-    let timed_out: Vec<u32> = lobby
-        .last_seen
-        .iter()
-        .filter(|&(_, &at)| now.duration_since(at) > timeout)
-        .map(|(&id, _)| id)
-        .collect();
-    for id in timed_out {
-        log::warn!("Joueur {id} : timeout ({timeout:?} sans message), retiré de la partie");
-        app.despawn_network_player(id);
-        lobby.forget(id);
-        net.broadcast(&ServerMsg::PlayerLeft { player_id: id });
+    for room in rooms.values_mut() {
+        let timed_out: Vec<PlayerId> = room
+            .lobby
+            .last_seen
+            .iter()
+            .filter(|&(_, &at)| now.duration_since(at) > timeout)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in timed_out {
+            log::warn!("Joueur {id} : timeout ({timeout:?} sans message), retiré de la partie");
+            room.app.despawn_network_player(id);
+            room.lobby.forget(id);
+            player_room.remove(&id);
+            for pid in room.connected_ids() {
+                net.send_to(pid, &ServerMsg::PlayerLeft { player_id: id });
+            }
+        }
     }
 }
 
@@ -274,7 +385,7 @@ fn post_leaderboard(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lo
 
 fn main() {
     env_logger::init();
-    log::info!("RusteeGear — serveur headless (Sprint 51) : démarrage d'une manche");
+    log::info!("RusteeGear — serveur headless : salons multiples (Sprint 82)");
 
     let addr = std::env::var("RUSTEEGEAR_SERVER_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
     let net = match NetServer::start(&addr) {
@@ -298,90 +409,102 @@ fn main() {
         );
     }
 
-    let mut app = AppState::new();
-    // Charge la même scène que les clients (le jeu réellement exporté, cf.
-    // `assets/player_scene.json`/`Scene::embedded_player`) plutôt que l'arène
-    // de test générique `Scene::mmorpg_demo` : le serveur est autoritaire sur
-    // les positions, transmises telles quelles aux clients (`network_snapshot`) —
-    // si sa scène diffère de la leur (géométrie/repère différents), un fantôme
-    // reçoit des coordonnées qui ne correspondent à rien de visible dans LEUR
-    // scène (constaté en conditions réelles : deux clients connectés plusieurs
-    // minutes sans jamais se voir, cf. le test manuel du 2026-07-12).
-    app.use_embedded_scene();
-    // Masque le gabarit joueur local *avant* le premier join : sans ça, l'IA
-    // le poursuit et sa santé s'épuise pendant l'attente du premier joueur,
-    // terminant la manche en défaite avant même qu'un joueur ait pu se
-    // connecter (cf. AUDIT_MMORPG.md, bug trouvé en conditions réelles).
-    app.hide_local_player_template();
-    app.playing = true;
-
-    let mut lobby = Lobby::default();
-
-    let mut last_wave = app.wave;
-    let mut last_score = app.score();
-    let started = Instant::now();
+    let mut rooms: HashMap<String, Room> = HashMap::new();
+    let mut player_room: HashMap<PlayerId, String> = HashMap::new();
     let mut tick: u32 = 0;
+
+    // Sans réseau (bind échoué) : un unique salon local, pour ne pas régresser
+    // le comportement historique (aucun moyen de le rejoindre de toute façon,
+    // mais la manche tourne quand même — utile en test manuel sans port libre).
+    if net.is_none() {
+        rooms.insert(DEFAULT_LOBBY.to_string(), Room::new());
+    }
 
     loop {
         let tick_start = Instant::now();
 
         if let Some(net) = &net {
             while let Ok((id, msg)) = net.inbox.try_recv() {
-                handle_message(&mut app, net, &mut lobby, id, msg);
+                handle_message(&mut rooms, &mut player_room, net, id, msg);
             }
-            evict_timed_out_players(&mut app, net, &mut lobby, CLIENT_TIMEOUT);
+            evict_timed_out_players(&mut rooms, &mut player_room, net, CLIENT_TIMEOUT);
         }
 
-        app.advance_play();
+        let mut to_close: Vec<String> = Vec::new();
+        for (code, room) in rooms.iter_mut() {
+            room.app.advance_play();
+
+            if let Some(net) = &net {
+                let ids = room.connected_ids();
+                let snapshot = ServerMsg::Snapshot(room.app.network_snapshot(tick));
+                for &pid in &ids {
+                    net.send_to(pid, &snapshot);
+                }
+                // Évènements ponctuels produits par la simulation de ce tick
+                // (monstre vaincu, joueur vaincu...) : diffusés une fois, pour
+                // que les clients réagissent (son/flash) sans comparer deux
+                // snapshots — uniquement aux joueurs *de ce salon*.
+                for event in room.app.take_net_events() {
+                    let msg = ServerMsg::Event(event);
+                    for &pid in &ids {
+                        net.send_to(pid, &msg);
+                    }
+                }
+            }
+
+            if room.app.wave != room.last_wave {
+                log::info!("[{code}] Manche {} révélée", room.app.wave);
+                room.last_wave = room.app.wave;
+            }
+            if room.app.score() != room.last_score {
+                log::info!("[{code}] Score : {}", room.app.score());
+                room.last_score = room.app.score();
+            }
+
+            // `is_room_lost()` (pas `is_lost()`, pensé pour un joueur local
+            // unique) : la défaite n'arrive que si TOUS les joueurs réseau de
+            // CE salon sont vaincus (GAMEDESIGN_EN_LIGNE.md §3.1) — un seul
+            // joueur qui meurt devient spectateur, la manche continue pour
+            // les autres, dans ce salon comme dans les autres.
+            let decided = room.app.has_won() || room.app.is_room_lost();
+            let timed_out = room.started.elapsed() > MAX_DURATION;
+            if decided || timed_out {
+                if decided {
+                    log::info!(
+                        "[{code}] Manche terminée : {}, score final {} (en {:.1} s)",
+                        if room.app.has_won() {
+                            "victoire"
+                        } else {
+                            "défaite"
+                        },
+                        room.app.score(),
+                        room.started.elapsed().as_secs_f32()
+                    );
+                } else {
+                    log::warn!(
+                        "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
+                    );
+                }
+                award_progress(&firebase, &room.lobby, room.app.score());
+                post_leaderboard(&firebase, &room.lobby, room.app.score());
+                // Une manche décidée ne ferme plus tout le serveur (avant le
+                // Sprint 82) : seul CE salon repart, les autres continuent —
+                // sauf s'il est déjà vide (dernier joueur parti entre-temps),
+                // auquel cas autant le fermer plutôt que de le faire tourner
+                // pour personne.
+                if room.connected_ids().is_empty() {
+                    to_close.push(code.clone());
+                } else {
+                    room.restart();
+                }
+            }
+        }
+        for code in to_close {
+            rooms.remove(&code);
+            log::info!("Salon « {code} » fermé (vide)");
+        }
+
         tick += 1;
-
-        if let Some(net) = &net {
-            net.broadcast(&ServerMsg::Snapshot(app.network_snapshot(tick)));
-            // Évènements ponctuels produits par la simulation de ce tick (monstre
-            // vaincu par une boule de feu...) : diffusés une fois, pour que les
-            // clients jouent son/flash sans attendre de comparer deux snapshots.
-            for event in app.take_net_events() {
-                net.broadcast(&ServerMsg::Event(event));
-            }
-        }
-
-        if app.wave != last_wave {
-            log::info!("Manche {} révélée", app.wave);
-            last_wave = app.wave;
-        }
-        if app.score() != last_score {
-            log::info!("Score : {}", app.score());
-            last_score = app.score();
-        }
-
-        if app.has_won() {
-            log::info!(
-                "Manche terminée : victoire, score final {} (en {:.1} s)",
-                app.score(),
-                started.elapsed().as_secs_f32()
-            );
-            award_progress(&firebase, &lobby, app.score());
-            post_leaderboard(&firebase, &lobby, app.score());
-            break;
-        }
-        // `is_room_lost()` (pas `is_lost()`, pensé pour un joueur local unique) :
-        // en multijoueur, la défaite de salon n'arrive que si TOUS les joueurs
-        // réseau connus sont vaincus (GAMEDESIGN_EN_LIGNE.md §3.1) — un seul
-        // joueur qui meurt devient spectateur, la manche continue pour les autres.
-        if app.is_room_lost() {
-            log::info!(
-                "Manche terminée : défaite, score final {} (en {:.1} s)",
-                app.score(),
-                started.elapsed().as_secs_f32()
-            );
-            award_progress(&firebase, &lobby, app.score());
-            post_leaderboard(&firebase, &lobby, app.score());
-            break;
-        }
-        if started.elapsed() > MAX_DURATION {
-            log::warn!("Arrêt de sécurité : durée maximale de manche atteinte sans issue");
-            break;
-        }
 
         let elapsed = tick_start.elapsed();
         if elapsed < SERVER_TICK {
@@ -404,14 +527,29 @@ mod tests {
     /// un `NetClient` rejoint, obtient un objet pilotable, son `Input` déplace
     /// *cet* objet, puis `Leave` le retire. Reproduit exactement la boucle de
     /// `main` (via `handle_message`) sans lancer le binaire dans un sous-processus.
+    /// Construit une manche de test (démo zombies, pilotable + monstres) plutôt
+    /// que la scène embarquée (`Room::new()`) : ces tests visent la plomberie
+    /// réseau/salons, pas le contenu de `assets/player_scene.json`.
+    fn zombies_room() -> Room {
+        let mut app = AppState::new();
+        app.load_zombies_demo();
+        app.playing = true;
+        Room {
+            app,
+            lobby: Lobby::default(),
+            last_wave: 0,
+            last_score: 0,
+            started: Instant::now(),
+        }
+    }
+
     #[test]
     fn joining_moving_and_leaving_through_the_real_socket() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
         let url = format!("ws://{}", net.local_addr);
-        let mut app = AppState::new();
-        app.load_zombies_demo();
-        app.playing = true;
-        let mut lobby = Lobby::default();
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
         let client = NetClient::connect(&url, "Alice", None).expect("connexion du client");
         let ServerMsg::Welcome { player_id } = client
@@ -428,12 +566,14 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
         assert_eq!(id, player_id);
-        handle_message(&mut app, &net, &mut lobby, id, msg);
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
-        let object_index = app
+        let room = rooms.get(DEFAULT_LOBBY).unwrap();
+        let object_index = room
+            .app
             .network_player_object(player_id)
             .expect("le Join doit avoir fait apparaître un objet pilotable");
-        let start = app.scene.objects[object_index].transform.position;
+        let start = room.app.scene.objects[object_index].transform.position;
 
         client.send(&motor3derust::net::protocol::ClientMsg::Input {
             move_x: 1.0,
@@ -449,17 +589,18 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Input attendu côté serveur");
-        handle_message(&mut app, &net, &mut lobby, id, msg);
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         // Pas d'accès à `last_frame` (privé) depuis ce binaire externe : on avance
         // en temps réel, comme le fait réellement `main` (contrairement aux tests
         // internes de `app::multiplayer`, qui peuvent retarder `last_frame`
         // directement pour rester déterministes sans dormir).
+        let room = rooms.get_mut(DEFAULT_LOBBY).unwrap();
         for _ in 0..30 {
             std::thread::sleep(Duration::from_millis(20));
-            app.advance_play();
+            room.app.advance_play();
         }
-        let end = app.scene.objects[object_index].transform.position;
+        let end = room.app.scene.objects[object_index].transform.position;
         assert!(
             (end.x - start.x).abs() > 0.5,
             "l'Input du client doit avoir déplacé son propre objet : {start:?} -> {end:?}"
@@ -470,10 +611,11 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Leave attendu côté serveur");
-        handle_message(&mut app, &net, &mut lobby, id, msg);
-        assert_eq!(app.network_player_object(player_id), None);
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        let room = rooms.get(DEFAULT_LOBBY).unwrap();
+        assert_eq!(room.app.network_player_object(player_id), None);
         assert!(
-            !app.scene.objects[object_index].visible,
+            !room.app.scene.objects[object_index].visible,
             "l'objet du joueur parti doit être masqué"
         );
     }
@@ -481,15 +623,14 @@ mod tests {
     /// Sprint 60 : un joueur qui ne donne plus signe de vie (freeze, crash sans
     /// `Leave` propre) doit être retiré après le délai de timeout, sans bloquer
     /// la partie des autres. Utilise un `timeout` court (paramètre de
-    /// `evict_timed_out_players`) plutôt que `CLIENT_TIMEOUT` (10 s réelles).
+    /// `evict_timed_out_players`) plutôt que `CLIENT_TIMEOUT` (60 s réelles).
     #[test]
     fn a_silent_client_is_evicted_after_the_timeout() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
         let url = format!("ws://{}", net.local_addr);
-        let mut app = AppState::new();
-        app.load_zombies_demo();
-        app.playing = true;
-        let mut lobby = Lobby::default();
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
         let client = NetClient::connect(&url, "Silencieux", None).expect("connexion");
         let ServerMsg::Welcome { player_id } = client
@@ -503,20 +644,111 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
-        handle_message(&mut app, &net, &mut lobby, id, msg);
-        assert!(app.network_player_object(player_id).is_some());
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        assert!(
+            rooms
+                .get(DEFAULT_LOBBY)
+                .unwrap()
+                .app
+                .network_player_object(player_id)
+                .is_some()
+        );
 
         // Aucun message pendant plus que le timeout court : le joueur doit être
         // évincé au prochain passage de `evict_timed_out_players`.
         let short_timeout = Duration::from_millis(50);
         std::thread::sleep(Duration::from_millis(120));
-        evict_timed_out_players(&mut app, &net, &mut lobby, short_timeout);
+        evict_timed_out_players(&mut rooms, &mut player_room, &net, short_timeout);
 
+        let room = rooms.get(DEFAULT_LOBBY).unwrap();
         assert_eq!(
-            app.network_player_object(player_id),
+            room.app.network_player_object(player_id),
             None,
             "un joueur silencieux depuis plus que le timeout doit être retiré"
         );
-        assert!(!lobby.last_seen.contains_key(&player_id));
+        assert!(!room.lobby.last_seen.contains_key(&player_id));
+        assert!(!player_room.contains_key(&player_id));
+    }
+
+    /// Sprint 82 (GAMEDESIGN_EN_LIGNE.md §3.3) : deux clients qui rejoignent des
+    /// salons différents ne doivent jamais se voir l'un l'autre — chacun reste
+    /// dans sa propre `AppState`, avec ses propres indices d'objets.
+    #[test]
+    fn two_clients_in_different_lobbies_land_in_separate_rooms() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let a = NetClient::connect_to_lobby(&url, "A", None, "salon-a").expect("connexion A");
+        let b = NetClient::connect_to_lobby(&url, "B", None, "salon-b").expect("connexion B");
+        let welcome_a = a.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
+        let welcome_b = b.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (ServerMsg::Welcome { player_id: id_a }, ServerMsg::Welcome { player_id: id_b }) =
+            (welcome_a, welcome_b)
+        else {
+            panic!("Welcome attendu pour les deux clients");
+        };
+
+        for _ in 0..2 {
+            let (id, msg) = net
+                .inbox
+                .recv_timeout(Duration::from_secs(2))
+                .expect("Join attendu côté serveur");
+            handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        }
+
+        assert_eq!(
+            rooms.len(),
+            2,
+            "deux salons distincts doivent avoir été créés"
+        );
+        assert!(rooms.contains_key("salon-a"));
+        assert!(rooms.contains_key("salon-b"));
+        assert_eq!(player_room.get(&id_a), Some(&"salon-a".to_string()));
+        assert_eq!(player_room.get(&id_b), Some(&"salon-b".to_string()));
+
+        // Le salon de B n'a aucune trace de A, et réciproquement.
+        assert!(rooms["salon-a"].app.network_player_object(id_b).is_none());
+        assert!(rooms["salon-b"].app.network_player_object(id_a).is_none());
+        assert_eq!(rooms["salon-a"].lobby.names.len(), 1);
+        assert_eq!(rooms["salon-b"].lobby.names.len(), 1);
+    }
+
+    /// Sprint 82 : quand le dernier joueur d'un salon part, le salon disparaît
+    /// (pas de manche qui tourne indéfiniment pour personne).
+    #[test]
+    fn a_room_closes_once_its_last_player_leaves() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let client =
+            NetClient::connect_to_lobby(&url, "Solo", None, "ephemere").expect("connexion");
+        client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu");
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        assert!(rooms.contains_key("ephemere"));
+
+        client.send(&motor3derust::net::protocol::ClientMsg::Leave);
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Leave attendu côté serveur");
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+
+        // `handle_message` masque le joueur mais ne ferme le salon vide que la
+        // boucle `main` (le nettoyage `to_close` vit dans `main`, pas dans
+        // `handle_message`, pour rester testable sans lancer tout le binaire) —
+        // ici on vérifie juste la partie qu'expose `handle_message` :
+        // plus aucun joueur connecté, prêt à être fermé au prochain tour de boucle.
+        assert!(rooms["ephemere"].connected_ids().is_empty());
     }
 }

@@ -168,7 +168,7 @@ immobiles) — sans quoi la vie individualisée du §3.1 n'aurait aucun effet
 observable en jeu. Test de régression : un monstre loin de deux joueurs finit
 par se rapprocher du plus proche, pas de celui arrivé en premier.
 
-### 3.3 Multi-salons (lobby)
+### 3.3 Multi-salons (lobby) ✅ FAIT (Sprint 82)
 
 **Problème.** `src/bin/server.rs` sert un seul salon par process. Pour
 plusieurs groupes simultanés, il faut lancer plusieurs processus/ports
@@ -187,6 +187,29 @@ manuellement — pas de découverte, pas de matchmaking.
 - Pas de découverte de salons dans l'UI pour l'instant (fenêtre Multijoueur
   actuelle : taper un code, comme `mp_lobby_code` déjà présent pour le chat
   Firebase — le réutiliser tel quel pour le lobby réseau serait cohérent).
+
+**Réalisé (Sprint 82, `src/bin/server.rs::Room`)** : exactement la
+proposition ci-dessus — `HashMap<String, Room>` (`Room` = `AppState` + état de
+salon), `ClientMsg::Join::lobby` (nouveau champ, défaut `net::protocol::
+DEFAULT_LOBBY` côté `NetClient::connect` — tous les clients actuels
+continuent donc à se retrouver dans le même salon partagé, aucune régression
+de comportement). `NetServer::broadcast()` va à TOUS les clients du process
+(pas de notion de salon à ce niveau) — les envois par salon utilisent
+`send_to` en boucle sur les joueurs de ce salon seulement. **Amélioration au
+passage, pas prévue dans la proposition initiale** : une manche décidée
+(victoire/défaite) ne termine plus le *process* entier (avant ce sprint,
+`break` sortait de la boucle et arrêtait le binaire — systemd le relançait,
+mais coupait la connexion de TOUS les joueurs, y compris ceux d'autres
+salons sans rapport). Elle réinitialise désormais ce salon **en place**
+(les joueurs encore connectés y sont re-spawnés) ; un salon vide (dernier
+joueur parti) est fermé plutôt que de tourner pour personne. **Reporté** :
+la sélection du salon dans l'UI (fenêtre Multijoueur) — `connect_to_lobby`
+existe côté `NetClient`, mais `AppState::connect_to_server` (appelé par
+l'éditeur) continue de rejoindre `DEFAULT_LOBBY` ; brancher un champ de
+saisie dans `editor/mod.rs` est un prochain petit sprint, une fois ce
+fichier stable (cf. la même réserve que pour §3.4). 4 tests de régression
+(bout-en-bout via de vrais sockets) : isolation entre deux salons, fermeture
+d'un salon vidé.
 
 ### 3.4 Vie et identité des autres joueurs à l'écran 🟢 backend fait (Sprint 80), HUD reporté
 
@@ -334,8 +357,8 @@ ordre — chaque étape dépend de la précédente :
 4. **§3.5 Rôles légers** (non traité — mérite sa propre UI de sélection à la
    connexion, pas improvisée) ; ~~**§3.6 Soin coopératif**~~ ✅ FAIT (Sprint 80,
    en version universelle, sans gate de rôle — cf. sa section).
-5. **§3.3 Multi-salons** (indépendant des précédents, à faire quand plusieurs
-   groupes veulent jouer en même temps)
+5. ~~**§3.3 Multi-salons**~~ ✅ FAIT (Sprint 82, backend + protocole ; sélection
+   du salon dans l'UI reportée, même réserve que §3.4)
 6. **§3.8 Progression qui dure** (indépendant, complète la boucle de retour)
 7. **§3.7 PvP** — seulement si explicitement demandé
 
@@ -359,3 +382,19 @@ Deux ajouts à `src/net/protocol.rs` (champ `heal`, variante `PlayerDown`) ont
 été silencieusement écrasés une première fois et ont dû être refaits après
 vérification (`grep` sur le fichier avant chaque étape suivante). Aucune
 perte de travail au final, mais la prudence a ralenti ce sprint.
+
+### Sprint 82 — Bilan
+
+**Fait** : §3.3 (multi-salons). `src/bin/server.rs` a été volontairement
+choisi pour ce sprint — aucun risque de collision avec la session parallèle,
+qui travaillait sur `editor/mod.rs`/`gfx/renderer.rs`. `Room` (`AppState` +
+état de salon) remplace le singleton précédent ; `ClientMsg::Join` gagne un
+champ `lobby` (rétrocompatible : `NetClient::connect` envoie toujours
+`DEFAULT_LOBBY`, seul `connect_to_lobby`, nouveau, en choisit un autre).
+4 tests bout-en-bout (vrais sockets) : isolation entre deux salons distincts,
+fermeture d'un salon vidé de tous ses joueurs. 220 tests lib + 4 tests bin,
+tous verts.
+
+**Reporté** : la sélection du salon dans l'UI (fenêtre Multijoueur) — même
+réserve que §3.4, en attendant que `editor/mod.rs` soit stable côté session
+parallèle.

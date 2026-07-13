@@ -174,7 +174,12 @@ async fn handle_connection(
         Message::Binary(b) => b,
         _ => return Err("première trame non binaire".into()),
     };
-    let ClientMsg::Join { name, firebase_uid } = protocol::decode::<ClientMsg>(&join_bytes)? else {
+    let ClientMsg::Join {
+        name,
+        firebase_uid,
+        lobby,
+    } = protocol::decode::<ClientMsg>(&join_bytes)?
+    else {
         return Err("première trame n'est pas un Join".into());
     };
 
@@ -192,7 +197,14 @@ async fn handle_connection(
     // dans la partie (cf. `AppState::spawn_network_player`, Sprint 55). Une
     // défaillance d'envoi ici (thread principal arrêté) ne doit pas empêcher la
     // connexion de continuer, donc pas de `?`.
-    let _ = tx.send((id, ClientMsg::Join { name, firebase_uid }));
+    let _ = tx.send((
+        id,
+        ClientMsg::Join {
+            name,
+            firebase_uid,
+            lobby,
+        },
+    ));
 
     // Pompe sortante : relaie les messages poussés par `send_to`/`broadcast`
     // (thread principal) vers la socket, jusqu'à fermeture du canal ou erreur
@@ -276,6 +288,7 @@ mod tests {
             ClientMsg::Join {
                 name: "Testeur".to_string(),
                 firebase_uid: None,
+                lobby: protocol::DEFAULT_LOBBY.to_string(),
             }
         );
 

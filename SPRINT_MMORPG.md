@@ -791,3 +791,46 @@ propres.
 `src/app/mod.rs`, `src/app/multiplayer.rs`, `src/app/fireball.rs`,
 `src/app/network_client.rs`, `src/bin/server.rs`, `src/scene/mod.rs`,
 `src/lib.rs`, `assets/player_scene.json`, `examples/*.rs`.
+
+### Sprint 82 — Multi-salons ✅ FAIT
+Traduction de [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md) §3.3. Choisi
+en priorité (parmi les axes restants) parce qu'il ne touche que
+`src/bin/server.rs`/`src/net/*` — aucun risque de collision avec la session
+parallèle qui travaillait au même moment sur `src/editor/mod.rs`/
+`src/gfx/renderer.rs` (Sprint 81).
+
+**Multi-salons.** `src/bin/server.rs` maintenait un `AppState` unique
+(un process = une manche). Remplacé par `HashMap<String, Room>` (`Room` =
+`AppState` + état de salon `Lobby` + suivi de manche) : `ClientMsg::Join`
+gagne un champ `lobby: String` qui choisit (ou crée à la demande) son salon.
+`net::protocol::DEFAULT_LOBBY` reste le salon partagé historique —
+`NetClient::connect` continue de l'utiliser, donc **aucune régression** pour
+les clients existants (desktop/APK), qui se retrouvent comme avant dans un
+seul salon commun ; `NetClient::connect_to_lobby` (nouveau) permet d'en
+choisir un autre. `NetServer::broadcast()` ne connaît pas la notion de
+salon (il atteint tous les clients du process) : les diffusions par salon
+utilisent désormais `send_to` en boucle sur les seuls joueurs de ce salon.
+
+**Amélioration non prévue dans la proposition initiale.** Avant ce sprint,
+une manche décidée (victoire/défaite) ou expirée (`MAX_DURATION`) faisait
+`break` hors de la boucle — donc **arrêtait tout le process**. En
+multi-salons, ça aurait mis fin à *tous* les salons pour *tous* les joueurs
+à la fin de la première manche décidée, quel que soit le salon concerné —
+inacceptable. Remplacé par `Room::restart()` : réinitialise ce salon en
+place (scène fraîche, joueurs déjà connectés re-spawnés dedans), sans
+toucher aux autres salons ni couper la moindre connexion TCP. Un salon vidé
+de tous ses joueurs (dernier `Leave`/timeout) est fermé plutôt que de
+tourner pour personne.
+
+**Reporté** : la sélection du salon dans la fenêtre Multijoueur de
+l'éditeur — `AppState::connect_to_server` continue de rejoindre
+`DEFAULT_LOBBY` ; ajouter un champ de saisie dans `editor/mod.rs` est un
+prochain petit sprint, une fois ce fichier stable côté session parallèle.
+
+**Tests** : 4 nouveaux dans `src/bin/server.rs` (bout-en-bout, vrais
+sockets) — isolation stricte entre deux salons (aucune fuite d'objet/indice
+de l'un vers l'autre), fermeture d'un salon vidé. 220 tests lib + 4 tests
+bin au total, tous verts ; `cargo fmt`/`clippy --all-targets -D warnings`
+propres.
+**Fichiers** : `src/bin/server.rs`, `src/net/protocol.rs`, `src/net/client.rs`,
+`src/net/server_loop.rs`, `src/app/network_client.rs`.

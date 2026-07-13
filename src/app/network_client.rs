@@ -1024,6 +1024,7 @@ mod tests {
             ClientMsg::Join {
                 name: "Alice".to_string(),
                 firebase_uid: Some("uid-alice".to_string()),
+                lobby: crate::net::protocol::DEFAULT_LOBBY.to_string(),
             }
         );
     }

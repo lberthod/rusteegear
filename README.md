@@ -262,6 +262,12 @@ scope, prises dès le départ :
   ne visaient jamais que le premier arrivé). Touche **H** ou bouton tactile
   **« Soin »** : soigne en continu l'allié blessé le plus proche à portée,
   résolu côté serveur.
+- **Multi-salons** (`src/bin/server.rs::Room`, Sprint 82) : un même serveur
+  fait tourner plusieurs manches indépendantes en parallèle, choisies par un
+  code de salon (`ClientMsg::Join::lobby`) — tous les clients actuels
+  continuent de se retrouver dans le même salon partagé par défaut, aucune
+  régression. Une manche décidée (victoire/défaite) ne coupe plus la
+  connexion de tout le monde : seul son salon repart, les autres continuent.
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 
@@ -328,7 +334,9 @@ le développement). Historique sprint par sprint :
   permanent pour le reste de la manche (décision assumée, Sprint 80).
 - Pas de rôles/classes : tous les joueurs partagent le même profil (le soin
   coopératif est universel, pas réservé à une classe « Soutien »).
-- Pas de multi-salons : un processus serveur = un seul salon pour l'instant.
+- Pas de sélection de salon dans l'UI : la fenêtre Multijoueur rejoint
+  toujours le salon partagé par défaut, même si le serveur en gère plusieurs
+  depuis le Sprint 82.
 
 ---
 

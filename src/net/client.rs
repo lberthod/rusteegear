@@ -37,11 +37,25 @@ impl NetClient {
     /// (raisonnable au lancement/join d'un salon, pas dans la boucle de rendu).
     /// `firebase_uid` : `uid` obtenu par `net::firebase::sign_in`/`sign_up`, si le
     /// joueur s'est connecté avant de rejoindre (cf. Sprint 57) ; `None` pour une
-    /// partie locale/anonyme.
+    /// partie locale/anonyme. Rejoint `protocol::DEFAULT_LOBBY` (le salon partagé
+    /// historique) — cf. `connect_to_lobby` pour choisir un autre salon
+    /// (Sprint 82, GAMEDESIGN_EN_LIGNE.md §3.3).
     pub fn connect(
         url: &str,
         name: &str,
         firebase_uid: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::connect_to_lobby(url, name, firebase_uid, protocol::DEFAULT_LOBBY)
+    }
+
+    /// Comme `connect`, mais rejoint le salon `lobby` plutôt que le salon
+    /// partagé par défaut (créé à la demande côté serveur s'il n'existe pas
+    /// encore, cf. `bin/server.rs::Room`).
+    pub fn connect_to_lobby(
+        url: &str,
+        name: &str,
+        firebase_uid: Option<&str>,
+        lobby: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let (in_tx, in_rx) = channel::<ServerMsg>();
         let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -49,6 +63,7 @@ impl NetClient {
         let join = protocol::encode(&ClientMsg::Join {
             name: name.to_string(),
             firebase_uid: firebase_uid.map(str::to_string),
+            lobby: lobby.to_string(),
         })?;
         // Mis en file avant même que le thread de fond n'existe : la pompe
         // sortante le trouvera prêt dès sa première itération.

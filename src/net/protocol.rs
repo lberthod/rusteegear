@@ -12,10 +12,17 @@ use serde::{Deserialize, Serialize};
 /// Identifiant de joueur, attribué par le serveur à la connexion (`ServerMsg::Welcome`).
 pub type PlayerId = u32;
 
+/// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
+/// clients actuels (Sprint 82, GAMEDESIGN_EN_LIGNE.md §3.3) s'y retrouvent
+/// donc ensemble, comme avant l'introduction du multi-salons : le serveur
+/// route désormais par code de salon, mais rien ne change tant qu'aucune UI
+/// ne propose d'en choisir un autre.
+pub const DEFAULT_LOBBY: &str = "default";
+
 /// Message envoyé par un client au serveur.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
-    /// Première trame envoyée à la connexion : demande à rejoindre le salon.
+    /// Première trame envoyée à la connexion : demande à rejoindre un salon.
     Join {
         name: String,
         /// `uid` Firebase (cf. `net::firebase::AuthSession`), si le joueur s'est
@@ -24,6 +31,12 @@ pub enum ClientMsg {
         /// une partie locale/anonyme (pas de régression : identique à l'absence
         /// de compte).
         firebase_uid: Option<String>,
+        /// Code du salon à rejoindre (créé à la demande s'il n'existe pas
+        /// encore, cf. `bin/server.rs::Room`) — vide traité comme
+        /// `DEFAULT_LOBBY` côté serveur (rétrocompatible : un client qui
+        /// n'envoie rien de particulier atterrit dans le même salon partagé
+        /// que tout le monde, comme avant le Sprint 82).
+        lobby: String,
     },
     /// État des contrôles pour le tick courant (cf. `app::PlayerInput`, en plus
     /// compact — un client réseau ne pilote qu'un joueur, pas un overlay tactile
@@ -204,10 +217,12 @@ mod tests {
         round_trip(ClientMsg::Join {
             name: "Loïc".to_string(),
             firebase_uid: None,
+            lobby: DEFAULT_LOBBY.to_string(),
         });
         round_trip(ClientMsg::Join {
             name: "Loïc".to_string(),
             firebase_uid: Some("uid-1234".to_string()),
+            lobby: "salon-prive".to_string(),
         });
     }
 
