@@ -2705,6 +2705,27 @@ impl AppState {
                         .map(|(i, &t)| (i, (t - obj.transform.position).length_squared()))
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                         .expect("candidate_targets vérifié non vide ci-dessus");
+                    // Portée de détection, **réseau uniquement** (audit en conditions
+                    // réelles, 2026-07-13, GAMEDESIGN_EN_LIGNE.md) : le plafond
+                    // ci-dessus étale l'ARRIVÉE des chasseurs dans le temps, mais avec
+                    // un seul joueur solo connecté, il n'empêche pas la convergence
+                    // *finale* — au bout d'assez de temps, tous les monstres de la
+                    // carte se relaient jusqu'à l'unique cible, même partis de l'autre
+                    // bout de l'arène. Volontairement limité au cas réseau
+                    // (`!self.network_players.is_empty()`) plutôt qu'appliqué partout :
+                    // en solo, plusieurs démos (`Scene::brawl_demo` notamment) comptent
+                    // sur un chasseur qui **revient toujours** vers le joueur après un
+                    // recul (knockback) pour ne pas tomber dans le vide de l'arène —
+                    // une portée de détection universelle cassait ce ring-out en
+                    // laissant le rival immobile une fois repoussé trop loin (régression
+                    // détectée par `brawl_demo_rival_survives_two_hits_then_falls_on_
+                    // the_third`, qui ne teste rien de spécifique au réseau).
+                    if !self.network_players.is_empty()
+                        && dist_sq > CHASER_DETECT_RANGE * CHASER_DETECT_RANGE
+                    {
+                        phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                        continue;
+                    }
                     by_target.entry(target_i).or_default().push((idx, dist_sq));
                 }
                 // Plafond de chasseurs actifs par cible (audit en conditions réelles,
@@ -3175,6 +3196,18 @@ const MANUAL_TURN_SPEED: f32 = 3.0;
 /// conditions réelles, 2026-07-13). 2 = toujours une vraie menace à plusieurs
 /// (pas trivialisé à un seul assaillant), sans jamais submerger instantanément.
 const MAX_ACTIVE_CHASERS_PER_TARGET: usize = 2;
+
+/// Portée de détection (m) au-delà de laquelle un `AiChaser` reste totalement
+/// immobile, quelle que soit la cible la plus proche parmi `candidate_targets`
+/// (audit en conditions réelles, 2026-07-13 — le plafond ci-dessus étale
+/// l'arrivée des chasseurs dans le temps, mais avec un seul joueur solo,
+/// n'empêche pas la convergence *finale* : au bout d'assez de temps, tous les
+/// monstres de la carte se relaient jusqu'à l'unique cible, même partis de
+/// l'autre bout de l'arène). ~9 m : sur l'arène embarquée (24×24 m, monstres
+/// à ±8 m du centre, joueurs qui apparaissent près du centre), seul 1-2
+/// monstres réagissent tant qu'on reste près du point d'apparition — les
+/// autres ne s'activent que si on s'aventure dans leur secteur.
+const CHASER_DETECT_RANGE: f32 = 9.0;
 
 /// Écart angulaire **signé le plus court** (radians, dans [-π, π]) de `cur` vers
 /// `target` — jamais plus d'un demi-tour, quel que soit l'enroulement des angles.
@@ -4777,6 +4810,72 @@ mod tests {
             moved(4) < 0.2,
             "au-delà du plafond, le 3e chasseur ne doit pas avancer ce tick : déplacement {}",
             moved(4)
+        );
+    }
+
+    /// Audit en conditions réelles (2026-07-13, GAMEDESIGN_EN_LIGNE.md) : même
+    /// après le plafond par cible, un joueur **réseau** solo signalait que les
+    /// monstres « vont en direction du joueur » quelle que soit sa position
+    /// sur la carte — le plafond étale l'arrivée dans le temps, mais avec une
+    /// seule cible vivante connectée, tous finissent par converger. Vérifie
+    /// qu'un chasseur **hors de portée de détection** (`CHASER_DETECT_RANGE`)
+    /// reste totalement immobile face à un unique joueur réseau, même s'il
+    /// serait autrement le seul/le plus proche (donc jamais relégué par le
+    /// plafond). Un joueur **réseau**, pas local : la portée de détection est
+    /// volontairement limitée au cas réseau (cf. le commentaire sur
+    /// `CHASER_DETECT_RANGE` dans la boucle de pilotage IA) pour ne pas casser
+    /// le ring-out de `Scene::brawl_demo` en solo.
+    #[test]
+    fn a_chaser_beyond_detection_range_never_moves_towards_a_lone_network_player() {
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(60.0, 1.0, 60.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let gabarit = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            color: [1.0; 3],
+            ..Default::default()
+        };
+        // Bien au-delà de CHASER_DETECT_RANGE (9 m) : seule cible sur la carte,
+        // donc jamais relégué par le plafond — sans la portée de détection, il
+        // se rapprocherait quand même.
+        let chaser = crate::scene::SceneObject {
+            name: "Chasseur lointain".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(20.0, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            color: [1.0; 3],
+            ..Default::default()
+        };
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, gabarit, chaser],
+            ..Default::default()
+        };
+        app.hide_local_player_template();
+        app.spawn_network_player(1);
+        app.playing = true;
+        let start = app.scene.objects[2].transform.position;
+        for _ in 0..60 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        let moved = (app.scene.objects[2].transform.position - start).length();
+        assert!(
+            moved < 0.2,
+            "un chasseur hors de portée de détection ne doit pas se rapprocher \
+             de l'unique joueur réseau, aussi loin soit-il : déplacement {moved}"
         );
     }
 
