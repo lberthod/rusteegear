@@ -1543,13 +1543,40 @@ régression client. Une manche décidée ne coupe plus tout le process
   `src/editor/mod.rs` (4156 lignes) et `src/scene/mod.rs` (4841 lignes), inchangés ;
   migration des commentaires d'historique de sprint vers `docs/audits/`.
 
-#### Sprint 103a-2 — Maintenabilité : découpage de `editor/mod.rs` et `scene/mod.rs` ⬜
-- [ ] Même traitement que 103a-1 (découpage par responsabilité), sur les deux fichiers
-      restants signalés par l'audit — à scinder à nouveau si le périmètre déborde.
-- **Fichiers** : `src/editor/mod.rs`, `src/scene/mod.rs`, nouveaux modules extraits.
-- **Livrable** : taille des deux fichiers réduite significativement ; comportement
-  inchangé ; tests existants verts.
-- **Risque** : refactor pur — le faire **seul**, pas de sprint gameplay en parallèle.
+#### Sprint 103a-2 — Maintenabilité : découpage de `editor/mod.rs` et `scene/mod.rs` ✅ FAIT
+- [x] **`editor/mod.rs`** (4156 lignes, presque entièrement des fonctions libres de
+      dessin egui, pas des méthodes — `impl Editor` ne pesait que ~340 lignes) découpé
+      par thème : `editor/hierarchy.rs` (panneau de hiérarchie), `editor/menus.rs`
+      (barre de menus Fichier/Édition/Ajouter/Outils/Aide), `editor/windows.rs`
+      (fenêtres flottantes : réglages, multijoueur, IA, optimisation, scripts,
+      assets, prévisualisation HUD), `editor/hud.rs` (HUD de jeu : vie, arme,
+      manches, classement, réticule, overlay tactile). `build_ui` (990 lignes,
+      l'orchestrateur qui assemble tout ça chaque frame) et `transform_editor`
+      restent dans `mod.rs`, même logique que `advance_play`/`sim_step` pour
+      `AppState` au sprint précédent.
+- [x] **`scene/mod.rs`** (4841 lignes) découpé par thème : `scene/demos.rs` (toutes
+      les scènes de démo prêtes à jouer — de loin le plus gros morceau, 1750 lignes),
+      `scene/queries.rs` (AABB, zones mortelles, ramassage, combat, lumières
+      proches), `scene/persistence.rs` (sauvegarde/chargement JSON, migration de
+      version), `scene/prefab.rs` (sauvegarde/instanciation/resynchronisation de
+      prefabs). Les définitions de types (`Transform`, `SceneObject`, `Scene`,
+      etc.) et leurs petits `impl Default` restent dans `mod.rs`, avec les tests.
+- [x] **Visibilité** : méthodes/fonctions déjà `pub fn` (la quasi-totalité de
+      `Scene::*`) déplacées sans changement — un `pub fn` reste accessible depuis
+      n'importe où dans le crate quel que soit le fichier qui porte l'`impl`. Seules
+      deux fonctions **privées** utilisées par un module frère (`Scene::migrate`,
+      `demo_obj`) et une par `mod tests` restée dans `editor/mod.rs`
+      (`roster_display_order`) sont passées en `pub(super)`/importées explicitement
+      — même règle qu'au sprint précédent (visibilité privée = module courant +
+      descendants, jamais les frères).
+- [x] **Livrable vérifié** : `editor/mod.rs` 4156 → 1674 lignes (-60 %),
+      `scene/mod.rs` 4841 → 2633 lignes (-46 %) ; 312 tests lib + 4 bin + 8 golden
+      toujours verts, `cargo clippy`/`cargo fmt` propres, comportement inchangé
+      (mouvement de code pur).
+- **Fichiers** : `src/editor/mod.rs`, nouveaux `src/editor/{hierarchy,menus,windows,
+  hud}.rs` ; `src/scene/mod.rs`, nouveaux `src/scene/{demos,queries,persistence,
+  prefab}.rs`.
+- **Risque** : refactor pur — fait seul, aucun sprint gameplay en parallèle.
 
 #### Sprint 103a-3 — Maintenabilité : commentaires d'historique vers `docs/audits/` ⬜
 - [ ] Commentaires trop volumineux qui documentent l'historique de sprint plutôt que

@@ -1,0 +1,934 @@
+//! Fenêtres flottantes de l'éditeur : réglages, multijoueur (connexion, chat,
+//! classement), scène assistée par IA, pipeline d'optimisation d'assets, éditeur
+//! de scripts, navigateur d'assets, prévisualisation HUD. Extrait de
+//! `editor/mod.rs` (Sprint 103a-2).
+
+use crate::scene::Scene;
+
+use super::{HudPreview, Panels, StatusInfo, UiActions, export, readiness};
+
+/// Fenêtres flottantes des menus « Aide » et « Outils ».
+pub(super) fn tool_windows(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &Scene,
+    export: &export::ExportPanel,
+    status: &StatusInfo,
+    console_input: &mut String,
+    actions: &mut UiActions,
+) {
+    // --- Console (logs en mémoire + commandes, Sprint 82) ---
+    egui::Window::new("🖥  Console")
+        .open(&mut panels.console)
+        .default_size([460.0, 320.0])
+        .show(ctx, |ui| {
+            if ui.button("🧹  Effacer").clicked() {
+                crate::log_buffer::clear();
+            }
+            ui.separator();
+            // Champ de commande : `timescale <valeur>`, `pause`, `play`, `step`, `tp <x> <y> <z>`,
+            // `net_stats` (cf. AppState::run_console_command — liste complète en survol).
+            ui.horizontal(|ui| {
+                let resp = ui
+                    .add(
+                        egui::TextEdit::singleline(console_input)
+                            .hint_text("timescale 0.5 · pause · play · step · tp 0 1 0 · net_stats")
+                            .desired_width(ui.available_width() - 70.0),
+                    )
+                    .on_hover_text(
+                        "Commandes : timescale <v> · pause · play · stop · step · \
+                         tp <x> <y> <z> · net_stats",
+                    );
+                let submit = ui.button("Exécuter").clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                if submit && !console_input.trim().is_empty() {
+                    actions.console_command = Some(console_input.trim().to_string());
+                    console_input.clear();
+                    resp.request_focus();
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for line in crate::log_buffer::snapshot() {
+                        ui.monospace(line);
+                    }
+                });
+        });
+
+    // --- Profiler FPS (n'accumule l'historique que lorsque la fenêtre est ouverte) ---
+    if !panels.profiler {
+        panels.fps_history.clear();
+    } else {
+        panels.fps_history.push_back(status.fps);
+        while panels.fps_history.len() > 120 {
+            panels.fps_history.pop_front();
+        }
+    }
+    let fps_hist = panels.fps_history.clone();
+    egui::Window::new("📊  Profiler FPS")
+        .open(&mut panels.profiler)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let avg = if fps_hist.is_empty() {
+                0.0
+            } else {
+                fps_hist.iter().sum::<f32>() / fps_hist.len() as f32
+            };
+            let min = fps_hist.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max = fps_hist.iter().cloned().fold(0.0_f32, f32::max);
+            ui.label(format!("FPS actuel : {:.0}", status.fps));
+            ui.label(format!(
+                "min {:.0} · moy {:.0} · max {:.0}",
+                if min.is_finite() { min } else { 0.0 },
+                avg,
+                max
+            ));
+            ui.label(format!("🧊 {} objets", scene.objects.len()));
+            ui.separator();
+            // Sparkline simple : barres verticales normalisées sur 60 FPS.
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(240.0, 60.0), egui::Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+            let n = fps_hist.len().max(1);
+            let bar_w = rect.width() / n as f32;
+            for (i, &f) in fps_hist.iter().enumerate() {
+                let h = (f / 60.0).clamp(0.0, 1.0) * rect.height();
+                let x = rect.left() + i as f32 * bar_w;
+                let color = if f >= 55.0 {
+                    egui::Color32::from_rgb(80, 200, 120)
+                } else if f >= 30.0 {
+                    egui::Color32::from_rgb(220, 180, 60)
+                } else {
+                    egui::Color32::from_rgb(220, 90, 80)
+                };
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(x, rect.bottom() - h),
+                        egui::pos2(x + bar_w.max(1.0), rect.bottom()),
+                    ),
+                    0.0,
+                    color,
+                );
+            }
+            // --- Profiler mémoire (estimation) ---
+            ui.separator();
+            ui.strong("Mémoire (estimation)");
+            let (obj_b, mesh_b, n_tex) = scene.memory_estimate();
+            let kb = |b: usize| format!("{:.1} Ko", b as f32 / 1024.0);
+            ui.label(format!("Objets : {}", kb(obj_b)));
+            ui.label(format!(
+                "Meshes importés : {} ({} modèle(s))",
+                kb(mesh_b),
+                scene.imported.len()
+            ));
+            ui.label(format!("Textures : {n_tex} unique(s)"));
+        });
+
+    // --- Contrôle qualité APK (APK Readiness Check) ---
+    let mut do_analyze = false;
+    egui::Window::new("✔  Contrôle qualité APK")
+        .open(&mut panels.readiness)
+        .default_size([420.0, 380.0])
+        .show(ctx, |ui| {
+            if panels.readiness_results.is_empty() {
+                panels.readiness_results = readiness::analyze(scene, export.config());
+            }
+            let (ok, warn, fail) = readiness::summary(&panels.readiness_results);
+            ui.horizontal(|ui| {
+                ui.label(format!("✅ {ok}"));
+                ui.label(format!("⚠ {warn}"));
+                ui.label(format!("❌ {fail}"));
+                if ui.button("🔄  Ré-analyser").clicked() {
+                    do_analyze = true;
+                }
+            });
+            if fail == 0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(80, 200, 120),
+                    "Prêt pour l'export Android 🎉",
+                );
+            } else {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 90, 80),
+                    format!("{fail} blocage(s) à corriger avant l'export"),
+                );
+            }
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for c in &panels.readiness_results {
+                        ui.horizontal(|ui| {
+                            ui.label(c.status.icon());
+                            ui.label(&c.label);
+                        });
+                    }
+                });
+        });
+    if do_analyze {
+        panels.readiness_results = readiness::analyze(scene, export.config());
+    }
+
+    egui::Window::new("⌨  Raccourcis clavier")
+        .open(&mut panels.shortcuts)
+        .resizable(false)
+        .show(ctx, |ui| {
+            egui::Grid::new("shortcuts_grid")
+                .num_columns(2)
+                .spacing([24.0, 6.0])
+                .show(ui, |ui| {
+                    for (k, v) in [
+                        ("W", "Déplacer (translation)"),
+                        ("E", "Tourner (rotation)"),
+                        ("R", "Redimensionner (échelle)"),
+                        ("F", "Recentrer la caméra sur la sélection"),
+                        ("Cmd/Ctrl + Z", "Annuler"),
+                        ("Cmd/Ctrl + Maj + Z", "Rétablir"),
+                        ("Cmd/Ctrl + D", "Dupliquer la sélection"),
+                        ("Suppr", "Supprimer la sélection"),
+                    ] {
+                        ui.strong(k);
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
+        });
+
+    egui::Window::new("🩺  Diagnostic système")
+        .open(&mut panels.diagnostic)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label("Environnement de build Android :");
+            ui.separator();
+            let check = |ui: &mut egui::Ui, label: &str, ok: bool| {
+                ui.horizontal(|ui| {
+                    ui.label(if ok { "✅" } else { "❌" });
+                    ui.label(label);
+                });
+            };
+            // Le binaire tourne forcément via la toolchain Rust.
+            check(ui, "Rust / Cargo", true);
+            let android_sdk = std::env::var("ANDROID_HOME")
+                .or_else(|_| std::env::var("ANDROID_SDK_ROOT"))
+                .is_ok();
+            let android_ndk = std::env::var("ANDROID_NDK_HOME")
+                .or_else(|_| std::env::var("NDK_HOME"))
+                .is_ok();
+            check(ui, "Android SDK (ANDROID_HOME)", android_sdk);
+            check(ui, "Android NDK (ANDROID_NDK_HOME)", android_ndk);
+            ui.separator();
+            ui.label(format!(
+                "🖥  Backend graphique : {}",
+                if cfg!(target_os = "macos") {
+                    "Metal"
+                } else if cfg!(target_os = "windows") {
+                    "DX12 / Vulkan"
+                } else {
+                    "Vulkan"
+                }
+            ));
+        });
+
+    egui::Window::new("ℹ  À propos de RusteeGear")
+        .open(&mut panels.about)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.heading("RusteeGear");
+            ui.label("Éditeur 3D en Rust orienté export Android natif.");
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.hyperlink_to(
+                "github.com/lberthod/rusteegear",
+                "https://github.com/lberthod/rusteegear",
+            );
+        });
+}
+
+/// Rectangle (points egui) de la zone de jeu : écran de téléphone centré dans la
+/// région `central` si l'aperçu mobile est actif, sinon `central` en entier.
+pub(super) fn play_area_rect(central: egui::Rect, preview: bool, portrait: bool) -> egui::Rect {
+    if !preview {
+        return central;
+    }
+    let (x, y, w, h) = crate::app::device_rect(central.width(), central.height(), portrait);
+    egui::Rect::from_min_size(central.min + egui::vec2(x, y), egui::vec2(w, h))
+}
+
+/// Dessine le cadre « téléphone » (biseau arrondi + encoche) autour de la zone de jeu.
+pub(super) fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
+    use egui::{Color32, Stroke};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("device_bezel"),
+    ));
+    // Contour épais arrondi, façon châssis de smartphone.
+    painter.rect_stroke(
+        rect.expand(6.0),
+        22.0,
+        Stroke::new(10.0, Color32::from_rgb(20, 20, 24)),
+        egui::StrokeKind::Outside,
+    );
+    painter.rect_stroke(
+        rect,
+        16.0,
+        Stroke::new(1.5, Color32::from_white_alpha(40)),
+        egui::StrokeKind::Inside,
+    );
+    // Encoche centrale en haut.
+    let notch = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.top() + 9.0),
+        egui::vec2(rect.width().min(160.0) * 0.45, 14.0),
+    );
+    painter.rect_filled(notch, 7.0, Color32::from_rgb(20, 20, 24));
+}
+
+/// Fenêtre « Paramètres » : clé API DeepSeek (persistée à chaque modification).
+pub(super) fn settings_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    settings: &mut crate::app::settings::Settings,
+) {
+    let mut open = panels.settings;
+    egui::Window::new("⚙  Paramètres")
+        .open(&mut open)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.heading("IA — génération de scripts");
+            ui.label("Clé API DeepSeek");
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut settings.deepseek_api_key)
+                    .password(true)
+                    .hint_text("sk-…")
+                    .desired_width(280.0),
+            );
+            if resp.lost_focus() || resp.changed() {
+                settings.save();
+            }
+            ui.label(if settings.deepseek_api_key.trim().is_empty() {
+                "❌ Aucune clé : génération IA désactivée"
+            } else {
+                "✅ Clé enregistrée"
+            });
+            ui.add_space(6.0);
+            ui.label("Modèle");
+            ui.horizontal(|ui| {
+                for m in ["deepseek-chat", "deepseek-reasoner"] {
+                    if ui
+                        .selectable_label(settings.deepseek_model == m, m)
+                        .clicked()
+                    {
+                        settings.deepseek_model = m.to_string();
+                        settings.save();
+                    }
+                }
+            });
+            let resp_m = ui.add(
+                egui::TextEdit::singleline(&mut settings.deepseek_model)
+                    .hint_text("id du modèle (ex. deepseek-chat)")
+                    .desired_width(280.0),
+            );
+            if resp_m.lost_focus() || resp_m.changed() {
+                settings.save();
+            }
+            ui.small(
+                "« deepseek-chat » pointe vers la dernière version. Saisis un id précis au besoin.",
+            );
+            ui.add_space(6.0);
+            ui.label("Température (0 = précis, 1 = créatif)");
+            if ui
+                .add(egui::Slider::new(
+                    &mut settings.deepseek_temperature,
+                    0.0..=1.0,
+                ))
+                .drag_stopped()
+            {
+                settings.save();
+            }
+            ui.add_space(6.0);
+            ui.hyperlink_to(
+                "Obtenir une clé DeepSeek",
+                "https://platform.deepseek.com/api_keys",
+            );
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("Multijoueur — comptes (Firebase)");
+            ui.label("Clé API Web Firebase");
+            let resp_fb_key = ui.add(
+                egui::TextEdit::singleline(&mut settings.firebase_api_key)
+                    .password(true)
+                    .hint_text("AIza…")
+                    .desired_width(280.0),
+            );
+            if resp_fb_key.lost_focus() || resp_fb_key.changed() {
+                settings.save();
+            }
+            ui.label("URL Realtime Database");
+            let resp_fb_url = ui.add(
+                egui::TextEdit::singleline(&mut settings.firebase_database_url)
+                    .hint_text("https://xxx-default-rtdb.firebaseio.com")
+                    .desired_width(280.0),
+            );
+            if resp_fb_url.lost_focus() || resp_fb_url.changed() {
+                settings.save();
+            }
+            ui.label(
+                if settings.firebase_api_key.trim().is_empty()
+                    || settings.firebase_database_url.trim().is_empty()
+                {
+                    "❌ Configuration incomplète : comptes multijoueur désactivés"
+                } else {
+                    "✅ Configuration enregistrée"
+                },
+            );
+            ui.small(
+                "Clé publique par conception côté Firebase — la sécurité vient des règles \
+                 de la Realtime Database, pas du secret de cette clé (cf. SPRINT_MMORPG.md).",
+            );
+        });
+    panels.settings = open;
+}
+
+/// Overlay Multijoueur minimal pour le mode Player (mobile/APK, Sprint 65) :
+/// adresse + pseudo + connecter/déconnecter, replié par défaut pour ne pas
+/// gêner le joystick. Pas de compte Firebase/chat/classement ici — hors scope
+/// de ce premier test (cf. `multiplayer_window`, l'équivalent complet côté
+/// éditeur desktop).
+pub(super) fn mobile_multiplayer_overlay(
+    ctx: &egui::Context,
+    server_url: &mut String,
+    name: &mut String,
+    net_status: &str,
+    net_connected: bool,
+    actions: &mut UiActions,
+) {
+    egui::Window::new("🌐")
+        .id(egui::Id::new("mobile_multiplayer"))
+        .collapsible(true)
+        .default_open(false)
+        .resizable(false)
+        // Décalage vertical généreux (pas seulement 8 px) : en plein écran immersif
+        // (NativeActivity Android), la zone de rendu passe sous la barre de statut
+        // système — un petit décalage laissait l'icône 🌐 cachée dessous, invisible
+        // et donc impossible à toucher (constaté en testant sur un vrai téléphone).
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 56.0))
+        .default_width(220.0)
+        .show(ctx, |ui| {
+            ui.label("Adresse du serveur");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(server_url).hint_text("ws://192.168.1.x:7777"),
+            );
+            ui.label("Pseudo");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(name).hint_text("Joueur"),
+            );
+            ui.add_space(4.0);
+            if net_connected {
+                if ui.button("🔌 Se déconnecter").clicked() {
+                    actions.disconnect_from_server = true;
+                }
+            } else {
+                let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
+                if ui
+                    .add_enabled(can_connect, egui::Button::new("▶ Se connecter"))
+                    .clicked()
+                {
+                    actions.connect_to_server = Some((server_url.clone(), name.clone()));
+                }
+            }
+            ui.add_space(4.0);
+            ui.small(if net_status.is_empty() {
+                "Non connecté"
+            } else {
+                net_status
+            });
+        });
+}
+
+/// Fenêtre « Multijoueur » : adresse du serveur + pseudo, connexion/déconnexion
+/// (SPRINT_MMORPG.md). Le joueur local reste piloté comme en solo ; les autres
+/// joueurs connectés apparaissent comme des objets fantômes une fois reçus par
+/// `Snapshot` (cf. `app::network_client`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn multiplayer_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    server_url: &mut String,
+    name: &mut String,
+    email: &mut String,
+    password: &mut String,
+    lobby_code: &mut String,
+    chat_input: &mut String,
+    settings: &crate::app::settings::Settings,
+    net_status: &str,
+    net_connected: bool,
+    chat_messages: &[crate::app::network_client::ChatLine],
+    has_firebase_account: bool,
+    leaderboard: &[crate::app::network_client::LeaderboardLine],
+    actions: &mut UiActions,
+) {
+    let mut open = panels.multiplayer;
+    egui::Window::new("🌐  Multijoueur")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(320.0)
+        .show(ctx, |ui| {
+            ui.label("Adresse du serveur");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(server_url).hint_text("ws://127.0.0.1:7777"),
+            );
+            ui.label("Pseudo");
+            ui.add_enabled(
+                !net_connected,
+                egui::TextEdit::singleline(name).hint_text("Joueur"),
+            );
+            ui.add_space(6.0);
+            if net_connected {
+                if ui.button("🔌  Se déconnecter").clicked() {
+                    actions.disconnect_from_server = true;
+                }
+            } else {
+                let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
+                if ui
+                    .add_enabled(can_connect, egui::Button::new("▶  Se connecter"))
+                    .clicked()
+                {
+                    actions.connect_to_server = Some((server_url.clone(), name.clone()));
+                }
+                if !can_connect {
+                    ui.small("Adresse et pseudo requis.");
+                }
+            }
+            ui.add_space(6.0);
+            ui.label(if net_status.is_empty() {
+                "Non connecté"
+            } else {
+                net_status
+            });
+            ui.add_space(6.0);
+            ui.small(
+                "Lance d'abord un serveur (`cargo run --bin server`), puis connecte-toi \
+                 depuis chaque instance de l'éditeur/du player avec la même adresse.",
+            );
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("Compte (optionnel)");
+            let firebase_configured = !settings.firebase_api_key.trim().is_empty()
+                && !settings.firebase_database_url.trim().is_empty();
+            if !firebase_configured {
+                ui.small(
+                    "Configure d'abord une clé API et une URL Database dans \
+                     ⚙ Paramètres pour activer les comptes (progression persistante).",
+                );
+            } else {
+                ui.label("Email");
+                ui.add(egui::TextEdit::singleline(email).hint_text("toi@example.com"));
+                ui.label("Mot de passe");
+                ui.add(egui::TextEdit::singleline(password).password(true));
+                let can_auth = !email.trim().is_empty() && !password.trim().is_empty();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(can_auth, egui::Button::new("Se connecter (compte)"))
+                        .clicked()
+                    {
+                        actions.firebase_sign_in = Some((email.clone(), password.clone()));
+                    }
+                    if ui
+                        .add_enabled(can_auth, egui::Button::new("Créer un compte"))
+                        .clicked()
+                    {
+                        actions.firebase_sign_up = Some((email.clone(), password.clone()));
+                    }
+                });
+                ui.small(
+                    "Se connecter avant de rejoindre un salon relie ta progression \
+                     (XP, classement) à ce compte, cf. SPRINT_MMORPG.md.",
+                );
+            }
+
+            if firebase_configured {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.heading("Chat");
+                ui.label("Salon");
+                ui.add(egui::TextEdit::singleline(lobby_code).hint_text("default"));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        if chat_messages.is_empty() {
+                            ui.small("Aucun message pour l'instant.");
+                        }
+                        for line in chat_messages {
+                            ui.label(format!("{} : {}", line.sender, line.text));
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(chat_input)
+                            .hint_text("Message…")
+                            .desired_width(180.0),
+                    );
+                    let can_send = has_firebase_account
+                        && !chat_input.trim().is_empty()
+                        && !lobby_code.trim().is_empty();
+                    if ui
+                        .add_enabled(can_send, egui::Button::new("Envoyer"))
+                        .clicked()
+                    {
+                        actions.send_chat_message =
+                            Some((lobby_code.clone(), name.clone(), chat_input.clone()));
+                        chat_input.clear();
+                    }
+                });
+                if !has_firebase_account {
+                    ui.small("Connecte-toi d'abord à un compte pour envoyer des messages.");
+                }
+                if ui.button("🔄  Rafraîchir").clicked() && !lobby_code.trim().is_empty() {
+                    actions.refresh_chat = Some(lobby_code.clone());
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.heading("Classement");
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        if leaderboard.is_empty() {
+                            ui.small("Aucun score pour l'instant.");
+                        }
+                        for (rank, entry) in leaderboard.iter().enumerate() {
+                            ui.label(format!("{}. {} — {}", rank + 1, entry.name, entry.score));
+                        }
+                    });
+                if ui.button("🔄  Rafraîchir le classement").clicked() {
+                    actions.refresh_leaderboard = true;
+                }
+            }
+        });
+    panels.multiplayer = open;
+}
+
+/// Fenêtre « Générer une scène (IA) » : consigne → scène (remplacer ou ajouter) via DeepSeek.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn ai_scene_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    settings: &crate::app::settings::Settings,
+    prompt: &mut String,
+    replace: &mut bool,
+    history: &mut Vec<String>,
+    status: &StatusInfo,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.ai_scene;
+    egui::Window::new("✨  Générer une scène (IA)")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(360.0)
+        .show(ctx, |ui| {
+            ui.label("Décris la scène à générer :");
+            ui.add(
+                egui::TextEdit::multiline(prompt)
+                    .desired_rows(3)
+                    .desired_width(340.0)
+                    .hint_text(
+                        "ex : « un sol, un personnage capsule piloté au joystick, 3 cubes \
+                         tactiles colorés et une caméra qui suit »",
+                    ),
+            );
+            ui.horizontal(|ui| {
+                ui.selectable_value(replace, true, "Remplacer");
+                ui.selectable_value(replace, false, "Ajouter à la scène");
+            });
+            let has_key = !settings.deepseek_api_key.trim().is_empty();
+            let can = has_key && !status.ai_busy && !prompt.trim().is_empty();
+            ui.horizontal(|ui| {
+                let label = if *replace {
+                    "✨ Générer (remplace)"
+                } else {
+                    "✨ Générer (ajoute)"
+                };
+                if ui.add_enabled(can, egui::Button::new(label)).clicked() {
+                    let p = prompt.trim().to_string();
+                    // Historique : consigne en tête, sans doublon, max 8.
+                    history.retain(|h| h != &p);
+                    history.insert(0, p.clone());
+                    history.truncate(8);
+                    actions.ai_generate_scene = Some((
+                        crate::app::ai::AiRequest {
+                            api_key: settings.deepseek_api_key.clone(),
+                            model: settings.deepseek_model.clone(),
+                            temperature: settings.deepseek_temperature,
+                            prompt: p,
+                        },
+                        *replace,
+                    ));
+                }
+                if status.ai_busy {
+                    ui.spinner();
+                    ui.label("génération…");
+                } else if !has_key {
+                    ui.label("clé API requise (⚙ Paramètres)");
+                }
+            });
+            if !history.is_empty() {
+                ui.separator();
+                ui.label("Consignes récentes :");
+                egui::ScrollArea::vertical()
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        for h in history.iter() {
+                            let short: String = h.chars().take(60).collect();
+                            if ui.selectable_label(false, short).clicked() {
+                                *prompt = h.clone();
+                            }
+                        }
+                    });
+            }
+        });
+    panels.ai_scene = open;
+}
+
+/// Fenêtre « Optimisation mobile » : actions concrètes pour alléger la scène.
+pub(super) fn optimize_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &Scene,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.optimize;
+    egui::Window::new("🪶  Optimisation mobile")
+        .open(&mut open)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let n_tex = scene
+                .objects
+                .iter()
+                .filter(|o| !o.texture.is_empty())
+                .count();
+            ui.label(format!(
+                "{n_tex} objet(s) texturé(s), {} lumière(s) ponctuelle(s)",
+                scene.point_lights.len()
+            ));
+            ui.separator();
+            ui.label("Réduire les textures (côté le plus long) :");
+            ui.horizontal(|ui| {
+                for max in [1024u32, 2048, 4096] {
+                    if ui.button(format!("≤ {max} px")).clicked() {
+                        actions.optimize_textures = Some(max);
+                    }
+                }
+            });
+            ui.small("Écrit des copies …_optN.png et met à jour les objets (annulable).");
+            if ui
+                .button("🧱 Convertir en puissances de 2")
+                .on_hover_text("Redimensionne les textures en POT (mip-mapping/compression GPU)")
+                .clicked()
+            {
+                actions.convert_textures_pot = true;
+            }
+            ui.separator();
+            if scene.point_lights.len() > 4 && ui.button("Limiter à 4 lumières").clicked() {
+                actions.limit_lights = Some(4);
+            }
+            if !scene.point_lights.is_empty()
+                && ui
+                    .button("💡 Bake lighting (figer les lumières)")
+                    .on_hover_text(
+                        "Fige les lumières ponctuelles en émission statique puis les supprime",
+                    )
+                    .clicked()
+            {
+                actions.bake_lighting = true;
+            }
+            ui.separator();
+            // Évolutions de rendu non encore implémentées : grisées et explicitées.
+            ui.add_enabled(
+                false,
+                egui::Button::new("🔻 Fusionner les meshes statiques"),
+            )
+            .on_hover_text("À venir : fusion des géométries statiques (réduction des draw calls)");
+            ui.add_enabled(
+                false,
+                egui::Button::new("📉 Activer LOD / occlusion culling"),
+            )
+            .on_hover_text(
+                "À venir : niveaux de détail et culling d'occlusion (sous-systèmes de rendu)",
+            );
+            ui.separator();
+            if ui
+                .button("⚡ Mode performance Android")
+                .on_hover_text("Réduit les textures à ≤ 1024 px et limite à 4 lumières en une fois")
+                .clicked()
+            {
+                actions.perf_mode = true;
+            }
+            ui.small("💡 Astuce : utilise « Contrôle qualité APK » pour vérifier les gains.");
+        });
+    panels.optimize = open;
+}
+
+/// Fenêtre « Gestionnaire de scripts Lua » : liste les objets scriptés, donne un
+/// aperçu et permet de sélectionner l'objet (édition dans l'inspecteur).
+pub(super) fn scripts_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &Scene,
+    selection: &mut Option<usize>,
+    selected: &mut Vec<usize>,
+) {
+    let mut open = panels.scripts;
+    egui::Window::new("📜  Gestionnaire de scripts Lua")
+        .open(&mut open)
+        .default_size([420.0, 320.0])
+        .show(ctx, |ui| {
+            let scripted: Vec<usize> = scene
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| !o.script.trim().is_empty())
+                .map(|(i, _)| i)
+                .collect();
+            let total_lines: usize = scripted
+                .iter()
+                .map(|&i| scene.objects[i].script.lines().count())
+                .sum();
+            ui.label(format!(
+                "{} script(s), {} ligne(s) au total",
+                scripted.len(),
+                total_lines
+            ));
+            ui.separator();
+            if scripted.is_empty() {
+                ui.weak("Aucun script. Sélectionne un objet et écris du Lua dans l'inspecteur.");
+            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for i in scripted {
+                        let obj = &scene.objects[i];
+                        let lines = obj.script.lines().count();
+                        let header = format!("📜 {} ({lines} l.)", obj.name);
+                        let is_sel = *selection == Some(i);
+                        if ui.selectable_label(is_sel, header).clicked() {
+                            *selection = Some(i);
+                            *selected = vec![i];
+                        }
+                        // Aperçu : première ligne non vide du script.
+                        if let Some(first) = obj.script.lines().find(|l| !l.trim().is_empty()) {
+                            ui.indent(("preview", i), |ui| {
+                                ui.weak(egui::RichText::new(first.trim()).monospace().small());
+                            });
+                        }
+                    }
+                });
+        });
+    panels.scripts = open;
+}
+
+/// Fenêtre « Gestionnaire d'assets » : liste les assets du projet + embarqués,
+/// permet de rassembler les fichiers externes et d'assigner une texture à la sélection.
+pub(super) fn asset_browser_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &mut Scene,
+    selection: Option<usize>,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.assets;
+    egui::Window::new("📁  Gestionnaire d'assets")
+        .open(&mut open)
+        .default_size([360.0, 320.0])
+        .show(ctx, |ui| {
+            if ui
+                .button("📦 Rassembler les assets du projet")
+                .on_hover_text(
+                    "Copie les fichiers externes dans ~/.motor3derust/assets et utilise asset://",
+                )
+                .clicked()
+            {
+                actions.collect_assets = true;
+            }
+            ui.separator();
+            let assets = crate::assets::list_assets();
+            if assets.is_empty() {
+                ui.label("Aucun asset. Importe une texture/un modèle, puis « Rassembler ».");
+            } else {
+                let sel_obj = selection.filter(|&i| i < scene.objects.len());
+                ui.label(match sel_obj {
+                    Some(_) => "Clique un asset image pour l'appliquer à l'objet sélectionné :",
+                    None => "Sélectionne un objet pour assigner une texture.",
+                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for a in assets {
+                            let is_img =
+                                a.ends_with(".png") || a.ends_with(".jpg") || a.ends_with(".jpeg");
+                            let resp = ui.selectable_label(false, &a);
+                            if resp.clicked()
+                                && is_img
+                                && let Some(i) = sel_obj
+                            {
+                                scene.objects[i].texture = a.clone();
+                            }
+                        }
+                    });
+            }
+        });
+    panels.assets = open;
+}
+
+/// La scène a-t-elle un joueur pilotable équipé d'une arme à distance
+/// (`Controller::fire_button` non vide) ? Sert à n'afficher le réticule de
+/// visée que quand il a un sens — pas dans une démo sans tir à distance.
+/// Fenêtre « 👁 Aperçu HUD » (Sprint 93) : cases à cocher pour prévisualiser en
+/// Édition les overlays normalement réservés à Play (réticule, inventaire,
+/// joueurs…), sans lancer la simulation — utile pour ajuster leur position ou
+/// leur lisibilité. État purement éditeur : rien ici n'est écrit dans la
+/// scène (contrairement à `Controller::fire_button`, qui décide de leur
+/// affichage réel en jeu).
+pub(super) fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) {
+    let mut open = preview.open;
+    egui::Window::new("👁 Aperçu HUD")
+        .open(&mut open)
+        // Position fixe (coin stratégique, sous la toolbar) plutôt que
+        // déplaçable : c'est un panneau de réglages, pas un élément de la
+        // scène de jeu (contrairement aux overlays qu'il pilote, eux bien
+        // glissables en 🖐 Repositionner) — inutile de la laisser traîner.
+        .movable(false)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 90.0))
+        .resizable(false)
+        .default_width(240.0)
+        .show(ctx, |ui| {
+            ui.small("Affiche ces éléments en Édition, comme en Play :");
+            ui.checkbox(&mut preview.crosshair, "🎯 Réticule");
+            ui.checkbox(&mut preview.weapon_inventory, "🎒 Inventaire d'armes");
+            ui.checkbox(&mut preview.weapon_hud, "Libellé de l'arme équipée");
+            ui.checkbox(&mut preview.kills, "💀 Frags");
+            ui.checkbox(&mut preview.roster, "👥 Joueurs (données d'exemple)");
+            ui.add_space(4.0);
+            ui.separator();
+            ui.checkbox(
+                &mut preview.reposition,
+                "🖐 Repositionner (glisser les éléments cochés)",
+            );
+            ui.small(
+                "La position de chaque élément est enregistrée dans la scène : elle \
+                 s'applique aussi en Play et dans le jeu exporté (APK/player).",
+            );
+            ui.add_space(4.0);
+            ui.small(
+                "En jeu, réticule et inventaire ne s'affichent que si le joueur a un \
+                 bouton 🔥 Feu configuré (Inspecteur › 🧩 Composants mobiles).",
+            );
+        });
+    preview.open = open;
+}
