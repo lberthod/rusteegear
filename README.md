@@ -135,6 +135,10 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 - **Rendu instancié** (1 draw par lot mesh+texture) + **frustum culling** CPU + **culling/LOD des lumières** (les 8 plus proches de la caméra).
 - **Chemin de rendu sans allocation par frame** (tampons réutilisés, plan de dessin par index, re-tri paresseux).
 - **Caméra orbitale** ; présentation **vsync** + cadence adaptative (throttle CPU au repos).
+- **Animation squelettale** : import glTF skinné, skinning GPU, **fondu enchaîné** entre
+  clips (`obj.anim` pilotable en Lua), répliquée en multijoueur.
+- **Ciel + brouillard** : dégradé horizon/zénith (suit l'orientation de la caméra) et
+  brouillard exponentiel, réglables dans l'inspecteur de scène.
 
 **Édition**
 - **Primitives** cube / sphère / plan / cylindre / capsule / **terrain** **+ import glTF / GLB** (asynchrone).
@@ -163,6 +167,7 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 obj.x/y/z   obj.rx/ry/rz   obj.sx/sy/sz   obj.r/g/b
 obj.tapped      -- touché au doigt cette frame
 obj.triggered   -- le joueur est entré dans la zone (trigger)
+obj.anim = "run"  -- change le clip joué (objets skinnés), fondu enchaîné automatique
 -- Globales :
 dt, time
 input.jx, input.jy, input.btn.<nom>   -- joystick + boutons tactiles
@@ -268,6 +273,14 @@ scope, prises dès le départ :
   continuent de se retrouver dans le même salon partagé par défaut, aucune
   régression. Une manche décidée (victoire/défaite) ne coupe plus la
   connexion de tout le monde : seul son salon repart, les autres continuent.
+- **Animation répliquée** (`EntityDelta::anim_clip`, Sprint 88) : le clip joué
+  par un joueur ou un monstre réseau est répliqué (pas sa phase — chaque
+  client avance déjà localement le temps de tout `AnimationState`, local ou
+  distant) et poussé dans `AnimationState::set_clip()` sur les fantômes, avec
+  le même fondu enchaîné qu'en solo.
+- **Frags individualisés** : un compteur de monstres vaincus par joueur,
+  diffusé à tous dans le `Snapshot` — brique de progression/compétition
+  pensée pour un futur mode MMORPG (cf. GAMEDESIGN_EN_LIGNE.md).
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 
@@ -355,9 +368,15 @@ le développement). Historique sprint par sprint :
 | Distribution signée (cœur) & IA/confort d'édition | 36 → 37 | 🟢 |
 | **G** — Éditeur produit orienté Android (menus, Build Panel, menu Ajouter, composants mobiles, outils) | 38 → 42 | 🟢 |
 | **H** — **Jouabilité mobile sans script** (contrôleur joueur, saut, collisions, actions au tap) & **perf rendu** | 43 → 44 | ✅ |
+| **I** — Robustesse & découplage (pas fixe, init sans panic, tests + skip-rebuild) | 45 → 49 | 🟢 (48/49 mobile-only restants) |
+| *(Multijoueur en ligne)* — salons, serveur autoritaire, Firebase annexe, latence, PvE réseau | 50 → 89 | 🟢 voir **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** |
+| **K** — Filet de sécurité (golden tests rendu, RNG seedé, console dev, debug drawing) | 80 → 83 | ✅ |
+| **L** — Animation squelettale (skinning glTF → blending → exposition Lua → réplication réseau) | 84 → 88 | ✅ |
+| **M** — Image (ciel + brouillard livrés ; HDR/tone mapping, bloom, mipmaps à venir) | 89 → 92 | 🟢 |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
-> Détail sprint par sprint : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+> Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
+> (c'est la source de vérité sur l'avancement — ce tableau n'en est qu'un résumé).
 > Reprise du projet par un nouveau développeur : **[HANDOFF.md](HANDOFF.md)**.
 
 ### Plateformes — état honnête
@@ -443,27 +462,22 @@ Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (moteur),
 
 ## 🧭 La suite — analyse & sprints
 
-Le projet a été construit par **sprints incrémentaux** (MVP → Sprint 44, Phases A→H).
+Le projet a été construit par **sprints incrémentaux**, un commit par étape validée.
 L'historique propre et la **logique des prochains sprints** vivent dans :
 
-- **[SPRINTS.md](SPRINTS.md)** — **récap de tous les sprints** (réalisés + à venir) et la
-  **logique de la Phase I** (sprints 45→49), avec correspondance analyse ↔ sprint.
-- **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** — détail par sprint (objectif · tâches · fichiers · livrable).
-- **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** — chantier **multijoueur en ligne** (sprints 50→62),
-  séparé du moteur solo : cf. **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
+- **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** — **source de vérité**, à jour en continu :
+  détail par sprint (objectif · tâches · fichiers · livrable), pour le moteur solo
+  **et** le multijoueur (numérotation indépendante, cf. la section dédiée dans ce fichier).
+- **[SPRINTS.md](SPRINTS.md)** — récap historique des sprints 0→44 (Phases A→H), figé.
+- **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)** —
+  chantier **multijoueur en ligne** en détail, cf.
+  **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
 - **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
-**Prochaine Phase I — robustesse & découplage** (détail dans [SPRINTS.md](SPRINTS.md)) :
-
-| # | Chantier | Priorité |
-|---|---|---|
-| **45** | **Découpler simulation & rendu** — boucle à pas fixe physique (aujourd'hui `advance_play` suit la cadence de rendu) | 🔴 |
-| **46** | **Durcir l'init** — propager les `Result` GPU/fenêtre + `log::error!`, réduire les `unwrap()` (anti-crash mobile, P4) | 🟠 |
-| **47** | **Dirty-tracking & tests** — sauter les rebuilds au repos, étendre la couverture | 🟡 |
-| **48** | **Capteurs & assets mobiles** — gyroscope/vibration natifs Android, import d'assets mobile (P10) | 🟠 |
-| **49** | **Distribution signée** — IPA en CI, notarisation macOS, signature store | 🟢 |
-
-> Pistes long terme (Phase J) : WebGPU/WASM, ECS léger, LOD / occlusion / fusion de meshes.
+**En cours — Phase M, image** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
+ciel + brouillard livrés (Sprint 89) ; restent cible HDR + tone mapping (90), bloom
+(91), mipmaps + tangentes (92). Après quoi : Phase N (chaîne gameplay événementielle),
+O (physique & feel), P (audio/HUD/confort), Q (WASM/WebGPU, vitrine web), R (WebXR).
 
 ---
 
