@@ -3525,6 +3525,40 @@ fn build_ui(
                                         );
                                     });
                                 }
+                                // Feu/Arme/Soin (fireball.rs) : mêmes combos bouton tactile que
+                                // Saut, jusqu'ici invisibles dans l'inspecteur — seul le JSON de
+                                // scène pouvait les régler, cf. `assets/player_scene.json`.
+                                let button_combo =
+                                    |ui: &mut egui::Ui, label: &str, salt: &str, field: &mut String| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(label);
+                                            let sel = if field.is_empty() {
+                                                "(aucun)".to_string()
+                                            } else {
+                                                field.clone()
+                                            };
+                                            egui::ComboBox::from_id_salt((salt, i))
+                                                .selected_text(sel)
+                                                .show_ui(ui, |ui| {
+                                                    ui.selectable_value(
+                                                        field,
+                                                        String::new(),
+                                                        "(aucun)",
+                                                    );
+                                                    for b in &mobile_buttons {
+                                                        ui.selectable_value(field, b.clone(), b);
+                                                    }
+                                                });
+                                        });
+                                    };
+                                button_combo(ui, "🔥 Feu ← bouton", "fire_btn", &mut ctrl.fire_button);
+                                button_combo(
+                                    ui,
+                                    "🎒 Arme (cycle) ← bouton",
+                                    "weapon_btn",
+                                    &mut ctrl.weapon_button,
+                                );
+                                button_combo(ui, "❤ Soin ← bouton", "heal_btn", &mut ctrl.heal_button);
                             }
                             ui.horizontal(|ui| {
                                 ui.label("📳 Vibration au tap");
