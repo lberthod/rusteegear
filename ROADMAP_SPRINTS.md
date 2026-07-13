@@ -23,7 +23,7 @@
 | **G — Éditeur produit orienté Android** | 33 → 37+ | Boucle produit sans ligne de commande |
 | **H — Jouabilité mobile sans script** | — | Objet jouable au doigt, rendu zéro-alloc |
 | **I — Robustesse & découplage** | 45 → 49 | Pas fixe, init sans panic, capteurs, signature |
-| *(Multijoueur en ligne)* | 50 → 78 | Voir **SPRINT_MMORPG.md** / **SPRINTNETWORK.md** |
+| *(Multijoueur en ligne)* | 50 → 79 (+ 80, 82 réseau) | Voir section **🌐 Multijoueur en ligne** ci-dessous |
 | **K — Filet de sécurité** | 80 → 83 | Golden tests rendu, RNG seedé, console dev, debug drawing |
 | **L — Animation squelettale** | 84 → 88 | Skinning glTF → blending → réplication réseau |
 | **M — Image** | 89 → 92 | Ciel/fog, HDR + tone mapping, bloom, mipmaps |
@@ -668,6 +668,206 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+## 🌐 Multijoueur en ligne (50 → 79, + 80/82 réseau) — VPS, Firebase, jeu en ligne
+
+> Numérotation **indépendante** du tronc solo ci-dessus (continue à 50 là où le solo
+> s'arrêtait à 49) ; détail complet des sprints dans **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)**
+> (50-65, puis 80/82) et **[SPRINTNETWORK.md](SPRINTNETWORK.md)** (66-79, suite directe de
+> [AUDIT_LATENCE_MULTIJOUEUR.md](AUDIT_LATENCE_MULTIJOUEUR.md)). Cette section résume ce qui
+> est **réalisé** ; elle ne remplace pas les documents source.
+>
+> **Scope verrouillé (2026-07-07)** : petit multi en ligne, **2–16 joueurs par salon**
+> (pas de monde persistant partagé) ; serveur de jeu Rust **autoritaire** (WebSocket) pour
+> le temps réel (position/combat) ; **Firebase Realtime Database** en backend annexe
+> seulement (comptes, progression, chat, classement, présence) — RTDB n'a pas d'autorité
+> serveur, il ne transporte jamais la simulation temps réel.
+>
+> ⚠️ **Collision de numérotation** : les sprints réseau **80** et **82** ci-dessous
+> (« Vie individualisée… » et « Multi-salons ») portent les **mêmes numéros** que les
+> sprints **80** et **82** du tronc solo (PHASE K, « Golden tests de rendu » et « Console
+> développeur », ci-dessous) — deux chantiers distincts numérotés en parallèle par erreur
+> (sessions concurrentes, cf. mémoire `concurrent-sessions-hazard`). Assumé tel quel dans
+> les documents source plutôt que renuméroté rétroactivement ; ne pas confondre les deux
+> en lisant « Sprint 80 »/« Sprint 82 » sans préciser le tronc.
+
+### PHASE M-net — Préparation (50)
+
+#### Sprint 50 — Extraire le gameplay combat de `app/mod.rs` ✅ FAIT
+Isolé attaque/manches/IA dans `src/app/combat.rs`, point d'extension pour le serveur
+réseau, refactor pur (aucun changement de comportement, 83/83 tests verts).
+
+### PHASE N-net — Serveur & protocole (51 → 53)
+
+#### Sprint 51 — Serveur de jeu headless ✅ FAIT
+Binaire `src/bin/server.rs` (aucun appel `gfx`/`editor`/`winit`), boucle à tick 20 Hz
+découplée du pas fixe physique 60 Hz. `cargo run --bin server` fait tourner une manche
+sans fenêtre.
+
+#### Sprint 52 — Protocole réseau & sérialisation ✅ FAIT
+`src/net/protocol.rs` : `ClientMsg`/`ServerMsg`/`Snapshot`/`EntityDelta` en `bincode`.
+10 tests de round-trip ; snapshot de 20 entités mesuré à 536 octets (~27 octets/entité).
+
+#### Sprint 53 — Transport WebSocket + connexion client ✅ FAIT
+`tokio` + `tokio-tungstenite` (desktop/Android uniquement, `ws://` sans TLS) ;
+`NetServer`/`NetClient` exposent des canaux `mpsc` synchrones au reste du programme.
+95/95 tests verts, serveur réel écoutant sur `127.0.0.1:7777`.
+
+### PHASE O-net — Client réseau (54 → 55)
+
+#### Sprint 54 — Prédiction client & interpolation 🟢 (cœur livré, câblage réel au Sprint 63)
+`src/net/interpolation.rs` : historique borné, interpolation position/yaw (chemin
+court), réconciliation à seuil (`SNAP_THRESHOLD` 0,5 m). 102/102 tests verts.
+
+#### Sprint 55 — Salons multijoueurs (lobby, join/leave) 🟢 (cœur serveur fait, UI câblée au Sprint 63)
+`src/app/multiplayer.rs` : un joueur réseau = objet indépendant avec son propre
+`NetworkInput`, routé dans `sim_step` sans changer le comportement solo. Test
+bout-en-bout à travers un vrai socket. 108 tests lib + 1 bin verts.
+
+### PHASE P-net — Firebase Realtime Database, backend annexe (56 → 59)
+
+#### Sprint 56 — Comptes & authentification 🟢 (client REST fait, écran câblé plus tard)
+`src/net/firebase.rs` : `sign_up`/`sign_in`/`set_profile_name`/`get_profile_name` (API
+REST Firebase Auth/RTDB). Clé API + URL RTDB dans les Paramètres. 114 tests verts.
+
+#### Sprint 57 — Inventaire & progression persistante 🟢 (câblage serveur fait, non vérifié en réel)
+`PlayerProgress { level, xp }` ↔ `/users/{uid}/progress` ; seul le **serveur** (compte
+Firebase dédié) écrit la progression, jamais le client (anti-triche). 117 tests verts.
+
+#### Sprint 58 — Chat de salon & présence 🟢 (REST fait, SSE temps réel non retenu)
+`ChatMessage`/`Presence` sur RTDB via polling REST (SSE écarté : incompatible avec la
+boucle `winit` sans thread dédié supplémentaire, pas justifié à cette échelle).
+123 tests verts.
+
+#### Sprint 59 — Classement (leaderboard) 🟢 (backend + câblage serveur faits, UI câblée au Sprint 65)
+`LeaderboardEntry` sur `/leaderboard`, écrit par le serveur en fin de manche, lu par
+polling public. 126 tests verts. Risque documenté : pas de purge, à corriger avant
+usage soutenu.
+
+### PHASE Q-net — Robustesse & mise en production (60 → 62)
+
+#### Sprint 60 — Durcissement réseau & anti-triche de base ✅ FAIT
+**Bug réel corrigé** : un `NaN` reçu du réseau traversait `f32::clamp` sans filtre et
+corrompait la position simulée — `sanitize_network_input` le rejette désormais.
+Ajouté : cooldown d'attaque réseau validé serveur, timeout client (10 s). 130 tests
+lib + 2 bin verts.
+
+#### Sprint 61 — Tests de charge & optimisation bande passante ✅ FAIT
+`examples/load_test_client.rs`, 16 bots réels à 20 Hz : traitement serveur ~0,4 ms/tick
+(1 % du budget à 20 Hz), 6,76 Ko/s/joueur descendant — largement sous l'objectif, aucune
+optimisation nécessaire à cette échelle (décision mesurée, pas anticipée).
+
+#### Sprint 62 — Déploiement serveur ⬜
+VPS simple, packaging du binaire serveur (cross-compile Linux), `wss://` obligatoire en
+prod. **Seul sprint réseau du plan initial resté non fait.**
+
+### Hors plan initial, demandés directement par l'utilisateur (63 → 65)
+
+#### Sprint 63 — Client réseau desktop & fenêtre Multijoueur ✅ FAIT
+`src/app/network_client.rs` + fenêtre **🌐 Multijoueur** dans l'éditeur : câble enfin
+`NetClient` dans la boucle réelle (envoi d'`Input`, fantômes distants interpolés,
+connexion Firebase optionnelle). **Bug critique trouvé et corrigé en testant réellement** :
+le serveur perdait la manche tout seul avant qu'un joueur ne rejoigne (heuristique
+`player_index` désignant un monstre ou le sol). 136 tests lib + 2 bin verts.
+
+#### Sprint 64 — Chat en jeu ✅ FAIT
+Fenêtre Multijoueur → section Chat, branchée sur le backend Firebase du Sprint 58.
+137 tests lib + 2 bin verts.
+
+#### Sprint 65 — Classement en jeu ✅ FAIT
+Fenêtre Multijoueur → section Classement, branchée sur le backend du Sprint 59.
+138 tests lib + 2 bin verts.
+
+### Suite directe : latence & qualité du mode en ligne (66 → 79)
+
+> Après [AUDIT_LATENCE_MULTIJOUEUR.md](AUDIT_LATENCE_MULTIJOUEUR.md) (2026-07-12) : chaque
+> sprint corrige un symptôme **mesuré en jeu réel** (vidéo, VPS), pas anticipé.
+
+#### Sprint 66 — Lissage de la réconciliation du joueur local ✅ FAIT
+Correction dure (« snap ») remplacée par un lissage progressif — fin de la
+téléportation visible en cas de désaccord serveur/client.
+
+#### Sprint 67 — Délai d'interpolation pour les fantômes distants ✅ FAIT
+Supprime les gels/saccades des joueurs distants affichés.
+
+#### Sprint 68 — Plafonnement du débit d'`Input` client ✅ FAIT
+N'envoie plus un `Input` à chaque frame de rendu, seulement au rythme utile.
+
+#### Sprint 69 — Vérification géographique du serveur de test ⬜ (infra, pas code)
+Établir si les 150-250 ms de RTT mesurés viennent de la distance géographique du VPS —
+nécessite un accès réel non disponible en environnement de dev.
+
+#### Sprint 70 — Cohérence doc/code du `Snapshot` ✅ FAIT
+Lève une divergence entre la documentation et le comportement réel du `Snapshot`.
+
+#### Sprint 71 — Transport non-TCP ⬜ (conditionnel, non déclenché)
+Prévu seulement si les Sprints 66-68 ne suffisent pas — jugé non nécessaire.
+
+#### Sprint 72 — Interpolation de rendu à pas fixe ✅ FAIT (`0aa0b5d`)
+**Cause du « judder »** : simulation à pas fixe 1/60 s, rendu affichant la dernière pose
+brute. **Correctif** : `blend_render_poses` mélange les deux derniers pas pondérés par
+l'accumulateur ; téléportations exemptées (`TELEPORT_SNAP_PER_STEP`).
+
+#### Sprint 73 — Game feel du déplacement ✅ FAIT (`e7695fe`)
+Constantes documentées (`BRAKE_FACTOR`, `AIR_CONTROL`, `FALL_GRAVITY_FACTOR`),
+rotation en amorti exponentiel indépendant du framerate.
+
+#### Sprint 74 — Réconciliation par trajectoire récente ✅ FAIT (`718fb1d`)
+**Cause du tremblement mesuré** : la position serveur, toujours en retard d'une
+latence + un tick, dépassait `SNAP_THRESHOLD` en continu à vitesse constante.
+**Correctif** : historique 1 s de la trajectoire prédite — une position serveur proche
+d'un point récent n'est plus corrigée (« en phase, juste en retard »).
+
+#### Sprint 75 — Convention d'axes de la poussée W/S ✅ FAIT (`04c0cc6`)
+**Bug de signe trouvé** : le client envoyait W/S en Z monde, le serveur attendait la
+convention joystick — corrigé, test de bout en bout par yaw ajouté.
+
+#### Sprint 76 — Boutons tactiles/gyro dans l'`Input` réseau ✅ FAIT (`62cf640`, `619b5a6`)
+Saut/attaque tactiles et gyroscope désormais transmis au serveur (invisibles avant) ;
+croix directionnelle tactile devenue pavé tank W/A/S/D (glyphes ▲▼ absents sur Android).
+
+#### Sprint 77 — Rattrapage doux à l'arrêt + serveur VPS aligné ✅ FAIT (`1f00598`)
+**Cause du décalage mesuré** (positions différentes selon l'appareil à l'arrêt) :
+serveur et client sur des versions de physique différentes. **Correctif** : convergence
+douce (5 %/frame) sous 3 cm d'écart à l'arrêt + **VPS recompilé sur le même commit**
+que les clients.
+
+#### Sprint 78 — Boule de feu + monstres sur la carte multijoueur ✅ FAIT
+Première attaque à distance (`src/app/fireball.rs`), recharge validée **côté serveur**
+(anti-spam), 5 monstres avec PV sur la carte embarquée, diffusés dans le `Snapshot`
+(`player_id: None`).
+
+#### Sprint 79 — Visée réelle, multi-armes et changement d'arme ✅ FAIT
+**Audit du Sprint 78, trois trous trouvés** : orientation des joueurs réseau jamais
+appliquée côté serveur (`aim_yaw` ajouté au protocole), une seule arme (table
+`RANGED_WEAPONS` : Boule de feu/Éclair/Boulet), pas de changement d'arme (clavier 1/2/3
++ bouton tactile, borné côté serveur).
+
+### Sprints réseau numérotés 80 et 82 (⚠️ collision avec PHASE K solo, voir avertissement ci-dessus)
+
+#### Sprint 80 (réseau) — Vie individualisée, IA multi-cibles, soin coopératif ✅ FAIT
+`src/app/health.rs` : vie par joueur (`HashMap<PlayerId, f32>`), mort = spectateur sans
+fin de manche pour les autres (`is_room_lost`) ; IA multi-cibles (chaque `AiChaser`
+poursuit le joueur vivant visible le plus proche) ; soin coopératif touche **H**/bouton
+tactile, validé serveur. 209 tests verts. Incident de session concurrente géré sans
+perte (cf. `concurrent-sessions-hazard`).
+
+#### Sprint 82 (réseau) — Multi-salons ✅ FAIT
+`src/bin/server.rs` : `HashMap<String, Room>` remplace l'`AppState` unique ; salon
+choisi/créé via `ClientMsg::Join::lobby`, `DEFAULT_LOBBY` préservé pour aucune
+régression client. Une manche décidée ne coupe plus tout le process
+(`Room::restart()` isolé par salon). 220 tests lib + 4 bin verts.
+
+### Reste ouvert côté réseau
+
+- **Sprint 62** — déploiement VPS proprement documenté/scripté (`packaging/deploy_server.sh`).
+- **Sprint 69** — vérification géographique du VPS de test (infra).
+- **Sprint 71** — transport non-TCP (seulement si nécessaire).
+- Écrans UI reportés faute d'affichage graphique vérifiable en environnement de dev :
+  lobby, connexion Firebase, reconnexion avec la même identité, sélection de salon
+  dans l'éditeur — tous fonctionnels côté backend/serveur, jamais vus tourner ici.
+
+---
+
 ## 🚀 Phases K → Q — Vers un moteur pertinent (sprints 80 → 114)
 
 > Issues de l'**audit comparatif à 200 fonctionnalités** (Godot / Unity / Unreal / RusteeGear,
@@ -1002,6 +1202,42 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 > (événements → prefabs → spawn → save), une physique fidèle, un audio vivant, et il tourne dans
 > un navigateur — sans avoir trahi un seul refus assumé.
 
+### PHASE R — WebXR, le casque dans le navigateur (115 → 117, dépend de PHASE Q)
+
+> Le Sprint 111 livre un canvas WebGPU classique en 2D plat, **pas** une session
+> WebXR — c'est un chantier séparé, à ne démarrer qu'une fois PHASE Q acquise.
+
+#### Sprint 115 — Spike : session WebXR isolée ⬜
+- [ ] `cargo build --target wasm32-unknown-unknown --lib` sur le crate actuel (sans
+  rendu) pour lister précisément les dépendances bloquantes (`mlua` vendored en C,
+  `tokio`/`tokio-tungstenite`) avant d'y toucher.
+- [ ] Exemple isolé (hors moteur) `wgpu` + `winit` + `wasm-bindgen` : triangle dans
+  un `<canvas>`, puis `navigator.xr.requestSession("immersive-vr")` + rendu stéréo
+  trivial (deux triangles colorés, un par œil).
+- **Fichiers** : `examples/` (nouveau, isolé du moteur).
+- **Livrable** : session WebXR minimale testable dans Chrome avec **Immersive Web
+  Emulator** (casque/contrôleurs simulés, sans matériel).
+- **Risque** : `mlua` vendored (C) et `tokio` incompatibles wasm32 nu — à
+  contourner ou différer avant toute intégration moteur.
+
+#### Sprint 116 — Intégration moteur : rendu stéréo + poses ⬜
+- [ ] `XRWebGLLayer`/`XRProjectionLayer` branché sur la surface wgpu du moteur ;
+  boucle `XRFrame` (deux vues caméra) cohabitant avec la boucle `winit` existante.
+- [ ] Poses tête + contrôleurs/mains (`XRInputSource`) injectées dans `src/app/`.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/app/mod.rs`.
+- **Livrable** : une scène RusteeGear s'affiche en stéréo dans un casque simulé
+  (IWE) ou réel (Quest via navigateur).
+
+#### Sprint 117 — Tests XR automatisés + polish ⬜
+- [ ] Scénarios IWE scriptés (déplacement contrôleur, gâchette, préhension d'objet)
+  rejoués après chaque changement, via le pont MCP d'IWE si un agent est disponible.
+- **Livrable** : une checklist d'interactions XR de base (viser, saisir, téléporter)
+  validée sans casque physique à chaque itération.
+
+> **Hors scope confirmé** : performance réelle sur casque autonome (Quest, Pico),
+> confort/nausées, hand tracking physique imparfait — un émulateur écran ne les
+> mesure pas ; à valider sur matériel réel avant toute publication XR.
+
 ---
 
 ## ✅ Définition de « terminé » par phase
@@ -1032,6 +1268,9 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - **P** : audio mixé/spatialisé/varié, HUD en widgets, manettes, hot-reload, profiler GPU, crash log
   local, doc API publiée.
 - **Q** : la démo multijoueur jouable **dans le navigateur**, lien public dans le README.
+- **R** : une scène RusteeGear s'affiche **en stéréo dans un casque** (simulé via
+  Immersive Web Emulator ou réel via navigateur), poses tête/contrôleurs prises en
+  compte, interactions XR de base validées par des scénarios rejouables.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
