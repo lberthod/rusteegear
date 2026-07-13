@@ -2530,21 +2530,40 @@ fn mobile_overlay(
     if !cfg.buttons.is_empty() {
         let btn = 64.0;
         let spacing = 8.0;
-        let width = cfg.buttons.len() as f32 * (btn + spacing);
-        let pos = egui::pos2(area.right() - margin - width, area.bottom() - margin - btn);
+        // Grille (2 colonnes max) plutôt qu'une seule rangée qui s'allonge avec
+        // le nombre de boutons : au-delà de Saut/Attaque (2 boutons, comme les
+        // premières démos), une rangée unique — Saut/Feu/Arme/Soin, 4 boutons —
+        // déborde assez à gauche pour chevaucher le pavé tank W/A/S/D sur un
+        // téléphone de largeur courante (constaté en jeu réel sur APK,
+        // Sprint 84 : « Sa » de Saut caché derrière le S du pavé). Une grille
+        // qui pousse en hauteur, jamais en largeur, garde une empreinte
+        // horizontale fixe (2 colonnes) quel que soit le nombre de boutons.
+        const COLS: usize = 2;
+        let cols = cfg.buttons.len().min(COLS);
+        let rows = cfg.buttons.len().div_ceil(cols);
+        let width = cols as f32 * (btn + spacing) - spacing;
+        let height = rows as f32 * (btn + spacing) - spacing;
+        let pos = egui::pos2(
+            area.right() - margin - width,
+            area.bottom() - margin - height,
+        );
         egui::Area::new("mobile_buttons".into())
             .fixed_pos(pos)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    for name in &cfg.buttons {
-                        let resp =
-                            ui.add_sized([btn, btn], egui::Button::new(name).corner_radius(32.0));
-                        // Bouton « maintenu » : actif tant que le pointeur est enfoncé dessus.
-                        if resp.is_pointer_button_down_on() {
-                            input.buttons.insert(name.clone());
-                        }
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+                for (i, name) in cfg.buttons.iter().enumerate() {
+                    let (col, row) = (i % cols, i / cols);
+                    let cell = egui::Rect::from_min_size(
+                        rect.min
+                            + Vec2::new(col as f32 * (btn + spacing), row as f32 * (btn + spacing)),
+                        Vec2::splat(btn),
+                    );
+                    let resp = ui.put(cell, egui::Button::new(name).corner_radius(32.0));
+                    // Bouton « maintenu » : actif tant que le pointeur est enfoncé dessus.
+                    if resp.is_pointer_button_down_on() {
+                        input.buttons.insert(name.clone());
                     }
-                });
+                }
             });
     }
 }
