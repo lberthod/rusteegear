@@ -947,6 +947,7 @@ impl Renderer {
                 &mut app.selected_light,
                 &mut app.playing,
                 &mut app.paused,
+                &mut app.time_scale,
                 &mut app.gizmo_mode,
                 &mut app.input_state,
                 &mut app.device_preview,

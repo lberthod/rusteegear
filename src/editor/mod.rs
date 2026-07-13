@@ -342,6 +342,8 @@ impl Editor {
         selected_light: &mut Option<usize>,
         playing: &mut bool,
         paused: &mut bool,
+        // Multiplicateur du temps simulé (Sprint 81) — voir `AppState::time_scale`.
+        time_scale: &mut f32,
         gizmo_mode: &mut GizmoMode,
         input_state: &mut crate::app::PlayerInput,
         device_preview: &mut bool,
@@ -390,6 +392,7 @@ impl Editor {
                 selected_light,
                 playing,
                 paused,
+                time_scale,
                 gizmo_mode,
                 input_state,
                 device_preview,
@@ -2517,6 +2520,7 @@ fn build_ui(
     selected_light: &mut Option<usize>,
     playing: &mut bool,
     paused: &mut bool,
+    time_scale: &mut f32,
     gizmo_mode: &mut GizmoMode,
     input_state: &mut crate::app::PlayerInput,
     device_preview: &mut bool,
@@ -2655,6 +2659,16 @@ fn build_ui(
                 if ui.button("⏹ Stop").clicked() {
                     *playing = false;
                     *paused = false;
+                }
+            }
+            ui.separator();
+            // Time scale (Sprint 81) : ralenti/accélère la simulation pour déboguer la
+            // physique et le réseau. Préréglages + valeur affichée plutôt qu'un slider :
+            // les valeurs qui comptent en pratique sont peu nombreuses (figé/ralenti/normal/rapide).
+            ui.label("⏱");
+            for (label, value) in [("¼×", 0.25), ("½×", 0.5), ("1×", 1.0), ("2×", 2.0)] {
+                if ui.selectable_label(*time_scale == value, label).clicked() {
+                    *time_scale = value;
                 }
             }
             ui.separator();
