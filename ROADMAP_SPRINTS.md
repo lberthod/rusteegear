@@ -1448,13 +1448,14 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/runtime/physics.rs`, `src/runtime/mod.rs`.
 - **Livrable** : capteur de sol et cône de vision scriptés en Lua, visualisés au debug drawing (Sprint 83).
 
-#### Sprint 103a — Maintenabilité : découpage de `app/mod.rs` ⬜
-**Objectif** : extraire des sous-systèmes hors de `app/mod.rs` (7180 lignes, cf. `AUDIT.md` §7.4) avant d'y ajouter la physique de contrôleur.
-- [ ] Extraire des sous-systèmes (combat, IA, etc.) hors de `app/mod.rs` dans des modules dédiés.
-- [ ] Réduire `app/mod.rs` à l'orchestration (state machine, boucle principale).
-- **Fichiers** : `src/app/mod.rs`, `src/app/combat.rs` et nouveaux modules extraits.
-- **Livrable** : taille de `app/mod.rs` réduite significativement ; comportement inchangé ; tests existants verts.
-- **Risque** : refactor pur, sans nouvelle fonctionnalité — le faire **seul**, pas de sprint gameplay en parallèle, pour limiter les conflits de merge.
+#### Sprint 103a — Maintenabilité : découpage des gros modules & AppState ⬜
+**Objectif** : réduire le risque des futurs changements gameplay/UI/réseau/script en cassant les fichiers-mastodontes avant d'y ajouter la physique de contrôleur (cf. `AUDIT.md` §7.4).
+- [ ] `app/mod.rs` (7180 lignes) : `AppState` porte trop de responsabilités (gameplay, scripts Lua, réseau, sauvegarde, combat, animation, UI indirecte) — extraire ces sous-systèmes dans des modules dédiés, réduire `AppState`/`app/mod.rs` à l'orchestration (state machine, boucle principale).
+- [ ] `src/editor/mod.rs` (3948 lignes) et `src/scene/mod.rs` (4810 lignes) : même traitement (découpage par responsabilité) ; scinder en sprint(s) séparé(s) si le périmètre est trop large pour tenir ici.
+- [ ] Commentaires trop volumineux qui documentent l'historique de sprint plutôt que le comportement actuel : déplacer l'historique vers `docs/audits` (à créer), garder dans le code uniquement les invariants importants.
+- **Fichiers** : `src/app/mod.rs`, `src/app/combat.rs`, `src/editor/mod.rs`, `src/scene/mod.rs`, nouveaux modules extraits, `docs/audits/`.
+- **Livrable** : taille des trois fichiers réduite significativement ; comportement inchangé ; tests existants verts ; commentaires du code recentrés sur les invariants, historique déplacé en doc.
+- **Risque** : refactor pur, sans nouvelle fonctionnalité — le faire **seul**, pas de sprint gameplay en parallèle, pour limiter les conflits de merge. Si le périmètre (3 fichiers + AppState + commentaires) s'avère trop large pour un seul sprint, scinder en 103a-1 (`app/mod.rs`/`AppState`), 103a-2 (`editor`+`scene`), 103a-3 (commentaires).
 
 #### Sprint 103b — Character controller kinématique ⬜
 **Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.
