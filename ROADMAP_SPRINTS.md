@@ -686,7 +686,12 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 > de sprints tampons insérables après K ; **Q ferme la boucle** quand il y a quelque chose à
 > montrer. Les sprints 50 → 78 étant pris par le multijoueur, on démarre à 80 (79 = tampon).
 
-### PHASE K — Filet de sécurité (80 → 83)
+### PHASE K — Filet de sécurité (80 → 83) ✅
+
+> **Phase K — Filet de sécurité : terminée** (Sprints 80→83). Golden tests headless,
+> simulation maîtrisée (time scale + pas unique), console de commandes, debug drawing
+> (Rust + Lua) et sélecteur de vue normales/profondeur. La Phase L (animation squelettale)
+> peut commencer sans sprint de rendu à l'aveugle.
 
 #### Sprint 80 — Golden tests de rendu 🟢
 **Objectif** : ne plus jamais toucher un shader sans filet.
@@ -729,7 +734,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - **Livrable** : 6 commandes testées bout en bout (`AppState` réel) — jamais de panique sur
   une saisie invalide, toujours un message de retour (usage ou erreur explicite).
 
-#### Sprint 83 — Debug drawing + vues buffers 🟡 (partiel)
+#### Sprint 83 — Debug drawing + vues buffers 🟢
 **Objectif** : voir ce que le moteur calcule.
 - [x] `AppState::debug_line/debug_box/debug_sphere` **côté Rust**, sur le pipeline gizmo
       (buffer dédié, redimensionné au doublement), vidé après chaque frame de rendu — branché
@@ -738,11 +743,17 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
       `vibrate()`/`set_health()` (table accumulatrice relue après `func.call`). Les 16 sites
       d'appel de `run_script` (1 production + 15 tests) mis à jour ; `debug.box`/`debug.sphere`
       restent Rust-only (un script peut composer des lignes lui-même au besoin).
-- [ ] Sélecteur de vue (normales, depth) dans la toolbar — pas commencé.
-- **Fichiers** : `src/app/mod.rs` (`run_script`, API Rust + Lua), `src/gfx/renderer.rs`
-  (pipeline). **Restant** : `src/gfx/` (vues buffers).
+- [x] Sélecteur de vue (`DebugView` : Éclairé/Normales/Profondeur) dans la toolbar, encodé
+      dans un canal inutilisé de l'uniform d'éclairage existant (`ambient.y`) plutôt que
+      d'agrandir l'uniform. Profondeur linéarisée sur une échelle visuelle de 20 m (le
+      near/far réel de la caméra, 0.1..100, écraserait toute scène compacte dans le même
+      blanc) — ajusté après un premier essai peu lisible, vérifié visuellement.
+- **Fichiers** : `src/app/mod.rs` (`run_script`, API Rust + Lua, `DebugView`),
+  `src/gfx/renderer.rs` (pipeline, uniform), `src/gfx/shaders/main.wgsl` (branches de vue),
+  `src/editor/mod.rs` (toolbar).
 - **Livrable** : le clic de sélection en mode édition visualise le rayon de picking (ligne
-  jaune) ; un script peut désormais tracer sa propre trajectoire avec `debug.line()`.
+  jaune) ; un script trace sa propre trajectoire avec `debug.line()` ; la toolbar bascule
+  entre rendu éclairé, normales et profondeur sur la scène affichée.
 
 ### PHASE L — Animation squelettale (84 → 88)
 
