@@ -809,7 +809,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   (wgpu autorise des modules vertex/fragment distincts si `VsOut` correspond exactement),
   évitant de dupliquer tout le code d'éclairage dans `skinned.wgsl`.
 
-#### Sprint 87 — Intégration Play + blending + state machine 🟡 (Rust livré, exposition Lua restante)
+#### Sprint 87 — Intégration Play + blending + state machine ✅ FAIT
 **Objectif** : des transitions douces pilotables en Lua.
 - [x] **Intégration Play/rendu** (reportée du Sprint 86) : `SceneObject.animation`
       (clip + temps + vitesse), `sim_step` avance le temps (compatible `time_scale`,
@@ -825,18 +825,24 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
       translation/échelle, nlerp rotation) avant de composer la hiérarchie une seule
       fois — mélanger des matrices monde aurait été faux pour la rotation. Vérifié par
       3 tests CPU (extrémités, milieu, clamp) + 1 test de rendu bout en bout.
-- [ ] Exposition Lua (`obj.anim = "run"`) — reste à faire : touche les 16 sites d'appel
-      de `run_script`, un chantier à part (cf. Sprint 83, où le même geste a déjà été
-      fait pour `debug.line()`). Sans elle, la FSM elle-même (choisir *quand* transiter)
-      doit encore être pilotée côté Rust ; le mécanisme de transition est complet et
-      utilisable dès qu'un appelant Rust choisit un clip.
-- **Fichiers livrés** : `src/scene/mod.rs` (`AnimationState`), `src/app/mod.rs` (`sim_step`),
-  `src/gfx/renderer.rs` (`draw_plan_skinned`, `prepare_skinned_draws`,
+- [x] **Exposition Lua** (`obj.anim = "run"`) : `run_script` reçoit désormais
+      `anim: &mut Option<AnimationState>` (signature + 16 sites d'appel, même geste que
+      `debug.line()` au Sprint 83) ; le champ `obj.anim` est lu en écriture après
+      l'appel Lua et route vers `AnimationState::set_clip()` — absent (`""`) ou
+      inchangé ⇒ aucun redémarrage de fondu. N'existe que pour les objets skinnés
+      (`obj.animation.is_some()`), silencieux sinon. 2 tests dédiés (démarre un fondu ;
+      ne redémarre pas le clip courant si le script n'y touche pas) + 253 tests lib/4
+      tests bin verts au total.
+- **Fichiers** : `src/scene/mod.rs` (`AnimationState`), `src/app/mod.rs` (`sim_step`,
+  `run_script`), `src/gfx/renderer.rs` (`draw_plan_skinned`, `prepare_skinned_draws`,
   `draw_skinned_objects`), `src/scene/import.rs` (`ImportedMesh::skinned_mesh_data`,
-  `compute_joint_matrices_blended`). **Restant** : `src/app/mod.rs` (`run_script`),
-  `src/runtime/mod.rs` (FSM Lua).
-- **Livrable restant** : le joueur de la démo court, s'arrête, saute — sans à-coup, piloté
-  par le script du joueur plutôt que par du code Rust ad hoc.
+  `compute_joint_matrices_blended`).
+- **Livrable restant, hors scope de ce sprint** : la démo mobile (`Scene::mobile_demo`)
+  n'a pas de personnage skinné (capsule statique) — un joueur qui court/s'arrête/saute
+  « sans à-coup, piloté par le script » demande un asset skinné avec clips
+  idle/run/jump nommés, qui n'existe pas encore dans le dépôt (seul le golden test de
+  skinning a un rig synthétique). Mécanisme Lua complet et testé ; contenu de démo à
+  faire dans un sprint dédié plutôt qu'anticipé ici.
 
 #### Sprint 88 — Animation répliquée ⬜
 **Objectif** : les joueurs réseau s'animent aussi.

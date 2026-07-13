@@ -2510,6 +2510,7 @@ impl AppState {
                 &func,
                 &mut obj.transform,
                 &mut obj.color,
+                &mut obj.animation,
                 dt,
                 time,
                 &self.input_state,
@@ -3328,6 +3329,7 @@ fn run_script(
     func: &mlua::Function,
     t: &mut Transform,
     color: &mut [f32; 3],
+    anim: &mut Option<crate::scene::AnimationState>,
     dt: f32,
     time: f32,
     input: &PlayerInput,
@@ -3353,6 +3355,11 @@ fn run_script(
     obj.set("b", color[2])?;
     obj.set("tapped", tapped)?;
     obj.set("triggered", triggered)?;
+    // `obj.anim` (Sprint 87) : clip actuellement joué, lu en écriture après l'appel pour
+    // piloter la FSM depuis Lua (`obj.anim = "run"` démarre un fondu enchaîné vers ce
+    // clip). N'existe que pour les objets skinnés ; ignoré silencieusement sinon, comme
+    // `hud` reste vide tant qu'aucun script n'y touche.
+    obj.set("anim", anim.as_ref().map(|a| a.clip.as_str()).unwrap_or(""))?;
 
     // Contrôles tactiles : `input.jx`, `input.jy` (joystick) et `input.btn.<nom>` (booléens).
     let input_tbl = lua.create_table()?;
@@ -3470,6 +3477,12 @@ fn run_script(
     );
     t.scale = Vec3::new(obj.get("sx")?, obj.get("sy")?, obj.get("sz")?);
     *color = [obj.get("r")?, obj.get("g")?, obj.get("b")?];
+    if let Some(state) = anim {
+        let requested: String = obj.get("anim")?;
+        if !requested.is_empty() {
+            state.set_clip(requested);
+        }
+    }
     Ok(())
 }
 
@@ -4087,6 +4100,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4108,6 +4122,7 @@ mod tests {
             &func,
             &mut t2,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &empty,
@@ -4138,6 +4153,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &PlayerInput::default(),
@@ -4160,6 +4176,87 @@ mod tests {
     }
 
     #[test]
+    fn script_setting_obj_anim_starts_a_crossfade() {
+        // Sprint 87 (exposition Lua) : `obj.anim = "run"` doit atterrir dans
+        // `AnimationState` via `set_clip`, avec le fondu enchaîné qu'il déclenche
+        // (`prev_clip` retient l'ancien clip, `blend` repart à 0).
+        use crate::scene::AnimationState;
+        let lua = Lua::new();
+        let src = "obj.anim = 'run'";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut anim = Some(AnimationState {
+            clip: "idle".into(),
+            time: 1.5,
+            speed: 1.0,
+            prev_clip: String::new(),
+            prev_time: 0.0,
+            blend: 1.0,
+        });
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut anim,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let state = anim.unwrap();
+        assert_eq!(state.clip, "run");
+        assert_eq!(state.prev_clip, "idle");
+        assert_eq!(state.blend, 0.0);
+    }
+
+    #[test]
+    fn script_leaving_obj_anim_untouched_does_not_reset_clip() {
+        // Sans écriture de `obj.anim` par le script, le clip courant ne doit pas être
+        // relancé (sinon `set_clip` redémarrerait un fondu à chaque frame sans raison).
+        use crate::scene::AnimationState;
+        let lua = Lua::new();
+        let src = "obj.x = obj.x"; // script sans rapport avec l'animation
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut anim = Some(AnimationState {
+            clip: "run".into(),
+            time: 0.4,
+            speed: 1.0,
+            prev_clip: String::new(),
+            prev_time: 0.0,
+            blend: 1.0,
+        });
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut anim,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let state = anim.unwrap();
+        assert_eq!(state.clip, "run");
+        assert_eq!(state.time, 0.4);
+        assert_eq!(state.blend, 1.0);
+    }
+
+    #[test]
     fn script_reacts_to_tap_and_changes_color() {
         // Au tap, l'objet vire au rouge.
         let lua = Lua::new();
@@ -4174,6 +4271,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4191,6 +4289,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4218,6 +4317,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4234,6 +4334,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4265,6 +4366,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4292,6 +4394,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4320,6 +4423,7 @@ mod tests {
             &func,
             &mut Transform::from_pos(Vec3::ZERO),
             &mut [1.0; 3],
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4337,6 +4441,7 @@ mod tests {
             &func,
             &mut Transform::from_pos(Vec3::ZERO),
             &mut [1.0; 3],
+            &mut None,
             0.016,
             0.0,
             &input,
@@ -4358,6 +4463,7 @@ mod tests {
                 &func,
                 &mut Transform::from_pos(Vec3::ZERO),
                 &mut [1.0; 3],
+                &mut None,
                 0.016,
                 0.0,
                 &input,
@@ -4401,6 +4507,7 @@ mod tests {
                 &func,
                 &mut t0,
                 &mut col,
+                &mut None,
                 0.016,
                 0.0,
                 &input,
@@ -4418,6 +4525,7 @@ mod tests {
                 &func,
                 &mut t1,
                 &mut col1,
+                &mut None,
                 0.016,
                 1.0,
                 &input,
@@ -5905,6 +6013,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             3.7,
             &input,
@@ -5941,6 +6050,7 @@ mod tests {
             &func,
             &mut t,
             &mut col,
+            &mut None,
             0.016,
             0.0,
             &input,
