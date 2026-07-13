@@ -2679,35 +2679,61 @@ impl AppState {
             // position courante du joueur, recalculée chaque frame — une vraie poursuite
             // réactive (jeu local vs IA), pas une trajectoire fixe scriptée à l'avance.
             if !candidate_targets.is_empty() {
+                // Cible la plus proche parmi `candidate_targets` pour chaque chasseur
+                // visible (GAMEDESIGN_EN_LIGNE.md §3.2), regroupée par cible choisie
+                // (indice dans `candidate_targets`, pas la position elle-même : sert
+                // au plafond ci-dessous).
+                let mut by_target: HashMap<usize, Vec<(usize, f32)>> = HashMap::new();
                 for (idx, obj) in self.scene.objects.iter().enumerate() {
-                    let Some(ai) = &obj.ai_chaser else { continue };
                     // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
                     // ne poursuit pas (et n'a de toute façon pas de corps physique tant
                     // qu'il est masqué, cf. le filtre `visible` dans `Physics::build`).
-                    if !obj.visible {
+                    if obj.ai_chaser.is_none() || !obj.visible {
                         continue;
                     }
-                    // Cible la plus proche parmi `candidate_targets` (GAMEDESIGN_EN_LIGNE.md
-                    // §3.2) : recalculée chaque frame, comme l'ancienne cible unique — un
-                    // monstre peut donc changer de proie s'il en approche une plus proche.
-                    let target = candidate_targets
+                    let (target_i, dist_sq) = candidate_targets
                         .iter()
-                        .copied()
-                        .min_by(|a, b| {
-                            let da = (*a - obj.transform.position).length_squared();
-                            let db = (*b - obj.transform.position).length_squared();
-                            da.total_cmp(&db)
-                        })
+                        .enumerate()
+                        .map(|(i, &t)| (i, (t - obj.transform.position).length_squared()))
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
                         .expect("candidate_targets vérifié non vide ci-dessus");
-                    let to_target = target - obj.transform.position;
-                    let dir = Vec3::new(to_target.x, 0.0, to_target.z);
-                    let (vx, vz) = if dir.length_squared() > 1e-6 {
-                        let d = dir.normalize() * ai.speed;
-                        (d.x, d.z)
-                    } else {
-                        (0.0, 0.0)
-                    };
-                    phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+                    by_target.entry(target_i).or_default().push((idx, dist_sq));
+                }
+                // Plafond de chasseurs actifs par cible (audit en conditions réelles,
+                // 2026-07-13) : sans lui, TOUS les monstres visibles convergent au même
+                // instant sur l'unique joueur présent (le cas le plus courant en test
+                // solo) — vu en jeu réel, 4-5 monstres acculant un joueur contre un mur
+                // en quelques secondes, sans la moindre fenêtre pour riposter ou fuir.
+                // Recalculé chaque frame par distance : seuls les `MAX_ACTIVE_CHASERS_
+                // PER_TARGET` chasseurs les plus proches d'une cible donnée avancent
+                // réellement ce tick ; les autres restent en place (toujours visibles/
+                // menaçants, juste pas en train de foncer) — un chasseur relégué reprend
+                // la poursuite dès qu'un des premiers meurt ou s'éloigne, sans script ni
+                // état à mémoriser d'une frame à l'autre.
+                for (target_i, mut group) in by_target {
+                    group.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    let target = candidate_targets[target_i];
+                    for (rank, &(idx, _)) in group.iter().enumerate() {
+                        if rank >= MAX_ACTIVE_CHASERS_PER_TARGET {
+                            phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                            continue;
+                        }
+                        let obj_pos = self.scene.objects[idx].transform.position;
+                        let speed = self.scene.objects[idx]
+                            .ai_chaser
+                            .as_ref()
+                            .expect("filtré ci-dessus : cet objet a un ai_chaser")
+                            .speed;
+                        let to_target = target - obj_pos;
+                        let dir = Vec3::new(to_target.x, 0.0, to_target.z);
+                        let (vx, vz) = if dir.length_squared() > 1e-6 {
+                            let d = dir.normalize() * speed;
+                            (d.x, d.z)
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+                    }
                 }
             }
             // Recul (knockback, cf. `AppState::stagger`) : appliqué en dernier, après le
@@ -3125,6 +3151,15 @@ fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
 /// le personnage à ~570°/s, impossible à doser (audit qualité, 2026-07-12).
 /// 3 rad/s ≈ 170°/s : demi-tour en ~1 s, vif mais contrôlable.
 const MANUAL_TURN_SPEED: f32 = 3.0;
+
+/// Nombre maximal de chasseurs (`AiChaser`) qui poursuivent activement la
+/// **même** cible en même temps (cf. le bloc de pilotage IA plus haut) : au-delà,
+/// les monstres en surnombre restent en place plutôt que de tous converger d'un
+/// coup — sans ce plafond, un joueur seul face à plusieurs monstres se faisait
+/// acculer contre un mur en quelques secondes, sans fenêtre de riposte (audit en
+/// conditions réelles, 2026-07-13). 2 = toujours une vraie menace à plusieurs
+/// (pas trivialisé à un seul assaillant), sans jamais submerger instantanément.
+const MAX_ACTIVE_CHASERS_PER_TARGET: usize = 2;
 
 /// Écart angulaire **signé le plus court** (radians, dans [-π, π]) de `cur` vers
 /// `target` — jamais plus d'un demi-tour, quel que soit l'enroulement des angles.
@@ -4622,6 +4657,81 @@ mod tests {
         assert!(
             dist1 < dist0 - 1.0,
             "le chasseur doit se rapprocher du joueur (dist0={dist0}, dist1={dist1})"
+        );
+    }
+
+    /// Audit en conditions réelles (2026-07-13, GAMEDESIGN_EN_LIGNE.md) : un
+    /// joueur solo signalait que « tout » se précipite sur lui en quelques
+    /// secondes — en réalité, 4-5 monstres convergeant tous en même temps sur
+    /// l'unique cible disponible, sans plafond. Vérifie que sur 3 chasseurs
+    /// visant la même cible, seuls les `MAX_ACTIVE_CHASERS_PER_TARGET` (2) plus
+    /// proches avancent réellement ; le 3e reste sur place ce tick.
+    #[test]
+    fn only_the_nearest_chasers_up_to_the_cap_advance_on_a_single_target() {
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(60.0, 1.0, 60.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            color: [1.0; 3],
+            ..Default::default()
+        };
+        // Trois chasseurs à distances croissantes de la même cible : le
+        // troisième (le plus loin) doit être celui relégué par le plafond.
+        let chaser_at = |x: f32| crate::scene::SceneObject {
+            name: format!("Chasseur {x}"),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(x, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            color: [1.0; 3],
+            ..Default::default()
+        };
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![
+                sol,
+                joueur,
+                chaser_at(6.0),
+                chaser_at(10.0),
+                chaser_at(14.0),
+            ],
+            ..Default::default()
+        };
+        app.playing = true;
+        let start: Vec<Vec3> = (2..5)
+            .map(|i| app.scene.objects[i].transform.position)
+            .collect();
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        let moved = |i: usize| (app.scene.objects[i].transform.position - start[i - 2]).length();
+        assert!(
+            moved(2) > 0.5,
+            "le chasseur le plus proche doit avancer : déplacement {}",
+            moved(2)
+        );
+        assert!(
+            moved(3) > 0.5,
+            "le 2e chasseur le plus proche doit aussi avancer : déplacement {}",
+            moved(3)
+        );
+        assert!(
+            moved(4) < 0.2,
+            "au-delà du plafond, le 3e chasseur ne doit pas avancer ce tick : déplacement {}",
+            moved(4)
         );
     }
 
