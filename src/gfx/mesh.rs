@@ -49,6 +49,73 @@ pub struct MeshData {
     pub indices: Vec<u32>,
 }
 
+/// Sommet skinné (Sprint 86) : `Vertex` + jusqu'à 4 os influents et leurs poids
+/// (convention glTF `JOINTS_0`/`WEIGHTS_0`, cf. `scene::import::VertexSkin`). Un type
+/// **séparé** de `Vertex` plutôt qu'un ajout de champs à `Vertex` : ça laisse tous les
+/// meshes statiques (primitives, imports glTF sans skin) et leur pipeline inchangés —
+/// seul un mesh réellement skinné paie le coût des attributs supplémentaires.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct SkinnedVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 3],
+    pub uv: [f32; 2],
+    /// Indices dans la palette de matrices de joints (cf. `Renderer` — Sprint 86).
+    /// `u32` plutôt que `u16` (format du glTF source) : format de vertex GPU plus simple
+    /// et plus largement pris en charge, au prix de 8 octets non significatifs par sommet
+    /// — négligeable face au reste du vertex.
+    pub joints: [u32; 4],
+    pub weights: [f32; 4],
+}
+
+impl SkinnedVertex {
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkinnedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 24,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 36,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 44,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Uint32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 60,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct SkinnedMeshData {
+    pub vertices: Vec<SkinnedVertex>,
+    pub indices: Vec<u32>,
+}
+
 /// Mesh chargé côté GPU (buffers prêts à dessiner).
 pub struct GpuMesh {
     pub vertex_buf: wgpu::Buffer,
@@ -65,6 +132,26 @@ impl GpuMesh {
         });
         let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("indices"),
+            contents: bytemuck::cast_slice(&data.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        GpuMesh {
+            vertex_buf,
+            index_buf,
+            num_indices: data.indices.len() as u32,
+        }
+    }
+
+    /// Identique à `new`, pour un mesh skinné (Sprint 86). `GpuMesh` lui-même ne connaît
+    /// que des buffers bruts — indépendant du format de vertex, seul l'upload diffère.
+    pub fn new_skinned(device: &wgpu::Device, data: &SkinnedMeshData) -> Self {
+        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("skinned_vertices"),
+            contents: bytemuck::cast_slice(&data.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("skinned_indices"),
             contents: bytemuck::cast_slice(&data.indices),
             usage: wgpu::BufferUsages::INDEX,
         });

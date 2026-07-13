@@ -155,6 +155,17 @@ pub struct Renderer {
     editor: Option<Editor>,
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
     backend: String,
+
+    // --- skinning GPU (Sprint 86) : palette de matrices de joints (groupe 4) + pipeline
+    //     dédié (vertex `skinned.wgsl`, fragment `fs_main` de main.wgsl **partagée**, même
+    //     éclairage que le chemin statique). Pas encore branché sur la boucle de rendu de
+    //     scène générale (`render`/`render_scene_headless`) — capacité vérifiée par un
+    //     rendu headless dédié, `render_skinned_test` (tests). L'intégration éditeur
+    //     (SceneObject animé, Play) est un chantier séparé, délibérément hors de ce sprint.
+    skinned_pipeline: wgpu::RenderPipeline,
+    joint_buf: wgpu::Buffer,
+    joint_bind_group: wgpu::BindGroup,
+    joint_capacity: usize,
 }
 
 impl Renderer {
@@ -447,6 +458,97 @@ impl Renderer {
             cache: None,
         });
 
+        // --- Skinning GPU (Sprint 86) : palette de joints (groupe 4), pipeline vertex
+        // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
+        // même `fs_main` : un seul endroit qui connaît l'éclairage).
+        let joint_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("joint_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        // Capacité généreuse pour un rig squelettal réel (Mixamo : ~50-65 os) ; pas
+        // encore de croissance à la volée (`ensure_debug_capacity` a le motif si besoin
+        // un jour) — un dépassement écrirait hors buffer, donc `write_joint_matrices`
+        // (plus bas) tronque plutôt que de paniquer ou de corrompre la mémoire GPU.
+        const JOINT_CAPACITY: usize = 128;
+        let joint_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("joint_buf"),
+            size: (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let joint_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("joint_bind_group"),
+            layout: &joint_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: joint_buf.as_entire_binding(),
+            }],
+        });
+        let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("skinned_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/skinned.wgsl").into()),
+        });
+        let skinned_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("skinned_pipeline_layout"),
+                bind_group_layouts: &[
+                    Some(&camera_layout),
+                    Some(&model_layout),
+                    Some(&shadow_bgl),
+                    Some(&tex_layout),
+                    Some(&joint_layout),
+                ],
+                immediate_size: 0,
+            });
+        let skinned_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("skinned_pipeline"),
+            layout: Some(&skinned_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &skinned_shader,
+                entry_point: Some("vs_skinned_main"),
+                buffers: &[crate::gfx::mesh::SkinnedVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // --- Pipeline d'ombre (profondeur seule depuis la lumière) ---
         let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shadow_shader"),
@@ -664,6 +766,10 @@ impl Renderer {
             textures,
             editor,
             backend,
+            skinned_pipeline,
+            joint_buf,
+            joint_bind_group,
+            joint_capacity: JOINT_CAPACITY,
         })
     }
 
@@ -695,6 +801,136 @@ impl Renderer {
             mapped_at_creation: false,
         });
         self.debug_capacity = cap;
+    }
+
+    /// Envoie la palette de matrices de joints au GPU (Sprint 86). Tronque silencieusement
+    /// (avec un `log::warn!`) au-delà de `joint_capacity` plutôt que de paniquer ou
+    /// d'écrire hors buffer — un rig anormalement gros dégraderait l'anim plutôt que de
+    /// planter le rendu.
+    fn write_joint_matrices(&mut self, matrices: &[glam::Mat4]) {
+        let n = matrices.len().min(self.joint_capacity);
+        if matrices.len() > self.joint_capacity {
+            log::warn!(
+                "skinning : {} joints, capacité {} — le reste est ignoré",
+                matrices.len(),
+                self.joint_capacity
+            );
+        }
+        let raw: Vec<[[f32; 4]; 4]> = matrices[..n].iter().map(|m| m.to_cols_array_2d()).collect();
+        self.queue
+            .write_buffer(&self.joint_buf, 0, bytemuck::cast_slice(&raw));
+    }
+
+    /// Rendu headless d'**un** mesh skinné, en une seule instance (Sprint 86 — chemin de
+    /// test/vérification dédié, pas encore branché sur `render`/`render_scene_headless` :
+    /// l'intégration éditeur — `SceneObject` animé, lecture en Play — reste à faire, cf.
+    /// ROADMAP_SPRINTS.md). `app` ne sert qu'à fournir caméra + lumière (`write_uniforms`) ;
+    /// sa scène n'est pas dessinée ici.
+    pub fn render_skinned_test(
+        &mut self,
+        app: &mut AppState,
+        mesh: &crate::gfx::mesh::SkinnedMeshData,
+        joint_matrices: &[glam::Mat4],
+        model_transform: glam::Mat4,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        app.camera.aspect = width as f32 / (height as f32).max(1.0);
+        self.write_uniforms(app);
+        self.write_joint_matrices(joint_matrices);
+
+        let gpu_mesh = crate::gfx::mesh::GpuMesh::new_skinned(&self.device, mesh);
+
+        let model_uniform = ModelUniform {
+            model: model_transform.to_cols_array_2d(),
+            normal: glam::Mat4::from_mat3(
+                glam::Mat3::from_mat4(model_transform).inverse().transpose(),
+            )
+            .to_cols_array_2d(),
+            params: [0.0, 0.0, 0.6, 0.0], // pas de surbrillance ; roughness 0.6, reste par défaut
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+        self.queue
+            .write_buffer(&self.models_buf, 0, bytemuck::bytes_of(&model_uniform));
+
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("skinned_test_target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("skinned_test_depth"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("skinned_test_encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("skinned_test_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.07,
+                            g: 0.08,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+            pass.set_pipeline(&self.skinned_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.models_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+            pass.set_bind_group(3, &self.textures[""], &[]);
+            pass.set_bind_group(4, &self.joint_bind_group, &[]);
+            pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
+            pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu_mesh.num_indices, 0, 0..1);
+        }
+
+        self.finish_and_read_rgba(encoder, &target, width, height)
     }
 
     /// Transmet l'événement à l'UI. Retourne `true` s'il a été consommé par egui.
@@ -1831,7 +2067,21 @@ impl Renderer {
             }
         }
 
-        // Lecture des pixels : wgpu impose que `bytes_per_row` soit un multiple de
+        self.finish_and_read_rgba(encoder, &target, width, height)
+    }
+
+    /// Copie `target` vers un buffer lisible CPU, soumet `encoder` et attend le résultat —
+    /// partagé par tous les rendus headless (`render_scene_headless`, `render_skinned_test`
+    /// (Sprint 86)). `encoder` doit déjà contenir toutes les passes de dessin dans `target` ;
+    /// cette méthode ne fait que la copie finale + lecture.
+    fn finish_and_read_rgba(
+        &self,
+        mut encoder: wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        // wgpu impose que `bytes_per_row` soit un multiple de
         // `COPY_BYTES_PER_ROW_ALIGNMENT` (256) → on copie avec ce padding puis on le retire.
         let bytes_per_pixel = 4u32;
         let unpadded = width * bytes_per_pixel;
@@ -1845,7 +2095,7 @@ impl Renderer {
         });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &target,
+                texture: target,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,

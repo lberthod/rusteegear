@@ -465,6 +465,73 @@ fn build_clip(
     }
 }
 
+/// Décompose une matrice de liaison en (translation, rotation, échelle) — pour fusionner
+/// avec les composantes qu'un `Clip` anime réellement (`JointPose`, dont chaque champ peut
+/// être `None`) sans jamais perdre les composantes **non** animées de la pose de liaison.
+fn decompose(m: Mat4) -> (Vec3, Quat, Vec3) {
+    let (scale, rotation, translation) = m.to_scale_rotation_translation();
+    (translation, rotation, scale)
+}
+
+/// Calcule, pour chaque joint d'un `Skeleton`, la matrice à envoyer au shader de skinning
+/// (Sprint 86) : `monde_du_joint(pose animée ou de liaison) * inverse_bind` — la partie
+/// `inverse_bind` annule la pose de liaison pour ne laisser que le **déplacement** depuis
+/// cette pose, ce qui est ce qu'un sommet en espace de liaison doit subir.
+///
+/// `clip = None` ⇒ pose de liaison pure (équivalent à un modèle statique : chaque matrice
+/// résultante est proche de l'identité, à l'erreur de précision flottante près — cf. test).
+///
+/// Robuste à un ordre de `Skeleton::joints` où un parent n'est **pas** garanti apparaître
+/// avant ses enfants (le glTF ne l'impose pas, même si c'est l'usage courant des
+/// exportateurs) : résolution par vagues plutôt que par simple parcours linéaire.
+pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f32) -> Vec<Mat4> {
+    let n = skeleton.joints.len();
+    let mut world: Vec<Option<Mat4>> = vec![None; n];
+    let mut remaining: Vec<usize> = (0..n).collect();
+
+    while !remaining.is_empty() {
+        let mut progressed = false;
+        remaining.retain(|&i| {
+            let joint = &skeleton.joints[i];
+            let parent_ready = match joint.parent {
+                None => true,
+                Some(p) => world[p].is_some(),
+            };
+            if !parent_ready {
+                return true; // pas encore résolvable : on retente à la vague suivante
+            }
+            let (bind_t, bind_r, bind_s) = decompose(joint.bind_local);
+            let local = match clip {
+                Some(clip) => {
+                    let pose = clip.sample_joint(i, time);
+                    Mat4::from_scale_rotation_translation(
+                        pose.scale.unwrap_or(bind_s),
+                        pose.rotation.unwrap_or(bind_r),
+                        pose.translation.unwrap_or(bind_t),
+                    )
+                }
+                None => joint.bind_local,
+            };
+            let parent_world = joint
+                .parent
+                .and_then(|p| world[p])
+                .unwrap_or(Mat4::IDENTITY);
+            world[i] = Some(parent_world * local);
+            progressed = true;
+            false // résolu : sorti de `remaining`
+        });
+        if !progressed {
+            // Squelette invalide (cycle parent/enfant, ou parent hors bornes) : n'arrive
+            // pas avec un glTF valide, mais on n'y boucle jamais indéfiniment pour autant.
+            break;
+        }
+    }
+
+    (0..n)
+        .map(|i| world[i].unwrap_or(Mat4::IDENTITY) * skeleton.joints[i].inverse_bind)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -953,5 +1020,44 @@ mod tests {
         let clips = load_gltf_clips(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
         assert!(clips.unwrap().is_empty());
+    }
+
+    #[test]
+    fn joint_matrices_in_bind_pose_equal_the_bind_hierarchy_when_inverse_bind_is_identity() {
+        let path = write_temp_glb(&skinned_triangle_glb(), "joint_matrices_bind");
+        let (skeleton, _) = load_gltf_skeleton(path.to_str().unwrap()).unwrap().unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let matrices = compute_joint_matrices(&skeleton, None, 0.0);
+        assert_eq!(matrices.len(), 2);
+        // inverse_bind = identité dans cette fixture ⇒ le résultat EST la hiérarchie de
+        // liaison monde : joint 0 (Root) à (0,1,0), joint 1 (Child) composé par-dessus,
+        // à (0, 1+0.5, 0).
+        assert_eq!(matrices[0].col(3).truncate(), Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!(matrices[1].col(3).truncate(), Vec3::new(0.0, 1.5, 0.0));
+    }
+
+    #[test]
+    fn joint_matrices_with_a_clip_override_only_the_animated_components() {
+        let path = write_temp_glb(&animated_skinned_glb(), "joint_matrices_animated");
+        let (skeleton, _) = load_gltf_skeleton(path.to_str().unwrap()).unwrap().unwrap();
+        let clips = load_gltf_clips(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let clip = &clips[0];
+
+        let matrices = compute_joint_matrices(&skeleton, Some(clip), 0.5);
+        // Joint 0 : translation animée (linéaire, →(5,0,0) à t=0.5) REMPLACE la
+        // translation de liaison (0,1,0) — c'est la propriété que le clip anime.
+        assert_eq!(matrices[0].col(3).truncate(), Vec3::new(5.0, 0.0, 0.0));
+        // Joint 1 : pas de canal de translation ⇒ garde sa translation de liaison
+        // (0,0.5,0) composée par-dessus le monde du joint 0 ; son canal de scale
+        // (step) est tenu à (1,1,1) à t=0.5, donc sans effet sur la position.
+        assert_eq!(matrices[1].col(3).truncate(), Vec3::new(5.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn joint_matrices_never_panics_or_infinite_loops_on_an_empty_skeleton() {
+        let matrices = compute_joint_matrices(&Skeleton::default(), None, 0.0);
+        assert!(matrices.is_empty());
     }
 }
