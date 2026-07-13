@@ -20,6 +20,17 @@
 | **D — App de dev & exports 1-clic** | 18 → 23 | Optimiser l'app desktop (.dmg) et exporter APK/IPA depuis des boutons configurables |
 | **E — Player complet & maturité éditeur** | 24 → 27 | Embarquer les assets, enrichir l'édition, monter en qualité de rendu, durcir |
 | **F — Reprise, finitions & distribution** | 28 → 31 | Onboarding/validation, finir l'édition & le rendu, distribuer proprement |
+| **G — Éditeur produit orienté Android** | 33 → 37+ | Boucle produit sans ligne de commande |
+| **H — Jouabilité mobile sans script** | — | Objet jouable au doigt, rendu zéro-alloc |
+| **I — Robustesse & découplage** | 45 → 49 | Pas fixe, init sans panic, capteurs, signature |
+| *(Multijoueur en ligne)* | 50 → 78 | Voir **SPRINT_MMORPG.md** / **SPRINTNETWORK.md** |
+| **K — Filet de sécurité** | 80 → 83 | Golden tests rendu, RNG seedé, console dev, debug drawing |
+| **L — Animation squelettale** | 84 → 88 | Skinning glTF → blending → réplication réseau |
+| **M — Image** | 89 → 92 | Ciel/fog, HDR + tone mapping, bloom, mipmaps |
+| **N — Chaîne gameplay** | 93 → 99 | Événements → prefabs → spawn/destroy Lua → save |
+| **O — Physique & feel** | 100 → 103 | Exposer rapier (trimesh, CCD, couches), character controller |
+| **P — Audio, HUD & confort** | 104 → 110 | Bus/panning, widgets HUD, manettes, hot-reload, profiler GPU |
+| **Q — Web (ex-« pistes Phase J »)** | 111 → 114 | WASM/WebGPU, multijoueur navigateur, vitrine publique |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
 > Les faire avant C évite de réécrire des features sur plusieurs cibles.
@@ -652,8 +663,243 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 - [ ] **Notarisation macOS** ; signature *distribution* Android (clé release dédiée).
 - **Fichiers** : `.github/workflows/release.yml`, `packaging/*`. **Risque** : comptes/secrets requis.
 
-> **Pistes long terme (Phase J)** : WebGPU/WASM, ECS léger, LOD / occlusion culling /
-> fusion de meshes statiques, éditeur tournant sur mobile.
+> **Pistes long terme (ex-Phase J)** : WebGPU/WASM (→ désormais planifié en **Phase Q**),
+> ECS léger, LOD / occlusion culling / fusion de meshes statiques, éditeur tournant sur mobile.
+
+---
+
+## 🚀 Phases K → Q — Vers un moteur pertinent (sprints 80 → 114)
+
+> Issues de l'**audit comparatif à 200 fonctionnalités** (Godot / Unity / Unreal / RusteeGear,
+> 2026-07-13) : RusteeGear couvre ~27 % de la grille, avec un profil vertical (noyau, physique
+> rapier, éditeur, réseau prédit/réconcilié tiennent la comparaison ; l'animation, le rendu
+> d'image et l'audio avancé sont les continents manquants). Ces 7 phases exécutent les
+> chantiers retenus 🟢 — beaucoup débloqué pour peu de code lisible, souvent en exposant ce que
+> `rapier3d`/`kira` savent déjà faire — et **aucun** des refus assumés (pas de boîte noire, pas
+> d'ECS/render graph/plugins/réflexion, pas de GI/Nanite, pas de consoles sous NDA, pas de
+> télémétrie automatique).
+>
+> Logique d'ordre : **K d'abord** (L et M réécrivent le pipeline de rendu — sans golden tests,
+> chaque sprint shader est un saut sans filet) ; **L avant M** (le skinning impose le système de
+> variants WGSL dont l'HDR profitera) ; **N strictement ordonnée** (chaque sprint consomme le
+> précédent) ; **O après N** (les requêtes physiques émettent des événements) ; **P** = réservoir
+> de sprints tampons insérables après K ; **Q ferme la boucle** quand il y a quelque chose à
+> montrer. Les sprints 50 → 78 étant pris par le multijoueur, on démarre à 80 (79 = tampon).
+
+### PHASE K — Filet de sécurité (80 → 83)
+
+#### Sprint 80 — Golden tests de rendu ⬜
+**Objectif** : ne plus jamais toucher un shader sans filet.
+- [ ] Rendu **headless** wgpu de 3 scènes de référence (primitives+lumières, glTF+ombres, démo contrôleur).
+- [ ] Comparaison aux images « golden » en CI avec **seuil de tolérance** par canal.
+- [ ] Commande de re-génération des goldens documentée.
+- **Fichiers** : `src/gfx/renderer.rs`, `tests/`, `.github/workflows/`.
+- **Livrable** : la CI passe au rouge si un shader dérive.
+- **Risque** : différences GPU CI/local → backend logiciel (lavapipe) ou tolérance calibrée.
+
+#### Sprint 81 — Temps maîtrisé (RNG seedé, time scale, step frame) ⬜
+**Objectif** : rendre la simulation reproductible et inspectable.
+- [ ] RNG **seedé par partie** (stream séparé pour le cosmétique), propagé explicitement.
+- [ ] `time_scale` multipliant `dt` avant physique/Lua, exposé dans la toolbar.
+- [ ] Bouton **« ⏭ 1 tick »** en pause (débloque exactement un pas fixe).
+- **Fichiers** : `src/app/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : deux replays de la démo contrôleur avec la même seed ⇒ même état final (test).
+
+#### Sprint 82 — Console développeur (cvars) ⬜
+**Objectif** : multiplier la vitesse de debug de tout le reste.
+- [ ] Champ de saisie dans la console + registre de commandes : `timescale`, `tp`, `give`, `net_stats`, `seed`.
+- **Fichiers** : `src/editor/mod.rs`, `src/log_buffer.rs`.
+- **Livrable** : 5 commandes documentées et testées.
+
+#### Sprint 83 — Debug drawing + vues buffers ⬜
+**Objectif** : voir ce que le moteur calcule.
+- [ ] `debug.line()/box()/sphere()` en Rust **et** Lua, sur le pipeline gizmo, vidé chaque frame.
+- [ ] Sélecteur de vue (normales, depth) dans la toolbar.
+- **Fichiers** : `src/gfx/`, `src/runtime/mod.rs`.
+- **Livrable** : raycast de picking et trajectoire du missile visualisés dans la démo.
+
+### PHASE L — Animation squelettale (84 → 88)
+
+#### Sprint 84 — Données de squelette ⬜
+**Objectif** : lire `joints`/`weights`/bind poses du glTF — données pures, sans rendu.
+- **Fichiers** : `src/scene/import.rs`, `src/scene/mod.rs`.
+- **Livrable** : round-trip testé sur un perso Mixamo (bones, parentés, inverse bind matrices).
+
+#### Sprint 85 — Échantillonnage de clips ⬜
+**Objectif** : jouer un clip (keyframes, interpolation, boucle) côté CPU.
+- **Fichiers** : `src/scene/import.rs`, `src/app/mod.rs`.
+- **Livrable** : un clip joue à la bonne vitesse (test sur timestamps), visible sur un cube parenté à un bone.
+
+#### Sprint 86 — Skinning GPU ⬜
+**Objectif** : le vertex shader déforme le mesh.
+- [ ] Palette de matrices en uniform buffer + **variant WGSL** de skinning (premier `#ifdef` maison).
+- **Fichiers** : `src/gfx/shaders/`, `src/gfx/renderer.rs`, `src/gfx/mesh.rs`.
+- **Livrable** : personnage Mixamo animé à 60 fps dans l'éditeur ; golden test dédié.
+- **Risque** : layouts de bind groups — c'est ici que le Sprint 80 paie.
+
+#### Sprint 87 — Blending + state machine ⬜
+**Objectif** : des transitions douces pilotables en Lua.
+- [ ] Lerp idle↔run pondéré par la vitesse + FSM minimale (`obj.anim = "run"`).
+- **Fichiers** : `src/app/mod.rs`, `src/runtime/mod.rs`.
+- **Livrable** : le joueur de la démo court, s'arrête, saute — sans à-coup.
+
+#### Sprint 88 — Animation répliquée ⬜
+**Objectif** : les joueurs réseau s'animent aussi.
+- [ ] État d'anim (1 octet : clip + phase) dans le snapshot, interpolé comme le reste.
+- **Fichiers** : `src/net/protocol.rs`, `src/net/interpolation.rs`, `src/bin/server.rs`.
+- **Livrable** : deux clients voient le même perso courir ; budget snapshot < 1 200 o (test).
+
+### PHASE M — Image (89 → 92)
+
+#### Sprint 89 — Ciel + brouillard ⬜
+- [ ] Gradient procédural (ou cubemap) sur cube inversé + **fog exponentiel** dans le shader PBR.
+- **Fichiers** : `src/gfx/shaders/`, `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : réglages dans l'inspecteur de scène ; goldens mis à jour.
+
+#### Sprint 90 — Cible HDR + tone mapping ⬜
+- [ ] Rendu dans `Rgba16Float` + passe plein écran ACES (ou AgX).
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
+- **Livrable** : les émissifs saturent proprement au lieu d'écrêter.
+
+#### Sprint 91 — Bloom + réglages ⬜
+- [ ] Chaîne de mips down/upsample ; intensité dans les paramètres et `build_config` (comme le MSAA).
+- **Fichiers** : `src/gfx/renderer.rs`, `src/app/build_config.rs`.
+- **Livrable** : la boule de feu rayonne ; opt-out mobile documenté.
+
+#### Sprint 92 — Mipmaps + tangentes ⬜
+- [ ] Mips générés à l'import (blits chaînés) ; tangentes `mikktspace` quand absentes.
+- **Fichiers** : `src/assets.rs`, `src/scene/import.rs`, `src/gfx/mesh.rs`.
+- **Livrable** : capture comparative avant/après sur l'aliasing au loin ; prépare le normal mapping.
+
+### PHASE N — Chaîne gameplay (93 → 99)
+
+#### Sprint 93 — Événements ⬜
+- [ ] File `Vec<GameEvent>` drainée chaque tick fixe ; `emit()` / `on_event` en Lua.
+- **Fichiers** : `src/app/mod.rs`, `src/runtime/mod.rs`.
+- **Livrable** : une porte s'ouvre quand le score atteint 3, sans couplage direct.
+
+#### Sprint 94 — Cycle de vie + handles générationnels ⬜
+**Objectif** : créer/détruire des objets en Play sans invalider de références.
+- [ ] File de commandes spawn/despawn appliquée en **fin de tick**.
+- [ ] `scene.objects` migré vers des handles générationnels (`slotmap`), module par module.
+- **Fichiers** : `src/scene/mod.rs`, `src/app/*`, `src/net/*`.
+- **Livrable** : détruire un objet en Play n'invalide aucune référence (tests).
+- **Risque** : le refactor le plus délicat du plan — il touche les indices du réseau et de l'undo.
+
+#### Sprint 95 — GUID d'assets + versioning de scènes ⬜
+- [ ] Manifeste `uuid → chemin` ; les scènes référencent l'uuid.
+- [ ] Champ `version` + migrations à la lecture des JSON (sur les defaults serde existants).
+- **Fichiers** : `src/assets.rs`, `src/scene/mod.rs`.
+- **Livrable** : renommer un asset ne casse plus une scène (test) ; une scène v1 se charge en v2.
+
+#### Sprint 96 — Prefabs ⬜
+- [ ] Sous-arbre JSON référencé par GUID + **overrides par instance** ; instanciation depuis le navigateur d'assets.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`.
+- **Livrable** : un prefab « gemme » modifié met à jour ses 20 instances, sauf propriétés surchargées.
+
+#### Sprint 97 — API Lua de scène ⬜
+- [ ] `spawn("prefab")`, `obj:destroy()`, `find_tag()` sur la file du Sprint 94 ; coroutines Lua natives.
+- **Fichiers** : `src/runtime/mod.rs`.
+- **Livrable** : démo « vagues d'ennemis » entièrement scriptée en Lua.
+
+#### Sprint 98 — user:// + sauvegarde de partie ⬜
+- [ ] Schéma `user://` (crate `dirs`) ; save game à slots (positions, score, variables Lua, seed), versionné.
+- **Fichiers** : `src/assets.rs`, `src/runtime/mod.rs`.
+- **Livrable** : progression sauvegardée/restaurée sur desktop **et** Android.
+
+#### Sprint 99 — Anim notifies ⬜
+- [ ] Marqueurs temporels sur les clips → événements du Sprint 93 (bruits de pas, fenêtres de hit).
+- **Fichiers** : `src/app/combat.rs`, `src/runtime/mod.rs`.
+- **Livrable** : le coup du mode combat ne touche que pendant sa fenêtre d'animation.
+
+### PHASE O — Physique & feel (100 → 103)
+
+#### Sprint 100 — Trimesh + convexe ⬜
+- [ ] `ConvexHull`/`TriMesh` rapier construits depuis les vertices glTF ; choix dans l'inspecteur.
+- **Fichiers** : `src/runtime/physics.rs`, `src/editor/mod.rs`.
+- **Livrable** : un décor importé se collisionne fidèlement (démo + test).
+
+#### Sprint 101 — CCD + couches de collision ⬜
+- [ ] Booléen `ccd` par objet ; `InteractionGroups` (couche + masque) dans l'inspecteur.
+- **Fichiers** : `src/runtime/physics.rs`, `src/scene/mod.rs`.
+- **Livrable** : le missile ne traverse plus un mur fin à haute vitesse (test de régression).
+
+#### Sprint 102 — Requêtes gameplay + trigger exit ⬜
+- [ ] `raycast(o, d, masque)` et `overlap_sphere()` en Lua via `QueryPipeline` ; événement `exited`.
+- **Fichiers** : `src/runtime/physics.rs`, `src/runtime/mod.rs`.
+- **Livrable** : capteur de sol et cône de vision scriptés en Lua, visualisés au debug drawing (Sprint 83).
+
+#### Sprint 103 — Character controller kinématique ⬜
+**Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.
+- [ ] Migration vers `KinematicCharacterController` de rapier.
+- [ ] **Audit complet de la prédiction réseau** derrière, façon sprints 72–77.
+- **Fichiers** : `src/runtime/physics.rs`, `src/app/multiplayer.rs`, `src/bin/server.rs`.
+- **Livrable** : escalier montable en solo et en ligne ; tests de réconciliation verts ; aucun rubber-banding à 100 ms simulées.
+- **Risque** : seul sprint qui menace l'acquis multijoueur — le faire **seul**, pas groupé.
+
+### PHASE P — Audio, HUD & confort (104 → 110, sprints tampons insérables après K)
+
+#### Sprint 104 — Audio : bus + panning + streaming ⬜
+- [ ] Tracks kira musique/SFX (volumes persistés) ; panning stéréo caméra→source ; `StreamingSoundData` pour les musiques.
+- **Fichiers** : `src/runtime/audio.rs`, `src/app/settings.rs`.
+- **Livrable** : réglages M/SFX dans les paramètres ; musique longue sans pic mémoire (profiler).
+
+#### Sprint 105 — Audio : randomisation ⬜
+- [ ] ± pitch/volume par déclenchement (RNG du Sprint 81).
+- **Fichiers** : `src/runtime/sfx.rs`.
+- **Livrable** : dix pas d'affilée ne sonnent plus identiques.
+
+#### Sprint 106 — Widgets de HUD déclaratifs ⬜
+- [ ] 5 widgets sérialisés dans la scène (texte, image, jauge, bouton, ancres) au-dessus de la 3D — la safe area existe déjà.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`.
+- **Livrable** : le HUD de la démo contrôleur reconstruit en widgets, zéro code en dur.
+
+#### Sprint 107 — Manettes + remapping ⬜
+- [ ] Crate `gilrs` ; table actions→touches persistée, éditable dans les paramètres.
+- **Fichiers** : `src/app/input.rs`, `src/app/settings.rs`.
+- **Livrable** : démo jouable à la manette Bluetooth sur desktop et Android.
+
+#### Sprint 108 — Hot-reload (assets + Lua) ⬜
+- [ ] `notify` sur le dossier assets → réimport async ; invalidation des chunks Lua modifiés en cours de Play.
+- **Fichiers** : `src/assets.rs`, `src/runtime/mod.rs`.
+- **Livrable** : retoucher une texture ou un script se voit sans redémarrer.
+
+#### Sprint 109 — Éditeur : snapping + profiler GPU ⬜
+- [ ] Snap position/rotation au pas (touche modificatrice) ; timestamp queries wgpu par passe + compteur de draw calls.
+- **Fichiers** : `src/gfx/`, `src/editor/mod.rs`.
+- **Livrable** : coût des passes ombre/scène/HDR/bloom lisible dans le profiler.
+
+#### Sprint 110 — Production : crash log + rustdoc ⬜
+- [ ] `panic::set_hook` → fichier dans `user://` + écran d'envoi **volontaire** (pas de télémétrie automatique, par principe).
+- [ ] `cargo doc` publié en CI (GitHub Pages) ; semver des releases.
+- **Fichiers** : `src/main.rs`, `.github/workflows/`.
+- **Livrable** : un panic Android laisse une trace exploitable ; doc API en ligne.
+
+### PHASE Q — Web, la vitrine (111 → 114)
+
+#### Sprint 111 — Build wasm32 ⬜
+- [ ] Cible `wasm32-unknown-unknown`, winit→canvas, wgpu→WebGPU ; une scène statique s'affiche.
+- **Fichiers** : `src/lib.rs`, `src/gfx/renderer.rs`, `packaging/`.
+- **Livrable** : la démo mobile tourne dans Chrome, page servie par la CI.
+- **Risque** : API bloquantes (fichiers, threads) — sprint de défrichage.
+
+#### Sprint 112 — Assets & audio web ⬜
+- [ ] Assets par fetch async (le chemin async existant aide) ; contexte audio web pour kira.
+- **Livrable** : démo contrôleur complète, jouable au clavier dans le navigateur.
+
+#### Sprint 113 — Multijoueur navigateur ⬜
+- [ ] Client WebSocket compilé en WASM (déjà en WebSocket — avantage décisif) ; passage en `wss://`.
+- **Fichiers** : `src/net/client.rs`, `examples/smoke_vps.rs`.
+- **Livrable** : un joueur navigateur et un joueur desktop se voient bouger sur le VPS (smoke test étendu).
+
+#### Sprint 114 — Vitrine publique ⬜
+- [ ] Page de démo déployée en CI ; lien README ; « rejoindre un salon » via les lobbies Firebase existants.
+- **Livrable** : n'importe qui teste le multijoueur en un clic — le meilleur README possible.
+
+> **Définition de « terminé » K→Q** : voir section suivante. Au Sprint 114, le moteur a des
+> personnages animés, une image moderne (HDR/bloom/ciel), un gameplay scriptable de bout en bout
+> (événements → prefabs → spawn → save), une physique fidèle, un audio vivant, et il tourne dans
+> un navigateur — sans avoir trahi un seul refus assumé.
 
 ---
 
@@ -674,6 +920,17 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
   actions au tap) ; le chemin de rendu est **sans allocation par frame**.
 - **I** : base **robuste & distribuable** — simulation à pas fixe, init sans panic, capteurs mobiles
   natifs, et livrables **signés** pour les stores.
+- **K** : plus aucun sprint de rendu sans filet — goldens en CI, simulation reproductible (seed),
+  step frame, console dev, debug drawing.
+- **L** : un personnage Mixamo **court, s'arrête et saute** dans l'éditeur et **en ligne**, sans à-coup.
+- **M** : ciel + fog + HDR/tone mapping + bloom + mipmaps — l'allure de toutes les démos transformée.
+- **N** : un jeu à vagues d'ennemis **entièrement scripté en Lua** (spawn/destroy/find, prefabs,
+  événements) avec **sauvegarde** restaurée sur mobile.
+- **O** : décors importés fidèles (trimesh), projectiles fiables (CCD, couches), escaliers montables
+  (controller kinématique) — **prédiction réseau re-validée**.
+- **P** : audio mixé/spatialisé/varié, HUD en widgets, manettes, hot-reload, profiler GPU, crash log
+  local, doc API publiée.
+- **Q** : la démo multijoueur jouable **dans le navigateur**, lien public dans le README.
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
