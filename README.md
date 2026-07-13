@@ -374,7 +374,7 @@ le développement). Historique sprint par sprint :
 | **L** — Animation squelettale (skinning glTF → blending → exposition Lua → réplication réseau) | 84 → 88 | ✅ |
 | **M** — Image (ciel + brouillard, HDR/tone mapping, bloom, mipmaps + tangentes) | 89 → 92 | ✅ |
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
-| **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | 🟢 (100/101 faits ; 102/103a-c restants) |
+| **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | 🟢 (100/101/102/103a-1 faits ; 103a-2/103a-3/103b/103c restants) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -478,9 +478,10 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 
 **En cours — Phase O, physique & feel** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
 la Phase N (chaîne gameplay événementielle) est livrée pour l'essentiel (reste le
-Sprint 94, cycle de vie/handles génération­nels, reporté). La Phase O est scindée en
-trois sprints : **103a** (maintenabilité — découpage de `app/mod.rs`, `editor/mod.rs`,
-`scene/mod.rs` et de `AppState`, trop de responsabilités cumulées), **103b**
+Sprint 94, cycle de vie/handles génération­nels, reporté). La Phase O se termine par
+103a-103c : **103a-1** (découpage de `app/mod.rs`/`AppState` en 7 sous-modules) est
+fait ; restent **103a-2** (même traitement pour `editor/mod.rs` et `scene/mod.rs`),
+**103a-3** (migration des commentaires d'historique vers `docs/audits/`), **103b**
 (character controller kinématique) et **103c** (audit de la prédiction réseau après
 la migration). Après quoi : P (audio/HUD/confort), Q (WASM/WebGPU, vitrine web),
 R (WebXR).

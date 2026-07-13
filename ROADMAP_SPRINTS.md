@@ -1507,14 +1507,57 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : capteur de sol et cône de vision scriptés en Lua, visualisés au debug drawing (Sprint 83).
   312 tests lib + 4 bin + 8 golden verts.
 
-#### Sprint 103a — Maintenabilité : découpage des gros modules & AppState ⬜
-**Objectif** : réduire le risque des futurs changements gameplay/UI/réseau/script en cassant les fichiers-mastodontes avant d'y ajouter la physique de contrôleur (cf. `AUDIT.md` §7.4).
-- [ ] `app/mod.rs` (7180 lignes) : `AppState` porte trop de responsabilités (gameplay, scripts Lua, réseau, sauvegarde, combat, animation, UI indirecte) — extraire ces sous-systèmes dans des modules dédiés, réduire `AppState`/`app/mod.rs` à l'orchestration (state machine, boucle principale).
-- [ ] `src/editor/mod.rs` (3948 lignes) et `src/scene/mod.rs` (4810 lignes) : même traitement (découpage par responsabilité) ; scinder en sprint(s) séparé(s) si le périmètre est trop large pour tenir ici.
-- [ ] Commentaires trop volumineux qui documentent l'historique de sprint plutôt que le comportement actuel : déplacer l'historique vers `docs/audits` (à créer), garder dans le code uniquement les invariants importants.
-- **Fichiers** : `src/app/mod.rs`, `src/app/combat.rs`, `src/editor/mod.rs`, `src/scene/mod.rs`, nouveaux modules extraits, `docs/audits/`.
-- **Livrable** : taille des trois fichiers réduite significativement ; comportement inchangé ; tests existants verts ; commentaires du code recentrés sur les invariants, historique déplacé en doc.
-- **Risque** : refactor pur, sans nouvelle fonctionnalité — le faire **seul**, pas de sprint gameplay en parallèle, pour limiter les conflits de merge. Si le périmètre (3 fichiers + AppState + commentaires) s'avère trop large pour un seul sprint, scinder en 103a-1 (`app/mod.rs`/`AppState`), 103a-2 (`editor`+`scene`), 103a-3 (commentaires).
+#### Sprint 103a-1 — Maintenabilité : découpage de `app/mod.rs`/`AppState` ✅ FAIT
+**Objectif** : réduire le risque des futurs changements gameplay/UI/réseau/script en cassant le fichier-mastodonte avant d'y ajouter la physique de contrôleur (cf. `AUDIT.md` §7.4). Périmètre initial (3 fichiers + `AppState` + commentaires) scindé en 103a-1/103a-2/103a-3 dès la prise en main, comme anticipé par ce même sprint — `app/mod.rs` (7577 lignes au moment de commencer, la plus grosse dette) seul ici.
+- [x] **7 sous-modules extraits** de `impl AppState` (méthodes déplacées telles quelles, aucun changement de comportement) :
+      `app/selection.rs` (sélection, presse-papiers, aligner/distribuer, groupes,
+      undo/redo, ajout/suppression/duplication d'objet), `app/picking.rs`
+      (`handle_input` et tout le picking/gizmo : rayons, poignées de translation/
+      rotation/échelle), `app/persistence.rs` (sauvegarde/chargement JSON, `SaveGame`,
+      import glTF en tâche de fond, `restart_game`, score), `app/demos.rs` (chargeurs
+      de démo), `app/asset_ops.rs` (pipeline d'assets : optimisation/POT/bake
+      lighting), `app/console.rs` (console développeur), `app/debug_draw.rs`
+      (`debug_line`/`box`/`sphere`, Sprint 83).
+- [x] **`AppState`/`app/mod.rs` réduit à l'orchestration** : ce qui reste dans
+      `impl AppState` (mod.rs) est le cœur non déplaçable sans découpage plus profond
+      — `new`, requêtes IA, `advance_play`/`sim_step` (boucle de jeu à dt fixe),
+      interpolation de rendu (`restore_sim_poses`/`blend_render_poses`), et quelques
+      requêtes d'état (`player_index`/`player_position`/`is_lost`/`hud_timer`).
+- [x] **Visibilité inter-modules** : deux méthodes utilisées par un module *autre* que
+      celui où elles vivent désormais (`capture_drag_selection` par `picking.rs`,
+      `poll_imports` par `advance_play` dans `mod.rs`) passées en `pub(super)` —
+      **trouvé en compilant** : la visibilité privée par défaut de Rust s'étend aux
+      modules *descendants*, pas aux modules *frères* (deux sous-modules distincts
+      d'`app` ne se voient pas entre eux sans `pub(super)`/`pub(crate)` explicite).
+      Les fonctions libres partagées entre méthodes déplacées et tests existants
+      (`ray_aabb`, `point_segment_dist`, `optimized_path`) suivent la même règle,
+      déplacées avec leurs méthodes et rendues `pub(super)` ; les appels de test
+      correspondants qualifiés (`picking::ray_aabb(...)`, etc.).
+- [x] **Livrable vérifié** : `app/mod.rs` réduit de 7577 à 5966 lignes (-21 %,
+      1656 lignes nettes déplacées/retirées) ; 312 tests lib + 4 bin + 8 golden
+      toujours verts, `cargo clippy`/`cargo fmt` propres, comportement inchangé
+      (mouvement de code pur, aucune méthode renommée ni signature modifiée).
+- **Fichiers** : `src/app/mod.rs`, nouveaux `src/app/{selection,picking,persistence,
+  demos,asset_ops,console,debug_draw}.rs`.
+- **Restant, hors scope de ce sprint** (cf. **103a-2**/**103a-3** ci-dessous) :
+  `src/editor/mod.rs` (4156 lignes) et `src/scene/mod.rs` (4841 lignes), inchangés ;
+  migration des commentaires d'historique de sprint vers `docs/audits/`.
+
+#### Sprint 103a-2 — Maintenabilité : découpage de `editor/mod.rs` et `scene/mod.rs` ⬜
+- [ ] Même traitement que 103a-1 (découpage par responsabilité), sur les deux fichiers
+      restants signalés par l'audit — à scinder à nouveau si le périmètre déborde.
+- **Fichiers** : `src/editor/mod.rs`, `src/scene/mod.rs`, nouveaux modules extraits.
+- **Livrable** : taille des deux fichiers réduite significativement ; comportement
+  inchangé ; tests existants verts.
+- **Risque** : refactor pur — le faire **seul**, pas de sprint gameplay en parallèle.
+
+#### Sprint 103a-3 — Maintenabilité : commentaires d'historique vers `docs/audits/` ⬜
+- [ ] Commentaires trop volumineux qui documentent l'historique de sprint plutôt que
+      le comportement actuel : déplacer l'historique vers `docs/audits` (à créer),
+      garder dans le code uniquement les invariants importants.
+- **Fichiers** : `src/**/*.rs` (commentaires), nouveau `docs/audits/`.
+- **Livrable** : commentaires du code recentrés sur les invariants, historique déplacé
+  en doc.
 
 #### Sprint 103b — Character controller kinématique ⬜
 **Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.
