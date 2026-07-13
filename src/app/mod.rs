@@ -155,6 +155,11 @@ pub struct AppState {
     tapped_obj: Option<usize>,
     /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
     sim_accumulator: f32,
+    /// Multiplicateur du temps simulé (Sprint 81) : 1.0 = normal, 0 = figé, &gt;1 = accéléré.
+    /// N'affecte que le `dt` consommé par la physique/les scripts, jamais le FPS affiché
+    /// ni le pas fixe lui-même (`FIXED_DT` reste 1/60 s : seul le nombre de pas exécutés
+    /// par frame change). Utile pour déboguer la physique et le réseau au ralenti.
+    pub time_scale: f32,
     /// Poses (position, rotation, échelle) de tous les objets après l'**avant-dernier**
     /// pas de simulation à pas fixe. Couplé à `sim_curr_poses` pour l'interpolation de
     /// rendu (cf. `advance_play`) : le rendu affiche un mélange des deux pondéré par
@@ -483,6 +488,7 @@ impl AppState {
             input_state: PlayerInput::default(),
             tapped_obj: None,
             sim_accumulator: 0.0,
+            time_scale: 1.0,
             sim_prev_poses: Vec::new(),
             sim_curr_poses: Vec::new(),
             sim_render_poses: Vec::new(),
@@ -2003,9 +2009,12 @@ impl AppState {
         // soit le framerate → physique et scripts déterministes, indépendants du FPS.
         const FIXED_DT: f32 = 1.0 / 60.0;
         const MAX_SUBSTEPS: u32 = 5;
+        // Time scale (Sprint 81) : n'affecte que le temps *consommé* par la simulation,
+        // jamais `dt` lui-même (déjà utilisé ci-dessus pour le FPS affiché) ni `FIXED_DT`.
+        let sim_dt = dt * self.time_scale.max(0.0);
         // Jeu figé une fois gagné ou perdu (l'écran de fin attend « Rejouer »).
         if !self.lost && self.win_time.is_none() {
-            let (steps, acc) = fixed_substeps(self.sim_accumulator, dt, FIXED_DT, MAX_SUBSTEPS);
+            let (steps, acc) = fixed_substeps(self.sim_accumulator, sim_dt, FIXED_DT, MAX_SUBSTEPS);
             self.sim_accumulator = acc;
             // Avant de simuler, restaure l'état **exact** du dernier pas : les
             // transforms affichés contiennent la pose *mélangée* du rendu précédent
