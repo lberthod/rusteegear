@@ -2705,6 +2705,7 @@ end"
             camera_follow: true,
             game_camera: None,
             sky: Sky::default(),
+            hud_layout: HudLayout::default(),
             version: Scene::CURRENT_VERSION,
         }
     }
@@ -3004,6 +3005,7 @@ impl Scene {
             camera_follow: false,
             game_camera: None,
             sky: Sky::default(),
+            hud_layout: HudLayout::default(),
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
@@ -3086,6 +3088,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             camera_follow: true,
             game_camera: None,
             sky: Sky::default(),
+            hud_layout: HudLayout::default(),
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
@@ -3197,6 +3200,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             camera_follow: spec.camera_follow,
             game_camera: None,
             sky: Sky::default(),
+            hud_layout: HudLayout::default(),
             version: Scene::CURRENT_VERSION,
         })
     }
