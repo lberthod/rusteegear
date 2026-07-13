@@ -105,6 +105,8 @@ pub struct UiActions {
     pub duplicate: bool,
     pub undo: bool,
     pub redo: bool,
+    /// « ⏭ » (Sprint 81) : avance d'exactement un pas fixe pendant la pause.
+    pub step_frame: bool,
     /// « Nouveau projet » : vide la scène.
     pub new_scene: bool,
     /// « Démo mobile » : charge une scène jouable (joystick + saut).
@@ -2659,6 +2661,14 @@ fn build_ui(
                 if ui.button("⏹ Stop").clicked() {
                     *playing = false;
                     *paused = false;
+                }
+                // Pas unique (Sprint 81) : n'a de sens qu'en pause.
+                if ui
+                    .add_enabled(*paused, egui::Button::new("⏭"))
+                    .on_hover_text("Avancer d'un pas fixe")
+                    .clicked()
+                {
+                    actions.step_frame = true;
                 }
             }
             ui.separator();

@@ -3432,6 +3432,41 @@ mod tests {
         assert_eq!(acc, 0.0);
     }
 
+    #[test]
+    fn step_requested_advances_exactly_one_fixed_tick_while_paused() {
+        // Sprint 81 : le bouton « ⏭ » doit avancer d'exactement un pas fixe en pause,
+        // ni plus (pas de rattrapage), ni moins (pas d'attente supplémentaire), puis
+        // regeler la simulation tant qu'aucune nouvelle demande n'arrive.
+        let mut app = AppState::new();
+        app.playing = true;
+        app.paused = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play(); // transition Edit→Play + première frame gelée
+        assert_eq!(
+            app.time, 0.0,
+            "en pause sans demande, le temps ne doit pas avancer"
+        );
+
+        app.request_step();
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        let fixed_dt = 1.0 / 60.0;
+        assert!(
+            (app.time - fixed_dt).abs() < 1e-5,
+            "un seul pas fixe attendu : time={}, attendu≈{fixed_dt}",
+            app.time
+        );
+
+        // Sans nouvelle demande, la pause suivante ne doit pas avancer davantage.
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(
+            (app.time - fixed_dt).abs() < 1e-5,
+            "sans nouvelle demande, le temps ne doit plus avancer : time={}",
+            app.time
+        );
+    }
+
     /// Invariant : la primaire (si présente) appartient toujours à l'ensemble sélectionné.
     fn assert_selection_invariant(app: &AppState) {
         if let Some(p) = app.selection {

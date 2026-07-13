@@ -1093,6 +1093,9 @@ impl Renderer {
             if actions.redo {
                 app.redo();
             }
+            if actions.step_frame {
+                app.request_step();
+            }
             if let Some(clip) = actions.play_audio {
                 app.play_audio(&clip);
             }
