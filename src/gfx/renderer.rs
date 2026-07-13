@@ -229,6 +229,11 @@ pub struct Renderer {
     tex_sampler: wgpu::Sampler,
     /// Bind groups de texture par chemin ; "" = texture blanche par défaut.
     textures: HashMap<String, wgpu::BindGroup>,
+    /// Génération de mipmaps à l'import (Sprint 92) : pipeline/layout/sampler dédiés,
+    /// utilisés par `make_texture` pour chaque niveau au-delà du mip 0.
+    mipgen_pipeline: wgpu::RenderPipeline,
+    mipgen_layout: wgpu::BindGroupLayout,
+    mipgen_sampler: wgpu::Sampler,
 
     editor: Option<Editor>,
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
@@ -438,6 +443,82 @@ impl Renderer {
             ],
         });
 
+        // --- Génération de mipmaps à l'import (Sprint 92) : chaîne de blits, un niveau
+        // à la fois, chacun un simple échantillonnage bilinéaire du niveau précédent
+        // (moitié résolution) — cf. `make_texture`/`mip_count_for`. Pipeline dédiée
+        // (pas celle du bloom, format différent — `Rgba8UnormSrgb` des textures
+        // albédo, pas `HDR_FORMAT`) mais même principe de triangle plein écran.
+        let mipgen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mipgen_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mipgen.wgsl").into()),
+        });
+        let mipgen_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mipgen_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let mipgen_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("mipgen_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let mipgen_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("mipgen_pipeline_layout"),
+                bind_group_layouts: &[Some(&mipgen_layout)],
+                immediate_size: 0,
+            });
+        let mipgen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mipgen_pipeline"),
+            layout: Some(&mipgen_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &mipgen_shader,
+                entry_point: Some("vs_mipgen"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mipgen_shader,
+                entry_point: Some("fs_mipgen"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // --- Textures (bind group 3) ---
         let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tex_layout"),
@@ -466,6 +547,11 @@ impl Renderer {
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            // Mipmaps (Sprint 92) : sans `mipmap_filter`, le sampler resterait bloqué
+            // sur le mip 0 quelle que soit la chaîne générée par `make_texture` — la
+            // sélection/mélange de mip selon la distance (dérivées d'écran) ne se
+            // déclenche qu'avec ce filtre renseigné.
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         let mut textures = HashMap::new();
@@ -475,6 +561,9 @@ impl Renderer {
             &queue,
             &tex_layout,
             &tex_sampler,
+            &mipgen_pipeline,
+            &mipgen_layout,
+            &mipgen_sampler,
             &[255, 255, 255, 255],
             1,
             1,
@@ -1134,6 +1223,9 @@ impl Renderer {
             tex_layout,
             tex_sampler,
             textures,
+            mipgen_pipeline,
+            mipgen_layout,
+            mipgen_sampler,
             editor,
             backend,
             skinned_pipeline,
@@ -1465,6 +1557,9 @@ impl Renderer {
                     &self.queue,
                     &self.tex_layout,
                     &self.tex_sampler,
+                    &self.mipgen_pipeline,
+                    &self.mipgen_layout,
+                    &self.mipgen_sampler,
                     &rgba,
                     w,
                     h,
@@ -1477,6 +1572,9 @@ impl Renderer {
                         &self.queue,
                         &self.tex_layout,
                         &self.tex_sampler,
+                        &self.mipgen_pipeline,
+                        &self.mipgen_layout,
+                        &self.mipgen_sampler,
                         &[255, 255, 255, 255],
                         1,
                         1,
@@ -2953,12 +3051,27 @@ fn load_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
     Some((img.into_raw(), w, h))
 }
 
-/// Crée une texture RGBA8 + son bind group (groupe 3) prêt à lier.
+/// Nombre de mips pour une texture `width`×`height` (Sprint 92) : `1 + log2(plus
+/// grande dimension)`, la formule standard — 256 → 9 niveaux (256..1), 1×1 → 1 (rien
+/// à générer). `leading_zeros` sur `u32` : direct, sans dépendance à une fonction
+/// `log2` flottante (imprécisions d'arrondi à éviter sur un compte de niveaux entier).
+fn mip_count_for(width: u32, height: u32) -> u32 {
+    32 - width.max(height).max(1).leading_zeros()
+}
+
+/// Crée une texture RGBA8 + son bind group (groupe 3) prêt à lier, avec sa chaîne de
+/// mips complète (Sprint 92) : sans elle, un objet texturé vu de loin agrège l'aliasing
+/// du mip 0 au lieu de moyenner vers une version plus petite — c'est tout l'intérêt de
+/// `mip_count_for`/de générer les niveaux suivants ici plutôt que de rester à 1 seul.
+#[allow(clippy::too_many_arguments)]
 fn make_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
+    mipgen_pipeline: &wgpu::RenderPipeline,
+    mipgen_layout: &wgpu::BindGroupLayout,
+    mipgen_sampler: &wgpu::Sampler,
     rgba: &[u8],
     width: u32,
     height: u32,
@@ -2968,14 +3081,20 @@ fn make_texture(
         height,
         depth_or_array_layers: 1,
     };
+    let mip_count = mip_count_for(width, height);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("albedo"),
         size,
-        mip_level_count: 1,
+        mip_level_count: mip_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        // `RENDER_ATTACHMENT` en plus de `TEXTURE_BINDING`/`COPY_DST` (déjà là avant ce
+        // sprint) : chaque mip > 0 est rempli en le ciblant comme cible de rendu
+        // (blit), pas via `write_texture` (qui n'a pas de filtre de réduction intégré).
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
     queue.write_texture(
@@ -2993,6 +3112,67 @@ fn make_texture(
         },
         size,
     );
+
+    if mip_count > 1 {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("mipgen_encoder"),
+        });
+        let mut prev_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("mip_src"),
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        for level in 1..mip_count {
+            let target_view = texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("mip_dst"),
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mipgen_bg"),
+                layout: mipgen_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&prev_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(mipgen_sampler),
+                    },
+                ],
+            });
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("mipgen_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(mipgen_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            prev_view = target_view;
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    // Vue par défaut (tous les mips) : c'est celle-ci que le shader échantillonne,
+    // le sampler choisit/mélange le niveau selon les dérivées d'écran (`mipmap_filter`
+    // du sampler, cf. `tex_sampler`).
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("tex_bg"),
@@ -3263,4 +3443,24 @@ fn create_bloom_mip_views(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mip_count_for_matches_the_standard_formula() {
+        // Sprint 92 : 1 + log2(plus grande dimension) — vérifié contre des puissances
+        // de deux connues plutôt qu'en réimplémentant la formule dans le test.
+        assert_eq!(mip_count_for(1, 1), 1); // rien à générer sous une texture 1×1
+        assert_eq!(mip_count_for(2, 2), 2);
+        assert_eq!(mip_count_for(256, 256), 9); // 256,128,64,32,16,8,4,2,1
+        assert_eq!(mip_count_for(1024, 1024), 11);
+        // Non carrée : la plus grande dimension domine (l'autre s'arrête avant 1×1,
+        // ce qui reste correct — wgpu accepte des mips plus petits que 1 sur un axe
+        // tant que l'autre n'est pas encore à 1).
+        assert_eq!(mip_count_for(256, 64), 9);
+        assert_eq!(mip_count_for(64, 256), 9);
+    }
 }

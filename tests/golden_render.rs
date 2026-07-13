@@ -331,3 +331,71 @@ fn bloom_intensity_visibly_spreads_light_around_the_bright_object() {
         ratio * 100.0
     );
 }
+
+/// Damier haute fréquence (Sprint 92, mipmaps) : le cas d'école de l'aliasing lointain
+/// — sans chaîne de mips, un plan texturé vu en oblique agrège le bruit du mip 0 au
+/// lieu de moyenner vers une version plus petite. Généré en mémoire (pas un fichier
+/// versionné) puis écrit dans un PNG temporaire : `sync_textures` ne sait charger
+/// qu'un fichier réel sur disque (ou un schéma `asset://`/`bundle://`), pas des octets
+/// bruts directement.
+fn write_temp_checkerboard() -> std::path::PathBuf {
+    const SIZE: u32 = 64;
+    let mut buf = vec![0u8; (SIZE * SIZE * 4) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let on = (x / 4 + y / 4) % 2 == 0;
+            let c = if on { 255 } else { 0 };
+            let idx = ((y * SIZE + x) * 4) as usize;
+            buf[idx] = c;
+            buf[idx + 1] = c;
+            buf[idx + 2] = c;
+            buf[idx + 3] = 255;
+        }
+    }
+    let path = std::env::temp_dir().join(format!(
+        "rusteegear_golden_checkerboard_{}.png",
+        std::process::id()
+    ));
+    image::save_buffer(&path, &buf, SIZE, SIZE, image::ColorType::Rgba8)
+        .expect("écriture du damier temporaire");
+    path
+}
+
+fn scene_textured_ground(texture_path: &std::path::Path) -> Scene {
+    let ground = SceneObject {
+        name: "Sol texturé".into(),
+        mesh: MeshKind::Plane,
+        transform: Transform::from_pos(glam::Vec3::new(0.0, -1.0, 0.0))
+            .with_scale(glam::Vec3::new(8.0, 1.0, 8.0)),
+        color: [1.0, 1.0, 1.0],
+        texture: texture_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    Scene {
+        objects: vec![ground],
+        light: Light {
+            ambient: 0.4,
+            ..Default::default()
+        },
+        sky: Sky {
+            bloom_intensity: 0.0,
+            ..Sky::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Filet de sécurité de bout en bout (Sprint 92) : que la chaîne de mips générée par
+/// `make_texture` continue de se construire et de s'échantillonner sans dériver —
+/// un vrai crash ou un shader qui casserait la génération de mips (par ex. une passe
+/// de blit mal configurée) ferait planter ce test avant même la comparaison de pixels.
+#[test]
+fn golden_textured_ground_with_mipmaps() {
+    let texture_path = write_temp_checkerboard();
+    let pixels = render_headless(scene_textured_ground(&texture_path));
+    let _ = std::fs::remove_file(&texture_path);
+    let Some(pixels) = pixels else {
+        return;
+    };
+    assert_matches_golden("textured_ground_mipmaps.png", &pixels, WIDTH, HEIGHT);
+}

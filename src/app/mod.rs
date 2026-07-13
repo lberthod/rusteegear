@@ -3086,9 +3086,11 @@ impl AppState {
             skeleton: None,
             clips: Vec::new(),
             vertex_skins: Vec::new(),
+            tangents: Vec::new(),
         };
-        // Squelette/clips (Sprints 84-85) : reparse le fichier séparément, cf.
-        // `ImportedMesh::load_skinning` — silencieux si le mesh est statique.
+        // Squelette/clips (Sprints 84-85) + tangentes (Sprint 92) : reparse le fichier
+        // séparément, cf. `ImportedMesh::load_skinning` — silencieux si le mesh est
+        // statique (squelette).
         imported.load_skinning();
         self.scene.imported.push(imported);
         // Recadrage auto : centrer à l'origine, mise à l'échelle ~2 u.

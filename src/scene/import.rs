@@ -85,6 +85,79 @@ fn build_from(
     Ok((MeshData { vertices, indices }, min, max))
 }
 
+/// Calcule une tangente par sommet (Sprint 92) quand le glTF n'en fournit pas
+/// (notre lecteur n'essaie pas encore de lire l'attribut `TANGENT` — aucun des
+/// modèles de test n'en porte un, ce serait un chantier à part). Méthode de Lengyel
+/// (la même que la plupart des moteurs implémentent, souvent appelée « à la
+/// mikktspace » même si distincte de l'implémentation de référence de Blender, plus
+/// complexe) : tangente par triangle à partir des dérivées position/UV, accumulée par
+/// sommet, puis orthogonalisée contre la normale (Gram-Schmidt) — le signe de la
+/// bitangente (`w`) est déduit du triangle pour rester cohérent avec un UV retourné
+/// (miroir), fréquent sur des meshes symétriques.
+///
+/// `xyz` = tangente normalisée, `w` = ±1 (signe de la bitangente). Un sommet jamais
+/// référencé par un triangle valide (dégénéré, UV nuls) retombe sur une tangente
+/// arbitraire perpendiculaire à la normale plutôt que `(0,0,0)` — un vecteur nul
+/// briserait le repère tangent-espace si jamais échantillonné.
+pub fn compute_tangents(vertices: &[Vertex], indices: &[u32]) -> Vec<[f32; 4]> {
+    let mut tangent_acc = vec![Vec3::ZERO; vertices.len()];
+    let mut bitangent_acc = vec![Vec3::ZERO; vertices.len()];
+
+    for tri in indices.chunks_exact(3) {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        let (Some(v0), Some(v1), Some(v2)) = (vertices.get(i0), vertices.get(i1), vertices.get(i2))
+        else {
+            continue;
+        };
+        let e1 = Vec3::from_array(v1.position) - Vec3::from_array(v0.position);
+        let e2 = Vec3::from_array(v2.position) - Vec3::from_array(v0.position);
+        let (du1, dv1) = (v1.uv[0] - v0.uv[0], v1.uv[1] - v0.uv[1]);
+        let (du2, dv2) = (v2.uv[0] - v0.uv[0], v2.uv[1] - v0.uv[1]);
+        let det = du1 * dv2 - du2 * dv1;
+        // UV dégénérés (triangle sans étendue UV réelle) : ce triangle ne contribue
+        // aucune direction tangente fiable, plutôt que d'en injecter une via une
+        // division par ~0 (explosion numérique qui polluerait tous les sommets
+        // partagés, pas seulement ce triangle dégénéré).
+        if det.abs() < 1e-8 {
+            continue;
+        }
+        let r = 1.0 / det;
+        let tangent = (e1 * dv2 - e2 * dv1) * r;
+        let bitangent = (e2 * du1 - e1 * du2) * r;
+        for &i in &[i0, i1, i2] {
+            tangent_acc[i] += tangent;
+            bitangent_acc[i] += bitangent;
+        }
+    }
+
+    vertices
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let n = Vec3::from_array(v.normal).normalize_or(Vec3::Y);
+            let t = tangent_acc[i];
+            // Gram-Schmidt : retire la composante de `t` colinéaire à la normale, pour
+            // un repère tangent-espace orthogonal même si `t` penchait légèrement hors
+            // du plan tangent (accumulation de plusieurs triangles non coplanaires).
+            let ortho = t - n * n.dot(t);
+            let tangent = if ortho.length_squared() > 1e-12 {
+                ortho.normalize()
+            } else {
+                // Tangente/normale colinéaires (sommet jamais dans un triangle à UV
+                // valide, cf. la garde `det` ci-dessus) : n'importe quel vecteur
+                // perpendiculaire à `n` fait un repère valide, arbitraire mais stable.
+                n.any_orthogonal_vector()
+            };
+            let handedness = if n.cross(tangent).dot(bitangent_acc[i]) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            [tangent.x, tangent.y, tangent.z, handedness]
+        })
+        .collect()
+}
+
 /// Un os (joint) du squelette d'un modèle skinné (Sprint 84), avec sa hiérarchie
 /// parent/enfant et sa pose de liaison inverse — nécessaire au skinning GPU (Sprint 86)
 /// mais délibérément **sans** dépendance au rendu ici : données pures.
@@ -1187,6 +1260,135 @@ pub(crate) mod tests {
             assert!(
                 u.abs_diff_eq(*a, 1e-5),
                 "blend < 0.0 doit être clampé à 0.0"
+            );
+        }
+    }
+
+    /// Triangle dans le plan XY (normale +Z), UV alignés sur les axes monde (u ~ x,
+    /// v ~ y) — la tangente attendue est donc +X, la bitangente +Y.
+    fn axis_aligned_uv_triangle(mirrored: bool) -> (Vec<Vertex>, Vec<u32>) {
+        let v_sign = if mirrored { -1.0 } else { 1.0 };
+        let vertices = vec![
+            Vertex {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                color: [1.0, 1.0, 1.0],
+                uv: [0.0, 0.0],
+            },
+            Vertex {
+                position: [1.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                color: [1.0, 1.0, 1.0],
+                uv: [1.0, 0.0],
+            },
+            Vertex {
+                position: [0.0, 1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                color: [1.0, 1.0, 1.0],
+                uv: [0.0, v_sign],
+            },
+        ];
+        (vertices, vec![0, 1, 2])
+    }
+
+    #[test]
+    fn compute_tangents_matches_world_x_for_axis_aligned_uvs() {
+        let (vertices, indices) = axis_aligned_uv_triangle(false);
+        let tangents = compute_tangents(&vertices, &indices);
+        assert_eq!(tangents.len(), 3);
+        for t in &tangents {
+            let tangent = Vec3::new(t[0], t[1], t[2]);
+            assert!(
+                tangent.abs_diff_eq(Vec3::X, 1e-4),
+                "tangente attendue ~+X pour un UV aligné sur les axes monde : {tangent:?}"
+            );
+            assert_eq!(t[3], 1.0, "bitangente droite (pas d'UV en miroir)");
+        }
+    }
+
+    #[test]
+    fn compute_tangents_is_orthogonal_to_the_normal() {
+        // Sur un triangle non trivial (normale inclinée), la tangente calculée doit
+        // rester dans le plan tangent — sinon Gram-Schmidt aurait un bug.
+        let vertices = vec![
+            Vertex {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.3, 0.2, 0.9],
+                color: [1.0; 3],
+                uv: [0.0, 0.0],
+            },
+            Vertex {
+                position: [1.0, 0.2, -0.1],
+                normal: [0.3, 0.2, 0.9],
+                color: [1.0; 3],
+                uv: [1.0, 0.3],
+            },
+            Vertex {
+                position: [0.1, 1.0, 0.05],
+                normal: [0.3, 0.2, 0.9],
+                color: [1.0; 3],
+                uv: [0.2, 1.0],
+            },
+        ];
+        let tangents = compute_tangents(&vertices, &[0, 1, 2]);
+        for (t, v) in tangents.iter().zip(&vertices) {
+            let n = Vec3::from_array(v.normal).normalize();
+            let tangent = Vec3::new(t[0], t[1], t[2]);
+            assert!(
+                tangent.dot(n).abs() < 1e-4,
+                "la tangente doit être orthogonale à la normale : dot={}",
+                tangent.dot(n)
+            );
+            assert!(
+                (tangent.length() - 1.0).abs() < 1e-4,
+                "la tangente doit être normalisée : longueur={}",
+                tangent.length()
+            );
+        }
+    }
+
+    #[test]
+    fn compute_tangents_flips_handedness_on_mirrored_uvs() {
+        // UV en miroir (v inversé) : cas fréquent sur un mesh symétrique (les deux
+        // moitiés partagent une texture retournée) — le signe de la bitangente doit
+        // suivre, sinon le normal mapping serait incohérent d'un côté à l'autre.
+        let (vertices, indices) = axis_aligned_uv_triangle(true);
+        let tangents = compute_tangents(&vertices, &indices);
+        for t in &tangents {
+            assert_eq!(t[3], -1.0, "bitangente inversée pour un UV en miroir");
+        }
+    }
+
+    #[test]
+    fn compute_tangents_returns_one_entry_per_vertex_even_with_degenerate_triangles() {
+        // Triangle dégénéré (UV identiques partout, `det` ~ 0) : ne doit ni paniquer
+        // ni produire une tangente NaN/explosée — juste une valeur arbitraire stable.
+        let vertices = vec![
+            Vertex {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                color: [1.0; 3],
+                uv: [0.5, 0.5],
+            },
+            Vertex {
+                position: [1.0, 0.0, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                color: [1.0; 3],
+                uv: [0.5, 0.5],
+            },
+            Vertex {
+                position: [0.0, 0.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                color: [1.0; 3],
+                uv: [0.5, 0.5],
+            },
+        ];
+        let tangents = compute_tangents(&vertices, &[0, 1, 2]);
+        assert_eq!(tangents.len(), 3);
+        for t in &tangents {
+            assert!(
+                t[0].is_finite() && t[1].is_finite() && t[2].is_finite(),
+                "tangente non finie sur triangle dégénéré : {t:?}"
             );
         }
     }

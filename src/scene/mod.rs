@@ -115,15 +115,28 @@ pub struct ImportedMesh {
     /// pour construire le mesh GPU skinné (Sprint 86 : `gfx::mesh::SkinnedVertex`).
     #[serde(skip)]
     pub vertex_skins: Vec<import::VertexSkin>,
+    /// Tangente par sommet (Sprint 92), alignée avec `data.vertices` : xyz = tangente,
+    /// w = signe de la bitangente (`cross(normal, tangent) * w`). Calculée pour **tout**
+    /// mesh importé (skinné ou non) — contrairement à `skeleton`/`clips`/`vertex_skins`,
+    /// rien ici ne dépend d'un skin glTF. Donnée pure, pas encore consommée par le
+    /// rendu (aucun normal mapping ce sprint) : prépare le terrain pour un futur sprint,
+    /// même logique que `skeleton` avant le skinning GPU (Sprint 86).
+    #[serde(skip)]
+    pub tangents: Vec<[f32; 4]>,
 }
 
 impl ImportedMesh {
-    /// Recharge `skeleton`/`clips`/`vertex_skins` depuis `path` (Sprints 84-85). Reparse
-    /// le glTF séparément de `data` (`import::load_gltf`) : un peu redondant (deux passes
-    /// sur le même fichier), mais garde le squelettage entièrement optionnel et sans
-    /// coût pour les meshes statiques, qui restent sur le seul chemin `load_gltf`
-    /// existant. Silencieux en cas d'erreur de lecture (log seulement) : l'absence de
-    /// squelette ne doit pas empêcher un mesh statique de s'afficher normalement.
+    /// Recharge `skeleton`/`clips`/`vertex_skins` depuis `path` (Sprints 84-85), **et**
+    /// `tangents` depuis `data` déjà chargée (Sprint 92) — malgré son nom, cette méthode
+    /// recalcule toute donnée dérivée non sérialisée d'un mesh importé, pas seulement le
+    /// squelettage ; regroupées ici plutôt qu'en méthodes séparées puisque tous les
+    /// appelants (`reload_imported`, tests) les invoquent toujours ensemble, juste après
+    /// avoir affecté `self.data`. Reparse le glTF séparément de `data` (`import::
+    /// load_gltf`) pour le squelette : un peu redondant (deux passes sur le même
+    /// fichier), mais garde le squelettage entièrement optionnel et sans coût pour les
+    /// meshes statiques, qui restent sur le seul chemin `load_gltf` existant. Silencieux
+    /// en cas d'erreur de lecture du squelette (log seulement) : son absence ne doit pas
+    /// empêcher un mesh statique de s'afficher normalement.
     pub fn load_skinning(&mut self) {
         self.skeleton = None;
         self.clips.clear();
@@ -142,6 +155,7 @@ impl ImportedMesh {
                 Err(e) => log::error!("Lecture des clips de {} échouée : {e}", self.path),
             }
         }
+        self.tangents = import::compute_tangents(&self.data.vertices, &self.data.indices);
     }
 
     /// Combine `data.vertices` (position/normale/couleur/uv) et `vertex_skins`
@@ -3375,6 +3389,40 @@ mod tests {
         assert_eq!(skinned.vertices[2].weights, [0.5, 0.5, 0.0, 0.0]);
         // Géométrie transportée telle quelle depuis `data.vertices`.
         assert_eq!(skinned.vertices[0].position, m.data.vertices[0].position);
+    }
+
+    #[test]
+    fn load_skinning_also_populates_tangents_for_any_imported_mesh() {
+        // Sprint 92 : contrairement au squelette (skin glTF requis), les tangentes
+        // sont calculées pour n'importe quel mesh importé — vérifié ici sur la même
+        // fixture skinnée que `skinned_mesh_data_combines_geometry_and_skin_weights`,
+        // mais rien dans `compute_tangents` ne dépend du skin.
+        let bytes = import::tests::skinned_triangle_glb();
+        let path = import::tests::write_temp_glb(&bytes, "scene_load_skinning_tangents");
+        let (data, aabb_min, aabb_max) = import::load_gltf(path.to_str().unwrap()).unwrap();
+        let mut m = ImportedMesh {
+            path: path.to_str().unwrap().to_string(),
+            data,
+            aabb_min,
+            aabb_max,
+            ..Default::default()
+        };
+        m.load_skinning();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            m.tangents.len(),
+            m.data.vertices.len(),
+            "une tangente par sommet"
+        );
+        for t in &m.tangents {
+            assert!(t[0].is_finite() && t[1].is_finite() && t[2].is_finite());
+            assert!(
+                t[3] == 1.0 || t[3] == -1.0,
+                "signe de bitangente : {}",
+                t[3]
+            );
+        }
     }
 
     #[test]

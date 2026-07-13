@@ -1162,10 +1162,45 @@ régression client. Une manche décidée ne coupe plus tout le process
   « la boule de feu rayonne » en jeu réel demande de vérifier `app::fireball` avec
   un émissif réglé en pratique (mécanisme prêt, contenu/tuning à faire séparément).
 
-#### Sprint 92 — Mipmaps + tangentes ⬜
-- [ ] Mips générés à l'import (blits chaînés) ; tangentes `mikktspace` quand absentes.
-- **Fichiers** : `src/assets.rs`, `src/scene/import.rs`, `src/gfx/mesh.rs`.
-- **Livrable** : capture comparative avant/après sur l'aliasing au loin ; prépare le normal mapping.
+#### Sprint 92 — Mipmaps + tangentes ✅ FAIT
+- [x] **Mips générés à l'import** (`src/gfx/shaders/mipgen.wgsl`, nouveau) :
+      `make_texture` calcule `mip_count_for(width, height)` (formule standard, `1 +
+      log2(plus grande dimension)`) et crée la texture avec toute la chaîne, puis
+      **blits chaînés** — un niveau à la fois, chacun un simple échantillonnage
+      bilinéaire du niveau précédent (même triangle plein écran que `sky.wgsl`/
+      `bloom.wgsl`, dans un module séparé pour ne pas coupler la génération de mips,
+      une fois par texture, au pipeline de bloom, par frame). `tex_sampler` gagne
+      `mipmap_filter: Linear` — sans lui, le sampler resterait bloqué sur le mip 0
+      quelle que soit la chaîne générée.
+- [x] **Tangentes** (`import::compute_tangents`, `src/scene/import.rs`) : méthode de
+      Lengyel (tangente par triangle depuis les dérivées position/UV, accumulée par
+      sommet, orthogonalisée contre la normale par Gram-Schmidt, signe de bitangente
+      déduit du triangle) — **pas** l'algorithme de référence mikktspace (Blender),
+      plus complexe ; équivalent fonctionnel largement utilisé sous ce nom dans
+      d'autres moteurs, documenté comme tel dans le code plutôt que de prétendre à
+      une conformité qu'il n'a pas. Calculées pour **tout** mesh importé (skinné ou
+      non) dans `ImportedMesh::load_skinning()`, stockées à part
+      (`ImportedMesh::tangents`, donnée dérivée non sérialisée, même statut que
+      `skeleton`/`clips`/`vertex_skins`) — **pas encore branchées sur le GPU** (aucun
+      normal mapping ce sprint, cf. livrable restant).
+- [x] **Tests** : `mip_count_for` (formule vérifiée contre des puissances de deux
+      connues), 4 tests de `compute_tangents` (tangente attendue sur UV aligné axes,
+      orthogonalité à la normale, inversion de signe sur UV en miroir, robustesse sur
+      triangle dégénéré), 1 test bout-en-bout (`load_skinning` peuple bien
+      `tangents`), 1 nouveau golden (damier haute fréquence sur un plan en
+      perspective — le cas d'école de l'aliasing lointain, sert de filet si la chaîne
+      de blits de `make_texture` venait à casser). 267 tests lib + 4 tests bin + 7
+      golden render + 1 golden skinning verts ; aucun golden existant n'a dû être
+      régénéré (aucune scène de référence n'utilise de texture).
+- **Fichiers** : `src/gfx/shaders/mipgen.wgsl` (nouveau), `src/gfx/renderer.rs`
+  (`make_texture`, `mip_count_for`), `src/scene/import.rs` (`compute_tangents`),
+  `src/scene/mod.rs` (`ImportedMesh::tangents`), `tests/golden_render.rs`.
+- **Livrable restant, hors scope de ce sprint** : le « avant/après » a été vérifié
+  visuellement (golden `textured_ground_mipmaps.png` : le damier se lisse
+  proprement vers l'horizon plutôt que de scintiller) plutôt que via une capture
+  d'écran manuelle dédiée — équivalent en pratique, versionné et reproductible. Le
+  normal mapping lui-même (consommer `tangents` dans un shader) reste un sprint à
+  part, non planifié dans cette section.
 
 ### PHASE N — Chaîne gameplay (93 → 99)
 
