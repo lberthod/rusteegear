@@ -599,6 +599,31 @@ pub struct SceneObject {
     /// usage réel ; sans effet sur un mesh statique (aucun joint à animer).
     #[serde(default)]
     pub animation: Option<AnimationState>,
+    /// Lien vers un prefab (Sprint 96) : `None` pour un objet indépendant (la grande
+    /// majorité). `Some` fait de cet objet une **instance** — resynchronisée depuis le
+    /// template par `Scene::sync_prefab_instances`, champ par champ, sauf ceux listés
+    /// dans `PrefabInstance::overrides`.
+    #[serde(default)]
+    pub prefab: Option<PrefabInstance>,
+}
+
+/// Instance d'un prefab (Sprint 96) : un `SceneObject` sérialisé, partagé par plusieurs
+/// objets de la scène qui y renvoient tous par référence stable (`asset-id://`, Sprint
+/// 95) plutôt que de dupliquer ses champs — modifier le fichier prefab puis appeler
+/// `Scene::sync_prefab_instances` répercute le changement sur toutes les instances,
+/// sauf les champs que chacune a explicitement surchargés.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PrefabInstance {
+    /// Référence stable vers le JSON du prefab (`asset-id://<uuid>`) — un renommage du
+    /// fichier prefab ne casse donc aucune instance (cf. `assets::rename_asset`).
+    pub asset_id: String,
+    /// Noms des champs de `SceneObject` (clés JSON sérialisées, ex. `"transform"`,
+    /// `"color"`) explicitement modifiés sur **cette** instance : jamais réécrits par
+    /// `sync_prefab_instances`, quoi que le template devienne. `transform` et `name` y
+    /// figurent par défaut dès la création (`Scene::instantiate_prefab`) — deux champs
+    /// qu'une instance a presque toujours besoin de garder propres à elle.
+    #[serde(default)]
+    pub overrides: Vec<String>,
 }
 
 /// Composant optionnel : lecture d'un clip d'animation squelettale (Sprint 87). `None` =
@@ -799,6 +824,7 @@ impl Default for SceneObject {
             deadly: false,
             respawn_delay: 0.0,
             animation: None,
+            prefab: None,
         }
     }
 }
@@ -3177,6 +3203,104 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
         }
         self.version = Self::CURRENT_VERSION;
     }
+
+    /// Sauvegarde `obj` comme prefab (Sprint 96) dans `assets_dir()/prefabs/<name>.json`,
+    /// enregistré dans le manifeste d'assets (Sprint 95) pour une référence stable —
+    /// c'est ce qui permet de renommer le fichier prefab sans casser les instances qui
+    /// le référencent. `Err` si `assets_dir()` est indisponible (pas de `$HOME`) ou si
+    /// l'écriture disque échoue.
+    pub fn save_prefab(obj: &SceneObject, name: &str) -> Result<String, String> {
+        let json = serde_json::to_string_pretty(obj).map_err(|e| e.to_string())?;
+        let dir = crate::assets::assets_dir()
+            .ok_or_else(|| "pas de dossier d'assets (HOME absent)".to_string())?
+            .join("prefabs");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let file_name = format!("{name}.json");
+        std::fs::write(dir.join(&file_name), json).map_err(|e| e.to_string())?;
+        Ok(crate::assets::register_asset(&format!(
+            "prefabs/{file_name}"
+        )))
+    }
+
+    /// Crée une nouvelle instance du prefab référencé par `asset_id`, positionnée à
+    /// `at` sous le nom `name`. `transform` et `name` sont surchargés dès la création
+    /// (chaque instance a naturellement sa propre position et un nom distinct dans la
+    /// hiérarchie) ; tout le reste suit le template tant qu'aucune autre surcharge n'est
+    /// ajoutée. `None` si le prefab est introuvable ou son JSON invalide.
+    pub fn instantiate_prefab(
+        asset_id: &str,
+        name: impl Into<String>,
+        at: Vec3,
+    ) -> Option<SceneObject> {
+        let mut obj = load_prefab_object(asset_id)?;
+        obj.name = name.into();
+        obj.transform.position = at;
+        obj.prefab = Some(PrefabInstance {
+            asset_id: asset_id.to_string(),
+            overrides: vec!["transform".to_string(), "name".to_string()],
+        });
+        Some(obj)
+    }
+
+    /// Resynchronise toutes les instances de prefab de la scène (Sprint 96) : pour
+    /// chaque objet lié (`obj.prefab.is_some()`), copie depuis le template chaque champ
+    /// **non listé** dans `PrefabInstance::overrides` — le livrable du sprint (modifier
+    /// un prefab « gemme » met à jour ses 20 instances, sauf leurs surcharges). Fusion au
+    /// niveau JSON (`serde_json::Value`) plutôt que champ Rust par champ : `SceneObject`
+    /// a des dizaines de champs, et une fusion générique évite d'avoir à étendre cette
+    /// fonction à chaque nouveau champ ajouté au type. Un template introuvable (fichier
+    /// prefab supprimé/déplacé) laisse l'instance telle quelle — pas d'erreur bruyante
+    /// pour un cas qui peut survenir en édition normale.
+    pub fn sync_prefab_instances(&mut self) {
+        let mut cache: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        for obj in &mut self.objects {
+            let Some(prefab) = obj.prefab.clone() else {
+                continue;
+            };
+            let template = match cache.get(&prefab.asset_id) {
+                Some(v) => v.clone(),
+                None => {
+                    let Some(v) = load_prefab_value(&prefab.asset_id) else {
+                        continue;
+                    };
+                    cache.insert(prefab.asset_id.clone(), v.clone());
+                    v
+                }
+            };
+            let Ok(mut instance_value) = serde_json::to_value(&*obj) else {
+                continue;
+            };
+            if let (Some(template_map), Some(instance_map)) =
+                (template.as_object(), instance_value.as_object_mut())
+            {
+                for (key, val) in template_map {
+                    // `prefab` : jamais copié depuis le template (préserverait le lien
+                    // et les surcharges de l'instance, pas ceux — généralement absents
+                    // — du template lui-même).
+                    if key == "prefab" || prefab.overrides.iter().any(|o| o == key) {
+                        continue;
+                    }
+                    instance_map.insert(key.clone(), val.clone());
+                }
+            }
+            if let Ok(merged) = serde_json::from_value::<SceneObject>(instance_value) {
+                *obj = merged;
+            }
+        }
+    }
+}
+
+/// Charge et parse le JSON d'un prefab depuis sa référence stable (`asset-id://<uuid>`
+/// ou tout autre schéma reconnu par `assets::read_bytes`).
+fn load_prefab_value(asset_id: &str) -> Option<serde_json::Value> {
+    let bytes = crate::assets::read_bytes(asset_id)?;
+    let text = String::from_utf8(bytes).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn load_prefab_object(asset_id: &str) -> Option<SceneObject> {
+    serde_json::from_value(load_prefab_value(asset_id)?).ok()
 }
 
 #[cfg(test)]
@@ -3723,6 +3847,120 @@ mod tests {
         scene.migrate();
         assert_eq!(scene.groups, vec!["A".to_string(), "A".to_string()]);
         assert_eq!(scene.version, Scene::CURRENT_VERSION);
+    }
+
+    /// Nom de prefab unique par appel (horloge + pid), pour ne pas collisionner avec un
+    /// vrai prefab de l'utilisateur qui lancerait ces tests (ils écrivent réellement
+    /// dans `~/.motor3derust/assets/prefabs/`, comme le ferait l'éditeur — ce sprint n'a
+    /// pas de variante testable par répertoire séparé, contrairement à `assets.rs`).
+    fn unique_prefab_name(tag: &str) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("test_{tag}_{}_{}", std::process::id(), nanos)
+    }
+
+    #[test]
+    fn modifying_a_prefab_updates_its_instances_except_overrides() {
+        // Le livrable du Sprint 96 : un prefab « gemme » modifié met à jour ses N
+        // instances, sauf les propriétés surchargées.
+        let name = unique_prefab_name("gemme");
+        let gemme_v1 = SceneObject {
+            name: "Gemme".into(),
+            mesh: MeshKind::Sphere,
+            color: [1.0, 1.0, 0.0], // jaune
+            tap_action: TapAction::Hide,
+            ..Default::default()
+        };
+        let asset_id =
+            Scene::save_prefab(&gemme_v1, &name).expect("sauvegarde du prefab impossible");
+
+        // 20 instances, chacune à sa propre position (transform/name surchargés par
+        // défaut par `instantiate_prefab`).
+        let mut scene = Scene::default();
+        for i in 0..20 {
+            let obj = Scene::instantiate_prefab(
+                &asset_id,
+                format!("Gemme {i}"),
+                Vec3::new(i as f32, 0.0, 0.0),
+            )
+            .expect("instanciation impossible");
+            scene.objects.push(obj);
+        }
+
+        // L'utilisateur retouche la couleur d'une seule instance (#5) à la main : ce
+        // champ devient une surcharge, protégée des futures resynchronisations.
+        scene.objects[5].color = [1.0, 0.0, 0.0]; // rouge
+        scene.objects[5]
+            .prefab
+            .as_mut()
+            .unwrap()
+            .overrides
+            .push("color".to_string());
+
+        // Le prefab change de couleur (verte) — sauvegardé sous le même nom/asset_id.
+        let gemme_v2 = SceneObject {
+            color: [0.0, 1.0, 0.0],
+            ..gemme_v1
+        };
+        Scene::save_prefab(&gemme_v2, &name).unwrap();
+        scene.sync_prefab_instances();
+
+        for (i, obj) in scene.objects.iter().enumerate() {
+            if i == 5 {
+                assert_eq!(
+                    obj.color,
+                    [1.0, 0.0, 0.0],
+                    "l'instance surchargée garde sa couleur"
+                );
+            } else {
+                assert_eq!(
+                    obj.color,
+                    [0.0, 1.0, 0.0],
+                    "l'instance {i} doit suivre la nouvelle couleur du prefab"
+                );
+            }
+            // `transform`/`name` restent propres à chaque instance (surchargés par
+            // défaut), jamais écrasés par la resynchronisation.
+            assert_eq!(obj.transform.position, Vec3::new(i as f32, 0.0, 0.0));
+            assert_eq!(obj.name, format!("Gemme {i}"));
+            assert!(
+                obj.mesh == MeshKind::Sphere,
+                "le mesh doit suivre le template"
+            );
+            assert_eq!(obj.tap_action, TapAction::Hide);
+        }
+    }
+
+    #[test]
+    fn sync_prefab_instances_leaves_non_prefab_objects_untouched() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Solo".into(),
+            color: [0.3, 0.3, 0.3],
+            ..Default::default()
+        });
+        scene.sync_prefab_instances();
+        assert_eq!(scene.objects[0].name, "Solo");
+        assert_eq!(scene.objects[0].color, [0.3, 0.3, 0.3]);
+    }
+
+    #[test]
+    fn sync_prefab_instances_is_a_no_op_when_the_prefab_file_is_missing() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Orpheline".into(),
+            prefab: Some(PrefabInstance {
+                asset_id: "asset-id://inconnu".into(),
+                overrides: vec![],
+            }),
+            ..Default::default()
+        });
+        // Ne doit pas paniquer, et laisser l'objet inchangé (prefab introuvable).
+        scene.sync_prefab_instances();
+        assert_eq!(scene.objects[0].name, "Orpheline");
     }
 
     #[test]

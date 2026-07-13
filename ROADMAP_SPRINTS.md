@@ -1277,10 +1277,37 @@ régression client. Une manche décidée ne coupe plus tout le process
   navigateur d'assets de l'éditeur — `rename_asset` existe et est testé côté moteur,
   reste à câbler un bouton/champ dans `src/editor/mod.rs`.
 
-#### Sprint 96 — Prefabs ⬜
-- [ ] Sous-arbre JSON référencé par GUID + **overrides par instance** ; instanciation depuis le navigateur d'assets.
-- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`.
-- **Livrable** : un prefab « gemme » modifié met à jour ses 20 instances, sauf propriétés surchargées.
+#### Sprint 96 — Prefabs 🟢 (mécanisme moteur fait, UI éditeur restante)
+- [x] **`SceneObject::prefab: Option<PrefabInstance>`** (`asset_id` = référence stable
+      `asset-id://<uuid>` du Sprint 95, `overrides: Vec<String>` = noms des champs
+      JSON explicitement modifiés sur cette instance).
+- [x] **`Scene::save_prefab(obj, name)`** : sérialise l'objet dans
+      `assets_dir()/prefabs/<name>.json`, enregistré dans le manifeste d'assets — un
+      renommage ultérieur du fichier prefab ne casse aucune instance (même mécanisme
+      que le Sprint 95).
+- [x] **`Scene::instantiate_prefab(asset_id, name, at)`** : nouvelle instance, avec
+      `transform`/`name` surchargés d'office (chaque instance a naturellement sa
+      propre position et un nom distinct dans la hiérarchie), le reste suivant le
+      template.
+- [x] **`Scene::sync_prefab_instances()`** : fusion au niveau JSON
+      (`serde_json::Value`) plutôt que champ Rust par champ — `SceneObject` a des
+      dizaines de champs, une fusion générique évite d'étendre cette fonction à
+      chaque champ futur. Copie chaque champ du template **non listé** dans
+      `overrides` ; `prefab` lui-même n'est jamais copié (préserverait sinon le lien
+      et les surcharges de l'instance). Un prefab introuvable (fichier supprimé/
+      déplacé) laisse l'instance telle quelle, sans erreur bruyante.
+- [x] **Livrable vérifié** : test `modifying_a_prefab_updates_its_instances_except_
+      overrides` — 20 instances d'un prefab « gemme », une couleur surchargée à la
+      main sur l'instance #5 ; le prefab change de couleur (jaune → vert) et se
+      resynchronise : les 19 autres suivent la nouvelle couleur, l'instance #5 garde
+      la sienne, et `transform`/`name` restent propres à chacune. +2 tests (objet
+      sans prefab inchangé ; prefab introuvable = no-op sans panique). 280 tests lib
+      + 4 bin + 8 golden verts.
+- **Fichiers** : `src/scene/mod.rs`.
+- **Livrable restant, hors scope de ce sprint** : pas d'instanciation depuis le
+  navigateur d'assets ni de bouton « créer un prefab depuis la sélection » dans
+  `src/editor/mod.rs` — mécanisme moteur complet et testé, câblage UI à faire dans
+  un sprint dédié (même situation que le renommage d'assets du Sprint 95).
 
 #### Sprint 97 — API Lua de scène ⬜
 - [ ] `spawn("prefab")`, `obj:destroy()`, `find_tag()` sur la file du Sprint 94 ; coroutines Lua natives.
