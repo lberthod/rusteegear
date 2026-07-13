@@ -2539,6 +2539,20 @@ impl AppState {
             .iter()
             .map(|o| o.transform.position)
             .collect();
+        // `find_tag` (Sprint 97) : instantané pris **avant** la boucle, pas de vue
+        // vivante sur `scene.objects` (déjà emprunté mutable ci-dessous). Un objet
+        // masqué ce tick (destroy) ou pas encore spawné n'y figure pas.
+        let tagged: Vec<(String, Vec3)> = self
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && !o.tag.is_empty())
+            .map(|o| (o.tag.clone(), o.transform.position))
+            .collect();
+        // `spawn()`/`obj:destroy()` (Sprint 97) : accumulés pendant la boucle des
+        // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
+        // mutable par l'itération ci-dessous.
+        let mut spawn_requests: Vec<(String, Vec3)> = Vec::new();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             let just_tapped = self.tapped_obj == Some(idx);
             // Vibration Feedback : retour haptique quand l'objet est tapé.
@@ -2574,6 +2588,8 @@ impl AppState {
                 },
             };
             let tapped = self.tapped_obj == Some(idx);
+            let mut destroy_requested = false;
+            let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
             if let Err(e) = run_script(
                 &self.lua,
                 &func,
@@ -2587,16 +2603,41 @@ impl AppState {
                 triggered.contains(&idx),
                 &events_in,
                 &mut events_out,
+                &tagged,
+                &mut spawns_this_obj,
+                &mut destroy_requested,
                 &mut vibrations,
                 &mut health,
                 &mut self.debug_lines,
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
+            // `obj:destroy()` (Sprint 97) : suppression douce, cf. sa doc dans
+            // `run_script` — jamais un retrait de `scene.objects`.
+            if destroy_requested {
+                obj.visible = false;
+            }
+            spawn_requests.extend(spawns_this_obj);
         }
         // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
         // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
         self.game_events = events_out;
+        // `spawn()` (Sprint 97) : appliqué maintenant que `scene.objects` n'est plus
+        // emprunté — ajout en fin de tableau (jamais d'insertion/retrait ailleurs),
+        // les indices existants (réseau, undo, IA) restent donc valides. Physique
+        // reconstruite une seule fois si des objets ont réellement été ajoutés (coûte
+        // cher, cf. le même garde-fou dans `spawn_network_player`).
+        if !spawn_requests.is_empty() {
+            for (prefab_ref, pos) in spawn_requests {
+                let name = format!("Spawn {}", self.scene.objects.len());
+                if let Some(obj) = crate::scene::Scene::instantiate_prefab(&prefab_ref, name, pos) {
+                    self.scene.objects.push(obj);
+                } else {
+                    log::error!("spawn() : prefab introuvable ou invalide ({prefab_ref})");
+                }
+            }
+            self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        }
         // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
         // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
         // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
@@ -3419,6 +3460,9 @@ fn run_script(
     triggered: bool,
     events_in: &[String],
     events_out: &mut Vec<String>,
+    tagged: &[(String, Vec3)],
+    spawn_out: &mut Vec<(String, Vec3)>,
+    destroy_out: &mut bool,
     vib_out: &mut Vec<f32>,
     health_out: &mut Option<f32>,
     debug_out: &mut Vec<(Vec3, Vec3, [f32; 3])>,
@@ -3444,6 +3488,21 @@ fn run_script(
     // clip). N'existe que pour les objets skinnés ; ignoré silencieusement sinon, comme
     // `hud` reste vide tant qu'aucun script n'y touche.
     obj.set("anim", anim.as_ref().map(|a| a.clip.as_str()).unwrap_or(""))?;
+
+    // `obj:destroy()` (Sprint 97) : suppression **douce** — `visible = false`, comme
+    // les monstres vaincus (`Scene::attack_at`) ou les collectibles ramassés
+    // (`Scene::collect_at`) — pas un vrai retrait de `scene.objects` (ça invaliderait
+    // les indices que d'autres systèmes retiennent d'une frame à l'autre : réseau,
+    // undo, IA — le refactor à handles générationnels du Sprint 94, pas encore fait).
+    // Appelée en syntaxe méthode (`obj:destroy()`) : Lua passe `obj` lui-même comme
+    // premier argument, ignoré ici (la fermeture sait déjà quel objet elle sert).
+    let destroy_tbl = lua.create_table()?;
+    let destroy_ref = destroy_tbl.clone();
+    let destroy_fn = lua.create_function(move |_, _self: mlua::Table| {
+        destroy_ref.set("d", true)?;
+        Ok(())
+    })?;
+    obj.set("destroy", destroy_fn)?;
 
     // Contrôles tactiles : `input.jx`, `input.jy` (joystick) et `input.btn.<nom>` (booléens).
     let input_tbl = lua.create_table()?;
@@ -3543,6 +3602,48 @@ fn run_script(
         Ok(received.get::<bool>(name.as_str()).unwrap_or(false))
     })?;
 
+    // `spawn(prefab_ref, x, y, z)` (Sprint 97) : accumule une demande (référence de
+    // prefab `asset-id://…`, position), appliquée **après** la boucle des scripts par
+    // `AppState::sim_step` — jamais pendant, `scene.objects` est en cours d'itération
+    // mutable à ce moment-là. Les nouveaux objets sont ajoutés en fin de tableau : les
+    // indices existants (réseau, undo, IA) restent valides, contrairement à une
+    // suppression (cf. `obj:destroy()`, volontairement plus prudente pour la même
+    // raison — pas le retrait/réutilisation de slots du Sprint 94, pas encore fait).
+    let spawn_tbl = lua.create_table()?;
+    let spawn_ref = spawn_tbl.clone();
+    let spawn = lua.create_function(move |lua, (prefab, x, y, z): (String, f32, f32, f32)| {
+        let entry = lua.create_table()?;
+        entry.set("prefab", prefab)?;
+        entry.set("x", x)?;
+        entry.set("y", y)?;
+        entry.set("z", z)?;
+        spawn_ref.push(entry)?;
+        Ok(())
+    })?;
+
+    // `find_tag("nom")` (Sprint 97) : instantané pris **avant** la boucle des scripts
+    // (`AppState::sim_step`) — un objet tout juste spawné/détruit ce même tick n'y
+    // apparaît donc pas encore/plus, disponible seulement au tick suivant. Ne renvoie
+    // que la position (pas de référence vivante à l'objet : les scripts n'ont accès
+    // qu'à leur propre `obj`, jamais directement à celui d'un autre).
+    let tagged_snapshot: Vec<(String, Vec3)> = tagged.to_vec();
+    let find_tag = lua.create_function(move |lua, tag: String| {
+        let out = lua.create_table()?;
+        let mut n = 1;
+        for (t, pos) in &tagged_snapshot {
+            if t != &tag {
+                continue;
+            }
+            let entry = lua.create_table()?;
+            entry.set("x", pos.x)?;
+            entry.set("y", pos.y)?;
+            entry.set("z", pos.z)?;
+            out.set(n, entry)?;
+            n += 1;
+        }
+        Ok(out)
+    })?;
+
     let g = lua.globals();
     g.set("obj", &obj)?;
     g.set("dt", dt)?;
@@ -3554,11 +3655,23 @@ fn run_script(
     g.set("damage", damage)?;
     g.set("emit", emit)?;
     g.set("on_event", on_event)?;
+    g.set("spawn", spawn)?;
+    g.set("find_tag", find_tag)?;
     g.set("debug", debug_api)?;
     func.call::<()>(())?;
 
+    if destroy_tbl.get::<bool>("d").unwrap_or(false) {
+        *destroy_out = true;
+    }
     for name in emit_tbl.sequence_values::<String>().flatten() {
         events_out.push(name);
+    }
+    for entry in spawn_tbl.sequence_values::<mlua::Table>().flatten() {
+        let prefab: String = entry.get("prefab").unwrap_or_default();
+        let x: f32 = entry.get("x").unwrap_or(0.0);
+        let y: f32 = entry.get("y").unwrap_or(0.0);
+        let z: f32 = entry.get("z").unwrap_or(0.0);
+        spawn_out.push((prefab, Vec3::new(x, y, z)));
     }
 
     for v in vib.sequence_values::<f32>().flatten() {
@@ -3644,6 +3757,19 @@ fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nom de prefab unique par appel (horloge + pid) : ces tests écrivent réellement
+    /// dans `~/.motor3derust/assets/prefabs/` (comme le ferait l'éditeur), pas de
+    /// répertoire de test isolé pour cette brique — cf. le commentaire équivalent dans
+    /// `scene::tests::unique_prefab_name` (Sprint 96).
+    fn unique_test_prefab_name(tag: &str) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("test_{tag}_{}_{}", std::process::id(), nanos)
+    }
 
     #[test]
     fn rotate_towards_smooth_eases_toward_the_target_the_short_way() {
@@ -4217,6 +4343,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4241,6 +4370,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4274,6 +4406,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut debug_out,
@@ -4316,6 +4451,9 @@ mod tests {
             false,
             &["score:3".to_string()],
             &mut events_out,
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4403,6 +4541,129 @@ mod tests {
     }
 
     #[test]
+    fn script_calling_obj_destroy_soft_deletes_via_visible_false() {
+        // Sprint 97 : `obj:destroy()` doit se traduire par `visible = false` — une
+        // suppression douce, pas un retrait de `scene.objects` (cf. la doc de
+        // `run_script`, cette dernière casserait les indices retenus ailleurs).
+        let mut app = AppState::new();
+        let mut scene = crate::scene::Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Éphémère".into(),
+            script: "obj:destroy()".into(),
+            ..Default::default()
+        });
+        app.scene = scene;
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(!app.scene.objects[0].visible, "l'objet devait être masqué");
+        // Toujours dans `scene.objects` : ce n'est pas un vrai retrait (Sprint 94, pas fait).
+        assert_eq!(app.scene.objects.len(), 1);
+    }
+
+    #[test]
+    fn find_tag_returns_positions_of_matching_visible_objects() {
+        // Sprint 97 : `find_tag` doit renvoyer la position de chaque objet visible
+        // portant le tag demandé, aucun autre — testé directement sur `run_script`
+        // (pas besoin d'un `AppState` complet pour cette brique).
+        let lua = Lua::new();
+        let src = "local hits = find_tag('ennemi'); obj.x = #hits; \
+                   if #hits > 0 then obj.y = hits[1].y end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let tagged = vec![
+            ("ennemi".to_string(), Vec3::new(1.0, 2.0, 3.0)),
+            ("ennemi".to_string(), Vec3::new(4.0, 5.0, 6.0)),
+            ("allié".to_string(), Vec3::new(9.0, 9.0, 9.0)),
+        ];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &tagged,
+            &mut Vec::new(),
+            &mut false,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            t.position.x, 2.0,
+            "seuls les 2 ennemis doivent être trouvés"
+        );
+        assert_eq!(t.position.y, 2.0);
+    }
+
+    #[test]
+    fn a_spawned_enemy_via_lua_joins_the_scene_and_can_be_found_by_tag() {
+        // Livrable du Sprint 97 : un script peut faire apparaître un ennemi depuis un
+        // prefab (`spawn`), et cet ennemi devient trouvable par `find_tag` (au tick
+        // suivant : `find_tag` lit un instantané pris avant la boucle des scripts).
+        let name = unique_test_prefab_name("ennemi97");
+        let template = crate::scene::SceneObject {
+            name: "Ennemi".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            tag: "ennemi".into(),
+            ..Default::default()
+        };
+        let asset_id = crate::scene::Scene::save_prefab(&template, &name).unwrap();
+
+        let mut app = AppState::new();
+        let mut scene = crate::scene::Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Générateur".into(),
+            script: format!("if time < 0.02 then spawn('{asset_id}', 3.0, 0.0, 4.0) end"),
+            ..Default::default()
+        });
+        app.scene = scene;
+        app.playing = true;
+        for _ in 0..3 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert_eq!(
+            app.scene.objects.len(),
+            2,
+            "le spawn doit ajouter exactement un objet"
+        );
+        let spawned = &app.scene.objects[1];
+        assert_eq!(spawned.tag, "ennemi", "l'instance doit suivre le template");
+        assert!((spawned.transform.position - Vec3::new(3.0, 0.0, 4.0)).length() < 1e-4);
+    }
+
+    #[test]
+    fn lua_coroutines_work_out_of_the_box() {
+        // Sprint 97 : `mlua::Lua::new()` charge la stdlib Lua complète, coroutines
+        // incluses — rien à câbler côté moteur, juste à vérifier que ça tourne
+        // réellement (pas seulement supposé), avant de cocher la case du sprint.
+        let lua = Lua::new();
+        let src = "\
+            local co = coroutine.create(function()
+                coroutine.yield(1)
+                return 2
+            end)
+            local ok1, v1 = coroutine.resume(co)
+            local ok2, v2 = coroutine.resume(co)
+            return ok1 and ok2 and v1 == 1 and v2 == 2";
+        let result: bool = lua.load(src).eval().unwrap();
+        assert!(
+            result,
+            "les coroutines Lua standard doivent fonctionner telles quelles"
+        );
+    }
+
+    #[test]
     fn script_setting_obj_anim_starts_a_crossfade() {
         // Sprint 87 (exposition Lua) : `obj.anim = "run"` doit atterrir dans
         // `AnimationState` via `set_clip`, avec le fondu enchaîné qu'il déclenche
@@ -4434,6 +4695,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4476,6 +4740,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4510,6 +4777,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4530,6 +4800,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4560,6 +4833,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4579,6 +4855,9 @@ mod tests {
             true,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4613,6 +4892,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -4643,6 +4925,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4674,6 +4959,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4694,6 +4982,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut health,
             &mut Vec::new(),
@@ -4718,6 +5009,9 @@ mod tests {
                 false,
                 &[],
                 &mut Vec::new(),
+                &[],
+                &mut Vec::new(),
+                &mut false,
                 &mut Vec::new(),
                 &mut health,
                 &mut Vec::new(),
@@ -4764,6 +5058,9 @@ mod tests {
                 false,
                 &[],
                 &mut Vec::new(),
+                &[],
+                &mut Vec::new(),
+                &mut false,
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
@@ -4784,6 +5081,9 @@ mod tests {
                 false,
                 &[],
                 &mut Vec::new(),
+                &[],
+                &mut Vec::new(),
+                &mut false,
                 &mut Vec::new(),
                 &mut None,
                 &mut Vec::new(),
@@ -6274,6 +6574,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut Vec::new(),
             &mut None,
             &mut Vec::new(),
@@ -6313,6 +6616,9 @@ mod tests {
             false,
             &[],
             &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
             &mut vib,
             &mut None,
             &mut Vec::new(),

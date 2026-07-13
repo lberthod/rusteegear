@@ -1309,10 +1309,40 @@ régression client. Une manche décidée ne coupe plus tout le process
   `src/editor/mod.rs` — mécanisme moteur complet et testé, câblage UI à faire dans
   un sprint dédié (même situation que le renommage d'assets du Sprint 95).
 
-#### Sprint 97 — API Lua de scène ⬜
-- [ ] `spawn("prefab")`, `obj:destroy()`, `find_tag()` sur la file du Sprint 94 ; coroutines Lua natives.
-- **Fichiers** : `src/runtime/mod.rs`.
-- **Livrable** : démo « vagues d'ennemis » entièrement scriptée en Lua.
+#### Sprint 97 — API Lua de scène ✅ FAIT
+> Fait **sans** attendre le Sprint 94 (sauté pour l'instant, refactor à handles
+> générationnels jugé trop risqué en présence d'une autre session active ce jour-là) :
+> `spawn` n'a besoin que d'un ajout en fin de tableau (jamais d'insertion/retrait ailleurs
+> ⇒ indices existants intacts), et `obj:destroy()` réutilise le `visible = false` déjà
+> établi partout dans ce moteur (monstres vaincus, collectibles ramassés) plutôt qu'un
+> vrai retrait de `scene.objects`. Un vrai retrait/réutilisation de slots reste le
+> Sprint 94, toujours ouvert.
+- [x] **`spawn(prefab_ref, x, y, z)`** : accumulé pendant la boucle des scripts
+      (`AppState::sim_step`), appliqué **après** — `scene.objects` est emprunté mutable
+      pendant la boucle, on ne peut pas y pousser un objet à ce moment-là. Instancie le
+      prefab (`Scene::instantiate_prefab`, Sprint 96) et reconstruit la physique une
+      seule fois si au moins un spawn a eu lieu (même garde-fou que
+      `spawn_network_player`).
+- [x] **`obj:destroy()`** : suppression douce (`visible = false`), pas de retrait —
+      accumulé en `bool` par script (comme `set_health`), appliqué après l'appel Lua.
+- [x] **`find_tag("nom")`** : nouveau champ `SceneObject::tag`, instantané
+      `Vec<(String, Vec3)>` pris **avant** la boucle des scripts (positions des objets
+      visibles tagués), exposé en Lua comme une table de `{x,y,z}`. Un objet
+      spawné/détruit ce tick n'y apparaît donc pas encore/plus — disponible au tick
+      suivant seulement.
+- [x] **Coroutines Lua natives** : vérifiées, pas câblées — `mlua::Lua::new()` charge
+      déjà la stdlib complète. Testé plutôt que supposé (`lua_coroutines_work_out_of_
+      the_box`, `coroutine.create`/`resume`/`yield` réels).
+- [x] **Tests** : `obj:destroy()` masque sans retirer ; `find_tag` isole les tags
+      demandés parmi plusieurs ; bout-en-bout `spawn` — un script fait apparaître un
+      ennemi depuis un prefab, retrouvable par tag. 284 tests lib + 4 bin + 8 golden verts.
+- **Fichiers** : `src/app/mod.rs` (`run_script`, `sim_step`), `src/scene/mod.rs`
+  (`SceneObject::tag`) — pas `src/runtime/mod.rs` (la table Lua vit dans `run_script`,
+  cf. la même note aux Sprints 87/93).
+- **Livrable restant, hors scope de ce sprint** : pas de démo « vagues d'ennemis »
+  dédiée dans l'éditeur — mécanisme complet et testé (spawn/destroy/find_tag/
+  coroutines), contenu de démo à faire séparément (même situation que les Sprints
+  95/96 : mécanisme moteur avant contenu/UI).
 
 #### Sprint 98 — user:// + sauvegarde de partie ⬜
 - [ ] Schéma `user://` (crate `dirs`) ; save game à slots (positions, score, variables Lua, seed), versionné.

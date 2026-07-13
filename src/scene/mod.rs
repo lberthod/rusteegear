@@ -605,6 +605,13 @@ pub struct SceneObject {
     /// dans `PrefabInstance::overrides`.
     #[serde(default)]
     pub prefab: Option<PrefabInstance>,
+    /// Étiquette libre (Sprint 97) interrogeable en Lua via `find_tag("nom")` — vide =
+    /// n'apparaît dans aucune recherche. Distinct de `group` (dossier de la hiérarchie,
+    /// usage éditeur) et de `name` (affichage, pas forcément stable/unique) : un tag
+    /// sert spécifiquement au script à retrouver des objets par rôle de gameplay
+    /// (ex. plusieurs ennemis tagués `"ennemi"`) sans connaître leurs indices.
+    #[serde(default)]
+    pub tag: String,
 }
 
 /// Instance d'un prefab (Sprint 96) : un `SceneObject` sérialisé, partagé par plusieurs
@@ -825,6 +832,7 @@ impl Default for SceneObject {
             respawn_delay: 0.0,
             animation: None,
             prefab: None,
+            tag: String::new(),
         }
     }
 }
