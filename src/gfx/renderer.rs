@@ -852,6 +852,7 @@ impl Renderer {
             if app.scene.mobile.any() {
                 let net_status = app.net_status.clone();
                 let net_connected = app.is_connected();
+                let weapon_label = app.selected_weapon_label();
                 let (output, actions) = self.editor.run_player_overlay(
                     &self.window,
                     &app.scene,
@@ -868,6 +869,7 @@ impl Renderer {
                     &mut restart,
                     &net_status,
                     net_connected,
+                    weapon_label,
                 );
                 player_net_actions = Some(actions);
                 Some(output)
@@ -885,6 +887,7 @@ impl Renderer {
             let net_status = app.net_status.clone();
             let net_connected = app.is_connected();
             let has_firebase_account = app.has_firebase_account();
+            let weapon_label = app.selected_weapon_label();
             let (full_output, actions) = self.editor.run(
                 &self.window,
                 &mut app.scene,
@@ -911,6 +914,7 @@ impl Renderer {
                 &app.chat_messages,
                 has_firebase_account,
                 &app.leaderboard,
+                weapon_label,
             );
             if actions.save {
                 app.save();

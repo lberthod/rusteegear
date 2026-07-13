@@ -32,12 +32,26 @@ pub enum ClientMsg {
     Input {
         move_x: f32,
         move_y: f32,
+        /// Orientation du personnage (yaw, radians) telle que le client la
+        /// prédit/affiche localement. Le serveur l'applique telle quelle (après
+        /// nettoyage `NaN`/infini) : l'orientation n'a pas d'enjeu anti-triche
+        /// (le collider est une capsule symétrique) mais elle décide de la
+        /// direction du **tir** — sans elle, le serveur ne faisait jamais
+        /// pivoter les joueurs réseau (le bloc d'orientation de `sim_step` est
+        /// réservé au joueur local) : fantômes figés vers -Z et boule de feu
+        /// partant dans l'orientation de spawn, pas là où le joueur regarde
+        /// (audit du 2026-07-13, Sprint 79).
+        aim_yaw: f32,
         attack: bool,
         jump: bool,
-        /// Tir de boule de feu (attaque à distance, cf. `app::fireball`) : distinct
+        /// Tir de l'arme à distance sélectionnée (cf. `app::fireball`) : distinct
         /// de `attack` (coup au contact) — le serveur valide son propre temps de
         /// recharge, comme pour `attack`.
         fire: bool,
+        /// Arme à distance sélectionnée (indice dans `app::fireball::
+        /// RANGED_WEAPONS`, borné côté serveur) : envoyée à chaque tick comme le
+        /// reste de l'état (pas un évènement « changement d'arme » à fiabiliser).
+        weapon: u8,
     },
     /// Déconnexion volontaire (quitte le salon proprement).
     Leave,
@@ -76,12 +90,20 @@ pub struct Snapshot {
     /// reçu hors ordre (réseau) plutôt que de reculer dans le temps.
     pub tick: u32,
     pub entities: Vec<EntityDelta>,
-    /// Positions monde des boules de feu en vol (cf. `app::fireball`) : pas des
-    /// entités de `scene.objects` (elles naissent et meurent en quelques
-    /// secondes), donc pas des `EntityDelta` — chaque client les affiche via un
-    /// petit pool local de sphères (cf. `AppState::sync_fireball_pool`), sans
-    /// identité persistante à suivre d'un tick à l'autre.
-    pub projectiles: Vec<[f32; 3]>,
+    /// Projectiles en vol (cf. `app::fireball`) : pas des entités de
+    /// `scene.objects` (ils naissent et meurent en quelques secondes), donc pas
+    /// des `EntityDelta` — chaque client les affiche via un petit pool local de
+    /// sphères (cf. `AppState::sync_fireball_pool`), sans identité persistante
+    /// à suivre d'un tick à l'autre.
+    pub projectiles: Vec<ProjectileState>,
+}
+
+/// Projectile en vol pour un tick donné : position + arme d'origine (l'aspect —
+/// couleur, taille — dépend de l'arme, cf. `app::fireball::RANGED_WEAPONS`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileState {
+    pub position: [f32; 3],
+    pub weapon: u8,
 }
 
 /// État minimal d'une entité de `scene.objects`, suffisant pour l'affichage/
@@ -175,9 +197,11 @@ mod tests {
         round_trip(ClientMsg::Input {
             move_x: -0.7,
             move_y: 1.0,
+            aim_yaw: 1.57,
             attack: true,
             jump: false,
             fire: true,
+            weapon: 2,
         });
     }
 
@@ -208,7 +232,16 @@ mod tests {
     fn server_msg_snapshot_round_trips() {
         round_trip(ServerMsg::Snapshot(Snapshot {
             tick: 12345,
-            projectiles: vec![[1.0, 1.4, -3.0], [0.0, 0.9, 4.2]],
+            projectiles: vec![
+                ProjectileState {
+                    position: [1.0, 1.4, -3.0],
+                    weapon: 0,
+                },
+                ProjectileState {
+                    position: [0.0, 0.9, 4.2],
+                    weapon: 2,
+                },
+            ],
             entities: vec![
                 EntityDelta {
                     index: 0,
@@ -269,7 +302,13 @@ mod tests {
             tick: 999_999,
             entities,
             // Quelques boules de feu en vol : le cas réaliste d'une manche animée.
-            projectiles: vec![[3.0, 1.4, -2.0]; 4],
+            projectiles: vec![
+                ProjectileState {
+                    position: [3.0, 1.4, -2.0],
+                    weapon: 1,
+                };
+                4
+            ],
         });
         let bytes = encode(&snapshot).expect("encodage");
         let per_entity = bytes.len() as f32 / 20.0;

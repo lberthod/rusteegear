@@ -340,3 +340,40 @@ perdrait monstres ou bouton « Feu » casse un test).
 `src/app/multiplayer.rs`, `src/app/network_client.rs`, `src/app/mod.rs`,
 `src/bin/server.rs`, `src/scene/mod.rs`, `src/lib.rs`,
 `assets/player_scene.json`.
+
+### Sprint 79 — Visée réelle, multi-armes et changement d'arme ✅ FAIT
+**Audit du mode combat à distance (Sprint 78), trois trous trouvés.**
+**(1) Le tir ne partait pas là où le joueur regarde** : le bloc d'orientation
+de `sim_step` est réservé au joueur *local* — côté serveur, rien ne faisait
+jamais pivoter les objets des joueurs réseau. Conséquences : fantômes figés
+vers -Z sur les écrans des autres, et boule de feu partant de l'orientation
+de spawn, pas de celle affichée à l'écran du tireur. **Correctif** :
+`ClientMsg::Input` transporte désormais `aim_yaw` (l'orientation prédite par
+le client, nettoyée `NaN`/infini côté serveur) — appliquée à l'objet serveur
+(donc diffusée aux fantômes des autres) et direction de tous ses tirs.
+L'orientation n'a pas d'enjeu anti-triche (collider capsule symétrique) ;
+le tir, lui, reste validé serveur (recharge par tireur).
+**(2) Une seule arme.** Nouvelle table `RANGED_WEAPONS` (`app/fireball.rs`),
+le pendant projectile des `Weapon` de mêlée : **Boule de feu** (équilibrée,
+12 m/s, 0,9 s, 1 dégât), **Éclair** (20 m/s, 0,45 s, petite, portée courte),
+**Boulet** (8 m/s, 1,8 s, 3 dégâts — le « chef » à 3 PV tombe d'un coup, gros
+rayon qui pardonne la visée). `Snapshot::projectiles` porte l'arme d'origine
+(couleur/taille par arme sur tous les écrans) ; `Combat::hp` se décompte via
+`damage_attackable_by` (dégâts multiples en un impact).
+**(3) Changement d'arme** : clavier **1/2/3** (sélection directe), bouton
+tactile **« Arme »** qui cycle (front montant uniquement — l'overlay réécrit
+l'état des boutons chaque frame), `Input::weapon` borné côté serveur (un
+client qui envoie 250 tire avec la dernière arme connue, pas de panique).
+Nouveau HUD bas-centre : arme équipée + rappel des raccourcis (texte latin,
+pas d'emoji — absents de la fonte egui sur Android).
+Tests : direction du tir = aim_yaw client, yaw serveur/snapshot aligné,
+Boulet 1-coup vs 3 coups de Boule de feu sur 3 PV, clamp d'arme réseau,
+cycle au front montant, sanitisation `aim_yaw` non-fini. Le test fumée
+`smoke_vps` tire désormais à l'Éclair avec visée +X et vérifie l'arme du
+projectile diffusé. Au passage, correctif de la scène des tests fireball :
+sans sol, le joueur (corps dynamique) tombait dans le vide et seul le premier
+tir partait à la bonne hauteur.
+**Fichiers** : `src/app/fireball.rs`, `src/net/protocol.rs`,
+`src/app/multiplayer.rs`, `src/app/network_client.rs`, `src/app/mod.rs`,
+`src/bin/server.rs`, `src/scene/mod.rs`, `src/lib.rs`, `src/editor/mod.rs`,
+`src/gfx/renderer.rs`, `assets/player_scene.json`.

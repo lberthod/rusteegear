@@ -282,9 +282,11 @@ mod tests {
         client.send(&ClientMsg::Input {
             move_x: 0.5,
             move_y: -1.0,
+            aim_yaw: 0.0,
             attack: true,
             jump: false,
             fire: false,
+            weapon: 0,
         });
 
         let (id, msg) = server
@@ -297,9 +299,11 @@ mod tests {
             ClientMsg::Input {
                 move_x: 0.5,
                 move_y: -1.0,
+                aim_yaw: 0.0,
                 attack: true,
                 jump: false,
                 fire: false,
+                weapon: 0,
             }
         );
     }

@@ -21,7 +21,8 @@
   "mobile": {
     "buttons": [
       "Saut",
-      "Feu"
+      "Feu",
+      "Arme"
     ],
     "health_bar": false,
     "joystick": false,
@@ -99,7 +100,8 @@
         "jump_button": "Saut",
         "jump_height": 1.5,
         "move_speed": 4.5,
-        "fire_button": "Feu"
+        "fire_button": "Feu",
+        "weapon_button": "Arme"
       },
       "deadly": false,
       "emissive": 0.0,

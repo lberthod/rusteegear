@@ -89,18 +89,22 @@ fn main() {
                 ClientMsg::Input {
                     move_x,
                     move_y,
+                    aim_yaw,
                     attack,
                     jump,
                     fire,
+                    weapon,
                 } => {
                     app.set_network_input(
                         id,
                         NetworkInput {
                             move_x,
                             move_y,
+                            aim_yaw,
                             attack,
                             jump,
                             fire,
+                            weapon,
                         },
                     );
                 }
@@ -133,9 +137,11 @@ fn main() {
                 let input = ClientMsg::Input {
                     move_x: (t * 1.3 + phase).sin(),
                     move_y: (t * 0.9 + phase).cos(),
+                    aim_yaw: 0.0,
                     attack: (t + phase) % 1.0 < 0.1,
                     jump: false,
                     fire: false,
+                    weapon: 0,
                 };
                 if let Ok(bytes) = protocol::encode(&input)
                     && now >= measure_from

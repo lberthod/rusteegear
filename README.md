@@ -237,15 +237,22 @@ scope, prises dès le départ :
   robuste à la gigue), jamais téléportées à chaque tick réseau — et le joueur
   local est piloté en **prédiction immédiate**, réconciliée intelligemment
   avec le serveur (voir ci-dessous).
-- **Attaque à distance « boule de feu » + monstres sur la carte**
-  (`src/app/fireball.rs`, Sprint 78) : touche **K** ou bouton tactile
-  **« Feu »** (APK + aperçu desktop) ⇒ un projectile part devant le
-  personnage, en ligne droite, et frappe le premier obstacle physique (un mur
-  sert d'abri) ou monstre sur son chemin. La carte embarquée place 5 monstres
-  à abattre (dont un « chef » à 3 PV) ; le serveur autoritaire simule tirs et
-  recharge (le spam d'un client modifié ne tire pas plus vite), diffuse
-  monstres et projectiles dans le `Snapshot`, et chaque mise à mort atteint
-  tous les écrans (`GameEvent::Defeated` : son + flash immédiats).
+- **Attaque à distance + monstres sur la carte** (`src/app/fireball.rs`,
+  Sprints 78-79) : touche **K** ou bouton tactile **« Feu »** (APK + aperçu
+  desktop) ⇒ un projectile part **dans la direction que le joueur regarde**
+  (l'orientation prédite part dans chaque `Input` — le serveur l'applique à
+  l'objet et en fait la direction du tir), en ligne droite, et frappe le
+  premier obstacle physique (un mur sert d'abri) ou monstre sur son chemin.
+  **Trois armes** — Boule de feu (équilibrée), Éclair (rapide, portée
+  courte), Boulet (lent, 3 dégâts) — via **1/2/3** au clavier ou le bouton
+  tactile **« Arme »** (cycle), avec un HUD bas-centre qui affiche l'arme
+  équipée et les raccourcis. La carte embarquée place 5 monstres à abattre
+  (dont un « chef » à 3 PV, un seul coup de Boulet) ; le serveur autoritaire
+  simule tirs et recharge (le spam d'un client modifié ne tire pas plus
+  vite, l'indice d'arme est borné), diffuse monstres et projectiles (avec
+  leur arme : couleur/taille fidèles sur tous les écrans) dans le `Snapshot`,
+  et chaque mise à mort atteint tous les écrans (`GameEvent::Defeated` :
+  son + flash immédiats).
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 

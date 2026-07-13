@@ -253,9 +253,18 @@ pub struct AppState {
     /// boules de feu — créés à la demande, masqués quand inutilisés, jamais
     /// retirés en cours de partie (retirer décalerait tous les indices).
     fireball_pool: Vec<usize>,
-    /// Positions des boules de feu reçues du dernier `Snapshot` serveur (client
-    /// connecté uniquement) : affichées telles quelles via le pool.
-    net_projectiles: Vec<Vec3>,
+    /// Projectiles (position + arme) reçus du dernier `Snapshot` serveur (client
+    /// connecté uniquement) : affichés tels quels via le pool.
+    net_projectiles: Vec<(Vec3, usize)>,
+    /// Arme à distance équipée par le joueur local (indice dans
+    /// `fireball::RANGED_WEAPONS`) : clavier 1/2/3, ou bouton tactile « Arme »
+    /// qui cycle (cf. `Controller::weapon_button`). Envoyée au serveur à chaque
+    /// `Input` quand ce client est en ligne.
+    selected_weapon: usize,
+    /// État du bouton tactile « Arme » à la frame précédente : le cycle ne se
+    /// déclenche que sur le front montant (l'overlay réécrit `buttons` à chaque
+    /// frame — sans ça, un appui ferait défiler toutes les armes en rafale).
+    weapon_button_was_down: bool,
     /// Évènements de gameplay produits par la simulation (ex. monstre vaincu par
     /// une boule de feu) à diffuser aux clients — drainés par le serveur headless
     /// à chaque tick (cf. `take_net_events`). Reste vide hors serveur (le joueur
@@ -502,6 +511,8 @@ impl AppState {
             fireball_cooldowns: HashMap::new(),
             fireball_pool: Vec::new(),
             net_projectiles: Vec::new(),
+            selected_weapon: 0,
+            weapon_button_was_down: false,
             pending_net_events: Vec::new(),
             #[cfg(not(target_os = "ios"))]
             net_client: None,
@@ -2341,6 +2352,17 @@ impl AppState {
                 // joueurs réseau reçoivent déjà leur orientation du serveur (cf.
                 // `network_client::apply_local_network_position`), l'écraser ici avec
                 // notre propre calcul créerait un conflit d'autorité.
+                // Joueur réseau : son orientation vient de l'`aim_yaw` de son
+                // `Input` — celle que **son** client prédit et affiche (Sprint
+                // 79). Avant ça, aucun code ne faisait pivoter les objets des
+                // joueurs réseau côté serveur : fantômes figés vers -Z sur les
+                // écrans des autres, et tir à distance partant de l'orientation
+                // de spawn au lieu de celle que le tireur voyait.
+                if ctrl.input
+                    && let Some(n) = net_input
+                {
+                    player_facing.push((idx, n.aim_yaw));
+                }
                 if ctrl.input && net_input.is_none() {
                     let cur_yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
                     let new_yaw = if key_turn != 0.0 {

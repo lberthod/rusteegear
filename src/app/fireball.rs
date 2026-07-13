@@ -1,7 +1,12 @@
-//! Attaque à distance « boule de feu » : un projectile part **devant** le tireur
-//! (le long de son orientation, contrairement au missile homing de `combat.rs` qui
-//! verrouille une cible), avance en ligne droite et frappe le premier obstacle
-//! physique ou monstre `attackable` sur son chemin.
+//! Attaque à distance : un projectile part **devant** le tireur (le long de son
+//! orientation, contrairement au missile homing de `combat.rs` qui verrouille une
+//! cible), avance en ligne droite et frappe le premier obstacle physique ou
+//! monstre `attackable` sur son chemin.
+//!
+//! **Multi-armes (Sprint 79)** : trois profils (cf. `RANGED_WEAPONS`) aux
+//! compromis distincts — vitesse/recharge/dégâts/portée — sélectionnés au clavier
+//! (1/2/3), au bouton tactile « Arme » (cycle, cf. `Controller::weapon_button`)
+//! ou par `ClientMsg::Input::weapon` en ligne (borné côté serveur).
 //!
 //! Même simulation en solo (APK/macOS hors ligne, tireur = joueur local) et sur le
 //! serveur autoritaire (tireurs = joueurs réseau, cf. `NetworkInput::fire`) — un
@@ -15,60 +20,113 @@ use super::AppState;
 use crate::net::protocol::GameEvent;
 use crate::runtime::physics::PhysicsKind;
 
-/// Boule de feu en vol (cf. `AppState::fireballs`).
+/// Profil d'arme à distance — l'équivalent projectile des `Weapon` de mêlée
+/// (`scene::WEAPONS`) : le choix change le *style* (viser vite ? frapper fort ?
+/// loin ?), chaque profil ayant un vrai coût en face de son avantage.
+pub struct RangedWeapon {
+    pub label: &'static str,
+    /// Vitesse de vol (m/s).
+    pub speed: f32,
+    /// Temps de recharge (s) entre deux tirs — validé côté simulation
+    /// (serveur pour les joueurs réseau) : le spam ne tire pas plus vite.
+    pub cooldown: f32,
+    /// Durée de vie (s) ⇒ portée max ≈ `speed × lifetime`.
+    pub lifetime: f32,
+    /// Rayon (m) du projectile : les AABB testés sont gonflés d'autant (un
+    /// frôlement compte comme un impact — exiger le centre géométrique serait
+    /// frustrant à viser), et c'est aussi sa taille affichée.
+    pub radius: f32,
+    /// Points de vie retirés par impact (cf. `Scene::damage_attackable_by`).
+    pub damage: u32,
+    /// Couleur du projectile (sphère émissive du pool d'affichage).
+    pub color: [f32; 3],
+}
+
+/// Les armes à distance du jeu, indexées par `AppState::selected_weapon` /
+/// `ClientMsg::Input::weapon`. L'ordre est un contrat réseau : le serveur et les
+/// clients doivent partager la même table (même binaire ou même commit).
+pub const RANGED_WEAPONS: &[RangedWeapon] = &[
+    // Équilibrée : la boule de feu historique (Sprint 78).
+    RangedWeapon {
+        label: "Boule de feu",
+        speed: 12.0,
+        cooldown: 0.9,
+        lifetime: 1.5, // ≈ 18 m
+        radius: 0.35,
+        damage: 1,
+        color: [1.0, 0.45, 0.1],
+    },
+    // Rapide : cadence et vitesse doublées, mais petite (plus dure à placer)
+    // et portée plus courte — l'arme du duel rapproché nerveux.
+    RangedWeapon {
+        label: "Éclair",
+        speed: 20.0,
+        cooldown: 0.45,
+        lifetime: 0.6, // ≈ 12 m
+        radius: 0.22,
+        damage: 1,
+        color: [0.35, 0.75, 1.0],
+    },
+    // Lourde : un boulet lent à grosse recharge, mais 3 dégâts (le « chef » à
+    // 3 PV tombe d'un coup) et un gros rayon qui pardonne la visée.
+    RangedWeapon {
+        label: "Boulet",
+        speed: 8.0,
+        cooldown: 1.8,
+        lifetime: 2.0, // ≈ 16 m
+        radius: 0.55,
+        damage: 3,
+        color: [0.45, 0.4, 0.5],
+    },
+];
+
+/// Projectile en vol (cf. `AppState::fireballs`).
 pub(super) struct Fireball {
-    /// Indice de l'objet tireur dans `scene.objects` : jamais frappé par sa
-    /// propre boule de feu (elle naît dans son AABB).
+    /// Indice de l'objet tireur dans `scene.objects` : jamais frappé par son
+    /// propre projectile (il naît dans son AABB).
     pub(super) owner: usize,
     pub(super) pos: Vec3,
     /// Direction de vol (horizontale, normalisée), figée au tir.
     pub(super) dir: Vec3,
-    /// Durée de vie restante (s) : écoulée sans impact, la boule s'éteint —
+    /// Durée de vie restante (s) : écoulée sans impact, le projectile s'éteint —
     /// borne la portée sans avoir à tester la distance parcourue.
     pub(super) remaining: f32,
+    /// Arme d'origine (indice dans `RANGED_WEAPONS`) : décide vitesse, dégâts,
+    /// rayon et aspect pendant toute la vie du projectile — changer d'arme
+    /// pendant qu'un tir vole ne modifie pas le tir déjà parti.
+    pub(super) weapon: usize,
 }
 
-/// Vitesse de vol (m/s) : nettement plus rapide que le missile homing
-/// (`combat::ATTACK_PROJECTILE_SPEED`, 10 m/s) mais en ligne droite — l'adresse
-/// de visée remplace le verrouillage automatique comme « coût » du tir.
-const FIREBALL_SPEED: f32 = 12.0;
-
-/// Temps de recharge (s) entre deux tirs d'un même tireur, validé côté
-/// simulation (serveur pour les joueurs réseau) : maintenir ou spammer le
-/// bouton ne tire pas plus vite. Cf. `AppState::fireball_cooldowns`.
-pub(super) const FIREBALL_COOLDOWN: f32 = 0.9;
-
-/// Durée de vie (s) ⇒ portée max ≈ `SPEED × LIFETIME` = 18 m : de quoi traverser
-/// l'arène embarquée (murs à ±9 m) sans jamais voler indéfiniment.
-const FIREBALL_LIFETIME: f32 = 1.5;
-
-/// Rayon (m) de la boule : les AABB testés sont gonflés d'autant, pour qu'un
-/// frôlement visuel compte comme un impact (le test exact point-dans-AABB
-/// exigerait de toucher le centre géométrique — frustrant à viser).
-const FIREBALL_RADIUS: f32 = 0.35;
-
-/// Distance (m) devant le tireur à laquelle la boule apparaît : hors de son
+/// Distance (m) devant le tireur à laquelle le projectile apparaît : hors de son
 /// propre AABB, pour ne pas exiger de cas particulier au premier pas de vol.
 const SPAWN_AHEAD: f32 = 0.8;
 
-/// Hauteur (m) au-dessus du centre du tireur : la boule part du « buste », assez
-/// haut pour survoler le sol (plan mince à y=0) sur toute sa trajectoire.
+/// Hauteur (m) au-dessus du centre du tireur : le projectile part du « buste »,
+/// assez haut pour survoler le sol (plan mince à y=0) sur toute sa trajectoire.
 const SPAWN_UP: f32 = 0.4;
 
-/// Ce que la boule de feu a frappé ce pas-ci (cf. `fireball_impact`).
+/// Ce que le projectile a frappé ce pas-ci (cf. `fireball_impact`).
 enum Impact {
-    /// Un monstre `attackable` : blessé (`Scene::damage_attackable`), la boule
-    /// s'éteint dans tous les cas (pas de perforation multi-cibles).
+    /// Un monstre `attackable` : blessé (`Scene::damage_attackable_by`, selon
+    /// l'arme), le projectile s'éteint dans tous les cas (pas de perforation).
     Monster(usize),
-    /// Un obstacle physique (mur, tour, décor `Static`/`Dynamic`) : la boule
+    /// Un obstacle physique (mur, tour, décor `Static`/`Dynamic`) : le projectile
     /// s'éteint sans effet — c'est ce qui rend un mur utilisable comme abri.
     Obstacle,
 }
 
+/// Borne un indice d'arme reçu du réseau (ou d'un futur code de config) à la
+/// table réelle — un client modifié qui envoie `weapon: 250` tire avec la
+/// dernière arme connue, il ne panique pas le serveur.
+pub fn clamp_weapon(weapon: u8) -> usize {
+    (weapon as usize).min(RANGED_WEAPONS.len() - 1)
+}
+
 impl AppState {
-    /// Fait vivre les boules de feu pour cette frame : tirs (joueur local en solo,
-    /// joueurs réseau côté serveur), vol, impacts, et pool d'affichage. Appelée une
-    /// fois par frame depuis `advance_play`, comme `update_attack` (dt réel).
+    /// Fait vivre les projectiles pour cette frame : sélection d'arme (bouton
+    /// tactile), tirs (joueur local en solo, joueurs réseau côté serveur), vol,
+    /// impacts, et pool d'affichage. Appelée une fois par frame depuis
+    /// `advance_play`, comme `update_attack` (dt réel).
     pub(super) fn update_fireballs(&mut self, dt: f32) {
         // Recharges : décomptées chaque frame, indépendamment du bouton (sinon
         // relâcher puis rappuyer contournerait le temporisateur) — mêmes raisons
@@ -78,10 +136,24 @@ impl AppState {
             *cd > 0.0
         });
 
+        // Bouton tactile « Arme » : cycle sur le **front montant** uniquement —
+        // l'overlay réécrit `buttons` à chaque frame (état maintenu), sans cette
+        // détection le moindre appui ferait défiler toutes les armes en rafale.
+        let weapon_down = self
+            .player_object()
+            .and_then(|o| o.controller.as_ref())
+            .is_some_and(|c| {
+                !c.weapon_button.is_empty() && self.input_state.buttons.contains(&c.weapon_button)
+            });
+        if weapon_down && !self.weapon_button_was_down {
+            self.cycle_weapon();
+        }
+        self.weapon_button_was_down = weapon_down;
+
         // Tir du joueur local — en solo uniquement : connecté, le serveur est
         // autoritaire (l'input part via `network_input_msg`, les projectiles
         // reviennent par le `Snapshot`) ; simuler aussi localement ferait vivre
-        // deux boules pour un seul tir (une vraie + une fantôme).
+        // deux projectiles pour un seul tir (un vrai + un fantôme).
         if !self.is_online_client()
             && let Some(pi) = self.player_index()
             && let Some(player) = self.scene.objects.get(pi)
@@ -92,80 +164,92 @@ impl AppState {
                 || (!ctrl.fire_button.is_empty()
                     && self.input_state.buttons.contains(&ctrl.fire_button));
             if pressed && !self.fireball_cooldowns.contains_key(&pi) {
-                self.spawn_fireball(pi);
+                let (yaw, _, _) = player.transform.rotation.to_euler(glam::EulerRot::YXZ);
+                self.spawn_fireball(pi, yaw, self.selected_weapon);
             }
         }
 
         // Tirs des joueurs réseau (serveur autoritaire) : même recharge, par objet
         // tireur — un client modifié qui envoie `fire: true` à chaque tick ne tire
         // pas plus vite (cf. le même durcissement dans `update_network_attacks`).
-        let shooters: Vec<usize> = self
+        // La direction vient de l'`aim_yaw` reçu (l'orientation que ce joueur voit
+        // à son écran), l'arme de son `weapon` (déjà borné par `sanitize`).
+        let shooters: Vec<(usize, f32, usize)> = self
             .network_players
             .iter()
-            .filter(|(id, _)| self.network_inputs.get(id).is_some_and(|i| i.fire))
-            .map(|(_, &index)| index)
-            .filter(|index| !self.fireball_cooldowns.contains_key(index))
+            .filter_map(|(id, &index)| self.network_inputs.get(id).map(|inp| (index, inp)))
+            .filter(|(index, inp)| inp.fire && !self.fireball_cooldowns.contains_key(index))
+            .map(|(index, inp)| (index, inp.aim_yaw, clamp_weapon(inp.weapon)))
             .collect();
-        for index in shooters {
-            self.spawn_fireball(index);
+        for (index, yaw, weapon) in shooters {
+            self.spawn_fireball(index, yaw, weapon);
         }
 
         // Vol + impacts. `mem::take` pour itérer sans bloquer l'emprunt de `self`
-        // (les impacts mutent la scène) ; les survivantes sont remises en place.
+        // (les impacts mutent la scène) ; les survivants sont remis en place.
         let mut flying = std::mem::take(&mut self.fireballs);
         flying.retain_mut(|fb| {
             fb.remaining -= dt;
             if fb.remaining <= 0.0 {
                 return false;
             }
-            fb.pos += fb.dir * FIREBALL_SPEED * dt;
+            fb.pos += fb.dir * RANGED_WEAPONS[fb.weapon].speed * dt;
             true
         });
         let mut survivors = Vec::with_capacity(flying.len());
         for fb in flying {
             match self.fireball_impact(&fb) {
-                Some(Impact::Monster(i)) => self.resolve_fireball_hit(i, fb.pos),
+                Some(Impact::Monster(i)) => {
+                    self.resolve_fireball_hit(i, fb.pos, RANGED_WEAPONS[fb.weapon].damage)
+                }
                 Some(Impact::Obstacle) => {}
                 None => survivors.push(fb),
             }
         }
         self.fireballs = survivors;
 
-        // Pool d'affichage : positions simulées ici (solo/serveur), ou reçues du
+        // Pool d'affichage : projectiles simulés ici (solo/serveur), ou reçus du
         // dernier `Snapshot` (client connecté — `self.fireballs` y reste vide).
-        let positions: Vec<Vec3> = if self.is_online_client() {
+        let shots: Vec<(Vec3, usize)> = if self.is_online_client() {
             self.net_projectiles.clone()
         } else {
-            self.fireballs.iter().map(|fb| fb.pos).collect()
+            self.fireballs
+                .iter()
+                .map(|fb| (fb.pos, fb.weapon))
+                .collect()
         };
-        self.sync_fireball_pool(&positions);
+        self.sync_fireball_pool(&shots);
     }
 
-    /// Fait partir une boule de feu devant l'objet `owner` et arme sa recharge.
-    fn spawn_fireball(&mut self, owner: usize) {
+    /// Fait partir un projectile de l'arme `weapon` devant l'objet `owner`
+    /// (orientation `yaw`) et arme sa recharge — celle de **cette** arme : passer
+    /// sur une arme rapide n'écourte pas la recharge d'un tir lourd déjà parti
+    /// (la recharge est par tireur, pas par arme).
+    fn spawn_fireball(&mut self, owner: usize, yaw: f32, weapon: usize) {
         let Some(o) = self.scene.objects.get(owner) else {
             return;
         };
-        let (yaw, _, _) = o.transform.rotation.to_euler(glam::EulerRot::YXZ);
+        let w = &RANGED_WEAPONS[weapon];
         // « Devant » = l'avant du personnage : -Z à yaw 0, la même convention que
         // la poussée tank W (cf. `network_move_axes` : vitesse monde
-        // `(-sin yaw, 0, -cos yaw)`) — la boule part là où le joueur regarde.
+        // `(-sin yaw, 0, -cos yaw)`) — le projectile part là où le joueur regarde.
         let dir = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
         let pos = o.transform.position + dir * SPAWN_AHEAD + Vec3::Y * SPAWN_UP;
         self.fireballs.push(Fireball {
             owner,
             pos,
             dir,
-            remaining: FIREBALL_LIFETIME,
+            remaining: w.lifetime,
+            weapon,
         });
-        self.fireball_cooldowns.insert(owner, FIREBALL_COOLDOWN);
+        self.fireball_cooldowns.insert(owner, w.cooldown);
     }
 
-    /// Premier objet frappé par la boule `fb` à sa position courante, s'il y en a
-    /// un. Ignorés : le tireur lui-même, les objets masqués, tout objet pilotable
-    /// (joueurs — pas de dégâts joueur-contre-joueur tant que la vie n'est pas
-    /// individualisée, cf. `network_snapshot`), l'ancre FX d'attaque, et les
-    /// objets ni `attackable` ni physiques (fantômes réseau, pool de boules...).
+    /// Premier objet frappé par le projectile `fb` à sa position courante, s'il y
+    /// en a un. Ignorés : le tireur lui-même, les objets masqués, tout objet
+    /// pilotable (joueurs — pas de dégâts joueur-contre-joueur tant que la vie
+    /// n'est pas individualisée, cf. `network_snapshot`), l'ancre FX d'attaque, et
+    /// les objets ni `attackable` ni physiques (fantômes réseau, pool...).
     fn fireball_impact(&self, fb: &Fireball) -> Option<Impact> {
         for (i, o) in self.scene.objects.iter().enumerate() {
             if i == fb.owner || !o.visible || o.controller.is_some() {
@@ -180,7 +264,7 @@ impl AppState {
                 continue;
             }
             let (wmin, wmax) = self.scene.world_aabb(o);
-            let inflate = Vec3::splat(FIREBALL_RADIUS);
+            let inflate = Vec3::splat(RANGED_WEAPONS[fb.weapon].radius);
             let hit = fb.pos.cmpge(wmin - inflate).all() && fb.pos.cmple(wmax + inflate).all();
             if !hit {
                 continue;
@@ -194,12 +278,12 @@ impl AppState {
         None
     }
 
-    /// Résout l'impact sur le monstre `i` : dégât, score, son, flash, respawn, et
-    /// évènement réseau `Defeated` si le coup l'achève (diffusé par le serveur
-    /// headless, cf. `take_net_events` — les clients y réagissent une fois, son +
-    /// flash, sans attendre le prochain `Snapshot`).
-    fn resolve_fireball_hit(&mut self, i: usize, at: Vec3) {
-        let defeated = self.scene.damage_attackable(i);
+    /// Résout l'impact sur le monstre `i` : dégâts de l'arme, score, son, flash,
+    /// respawn, et évènement réseau `Defeated` si le coup l'achève (diffusé par le
+    /// serveur headless, cf. `take_net_events` — les clients y réagissent une
+    /// fois, son + flash, sans attendre le prochain `Snapshot`).
+    fn resolve_fireball_hit(&mut self, i: usize, at: Vec3, damage: u32) {
+        let defeated = self.scene.damage_attackable_by(i, damage);
         self.attack_flash = 1.0;
         if let Some(fx) = self.attack_fx_index()
             && let Some(o) = self.scene.objects.get_mut(fx)
@@ -222,19 +306,42 @@ impl AppState {
         }
     }
 
-    /// Aligne le pool d'affichage (sphères émissives) sur `positions` : agrandit le
-    /// pool à la demande, masque les sphères en trop. Les objets du pool restent en
-    /// place une fois créés (les retirer décalerait tous les indices de
+    /// Sélectionne directement une arme (clavier 1/2/3, cf. `lib.rs`) ; ignore un
+    /// indice hors table (touche 4+ future, config corrompue...).
+    pub fn select_weapon(&mut self, weapon: usize) {
+        if weapon < RANGED_WEAPONS.len() {
+            self.selected_weapon = weapon;
+        }
+    }
+
+    /// Arme suivante (cycle) — bouton tactile « Arme » (cf. `update_fireballs`).
+    pub fn cycle_weapon(&mut self) {
+        self.selected_weapon = (self.selected_weapon + 1) % RANGED_WEAPONS.len();
+    }
+
+    /// Indice de l'arme à distance équipée (cf. `RANGED_WEAPONS`).
+    pub fn selected_weapon(&self) -> usize {
+        self.selected_weapon
+    }
+
+    /// Libellé de l'arme équipée, pour le HUD.
+    pub fn selected_weapon_label(&self) -> &'static str {
+        RANGED_WEAPONS[self.selected_weapon].label
+    }
+
+    /// Aligne le pool d'affichage (sphères émissives) sur `shots` (position +
+    /// arme) : agrandit le pool à la demande, masque les sphères en trop, et
+    /// applique couleur/taille de l'arme (une sphère du pool peut servir à un
+    /// Éclair une frame et à un Boulet la suivante). Les objets du pool restent
+    /// en place une fois créés (les retirer décalerait tous les indices de
     /// `scene.objects` — même contrainte que `despawn_network_player`).
-    pub(super) fn sync_fireball_pool(&mut self, positions: &[Vec3]) {
-        while self.fireball_pool.len() < positions.len() {
+    pub(super) fn sync_fireball_pool(&mut self, shots: &[(Vec3, usize)]) {
+        while self.fireball_pool.len() < shots.len() {
             let index = self.scene.objects.len();
             self.scene.objects.push(crate::scene::SceneObject {
-                name: format!("Boule de feu {}", self.fireball_pool.len() + 1),
+                name: format!("Projectile {}", self.fireball_pool.len() + 1),
                 mesh: crate::scene::MeshKind::Sphere,
-                transform: crate::scene::Transform::from_pos(Vec3::ZERO)
-                    .with_scale(Vec3::splat(FIREBALL_RADIUS * 2.0)),
-                color: [1.0, 0.45, 0.1],
+                transform: crate::scene::Transform::from_pos(Vec3::ZERO),
                 emissive: 2.0,
                 physics: PhysicsKind::None,
                 visible: false,
@@ -244,9 +351,12 @@ impl AppState {
         }
         for (slot, &index) in self.fireball_pool.iter().enumerate() {
             if let Some(o) = self.scene.objects.get_mut(index) {
-                match positions.get(slot) {
-                    Some(&p) => {
+                match shots.get(slot) {
+                    Some(&(p, weapon)) => {
+                        let w = &RANGED_WEAPONS[weapon.min(RANGED_WEAPONS.len() - 1)];
                         o.transform.position = p;
+                        o.transform.scale = Vec3::splat(w.radius * 2.0);
+                        o.color = w.color;
                         o.visible = true;
                     }
                     None => o.visible = false,
@@ -255,7 +365,7 @@ impl AppState {
         }
     }
 
-    /// Oublie toutes les boules de feu, recharges et le pool d'affichage : à
+    /// Oublie tous les projectiles, recharges et le pool d'affichage : à
     /// appeler chaque fois que `scene.objects` est restauré en bloc (mêmes sites
     /// que `clear_network_players`) — le pool vit dans `scene.objects`, ses
     /// indices deviennent obsolètes après restauration.
@@ -276,7 +386,7 @@ impl AppState {
 
     /// `true` si cette instance est un **client** connecté à un serveur (jamais le
     /// cas du serveur headless, qui n'a pas de `NetClient`) : la simulation locale
-    /// des boules de feu s'efface alors devant l'autorité du serveur.
+    /// des projectiles s'efface alors devant l'autorité du serveur.
     fn is_online_client(&self) -> bool {
         #[cfg(not(target_os = "ios"))]
         {
@@ -294,15 +404,30 @@ mod tests {
     use glam::Vec3;
 
     use super::super::AppState;
+    use super::{RANGED_WEAPONS, clamp_weapon};
     use crate::app::multiplayer::NetworkInput;
     use crate::runtime::physics::PhysicsKind;
     use crate::scene::{Combat, Controller, MeshKind, Scene, SceneObject, Transform};
+
+    /// Indice du monstre dans `scene_with_monster_ahead` (0 = sol, 1 = joueur).
+    const MONSTER: usize = 2;
 
     /// Arène minimale : un joueur pilotable en (0, 1, 0) orienté vers -Z (yaw 0),
     /// un monstre `attackable` droit devant à -6 m, et un mur optionnel entre les
     /// deux — de quoi vérifier vol, impact, abri et recharge sans charger une démo.
     fn scene_with_monster_ahead(wall_between: bool) -> Scene {
         let mut scene = Scene::default();
+        // Sol : sans lui, le joueur (corps dynamique) tombe dans le vide et les
+        // tirs suivants partent bien sous les cibles — bug de scène de test
+        // trouvé quand `the_standard_weapon_needs_three_hits_on_the_boss` n'a
+        // compté qu'un seul impact sur trois attendus.
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: MeshKind::Plane,
+            transform: Transform::from_pos(Vec3::ZERO).with_scale(Vec3::new(40.0, 1.0, 40.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
         scene.objects.push(SceneObject {
             name: "Joueur".into(),
             mesh: MeshKind::Capsule,
@@ -310,6 +435,7 @@ mod tests {
             controller: Some(Controller {
                 input: true,
                 fire_button: "Feu".into(),
+                weapon_button: "Arme".into(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -352,6 +478,19 @@ mod tests {
         }
     }
 
+    /// Input réseau neutre, à personnaliser par test.
+    fn net_input() -> NetworkInput {
+        NetworkInput {
+            move_x: 0.0,
+            move_y: 0.0,
+            aim_yaw: 0.0,
+            attack: false,
+            jump: false,
+            fire: false,
+            weapon: 0,
+        }
+    }
+
     #[test]
     fn a_fireball_flies_forward_and_defeats_the_monster_ahead() {
         let mut app = app_with(scene_with_monster_ahead(false));
@@ -361,7 +500,7 @@ mod tests {
         advance(&mut app, 40, 0.05);
 
         assert!(
-            !app.scene.objects[1].visible,
+            !app.scene.objects[MONSTER].visible,
             "le monstre droit devant doit être vaincu par la boule de feu"
         );
         assert_eq!(app.score(), 1, "un monstre vaincu = +1 au score");
@@ -375,7 +514,7 @@ mod tests {
         advance(&mut app, 40, 0.05);
 
         assert!(
-            app.scene.objects[1].visible,
+            app.scene.objects[MONSTER].visible,
             "la boule de feu doit s'éteindre sur le mur, jamais atteindre le monstre abrité"
         );
         assert_eq!(app.score(), 0);
@@ -391,7 +530,7 @@ mod tests {
         advance(&mut app, 40, 0.05);
 
         assert!(
-            !app.scene.objects[1].visible,
+            !app.scene.objects[MONSTER].visible,
             "le bouton tactile « Feu » doit tirer comme la touche clavier"
         );
     }
@@ -422,11 +561,8 @@ mod tests {
         app.set_network_input(
             1,
             NetworkInput {
-                move_x: 0.0,
-                move_y: 0.0,
-                attack: false,
-                jump: false,
                 fire: true,
+                ..net_input()
             },
         );
 
@@ -444,6 +580,77 @@ mod tests {
         assert_eq!(snap.projectiles.len(), 1);
     }
 
+    /// Sprint 79 (audit) : la direction du tir réseau vient de l'`aim_yaw` envoyé
+    /// par le client — l'orientation que ce joueur **voit à son écran** — pas de
+    /// l'orientation serveur de l'objet (qui, avant ce sprint, ne pivotait
+    /// jamais : le bloc d'orientation de `sim_step` est réservé au joueur local).
+    #[test]
+    fn a_network_fireball_flies_along_the_clients_aim_yaw() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1).unwrap();
+        // Déplace le monstre en +X du joueur réseau : seul un tir orienté par
+        // l'aim_yaw (-π/2 ⇒ direction (+1, 0, 0)) peut le toucher.
+        let shooter = app.scene.objects[index].transform.position;
+        app.scene.objects[MONSTER].transform.position = shooter + Vec3::new(6.0, 0.0, 0.0);
+        app.set_network_input(
+            1,
+            NetworkInput {
+                fire: true,
+                aim_yaw: -std::f32::consts::FRAC_PI_2,
+                ..net_input()
+            },
+        );
+
+        advance(&mut app, 40, 0.05);
+
+        assert!(
+            !app.scene.objects[MONSTER].visible,
+            "le tir doit partir le long de l'aim_yaw du client (vers +X), pas de \
+             l'orientation serveur jamais mise à jour"
+        );
+    }
+
+    /// Sprint 79 (audit) : l'`aim_yaw` reçu oriente aussi l'**objet** du joueur
+    /// réseau — c'est ce yaw que `network_snapshot` diffuse aux autres clients ;
+    /// sans ça, les fantômes des autres joueurs ne pivotaient jamais.
+    #[test]
+    fn the_clients_aim_yaw_rotates_its_server_side_object() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1).unwrap();
+        app.set_network_input(
+            1,
+            NetworkInput {
+                aim_yaw: 1.2,
+                ..net_input()
+            },
+        );
+
+        advance(&mut app, 10, 0.02);
+
+        let yaw = app.scene.objects[index]
+            .transform
+            .rotation
+            .to_euler(glam::EulerRot::YXZ)
+            .0;
+        assert!(
+            (yaw - 1.2).abs() < 1e-3,
+            "l'objet serveur du joueur réseau doit adopter l'aim_yaw reçu : {yaw}"
+        );
+        let snap = app.network_snapshot(1);
+        let entity = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .unwrap();
+        assert!(
+            (entity.yaw - 1.2).abs() < 1e-3,
+            "le snapshot doit diffuser ce yaw aux autres clients : {}",
+            entity.yaw
+        );
+    }
+
     #[test]
     fn a_spamming_network_client_cannot_outrun_the_server_cooldown() {
         let mut app = app_with(scene_with_monster_ahead(false));
@@ -452,11 +659,8 @@ mod tests {
         app.set_network_input(
             1,
             NetworkInput {
-                move_x: 0.0,
-                move_y: 0.0,
-                attack: false,
-                jump: false,
                 fire: true,
+                ..net_input()
             },
         );
 
@@ -466,6 +670,90 @@ mod tests {
             app.fireballs.len(),
             1,
             "le serveur doit imposer sa recharge, quel que soit le spam du client"
+        );
+    }
+
+    #[test]
+    fn the_heavy_weapon_one_shots_the_three_hp_boss() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = 3;
+        app.select_weapon(2); // Boulet : 3 dégâts
+        app.input_state.fire = true;
+
+        advance(&mut app, 40, 0.05);
+
+        assert!(
+            !app.scene.objects[MONSTER].visible,
+            "le Boulet (3 dégâts) doit achever un monstre à 3 PV en un seul impact"
+        );
+    }
+
+    #[test]
+    fn the_standard_weapon_needs_three_hits_on_the_boss() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = 3;
+        app.input_state.fire = true; // Boule de feu (1 dégât), tir en continu
+
+        // Deux tirs maximum en 1,6 s (recharge 0,9 s) : le monstre doit tenir.
+        advance(&mut app, 32, 0.05);
+        assert!(
+            app.scene.objects[MONSTER].visible,
+            "après 2 impacts à 1 dégât, un monstre à 3 PV doit encore tenir debout"
+        );
+        // Le troisième tir finit le travail.
+        advance(&mut app, 40, 0.05);
+        assert!(!app.scene.objects[MONSTER].visible);
+    }
+
+    /// Un client modifié qui envoie un indice d'arme hors table ne doit ni
+    /// paniquer le serveur ni inventer une arme : borné à la dernière connue.
+    #[test]
+    fn an_out_of_range_network_weapon_is_clamped_not_a_panic() {
+        assert_eq!(clamp_weapon(250), RANGED_WEAPONS.len() - 1);
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.hide_local_player_template();
+        app.spawn_network_player(1);
+        app.set_network_input(
+            1,
+            NetworkInput {
+                fire: true,
+                weapon: 250,
+                ..net_input()
+            },
+        );
+        advance(&mut app, 5, 0.02);
+        assert_eq!(app.fireballs.len(), 1);
+        assert_eq!(app.fireballs[0].weapon, RANGED_WEAPONS.len() - 1);
+    }
+
+    #[test]
+    fn the_touch_weapon_button_cycles_once_per_press() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        assert_eq!(app.selected_weapon(), 0);
+
+        // Bouton maintenu 5 frames : UN seul changement (front montant).
+        app.input_state.buttons.insert("Arme".to_string());
+        advance(&mut app, 5, 0.02);
+        assert_eq!(
+            app.selected_weapon(),
+            1,
+            "maintenir le bouton Arme ne doit cycler qu'une fois"
+        );
+
+        // Relâché puis rappuyé : un cran de plus, puis retour au début du cycle.
+        app.input_state.buttons.clear();
+        advance(&mut app, 2, 0.02);
+        app.input_state.buttons.insert("Arme".to_string());
+        advance(&mut app, 2, 0.02);
+        assert_eq!(app.selected_weapon(), 2);
+        app.input_state.buttons.clear();
+        advance(&mut app, 2, 0.02);
+        app.input_state.buttons.insert("Arme".to_string());
+        advance(&mut app, 2, 0.02);
+        assert_eq!(
+            app.selected_weapon(),
+            0,
+            "le cycle doit boucler sur la table"
         );
     }
 
@@ -480,7 +768,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, crate::net::protocol::GameEvent::Defeated { index: 1 })),
+                .any(|e| matches!(e, crate::net::protocol::GameEvent::Defeated { index: 2 })),
             "un monstre vaincu doit produire un évènement Defeated à diffuser : {events:?}"
         );
         assert!(
@@ -492,24 +780,24 @@ mod tests {
     /// Verrouille le contenu multijoueur de la scène embarquée (le jeu réellement
     /// exporté, jouée par le serveur ET les clients — cf. `src/bin/server.rs`) :
     /// un ré-export depuis l'éditeur réécrit `assets/player_scene.json`, et
-    /// perdrait silencieusement monstres et bouton « Feu » sans ce garde-fou.
+    /// perdrait silencieusement monstres et boutons sans ce garde-fou.
     #[test]
     fn the_embedded_scene_ships_monsters_and_the_fire_button() {
         let scene = Scene::embedded_player();
-        assert!(
-            scene.mobile.buttons.iter().any(|b| b == "Feu"),
-            "l'overlay tactile (APK/aperçu desktop) doit proposer le bouton « Feu »"
-        );
+        for button in ["Feu", "Arme"] {
+            assert!(
+                scene.mobile.buttons.iter().any(|b| b == button),
+                "l'overlay tactile (APK/aperçu desktop) doit proposer le bouton « {button} »"
+            );
+        }
         let player = scene
             .objects
             .iter()
             .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
             .expect("la scène embarquée a un joueur pilotable");
-        assert_eq!(
-            player.controller.as_ref().unwrap().fire_button,
-            "Feu",
-            "le contrôleur du joueur doit relier le bouton « Feu » au tir"
-        );
+        let ctrl = player.controller.as_ref().unwrap();
+        assert_eq!(ctrl.fire_button, "Feu");
+        assert_eq!(ctrl.weapon_button, "Arme");
         let monsters = scene
             .objects
             .iter()
@@ -531,6 +819,10 @@ mod tests {
         assert_eq!(app.fireball_pool.len(), 1, "une boule en vol = une sphère");
         let sphere = app.fireball_pool[0];
         assert!(app.scene.objects[sphere].visible);
+        assert_eq!(
+            app.scene.objects[sphere].color, RANGED_WEAPONS[0].color,
+            "la sphère du pool doit porter la couleur de l'arme d'origine"
+        );
 
         // Une fois la boule éteinte (impact ou fin de vie), la sphère se masque
         // mais reste en place (indices stables).

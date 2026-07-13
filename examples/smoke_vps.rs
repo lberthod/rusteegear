@@ -26,13 +26,17 @@ fn main() {
         match client.inbox.recv_timeout(Duration::from_millis(500)) {
             Ok(ServerMsg::Welcome { player_id }) => {
                 println!("Welcome : joueur {player_id}");
-                // Tire une boule de feu pour de vrai (le serveur doit l'accepter).
+                // Tire pour de vrai avec l'arme 1 (Éclair) et une visée vers +X
+                // (aim_yaw -π/2) : vérifie d'un coup le tir, la sélection d'arme
+                // ET la prise en compte de l'orientation par le serveur.
                 client.send(&ClientMsg::Input {
                     move_x: 0.0,
                     move_y: 0.0,
+                    aim_yaw: -std::f32::consts::FRAC_PI_2,
                     attack: false,
                     jump: false,
                     fire: true,
+                    weapon: 1,
                 });
                 fired = true;
             }
@@ -49,7 +53,12 @@ fn main() {
                     got_snapshot = true;
                 }
                 if fired && !s.projectiles.is_empty() {
-                    println!("Projectile en vol confirmé : {:?}", s.projectiles[0]);
+                    let p = &s.projectiles[0];
+                    println!(
+                        "Projectile en vol confirmé : {:?} (arme {})",
+                        p.position, p.weapon
+                    );
+                    assert_eq!(p.weapon, 1, "l'arme sélectionnée doit suivre le projectile");
                     break;
                 }
             }

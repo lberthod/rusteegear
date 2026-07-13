@@ -199,7 +199,12 @@ impl AppState {
             .net_last_input_sent
             .is_none_or(|last| now.duration_since(last) >= INPUT_SEND_INTERVAL);
         if should_send_input {
-            let input = network_input_msg(&self.input_state, self.camera.yaw, self.player_object());
+            let input = network_input_msg(
+                &self.input_state,
+                self.camera.yaw,
+                self.player_object(),
+                self.selected_weapon() as u8,
+            );
             if let Some(client) = &self.net_client {
                 client.send(&input);
             }
@@ -388,7 +393,7 @@ impl AppState {
                 self.net_projectiles = snap
                     .projectiles
                     .iter()
-                    .map(|p| glam::Vec3::from_array(*p))
+                    .map(|p| (glam::Vec3::from_array(p.position), p.weapon as usize))
                     .collect();
                 for e in snap.entities {
                     let Some(pid) = e.player_id else {
@@ -506,6 +511,7 @@ fn network_input_msg(
     inp: &super::PlayerInput,
     camera_yaw: f32,
     player: Option<&crate::scene::SceneObject>,
+    weapon: u8,
 ) -> crate::net::protocol::ClientMsg {
     let player_yaw = player.map(|o| o.transform.rotation.to_euler(glam::EulerRot::YXZ).0);
     let (mut mx, mut my) = network_move_axes(inp, camera_yaw, player_yaw);
@@ -528,12 +534,18 @@ fn network_input_msg(
     crate::net::protocol::ClientMsg::Input {
         move_x: mx,
         move_y: my,
+        // Orientation prédite localement (celle que CE joueur voit à son écran) :
+        // le serveur l'applique à son objet et en fait la direction de ses tirs
+        // (cf. `ClientMsg::Input::aim_yaw`). 0.0 si l'objet joueur n'existe pas
+        // (encore) — le neutre, même valeur qu'à l'apparition.
+        aim_yaw: player_yaw.unwrap_or(0.0),
         attack: inp.attack || touch_attack,
         jump: inp.jump || touch_jump,
-        // Boule de feu : touche clavier (K) ou bouton tactile nommé
+        // Tir à distance : touche clavier (K) ou bouton tactile nommé
         // (`Controller::fire_button`) — le serveur simule le tir et sa recharge
         // (cf. `app::fireball`), ce client ne fait qu'exprimer l'intention.
         fire: inp.fire || touch_fire,
+        weapon,
     }
 }
 
@@ -892,18 +904,22 @@ mod tests {
                 ClientMsg::Input {
                     move_x,
                     move_y,
+                    aim_yaw,
                     attack,
                     jump,
                     fire,
+                    weapon,
                 } => {
                     server_app.set_network_input(
                         id,
                         NetworkInput {
                             move_x,
                             move_y,
+                            aim_yaw,
                             attack,
                             jump,
                             fire,
+                            weapon,
                         },
                     );
                 }
@@ -1482,13 +1498,15 @@ mod tests {
         inp.buttons.insert("Saut".into());
         inp.buttons.insert("Attaque".into());
         inp.buttons.insert("Feu".into());
-        let msg = network_input_msg(&inp, 0.0, Some(&obj));
+        let msg = network_input_msg(&inp, 0.0, Some(&obj), 1);
         let crate::net::protocol::ClientMsg::Input {
             move_x,
             move_y,
             attack,
             jump,
             fire,
+            weapon,
+            ..
         } = msg
         else {
             panic!("network_input_msg doit produire un ClientMsg::Input");
@@ -1502,6 +1520,7 @@ mod tests {
             fire,
             "le bouton tactile Feu (boule de feu) doit être transmis au serveur"
         );
+        assert_eq!(weapon, 1, "l'arme sélectionnée doit partir avec l'Input");
         // Gyroscope en convention joystick : le serveur applique `vz = -move_y`,
         // la prédiction locale `vz = -tilt.1` — donc move_y = tilt.1 tel quel.
         assert!(
@@ -1528,13 +1547,14 @@ mod tests {
         };
         inp.buttons.insert("Saut".into());
         inp.buttons.insert("Feu".into());
-        let msg = network_input_msg(&inp, 0.0, Some(&obj));
+        let msg = network_input_msg(&inp, 0.0, Some(&obj), 0);
         let crate::net::protocol::ClientMsg::Input {
             move_x,
             move_y,
             attack,
             jump,
             fire,
+            ..
         } = msg
         else {
             panic!("network_input_msg doit produire un ClientMsg::Input");

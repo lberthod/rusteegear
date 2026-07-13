@@ -191,6 +191,12 @@ pub struct Controller {
     /// physique ou monstre sur son chemin.
     #[serde(default)]
     pub fire_button: String,
+    /// Nom du bouton tactile qui fait défiler l'arme à distance équipée (vide =
+    /// pas de changement d'arme au tactile). Pendant du clavier 1/2/3 (sélection
+    /// directe) — le bouton, lui, **cycle** (front montant uniquement, cf.
+    /// `AppState::update_fireballs`) : un seul bouton suffit à l'écran tactile.
+    #[serde(default)]
+    pub weapon_button: String,
     /// Portée (mètres) de l'attaque, centrée sur la position de l'objet.
     #[serde(default = "default_attack_range")]
     pub attack_range: f32,
@@ -232,6 +238,7 @@ impl Default for Controller {
             jump_height: default_jump_height(),
             attack_button: String::new(),
             fire_button: String::new(),
+            weapon_button: String::new(),
             attack_range: default_attack_range(),
             attack_cooldown: default_attack_cooldown(),
             attack_windup: default_attack_windup(),
@@ -2564,13 +2571,20 @@ impl Scene {
     /// `Scene::brawl_demo`), impossible à exprimer avec l'ancien `attack_at`/`attack_zone_at`
     /// (masquage immédiat, sans notion de PV restants).
     pub fn damage_attackable(&mut self, i: usize) -> bool {
+        self.damage_attackable_by(i, 1)
+    }
+
+    /// Comme `damage_attackable`, mais retire `amount` points de vie d'un coup —
+    /// pour les armes lourdes (cf. `app::fireball::RangedWeapon::damage`), sans
+    /// boucler N fois sur un décompte unitaire.
+    pub fn damage_attackable_by(&mut self, i: usize, amount: u32) -> bool {
         let Some(o) = self.objects.get_mut(i) else {
             return false;
         };
         let Some(c) = &mut o.combat else {
             return false;
         };
-        c.hp = c.hp.saturating_sub(1);
+        c.hp = c.hp.saturating_sub(amount);
         if c.hp == 0 {
             o.visible = false;
             true

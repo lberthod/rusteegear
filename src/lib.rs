@@ -253,6 +253,12 @@ impl ApplicationHandler for App {
                         KeyCode::KeyX if cmd => self.state.cut_selected(),
                         KeyCode::KeyA if cmd => self.state.select_all(),
                         KeyCode::Backspace | KeyCode::Delete => self.state.delete_selected(),
+                        // Sélection directe de l'arme à distance (cf.
+                        // `app::fireball::RANGED_WEAPONS`) — le pendant tactile
+                        // est le bouton « Arme », qui cycle.
+                        KeyCode::Digit1 if !cmd => self.state.select_weapon(0),
+                        KeyCode::Digit2 if !cmd => self.state.select_weapon(1),
+                        KeyCode::Digit3 if !cmd => self.state.select_weapon(2),
                         _ => {}
                     }
                 }

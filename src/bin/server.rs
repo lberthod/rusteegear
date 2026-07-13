@@ -128,18 +128,22 @@ fn handle_message(app: &mut AppState, net: &NetServer, lobby: &mut Lobby, id: u3
         ClientMsg::Input {
             move_x,
             move_y,
+            aim_yaw,
             attack,
             jump,
             fire,
+            weapon,
         } => {
             app.set_network_input(
                 id,
                 NetworkInput {
                     move_x,
                     move_y,
+                    aim_yaw,
                     attack,
                     jump,
                     fire,
+                    weapon,
                 },
             );
         }
@@ -428,9 +432,11 @@ mod tests {
         client.send(&motor3derust::net::protocol::ClientMsg::Input {
             move_x: 1.0,
             move_y: 0.0,
+            aim_yaw: 0.0,
             attack: false,
             jump: false,
             fire: false,
+            weapon: 0,
         });
         let (id, msg) = net
             .inbox

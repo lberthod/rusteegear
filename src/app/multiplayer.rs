@@ -19,11 +19,18 @@ use crate::net::protocol::{EntityDelta, PlayerId, Snapshot};
 pub struct NetworkInput {
     pub move_x: f32,
     pub move_y: f32,
+    /// Orientation (yaw, radians) prédite/affichée par le client — appliquée à
+    /// son objet côté serveur (cf. `sim_step`) et direction de ses tirs (cf.
+    /// `ClientMsg::Input::aim_yaw` pour le pourquoi).
+    pub aim_yaw: f32,
     pub attack: bool,
     pub jump: bool,
-    /// Tir de boule de feu (cf. `app::fireball`) : recharge validée côté serveur
-    /// par objet tireur (`AppState::fireball_cooldowns`), comme `attack`.
+    /// Tir de l'arme à distance (cf. `app::fireball`) : recharge validée côté
+    /// serveur par objet tireur (`AppState::fireball_cooldowns`), comme `attack`.
     pub fire: bool,
+    /// Arme à distance sélectionnée (indice dans `fireball::RANGED_WEAPONS`,
+    /// borné par `sanitize_network_input`).
+    pub weapon: u8,
 }
 
 /// Portée (m) de l'attaque réseau : un coup immédiat au contact, pas le
@@ -56,9 +63,20 @@ fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
     NetworkInput {
         move_x: clean(input.move_x),
         move_y: clean(input.move_y),
+        // Yaw : seul `NaN`/infini est dangereux (il se propagerait au quaternion
+        // de l'objet puis au snapshot de tout le monde) — pas de clamp [-1, 1]
+        // ici, un angle vit naturellement au-delà (sin/cos se moquent du reste).
+        aim_yaw: if input.aim_yaw.is_finite() {
+            input.aim_yaw
+        } else {
+            0.0
+        },
         attack: input.attack,
         jump: input.jump,
         fire: input.fire,
+        // Borné à la table réelle dès la réception : le reste du code peut
+        // indexer `RANGED_WEAPONS` sans re-vérifier.
+        weapon: super::fireball::clamp_weapon(input.weapon) as u8,
     }
 }
 
@@ -306,7 +324,14 @@ impl AppState {
         Snapshot {
             tick,
             entities,
-            projectiles: self.fireballs.iter().map(|fb| fb.pos.to_array()).collect(),
+            projectiles: self
+                .fireballs
+                .iter()
+                .map(|fb| crate::net::protocol::ProjectileState {
+                    position: fb.pos.to_array(),
+                    weapon: fb.weapon as u8,
+                })
+                .collect(),
         }
     }
 }
@@ -448,9 +473,11 @@ mod tests {
             NetworkInput {
                 move_x: 1.0,
                 move_y: 0.0,
+                aim_yaw: 0.0,
                 attack: false,
                 jump: false,
                 fire: false,
+                weapon: 0,
             },
         );
         assert_eq!(app.network_player_count(), 0);
@@ -470,9 +497,11 @@ mod tests {
             NetworkInput {
                 move_x: 1.0,
                 move_y: 0.0,
+                aim_yaw: 0.0,
                 attack: false,
                 jump: false,
                 fire: false,
+                weapon: 0,
             },
         );
         app.playing = true;
@@ -549,9 +578,11 @@ mod tests {
         let dirty = NetworkInput {
             move_x: f32::NAN,
             move_y: f32::INFINITY,
+            aim_yaw: 0.0,
             attack: true,
             jump: true,
             fire: false,
+            weapon: 0,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 0.0);
@@ -566,9 +597,11 @@ mod tests {
         let dirty = NetworkInput {
             move_x: 50.0,
             move_y: -50.0,
+            aim_yaw: 0.0,
             attack: false,
             jump: false,
             fire: false,
+            weapon: 0,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 1.0);
@@ -587,9 +620,11 @@ mod tests {
             NetworkInput {
                 move_x: f32::NAN,
                 move_y: f32::NAN,
+                aim_yaw: 0.0,
                 attack: false,
                 jump: false,
                 fire: false,
+                weapon: 0,
             },
         );
         app.playing = true;
@@ -657,9 +692,11 @@ mod tests {
             NetworkInput {
                 move_x: 0.0,
                 move_y: 0.0,
+                aim_yaw: 0.0,
                 attack: true,
                 jump: false,
                 fire: false,
+                weapon: 0,
             },
         );
 

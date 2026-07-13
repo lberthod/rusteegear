@@ -272,6 +272,7 @@ impl Editor {
         restart: &mut bool,
         net_status: &str,
         net_connected: bool,
+        weapon_label: &str,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -292,6 +293,7 @@ impl Editor {
                 health_bar(ctx, area, h);
             }
             wave_hud(ctx, area, scene, wave);
+            weapon_hud(ctx, area, weapon_label);
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score);
             }
@@ -358,6 +360,7 @@ impl Editor {
         chat_messages: &[crate::app::network_client::ChatLine],
         has_firebase_account: bool,
         leaderboard: &[crate::app::network_client::LeaderboardLine],
+        weapon_label: &str,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -421,6 +424,7 @@ impl Editor {
                 chat_messages,
                 has_firebase_account,
                 leaderboard,
+                weapon_label,
                 &mut actions,
             );
         });
@@ -2163,6 +2167,32 @@ fn damage_vignette(ctx: &egui::Context, area: egui::Rect, intensity: f32) {
 /// Indicateur de manche (haut-centre), pour les scènes à système de manches (cf.
 /// `Combat::wave`/`AppState::wave`) — style « Vague N/M » (Call of Zombies). N'affiche
 /// rien si `wave == 0` (pas de système de manches dans la scène courante).
+/// HUD de l'arme à distance équipée (bas-centre, entre le pavé tank et les
+/// boutons tactiles) : libellé + rappel des raccourcis. Texte ASCII/latin
+/// uniquement — pas d'emoji, absents de la fonte egui embarquée sur Android
+/// (cf. le pavé W/A/S/D : carrés vides constatés sur APK réel, 2026-07-13).
+fn weapon_hud(ctx: &egui::Context, area: egui::Rect, label: &str) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_weapon"),
+    ));
+    painter.text(
+        egui::pos2(area.center().x, area.bottom() - 34.0),
+        Align2::CENTER_CENTER,
+        format!("Arme : {label}"),
+        FontId::proportional(16.0),
+        Color32::from_rgb(255, 170, 80),
+    );
+    painter.text(
+        egui::pos2(area.center().x, area.bottom() - 14.0),
+        Align2::CENTER_CENTER,
+        "K ou « Feu » : tirer — 1/2/3 ou « Arme » : changer",
+        FontId::proportional(11.0),
+        Color32::from_white_alpha(150),
+    );
+}
+
 fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
     if wave == 0 {
         return;
@@ -2521,6 +2551,7 @@ fn build_ui(
     chat_messages: &[crate::app::network_client::ChatLine],
     has_firebase_account: bool,
     leaderboard: &[crate::app::network_client::LeaderboardLine],
+    weapon_label: &str,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -3231,6 +3262,7 @@ fn build_ui(
     }
     if *playing {
         wave_hud(root.ctx(), play_rect, scene, wave);
+        weapon_hud(root.ctx(), play_rect, weapon_label);
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);
