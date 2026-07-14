@@ -2048,14 +2048,18 @@ lignes chacun, dans l'esprit des extractions déjà faites (103a-1, 105a-1).
       3752 → 2544 lignes (-32 %). Reste au-dessus de la cible : `render()` lui-même
       (~825 l.) n'a pas été touché — encoder/passes séquentiels, plus risqué à découper
       sans casser l'ordre (voir note de risque ci-dessous).
-- [x] `app/mod.rs` : tests de console.rs/debug_draw.rs/selection.rs/demos.rs/
-      simulation.rs (tank_controls)/scripting.rs (raycast/overlap/obj_exited Lua)
-      déplacés vers leur module respectif — même pattern que ai.rs/health.rs/input.rs
-      déjà extraits aux sprints précédents. 4666 → 3807 lignes (-18 %).
-      **Reste à faire** : les tests encore dans `app/mod.rs` mélangent plusieurs
-      modules dans un même test (ex. combat+ai+health, ou combat+persistence+
-      asset_ops) — pas de split mécanique évident, à traiter test par test plutôt
-      qu'en bloc contigu.
+- [x] `app/mod.rs` : tests déplacés vers leur module respectif (console.rs,
+      debug_draw.rs, selection.rs, demos.rs, simulation.rs — maths + tank_controls,
+      scripting.rs — raycast/overlap/obj_exited/lua_coroutines/script_save_set/etc.,
+      picking.rs — ray_aabb/point_segment_dist, asset_ops.rs — optimized_path) —
+      même pattern que ai.rs/health.rs/input.rs déjà extraits aux sprints précédents.
+      4666 → 3029 lignes (-35 %).
+      **Reste dans `app/mod.rs`** : les tests qui mélangent vraiment plusieurs
+      modules dans un même test (ex. `controller_demo_enemy_scripts_compile_and_patrol`,
+      `attack_windup_finally_guarantees_risk_in_a_1v1`, `saving_and_loading_a_game_
+      restores_score_position_and_lua_vars` — combat+ai+health ou combat+persistence
+      entremêlés) — pas de split mécanique évident sans dupliquer de la logique de
+      test, à traiter test par test plutôt qu'en bloc contigu si repris.
 - [ ] `scene/mod.rs` (2789 l.) : pas commencé — si le temps le permet, extraire les
       types de données (widgets HUD, contrôles mobiles, prefabs) des méthodes d'API scène.
 - **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs` (+ `gfx/pipelines.rs`,
