@@ -99,8 +99,32 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn adopt_pending_renderer(&mut self) {
         if self.renderer.is_none()
-            && let Some(renderer) = self.pending_renderer.borrow_mut().take()
+            && let Some(mut renderer) = self.pending_renderer.borrow_mut().take()
         {
+            // `window.inner_size()` lu au tout début de `Renderer::new` (avant tout
+            // `await`) peut ne pas encore refléter la taille réelle du canvas côté
+            // navigateur — course avec la mise en page DOM constatée à l'écran (canvas
+            // configuré à 1×1, étiré en un aplat de couleur par le CSS). On recale
+            // avec la taille lue directement depuis `window` au moment de l'adoption,
+            // une fois la tâche async forcément retombée après le premier tour de
+            // boucle d'événements du navigateur.
+            if let Some((w, h)) = web_sys::window().and_then(|win| {
+                win.inner_width()
+                    .ok()?
+                    .as_f64()
+                    .zip(win.inner_height().ok()?.as_f64())
+            }) {
+                let dpr = web_sys::window()
+                    .map(|w| w.device_pixel_ratio())
+                    .unwrap_or(1.0);
+                let size = winit::dpi::PhysicalSize::new(
+                    ((w * dpr) as u32).max(1),
+                    ((h * dpr) as u32).max(1),
+                );
+                if size != renderer.size {
+                    renderer.resize(size);
+                }
+            }
             self.state
                 .set_viewport(renderer.size.width, renderer.size.height);
             self.renderer = Some(renderer);
@@ -290,6 +314,20 @@ impl ApplicationHandler for App {
                 .and_then(|w| w.document())
                 .and_then(|d| d.get_element_by_id("rustee-canvas"))
                 .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+            // Remplace la taille par défaut (1024×720, pensée pour desktop) par celle
+            // de la fenêtre du navigateur : winit pose `width`/`height` en style inline
+            // sur le canvas, ce qui écrase le `width:100%; height:100%` de
+            // `packaging/web/index.html` — sans ça, le canvas restait bloqué à
+            // 1024×720 quelle que soit la taille réelle de la fenêtre Chrome (bande
+            // noire sous le rendu, constaté à l'écran).
+            if let Some((w, h)) = web_sys::window().and_then(|w| {
+                w.inner_width()
+                    .ok()?
+                    .as_f64()
+                    .zip(w.inner_height().ok()?.as_f64())
+            }) {
+                attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h));
+            }
             attrs = attrs.with_canvas(canvas);
         }
         let window = match event_loop.create_window(attrs) {

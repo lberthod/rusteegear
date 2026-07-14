@@ -266,21 +266,32 @@ pub(super) fn create_bloom_mip_views(
     width: u32,
     height: u32,
 ) -> Vec<wgpu::TextureView> {
+    let base_width = (width / 2).max(2);
+    let base_height = (height / 2).max(2);
+    // `mip_level_count` ne peut pas dépasser ce que la taille de base permet
+    // (log2(min(w,h)) + 1) — sinon `create_texture` échoue la validation WebGPU,
+    // ce qui invalide la texture, son bind group, son pipeline, puis (même
+    // command encoder) TOUT le rendu de la frame, écran noir y compris pour la
+    // passe principale qui elle est saine. Se produit sur une fenêtre/canvas
+    // minuscule (ex. avant le premier resize réel, où `base_width`/`base_height`
+    // retombent sur le plancher `.max(2)`, insuffisant pour 4 niveaux).
+    let max_mips = base_width.min(base_height).ilog2() + 1;
+    let mip_level_count = BLOOM_MIP_LEVELS.min(max_mips);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bloom_chain"),
         size: wgpu::Extent3d {
-            width: (width / 2).max(2),
-            height: (height / 2).max(2),
+            width: base_width,
+            height: base_height,
             depth_or_array_layers: 1,
         },
-        mip_level_count: BLOOM_MIP_LEVELS,
+        mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: HDR_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    (0..BLOOM_MIP_LEVELS)
+    (0..mip_level_count)
         .map(|level| {
             texture.create_view(&wgpu::TextureViewDescriptor {
                 label: Some("bloom_mip_view"),
