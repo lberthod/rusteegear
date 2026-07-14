@@ -432,10 +432,21 @@ pub(super) fn menu_ajouter(
                         .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
                         .pick_file()
                 {
-                    scene.objects[i]
+                    // Normalisation de loudness à l'import (Sprint 126) : mesure le
+                    // gain une fois ici plutôt qu'à chaque lecture — `AudioSource.gain`
+                    // porte le résultat, appliqué par `AppState::sim_step` au moment de
+                    // jouer le clip (cf. sa doc). `1.0` (aucun changement) si le fichier
+                    // ne se lit pas encore (chemin invalide, format non supporté) —
+                    // laisse `clip` pointer dessus quand même, le reste de l'éditeur
+                    // gère déjà un chemin audio invalide sans planter.
+                    let gain = std::fs::read(&p)
+                        .map(|bytes| crate::runtime::audio::normalize_gain(&bytes))
+                        .unwrap_or(1.0);
+                    let audio = scene.objects[i]
                         .audio
-                        .get_or_insert_with(crate::scene::AudioSource::default)
-                        .clip = p.to_string_lossy().into_owned();
+                        .get_or_insert_with(crate::scene::AudioSource::default);
+                    audio.clip = p.to_string_lossy().into_owned();
+                    audio.gain = gain;
                 }
                 ui.close();
             }

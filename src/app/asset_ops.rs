@@ -201,6 +201,79 @@ impl AppState {
         self.scene.point_lights.clear();
         n
     }
+
+    /// Applique un préset qualité (Sprint 126) : compose les mêmes méthodes que
+    /// ci-dessus (`optimize_textures`/`limit_point_lights`/`convert_textures_pot`/
+    /// `bake_lighting`), rien de dupliqué — un préset n'est qu'une combinaison
+    /// nommée de leurs paramètres. Généralise `perf_mode` (déjà
+    /// `optimize_textures(1024)` + `limit_point_lights(4)`, cf.
+    /// `gfx::renderer::render`) en lui donnant des voisins plus/moins agressifs
+    /// plutôt qu'un unique niveau tout-ou-rien.
+    pub fn apply_quality_preset(&mut self, preset: QualityPreset) {
+        let cfg = preset.config();
+        if let Some(max_px) = cfg.max_texture_px {
+            self.optimize_textures(max_px);
+        }
+        if let Some(max_lights) = cfg.max_point_lights {
+            self.limit_point_lights(max_lights);
+        }
+        if cfg.pot_textures {
+            self.convert_textures_pot();
+        }
+        if cfg.bake_lighting {
+            self.bake_lighting();
+        }
+    }
+}
+
+/// Préset qualité par plateforme (Sprint 126) — généralisation du bouton unique
+/// « Mode performance Android » (`perf_mode`) en plusieurs niveaux nommés.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QualityPreset {
+    /// Aucune réduction — machine de bureau, pas de contrainte GPU mobile.
+    Desktop,
+    /// Réduction légère : seules les textures surdimensionnées sont réduites,
+    /// tout le reste (lumières, bake) reste inchangé.
+    MobileHigh,
+    /// Réduction agressive : mêmes seuils que `perf_mode` aujourd'hui
+    /// (textures 1024 px, 4 lumières ponctuelles max), plus conversion en
+    /// puissances de 2 et bake lighting — pour un appareil bas de gamme.
+    MobileLow,
+}
+
+/// Combinaison de paramètres pour un `QualityPreset` — struct plutôt que la
+/// logique inline dans `apply_quality_preset` : testable seule (cf. les tests),
+/// et le mapping preset→paramètres reste visible d'un coup d'œil.
+pub(super) struct QualityConfig {
+    pub max_texture_px: Option<u32>,
+    pub max_point_lights: Option<usize>,
+    pub pot_textures: bool,
+    pub bake_lighting: bool,
+}
+
+impl QualityPreset {
+    pub(super) fn config(self) -> QualityConfig {
+        match self {
+            QualityPreset::Desktop => QualityConfig {
+                max_texture_px: None,
+                max_point_lights: None,
+                pot_textures: false,
+                bake_lighting: false,
+            },
+            QualityPreset::MobileHigh => QualityConfig {
+                max_texture_px: Some(2048),
+                max_point_lights: None,
+                pot_textures: false,
+                bake_lighting: false,
+            },
+            QualityPreset::MobileLow => QualityConfig {
+                max_texture_px: Some(1024),
+                max_point_lights: Some(4),
+                pot_textures: true,
+                bake_lighting: true,
+            },
+        }
+    }
 }
 
 /// Chemin de la copie optimisée d'une texture (`foo.png` → `foo_opt2048.png`).
@@ -249,5 +322,53 @@ mod tests {
             "/tmp/bois_opt2048.png"
         );
         assert_eq!(optimized_path("bois.png", 512), "bois_opt512.png");
+    }
+
+    /// Sprint 126 : `QualityPreset::Desktop` ne doit rien changer — c'est le
+    /// niveau « aucune contrainte GPU mobile », pas un préset qui se contente
+    /// d'être léger.
+    #[test]
+    fn desktop_preset_leaves_the_scene_untouched() {
+        let mut app = crate::app::AppState::new();
+        for _ in 0..6 {
+            app.scene
+                .point_lights
+                .push(crate::scene::PointLight::default());
+        }
+        let lights_before = app.scene.point_lights.len();
+        app.apply_quality_preset(QualityPreset::Desktop);
+        assert_eq!(app.scene.point_lights.len(), lights_before);
+    }
+
+    /// `QualityPreset::MobileLow` doit au moins appliquer la limite de lumières
+    /// (le seul effet vérifiable sans fichier texture réel sur disque dans ce
+    /// test — `optimize_textures`/`convert_textures_pot` sont no-op sur une scène
+    /// sans texture, `bake_lighting` vide `point_lights` lui-même après usage).
+    #[test]
+    fn mobile_low_preset_caps_point_lights_and_bakes_them_away() {
+        let mut app = crate::app::AppState::new();
+        for _ in 0..6 {
+            app.scene
+                .point_lights
+                .push(crate::scene::PointLight::default());
+        }
+        app.apply_quality_preset(QualityPreset::MobileLow);
+        // `limit_point_lights(4)` puis `bake_lighting()` (qui vide le reste) :
+        // au final plus aucune lumière ponctuelle dynamique.
+        assert!(app.scene.point_lights.is_empty());
+    }
+
+    /// `QualityPreset::MobileHigh` ne touche pas aux lumières (contrairement à
+    /// `MobileLow`) — seule la config de texture diffère entre les deux niveaux.
+    #[test]
+    fn mobile_high_preset_does_not_touch_point_lights() {
+        let mut app = crate::app::AppState::new();
+        for _ in 0..6 {
+            app.scene
+                .point_lights
+                .push(crate::scene::PointLight::default());
+        }
+        app.apply_quality_preset(QualityPreset::MobileHigh);
+        assert_eq!(app.scene.point_lights.len(), 6);
     }
 }

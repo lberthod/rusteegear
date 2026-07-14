@@ -829,6 +829,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             clip: String::new(),
             autoplay: true,
             spatial: true,
+            ..Default::default()
         });
 
         // --- Combat : cible d'attaque (`attackable`) et ancre visuelle de l'effet

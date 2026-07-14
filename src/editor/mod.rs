@@ -279,6 +279,9 @@ pub struct UiActions {
     pub bake_lighting: bool,
     /// Mode performance Android : optimisations groupées (textures + lumières).
     pub perf_mode: bool,
+    /// Préset qualité par plateforme (Sprint 126) — généralisation de `perf_mode`
+    /// en plusieurs niveaux nommés (cf. `app::asset_ops::QualityPreset`).
+    pub apply_quality_preset: Option<crate::app::asset_ops::QualityPreset>,
     /// Rassembler les assets externes dans le dossier projet (asset://).
     pub collect_assets: bool,
     /// Édition : couper / copier / coller / tout sélectionner / grouper / dégrouper.

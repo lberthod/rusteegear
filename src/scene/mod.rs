@@ -217,7 +217,7 @@ impl ImportedMesh {
 /// `None` = aucun son — la grande majorité des objets d'une scène n'en ont pas ; les y
 /// laisser à plat (3 champs) aurait alourdi tous les objets pour rien. Même logique de
 /// migration que `Controller`.
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AudioSource {
     /// Fichier son (chemin disque ou `bundle://`).
     #[serde(default)]
@@ -228,6 +228,29 @@ pub struct AudioSource {
     /// Volume au lancement décroissant avec la distance à la caméra.
     #[serde(default)]
     pub spatial: bool,
+    /// Multiplicateur de gain calculé à l'import (Sprint 126, normalisation de
+    /// loudness) : appliqué en plus de l'atténuation spatiale au moment de la
+    /// lecture, pas ré-encodé dans le fichier lui-même — un clip trop fort/faible
+    /// enregistré au studio se joue à un niveau cohérent avec les autres sans
+    /// avoir à retoucher l'asset. `1.0` = inchangé (valeur par défaut pour les
+    /// scènes existantes, qui n'ont jamais eu ce champ).
+    #[serde(default = "default_audio_gain")]
+    pub gain: f32,
+}
+
+fn default_audio_gain() -> f32 {
+    1.0
+}
+
+impl Default for AudioSource {
+    fn default() -> Self {
+        Self {
+            clip: String::new(),
+            autoplay: false,
+            spatial: false,
+            gain: default_audio_gain(),
+        }
+    }
 }
 
 /// Mécanique de résolution de l'attaque du joueur (cf. `Controller::attack_mode`).
@@ -2037,6 +2060,52 @@ mod tests {
         assert!(angle(&n) < 1e-6);
     }
 
+    /// Sprint 126 : `asset_references` indexe les 4 champs qui peuvent porter une
+    /// référence `asset-id://` stable (texture, audio, mesh importé, image HUD) et
+    /// ignore les chemins qui n'ont pas ce schéma (`asset://`/`bundle://` bruts,
+    /// aucune identité stable à indexer) — cf. sa doc.
+    #[test]
+    fn asset_references_indexes_all_four_reference_fields_by_uuid() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Caisse".into(),
+            texture: "asset-id://tex-uuid".into(),
+            audio: Some(AudioSource {
+                clip: "asset-id://audio-uuid".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        // Chemin `asset://` brut : pas de schéma `asset-id://`, ne doit apparaître
+        // dans aucune entrée (aucune identité stable à indexer).
+        scene.objects.push(SceneObject {
+            name: "Sans référence stable".into(),
+            texture: "asset://old_style.png".into(),
+            ..Default::default()
+        });
+        scene.imported.push(ImportedMesh {
+            name: "Robot".into(),
+            path: "asset-id://mesh-uuid".into(),
+            ..Default::default()
+        });
+        scene.hud_widgets.push(HudWidget {
+            id: "icone_vie".into(),
+            anchor: HudAnchor::TopLeft,
+            offset: [0.0, 0.0],
+            size: [32.0, 32.0],
+            kind: HudWidgetKind::Image {
+                path: "asset-id://hud-uuid".into(),
+            },
+        });
+
+        let refs = scene.asset_references();
+        assert_eq!(refs.len(), 4, "un uuid par référence stable, pas plus");
+        assert!(refs["tex-uuid"][0].contains("Caisse"));
+        assert!(refs["audio-uuid"][0].contains("Caisse"));
+        assert!(refs["mesh-uuid"][0].contains("Robot"));
+        assert!(refs["hud-uuid"][0].contains("icone_vie"));
+    }
+
     #[test]
     fn collect_at_picks_up_touched_pieces() {
         let mut s = Scene::controller_demo();
@@ -2375,6 +2444,7 @@ mod tests {
             clip: "assets/wind.wav".into(),
             autoplay: true,
             spatial: true,
+            ..Default::default()
         });
         let scene = Scene {
             objects: vec![o],

@@ -4,7 +4,7 @@
 
 use glam::Vec3;
 
-use super::{MeshKind, Scene, SceneObject, TapAction, WEAPONS, Weapon};
+use super::{HudWidgetKind, MeshKind, Scene, SceneObject, TapAction, WEAPONS, Weapon};
 
 impl Scene {
     /// Estimation grossière de l'occupation mémoire (octets) : `(objets, meshes importés,
@@ -252,5 +252,39 @@ impl Scene {
         });
         idx.truncate(max);
         idx
+    }
+
+    /// Graphe inverse `uuid d'asset → description des endroits qui le référencent`
+    /// (Sprint 126) : seules les références `asset-id://<uuid>` sont indexables (un
+    /// `asset://<nom>` brut n'a pas d'identité stable, cf. la doc de
+    /// `assets::ASSET_ID_SCHEME`) — sert à avertir avant un renommage/suppression
+    /// qui casserait ces références, plutôt que de le découvrir après coup à
+    /// l'ouverture de la scène. Parcourt les 4 champs qui peuvent porter une
+    /// référence asset : `SceneObject::texture`/`audio.clip`, `ImportedMesh::path`,
+    /// `HudWidgetKind::Image::path` — mêmes champs que `AppState::collect_assets`
+    /// (`app/asset_ops.rs`), plus les widgets HUD que celui-ci ne couvre pas encore.
+    pub fn asset_references(&self) -> std::collections::HashMap<String, Vec<String>> {
+        let mut refs: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut note = |path: &str, desc: String| {
+            if let Some(uuid) = path.strip_prefix(crate::assets::ASSET_ID_SCHEME) {
+                refs.entry(uuid.to_string()).or_default().push(desc);
+            }
+        };
+        for o in &self.objects {
+            note(&o.texture, format!("objet « {} » (texture)", o.name));
+            if let Some(a) = &o.audio {
+                note(&a.clip, format!("objet « {} » (audio)", o.name));
+            }
+        }
+        for m in &self.imported {
+            note(&m.path, format!("mesh importé « {} »", m.name));
+        }
+        for w in &self.hud_widgets {
+            if let HudWidgetKind::Image { path } = &w.kind {
+                note(path, format!("widget HUD « {} » (image)", w.id));
+            }
+        }
+        refs
     }
 }

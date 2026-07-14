@@ -849,6 +849,34 @@ pub(super) fn optimize_window(
             {
                 actions.perf_mode = true;
             }
+            ui.separator();
+            ui.label("Préset qualité (Sprint 126) :");
+            ui.horizontal(|ui| {
+                use crate::app::asset_ops::QualityPreset;
+                if ui
+                    .button("🖥 Desktop")
+                    .on_hover_text("Aucune réduction — machine de bureau")
+                    .clicked()
+                {
+                    actions.apply_quality_preset = Some(QualityPreset::Desktop);
+                }
+                if ui
+                    .button("📱 Mobile (léger)")
+                    .on_hover_text("Réduction légère : textures ≤ 2048 px seulement")
+                    .clicked()
+                {
+                    actions.apply_quality_preset = Some(QualityPreset::MobileHigh);
+                }
+                if ui
+                    .button("📱 Mobile (agressif)")
+                    .on_hover_text(
+                        "Réduction complète : textures ≤ 1024 px, 4 lumières max, POT, bake lighting",
+                    )
+                    .clicked()
+                {
+                    actions.apply_quality_preset = Some(QualityPreset::MobileLow);
+                }
+            });
             ui.small("💡 Astuce : utilise « Contrôle qualité APK » pour vérifier les gains.");
         });
     panels.optimize = open;

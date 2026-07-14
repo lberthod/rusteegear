@@ -1630,6 +1630,10 @@ impl Renderer {
                 app.limit_point_lights(4);
                 log::info!("Mode performance Android : {t} texture(s) réduite(s), ≤ 4 lumières");
             }
+            if let Some(preset) = actions.apply_quality_preset {
+                app.apply_quality_preset(preset);
+                log::info!("Préset qualité appliqué : {preset:?}");
+            }
             if actions.collect_assets {
                 let n = app.collect_assets();
                 log::info!("Assets rassemblés : {n} chemin(s) → asset://");

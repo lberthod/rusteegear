@@ -2,7 +2,7 @@
 //! interaction pointeur. Le `Renderer` consomme cet état pour dessiner.
 
 pub mod ai;
-mod asset_ops;
+pub mod asset_ops;
 pub mod build_config;
 mod combat;
 mod console;

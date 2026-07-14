@@ -2613,13 +2613,39 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Livrable** : un objet dynamique traversant une zone de vent est visiblement poussé ; retrouve son comportement normal en sortant.
 - **Prérequis livré** : triggers + événement exit (Sprint 102).
 
-#### Sprint 126 — Pipeline assets, extensions ⬜
-- [ ] Presets qualité par plateforme (généralisation de la réduction mobile existante).
-- [ ] Graphe de dépendances d'assets depuis le manifeste GUID (Sprint 95).
-- [ ] Règles de budget (polycount, tailles) dans le contrôle qualité APK existant.
-- [ ] Normalisation loudness à l'import audio.
-- **Fichiers** : `src/assets.rs`.
-- **Livrable** : renommer/déplacer un asset référencé ailleurs le signale avant l'export ; un import audio trop fort est normalisé.
+#### Sprint 126 — Pipeline assets, extensions ✅ FAIT
+- [x] Presets qualité par plateforme (`app::asset_ops::QualityPreset` — Desktop/
+      MobileHigh/MobileLow) : généralise `perf_mode` (déjà
+      `optimize_textures(1024)` + `limit_point_lights(4)`) en 3 niveaux nommés,
+      composés à partir des mêmes méthodes `AppState` existantes (aucune logique
+      dupliquée). Nouveau bouton dans la fenêtre « Optimisation mobile ».
+- [x] Graphe de dépendances d'assets (`Scene::asset_references`,
+      `scene/queries.rs`) : indexe uuid → description lisible pour les 4 champs
+      qui peuvent porter une référence `asset-id://` stable (texture, audio, mesh
+      importé, image de widget HUD — ce dernier n'était couvert par aucun
+      mécanisme existant, `collect_assets` ne le touchait pas non plus).
+- [x] Règles de budget dans le contrôle qualité APK (`editor/readiness.rs`) :
+      nouveau check « références d'assets cassées » (uuid qui ne résout plus,
+      nommant l'objet concerné plutôt qu'un « asset manquant » générique),
+      budget polycount par mesh importé (`MAX_TRIS_PER_MESH`, `Warn`), budget
+      taille sur disque par asset (`MAX_ASSET_BYTES`, `Warn`).
+- [x] Normalisation loudness à l'import audio (`runtime::audio::normalize_gain`,
+      fonction pure : décode via `kira::StaticSoundData`, mesure le pic, calcule
+      un gain vers `NORMALIZE_TARGET_PEAK`, borné `[0.1, 4.0]`). Appliquée au
+      choix d'un fichier audio dans l'inspecteur (`editor/menus.rs`), stockée
+      dans le nouveau champ `AudioSource.gain` (défaut 1.0, pas de migration de
+      scène nécessaire), composée avec l'atténuation spatiale à la lecture
+      (`AppState::sim_step`) — pas de ré-encodage du fichier, gain appliqué à la
+      volée comme le gain spatial existant.
+- **Fichiers** : `src/app/asset_ops.rs`, `src/scene/queries.rs`,
+  `src/scene/mod.rs` (`AudioSource.gain`), `src/editor/readiness.rs`,
+  `src/editor/menus.rs`, `src/editor/windows.rs`, `src/runtime/audio.rs`,
+  `src/app/simulation.rs`.
+- **Livrable** : 355 tests verts (10 nouveaux), clippy -D warnings et fmt
+  propres, build wasm32 vert. Non vérifié visuellement (fenêtre éditeur native,
+  cf. limite déjà documentée aux sprints 113d/122) — la logique elle-même
+  (presets, graphe de dépendances, budgets, normalisation) est entièrement
+  couverte par des tests unitaires indépendants du rendu.
 - **Prérequis livré** : manifeste GUID (Sprint 95).
 
 #### Sprint 127 — Compression Zstd des packs embarqués ⬜

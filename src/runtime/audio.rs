@@ -44,6 +44,40 @@ const DUCK_HOLD: Duration = Duration::from_millis(180);
 const DUCK_ATTACK_DURATION: Duration = Duration::from_millis(60);
 const DUCK_RELEASE_DURATION: Duration = Duration::from_millis(450);
 
+/// Pic cible après normalisation (Sprint 126), en amplitude linéaire — 0,9 laisse
+/// une petite marge (~-0,9 dB) sous 1,0 (écrêtage numérique) pour absorber
+/// l'arrondi de la multiplication par le gain calculé, sans viser le plein 0 dB.
+const NORMALIZE_TARGET_PEAK: f32 = 0.9;
+/// Bornes du gain de normalisation appliqué (Sprint 126) : au-delà, le calcul
+/// traduit plus une erreur (silence quasi total → gain énorme) qu'une correction
+/// de niveau légitime — un clip vraiment silencieux reste silencieux plutôt que
+/// d'être amplifié jusqu'au bruit de fond.
+const NORMALIZE_GAIN_MIN: f32 = 0.1;
+const NORMALIZE_GAIN_MAX: f32 = 4.0;
+
+/// Calcule le multiplicateur de gain à appliquer à `bytes` (fichier audio complet,
+/// WAV/OGG/FLAC/MP3 — tout ce que `kira`/`symphonia` savent décoder) pour amener
+/// son pic d'amplitude à `NORMALIZE_TARGET_PEAK` (Sprint 126, import audio) —
+/// mesure le **pic**, pas le RMS/LUFS : plus simple à calculer sans dépendance
+/// supplémentaire, et suffisant pour éviter qu'un clip nettement plus fort/faible
+/// que les autres ne détonne dans le mixage (l'objectif ici, pas un mastering
+/// broadcast). `1.0` (inchangé) si le décodage échoue ou si le clip est déjà
+/// silencieux (pic quasi nul — un gain calculé dessus n'aurait aucun sens).
+/// Fonction pure, testable sans `AudioManager` — même esprit que `gain_to_db`.
+pub fn normalize_gain(bytes: &[u8]) -> f32 {
+    let Ok(data) = StaticSoundData::from_cursor(std::io::Cursor::new(bytes.to_vec())) else {
+        return 1.0;
+    };
+    let peak = data
+        .frames
+        .iter()
+        .fold(0.0_f32, |acc, f| acc.max(f.left.abs()).max(f.right.abs()));
+    if peak <= 0.001 {
+        return 1.0;
+    }
+    (NORMALIZE_TARGET_PEAK / peak).clamp(NORMALIZE_GAIN_MIN, NORMALIZE_GAIN_MAX)
+}
+
 /// Convertit un gain linéaire (0..1) en décibels (kira). 0 → quasi-silence.
 fn gain_to_db(gain: f32) -> f32 {
     if gain <= 0.001 {
@@ -536,6 +570,79 @@ impl Default for Audio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WAV mono PCM16 minimal (en-tête 44 octets, standard) contenant des
+    /// échantillons constants à `amplitude` (0..1) — assez pour exercer
+    /// `normalize_gain` sans dépendance à un fichier réel sur disque.
+    fn wav_bytes_at_amplitude(amplitude: f32) -> Vec<u8> {
+        let sample_rate: u32 = 44100;
+        let num_samples: u32 = 4410; // 0,1 s
+        let sample_i16 = (amplitude.clamp(0.0, 1.0) * i16::MAX as f32) as i16;
+        let data_len = num_samples * 2; // 16 bits = 2 octets/échantillon
+        let mut buf = Vec::with_capacity(44 + data_len as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + data_len).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes()); // taille du sous-bloc fmt
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes()); // bits/échantillon
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_len.to_le_bytes());
+        for _ in 0..num_samples {
+            buf.extend_from_slice(&sample_i16.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn normalize_gain_brings_a_loud_clip_down_towards_the_target_peak() {
+        // Pic à pleine échelle (1.0) : le gain calculé doit ramener le pic vers
+        // NORMALIZE_TARGET_PEAK (0,9), donc être proche de 0,9 (légèrement en
+        // dessous à cause de l'arrondi 16 bits de `wav_bytes_at_amplitude`).
+        let bytes = wav_bytes_at_amplitude(1.0);
+        let gain = normalize_gain(&bytes);
+        assert!(
+            (gain - NORMALIZE_TARGET_PEAK).abs() < 0.01,
+            "gain={gain}, attendu proche de {NORMALIZE_TARGET_PEAK}"
+        );
+    }
+
+    #[test]
+    fn normalize_gain_brings_a_quiet_clip_up_towards_the_target_peak() {
+        // Pic à 0,1 : viser 0,9 demanderait ×9, mais NORMALIZE_GAIN_MAX (×4) borne
+        // l'amplification — un clip très faible n'est pas monté jusqu'au bruit de fond.
+        let bytes = wav_bytes_at_amplitude(0.1);
+        assert_eq!(normalize_gain(&bytes), NORMALIZE_GAIN_MAX);
+
+        // Pic à 0,5 : ×1,8 pour atteindre 0,9, dans les bornes sans être clampé —
+        // vérifie que la formule elle-même (pas seulement le clamp) est correcte.
+        let bytes = wav_bytes_at_amplitude(0.5);
+        let gain = normalize_gain(&bytes);
+        assert!(
+            (gain - NORMALIZE_TARGET_PEAK / 0.5).abs() < 0.05,
+            "gain={gain}, attendu proche de {}",
+            NORMALIZE_TARGET_PEAK / 0.5
+        );
+    }
+
+    #[test]
+    fn normalize_gain_leaves_near_silence_and_garbage_unchanged() {
+        assert_eq!(
+            normalize_gain(&wav_bytes_at_amplitude(0.0)),
+            1.0,
+            "un clip quasi silencieux ne doit pas être amplifié à l'infini"
+        );
+        assert_eq!(
+            normalize_gain(b"pas un fichier audio valide"),
+            1.0,
+            "un décodage impossible doit rendre 1.0 (aucun changement), pas paniquer"
+        );
+    }
 
     #[test]
     fn camera_panning_is_zero_straight_ahead_and_behind() {
