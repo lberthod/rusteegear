@@ -60,6 +60,24 @@ impl NetClient {
         firebase_uid: Option<&str>,
         lobby: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Sprint 113f : un navigateur refuse d'ouvrir un WebSocket `ws://` (non
+        // chiffré) depuis une page servie en `https:` — `WebSocket::new` lève une
+        // exception JS (« An insecure WebSocket connection may not be initiated
+        // from a page loaded over HTTPS ») que `map_err` ci-dessous transformerait
+        // en message technique peu clair. Détectée ici en amont pour un message
+        // explicite, avant même de tenter la connexion.
+        if let Some(win) = web_sys::window()
+            && let Ok(protocol) = win.location().protocol()
+            && protocol == "https:"
+            && url.starts_with("ws://")
+        {
+            return Err(format!(
+                "Connexion refusée : « {url} » n'est pas chiffré (ws://), mais cette page \
+                 est servie en HTTPS — utilisez une adresse wss:// (le navigateur refuse \
+                 tout WebSocket non chiffré depuis une page HTTPS)."
+            )
+            .into());
+        }
         let ws = WebSocket::new(url).map_err(|e| js_error_to_string(&e))?;
         ws.set_binary_type(BinaryType::Arraybuffer);
 

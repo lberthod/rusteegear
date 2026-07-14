@@ -2199,29 +2199,58 @@ aujourd'hui : `architecture.md` + `docs/audits/*`).
   prévu, et chaque référence UI vérifiée contre le code source du 113d au moment de
   l'écriture (pas de dérive à ce stade).
 
-#### Sprint 113f — Déploiement web : WSS obligatoire derrière HTTPS ⬜
+#### Sprint 113f — Déploiement web : WSS obligatoire derrière HTTPS ✅ FAIT
 **Objectif** : le jeu exporté en wasm32 et déployé sur un hébergeur HTTPS (cas FTP
 standard) ne peut plus se connecter au serveur multijoueur car celui-ci ne parle
 que `ws://` en clair — constaté lors d'un déploiement réel : Chrome refuse la
 connexion avec *« Failed to construct 'WebSocket': An insecure WebSocket
 connection may not be initiated from a page loaded over HTTPS »*.
-- [ ] Reverse-proxy TLS (nginx + Let's Encrypt/certbot) devant le serveur WS natif
-      sur le VPS, nom de domaine pointant vers `179.237.71.235` (un certificat
-      Let's Encrypt ne peut pas être émis pour une IP nue).
-- [ ] `DEFAULT_SERVER_URL` (`src/app/network_client.rs`) basculé vers
-      `wss://<domaine>`.
-- [ ] Détecter `location.protocol` côté web (`src/net/client/web.rs`) pour
-      refuser/avertir proprement une URL `ws://` saisie manuellement depuis une
-      page HTTPS, plutôt que de laisser `WebSocket::new` lever une exception JS
-      non gérée jusqu'à l'UI.
-- [ ] Recouper avec le TLS natif déjà prévu au Sprint 113c (même serveur, éviter
-      le double travail — un seul reverse-proxy/certificat pour les deux besoins).
-- **Fichiers** : `src/app/network_client.rs`, `src/net/client/web.rs`, infra VPS
-  (hors repo).
-- **Livrable** : jeu déployé sur un hébergeur HTTPS tiers, connexion multijoueur
-  fonctionnelle en `wss://` de bout en bout.
-- **Risques** : dépend de ressources hors repo (domaine, accès SSH au VPS) —
-  distinct du travail purement applicatif des autres sprints P2.
+- [x] Reverse-proxy TLS : le VPS avait déjà **Caddy** installé (pas nginx/certbot,
+      HTTPS automatique intégré) pour un autre usage (`api.loicberthod.ch`,
+      bot4tokensolana + une app tierce). Plutôt que de toucher ce bloc partagé,
+      nouveau sous-domaine dédié `ws.loicberthod.ch` (DNS A → `179.237.71.235`,
+      ajouté chez Infomaniak) avec son propre bloc Caddy
+      (`ws.loicberthod.ch { reverse_proxy localhost:7777 }`) — zéro risque pour le
+      routage existant, certificat Let's Encrypt obtenu automatiquement au premier
+      reload (`CN=ws.loicberthod.ch`, vérifié). La route `ws://…:80` déjà en place
+      pour le client natif (desktop/Android) n'a pas été touchée.
+- [x] `DEFAULT_SERVER_URL` (`src/app/network_client.rs`) : **scindé par plateforme**
+      plutôt que basculé globalement — le client natif (`net::client::native`,
+      Sprint 65) n'a délibérément aucune dépendance TLS (évite OpenSSL/rustls à
+      cross-compiler pour Android), donc y forcer `wss://` l'aurait cassé
+      purement et simplement. `#[cfg(target_arch = "wasm32")]` bascule vers
+      `wss://ws.loicberthod.ch` ; `#[cfg(not(target_arch = "wasm32"))]` garde
+      `ws://179.237.71.235:80` inchangé.
+- [x] `net::client::web` : détecte `location.protocol` avant même d'appeler
+      `WebSocket::new` — refuse une URL `ws://` saisie manuellement depuis une
+      page HTTPS avec un message explicite (`Err` clair), plutôt que de laisser
+      l'exception JS du navigateur remonter telle quelle. Feature `web-sys/Location`
+      ajoutée.
+- [x] TLS natif du Sprint 113c confirmé non nécessaire : le reverse-proxy Caddy
+      couvre le besoin, pas de double travail.
+- [x] **Vérifié bout-en-bout** (pas juste compilé) : build wasm32 release réel +
+      `wasm-bindgen`, servi en local, connexion réelle testée avec un client
+      WebSocket RFC6455 complet (poignée de main TLS + upgrade + `ClientMsg::Join`
+      encodé en bincode envoyé + `ServerMsg::Welcome { player_id: 1 }` reçu, log
+      serveur `Joueur 1 (ProbeWSS) connecté` confirmé). Le test dans le Browser pane
+      intégré à cet environnement a échoué (code 1006) — diagnostiqué comme un
+      artefact de la sandbox du navigateur (nouvelle origine jamais approuvée dans
+      cette session, `ws://` vers l'IP nue avait déjà été autorisé plus tôt), pas un
+      défaut du déploiement : confirmé en reproduisant avec un vrai client hors
+      sandbox. Tous les artefacts de diagnostic temporaires (override `RUST_LOG` sur
+      le service, feature TLS ajoutée à `tokio-tungstenite` pour le test, binaire
+      d'exemple) ont été retirés après vérification.
+- **Fichiers** : `src/app/network_client.rs`, `src/net/client/web.rs`, `Cargo.toml`
+  (feature `web-sys/Location`) ; infra VPS hors repo (`/etc/caddy/Caddyfile` sur
+  `179.237.71.235`, DNS Infomaniak).
+- **Livrable** : connexion multijoueur `wss://ws.loicberthod.ch` validée bout-en-bout
+  avec un vrai client (pas juste une compilation) ; 342 tests + 50 tests réseau
+  (`--features net_tests`) verts, clippy -D warnings et fmt propres, build wasm32
+  (dev et release) vert.
+- **Risques retenus pour la suite** : reverse-proxy/certificat gérés manuellement
+  sur le VPS (pas dans ce repo) — un renouvellement Let's Encrypt cassé ou un
+  changement de Caddyfile par une autre intervention sur ce VPS partagé
+  n'apparaîtrait pas dans l'historique git de ce projet.
 
 ---
 
