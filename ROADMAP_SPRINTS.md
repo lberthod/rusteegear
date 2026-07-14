@@ -2039,24 +2039,34 @@ régression client. Une manche décidée ne coupe plus tout le process
 > exposition réseau réelle ». Insérables n'importe où après leurs prérequis,
 > comme les sprints tampons de la Phase P.
 
-#### Sprint 113a — Découpage des god-modules ⬜
+#### Sprint 113a — Découpage des god-modules 🟡 EN COURS
 **Objectif** : ramener `app/mod.rs` (4612 l.) et `renderer.rs` (3490 l.) sous ~1500-2000
 lignes chacun, dans l'esprit des extractions déjà faites (103a-1, 105a-1).
-- [ ] `app/mod.rs` : extraire ce qui reste extractible en modules dédiés (candidats à
-      identifier au sprint — ex. gestion HUD/input restante non déjà sortie en
-      `simulation.rs`/`scripting.rs`), méthodes déplacées **telles quelles**, aucun
-      changement de comportement (règle de visibilité `pub(super)` déjà établie).
-- [ ] `renderer.rs` : séparer setup pipeline / passes de rendu / gestion ressources GPU
-      en sous-modules `gfx/pipelines.rs`, `gfx/passes.rs` (ou équivalent), sans toucher
-      aux shaders ni changer l'ordre des passes.
-- [ ] `scene/mod.rs` (2789 l.) : si le temps le permet, extraire les types de données
-      (widgets HUD, contrôles mobiles, prefabs) des méthodes d'API scène.
-- **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs`, `src/scene/mod.rs`.
+- [x] `renderer.rs` : setup pipeline (~40 pipelines/layouts/samplers/buffers) extrait
+      dans `gfx/pipelines.rs` (`pipelines::build` → `PipelineBundle` destructuré dans
+      `new_impl`), fonctions pures de culling/tri/grille extraites dans `gfx/passes.rs`.
+      3752 → 2544 lignes (-32 %). Reste au-dessus de la cible : `render()` lui-même
+      (~825 l.) n'a pas été touché — encoder/passes séquentiels, plus risqué à découper
+      sans casser l'ordre (voir note de risque ci-dessous).
+- [x] `app/mod.rs` : tests de console.rs/debug_draw.rs/selection.rs/demos.rs/
+      simulation.rs (tank_controls)/scripting.rs (raycast/overlap/obj_exited Lua)
+      déplacés vers leur module respectif — même pattern que ai.rs/health.rs/input.rs
+      déjà extraits aux sprints précédents. 4666 → 3807 lignes (-18 %).
+      **Reste à faire** : les tests encore dans `app/mod.rs` mélangent plusieurs
+      modules dans un même test (ex. combat+ai+health, ou combat+persistence+
+      asset_ops) — pas de split mécanique évident, à traiter test par test plutôt
+      qu'en bloc contigu.
+- [ ] `scene/mod.rs` (2789 l.) : pas commencé — si le temps le permet, extraire les
+      types de données (widgets HUD, contrôles mobiles, prefabs) des méthodes d'API scène.
+- **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs` (+ `gfx/pipelines.rs`,
+  `gfx/passes.rs`), `src/scene/mod.rs`.
 - **Livrable** : nombre de lignes avant/après documenté par fichier ; 100 % des tests
   existants toujours verts ; `cargo clippy`/`cargo fmt` propres ; aucun changement de
   comportement observable.
 - **Risques** : gros diff mécanique → vérifier par un diff limité aux déplacements
-  (pas de logique modifiée), comme fait au Sprint 105a-1.
+  (pas de logique modifiée), comme fait au Sprint 105a-1. Une autre session a modifié
+  `gfx/pipelines.rs` en parallèle (correctif écran noir wasm32, commit `b3e7bce`) sans
+  collision — dépôt à vérifier pour activité concurrente avant de reprendre ce sprint.
 
 #### Sprint 113b — Audit complet unwrap/expect/panic en code de production ⬜
 **Objectif** : réconcilier l'annonce du Sprint 46 (« 0 unwrap/expect en code de prod »,
