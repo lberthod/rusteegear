@@ -1280,6 +1280,8 @@ impl Renderer {
         };
         let ticks: Vec<u64> = {
             let data = slice.get_mapped_range();
+            // `chunks_exact(8)` garantit des tranches de 8 octets : la conversion en
+            // `[u8; 8]` ne peut jamais échouer (Sprint 113b, audit unwrap/expect).
             data.chunks_exact(8)
                 .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
                 .collect()

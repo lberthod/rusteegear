@@ -2072,26 +2072,45 @@ lignes chacun, dans l'esprit des extractions déjà faites (103a-1, 105a-1).
   `gfx/pipelines.rs` en parallèle (correctif écran noir wasm32, commit `b3e7bce`) sans
   collision — dépôt à vérifier pour activité concurrente avant de reprendre ce sprint.
 
-#### Sprint 113b — Audit complet unwrap/expect/panic en code de production ⬜
+#### Sprint 113b — Audit complet unwrap/expect/panic en code de production ✅ FAIT
 **Objectif** : réconcilier l'annonce du Sprint 46 (« 0 unwrap/expect en code de prod »,
 scope `gfx/renderer.rs` + `lib.rs`) avec l'état actuel du crate entier
-(**248 `.unwrap()` + 146 `.expect()` + 8 `panic!`** hors tests, tous modules confondus).
-- [ ] Grep exhaustif hors `#[cfg(test)]`/`tests/` ; classer chaque site en
-      (a) invariant vraiment garanti (documenter pourquoi, laisser tel quel),
-      (b) à durcir en `Result`/`let…else`/valeur par défaut sûre.
-- [ ] Durcir en priorité les chemins atteignables depuis une entrée utilisateur/réseau/
-      fichier (import assets, chargement de scène, réseau) — même patron que le Sprint 28
-      (`let … else` sur le tactile) et le Sprint 46 (init GPU).
-- [ ] Étendre l'audit ponctuel du Sprint 46 en **vérification CI** : un job/script qui
-      grep les `unwrap()`/`expect()` hors tests et échoue si le nombre dépasse une
-      liste blanche documentée (évite la régression silencieuse qui a motivé ce sprint).
-- **Fichiers** : `src/app/*.rs`, `src/runtime/*.rs`, `src/net/*.rs`, `src/scene/*.rs`,
-  nouveau script/CI de vérification.
-- **Livrable** : compte avant/après documenté par fichier ; liste blanche justifiée
-  pour les unwraps restants ; CI qui empêche la régression future.
-- **Risques** : certains `unwrap()` masquent un vrai bug latent → traiter au cas par
-  cas, ne pas juste remplacer par `expect()` avec un message (ça ne change rien au
-  panic) sauf si l'invariant est réellement garanti.
+(**248 `.unwrap()` + 146 `.expect()` + 8 `panic!`**, chiffre brut du grep initial —
+en fait un comptage crate entier qui n'excluait pas les corps de `#[cfg(test)] mod
+tests { ... }`, très majoritaires : `.unwrap()`/`.expect()` sont l'idiome normal des
+assertions de test).
+- [x] Script d'audit qui exclut précisément les modules `#[cfg(test)] mod tests { … }`
+      (correspondance d'accolades, gère les attributs `#[cfg(...)]` multi-lignes et
+      composés comme `#[cfg(all(test, feature = "net_tests"))]`, pas une regex ligne à
+      ligne) : **6 sites réels en code de production** hors tests (1 `.unwrap()` +
+      5 `.expect()`, 0 `panic!`) — très loin des 402 du grep brut initial.
+- [x] Classement des 6 sites : **tous des invariants vraiment garantis**, déjà
+      documentés par un commentaire au site d'appel expliquant pourquoi
+      (`chunks_exact(8)` ⇒ conversion `[u8;8]` infaillible dans `gfx/renderer.rs`,
+      vérifications `is_empty()`/`contains_key`/filtre juste avant dans
+      `net/interpolation.rs`, `app/combat.rs`, `app/simulation.rs` ×2,
+      `app/network_client.rs`) — aucun bug latent trouvé, rien à durcir côté logique.
+- [x] Durcissement réseau trouvé en le faisant : les 5 `.lock().unwrap()` sur le
+      `Mutex<HashMap>` des connexions (`src/net/server_loop.rs`, `send_to`/
+      `broadcast`/`connected_count`/connexion/déconnexion) auraient empoisonné le
+      mutex au premier panic dans une tâche de connexion, plantant en cascade le
+      thread de jeu principal (`send_to`/`broadcast` appelés depuis là à chaque
+      tick) — remplacés par un helper `lock_outboxes` qui récupère le contenu même
+      empoisonné (`unwrap_or_else(|p| p.into_inner())`), sûr ici car `insert`/
+      `remove`/lecture sur une simple `HashMap` ne laissent rien d'incohérent.
+- [x] Garde CI : `scripts/check_unwrap_budget.py` (même détection de portée que
+      l'audit), liste blanche = les 6 sites documentés ci-dessus avec leur nombre
+      exact par fichier ; échoue si un nouveau site apparaît hors liste blanche.
+      Câblé dans `.github/workflows/ci.yml` juste après `cargo test --all-targets`.
+- **Fichiers** : `src/net/server_loop.rs`, `src/gfx/renderer.rs`,
+  `scripts/check_unwrap_budget.py` (nouveau), `.github/workflows/ci.yml`.
+- **Livrable** : 6 sites hors tests, tous documentés/whitelistés ; 1 durcissement
+  réseau réel (poison de mutex) ; CI qui empêche la régression future ; 342 tests +
+  48 tests réseau (`--features net_tests`) toujours verts, clippy -D warnings et
+  fmt propres.
+- **Note** : le chiffre 248+146+8 de l'objectif initial se lit maintenant comme un
+  artefact de méthode de comptage plutôt qu'une dette réelle — corrigé ici pour que
+  la roadmap reste une source fiable plutôt que de propager le chiffre brut.
 
 #### Sprint 113c — Sécurité réseau : rate limiting + TLS natif ⬜
 **Objectif** : combler ce que Sprint 105a-2 n'a pas couvert — aucun rate limiting,

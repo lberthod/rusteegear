@@ -49,6 +49,20 @@ pub type Inbound = (PlayerId, ClientMsg);
 
 type Outboxes = Arc<Mutex<HashMap<PlayerId, tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>;
 
+/// Verrouille `outboxes` en récupérant le contenu même si le mutex est empoisonné
+/// (Sprint 113b, durcissement) : `insert`/`remove`/lecture sur une simple `HashMap`
+/// ne laissent rien d'incohérent en mémoire même interrompus par un panic — un seul
+/// client fautif ne doit pas figer `send_to`/`broadcast` pour tous les autres
+/// joueurs (et donc tout le thread de jeu principal) derrière un `.unwrap()` qui
+/// re-paniquerait à chaque appel suivant.
+fn lock_outboxes(
+    outboxes: &Outboxes,
+) -> std::sync::MutexGuard<'_, HashMap<PlayerId, tokio::sync::mpsc::UnboundedSender<Vec<u8>>>> {
+    outboxes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Serveur réseau : accepte des connexions WebSocket, décode les `ClientMsg` reçus
 /// et les pousse dans `inbox` ; `send_to`/`broadcast` encodent et poussent des
 /// `ServerMsg` vers un ou tous les clients connectés.
@@ -144,7 +158,7 @@ impl NetServer {
         let Ok(bytes) = protocol::encode(msg) else {
             return;
         };
-        if let Some(tx) = self.outboxes.lock().unwrap().get(&id) {
+        if let Some(tx) = lock_outboxes(&self.outboxes).get(&id) {
             let _ = tx.send(bytes);
         }
     }
@@ -154,14 +168,14 @@ impl NetServer {
         let Ok(bytes) = protocol::encode(msg) else {
             return;
         };
-        for tx in self.outboxes.lock().unwrap().values() {
+        for tx in lock_outboxes(&self.outboxes).values() {
             let _ = tx.send(bytes.clone());
         }
     }
 
     /// Nombre de clients actuellement connectés.
     pub fn connected_count(&self) -> usize {
-        self.outboxes.lock().unwrap().len()
+        lock_outboxes(&self.outboxes).len()
     }
 
     /// Identifiant qui serait attribué au prochain joueur à rejoindre (utile pour
@@ -201,7 +215,7 @@ async fn handle_connection(
     log::info!("Joueur {id} ({name}) connecté depuis {peer}");
 
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    outboxes.lock().unwrap().insert(id, out_tx);
+    lock_outboxes(&outboxes).insert(id, out_tx);
 
     let welcome = protocol::encode(&ServerMsg::Welcome { player_id: id })?;
     sink.send(Message::Binary(welcome.into())).await?;
@@ -252,7 +266,7 @@ async fn handle_connection(
         _ = outbound => {}
         _ = inbound => {}
     }
-    outboxes.lock().unwrap().remove(&id);
+    lock_outboxes(&outboxes).remove(&id);
     // Signale la déconnexion au thread principal, qu'elle soit volontaire (déjà
     // relayée par la pompe entrante) ou abrupte (perte de connexion) — envoyer un
     // second `Leave` dans le premier cas ne coûte rien : `despawn_network_player`

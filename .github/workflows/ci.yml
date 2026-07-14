@@ -41,6 +41,9 @@ jobs:
       - name: Tests
         run: cargo test --all-targets
 
+      - name: Budget unwrap/expect/panic (Sprint 113b)
+        run: python3 scripts/check_unwrap_budget.py
+
   # Vérifie que la lib compile pour les cibles mobiles (build seul, pas de tests).
   cross-build:
     name: Build cross (${{ matrix.target }})
