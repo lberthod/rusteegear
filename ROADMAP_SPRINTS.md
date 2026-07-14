@@ -30,7 +30,7 @@
 | **N — Chaîne gameplay** | 93 → 99 | Événements → prefabs → spawn/destroy Lua → save |
 | **O — Physique & feel** | 100 → 103 | Exposer rapier (trimesh, CCD, couches), character controller |
 | **P — Audio, HUD & confort** | 104 → 113 | Bus/panning, widgets HUD, manettes, hot-reload, profiler GPU, crash log |
-| **P2 — Dette, sécurité & accessibilité** | 113a → 113e | Découper les god-modules, durcir unwrap/réseau, rendre l'éditeur et la doc accessibles à un non-développeur |
+| **P2 — Dette, sécurité & accessibilité** | 113a → 113f | Découper les god-modules, durcir unwrap/réseau, rendre l'éditeur et la doc accessibles à un non-développeur |
 | **Q — Web (ex-« pistes Phase J »)** | 114 → 117 | WASM/WebGPU, multijoueur navigateur, vitrine publique |
 | **S — Extensions quasi-gratuites** | 118 → 127 | Suites peu coûteuses de K/L/M/N/O/P (audio confort, post-effets HDR, SSAO, pipeline assets, outillage éditeur…) pour dépasser 100/200 sur la grille des 200 fonctionnalités |
 | **R — WebXR** | 115 → 117 | Casque dans le navigateur (spike isolé → rendu stéréo → tests IWE) — traitée en dernier par choix de priorité, malgré des numéros de sprint antérieurs à S |
@@ -2140,6 +2140,30 @@ aujourd'hui : `architecture.md` + `docs/audits/*`).
   exporter un APK jouable sans assistance.
 - **Risques** : doc qui pourrit vite si le wizard change → à écrire après 113d,
   pas avant.
+
+#### Sprint 113f — Déploiement web : WSS obligatoire derrière HTTPS ⬜
+**Objectif** : le jeu exporté en wasm32 et déployé sur un hébergeur HTTPS (cas FTP
+standard) ne peut plus se connecter au serveur multijoueur car celui-ci ne parle
+que `ws://` en clair — constaté lors d'un déploiement réel : Chrome refuse la
+connexion avec *« Failed to construct 'WebSocket': An insecure WebSocket
+connection may not be initiated from a page loaded over HTTPS »*.
+- [ ] Reverse-proxy TLS (nginx + Let's Encrypt/certbot) devant le serveur WS natif
+      sur le VPS, nom de domaine pointant vers `179.237.71.235` (un certificat
+      Let's Encrypt ne peut pas être émis pour une IP nue).
+- [ ] `DEFAULT_SERVER_URL` (`src/app/network_client.rs`) basculé vers
+      `wss://<domaine>`.
+- [ ] Détecter `location.protocol` côté web (`src/net/client/web.rs`) pour
+      refuser/avertir proprement une URL `ws://` saisie manuellement depuis une
+      page HTTPS, plutôt que de laisser `WebSocket::new` lever une exception JS
+      non gérée jusqu'à l'UI.
+- [ ] Recouper avec le TLS natif déjà prévu au Sprint 113c (même serveur, éviter
+      le double travail — un seul reverse-proxy/certificat pour les deux besoins).
+- **Fichiers** : `src/app/network_client.rs`, `src/net/client/web.rs`, infra VPS
+  (hors repo).
+- **Livrable** : jeu déployé sur un hébergeur HTTPS tiers, connexion multijoueur
+  fonctionnelle en `wss://` de bout en bout.
+- **Risques** : dépend de ressources hors repo (domaine, accès SSH au VPS) —
+  distinct du travail purement applicatif des autres sprints P2.
 
 ---
 
