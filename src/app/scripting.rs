@@ -388,6 +388,278 @@ mod tests {
     use crate::scene::{MeshKind, Scene, SceneObject};
 
     #[test]
+    fn script_reads_mobile_input() {
+        // Le script déplace l'objet selon le joystick et saute si le bouton « B1 » est pressé.
+        let lua = Lua::new();
+        let src = "obj.x = obj.x + input.jx; if input.btn.B1 then obj.y = 5 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
+        let mut input = PlayerInput {
+            joy: (0.5, 0.0),
+            ..Default::default()
+        };
+        input.buttons.insert("B1".into());
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert!((t.position.x - 0.5).abs() < 1e-5);
+        assert!((t.position.y - 5.0).abs() < 1e-5);
+
+        // Sans bouton ni joystick : aucun mouvement.
+        let mut t2 = Transform::from_pos(Vec3::ZERO);
+        let empty = PlayerInput::default();
+        run_script(
+            &lua,
+            &func,
+            &mut t2,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &empty,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert!((t2.position.x).abs() < 1e-5);
+        assert!((t2.position.y).abs() < 1e-5);
+    }
+
+    #[test]
+    fn script_debug_line_is_read_back_into_debug_out() {
+        // `debug.line(...)` côté Lua doit atterrir dans `debug_out`, avec les
+        // mêmes coordonnées/couleur que ce que le script a passé — un appel par ligne de
+        // script, deux appels ici pour vérifier qu'ils s'accumulent sans s'écraser.
+        let lua = Lua::new();
+        let src = "debug.line(0,0,0, 1,2,3, 1,0,0); debug.line(-1,0,0, 0,0,0, 0,1,0)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut debug_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut debug_out,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(debug_out.len(), 2);
+        assert_eq!(
+            debug_out[0],
+            (Vec3::ZERO, Vec3::new(1.0, 2.0, 3.0), [1.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            debug_out[1],
+            (Vec3::new(-1.0, 0.0, 0.0), Vec3::ZERO, [0.0, 1.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn script_emit_lands_in_events_out_and_on_event_reads_events_in() {
+        // `emit("x")` doit atterrir dans `events_out` (délivré au tick
+        // suivant par `sim_step`), et `on_event` doit refléter exactement `events_in`
+        // — vrai pour un nom reçu, faux pour tout le reste (y compris ce qu'on est en
+        // train d'émettre : pas de livraison intra-tick, cf. doc de `game_events`).
+        let lua = Lua::new();
+        let src = "emit('porte'); if on_event('score:3') then obj.y = 9 end; \
+                   if on_event('porte') then obj.x = 9 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut events_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &["score:3".to_string()],
+            &mut events_out,
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(events_out, vec!["porte".to_string()]);
+        assert!(
+            (t.position.y - 9.0).abs() < 1e-5,
+            "on_event('score:3') devait être vrai (événement reçu)"
+        );
+        assert!(
+            t.position.x.abs() < 1e-5,
+            "on_event('porte') devait être faux : un emit de ce tick n'est pas \
+             délivré au même tick"
+        );
+    }
+
+    #[test]
+    fn find_tag_returns_positions_of_matching_visible_objects() {
+        // `find_tag` doit renvoyer la position de chaque objet visible
+        // portant le tag demandé, aucun autre — testé directement sur `run_script`
+        // (pas besoin d'un `AppState` complet pour cette brique).
+        let lua = Lua::new();
+        let src = "local hits = find_tag('ennemi'); obj.x = #hits; \
+                   if #hits > 0 then obj.y = hits[1].y end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let tagged = vec![
+            ("ennemi".to_string(), Vec3::new(1.0, 2.0, 3.0)),
+            ("ennemi".to_string(), Vec3::new(4.0, 5.0, 6.0)),
+            ("allié".to_string(), Vec3::new(9.0, 9.0, 9.0)),
+        ];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &tagged,
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            t.position.x, 2.0,
+            "seuls les 2 ennemis doivent être trouvés"
+        );
+        assert_eq!(t.position.y, 2.0);
+    }
+
+    #[test]
+    fn lua_coroutines_work_out_of_the_box() {
+        // `mlua::Lua::new()` charge la stdlib Lua complète, coroutines
+        // incluses — rien à câbler côté moteur, juste à vérifier que ça tourne
+        // réellement.
+        let lua = Lua::new();
+        let src = "\
+            local co = coroutine.create(function()
+                coroutine.yield(1)
+                return 2
+            end)
+            local ok1, v1 = coroutine.resume(co)
+            local ok2, v2 = coroutine.resume(co)
+            return ok1 and ok2 and v1 == 1 and v2 == 2";
+        let result: bool = lua.load(src).eval().unwrap();
+        assert!(
+            result,
+            "les coroutines Lua standard doivent fonctionner telles quelles"
+        );
+    }
+
+    #[test]
+    fn script_save_set_persists_and_save_get_reads_it_back() {
+        // `save.set`/`save.get` doivent partager le même état que
+        // `AppState::lua_vars` — c'est cet état que `SaveGame` capture/restaure.
+        let lua = Lua::new();
+        let src = "save.set('pv_max', 42.0); obj.x = save.get('pv_max')";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut vars = std::collections::HashMap::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut vars,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 42.0);
+        assert_eq!(vars.get("pv_max"), Some(&42.0));
+    }
+
+    #[test]
     fn script_key_stable_and_distinct() {
         assert_eq!(script_key("obj.x = 1"), script_key("obj.x = 1"));
         assert_ne!(script_key("obj.x = 1"), script_key("obj.x = 2"));
