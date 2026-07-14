@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -19,6 +21,7 @@ pub mod log_buffer;
 pub mod net;
 pub mod runtime;
 pub mod scene;
+pub mod time_compat;
 
 use app::input::InputEvent;
 use app::{AppState, GizmoMode};
@@ -27,6 +30,13 @@ use gfx::renderer::Renderer;
 #[derive(Default)]
 struct App {
     renderer: Option<Renderer>,
+    /// wasm32 uniquement (Sprint 114) : `Renderer::new` est asynchrone (WebGPU/
+    /// `request_adapter`/`request_device` n'ont pas d'équivalent bloquant dans un
+    /// navigateur, contrairement à `pollster::block_on` côté natif) — posé par la
+    /// tâche lancée dans `resumed` via `wasm_bindgen_futures::spawn_local`, récupéré
+    /// dans `renderer` au prochain événement via `adopt_pending_renderer`.
+    #[cfg(target_arch = "wasm32")]
+    pending_renderer: std::rc::Rc<std::cell::RefCell<Option<Renderer>>>,
     state: AppState,
     modifiers: winit::event::Modifiers,
 
@@ -58,7 +68,7 @@ struct App {
     /// gardé avec le `Watcher` qui l'alimente (cf. `resumed`) : abandonner le
     /// `Watcher` arrêterait la surveillance côté OS. `None` si le dossier était
     /// indisponible au lancement (`$HOME` absent) ou sur mobile.
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     asset_watch: Option<(
         notify::RecommendedWatcher,
         std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
@@ -84,6 +94,19 @@ fn axis_from_held(negative: bool, positive: bool) -> f32 {
 }
 
 impl App {
+    /// wasm32 uniquement : récupère le `Renderer` posé par la tâche asynchrone de
+    /// `resumed` dès qu'il est prêt — cf. la doc de `pending_renderer`.
+    #[cfg(target_arch = "wasm32")]
+    fn adopt_pending_renderer(&mut self) {
+        if self.renderer.is_none()
+            && let Some(renderer) = self.pending_renderer.borrow_mut().take()
+        {
+            self.state
+                .set_viewport(renderer.size.width, renderer.size.height);
+            self.renderer = Some(renderer);
+        }
+    }
+
     /// Traduit les événements tactiles : 1 doigt = orbit, 2 doigts = pinch-zoom.
     fn handle_touch(&mut self, touch: Touch) {
         let (x, y) = (touch.location.x, touch.location.y);
@@ -217,7 +240,7 @@ impl App {
     /// un canal). Groupe tous les événements en attente en une seule invalidation
     /// plutôt qu'une par événement : un éditeur d'image écrit souvent plusieurs
     /// fois de suite (fichier temporaire + renommage) pour une seule retouche.
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     fn poll_asset_hot_reload(&mut self) {
         let Some((_, rx)) = self.asset_watch.as_ref() else {
             return;
@@ -245,14 +268,30 @@ impl ApplicationHandler for App {
                 Err(e) => log::info!("Manette indisponible ({e}) — clavier/tactile seuls."),
             }
         }
-        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         if self.asset_watch.is_none() {
             self.asset_watch = start_asset_watch();
         }
-        let attrs = Window::default_attributes()
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut attrs = Window::default_attributes()
             .with_title("RusteeGear")
-            .with_window_icon(load_window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 720.0));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            attrs = attrs.with_window_icon(load_window_icon());
+        }
+        // wasm32 : rattache la fenêtre au <canvas id="rustee-canvas"> de la page
+        // hôte (cf. `packaging/web/index.html`) plutôt qu'un canvas créé/inséré tout
+        // seul — la page garde le contrôle de sa mise en page.
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            let canvas = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.get_element_by_id("rustee-canvas"))
+                .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+            attrs = attrs.with_canvas(canvas);
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -261,6 +300,7 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        #[cfg(not(target_arch = "wasm32"))]
         match pollster::block_on(Renderer::new(window)) {
             Ok(renderer) => {
                 self.state
@@ -272,6 +312,19 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
         }
+        // wasm32 : pas de `block_on` possible (le navigateur n'offre aucune attente
+        // bloquante sur le thread principal) — la tâche écrit dans `pending_renderer`,
+        // récupéré au prochain événement par `adopt_pending_renderer`.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let slot = self.pending_renderer.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match Renderer::new(window).await {
+                    Ok(renderer) => *slot.borrow_mut() = Some(renderer),
+                    Err(e) => log::error!("Initialisation du renderer impossible : {e}"),
+                }
+            });
+        }
     }
 
     /// Mobile : la surface GPU devient invalide quand l'app passe en arrière-plan.
@@ -281,6 +334,8 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        #[cfg(target_arch = "wasm32")]
+        self.adopt_pending_renderer();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -474,8 +529,10 @@ impl ApplicationHandler for App {
     /// économiser CPU/batterie sur desktop tout en restant réactif aux entrées
     /// et aux chargements asynchrones.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_arch = "wasm32")]
+        self.adopt_pending_renderer();
         self.poll_gamepad();
-        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         self.poll_asset_hot_reload();
         if let Some(renderer) = &self.renderer
             && let Some(window) = &renderer.window
@@ -500,7 +557,7 @@ impl ApplicationHandler for App {
 /// surveillance de l'OS ne démarre pas (dégrade en silence, comme `poll_gamepad`
 /// pour une manette absente — l'édition manuelle du fichier JSON de scène reste le
 /// filet de secours dans les deux cas).
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn start_asset_watch() -> Option<(
     notify::RecommendedWatcher,
     std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
@@ -552,14 +609,15 @@ fn make_app(player: bool) -> App {
 /// serveur par défaut. Basé sur l'horloge plutôt qu'une dépendance `rand`
 /// (aucune autre n'existe déjà dans le projet pour ce besoin ponctuel).
 fn guest_name() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let nanos = crate::time_compat::SystemTime::now()
+        .duration_since(crate::time_compat::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     format!("Invité{}", nanos % 10000)
 }
 
 /// Point d'entrée desktop (et iOS via le bin).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run() {
     crate::log_buffer::install();
     crate::crash_log::install();
@@ -580,6 +638,32 @@ pub fn run() {
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Boucle d'événements terminée sur erreur : {e}");
     }
+}
+
+/// Point d'entrée web (Sprint 114, défrichage) : appelé automatiquement au
+/// chargement du module wasm (`#[wasm_bindgen(start)]`) depuis
+/// `packaging/web/index.html`. Toujours en mode Player (pas de panneaux éditeur
+/// egui dans le navigateur pour l'instant) ; `event_loop.run_app` bloquerait le
+/// thread principal du navigateur (interdit), donc `spawn_app` plutôt que `run_app`
+/// — l'App vit dans des callbacks web (`requestAnimationFrame` sous le capot),
+/// jamais dans une boucle Rust bloquante comme sur desktop.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn run_web() {
+    console_error_panic_hook::set_once();
+    let _ = console_log::init_with_level(log::Level::Info);
+    crate::crash_log::install();
+    let event_loop = match EventLoop::new() {
+        Ok(el) => el,
+        Err(e) => {
+            log::error!("Création de la boucle d'événements impossible : {e}");
+            return;
+        }
+    };
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let app = make_app(true);
+    use winit::platform::web::EventLoopExtWebSys;
+    event_loop.spawn_app(app);
 }
 
 /// Point d'entrée Android (appelé par android-activity via la NativeActivity).

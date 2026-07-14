@@ -406,7 +406,7 @@ impl ExportPanel {
                         ui.label("Profil");
                         ui.horizontal(|ui| {
                             if ui.button("Choisir .mobileprovision…").clicked() {
-                                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
                                 if let Some(p) = rfd::FileDialog::new()
                                     .add_filter("Profil", &["mobileprovision"])
                                     .pick_file()
@@ -576,7 +576,7 @@ fn asset_picker(ui: &mut egui::Ui, label: &str, path: &mut String) {
     ui.horizontal(|ui| {
         ui.label(label);
         if ui.button("Choisir…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
             if let Some(p) = rfd::FileDialog::new()
                 .add_filter("Image PNG", &["png"])
                 .pick_file()
@@ -602,7 +602,11 @@ fn asset_picker(ui: &mut egui::Ui, label: &str, path: &mut String) {
 /// Détecte les pré-requis d'une cible. `Ok` = prêt à exporter.
 fn detect(target: Target) -> Result<(), String> {
     // L'export se pilote depuis le desktop ; rien à sonder sur mobile (pas de processus).
-    if cfg!(any(target_os = "ios", target_os = "android")) {
+    if cfg!(any(
+        target_os = "ios",
+        target_os = "android",
+        target_arch = "wasm32"
+    )) {
         return Err("export depuis le desktop".into());
     }
     match target {
@@ -666,6 +670,11 @@ fn augmented_path() -> String {
 }
 
 /// Vrai si une commande exécutable existe dans l'un des dossiers de recherche.
+/// `std::os::unix::fs::PermissionsExt` : indisponible sur wasm32 (pas de bit
+/// exécutable ni de build tooling à détecter dans un navigateur, cf. `detect`
+/// juste plus bas qui traite déjà tout mobile/web comme « export depuis le
+/// desktop uniquement », Sprint 114).
+#[cfg(not(target_arch = "wasm32"))]
 fn has_cmd(name: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     search_dirs().iter().any(|dir| {
@@ -674,6 +683,11 @@ fn has_cmd(name: &str) -> bool {
             .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
     })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn has_cmd(_name: &str) -> bool {
+    false
 }
 
 /// Localise le NDK Android (variables d'env usuelles, puis l'emplacement par défaut

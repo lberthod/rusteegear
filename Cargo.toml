@@ -76,13 +76,11 @@ include_dir = "0.7.4"
 image = { version = "0.25.5", default-features = false, features = ["png", "jpeg"] }
 egui = "0.34.3"
 egui-wgpu = "0.34.3"
-egui-winit = "0.34.3"
 env_logger = "0.11.10"
 glam = { version = "0.33.1", features = ["serde"] }
 gltf = "1.4.1"
 kira = "0.12.1"
 log = "0.4.32"
-mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
 pollster = "0.4.0"
 rapier3d = "0.33.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -93,23 +91,74 @@ gilrs = "0.11.2"
 
 # Sélecteur de fichiers + client HTTP (génération de scripts par IA) : desktop
 # uniquement (Firebase/IA restent hors mobile pour l'instant, cf. réseau ci-dessous).
-[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+# wasm32 exclu aussi (Sprint 114, défrichage) : ni `rfd` ni `ureq` (TLS natif via
+# `ring`, qui ne compile pas sur `wasm32-unknown-unknown`) ne ciblent le web — un
+# sélecteur de fichiers/appel HTTP web passerait par `web-sys`/`fetch`, hors scope
+# tant que le Sprint 115 (assets & audio web) n'est pas là.
+[target.'cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))'.dependencies]
 rfd = "0.17.2"
 ureq = { version = "2.12", features = ["json"] }
 # Hot-reload des assets de projet (Sprint 111) : concept desktop uniquement — pas de
 # dossier `~/.motor3derust/assets/` à surveiller sur mobile (Android a son propre
-# dossier de données d'app, iOS reste hors scope comme les deux dépendances ci-dessus).
+# dossier de données d'app, iOS et wasm32 restent hors scope comme les deux
+# dépendances ci-dessus).
 notify = "8.2.0"
 
 # Réseau multijoueur (WebSocket, SPRINT_MMORPG.md Sprint 53) : desktop + Android
 # (Sprint 65) — pas de TLS ici (`ws://`, jamais `wss://`), donc pas de dépendance
 # native (OpenSSL) à cross-compiler pour Android. iOS reste hors scope pour l'instant.
-[target.'cfg(not(target_os = "ios"))'.dependencies]
+# wasm32 exclu (Sprint 114, défrichage) : `tokio`/`tokio-tungstenite` supposent un
+# vrai socket TCP OS, absent du navigateur — un client réseau web passera par
+# `web_sys::WebSocket`, prévu au Sprint 116 (multijoueur navigateur), pas ici.
+[target.'cfg(not(any(target_os = "ios", target_arch = "wasm32")))'.dependencies]
 tokio = { version = "1.48", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
 tokio-tungstenite = "0.28"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+# Scripting Lua : `lua-src` (vendored, compile le C de Lua) ne sait pas construire
+# Lua pour `wasm32-unknown-unknown` (« don't know how to build Lua for
+# wasm32-unknown-unknown », Sprint 114) — aucune option de contournement légère
+# (pas de Lua système sur le web, pas de port wasm32 connu de `lua-src`). Un objet
+# scripté reste inerte sur le web en attendant un sprint dédié (interpréteur Lua
+# pur Rust, ou WASI) ; le reste du moteur (rendu, physique, scène) n'en dépend pas.
+#
+# `egui-winit` (même table, toujours « pas wasm32 ») : sa feature par défaut
+# `clipboard` (presse-papiers OS via `arboard`) est indisponible sur wasm32 —
+# `arboard` n'a aucun module `platform` pour cette cible (constaté en compilant).
+# Redéclarée sans cette feature dans la table wasm32 ci-dessous plutôt que
+# désactivée ici : Cargo ne permet pas de faire varier `default-features` pour une
+# seule cible depuis une unique entrée `[dependencies]`.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
+egui-winit = "0.34.3"
 
 # Android : winit a besoin d'un backend android-activity + logger natif.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30.13", features = ["android-native-activity"] }
 android_logger = "0.14"
+
+# wasm32 (Sprint 114). `getrandom` (dépendance transitive de `uuid`/`wgpu`/…) refuse
+# de compiler sur `wasm32-unknown-unknown` sans le backend `wasm_js` explicitement
+# activé — le déclarer en dépendance directe est le seul moyen d'allumer sa feature
+# depuis ce crate (elle s'applique alors à toute résolution de `getrandom` dans
+# l'arbre, cf. unification des features Cargo). Le flag de compilation associé
+# (`--cfg getrandom_backend="wasm_js"`) est fourni par `.cargo/config.toml`, la
+# feature seule ne suffit pas (message d'erreur du crate lui-même). `egui-winit`
+# sans `clipboard`/`wayland`/`x11` (defaults linux-only ou non supportés, cf.
+# commentaire ci-dessus) — garde juste `links` (`webbrowser`, qui compile tel quel).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# `std::time::Instant`/`SystemTime` paniquent purement et simplement sur
+# wasm32-unknown-unknown (« time not implemented on this platform », constaté à
+# l'exécution dans Chrome, Sprint 114) — `web-time` a une API identique, adossée à
+# `performance.now()`/`Date.now()`. Utilisé via `crate::time_compat` (`src/
+# time_compat.rs`), pas directement, pour que les quelques sites d'appel restent
+# écrits une seule fois (`use crate::time_compat::Instant`) plutôt que `#[cfg]`
+# partout.
+web-time = "1.1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Window", "Element", "HtmlCanvasElement"] }
+console_error_panic_hook = "0.1"
+console_log = "1.0"
+egui-winit = { version = "0.34.3", default-features = false, features = ["links"] }

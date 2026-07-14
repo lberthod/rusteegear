@@ -1,16 +1,32 @@
 //! Audio simple via kira : décodage en thread de fond + cache pour éviter tout lag.
+//!
+//! wasm32 (Sprint 114, défrichage) : `Audio` devient un stub sans effet plus bas
+//! dans ce fichier. `kira::sound::streaming` exclut lui-même `wasm32-unknown-
+//! unknown` (musique en flux : ouvre un vrai descripteur de fichier), et
+//! `StaticSoundData::from_file`/`std::thread::spawn` (décodage en fond) supposent
+//! tous deux un système de fichiers/threading natif absents du navigateur. Le
+//! Sprint 115 (« Assets & audio web ») est le bon endroit pour un vrai portage
+//! (Web Audio via le backend `cpal` web de kira, streaming par `fetch`), pas ici.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use glam::Vec3;
+#[cfg(not(target_arch = "wasm32"))]
 use kira::sound::FromFileError;
+#[cfg(not(target_arch = "wasm32"))]
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+#[cfg(not(target_arch = "wasm32"))]
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
+#[cfg(not(target_arch = "wasm32"))]
 use kira::track::{TrackBuilder, TrackHandle};
+#[cfg(not(target_arch = "wasm32"))]
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Panning, Tween};
 
 /// Convertit un gain linéaire (0..1) en décibels (kira). 0 → quasi-silence.
+#[cfg(not(target_arch = "wasm32"))]
 fn gain_to_db(gain: f32) -> f32 {
     if gain <= 0.001 {
         -60.0
@@ -43,12 +59,14 @@ pub fn camera_panning(eye: Vec3, target: Vec3, source: Vec3) -> f32 {
 /// (fichiers réels, potentiellement longs) des effets sonores synthétisés
 /// (`sfx.rs`), pour un réglage de volume indépendant des deux (cf.
 /// `Audio::set_music_volume`/`set_sfx_volume`).
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Track {
     Music,
     Sfx,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Audio {
     /// Jamais relu après `new()` (tout passe désormais par `music_track`/
     /// `sfx_track`, Sprint 104) mais doit rester en vie : kira arrête la
@@ -74,6 +92,7 @@ pub struct Audio {
     rx: Receiver<(String, StaticSoundData)>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Audio {
     pub fn new() -> Self {
         let (tx, rx) = channel();
@@ -277,6 +296,36 @@ impl Audio {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for Audio {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// wasm32 (Sprint 114, défrichage) : même API publique que la version native
+/// ci-dessus, entièrement muette — cf. la doc en tête de fichier pour le pourquoi.
+/// Les appelants (`sfx.rs`, `app/combat.rs`, `app/health.rs`, `app/fireball.rs`…)
+/// n'ont donc pas besoin de `#[cfg]` à chaque site d'appel.
+#[cfg(target_arch = "wasm32")]
+pub struct Audio;
+
+#[cfg(target_arch = "wasm32")]
+impl Audio {
+    pub fn new() -> Self {
+        Audio
+    }
+    pub fn play(&mut self, _path: &str) {}
+    pub fn play_gain(&mut self, _path: &str, _gain: f32) {}
+    pub fn play_music_streaming_gain(&mut self, _path: &str, _gain: f32, _panning: f32) {}
+    pub fn play_bytes(&mut self, _key: &str, _bytes: &[u8], _gain: f32, _playback_rate: f32) {}
+    pub fn update(&mut self) {}
+    pub fn set_music_volume(&mut self, _v: f32) {}
+    pub fn set_sfx_volume(&mut self, _v: f32) {}
+    pub fn stop_all(&mut self) {}
+}
+
+#[cfg(target_arch = "wasm32")]
 impl Default for Audio {
     fn default() -> Self {
         Self::new()

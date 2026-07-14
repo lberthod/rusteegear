@@ -1,5 +1,8 @@
 /target
 .DS_Store
+# Sortie de wasm-bindgen (Sprint 114) : régénérée par la CI/le script de build web
+# depuis target/wasm32-unknown-unknown, jamais versionnée (36 Mo+ en debug).
+/packaging/web/pkg/
 /packaging/release.keystore
 packaging/ios-xcode/Motor3DeRust.xcodeproj/
 packaging/ios-xcode/build/

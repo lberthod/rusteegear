@@ -2032,11 +2032,85 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ### PHASE Q — Web, la vitrine (114 → 117)
 
-#### Sprint 114 — Build wasm32 ⬜
-- [ ] Cible `wasm32-unknown-unknown`, winit→canvas, wgpu→WebGPU ; une scène statique s'affiche.
-- **Fichiers** : `src/lib.rs`, `src/gfx/renderer.rs`, `packaging/`.
-- **Livrable** : la démo mobile tourne dans Chrome, page servie par la CI.
-- **Risque** : API bloquantes (fichiers, threads) — sprint de défrichage.
+#### Sprint 114 — Build wasm32 🟡 défrichage fait, rendu non résolu
+- [x] **La lib compile pour `wasm32-unknown-unknown`** (`cargo build --lib
+      --target wasm32-unknown-unknown`, `packaging/build_web.sh`). A demandé
+      d'exclure trois familles de dépendances de cette cible (mêmes principes
+      que les exclusions iOS/Android déjà en place dans `Cargo.toml`/`net/
+      mod.rs`, étendues avec `target_arch = "wasm32"`) :
+      - **Réseau/IA** (`tokio`, `tokio-tungstenite`, `ureq`, `rfd`, `notify`) :
+        `ring` (TLS natif) ne compile pas pour ce target. Un client web
+        passera par `web_sys::WebSocket`/`fetch`, prévu Sprint 116/115 — pas
+        stubé "à la iOS" ici, juste absent (aucun appelant sur ce chemin).
+      - **Scripting Lua** (`mlua`) : `lua-src` (vendored) ne sait pas
+        construire Lua pour ce target (« don't know how to build Lua for
+        wasm32-unknown-unknown »). `AppState::lua`/`script_cache` et le module
+        `app::scripting` passent derrière `#[cfg(not(target_arch =
+        "wasm32"))]` ; un objet scripté reste inerte sur le web (`app/
+        simulation.rs`, la boucle de script `continue` immédiatement).
+      - **Audio** (`kira`) : `kira::sound::streaming` s'auto-exclut de ce
+        target, et `StaticSoundData::from_file`/`std::thread::spawn`
+        (décodage en fond) supposent fichiers/threads natifs. `runtime::
+        audio::Audio` devient un stub silencieux (même API publique, aucun
+        site d'appel à modifier) plutôt que de porter `kira` vers Web Audio
+        tout de suite — laissé au Sprint 115.
+      - **`std::time::Instant`/`SystemTime`** paniquent purs et simples sur ce
+        target (« time not implemented on this platform », `wasm32-unknown-
+        unknown` n'expose aucune horloge) — nouveau `src/time_compat.rs`
+        (réexporte `std::time` partout, `web_time` sur wasm32, même API) :
+        corrige la boucle de jeu (`AppState::last_frame`), le pseudo invité
+        auto-connecté, la graine RNG des SFX/du tirage d'armes du donjon.
+      - `egui-winit` : sa feature par défaut `clipboard` (`arboard`) n'a
+        aucun module pour ce target — désactivée spécifiquement sur wasm32
+        (garde juste `links`).
+- [x] **Point d'entrée web** (`run_web`, `#[wasm_bindgen(start)]`) : winit
+      rattaché au `<canvas id="rustee-canvas">` de `packaging/web/index.html`
+      (`WindowAttributesExtWebSys::with_canvas`), `event_loop.spawn_app`
+      plutôt que `run_app` (bloquant, interdit sur le thread principal du
+      navigateur). `Renderer::new` est asynchrone (WebGPU) ; `pollster::
+      block_on` ne fonctionne pas sur wasm32 — la construction passe par
+      `wasm_bindgen_futures::spawn_local` + un `pending_renderer: Rc<RefCell<
+      Option<Renderer>>>`, récupéré au prochain événement
+      (`adopt_pending_renderer`).
+- [x] **Vérifié dans un vrai Chrome** (pas juste "ça compile") : la page
+      charge, WebGPU s'initialise (`navigator.gpu` présent, contexte
+      `webgpu` du canvas configuré), `Renderer::new` réussit, la boucle
+      d'événements tourne (`about_to_wait` s'exécute en continu),
+      `RedrawRequested`/`renderer.render()` finissent par se déclencher —
+      **aucun panic, aucune erreur console**. Point notable : dans
+      l'environnement de test automatisé, `request_redraw()` (donc
+      `requestAnimationFrame`) est resté bloqué tant que l'onglet n'avait
+      reçu ni focus ni interaction — plausible que ce soit un artefact du
+      navigateur headless/automatisé plutôt qu'un bug moteur, à confirmer
+      dans un onglet normal.
+- [ ] **Non résolu : le canvas reste noir.** Le pipeline tourne sans erreur
+      (confirmé par des logs `web_sys::console` insérés puis retirés) mais
+      n'affiche ni le dégradé de ciel ni la géométrie de la scène embarquée
+      (`assets/player_scene.json`, chargée avec succès — pas un problème de
+      scène vide). Cause non identifiée : candidats les plus probables un
+      format de surface/texture incompatible entre le backend WebGPU
+      natif (desktop) et celui du navigateur, ou une passe de rendu qui
+      suppose une capacité absente du backend web de `wgpu`. Prochaine étape
+      pour qui reprend ce fil : comparer `wgpu::Surface::get_capabilities`
+      entre les deux backends, puis instrumenter `Renderer::render` passe par
+      passe.
+- **Fichiers** : nouveau `src/time_compat.rs`, `.cargo/config.toml`,
+  `packaging/web/index.html`, `packaging/build_web.sh` ; modifiés :
+  `src/lib.rs`, `src/runtime/audio.rs`, `src/app/mod.rs`, `src/app/
+  simulation.rs`, `src/net/mod.rs`, `src/app/network_client.rs`, `src/app/
+  ai.rs`, `src/editor/export.rs`, `src/editor/menus.rs`, `Cargo.toml`,
+  `.github/workflows/ci.yml` (job `cross-build` étendu, build seul).
+- **Livrable** : la lib compile et s'exécute sans erreur pour
+  `wasm32-unknown-unknown`, vérifié en conditions réelles (Chrome, WebGPU) —
+  mais **la scène ne s'affiche pas encore** (canvas noir), donc le livrable
+  initial (« la démo mobile tourne dans Chrome ») n'est pas atteint. Pas de
+  job CI de déploiement tant que ce n'est pas résolu (juste un build de
+  non-régression, cf. `ci.yml`).
+- **Risque avéré** : au-delà des API bloquantes anticipées (fichiers,
+  threads — confirmées : réseau, Lua, audio streaming), le rendu lui-même
+  a un problème encore non diagnostiqué. Sprint à rouvrir avant 115/116 avec
+  du temps dédié au diagnostic visuel, plutôt que de construire audio/réseau
+  web par-dessus un rendu qui ne s'affiche pas.
 
 #### Sprint 115 — Assets & audio web ⬜
 - [ ] Assets par fetch async (le chemin async existant aide) ; contexte audio web pour kira.

@@ -53,6 +53,12 @@ jobs:
             target: aarch64-linux-android
           - os: macos-latest
             target: aarch64-apple-ios
+          # Sprint 114 (défrichage) : build seul, pas de vérification visuelle en
+          # CI — le premier rendu affiche encore un canvas noir (cf.
+          # ROADMAP_SPRINTS.md), ce job garantit juste l'absence de régression de
+          # compilation sur cette cible pendant que le rendu se répare.
+          - os: ubuntu-latest
+            target: wasm32-unknown-unknown
     steps:
       - uses: actions/checkout@v4
 

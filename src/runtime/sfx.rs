@@ -71,8 +71,8 @@ const VOLUME_VARIATION: f32 = 0.15;
 /// tirées de l'horloge à quelques nanosecondes d'écart, qui pourraient
 /// coïncider).
 fn synth_variation() -> (f32, f32) {
-    let mut seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let mut seed = crate::time_compat::SystemTime::now()
+        .duration_since(crate::time_compat::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0x9E3779B97F4A7C15)
         | 1; // xorshift dégénère à 0 si la graine est 0 : jamais nulle.

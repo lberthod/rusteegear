@@ -73,7 +73,8 @@ fn save_manifest_at(dir: &std::path::Path, manifest: &AssetManifest) {
 /// toute collision pratique sur un même poste.
 fn new_asset_id() -> String {
     use std::hash::{BuildHasher, Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::time_compat::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

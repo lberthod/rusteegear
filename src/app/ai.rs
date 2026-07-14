@@ -41,7 +41,7 @@ obj.tapped, obj.triggered, dt, time, input.jx, input.jy, input.btn.NOM.
 Mets un sol (mesh plane, physics static) si pertinent. Réponds UNIQUEMENT le JSON.";
 
 /// Appel bas-niveau à l'API chat de DeepSeek. Retourne le contenu texte du message.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn chat(req: &AiRequest, system: &str) -> Result<String, String> {
     if req.api_key.trim().is_empty() {
         return Err("Clé API DeepSeek manquante (Outils → Paramètres)".into());
@@ -82,23 +82,23 @@ fn chat(req: &AiRequest, system: &str) -> Result<String, String> {
 }
 
 /// Produit un script Lua à partir d'une consigne. Bloquant (thread de fond).
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub fn generate_lua(req: &AiRequest) -> Result<String, String> {
     chat(req, SYSTEM_PROMPT).map(|s| strip_code_fences(&s))
 }
 
 /// Produit le JSON d'une scène complète à partir d'une consigne. Bloquant.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub fn generate_scene_json(req: &AiRequest) -> Result<String, String> {
     chat(req, SCENE_SYSTEM_PROMPT).map(|s| strip_code_fences(&s))
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub fn generate_lua(_req: &AiRequest) -> Result<String, String> {
     Err("Génération IA indisponible sur mobile".into())
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub fn generate_scene_json(_req: &AiRequest) -> Result<String, String> {
     Err("Génération IA indisponible sur mobile".into())
 }

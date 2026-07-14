@@ -12,9 +12,9 @@
 pub mod interpolation;
 pub mod protocol;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 pub mod client;
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub mod firebase;
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub mod server_loop;

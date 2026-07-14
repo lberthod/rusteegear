@@ -1176,7 +1176,7 @@ fn build_ui(
                         ui.horizontal(|ui| {
                             ui.label("Texture");
                             if ui.button("Choisir…").clicked() {
-                                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
                                 if let Some(p) = rfd::FileDialog::new()
                                     .add_filter("Image", &["png", "jpg", "jpeg"])
                                     .pick_file()
@@ -1312,7 +1312,7 @@ fn build_ui(
                                 .unwrap_or_default();
                             ui.horizontal(|ui| {
                                 if ui.button("Choisir un son…").clicked() {
-                                    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                                    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
                                     if let Some(p) = rfd::FileDialog::new()
                                         .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
                                         .pick_file()

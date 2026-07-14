@@ -116,7 +116,7 @@ pub struct LeaderboardLine {
     pub score: u32,
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
     /// Remplace une connexion existante s'il y en avait une. Transmet
@@ -647,7 +647,7 @@ fn network_move_axes(
 
 /// Compte Firebase, chat, classement : desktop uniquement (`ureq`/`net::firebase`
 /// ne ciblent pas mobile, cf. `Cargo.toml`/`net/mod.rs`).
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 impl AppState {
     /// `true` si un compte Firebase est associé à cette session (cf.
     /// `sign_in`/`sign_up`).
@@ -856,7 +856,7 @@ impl AppState {
 
 /// Récupère les messages d'un salon et les convertit en `ChatLine`
 /// (représentation universelle, cf. sa doc).
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn fetch_chat_lines(
     config: &crate::net::firebase::FirebaseConfig,
     lobby_code: &str,
@@ -874,7 +874,7 @@ fn fetch_chat_lines(
 
 /// iOS uniquement : `net::client` n'y est pas encore compilé (cf. `net/mod.rs`),
 /// contrairement à Android.
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
 impl AppState {
     pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
         self.net_status = "Multijoueur indisponible sur iOS".to_string();
@@ -905,7 +905,7 @@ impl AppState {
 
 /// Compte Firebase, chat, classement : hors mobile (iOS et Android), cf. le
 /// bloc desktop équivalent plus haut.
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 impl AppState {
     pub fn has_firebase_account(&self) -> bool {
         false
@@ -958,7 +958,10 @@ impl AppState {
     }
 }
 
-#[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
+#[cfg(all(
+    test,
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+))]
 mod tests {
     // Sprint 105a-3 : uniquement utilisés par les tests réseau ci-dessous
     // (derrière `net_tests`) — sans ce `cfg`, `cargo test` par défaut (sans

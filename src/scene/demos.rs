@@ -1207,8 +1207,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // dépendance `rand` pour un tirage aussi simple, cf. philosophie du projet —
         // dépendances choisies pour des besoins délimités, jamais pour la structure du
         // moteur) : l'horloge système sert de graine.
-        let mut rng_state = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let mut rng_state = crate::time_compat::SystemTime::now()
+            .duration_since(crate::time_compat::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0x9E3779B97F4A7C15)
             | 1; // xorshift dégénère à 0 si la graine est 0 : jamais nulle.

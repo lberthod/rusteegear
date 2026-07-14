@@ -129,7 +129,7 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         if ui.button("💾  Enregistrer sous…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
             if let Some(p) = rfd::FileDialog::new()
                 .add_filter("Scène JSON", &["json"])
                 .set_file_name("scene.json")
@@ -140,14 +140,14 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         if ui.button("📂  Ouvrir…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
             if let Some(p) = rfd::FileDialog::new()
                 .add_filter("Scène JSON", &["json"])
                 .pick_file()
             {
                 actions.load_path = Some(p.to_string_lossy().into_owned());
             }
-            #[cfg(any(target_os = "ios", target_os = "android"))]
+            #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
             {
                 actions.load = true;
             }
@@ -155,7 +155,7 @@ pub(super) fn menu_fichier(
         }
         ui.separator();
         if ui.button("📥  Importer glTF…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
             if let Some(p) = rfd::FileDialog::new()
                 .add_filter("glTF", &["glb", "gltf"])
                 .pick_file()
@@ -411,7 +411,7 @@ pub(super) fn menu_ajouter(
                 .on_hover_text("Choisit un son joué par l'objet sélectionné")
                 .clicked()
             {
-                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
                 if let Some(i) = sel
                     && let Some(p) = rfd::FileDialog::new()
                         .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])

@@ -2,12 +2,14 @@
 //! inchangé, seulement déplacé) : `advance_play`/`sim_step`, accumulateur à
 //! pas fixe, interpolation de poses de rendu.
 
-use std::collections::HashMap;
-use std::time::Instant;
-
 use glam::{EulerRot, Quat, Vec3};
+use std::collections::HashMap;
 
-use super::{AppState, multiplayer, scripting};
+use crate::time_compat::Instant;
+
+#[cfg(not(target_arch = "wasm32"))]
+use super::scripting;
+use super::{AppState, multiplayer};
 
 /// Angle de plongée (radians) de la caméra de suivi par défaut : resserré derrière
 /// l'épaule du personnage plutôt que le recul plus « isométrique » d'avant (~35°,
@@ -625,55 +627,65 @@ impl AppState {
             if obj.script.trim().is_empty() {
                 continue;
             }
-            // Récupère (ou compile une seule fois) le chunk associé à cette source.
-            let key = scripting::script_key(&obj.script);
-            let func = match self.script_cache.get(&key) {
-                Some(f) => f.clone(),
-                None => match self.lua.load(&obj.script).into_function() {
-                    Ok(f) => {
-                        self.script_cache.insert(key, f.clone());
-                        f
-                    }
-                    Err(e) => {
-                        log::error!("Compilation du script '{}' : {e}", obj.name);
-                        continue;
-                    }
-                },
-            };
-            let tapped = self.tapped_obj == Some(idx);
-            let mut destroy_requested = false;
-            let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
-            if let Err(e) = scripting::run_script(
-                &self.lua,
-                &func,
-                &mut obj.transform,
-                &mut obj.color,
-                &mut obj.animation,
-                dt,
-                time,
-                &self.input_state,
-                tapped,
-                triggered.contains(&idx),
-                &events_in,
-                &mut events_out,
-                &tagged,
-                &mut spawns_this_obj,
-                &mut destroy_requested,
-                &mut self.lua_vars,
-                &mut vibrations,
-                &mut health,
-                &mut self.debug_lines,
-                exited.contains(&idx),
-                self.physics.as_ref(),
-            ) {
-                log::error!("Script '{}' : {e}", obj.name);
+            // Scripting Lua indisponible sur wasm32 (`mlua`/`lua-src` ne ciblent pas
+            // `wasm32-unknown-unknown`, cf. Cargo.toml et Sprint 114) : un objet
+            // scripté reste inerte sur le web plutôt que de faire échouer la
+            // compilation — le reste de la boucle (tap, collectibles, physique) est
+            // inchangé au-dessus de ce bloc.
+            #[cfg(target_arch = "wasm32")]
+            continue;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Récupère (ou compile une seule fois) le chunk associé à cette source.
+                let key = scripting::script_key(&obj.script);
+                let func = match self.script_cache.get(&key) {
+                    Some(f) => f.clone(),
+                    None => match self.lua.load(&obj.script).into_function() {
+                        Ok(f) => {
+                            self.script_cache.insert(key, f.clone());
+                            f
+                        }
+                        Err(e) => {
+                            log::error!("Compilation du script '{}' : {e}", obj.name);
+                            continue;
+                        }
+                    },
+                };
+                let tapped = self.tapped_obj == Some(idx);
+                let mut destroy_requested = false;
+                let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
+                if let Err(e) = scripting::run_script(
+                    &self.lua,
+                    &func,
+                    &mut obj.transform,
+                    &mut obj.color,
+                    &mut obj.animation,
+                    dt,
+                    time,
+                    &self.input_state,
+                    tapped,
+                    triggered.contains(&idx),
+                    &events_in,
+                    &mut events_out,
+                    &tagged,
+                    &mut spawns_this_obj,
+                    &mut destroy_requested,
+                    &mut self.lua_vars,
+                    &mut vibrations,
+                    &mut health,
+                    &mut self.debug_lines,
+                    exited.contains(&idx),
+                    self.physics.as_ref(),
+                ) {
+                    log::error!("Script '{}' : {e}", obj.name);
+                }
+                // `obj:destroy()` : suppression douce, cf. sa doc dans
+                // `run_script` — jamais un retrait de `scene.objects`.
+                if destroy_requested {
+                    obj.visible = false;
+                }
+                spawn_requests.extend(spawns_this_obj);
             }
-            // `obj:destroy()` : suppression douce, cf. sa doc dans
-            // `run_script` — jamais un retrait de `scene.objects`.
-            if destroy_requested {
-                obj.visible = false;
-            }
-            spawn_requests.extend(spawns_this_obj);
         }
         // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
         // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
