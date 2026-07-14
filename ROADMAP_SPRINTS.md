@@ -1829,11 +1829,34 @@ régression client. Une manche décidée ne coupe plus tout le process
   `src/net/firebase.rs`.
 - **Livrable** : entrées invalides rejetées avec une erreur explicite plutôt qu'un comportement indéfini ; tests de validation verts.
 
-#### Sprint 105a-3 — Maintenabilité : isolation des tests système + `docs/architecture.md` ⬜
-- [ ] Dossier utilisateur temporaire injecté pour les tests touchant saves/assets, au lieu de `$HOME` réel.
-- [ ] Tests réseau séparés des tests unitaires purs, marqués `#[ignore]` ou derrière une feature.
-- [ ] `docs/architecture.md` : boucle principale, pipeline rendu, pipeline simulation, modèle scène/assets, modèle réseau, modèle scripting Lua, règles de sauvegarde/export.
-- **Fichiers** : tests concernés dans `src/app/`, `src/runtime/savegame.rs`, `src/net/`, nouveau `docs/architecture.md`.
+#### Sprint 105a-3 — Maintenabilité : isolation des tests système + `docs/architecture.md` ✅ FAIT
+- [x] **Dossier utilisateur injectable** : extension du précédent déjà établi
+      pour `assets_dir()` (`register_asset_at`/`resolve_asset_id_at`) aux
+      fonctions basées sur `user_dir()` — `assets::read_user_bytes_at`/
+      `write_user_bytes_at`, `SaveGame::save_to_slot_at`/`load_from_slot_at`,
+      `AppState::save_game_at`/`load_game_at` (nouveau `dir: &Path` explicite
+      à chaque niveau, enveloppes publiques sans ce paramètre qui résolvent
+      le vrai dossier). Les 4 tests qui touchaient réellement `~/.motor3derust/`
+      utilisent maintenant un dossier temporaire isolé par test — plus
+      besoin du contournement pid+nanosecondes de `saving_and_loading_a_game_
+      restores_score_position_and_lua_vars` (le nom de slot redevient un
+      simple littéral, l'isolation vient du dossier, pas du nom).
+- [x] **Tests réseau derrière une feature** : nouvelle feature Cargo
+      `net_tests` (désactivée par défaut). Les modules de tests
+      entièrement réseau (`net/server_loop.rs`, `bin/server.rs`) sont gatés
+      en bloc ; les 12 tests réseau mêlés à des tests purs dans `app/
+      network_client.rs` sont annotés individuellement (`#[cfg(feature =
+      "net_tests")]`), ainsi que leurs imports/fonctions utilitaires
+      devenus autrement du code mort en l'absence de la feature.
+      `cargo test` (défaut) : 323 tests, ~5 s, aucun socket. `cargo test
+      --features net_tests` : 343 tests (couverture complète inchangée).
+- [x] **`docs/architecture.md`** (nouveau) : état des lieux courant (pas
+      narratif comme `docs/audits/`, qui reste l'historique par sprint) —
+      les sept sections demandées, chacune avec ses fichiers/types clés.
+- **Fichiers** : `src/assets.rs`, `src/runtime/savegame.rs`, `src/app/
+  persistence.rs`, `src/app/mod.rs` (test), `src/net/server_loop.rs`,
+  `src/bin/server.rs`, `src/app/network_client.rs`, `Cargo.toml`, nouveau
+  `docs/architecture.md`.
 - **Livrable** : CI plus fiable (aucun test ne dépend d'un `$HOME` réel ni d'un socket sans opt-in) ; documentation d'architecture consultable en 5 minutes.
 
 #### Sprint 108 — Audio : randomisation ⬜

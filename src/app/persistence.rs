@@ -106,11 +106,26 @@ impl AppState {
         self.capture_save().save_to_slot(slot)
     }
 
+    /// Comme `save_game`, mais avec un dossier explicite plutôt que le vrai
+    /// `user_dir()` (Sprint 105a-3, isolation des tests) — même patron que
+    /// `SaveGame::save_to_slot_at`.
+    pub fn save_game_at(&self, slot: &str, dir: &std::path::Path) -> Result<(), String> {
+        self.capture_save().save_to_slot_at(slot, dir)
+    }
+
     /// Charge le slot `slot` et l'applique à la scène actuellement chargée. `Err` si
     /// le slot est vide/introuvable ou le JSON invalide — la scène n'est alors pas
     /// modifiée (l'erreur est renvoyée avant tout appel à `apply_save`).
     pub fn load_game(&mut self, slot: &str) -> Result<(), String> {
         let save = crate::runtime::savegame::SaveGame::load_from_slot(slot)?;
+        self.apply_save(&save);
+        Ok(())
+    }
+
+    /// Comme `load_game`, mais avec un dossier explicite (Sprint 105a-3,
+    /// isolation des tests) — cf. la doc de `save_game_at`.
+    pub fn load_game_at(&mut self, slot: &str, dir: &std::path::Path) -> Result<(), String> {
+        let save = crate::runtime::savegame::SaveGame::load_from_slot_at(slot, dir)?;
         self.apply_save(&save);
         Ok(())
     }

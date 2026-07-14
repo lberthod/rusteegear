@@ -42,23 +42,40 @@ impl SaveGame {
     /// forcée à `CURRENT_VERSION` à l'écriture (comme `Scene::save`) : ce
     /// qui est écrit par cette version du moteur est par définition à jour.
     pub fn save_to_slot(&self, slot: &str) -> Result<(), String> {
+        let dir = crate::assets::user_dir()
+            .ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
+        self.save_to_slot_at(slot, &dir)
+    }
+
+    /// Comme `save_to_slot`, mais avec un dossier explicite plutôt que le
+    /// vrai `user_dir()` (Sprint 105a-3, isolation des tests) — même patron
+    /// que `assets::write_user_bytes_at`.
+    pub fn save_to_slot_at(&self, slot: &str, dir: &std::path::Path) -> Result<(), String> {
         if !valid_slot(slot) {
             return Err(format!("nom de slot invalide : « {slot} »"));
         }
         let mut to_write = self.clone();
         to_write.version = Self::CURRENT_VERSION;
         let json = serde_json::to_string_pretty(&to_write).map_err(|e| e.to_string())?;
-        crate::assets::write_user_bytes(&Self::file_name(slot), json.as_bytes())
+        crate::assets::write_user_bytes_at(dir, &Self::file_name(slot), json.as_bytes())
     }
 
     /// Charge le slot `slot`. `Err` si le nom de slot est invalide, si le dossier
     /// utilisateur est indisponible, si le fichier n'existe pas (aucune sauvegarde
     /// dans ce slot) ou si le JSON est invalide.
     pub fn load_from_slot(slot: &str) -> Result<Self, String> {
+        let dir = crate::assets::user_dir()
+            .ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
+        Self::load_from_slot_at(slot, &dir)
+    }
+
+    /// Comme `load_from_slot`, mais avec un dossier explicite (Sprint
+    /// 105a-3, isolation des tests) — cf. la doc de `save_to_slot_at`.
+    pub fn load_from_slot_at(slot: &str, dir: &std::path::Path) -> Result<Self, String> {
         if !valid_slot(slot) {
             return Err(format!("nom de slot invalide : « {slot} »"));
         }
-        let bytes = crate::assets::read_user_bytes(&Self::file_name(slot))
+        let bytes = crate::assets::read_user_bytes_at(dir, &Self::file_name(slot))
             .ok_or_else(|| format!("aucune sauvegarde dans le slot « {slot} »"))?;
         let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
@@ -108,11 +125,24 @@ mod tests {
         assert_eq!(written.score, 3);
     }
 
+    /// Dossier temporaire unique par test (Sprint 105a-3, isolation des
+    /// tests système) — même schéma que `assets::tests::temp_assets_dir` :
+    /// aucune dépendance au vrai `$HOME`, sûr sous exécution parallèle.
+    fn temp_save_dir(tag: &str) -> std::path::PathBuf {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        tag.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        let dir = std::env::temp_dir().join(format!("rusteegear_save_test_{:x}", hasher.finish()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn load_from_slot_fails_cleanly_when_nothing_was_saved() {
         // Un slot jamais utilisé ne doit pas paniquer — juste une erreur lisible.
-        // Nom improbable pour ne pas percuter une vraie sauvegarde de l'utilisateur.
-        let result = SaveGame::load_from_slot("__sprint98_test_slot_never_used__");
+        let dir = temp_save_dir("never_used");
+        let result = SaveGame::load_from_slot_at("never_used", &dir);
         assert!(result.is_err());
     }
 
@@ -142,13 +172,14 @@ mod tests {
 
     #[test]
     fn save_to_slot_and_load_from_slot_reject_a_traversal_slot_name() {
+        let dir = temp_save_dir("traversal");
         let save = SaveGame::default();
         assert!(
-            save.save_to_slot("../evil").is_err(),
+            save.save_to_slot_at("../evil", &dir).is_err(),
             "un nom de slot tentant une évasion de répertoire doit être rejeté à l'écriture"
         );
         assert!(
-            SaveGame::load_from_slot("../evil").is_err(),
+            SaveGame::load_from_slot_at("../evil", &dir).is_err(),
             "un nom de slot tentant une évasion de répertoire doit être rejeté à la lecture"
         );
     }

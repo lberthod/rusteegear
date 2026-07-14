@@ -240,15 +240,30 @@ fn safe_join(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 /// (cf. `safe_join`), ou si le fichier n'existe pas encore (première utilisation —
 /// pas une erreur).
 pub fn read_user_bytes(name: &str) -> Option<Vec<u8>> {
-    std::fs::read(safe_join(&user_dir()?, name)?).ok()
+    read_user_bytes_at(&user_dir()?, name)
+}
+
+/// Comme `read_user_bytes`, mais avec un dossier explicite plutôt que le vrai
+/// `user_dir()` (Sprint 105a-3, isolation des tests) — même patron que
+/// `register_asset_at` pour `assets_dir()` : le travail réel prend `dir` en
+/// paramètre, `read_user_bytes` n'est qu'une enveloppe qui résout le vrai
+/// dossier utilisateur.
+pub fn read_user_bytes_at(dir: &std::path::Path, name: &str) -> Option<Vec<u8>> {
+    std::fs::read(safe_join(dir, name)?).ok()
 }
 
 /// Écrit `data` dans `user://<nom>`, en créant le dossier utilisateur si besoin.
 pub fn write_user_bytes(name: &str, data: &[u8]) -> Result<(), String> {
     let dir = user_dir().ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_user_bytes_at(&dir, name, data)
+}
+
+/// Comme `write_user_bytes`, mais avec un dossier explicite (Sprint 105a-3,
+/// isolation des tests) — cf. la doc de `read_user_bytes_at`.
+pub fn write_user_bytes_at(dir: &std::path::Path, name: &str, data: &[u8]) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let target =
-        safe_join(&dir, name).ok_or_else(|| format!("nom de fichier invalide : « {name} »"))?;
+        safe_join(dir, name).ok_or_else(|| format!("nom de fichier invalide : « {name} »"))?;
     std::fs::write(target, data).map_err(|e| e.to_string())
 }
 
@@ -446,15 +461,15 @@ mod tests {
 
     #[test]
     fn read_user_bytes_and_write_user_bytes_reject_traversal() {
-        // `user_dir()` dépend de `$HOME` (pas encore paramétrable, cf. Sprint
-        // 105a-3) — ce test vérifie seulement que le nom est rejeté *avant*
-        // toute écriture/lecture disque, pas le chemin final résolu.
+        // Dossier temporaire isolé (Sprint 105a-3) plutôt que le vrai
+        // `user_dir()` — variantes `_at`, aucune dépendance à `$HOME`.
+        let dir = temp_assets_dir("user_traversal");
         assert!(
-            write_user_bytes("../evil.json", b"x").is_err(),
+            write_user_bytes_at(&dir, "../evil.json", b"x").is_err(),
             "une tentative d'évasion doit être rejetée, pas silencieusement écrite ailleurs"
         );
         assert!(
-            read_user_bytes("../evil.json").is_none(),
+            read_user_bytes_at(&dir, "../evil.json").is_none(),
             "une tentative d'évasion en lecture doit échouer, pas lire hors du dossier prévu"
         );
     }

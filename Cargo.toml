@@ -62,6 +62,12 @@ keystore_password = "android"
 # Force le mode Player dès le lancement (sans --player) : utilisé pour exporter un
 # « player » jouable du jeu créé (.dmg/.app double-cliquable qui démarre sur la scène).
 player_build = []
+# Sprint 105a-3 : active les tests à socket réel (NetServer/NetClient, vrai
+# runtime tokio) — désactivés par défaut pour que `cargo test` reste rapide
+# et indépendant d'un environnement CI qui restreint parfois le bind
+# loopback/les sockets. Couverture complète : `cargo test --features
+# net_tests` (cf. docs/architecture.md, section réseau).
+net_tests = []
 
 [dependencies]
 bincode = "1.3.3"

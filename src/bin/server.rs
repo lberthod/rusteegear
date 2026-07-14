@@ -507,7 +507,12 @@ fn main() {
     }
 }
 
-#[cfg(test)]
+// Sprint 105a-3 : tous les tests de ce module ouvrent un vrai socket
+// (NetServer/NetClient) — regroupés derrière `net_tests` plutôt qu'annotés
+// un par un, `cargo test` par défaut reste rapide et indépendant d'un
+// environnement CI qui restreint parfois le bind loopback (cf.
+// docs/architecture.md, section réseau, pour lancer la couverture complète).
+#[cfg(all(test, feature = "net_tests"))]
 mod tests {
     use std::time::Duration;
 

@@ -1896,20 +1896,29 @@ mod tests {
         assert_eq!(vars.get("pv_max"), Some(&42.0));
     }
 
+    /// Dossier temporaire unique par test (Sprint 105a-3, isolation des
+    /// tests système) — même schéma que `assets::tests::temp_assets_dir` :
+    /// aucune dépendance au vrai `$HOME`, sûr sous exécution parallèle.
+    fn temp_save_dir(tag: &str) -> std::path::PathBuf {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        tag.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        let dir =
+            std::env::temp_dir().join(format!("rusteegear_appsave_test_{:x}", hasher.finish()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn saving_and_loading_a_game_restores_score_position_and_lua_vars() {
         // La progression (score, positions, variables de
         // script) doit survivre à une sauvegarde puis un chargement — testé bout en
-        // bout via `AppState::save_game`/`load_game`, qui écrivent réellement dans
-        // `user://` (comme le ferait le jeu réel sur desktop ou Android).
-        let slot = format!(
-            "__sprint98_test_{}_{}__",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
+        // bout via `AppState::save_game_at`/`load_game_at`, qui écrivent réellement
+        // sur disque (comme le ferait le jeu réel sur desktop ou Android), mais dans
+        // un dossier temporaire isolé plutôt que le vrai `user://`.
+        let dir = temp_save_dir("roundtrip");
+        let slot = "roundtrip";
         let mut app = AppState::new();
         app.scene = crate::scene::Scene::default();
         app.scene.objects.push(crate::scene::SceneObject {
@@ -1920,7 +1929,7 @@ mod tests {
         app.score = 7;
         app.lua_vars.insert("niveau".to_string(), 4.0);
 
-        app.save_game(&slot).expect("sauvegarde impossible");
+        app.save_game_at(slot, &dir).expect("sauvegarde impossible");
 
         // Simule une reprise de partie : score/position/variables sont remis à zéro
         // avant le chargement (ex. l'app vient de redémarrer).
@@ -1928,7 +1937,7 @@ mod tests {
         app.scene.objects[0].transform.position = Vec3::ZERO;
         app.lua_vars.clear();
 
-        app.load_game(&slot).expect("chargement impossible");
+        app.load_game_at(slot, &dir).expect("chargement impossible");
 
         assert_eq!(app.score, 7);
         assert_eq!(
@@ -1936,11 +1945,6 @@ mod tests {
             Vec3::new(3.0, 1.0, -2.0)
         );
         assert_eq!(app.lua_vars.get("niveau"), Some(&4.0));
-
-        // Nettoyage : ce test écrit réellement dans `~/.motor3derust/save/`.
-        if let Some(dir) = crate::assets::user_dir() {
-            let _ = std::fs::remove_file(dir.join(format!("save_{slot}.json")));
-        }
     }
 
     #[test]

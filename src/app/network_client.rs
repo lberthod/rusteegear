@@ -960,19 +960,29 @@ impl AppState {
 
 #[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
 mod tests {
+    // Sprint 105a-3 : uniquement utilisés par les tests réseau ci-dessous
+    // (derrière `net_tests`) — sans ce `cfg`, `cargo test` par défaut (sans
+    // la feature) les signale comme imports/fonctions mortes.
+    #[cfg(feature = "net_tests")]
     use std::time::{Duration, Instant};
 
+    #[cfg(feature = "net_tests")]
     use glam::Vec3;
 
     use super::*;
+    #[cfg(feature = "net_tests")]
     use crate::app::multiplayer::NetworkInput;
+    #[cfg(feature = "net_tests")]
     use crate::net::protocol::EntityDelta;
+    #[cfg(feature = "net_tests")]
     use crate::net::protocol::{ClientMsg, ServerMsg};
+    #[cfg(feature = "net_tests")]
     use crate::net::server_loop::NetServer;
 
     /// Fait progresser le "serveur de test" d'un tick : traite les messages en
     /// attente (Join/Input/Leave, cf. `src/bin/server.rs`), simule, diffuse un
     /// `Snapshot`. Retourne le numéro de tick utilisé.
+    #[cfg(feature = "net_tests")]
     fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
         while let Ok((id, msg)) = net.inbox.try_recv() {
             match msg {
@@ -1035,6 +1045,7 @@ mod tests {
     /// transmettre au `Join` — c'est ce qui permet au serveur de créditer la
     /// bonne progression. Vérifié à travers un vrai socket : le
     /// `Join` reçu côté serveur doit porter le même `uid`.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn connect_to_server_forwards_the_known_firebase_uid() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1118,6 +1129,7 @@ mod tests {
     /// lui-même — c'est exactement le bug qu'aurait causé l'absence de
     /// `EntityDelta::player_id` (sans lui, impossible de distinguer « moi » de
     /// « l'autre joueur » dans un `Snapshot`).
+    #[cfg(feature = "net_tests")]
     #[test]
     fn client_sees_a_ghost_for_the_other_player_but_never_for_itself() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1173,6 +1185,7 @@ mod tests {
     /// même mise en place que `client_sees_a_ghost_for_the_other_player_but_
     /// never_for_itself`, réduite à un seul client (ces tests ne portent que
     /// sur la réconciliation du joueur local, pas sur les fantômes distants).
+    #[cfg(feature = "net_tests")]
     fn connected_app_with_a_player(net: &NetServer) -> AppState {
         let url = format!("ws://{}", net.local_addr);
         let mut app = AppState::new();
@@ -1188,6 +1201,7 @@ mod tests {
     /// (`defeated_banner`, `editor/mod.rs`), un joueur à 0 PV disparaissait de
     /// l'écran sans le moindre message (juste le flash rouge d'un tiers de
     /// seconde), indiscernable d'un bug.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn is_locally_defeated_reflects_the_servers_health_once_it_reaches_zero() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1231,6 +1245,7 @@ mod tests {
     /// un écart au-dessus de `SNAP_THRESHOLD` ne doit **jamais** faire sauter
     /// le joueur local directement à la position autoritative en un seul
     /// appel — seulement un petit pas (`CORRECTION_PULL`) vers elle.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn a_single_call_only_takes_a_small_step_toward_the_authoritative_position() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1273,6 +1288,7 @@ mod tests {
     /// eux) doivent faire converger progressivement la position vers la
     /// valeur autoritative — le petit pas par appel n'est pas qu'un lissage
     /// ponctuel, il finit par combler l'écart.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn repeated_calls_gradually_converge_toward_the_authoritative_position() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1328,6 +1344,7 @@ mod tests {
     /// ça a causé). Une position serveur **sur notre trajectoire récente**
     /// signifie « en phase, juste en retard » : aucune correction ne doit
     /// s'appliquer.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1383,6 +1400,7 @@ mod tests {
     /// garderait un décalage permanent avec la position que les autres voient
     /// de lui (cf. docs/audits/app-network.md). Un joueur **immobile** doit
     /// converger doucement vers la vérité serveur.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn an_idle_player_softly_settles_onto_the_server_position() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1432,6 +1450,7 @@ mod tests {
     /// mouvement **n'est jamais écrasé** : la position finale doit refléter à
     /// la fois le mouvement local et un petit pas de correction, jamais
     /// uniquement l'un ou l'autre.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn a_correction_never_discards_local_movement_that_happened_between_calls() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1488,6 +1507,7 @@ mod tests {
     /// test simule exactement cette séquence (correction, puis un tick
     /// physique, comme le ferait `advance_play` à la frame suivante) et
     /// vérifie que la correction **survit**.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn a_local_position_correction_survives_the_next_physics_step() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1554,6 +1574,7 @@ mod tests {
     /// `a_lagging_server_position_on_our_recent_path_triggers_no_correction`
     /// ci-dessus) — aucun saut de correction ne doit se produire du seul
     /// fait de grimper les marches.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn climbing_stairs_does_not_trigger_a_spurious_correction() {
         const STEP_RISE: f32 = 0.2;
@@ -1660,6 +1681,7 @@ mod tests {
     /// l'arrêt (`IDLE_SETTLE_PULL`) continue de fonctionner dans ce cas :
     /// un joueur bloqué contre un mur est, en pratique, immobile dans le
     /// monde — le rattrapage doit s'appliquer comme pour tout autre arrêt.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn a_wall_blocked_player_settles_without_fighting_the_correction() {
         const START: Vec3 = Vec3::new(200.0, 1.0, 0.0);
@@ -1769,6 +1791,7 @@ mod tests {
     /// `poll_network` en boucle serrée (sans dormir entre les appels, donc
     /// bien plus vite que `INPUT_SEND_INTERVAL`) et vérifie que le serveur ne
     /// reçoit qu'une poignée d'`Input`, pas un par appel.
+    #[cfg(feature = "net_tests")]
     #[test]
     fn input_send_rate_is_capped_regardless_of_poll_network_call_rate() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
