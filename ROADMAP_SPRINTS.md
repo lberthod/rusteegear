@@ -2316,14 +2316,85 @@ aujourd'hui : `architecture.md` + `docs/audits/*`).
   futur) — pas dans le scope initial de ce sprint-ci, qui portait sur
   assets + **audio de base** (SFX), livré.
 
-#### Sprint 116 — Multijoueur navigateur ⬜
-- [ ] Client WebSocket compilé en WASM (déjà en WebSocket — avantage décisif) ; passage en `wss://`.
-- **Fichiers** : `src/net/client.rs`, `examples/smoke_vps.rs`.
-- **Livrable** : un joueur navigateur et un joueur desktop se voient bouger sur le VPS (smoke test étendu).
+#### Sprint 116 — Multijoueur navigateur ✅ FAIT
+- [x] **`net::client` scindé en deux implémentations derrière la même API**
+      (`NetClient::connect`/`connect_to_lobby`/`send`, champ `inbox`) — le
+      module est devenu un dossier `src/net/client/{mod,native,web}.rs` :
+      - `native` (desktop/Android) : code inchangé, juste déplacé.
+      - `web` (nouveau, `web_sys::WebSocket`) : l'API WebSocket **native du
+        navigateur** — pas de dépendance TLS/socket à cross-compiler,
+        contrairement à `tokio-tungstenite` (`ring` ne compile pas pour
+        `wasm32-unknown-unknown`, cf. Sprint 114). Différence de fond, pas
+        cosmétique : `WebSocket::new` **ne bloque jamais** (le navigateur gère
+        la connexion TCP/TLS en coulisses, invisible depuis Rust) — contrairement
+        à `native::connect` qui bloque jusqu'à la poignée de main. Les
+        callbacks JS (`onopen`/`onmessage`/`onerror`/`onclose`) poussent dans
+        le même `mpsc::Receiver<ServerMsg>` que côté natif (fonctionne très
+        bien sans vrai thread OS, `wasm32-unknown-unknown` est mono-thread) ;
+        `Join` est envoyé depuis `onopen` (pas avant, le navigateur refuse un
+        `send` avant l'ouverture effective).
+      - `app::network_client` : le bloc d'implémentation réel (`connect_to_
+        server`, `poll_network`, etc.), auparavant exclu d'iOS **et** wasm32,
+        n'exclut plus que iOS — étendu au web tel quel. Deux ajustements
+        obligés en cours de route : `poll_network` appelait sans garde les
+        méthodes Firebase (desktop-only, `ureq`) ; `net_local_history`/
+        `net_last_input_sent` (`AppState`) et `net::interpolation::
+        RemoteEntity` utilisaient `std::time::Instant` en dur — paniquerait
+        sur wasm32 (cf. Sprint 114, `time_compat`) dès qu'un vrai message
+        réseau les exercerait. Corrigés (garde Firebase ajoutée, `Instant`
+        remplacé par `crate::time_compat::Instant` dans les trois).
+      - `Cargo.toml` : features `web-sys` étendues (`WebSocket`,
+        `MessageEvent`, `BinaryType`, `CloseEvent`, `ErrorEvent`) + nouvelle
+        dépendance `js-sys` (conversion `Uint8Array`/`ArrayBuffer`), toutes
+        wasm32 uniquement.
+- [x] **Vérifié en conditions réelles, deux fois** : contre un serveur local
+      (`cargo run --bin server`) d'abord, puis contre le **vrai serveur de
+      production** (`DEFAULT_SERVER_URL`, celui que desktop/APK utilisent
+      déjà) — connexion réussie dans les deux cas (« bienvenue, joueur N »
+      reçu du serveur, N incrémentant à chaque test = d'autres sessions
+      réelles sont déjà dessus), déplacement au clavier sans erreur console
+      pendant plusieurs secondes de jeu.
+- **Fichiers** : `src/net/client.rs` → `src/net/client/{mod,native,web}.rs` ;
+  modifiés : `src/net/mod.rs`, `src/net/interpolation.rs`, `src/app/mod.rs`,
+  `src/app/network_client.rs`, `src/app/fireball.rs`, `Cargo.toml`.
+- **Livrable** : un joueur navigateur et un joueur desktop/APK peuvent
+  réellement se voir bouger sur le VPS de production — pas un smoke test isolé,
+  le même serveur que tout le monde utilise déjà.
 
-#### Sprint 117 — Vitrine publique ⬜
-- [ ] Page de démo déployée en CI ; lien README ; « rejoindre un salon » via les lobbies Firebase existants.
-- **Livrable** : n'importe qui teste le multijoueur en un clic — le meilleur README possible.
+#### Sprint 117 — Vitrine publique ✅ FAIT (sauf un geste manuel)
+- [x] **Page de démo + doc API déployées en un seul site GitHub Pages.**
+      GitHub Pages ne sert qu'**un seul** artefact par dépôt : `.github/
+      workflows/docs.yml` (Sprint 113) et une nouvelle page de démo se
+      seraient écrasés l'un l'autre à chaque exécution s'ils avaient chacun
+      leur workflow de déploiement. Fusionnés : `docs.yml` renommé
+      `pages.yml`, construit un site combiné (`site/index.html` + `site/pkg/`
+      = la démo, `site/doc/` = `cargo doc`), un seul `actions/deploy-pages`.
+      Vérifié **localement** avec la disposition exacte du site déployé
+      (`packaging/build_web.sh` en profil release + `cargo doc`, servis
+      ensemble par un serveur statique) : les deux chemins fonctionnent,
+      `/` recharge la démo (multijoueur compris — testé contre le vrai
+      serveur de production, cf. Sprint 116), `/doc/` la doc API.
+- [x] **Lien README** : nouvelle section juste sous les badges, en haut du
+      fichier — pas enterré plus bas où personne ne le trouverait.
+- [ ] **« Rejoindre un salon » via les lobbies Firebase existants** — **pas
+      fait**, sciemment hors scope de ce sprint-ci malgré la case cochée dans
+      la version précédente de cette entrée. Le choix de lobby Firebase
+      dépend de `ureq` (REST), qui ne cible pas `wasm32-unknown-unknown`
+      (même blocage `ring`/TLS que `tokio-tungstenite`, cf. Sprint 114) —
+      porter ça demanderait un client HTTP web (`web_sys`/`fetch`), un
+      chantier de la même ampleur que le Sprint 116 mais pour Firebase plutôt
+      que le serveur de jeu. Non bloquant pour le livrable réel : la connexion
+      **automatique** au serveur par défaut (celle que desktop/APK utilisent
+      déjà, cf. Sprint 116) donne déjà l'expérience « un clic, tout le monde
+      dans la même partie » — juste sans le sélecteur de salon.
+- **Fichiers** : `.github/workflows/docs.yml` → `.github/workflows/
+  pages.yml` (réécrit), `packaging/build_web.sh` (commentaire d'état à jour),
+  `README.md` (lien démo).
+- **Livrable** : n'importe qui ouvrant le lien du README atterrit dans la
+  même partie multijoueur que les joueurs desktop/APK, sans rien installer —
+  **une fois qu'un humain aura activé Pages une fois** dans Settings → Pages
+  → Source = *GitHub Actions* du dépôt (pas automatisable depuis un fichier de
+  workflow, cf. la même note laissée au Sprint 113).
 
 > **Définition de « terminé » K→Q** : voir section suivante. Au Sprint 117, le moteur a des
 > personnages animés, une image moderne (HDR/bloom/ciel), un gameplay scriptable de bout en bout

@@ -1,9 +1,12 @@
-name: Docs
+name: Pages
 
-# Publie `cargo doc` (doc API du crate) sur GitHub Pages à chaque push sur main.
-# Nécessite d'activer Pages une fois dans Settings → Pages → Source = « GitHub
-# Actions » (pas configurable depuis ce fichier) — sans ça, ce workflow tourne
-# mais rien n'est servi.
+# Publie sur GitHub Pages à chaque push sur main : la démo jouable (wasm32/
+# WebGPU, Sprint 114-117) à la racine, la doc API (`cargo doc`, Sprint 113) sous
+# /doc/. Nécessite d'activer Pages une fois dans Settings → Pages → Source =
+# « GitHub Actions » (pas configurable depuis ce fichier) — sans ça, ce workflow
+# tourne mais rien n'est servi. Un seul déploiement Pages par dépôt : les deux
+# doivent être assemblés dans le même artefact, pas deux workflows séparés qui
+# s'écraseraient l'un l'autre à chaque exécution.
 on:
   push:
     branches: [main]
@@ -15,21 +18,23 @@ permissions:
   id-token: write
 
 # Une seule publication à la fois ; n'annule pas un déploiement déjà en cours
-# (contrairement au CI de build/test, une doc à moitié publiée serait pire que
-# tard mais complète).
+# (contrairement au CI de build/test, une publication à moitié faite serait pire
+# que tard mais complète).
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
   build:
-    name: cargo doc
+    name: Démo web + cargo doc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installer la toolchain Rust
+      - name: Installer la toolchain Rust (+ wasm32)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -44,20 +49,26 @@ jobs:
             libx11-dev libxkbcommon-dev libwayland-dev \
             libasound2-dev libudev-dev pkg-config
 
-      - name: cargo doc
-        run: cargo doc --no-deps --lib
+      # Version EXACTE de la crate `wasm-bindgen` du lockfile — le CLI doit
+      # matcher, cf. packaging/build_web.sh.
+      - name: Installer wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.125 --locked
 
-      # `cargo doc` ne génère pas de page d'accueil à la racine : redirige vers
-      # la doc du crate (seule cible utile, pas de workspace multi-crates ici).
-      - name: Page d'accueil (redirection)
+      - name: Assembler le site (site/ = démo, site/doc/ = doc API)
         run: |
+          mkdir -p site
+          ./packaging/build_web.sh
+          cp packaging/web/index.html site/
+          cp -r packaging/web/pkg site/pkg
+          cargo doc --no-deps --lib
           echo '<meta http-equiv="refresh" content="0; url=motor3derust/index.html">' \
             > target/doc/index.html
+          cp -r target/doc site/doc
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: target/doc
+          path: site
 
   deploy:
     name: Déployer sur Pages

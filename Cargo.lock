@@ -2022,6 +2022,7 @@ dependencies = [
  "gltf",
  "image",
  "include_dir",
+ "js-sys",
  "kira",
  "log",
  "mlua",

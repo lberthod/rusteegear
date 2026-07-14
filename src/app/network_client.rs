@@ -116,7 +116,7 @@ pub struct LeaderboardLine {
     pub score: u32,
 }
 
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(target_os = "ios"))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
     /// Remplace une connexion existante s'il y en avait une. Transmet
@@ -219,7 +219,7 @@ impl AppState {
     /// Appelé une fois par frame depuis `advance_play` : envoie l'input local,
     /// draine les messages serveur, met à jour les fantômes des autres joueurs.
     pub(super) fn poll_network(&mut self) {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         {
             self.poll_firebase();
             self.poll_chat();
@@ -244,7 +244,7 @@ impl AppState {
         // messages envoyés seraient jetés sans effet côté serveur (`set_
         // network_input` remplace l'entrée précédente, il ne les cumule pas),
         // pour un coût réseau/CPU inutile des deux côtés.
-        let now = std::time::Instant::now();
+        let now = crate::time_compat::Instant::now();
         let should_send_input = self
             .net_last_input_sent
             .is_none_or(|last| now.duration_since(last) >= INPUT_SEND_INTERVAL);
@@ -334,7 +334,7 @@ impl AppState {
         if self.net_client.is_none() {
             return;
         }
-        let now = std::time::Instant::now();
+        let now = crate::time_compat::Instant::now();
         if let Some((server_pos, _yaw, visible)) = self.net_local_interp.sample(now)
             && let Some(pi) = self.player_index()
             && let Some(o) = self.scene.objects.get_mut(pi)
@@ -433,7 +433,7 @@ impl AppState {
                 }
             }
             ServerMsg::Snapshot(snap) => {
-                let now = std::time::Instant::now();
+                let now = crate::time_compat::Instant::now();
                 // Boules de feu en vol côté serveur : mémorisées telles quelles,
                 // affichées par le pool local (cf. `sync_fireball_pool`, appelé
                 // par `update_fireballs` à chaque frame). Pas d'interpolation :
@@ -872,9 +872,11 @@ fn fetch_chat_lines(
     })
 }
 
-/// iOS uniquement : `net::client` n'y est pas encore compilé (cf. `net/mod.rs`),
-/// contrairement à Android.
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+/// iOS uniquement : `net::client` n'y est pas encore compilé (cf. `net/mod.rs`).
+/// wasm32 a désormais sa propre implémentation de `net::client::NetClient`
+/// (Sprint 116, `web_sys::WebSocket`) — le bloc `not(target_os = "ios")`
+/// ci-dessus s'applique donc aussi au web.
+#[cfg(target_os = "ios")]
 impl AppState {
     pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
         self.net_status = "Multijoueur indisponible sur iOS".to_string();

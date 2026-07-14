@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Construit la cible wasm32 et génère les bindings JS (Sprint 114, défrichage).
+# Construit la cible wasm32 et génère les bindings JS (Phase Q, Sprints 114-117).
 # Pré-requis : rustup target add wasm32-unknown-unknown ; cargo install wasm-bindgen-cli
 # (version EXACTE de la crate `wasm-bindgen` du lockfile — cf. Cargo.lock).
 #
-# État connu à ce sprint : la scène (sol, joueur, overlay tactile) s'affiche dans
-# Chrome via WebGPU. Scripting Lua, audio et réseau restent inertes/absents sur
-# wasm32 (Sprints 115/116) ; les meshes à animation squelettale ne s'affichent
-# pas encore (limite de bind groups WebGPU, cf. ROADMAP_SPRINTS.md Sprint 114).
+# État connu : rendu (114), audio SFX (115) et multijoueur (116, WebSocket natif
+# du navigateur) fonctionnels dans Chrome via WebGPU — jouable au clavier,
+# connexion automatique au serveur par défaut comme sur desktop/APK. Limitations
+# connues : scripting Lua inerte, musique en flux absente, meshes à animation
+# squelettale non affichés (limite de bind groups WebGPU) — détail dans
+# ROADMAP_SPRINTS.md, Sprints 114-116.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

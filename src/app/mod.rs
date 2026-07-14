@@ -343,7 +343,7 @@ pub struct AppState {
     /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
     /// a rejoint une partie en ligne. Desktop + Android seulement : `net::client`
     /// dépend de `tokio`, pas encore ciblé sur iOS (cf. `net/mod.rs`).
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(target_os = "ios"))]
     net_client: Option<crate::net::client::NetClient>,
     /// Identifiant attribué par le serveur à ce client (`ServerMsg::Welcome`),
     /// une fois connecté. Sert à repérer sa propre entité dans les `Snapshot`
@@ -364,19 +364,19 @@ pub struct AppState {
     /// autoritative pour la réconciliation (`apply_local_network_position`) :
     /// le joueur local reste piloté par prédiction immédiate (`sim_step`), le
     /// serveur ne corrige que si l'écart dépasse `interpolation::SNAP_THRESHOLD`.
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(target_os = "ios"))]
     net_local_interp: crate::net::interpolation::RemoteEntity,
     /// Dernière vie connue du joueur local (0..1, cf. `app::health`,
     /// GAMEDESIGN_EN_LIGNE.md §3.1/§3.4) : lue telle quelle du dernier
     /// `Snapshot` reçu pour notre propre `PlayerId` — même principe que
     /// `RemotePlayer::health` pour les autres joueurs. `None` hors ligne ou
     /// avant le premier snapshot.
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(target_os = "ios"))]
     net_local_health: Option<f32>,
     /// Frags individualisés connus du joueur local (brique de progression pour
     /// un futur MMORPG) — même principe que `net_local_health` : lu tel quel
     /// du dernier `Snapshot`. `None` hors ligne ou avant le premier snapshot.
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(target_os = "ios"))]
     net_local_kills: Option<u32>,
     /// Historique court (~1 s) des positions **prédites** du joueur local, une par
     /// frame (cf. `apply_local_network_position`). La position renvoyée par le
@@ -388,15 +388,15 @@ pub struct AppState {
     /// serveur est donc validée contre la **trajectoire récente** : si elle est
     /// proche d'un point où l'on est réellement passé, on est en phase (le serveur
     /// est juste en retard), pas de correction.
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
-    net_local_history: std::collections::VecDeque<(std::time::Instant, Vec3)>,
+    #[cfg(not(target_os = "ios"))]
+    net_local_history: std::collections::VecDeque<(crate::time_compat::Instant, Vec3)>,
     /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur : `poll_network`
     /// est appelée une fois par frame de rendu, potentiellement bien au-dessus du
     /// tick serveur — ce champ sert à plafonner le débit d'envoi à
     /// `network_client::INPUT_SEND_INTERVAL` plutôt que d'envoyer un message par
     /// frame affichée.
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
-    net_last_input_sent: Option<std::time::Instant>,
+    #[cfg(not(target_os = "ios"))]
+    net_last_input_sent: Option<crate::time_compat::Instant>,
     /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
     /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
     /// créditer la progression au bon compte. `None` = partie anonyme, sans
@@ -657,20 +657,20 @@ impl AppState {
             selected_weapon: 0,
             weapon_button_was_down: false,
             pending_net_events: Vec::new(),
-            #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+            #[cfg(not(target_os = "ios"))]
             net_client: None,
             net_player_id: None,
             net_status: String::new(),
             remote_players: HashMap::new(),
-            #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+            #[cfg(not(target_os = "ios"))]
             net_local_interp: crate::net::interpolation::RemoteEntity::default(),
-            #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+            #[cfg(not(target_os = "ios"))]
             net_local_health: None,
-            #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+            #[cfg(not(target_os = "ios"))]
             net_local_kills: None,
-            #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+            #[cfg(not(target_os = "ios"))]
             net_local_history: std::collections::VecDeque::new(),
-            #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+            #[cfg(not(target_os = "ios"))]
             net_last_input_sent: None,
             firebase_uid: None,
             firebase_busy: false,

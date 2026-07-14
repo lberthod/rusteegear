@@ -403,11 +403,11 @@ impl AppState {
     /// cas du serveur headless, qui n'a pas de `NetClient`) : la simulation locale
     /// des projectiles s'efface alors devant l'autorité du serveur.
     fn is_online_client(&self) -> bool {
-        #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+        #[cfg(not(target_os = "ios"))]
         {
             self.net_client.is_some()
         }
-        #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+        #[cfg(target_os = "ios")]
         {
             false
         }

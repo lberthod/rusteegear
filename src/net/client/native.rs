@@ -1,4 +1,5 @@
-//! Transport WebSocket côté client.
+//! Transport WebSocket côté client — desktop/Android (`tokio`+`tokio_tungstenite`).
+//! Cf. `super` pour le pourquoi de ce découpage natif/web.
 //!
 //! Même schéma que `server_loop` : un thread de fond dédié pousse les
 //! `ServerMsg` reçus dans `inbox` (canal `std::sync::mpsc`), et `send` encode
@@ -21,7 +22,7 @@ use std::sync::mpsc::{Receiver, channel};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::protocol::{self, ClientMsg, ServerMsg};
+use super::super::protocol::{self, ClientMsg, ServerMsg};
 
 /// Connexion réseau côté client à un salon RusteeGear.
 pub struct NetClient {

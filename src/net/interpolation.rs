@@ -7,9 +7,16 @@
 //! une micro-saccade visible à chaque snapshot).
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use glam::Vec3;
+
+// `std::time::Instant::now()` panique sur wasm32-unknown-unknown (cf.
+// `crate::time_compat`) — ce module reste pur (aucun `Instant::now()` ici, `at`/
+// `now` sont toujours fournis par l'appelant), mais le *type* doit rester
+// identique à celui utilisé par `app::network_client`/`AppState`, faute de quoi
+// les deux ne s'unifient plus au moment de la compilation.
+use crate::time_compat::Instant;
 
 use super::protocol::EntityDelta;
 

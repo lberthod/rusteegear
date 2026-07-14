@@ -14,6 +14,12 @@ winit · wgpu · egui — aucun moteur tiers.
 **Tourne réellement sur les 3 plateformes** : éditeur complet sur macOS,
 mode « player » tactile sur iPhone et Android.
 
+### 🎮 [Essayer la démo dans le navigateur](https://lberthod.github.io/rusteegear/)
+
+Aucune installation : WebGPU (Chrome/Edge récents), clavier (WASD + Espace/J/K/H),
+connectée au **même serveur multijoueur** que le desktop/APK — tout le monde qui
+ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.github.io/rusteegear/doc/motor3derust/).
+
 </div>
 
 ---
@@ -385,7 +391,7 @@ le développement). Historique sprint par sprint :
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
 | **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ✅ |
 | **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, hot-reload, snapping + profiler GPU, crash log + rustdoc | 104 → 113 | ✅ (106/107 non numérotés, tampons non utilisés) |
-| **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | 🟢 (114/115 faits — jouable au clavier avec effets sonores dans Chrome ; 116 restant) |
+| **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | ✅ (117 : reste à activer Pages une fois dans les réglages GitHub — non automatisable) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -496,14 +502,18 @@ position/rotation + profiler GPU (112), journal de crash volontaire + `cargo doc
 publiable sur GitHub Pages (113), build wasm32/WebGPU — sol, joueur et
 overlay tactile s'affichent dans Chrome, vérifié par lecture de pixels réels
 (114), assets embarqués + audio (`kira`, SFX) fonctionnels sur le web —
-démo contrôleur jouable au clavier dans le navigateur (115). **En cours —
-Phase Q, la vitrine web** : reste le multijoueur navigateur (116). Le
-scripting Lua reste inerte sur wasm32, et la musique/ambiance en flux
-n'est pas encore portée sur le web (`kira::sound::streaming` exclut ce
-target). Limitation connue : les meshes à animation squelettale ne
-s'affichent pas encore sur le web (limite de bind groups WebGPU, détail
-dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)). Puis
-R (WebXR).
+démo contrôleur jouable au clavier dans le navigateur (115), multijoueur
+navigateur — `web_sys::WebSocket` natif, vérifié en conditions réelles
+contre le vrai serveur de production (116), page de démo + doc API
+déployées en un seul site GitHub Pages (117, cf. le lien tout en haut de ce
+README). **Phase Q terminée** — reste juste l'activation de Pages côté
+GitHub (Settings → Pages → Source = *GitHub Actions*, un geste manuel qui ne
+s'automatise pas depuis un fichier de workflow). Limitations connues : le
+scripting Lua reste inerte sur wasm32, la musique/ambiance en flux n'est pas
+encore portée sur le web (`kira::sound::streaming` exclut ce target), et les
+meshes à animation squelettale ne s'affichent pas (limite de bind groups
+WebGPU) — détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md). Puis R
+(WebXR).
 
 ---
 

@@ -158,7 +158,22 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 web-time = "1.1"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "Window", "Element", "HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Window",
+    "Element",
+    "HtmlCanvasElement",
+    # Sprint 116 : client multijoueur web (`net::client::web`) — l'API
+    # WebSocket native du navigateur, pas de dépendance TLS/socket à
+    # cross-compiler (contrairement à `tokio-tungstenite`, cf. Cargo.toml
+    # plus haut).
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+    "CloseEvent",
+    "ErrorEvent",
+] }
+js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 egui-winit = { version = "0.34.3", default-features = false, features = ["links"] }
