@@ -1536,6 +1536,232 @@ mod tests {
         );
     }
 
+    /// Sprint 103c (audit réseau après la migration du joueur vers
+    /// `KinematicCharacterController`, Sprint 103b) : un escalier fait
+    /// bouger le joueur verticalement de façon quasi instantanée
+    /// (`autostep`, jusqu'à `PLAYER_AUTOSTEP_HEIGHT` = 0,3 m par marche) —
+    /// un axe de mouvement que l'ancien corps dynamique n'avait jamais
+    /// (sol toujours plat). `on_recent_path`/`reconcile`
+    /// (`interpolation::SNAP_THRESHOLD` = 0,5 m) comparent des positions
+    /// **3D** : une bosse verticale d'autostep pourrait, combinée à un
+    /// léger décalage latéral, franchir le seuil et déclencher une
+    /// correction parasite pile en montant. Ce test fait grimper un
+    /// escalier de 4 marches (mêmes constantes que
+    /// `physics::tests::kinematic_player_climbs_a_low_staircase`, dupliquées
+    /// ici car ce test-là est privé à `physics.rs`) tout en simulant un
+    /// serveur légèrement en retard (position d'il y a quelques ticks,
+    /// « en phase, juste en retard », comme
+    /// `a_lagging_server_position_on_our_recent_path_triggers_no_correction`
+    /// ci-dessus) — aucun saut de correction ne doit se produire du seul
+    /// fait de grimper les marches.
+    #[test]
+    fn climbing_stairs_does_not_trigger_a_spurious_correction() {
+        const STEP_RISE: f32 = 0.2;
+        const STEP_DEPTH: f32 = 0.6;
+        const STEPS: i32 = 4;
+        const START: Vec3 = Vec3::new(100.0, 1.0, -1.5);
+
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+        let pi = app.player_index().expect("gabarit pilotable");
+
+        // Loin du reste de la scène (x=100) pour ne heurter aucun décor de la
+        // démo zombies — seul l'escalier ajouté ici doit influencer le test.
+        app.scene.objects[pi].transform.position = START;
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Sol (test)".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(100.0, -0.1, -1.5))
+                .with_scale(Vec3::new(4.0, 0.2, 3.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        for k in 0..STEPS {
+            let top = STEP_RISE * (k + 1) as f32;
+            app.scene.objects.push(crate::scene::SceneObject {
+                name: format!("Marche (test) {k}"),
+                mesh: crate::scene::MeshKind::Cube,
+                transform: crate::scene::Transform::from_pos(Vec3::new(
+                    100.0,
+                    top * 0.5,
+                    (k as f32 + 0.5) * STEP_DEPTH,
+                ))
+                .with_scale(Vec3::new(4.0, top, STEP_DEPTH)),
+                physics: crate::runtime::physics::PhysicsKind::Static,
+                ..Default::default()
+            });
+        }
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        // 130 pas (~2,2 s) : le joueur atteint le sommet de l'escalier sans le
+        // dépasser — au-delà, il marcherait dans le vide derrière la dernière
+        // marche (aucun palier dans cette scène de test), ce qui n'est pas ce
+        // que ce test vérifie (cf. le palier ajouté pour la même raison dans
+        // `physics::tests::kinematic_player_climbs_a_low_staircase`).
+        let dt = 1.0 / 60.0;
+        let mut recent: std::collections::VecDeque<Vec3> = std::collections::VecDeque::new();
+        let mut max_jump = 0.0_f32;
+        for _ in 0..130 {
+            app.physics
+                .as_mut()
+                .expect("construite ci-dessus")
+                .control(pi, 0.0, 2.0, false, 0.0, 0.0, dt);
+            app.physics
+                .as_mut()
+                .expect("construite ci-dessus")
+                .step(dt, &mut app.scene);
+
+            // « Serveur » simulé en retard de quelques ticks (~100 ms) : la
+            // position injectée est celle d'un passé récent, jamais
+            // l'instantanée — comme un aller-retour réseau normal.
+            recent.push_back(app.scene.objects[pi].transform.position);
+            if recent.len() > 6 {
+                recent.pop_front();
+            }
+            let lagging = *recent.front().unwrap();
+            app.net_local_interp.push(
+                EntityDelta {
+                    index: pi as u32,
+                    player_id: None,
+                    position: lagging.to_array(),
+                    yaw: 0.0,
+                    visible: true,
+                    health: None,
+                    anim_clip: String::new(),
+                    kills: None,
+                },
+                Instant::now(),
+            );
+
+            let before = app.scene.objects[pi].transform.position;
+            app.apply_local_network_position();
+            let after = app.scene.objects[pi].transform.position;
+            max_jump = max_jump.max(before.distance(after));
+        }
+
+        assert!(
+            max_jump < crate::net::interpolation::SNAP_THRESHOLD,
+            "grimper un escalier ne doit déclencher aucune correction \
+             parasite (saut maximal observé : {max_jump} m)"
+        );
+        assert!(
+            app.scene.objects[pi].transform.position.y > STEP_RISE * (STEPS as f32 - 1.5),
+            "le joueur doit avoir réellement grimpé l'escalier pendant le test \
+             (y={})",
+            app.scene.objects[pi].transform.position.y
+        );
+    }
+
+    /// Sprint 103c : `Physics::velocity` (Sprint 103b) dérive désormais la
+    /// vitesse horizontale du mouvement **réel** post-collision de
+    /// `move_shape`, pas d'un `linvel` rapier — un joueur qui pousse contre
+    /// un mur en tenant l'entrée a donc une vitesse quasi nulle, comme un
+    /// joueur réellement immobile. Ce test vérifie que le rattrapage doux à
+    /// l'arrêt (`IDLE_SETTLE_PULL`) continue de fonctionner dans ce cas :
+    /// un joueur bloqué contre un mur est, en pratique, immobile dans le
+    /// monde — le rattrapage doit s'appliquer comme pour tout autre arrêt.
+    #[test]
+    fn a_wall_blocked_player_settles_without_fighting_the_correction() {
+        const START: Vec3 = Vec3::new(200.0, 1.0, 0.0);
+
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut app = connected_app_with_a_player(&net);
+        let pi = app.player_index().expect("gabarit pilotable");
+
+        app.scene.objects[pi].transform.position = START;
+        // Sol sous le joueur — sans lui, il tombe en chute libre et sa
+        // vitesse mesurée reflète la chute, pas le blocage contre le mur.
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Sol (test)".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(200.0, -0.1, 0.0))
+                .with_scale(Vec3::new(4.0, 0.2, 4.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        // Mur juste devant (au sens +Z, la direction poussée ci-dessous).
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Mur (test)".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(200.0, 1.0, 1.0))
+                .with_scale(Vec3::new(4.0, 3.0, 0.2)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let dt = 1.0 / 60.0;
+        // Pousse contre le mur pendant assez de temps pour s'y presser
+        // (vitesse résultante quasi nulle après `move_shape`).
+        for _ in 0..60 {
+            app.physics
+                .as_mut()
+                .expect("construite ci-dessus")
+                .control(pi, 0.0, 4.0, false, 0.0, 0.0, dt);
+            app.physics
+                .as_mut()
+                .expect("construite ci-dessus")
+                .step(dt, &mut app.scene);
+        }
+        let blocked_speed = app
+            .physics
+            .as_ref()
+            .expect("construite ci-dessus")
+            .velocity(pi)
+            .expect("le joueur est un corps piloté")
+            .length();
+        assert!(
+            blocked_speed < IDLE_SPEED_EPSILON,
+            "un joueur pressé contre un mur doit être mesuré comme quasi \
+             immobile (vitesse={blocked_speed})"
+        );
+
+        let stuck_at = app.scene.objects[pi].transform.position;
+        // Écart **latéral** (X), pas vers l'arrière (-Z) : l'entrée tenue
+        // pousse continuellement vers +Z contre le mur — un écart cible
+        // situé plus loin dans -Z serait immédiatement défait par cette
+        // même entrée à chaque tick (le joueur ne peut physiquement pas
+        // reculer tout en poussant en avant), ce qui n'a rien d'un bug de
+        // réconciliation. Sous `SNAP_THRESHOLD` (ignoré par `reconcile`),
+        // comme dans `an_idle_player_softly_settles_onto_the_server_position`.
+        let authoritative = stuck_at + Vec3::new(0.3, 0.0, 0.0);
+        app.net_local_interp.push(
+            EntityDelta {
+                index: pi as u32,
+                player_id: None,
+                position: authoritative.to_array(),
+                yaw: 0.0,
+                visible: true,
+                health: None,
+                anim_clip: String::new(),
+                kills: None,
+            },
+            Instant::now(),
+        );
+        for _ in 0..120 {
+            // Le joueur continue de tenir l'entrée contre le mur pendant le
+            // rattrapage — comme un joueur réel qui n'a pas relâché le stick.
+            app.physics
+                .as_mut()
+                .expect("construite ci-dessus")
+                .control(pi, 0.0, 4.0, false, 0.0, 0.0, dt);
+            app.physics
+                .as_mut()
+                .expect("construite ci-dessus")
+                .step(dt, &mut app.scene);
+            app.apply_local_network_position();
+        }
+        let dist = app.scene.objects[pi]
+            .transform
+            .position
+            .distance(authoritative);
+        assert!(
+            dist <= IDLE_SETTLE_MIN + 1e-2,
+            "un joueur bloqué contre un mur doit quand même converger vers \
+             la position serveur (écart={dist})"
+        );
+    }
+
     /// cf. `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2 :
     /// `poll_network` est appelée une fois par frame de rendu, potentiellement
     /// bien plus souvent que le tick serveur — sans plafond, un client sur un

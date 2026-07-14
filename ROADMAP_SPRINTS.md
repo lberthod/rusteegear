@@ -1665,11 +1665,56 @@ régression client. Une manche décidée ne coupe plus tout le process
   ci-dessus sur l'absence d'impact réseau).
 - **Livrable** : escalier montable en solo et en ligne.
 
-#### Sprint 103c — Audit complet de la prédiction réseau ⬜
+#### Sprint 103c — Audit complet de la prédiction réseau ✅ FAIT
 **Objectif** : revalider la prédiction/réconciliation réseau après la migration du contrôleur, façon sprints 72–77.
-- [ ] Vérifier la réconciliation client/serveur sur le nouveau contrôleur cinématique.
-- [ ] Tests de non-régression rubber-banding à latence simulée.
-- **Fichiers** : `src/app/network_client.rs`, `src/net/interpolation.rs`, `src/bin/server.rs`.
+- [x] **Correctif réel trouvé en auditant** (`src/runtime/physics.rs`,
+      `Physics::set_position`) : pour un corps kinématique, une correction
+      réseau qui déplace le joueur *hors* de `move_shape` (`set_translation`
+      direct) laissait `KinematicState.grounded` à sa valeur d'avant la
+      correction — un tick de gravité manquant après chaque correction si le
+      joueur était posé avant. Corrigé en réinitialisant `grounded` à
+      `false`, mais **seulement** au-delà de `TELEPORT_INVALIDATES_GROUND`
+      (1 m) : un premier essai le réinitialisait sur *toute* correction, quelle
+      que soit son amplitude — cassait la montée d'escalier normale, la
+      réconciliation corrigeant quasiment à chaque tick pendant un
+      déplacement réel (trouvé en écrivant le test `climbing_stairs_does_
+      not_trigger_a_spurious_correction`, cf. ci-dessous). Le seuil distingue
+      les vraies téléportations (respawn, gros désync) des petites
+      corrections habituelles (`CORRECTION_PULL`/`IDLE_SETTLE_PULL`, bornées
+      par des fractions de `SNAP_THRESHOLD` ≈ 0,5 m).
+- [x] **Vérifié : aucun autre changement de code nécessaire.** Client et
+      serveur partagent le même `sim_step`/`Physics::control` (confirmé au
+      Sprint 103b) — `src/app/multiplayer.rs` et le reste de
+      `src/bin/server.rs` n'ont nécessité aucune modification.
+      `src/net/interpolation.rs` (`reconcile`) est une fonction pure sur des
+      positions, agnostique du type de corps physique — inchangée, déjà
+      bien couverte.
+- [x] **Tests de réconciliation ciblés** (`src/app/network_client.rs`) :
+      `climbing_stairs_does_not_trigger_a_spurious_correction` (un escalier
+      bas grimpé sous réconciliation simulée-en-retard ne déclenche aucune
+      correction parasite malgré le rebond vertical de l'autostep) et
+      `a_wall_blocked_player_settles_without_fighting_the_correction`
+      (`Physics::velocity`, dérivée du mouvement réel post-collision depuis
+      103b et non plus d'un `linvel` rapier, continue de détecter
+      correctement un joueur bloqué contre un mur comme quasi immobile pour
+      le rattrapage doux à l'arrêt). **Trouvé en écrivant ce dernier test** :
+      un premier essai visait une cible de correction *reculant* par rapport
+      au mur (axe opposé à l'entrée tenue) — ne convergeait jamais, l'entrée
+      continue vers le mur ré-annulant le petit pas de rattrapage à chaque
+      tick ; ce n'est pas un bug de réconciliation (aucun code physique ne
+      peut faire reculer un corps qu'on pousse activement en avant), corrigé
+      en visant une cible **latérale** au mur plutôt qu'en retrait.
+- [x] **Livrable explicite du roadmap** (`src/bin/server.rs`) :
+      `sustained_movement_does_not_rubber_band_at_100ms_simulated_latency`,
+      bout-en-bout à travers un vrai socket (même patron que
+      `joining_moving_and_leaving_through_the_real_socket`), tick serveur
+      ralenti à 100 ms (au lieu des ~20 ms habituels, ce dépôt n'utilisant
+      que des `sleep`/`Instant` réels, jamais d'horloge simulée) — vérifie
+      que la position ne recule jamais sensiblement d'un tick traité au
+      suivant.
+- **Fichiers** : `src/runtime/physics.rs` (correctif + test), `src/app/
+  network_client.rs` (2 tests), `src/bin/server.rs` (1 test).
+  `src/net/interpolation.rs` vérifié, non modifié.
 - **Livrable** : tests de réconciliation verts ; aucun rubber-banding à 100 ms simulées.
 
 ### PHASE P — Audio, HUD & confort (104 → 110, sprints tampons insérables après K)

@@ -81,6 +81,15 @@ const PLAYER_MIN_SLOPE_SLIDE_DEG: f32 = 45.0;
 /// marche/pente à vitesse normale.
 const PLAYER_SNAP_TO_GROUND: f32 = 0.2;
 
+/// Distance (m) au-delà de laquelle `Physics::set_position` (Sprint 103c)
+/// considère qu'un déplacement kinématique imposé hors de `move_shape` a pu
+/// invalider l'état « au sol » mis en cache — largement au-dessus de ce
+/// qu'une correction de réconciliation réseau normale déplace en un appel
+/// (`CORRECTION_PULL`/`IDLE_SETTLE_PULL` dans `app::network_client`, bornées
+/// par des fractions de `interpolation::SNAP_THRESHOLD` ≈ 0,5 m), pour ne
+/// viser que les vraies téléportations (respawn, gros désync).
+const TELEPORT_INVALIDATES_GROUND: f32 = 1.0;
+
 /// État propre au contrôleur cinématique du joueur (Sprint 103b) : un corps
 /// `kinematic_position_based` n'a pas de `linvel` géré par rapier (il est
 /// déplacé par consigne, pas par force/vitesse) — on garde donc nous-mêmes la
@@ -600,10 +609,38 @@ impl Physics {
     /// docs/audits/physics.md pour le bug réel que ça a causé).
     /// `set_translation` fonctionne aussi bien sur un corps kinématique
     /// (téléportation directe, hors de `move_shape`) que dynamique.
+    ///
+    /// Sprint 103c (audit réseau après la migration 103b) : pour un corps
+    /// kinématique, remet aussi `KinematicState.grounded` à `false` si le
+    /// déplacement dépasse `TELEPORT_INVALIDATES_GROUND` — une vraie
+    /// téléportation (respawn, gros désync) place le corps *hors* de
+    /// `move_shape`, où l'état « au sol » mis en cache par le dernier
+    /// `control_kinematic` n'a plus aucune raison d'être encore valable
+    /// (ex. la correction retire le joueur d'une plateforme). **Pas** pour
+    /// les petites corrections de réconciliation habituelles (`CORRECTION_
+    /// PULL`/`IDLE_SETTLE_PULL` dans `app::network_client`, de l'ordre du
+    /// centimètre à quelques dizaines de cm par appel) : un premier essai
+    /// remettait `grounded` à `false` sur *toute* correction, quelle que
+    /// soit son amplitude — en écrivant le test de montée d'escalier avec
+    /// réconciliation simulée (`network_client::tests::climbing_stairs_
+    /// does_not_trigger_a_spurious_correction`), ça cassait la montée
+    /// normale : la réconciliation corrige quasiment à chaque tick pendant
+    /// un déplacement réel, donc `grounded` ne restait jamais vrai assez
+    /// longtemps pour que `control_kinematic` cesse d'appliquer un tick de
+    /// gravité parasite à chaque correction, cumulant une chute jamais
+    /// voulue. Le seuil distingue les deux cas : sous lui, on fait confiance
+    /// à l'état mis en cache (la correction est trop petite pour avoir pu
+    /// faire décoller le joueur) ; au-dessus, on force une vraie détection.
     pub fn set_position(&mut self, index: usize, pos: Vec3) {
-        if let Some(&(_, handle, _)) = self.kinematic.iter().find(|&&(i, _, _)| i == index) {
+        if let Some(slot) = self.kinematic.iter().position(|&(i, _, _)| i == index) {
+            let handle = self.kinematic[slot].1;
             if let Some(body) = self.bodies.get_mut(handle) {
+                let prev = body.translation();
+                let moved = (Vector::new(pos.x, pos.y, pos.z) - prev).length();
                 body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
+                if moved > TELEPORT_INVALIDATES_GROUND {
+                    self.kinematic[slot].2.grounded = false;
+                }
             }
             return;
         }
@@ -1637,6 +1674,35 @@ mod tests {
         assert!(
             phys.overlap_sphere(Vec3::ZERO, 2.0, 0b101).is_empty(),
             "un masque excluant la couche du capteur ne doit rien détecter"
+        );
+    }
+
+    /// Sprint 103c : une correction de position réseau (`set_position`) ne
+    /// doit pas laisser le joueur figé « au sol » un tick de plus après avoir
+    /// été téléporté en l'air — la gravité doit reprendre dès le prochain
+    /// `control`, pas seulement après un tick de retard (cf. le correctif de
+    /// `set_position`, qui remet `grounded` à `false`).
+    #[test]
+    fn set_position_does_not_trust_a_stale_grounded_state() {
+        let mut scene = Scene::controller_demo();
+        let p = player_index(&scene);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        settle_on_ground(&mut phys, &mut scene, p);
+        assert!(
+            phys.velocity(p).unwrap().y.abs() < 1e-6,
+            "posé au sol, la vitesse verticale doit être nulle avant le test"
+        );
+
+        // Téléporte loin en l'air, bien au-dessus de tout support — simule une
+        // correction réseau qui déplace le joueur hors de portée du sol connu.
+        phys.set_position(p, Vec3::new(0.0, 20.0, -6.0));
+        phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
+        let vy = phys.velocity(p).unwrap().y;
+        assert!(
+            vy < 0.0,
+            "la gravité doit s'appliquer dès le premier `control` après une \
+             téléportation, pas seulement au tick suivant (vy={vy})"
         );
     }
 }

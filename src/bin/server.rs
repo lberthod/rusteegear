@@ -603,6 +603,97 @@ mod tests {
         );
     }
 
+    /// Sprint 103c (audit réseau après la migration du joueur vers
+    /// `KinematicCharacterController`, Sprint 103b) : livrable explicite du
+    /// roadmap — « aucun rubber-banding à 100 ms simulées ». Mêmes
+    /// `NetServer`/`NetClient` réels que `joining_moving_and_leaving_
+    /// through_the_real_socket` ci-dessus, mais le serveur ne traite son
+    /// inbox/n'avance sa simulation qu'une fois toutes les 100 ms (au lieu
+    /// des ~20 ms habituels) — une pacing bien plus lente que le tick
+    /// serveur réel simule un aller-retour réseau dégradé sans horloge
+    /// simulée (ce dépôt n'utilise que des `sleep`/`Instant` réels, cf.
+    /// `SPRINTNETWORK.md`). « Rubber-banding » = la position oscille ou
+    /// recule brièvement avant de repartir en avant ; ce test suit la
+    /// position à chaque tick traité et vérifie qu'elle progresse
+    /// globalement dans le sens du mouvement, jamais un aller-retour marqué
+    /// entre deux ticks consécutifs.
+    #[test]
+    fn sustained_movement_does_not_rubber_band_at_100ms_simulated_latency() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let client = NetClient::connect(&url, "Bob", None).expect("connexion du client");
+        let ServerMsg::Welcome { player_id } = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu")
+        else {
+            panic!("premier message attendu : Welcome");
+        };
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+
+        let room = rooms.get(DEFAULT_LOBBY).unwrap();
+        let object_index = room
+            .app
+            .network_player_object(player_id)
+            .expect("le Join doit avoir fait apparaître un objet pilotable");
+        let start = room.app.scene.objects[object_index].transform.position;
+
+        client.send(&motor3derust::net::protocol::ClientMsg::Input {
+            move_x: 1.0,
+            move_y: 0.0,
+            aim_yaw: 0.0,
+            attack: false,
+            jump: false,
+            fire: false,
+            weapon: 0,
+            heal: false,
+        });
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Input attendu côté serveur");
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+
+        // Comme `joining_moving_and_leaving_through_the_real_socket` : pas
+        // d'autre `Input` envoyé après celui-ci, `advance_play` continue de
+        // piloter l'objet à partir de la dernière entrée connue
+        // (`network_inputs`, persistante jusqu'au prochain message) — inutile
+        // de redrainer l'inbox à chaque tick de la boucle.
+        let room = rooms.get_mut(DEFAULT_LOBBY).unwrap();
+        let mut previous = start;
+        let mut max_backward_step = 0.0_f32;
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(100));
+            room.app.advance_play();
+            let current = room.app.scene.objects[object_index].transform.position;
+            // Recul entre deux ticks consécutifs le long de l'axe de
+            // déplacement (X, `move_x = 1.0` ci-dessus) : au-delà d'un bruit
+            // négligeable, ce serait le symptôme même du rubber-banding.
+            let backward = (previous.x - current.x).max(0.0);
+            max_backward_step = max_backward_step.max(backward);
+            previous = current;
+        }
+
+        let end = room.app.scene.objects[object_index].transform.position;
+        assert!(
+            (end.x - start.x).abs() > 0.5,
+            "le mouvement doit progresser malgré la latence simulée : {start:?} -> {end:?}"
+        );
+        assert!(
+            max_backward_step < 0.05,
+            "aucun tick ne doit reculer sensiblement (rubber-banding) : recul \
+             maximal observé {max_backward_step} m"
+        );
+    }
+
     /// Un joueur qui ne donne plus signe de vie (freeze, crash sans
     /// `Leave` propre) doit être retiré après le délai de timeout, sans bloquer
     /// la partie des autres. Utilise un `timeout` court (paramètre de
