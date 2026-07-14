@@ -575,6 +575,10 @@ impl AppState {
             self.trigger_prev.difference(&triggered).copied().collect();
         self.trigger_prev = triggered.clone();
         let mut vibrations: Vec<f32> = Vec::new();
+        // Sprint 121 : mélanges de réverbération demandés par les scripts ce tick
+        // (`reverb(mix)`, typiquement depuis une zone `trigger`) — le dernier appel
+        // l'emporte, appliqué après la boucle comme les vibrations.
+        let mut reverb_requests: Vec<f32> = Vec::new();
         // Événements de gameplay : ceux émis au tick précédent (scripts ou
         // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
         // de ce tick s'accumulent dans `events_out` et seront délivrés au suivant.
@@ -676,6 +680,7 @@ impl AppState {
                     &mut self.debug_lines,
                     exited.contains(&idx),
                     self.physics.as_ref(),
+                    &mut reverb_requests,
                 ) {
                     log::error!("Script '{}' : {e}", obj.name);
                 }
@@ -721,6 +726,11 @@ impl AppState {
         // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
         for ms in vibrations {
             crate::runtime::vibrate(ms);
+        }
+        // Réverbération demandée par les scripts ce tick (Sprint 121) — dernier
+        // appel gagnant, transition douce (0,5 s) plutôt qu'un changement abrupt.
+        if let Some(&mix) = reverb_requests.last() {
+            self.audio.set_reverb_mix(mix, 0.5);
         }
 
         // 2. physique (écrase les poses des corps dynamiques)

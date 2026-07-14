@@ -2552,14 +2552,38 @@ connection may not be initiated from a page loaded over HTTPS »*.
 > insérables n'importe où après leurs prérequis respectifs — même logique de
 > réservoir que P.
 
-#### Sprint 121 — Audio confort (DSP, reverb, ducking, musique adaptative) ⬜
+#### Sprint 121 — Audio confort (DSP, reverb, ducking, musique adaptative) ✅ FAIT
 **Objectif** : transformer le bus musique/SFX (Sprint 104) en mixeur complet.
-- [ ] Reverb/EQ/limiteur natifs à `kira` sur le bus SFX.
-- [ ] Zones de réverbération : triggers (Sprint 89) qui changent le send.
-- [ ] Ducking : automation de volume du bus musique quand le SFX joue.
-- [ ] Musique adaptative : 2 layers en crossfade (même mécanique que le crossfade d'animation, Sprint 87).
-- **Fichiers** : `src/runtime/audio.rs`.
-- **Livrable** : une zone de danger assourdit la musique ; les pas d'un combat font baisser la musique puis remonter (ducking) ; 2 layers de musique se croisent sans coupure.
+- [x] Reverb/EQ/limiteur natifs à `kira` sur le bus SFX (`Audio::new`) : chaîne
+      EQ (low-shelf -6 dB sous 150 Hz, retire le rumble grave qui rend le mixage
+      boueux) → compresseur en limiteur (seuil -6 dB, ratio 10:1, attaque 5 ms,
+      relâchement 80 ms — évite l'écrêtage quand plusieurs SFX s'accumulent) →
+      réverbération (sèche par défaut, `mix` piloté par `set_reverb_mix`).
+- [x] Zones de réverbération : pas de nouveau type de zone natif — nouvelle
+      fonction Lua `reverb(mix)` (`app::scripting`, même patron que `vibrate`),
+      appelable depuis le script d'une zone `trigger` existante (Sprint 89) à
+      l'entrée/sortie (`obj.triggered`/`obj.exited`). `AppState::sim_step`
+      applique le dernier `reverb()` du tick via `Audio::set_reverb_mix` (tween
+      0,5 s). Zéro duplication : réutilise le mécanisme de trigger tel quel.
+- [x] Ducking : `Audio::play_bytes` (tout SFX) déclenche `duck()` — descend à
+      35 % du volume musique en 60 ms, reste basse tant que des SFX se
+      enchaînent (chaque appel repousse l'échéance), remonte en 450 ms une fois
+      la salve terminée. Vérifié via `duck_release_at` + `update()` (même schéma
+      de sondage par frame que `pending`/`rx`), pas de tâche différée/thread.
+- [x] Musique adaptative : deuxième piste `music_track_b` +
+      `play_music_layer_b_streaming_gain` + `set_music_layer_mix(t, secs)` —
+      crossfade linéaire des volumes des deux layers (déjà en boucle en
+      parallèle), composé avec le volume utilisateur et le ducking en cours via
+      un unique point d'application (`apply_music_volumes`) plutôt que dupliqué
+      à chaque appelant.
+- **Fichiers** : `src/runtime/audio.rs`, `src/app/scripting.rs` (fonction Lua
+  `reverb`), `src/app/simulation.rs` (application du dernier `reverb()` du
+  tick). `run_script` gagne un paramètre `reverb_out: &mut Vec<f32>` — 27 sites
+  d'appel (26 tests + l'appel réel) mis à jour en conséquence.
+- **Livrable** : 345 tests verts (dont 3 nouveaux : `script_can_request_reverb`,
+  `reverb_layer_b_and_ducking_never_panic_regardless_of_manager_availability`,
+  `duck_release_clears_even_without_an_audio_manager`), clippy -D warnings et
+  fmt propres, build wasm32 vert.
 - **Prérequis livré** : bus musique/SFX + panning (Sprint 104).
 
 #### Sprint 122 — Post-effets HDR (exposition auto, grading, vignette) ⬜

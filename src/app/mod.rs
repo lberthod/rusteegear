@@ -1318,6 +1318,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         let state = anim.unwrap();
@@ -1366,6 +1367,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         let state = anim.unwrap();
@@ -1406,6 +1408,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(col, [0.5, 0.5, 0.5]);
@@ -1432,6 +1435,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(col, [1.0, 0.0, 0.0]);
@@ -1468,6 +1472,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
@@ -1493,6 +1498,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
@@ -1533,6 +1539,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t.position.x - 1.0).abs() < 1e-5);
@@ -1569,6 +1576,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(health, Some(0.5));
@@ -1606,6 +1614,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(health, Some(0.7));
@@ -1632,6 +1641,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!(
@@ -1662,6 +1672,7 @@ mod tests {
                 &mut Vec::new(),
                 false,
                 None,
+                &mut Vec::new(),
             )
             .unwrap();
         }
@@ -1714,6 +1725,7 @@ mod tests {
                 &mut Vec::new(),
                 false,
                 None,
+                &mut Vec::new(),
             )
             .unwrap();
             let mut t1 = e.transform;
@@ -1740,6 +1752,7 @@ mod tests {
                 &mut Vec::new(),
                 false,
                 None,
+                &mut Vec::new(),
             )
             .unwrap();
             assert!(
@@ -2929,6 +2942,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(
@@ -2974,9 +2988,52 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(vib, vec![80.0]);
+    }
+
+    /// Sprint 121 : `reverb(mix)` — typiquement appelé depuis le script d'une
+    /// zone `trigger` à l'entrée (`obj.triggered`) — empile la valeur demandée
+    /// dans `reverb_out`, même mécanisme que `vibrate`/`vib_out` ci-dessus.
+    #[test]
+    fn script_can_request_reverb() {
+        let lua = Lua::new();
+        let func = lua
+            .load("if obj.triggered then reverb(0.6) end")
+            .into_function()
+            .unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let input = PlayerInput::default();
+        let mut reverb_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            true,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut reverb_out,
+        )
+        .unwrap();
+        assert_eq!(reverb_out, vec![0.6]);
     }
 
     #[test]

@@ -15,11 +15,17 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Duration;
 
 use glam::Vec3;
+use kira::effect::compressor::CompressorBuilder;
+use kira::effect::eq_filter::{EqFilterBuilder, EqFilterKind};
+use kira::effect::reverb::{ReverbBuilder, ReverbHandle};
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::track::{TrackBuilder, TrackHandle};
-use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween};
+use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Mix, Tween};
+
+use crate::time_compat::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 use kira::Panning;
@@ -27,6 +33,16 @@ use kira::Panning;
 use kira::sound::FromFileError;
 #[cfg(not(target_arch = "wasm32"))]
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
+
+/// Ducking (Sprint 121) : quand un SFX joue, la musique tombe à `DUCK_GAIN_FACTOR`
+/// de son volume réglé, reste basse `DUCK_HOLD`, puis remonte sur
+/// `DUCK_RELEASE_DURATION`. Attaque courte (`DUCK_ATTACK_DURATION`) — le ducking
+/// doit se sentir immédiat, contrairement à la remontée qui peut être progressive
+/// sans gêner (imite un limiteur/sidechain classique : creuse vite, relâche doucement).
+const DUCK_GAIN_FACTOR: f32 = 0.35;
+const DUCK_HOLD: Duration = Duration::from_millis(180);
+const DUCK_ATTACK_DURATION: Duration = Duration::from_millis(60);
+const DUCK_RELEASE_DURATION: Duration = Duration::from_millis(450);
 
 /// Convertit un gain linéaire (0..1) en décibels (kira). 0 → quasi-silence.
 fn gain_to_db(gain: f32) -> f32 {
@@ -82,11 +98,39 @@ pub struct Audio {
     /// sortie audio dès que `AudioManager` est droppé.
     #[allow(dead_code)]
     manager: Option<AudioManager>,
-    /// Piste musique/ambiance (fichiers réels, `play`/`play_gain`/
+    /// Piste musique/ambiance, layer A (fichiers réels, `play`/`play_gain`/
     /// `play_music_streaming_gain`) — `None` si `manager` est `None`.
     music_track: Option<TrackHandle>,
-    /// Piste effets sonores (`play_bytes`, sons synthétisés de `sfx.rs`).
+    /// Piste musique, layer B (Sprint 121, musique adaptative) : deuxième piste
+    /// jouée en parallèle de `music_track`, mélangée via `set_music_layer_mix`
+    /// plutôt que de couper un morceau pour lancer l'autre — un crossfade continu
+    /// entre deux ambiances (calme/combat, par ex.) au lieu d'une coupure nette.
+    music_track_b: Option<TrackHandle>,
+    /// Piste effets sonores (`play_bytes`, sons synthétisés de `sfx.rs`) —
+    /// porte aussi le limiteur/EQ/réverbération du bus SFX (Sprint 121).
     sfx_track: Option<TrackHandle>,
+    /// Contrôle de la réverbération du bus SFX (Sprint 121) : `mix` tweené par
+    /// `set_reverb_mix`, typiquement piloté par une zone `trigger` scriptée
+    /// (`reverb(mix)`, cf. `app::scripting`). `None` si `manager`/`sfx_track`
+    /// sont indisponibles.
+    reverb: Option<ReverbHandle>,
+    /// Volume musique (0..1) tel que réglé par l'utilisateur (`set_music_volume`,
+    /// persisté dans `Settings::music_volume`) — **avant** ducking. Le ducking
+    /// (cf. `duck`/`update`) tweene `music_track`/`music_track_b` en dessous de
+    /// cette valeur temporairement, puis y revient : sans la garder à part, un
+    /// « retour » de ducking écraserait un réglage utilisateur fait entre-temps
+    /// avec l'ancienne valeur.
+    music_volume: f32,
+    /// Mélange (0=layer A, 1=layer B) entre `music_track`/`music_track_b`
+    /// (Sprint 121) — combiné avec `music_volume` et l'atténuation de ducking à
+    /// chaque tween plutôt que reconstruit depuis zéro, pour ne perdre aucun des
+    /// trois effets en composant les volumes.
+    music_layer_mix: f32,
+    /// Instant auquel le ducking en cours doit relâcher (revenir à
+    /// `music_volume`) — `None` si aucun ducking actif. Vérifié à chaque
+    /// `update()`, comme `pending`/`rx` (même schéma : rien de bloquant, un
+    /// simple sondage par frame).
+    duck_release_at: Option<Instant>,
     playing: Vec<StaticSoundHandle>,
     /// Sons **en flux** en cours de lecture (Sprint 104, `StreamingSoundData`) :
     /// type de handle distinct de `StaticSoundHandle`, pas de décodage complet
@@ -122,13 +166,50 @@ impl Audio {
         let music_track = manager
             .as_mut()
             .and_then(|m| m.add_sub_track(TrackBuilder::new()).ok());
-        let sfx_track = manager
+        let music_track_b = manager
             .as_mut()
             .and_then(|m| m.add_sub_track(TrackBuilder::new()).ok());
+        // Bus SFX (Sprint 121) : EQ (retire le rumble grave qui donne un mixage
+        // boueux quand plusieurs effets s'accumulent) → compresseur en limiteur
+        // (ratio élevé, évite l'écrêtage quand beaucoup de sons se superposent,
+        // ex. plusieurs impacts la même frame) → réverbération (sèche par défaut,
+        // `mix` piloté à la volée par `set_reverb_mix`/le script `reverb()` d'une
+        // zone). Ordre du chaînage : nettoyer (EQ) avant de compresser évite que
+        // le grave inutile ne déclenche le limiteur pour rien ; la réverbération
+        // en dernier traite le signal déjà nettoyé/compressé.
+        let mut sfx_builder = TrackBuilder::new();
+        sfx_builder.add_effect(EqFilterBuilder::new(
+            EqFilterKind::LowShelf,
+            150.0,
+            Decibels(-6.0),
+            0.7,
+        ));
+        sfx_builder.add_effect(
+            CompressorBuilder::new()
+                .threshold(-6.0)
+                .ratio(10.0)
+                .attack_duration(Duration::from_millis(5))
+                .release_duration(Duration::from_millis(80)),
+        );
+        let reverb_handle = sfx_builder.add_effect(
+            ReverbBuilder::new()
+                .feedback(0.6)
+                .damping(0.5)
+                .mix(Mix::DRY),
+        );
+        let sfx_track = manager
+            .as_mut()
+            .and_then(|m| m.add_sub_track(sfx_builder).ok());
+        let reverb = sfx_track.as_ref().map(|_| reverb_handle);
         Audio {
             manager,
             music_track,
+            music_track_b,
             sfx_track,
+            reverb,
+            music_volume: 1.0,
+            music_layer_mix: 0.0,
+            duck_release_at: None,
             playing: Vec::new(),
             streaming_playing: StreamingHandles::default(),
             cache: HashMap::new(),
@@ -265,15 +346,60 @@ impl Audio {
         };
         let data = data.playback_rate(playback_rate as f64);
         self.start_on(data, gain, Track::Sfx);
+        self.duck();
     }
 
-    /// À appeler chaque frame : récupère les sons décodés et joue ceux en attente.
+    /// À appeler chaque frame : récupère les sons décodés et joue ceux en attente,
+    /// et relâche le ducking en cours si son délai (`DUCK_HOLD`) est écoulé.
     pub fn update(&mut self) {
         while let Ok((path, data)) = self.rx.try_recv() {
             self.cache.insert(path.clone(), data.clone());
             if let Some(gain) = self.pending.remove(&path) {
                 self.start(data, gain);
             }
+        }
+        if self.duck_release_at.is_some_and(|at| Instant::now() >= at) {
+            self.duck_release_at = None;
+            self.apply_music_volumes(Tween {
+                duration: DUCK_RELEASE_DURATION,
+                ..Default::default()
+            });
+        }
+    }
+
+    /// Baisse temporairement le volume musique (Sprint 121, ducking) : chaque
+    /// effet sonore « pousse » l'échéance de relâchement de `DUCK_HOLD` — des SFX
+    /// rapprochés (rafale de tirs, pas de course) gardent donc la musique baissée
+    /// en continu au lieu d'un ducking qui hoquette entre chaque son, et elle ne
+    /// remonte qu'une fois le dernier son de la salve passé.
+    fn duck(&mut self) {
+        self.duck_release_at = Some(Instant::now() + DUCK_HOLD);
+        self.apply_music_volumes(Tween {
+            duration: DUCK_ATTACK_DURATION,
+            ..Default::default()
+        });
+    }
+
+    /// Recalcule et applique en une fois le volume des deux layers musique à
+    /// partir de `music_volume` (réglage utilisateur), `music_layer_mix`
+    /// (crossfade A/B) et l'atténuation de ducking courante (`duck_factor`, 1.0 =
+    /// pas de ducking) — un seul point d'application plutôt que dupliqué dans
+    /// `duck`/`update`/`set_music_volume`/`set_music_layer_mix`, qui composent
+    /// tous les mêmes trois grandeurs.
+    fn apply_music_volumes(&mut self, tween: Tween) {
+        let duck_factor = if self.duck_release_at.is_some() {
+            DUCK_GAIN_FACTOR
+        } else {
+            1.0
+        };
+        let base = self.music_volume * duck_factor;
+        if let Some(track) = self.music_track.as_mut() {
+            let gain = base * (1.0 - self.music_layer_mix);
+            track.set_volume(Decibels(gain_to_db(gain)), tween);
+        }
+        if let Some(track) = self.music_track_b.as_mut() {
+            let gain = base * self.music_layer_mix;
+            track.set_volume(Decibels(gain_to_db(gain)), tween);
         }
     }
 
@@ -298,11 +424,82 @@ impl Audio {
 
     /// Volume (0..1) de la piste musique/ambiance (Sprint 104, persisté dans
     /// `Settings::music_volume`) — s'applique en direct à tous les sons déjà
-    /// en cours sur cette piste, sans avoir à les rejouer.
+    /// en cours sur cette piste, sans avoir à les rejouer. Recalculé via
+    /// `apply_music_volumes` (Sprint 121) : compose avec le layer B et un
+    /// ducking éventuellement en cours plutôt que de les écraser.
     pub fn set_music_volume(&mut self, v: f32) {
-        if let Some(track) = self.music_track.as_mut() {
-            track.set_volume(Decibels(gain_to_db(v.clamp(0.0, 1.0))), Tween::default());
+        self.music_volume = v.clamp(0.0, 1.0);
+        self.apply_music_volumes(Tween::default());
+    }
+
+    /// Mélange (0..1) entre les deux layers de musique adaptative (Sprint 121) :
+    /// 0 = uniquement le layer A (`play`/`play_gain`/`play_music_streaming_gain`),
+    /// 1 = uniquement le layer B (`play_music_layer_b_streaming_gain`). Crossfade
+    /// linéaire sur les deux volumes plutôt qu'une coupure nette — les deux
+    /// layers doivent déjà être en train de jouer en boucle pour un résultat
+    /// sans à-coup (le mélange ne fait varier que le volume, pas la position de
+    /// lecture : les deux flux doivent rester synchronisés par construction,
+    /// typiquement deux exports du même morceau avec/sans la couche « combat »).
+    pub fn set_music_layer_mix(&mut self, t: f32, tween_secs: f32) {
+        self.music_layer_mix = t.clamp(0.0, 1.0);
+        self.apply_music_volumes(Tween {
+            duration: Duration::from_secs_f32(tween_secs.max(0.0)),
+            ..Default::default()
+        });
+    }
+
+    /// Mélange sec/mouillé (0..1) de la réverbération du bus SFX (Sprint 121) —
+    /// piloté par une zone `trigger` scriptée (`reverb(mix)`, cf.
+    /// `app::scripting`) ou tout autre appelant. No-op si le manager audio ou le
+    /// bus SFX sont indisponibles (mêmes réserves que le reste du module).
+    pub fn set_reverb_mix(&mut self, mix: f32, tween_secs: f32) {
+        if let Some(reverb) = self.reverb.as_mut() {
+            reverb.set_mix(
+                Mix(mix.clamp(0.0, 1.0)),
+                Tween {
+                    duration: Duration::from_secs_f32(tween_secs.max(0.0)),
+                    ..Default::default()
+                },
+            );
         }
+    }
+
+    /// Layer B de musique adaptative (Sprint 121, `play_music_streaming_gain` /
+    /// `set_music_layer_mix`) : même mécanique que le layer A (flux, pas de
+    /// décodage complet en mémoire), sur sa propre piste. Absent sur wasm32 pour
+    /// la même raison que `play_music_streaming_gain` (cf. sa doc).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn play_music_layer_b_streaming_gain(&mut self, path: &str, panning: f32) {
+        let Some(track) = self.music_track_b.as_mut() else {
+            return;
+        };
+        let panning = Panning(panning.clamp(-1.0, 1.0));
+        let gain = self.music_volume * self.music_layer_mix;
+        let volume = Decibels(gain_to_db(gain));
+        let data = if crate::assets::is_known_scheme(path) {
+            match crate::assets::read_bytes(path) {
+                Some(bytes) => StreamingSoundData::from_cursor(std::io::Cursor::new(bytes))
+                    .map(|d| d.volume(volume).panning(panning)),
+                None => {
+                    log::error!("Son introuvable : {path}");
+                    return;
+                }
+            }
+        } else {
+            StreamingSoundData::from_file(path).map(|d| d.volume(volume).panning(panning))
+        };
+        match data {
+            Ok(data) => match track.play(data) {
+                Ok(handle) => self.streaming_playing.push(handle),
+                Err(e) => log::error!("Lecture audio (flux, layer B) échouée : {e}"),
+            },
+            Err(e) => log::error!("Son (flux, layer B) '{path}' illisible : {e}"),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn play_music_layer_b_streaming_gain(&mut self, path: &str, _panning: f32) {
+        log::warn!("Musique/ambiance en flux (layer B) indisponible sur le web : {path}");
     }
 
     /// Volume (0..1) de la piste effets sonores (Sprint 104, persisté dans
@@ -382,6 +579,45 @@ mod tests {
         audio.set_sfx_volume(0.0);
         audio.play_music_streaming_gain("chemin/inexistant.mp3", 0.5, 0.0);
         audio.stop_all();
+    }
+
+    /// Sprint 121 : les nouvelles surfaces (réverbération, layer B, ducking) ne
+    /// doivent jamais paniquer non plus, que l'`AudioManager` soit disponible ou
+    /// non — même esprit que le test ci-dessus. `duck()` est exercé indirectement
+    /// via `play_bytes` (pas de méthode publique dédiée), et `update()` est
+    /// appelé pour couvrir le chemin de relâchement du ducking.
+    #[test]
+    fn reverb_layer_b_and_ducking_never_panic_regardless_of_manager_availability() {
+        let mut audio = Audio::new();
+        audio.set_reverb_mix(0.6, 0.5);
+        audio.set_music_layer_mix(0.5, 1.0);
+        audio.play_music_layer_b_streaming_gain("chemin/inexistant.mp3", 0.0);
+        crate::runtime::sfx::play(&mut audio, crate::runtime::sfx::Sfx::Jump);
+        audio.update();
+        audio.stop_all();
+    }
+
+    /// Sans matériel audio (CI/sandbox, `AudioManager::new()` en échec), le
+    /// ducking doit rester un pur no-op silencieux : `duck_release_at` ne doit
+    /// jamais rester bloqué à `Some` indéfiniment (ce qui gèlerait `update()`
+    /// sur une comparaison de temps sans jamais rien appliquer de visible, un
+    /// bug plus subtil qu'un panic direct).
+    #[test]
+    fn duck_release_clears_even_without_an_audio_manager() {
+        let mut audio = Audio::new();
+        crate::runtime::sfx::play(&mut audio, crate::runtime::sfx::Sfx::Jump);
+        assert!(
+            audio.duck_release_at.is_some(),
+            "un SFX doit programmer un relâchement de ducking, même sans manager"
+        );
+        // Avance artificiellement l'échéance dans le passé plutôt que d'attendre
+        // DUCK_HOLD en vrai — ce test doit rester instantané.
+        audio.duck_release_at = Some(Instant::now() - Duration::from_millis(1));
+        audio.update();
+        assert!(
+            audio.duck_release_at.is_none(),
+            "update() doit relâcher le ducking une fois l'échéance passée"
+        );
     }
 
     /// Sprint 108 : `play_bytes` accepte un gain/débit de lecture différents

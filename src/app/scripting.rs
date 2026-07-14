@@ -45,6 +45,7 @@ pub(super) fn run_script(
     debug_out: &mut Vec<(Vec3, Vec3, [f32; 3])>,
     exited: bool,
     physics: Option<&crate::runtime::physics::Physics>,
+    reverb_out: &mut Vec<f32>,
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
     let obj = lua.create_table()?;
@@ -103,6 +104,18 @@ pub(super) fn run_script(
     let vib_ref = vib.clone();
     let vibrate = lua.create_function(move |_, ms: f32| {
         vib_ref.push(ms)?;
+        Ok(())
+    })?;
+
+    // `reverb(mix)` (Sprint 121) : demande un mélange sec/mouillé (0..1) pour la
+    // réverbération du bus SFX — typiquement appelé depuis le script d'une zone
+    // `trigger` (Sprint 89) à l'entrée/sortie (`obj.triggered`/`obj.exited`), pas
+    // un nouveau type de zone natif. Empilé comme `vibrate` : le dernier appel du
+    // tick l'emporte côté Rust (cf. `AppState::sim_step`), pas de fusion ici.
+    let reverb_tbl = lua.create_table()?;
+    let reverb_ref = reverb_tbl.clone();
+    let reverb_fn = lua.create_function(move |_, mix: f32| {
+        reverb_ref.push(mix.clamp(0.0, 1.0))?;
         Ok(())
     })?;
 
@@ -256,6 +269,7 @@ pub(super) fn run_script(
     g.set("input", input_tbl)?;
     g.set("tilt", tilt)?;
     g.set("vibrate", vibrate)?;
+    g.set("reverb", reverb_fn)?;
     g.set("set_health", set_health)?;
     g.set("damage", damage)?;
     g.set("emit", emit)?;
@@ -351,6 +365,9 @@ pub(super) fn run_script(
     for v in vib.sequence_values::<f32>().flatten() {
         vib_out.push(v);
     }
+    for v in reverb_tbl.sequence_values::<f32>().flatten() {
+        reverb_out.push(v);
+    }
     if let Ok(h) = hud.get::<f32>("h") {
         *health_out = Some(h);
     }
@@ -422,6 +439,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
@@ -452,6 +470,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
@@ -491,6 +510,7 @@ mod tests {
             &mut debug_out,
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(debug_out.len(), 2);
@@ -539,6 +559,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(events_out, vec!["porte".to_string()]);
@@ -591,6 +612,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(
@@ -653,6 +675,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.x, 42.0);
@@ -719,6 +742,7 @@ mod tests {
             &mut debug_out,
             false,
             Some(&phys),
+            &mut Vec::new(),
         )
         .unwrap();
         assert!(
@@ -765,6 +789,7 @@ mod tests {
             &mut Vec::new(),
             false,
             Some(&phys),
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.x, 42.0);
@@ -803,6 +828,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.x, 1.0);
@@ -866,6 +892,7 @@ mod tests {
             &mut Vec::new(),
             false,
             Some(&phys),
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.x, 1.0, "seule la sphère proche est à 2 m");
@@ -906,6 +933,7 @@ mod tests {
             &mut Vec::new(),
             false,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
@@ -932,6 +960,7 @@ mod tests {
             &mut Vec::new(),
             true,
             None,
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
