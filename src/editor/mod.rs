@@ -205,6 +205,10 @@ pub struct UiActions {
     /// « Quitter » : ferme l'application.
     pub quit: bool,
     pub play_audio: Option<String>,
+    /// Fenêtre Paramètres : volume musique/ambiance changé (Sprint 104).
+    pub music_volume: Option<f32>,
+    /// Fenêtre Paramètres : volume effets sonores changé (Sprint 104).
+    pub sfx_volume: Option<f32>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
     /// Réordonnancement par glisser-déposer dans la hiérarchie : `(index source, index cible)`.
@@ -647,7 +651,7 @@ fn build_ui(
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
-    settings_window(root.ctx(), panels, settings);
+    settings_window(root.ctx(), panels, settings, actions);
     // Fenêtre « 👁 Aperçu HUD » : prévisualiser les overlays de jeu en Édition.
     hud_preview_window(root.ctx(), hud_preview);
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).

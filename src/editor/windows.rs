@@ -284,11 +284,13 @@ pub(super) fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
     painter.rect_filled(notch, 7.0, Color32::from_rgb(20, 20, 24));
 }
 
-/// Fenêtre « Paramètres » : clé API DeepSeek (persistée à chaque modification).
+/// Fenêtre « Paramètres » : clé API DeepSeek, volumes audio (persistés à
+/// chaque modification).
 pub(super) fn settings_window(
     ctx: &egui::Context,
     panels: &mut Panels,
     settings: &mut crate::app::settings::Settings,
+    actions: &mut super::UiActions,
 ) {
     let mut open = panels.settings;
     egui::Window::new("⚙  Paramètres")
@@ -387,6 +389,26 @@ pub(super) fn settings_window(
                 "Clé publique par conception côté Firebase — la sécurité vient des règles \
                  de la Realtime Database, pas du secret de cette clé (cf. SPRINT_MMORPG.md).",
             );
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("Audio");
+            ui.label("Musique / ambiance");
+            if ui
+                .add(egui::Slider::new(&mut settings.music_volume, 0.0..=1.0))
+                .drag_stopped()
+            {
+                settings.save();
+                actions.music_volume = Some(settings.music_volume);
+            }
+            ui.label("Effets sonores");
+            if ui
+                .add(egui::Slider::new(&mut settings.sfx_volume, 0.0..=1.0))
+                .drag_stopped()
+            {
+                settings.save();
+                actions.sfx_volume = Some(settings.sfx_volume);
+            }
         });
     panels.settings = open;
 }

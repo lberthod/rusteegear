@@ -1719,9 +1719,36 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ### PHASE P — Audio, HUD & confort (104 → 113, sprints tampons insérables après K)
 
-#### Sprint 104 — Audio : bus + panning + streaming ⬜
-- [ ] Tracks kira musique/SFX (volumes persistés) ; panning stéréo caméra→source ; `StreamingSoundData` pour les musiques.
-- **Fichiers** : `src/runtime/audio.rs`, `src/app/settings.rs`.
+#### Sprint 104 — Audio : bus + panning + streaming ✅ FAIT
+- [x] **Deux pistes kira** (`src/runtime/audio.rs`, `manager.add_sub_track`) :
+      musique/ambiance (`play`/`play_gain`/`play_music_streaming_gain`) et
+      effets sonores (`play_bytes`, utilisé par `sfx.rs`) — séparées par les
+      points d'entrée déjà existants, aucun site d'appel gameplay n'a changé
+      de signature. `Audio::set_music_volume`/`set_sfx_volume` réglent le
+      volume en direct sur la piste (`TrackHandle::set_volume`), sans
+      re-décoder/rejouer les sons en cours.
+- [x] **`StreamingSoundData` pour la musique/ambiance** (`play_music_
+      streaming_gain`, nouveau) : remplace `StaticSoundData::from_file` (tout
+      décodé en mémoire à l'avance) sur le seul site de lecture de fichiers
+      réels longs (`AudioSource` de scène, `src/app/mod.rs`) — plus de pic
+      mémoire pour une musique longue. Pas de cache pour un flux (état de
+      lecture, pas `Clone`) : sans conséquence, une `AudioSource` se
+      déclenche une fois à l'entrée en Play, jamais rejouée depuis un cache.
+- [x] **Panning stéréo caméra→source** (`audio::camera_panning`, fonction
+      pure testable sans `AudioManager`) : projette le vecteur caméra→source
+      sur l'axe « droite » de la caméra (dérivé du couple œil/cible, pas du
+      yaw brut — évite toute hypothèse de signe sur la convention de
+      rotation), appliqué aux `AudioSource` spatialisées.
+- [x] **Volumes persistés** (`src/app/settings.rs`, `music_volume`/
+      `sfx_volume`, `#[serde(default)]`) : deux sliders dans la fenêtre
+      Paramètres (`src/editor/windows.rs`), propagés vers `AppState`/`Audio`
+      via `UiActions` (même patron que `play_audio` existant) — et lus une
+      fois au démarrage (`AppState::new`, `Settings::load()`) pour que le
+      volume enregistré s'applique dès le lancement, pas seulement après un
+      premier geste sur un slider.
+- **Fichiers** : `src/runtime/audio.rs`, `src/app/mod.rs`, `src/app/
+  settings.rs`, `src/editor/mod.rs`, `src/editor/windows.rs`,
+  `src/gfx/renderer.rs`.
 - **Livrable** : réglages M/SFX dans les paramètres ; musique longue sans pic mémoire (profiler).
 
 #### Sprint 105a-1 — Maintenabilité : extraction `app/simulation.rs` + `app/scripting.rs` ⬜

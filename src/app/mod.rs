@@ -575,6 +575,15 @@ impl AppState {
         let (firebase_tx, firebase_rx) = channel();
         let (chat_tx, chat_rx) = channel();
         let (leaderboard_tx, leaderboard_rx) = channel();
+        // Volumes musique/SFX (Sprint 104) : lus une fois ici plutôt qu'attendre
+        // que l'utilisateur ouvre la fenêtre Paramètres et bouge un slider —
+        // `Editor` (qui possède `Settings`) et `AppState` (qui possède `Audio`)
+        // sont construits indépendamment, sans moment commun où propager
+        // l'un vers l'autre autrement qu'en relisant `Settings::load()` ici.
+        let mut audio = crate::runtime::audio::Audio::new();
+        let initial_settings = crate::app::settings::Settings::load();
+        audio.set_music_volume(initial_settings.music_volume);
+        audio.set_sfx_volume(initial_settings.sfx_volume);
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -686,7 +695,7 @@ impl AppState {
             was_playing: false,
             play_snapshot: Vec::new(),
             physics: None,
-            audio: crate::runtime::audio::Audio::new(),
+            audio,
             import_tx: tx,
             import_rx: rx,
             scene_load_tx: scene_tx,
@@ -788,6 +797,18 @@ impl AppState {
         self.audio.play(path);
     }
 
+    /// Volume (0..1) de la piste musique/ambiance (Sprint 104, persisté dans
+    /// `Settings::music_volume`).
+    pub fn set_music_volume(&mut self, v: f32) {
+        self.audio.set_music_volume(v);
+    }
+
+    /// Volume (0..1) de la piste effets sonores (Sprint 104, persisté dans
+    /// `Settings::sfx_volume`).
+    pub fn set_sfx_volume(&mut self, v: f32) {
+        self.audio.set_sfx_volume(v);
+    }
+
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         self.gizmo_mode = mode;
     }
@@ -850,9 +871,14 @@ impl AppState {
             // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
             self.init_waves();
             self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
-            // sons en autoplay (gain atténué par la distance à la caméra si spatialisé)
+            // sons en autoplay (gain atténué par la distance à la caméra, panning
+            // stéréo caméra→source si spatialisé — Sprint 104) : lus **en flux**
+            // (`play_music_streaming_gain`, `StreamingSoundData`) plutôt que
+            // décodés entièrement en mémoire — une musique/ambiance longue ne
+            // provoque plus de pic mémoire au démarrage du mode Play.
             let listener = self.camera.target;
-            let clips: Vec<(String, f32)> = self
+            let eye = self.camera.eye();
+            let clips: Vec<(String, f32, f32)> = self
                 .scene
                 .objects
                 .iter()
@@ -861,17 +887,23 @@ impl AppState {
                     if !a.autoplay || a.clip.is_empty() {
                         return None;
                     }
-                    let gain = if a.spatial {
+                    let (gain, panning) = if a.spatial {
                         let dist = (o.transform.position - listener).length();
-                        (1.0 - dist / 20.0).clamp(0.0, 1.0)
+                        let gain = (1.0 - dist / 20.0).clamp(0.0, 1.0);
+                        let panning = crate::runtime::audio::camera_panning(
+                            eye,
+                            listener,
+                            o.transform.position,
+                        );
+                        (gain, panning)
                     } else {
-                        1.0
+                        (1.0, 0.0)
                     };
-                    Some((a.clip.clone(), gain))
+                    Some((a.clip.clone(), gain, panning))
                 })
                 .collect();
-            for (c, gain) in clips {
-                self.audio.play_gain(&c, gain);
+            for (c, gain, panning) in clips {
+                self.audio.play_music_streaming_gain(&c, gain, panning);
             }
             // Caméra de suivi : se cale d'emblée sur le joueur + adopte un bon angle de
             // jeu 3ᵉ personne (plongée douce + recul confortable) si aucune caméra de jeu

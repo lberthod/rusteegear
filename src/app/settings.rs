@@ -26,6 +26,14 @@ pub struct Settings {
     /// URL de la Realtime Database (ex. `https://xxx-default-rtdb.firebaseio.com`).
     #[serde(default)]
     pub firebase_database_url: String,
+    /// Volume (0..1) de la piste musique/ambiance (Sprint 104, cf.
+    /// `runtime::audio::Audio::set_music_volume`).
+    #[serde(default = "default_volume")]
+    pub music_volume: f32,
+    /// Volume (0..1) de la piste effets sonores (Sprint 104, cf.
+    /// `runtime::audio::Audio::set_sfx_volume`).
+    #[serde(default = "default_volume")]
+    pub sfx_volume: f32,
 }
 
 fn default_model() -> String {
@@ -36,6 +44,10 @@ fn default_temperature() -> f32 {
     0.2
 }
 
+fn default_volume() -> f32 {
+    1.0
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -44,6 +56,8 @@ impl Default for Settings {
             deepseek_temperature: default_temperature(),
             firebase_api_key: String::new(),
             firebase_database_url: String::new(),
+            music_volume: default_volume(),
+            sfx_volume: default_volume(),
         }
     }
 }
@@ -75,5 +89,44 @@ impl Settings {
         if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(p, json);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round-trip JSON pur (`serde_json`, pas `Settings::save`/`load` qui
+    /// touchent le vrai `$HOME` de la machine — à éviter dans un test).
+    #[test]
+    fn music_and_sfx_volume_round_trip_at_full_volume_by_default() {
+        let settings = Settings::default();
+        assert_eq!(settings.music_volume, 1.0);
+        assert_eq!(settings.sfx_volume, 1.0);
+        let json = serde_json::to_string(&settings).expect("sérialisable");
+        let back: Settings = serde_json::from_str(&json).expect("désérialisable");
+        assert_eq!(back.music_volume, 1.0);
+        assert_eq!(back.sfx_volume, 1.0);
+    }
+
+    /// Sprint 104 : un `settings.json` déjà sur le disque d'un utilisateur
+    /// (écrit par une version antérieure, sans `music_volume`/`sfx_volume`)
+    /// doit continuer à charger, avec les valeurs par défaut pour les
+    /// nouveaux champs — même garde-fou que `scene::tests::old_scene_
+    /// without_new_fields_loads_with_defaults`.
+    #[test]
+    fn an_old_settings_file_without_volume_fields_loads_with_defaults() {
+        let old_json = r#"{
+            "deepseek_api_key": "sk-test",
+            "deepseek_model": "deepseek-chat",
+            "deepseek_temperature": 0.2,
+            "firebase_api_key": "",
+            "firebase_database_url": ""
+        }"#;
+        let settings: Settings = serde_json::from_str(old_json)
+            .expect("un ancien settings.json sans les champs volume doit rester lisible");
+        assert_eq!(settings.deepseek_api_key, "sk-test");
+        assert_eq!(settings.music_volume, 1.0);
+        assert_eq!(settings.sfx_volume, 1.0);
     }
 }
