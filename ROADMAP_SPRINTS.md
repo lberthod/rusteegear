@@ -1717,76 +1717,97 @@ régression client. Une manche décidée ne coupe plus tout le process
   `src/net/interpolation.rs` vérifié, non modifié.
 - **Livrable** : tests de réconciliation verts ; aucun rubber-banding à 100 ms simulées.
 
-### PHASE P — Audio, HUD & confort (104 → 110, sprints tampons insérables après K)
+### PHASE P — Audio, HUD & confort (104 → 113, sprints tampons insérables après K)
 
 #### Sprint 104 — Audio : bus + panning + streaming ⬜
 - [ ] Tracks kira musique/SFX (volumes persistés) ; panning stéréo caméra→source ; `StreamingSoundData` pour les musiques.
 - **Fichiers** : `src/runtime/audio.rs`, `src/app/settings.rs`.
 - **Livrable** : réglages M/SFX dans les paramètres ; musique longue sans pic mémoire (profiler).
 
-#### Sprint 105 — Audio : randomisation ⬜
+#### Sprint 105a-1 — Maintenabilité : extraction `app/simulation.rs` + `app/scripting.rs` ⬜
+**Objectif** : réduire encore `app/mod.rs` avant d'y ajouter l'audio/HUD des sprints suivants — même logique que **103a-1**, périmètre différent (ce qui restait « cœur non déplaçable » à l'issue de 103a-1).
+- [ ] `app/simulation.rs` : boucle `advance_play`/`sim_step`, accumulateur à pas fixe, interpolation de poses de rendu (`restore_sim_poses`/`blend_render_poses`) — déplacés hors de `app/mod.rs`, méthodes telles quelles.
+- [ ] `app/scripting.rs` (ou `app/lua.rs`) : API Lua complète (`run_script`, `save.get`/`save.set`, `emit`, `spawn`, etc.) sortie de `app/mod.rs`.
+- **Fichiers** : `src/app/mod.rs`, nouveaux `src/app/{simulation,scripting}.rs`.
+- **Livrable** : `app/mod.rs` encore réduit, comportement inchangé — 312 tests lib + 4 bin + 8 golden toujours verts, `cargo clippy`/`cargo fmt` propres.
+
+#### Sprint 105a-2 — Maintenabilité : durcissement des entrées réseau/fichiers ⬜
+- [ ] Tailles max sur les messages réseau ; validation `lobby`/`name`/`firebase_uid`.
+- [ ] Validation des slots de sauvegarde et des noms d'assets ; encodage des URL Firebase ; refus des chemins `asset://../...`.
+- [ ] Tests dédiés pour chaque validation ajoutée.
+- **Fichiers** : `src/app/network_client.rs`, `src/bin/server.rs`, `src/assets.rs`, `src/runtime/savegame.rs`.
+- **Livrable** : entrées invalides rejetées avec une erreur explicite plutôt qu'un comportement indéfini ; tests de validation verts.
+
+#### Sprint 105a-3 — Maintenabilité : isolation des tests système + `docs/architecture.md` ⬜
+- [ ] Dossier utilisateur temporaire injecté pour les tests touchant saves/assets, au lieu de `$HOME` réel.
+- [ ] Tests réseau séparés des tests unitaires purs, marqués `#[ignore]` ou derrière une feature.
+- [ ] `docs/architecture.md` : boucle principale, pipeline rendu, pipeline simulation, modèle scène/assets, modèle réseau, modèle scripting Lua, règles de sauvegarde/export.
+- **Fichiers** : tests concernés dans `src/app/`, `src/runtime/savegame.rs`, `src/net/`, nouveau `docs/architecture.md`.
+- **Livrable** : CI plus fiable (aucun test ne dépend d'un `$HOME` réel ni d'un socket sans opt-in) ; documentation d'architecture consultable en 5 minutes.
+
+#### Sprint 108 — Audio : randomisation ⬜
 - [ ] ± pitch/volume par déclenchement (RNG du Sprint 81).
 - **Fichiers** : `src/runtime/sfx.rs`.
 - **Livrable** : dix pas d'affilée ne sonnent plus identiques.
 
-#### Sprint 106 — Widgets de HUD déclaratifs ⬜
+#### Sprint 109 — Widgets de HUD déclaratifs ⬜
 - [ ] 5 widgets sérialisés dans la scène (texte, image, jauge, bouton, ancres) au-dessus de la 3D — la safe area existe déjà.
 - **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`.
 - **Livrable** : le HUD de la démo contrôleur reconstruit en widgets, zéro code en dur.
 
-#### Sprint 107 — Manettes + remapping ⬜
+#### Sprint 110 — Manettes + remapping ⬜
 - [ ] Crate `gilrs` ; table actions→touches persistée, éditable dans les paramètres.
 - **Fichiers** : `src/app/input.rs`, `src/app/settings.rs`.
 - **Livrable** : démo jouable à la manette Bluetooth sur desktop et Android.
 
-#### Sprint 108 — Hot-reload (assets + Lua) ⬜
+#### Sprint 111 — Hot-reload (assets + Lua) ⬜
 - [ ] `notify` sur le dossier assets → réimport async ; invalidation des chunks Lua modifiés en cours de Play.
 - **Fichiers** : `src/assets.rs`, `src/runtime/mod.rs`.
 - **Livrable** : retoucher une texture ou un script se voit sans redémarrer.
 
-#### Sprint 109 — Éditeur : snapping + profiler GPU ⬜
+#### Sprint 112 — Éditeur : snapping + profiler GPU ⬜
 - [ ] Snap position/rotation au pas (touche modificatrice) ; timestamp queries wgpu par passe + compteur de draw calls.
 - **Fichiers** : `src/gfx/`, `src/editor/mod.rs`.
 - **Livrable** : coût des passes ombre/scène/HDR/bloom lisible dans le profiler.
 
-#### Sprint 110 — Production : crash log + rustdoc ⬜
+#### Sprint 113 — Production : crash log + rustdoc ⬜
 - [ ] `panic::set_hook` → fichier dans `user://` + écran d'envoi **volontaire** (pas de télémétrie automatique, par principe).
 - [ ] `cargo doc` publié en CI (GitHub Pages) ; semver des releases.
 - **Fichiers** : `src/main.rs`, `.github/workflows/`.
 - **Livrable** : un panic Android laisse une trace exploitable ; doc API en ligne.
 
-### PHASE Q — Web, la vitrine (111 → 114)
+### PHASE Q — Web, la vitrine (114 → 117)
 
-#### Sprint 111 — Build wasm32 ⬜
+#### Sprint 114 — Build wasm32 ⬜
 - [ ] Cible `wasm32-unknown-unknown`, winit→canvas, wgpu→WebGPU ; une scène statique s'affiche.
 - **Fichiers** : `src/lib.rs`, `src/gfx/renderer.rs`, `packaging/`.
 - **Livrable** : la démo mobile tourne dans Chrome, page servie par la CI.
 - **Risque** : API bloquantes (fichiers, threads) — sprint de défrichage.
 
-#### Sprint 112 — Assets & audio web ⬜
+#### Sprint 115 — Assets & audio web ⬜
 - [ ] Assets par fetch async (le chemin async existant aide) ; contexte audio web pour kira.
 - **Livrable** : démo contrôleur complète, jouable au clavier dans le navigateur.
 
-#### Sprint 113 — Multijoueur navigateur ⬜
+#### Sprint 116 — Multijoueur navigateur ⬜
 - [ ] Client WebSocket compilé en WASM (déjà en WebSocket — avantage décisif) ; passage en `wss://`.
 - **Fichiers** : `src/net/client.rs`, `examples/smoke_vps.rs`.
 - **Livrable** : un joueur navigateur et un joueur desktop se voient bouger sur le VPS (smoke test étendu).
 
-#### Sprint 114 — Vitrine publique ⬜
+#### Sprint 117 — Vitrine publique ⬜
 - [ ] Page de démo déployée en CI ; lien README ; « rejoindre un salon » via les lobbies Firebase existants.
 - **Livrable** : n'importe qui teste le multijoueur en un clic — le meilleur README possible.
 
-> **Définition de « terminé » K→Q** : voir section suivante. Au Sprint 114, le moteur a des
+> **Définition de « terminé » K→Q** : voir section suivante. Au Sprint 117, le moteur a des
 > personnages animés, une image moderne (HDR/bloom/ciel), un gameplay scriptable de bout en bout
 > (événements → prefabs → spawn → save), une physique fidèle, un audio vivant, et il tourne dans
 > un navigateur — sans avoir trahi un seul refus assumé.
 
-### PHASE R — WebXR, le casque dans le navigateur (115 → 117, dépend de PHASE Q)
+### PHASE R — WebXR, le casque dans le navigateur (118 → 120, dépend de PHASE Q)
 
-> Le Sprint 111 livre un canvas WebGPU classique en 2D plat, **pas** une session
+> Le Sprint 114 livre un canvas WebGPU classique en 2D plat, **pas** une session
 > WebXR — c'est un chantier séparé, à ne démarrer qu'une fois PHASE Q acquise.
 
-#### Sprint 115 — Spike : session WebXR isolée ⬜
+#### Sprint 118 — Spike : session WebXR isolée ⬜
 - [ ] `cargo build --target wasm32-unknown-unknown --lib` sur le crate actuel (sans
   rendu) pour lister précisément les dépendances bloquantes (`mlua` vendored en C,
   `tokio`/`tokio-tungstenite`) avant d'y toucher.
@@ -1799,7 +1820,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Risque** : `mlua` vendored (C) et `tokio` incompatibles wasm32 nu — à
   contourner ou différer avant toute intégration moteur.
 
-#### Sprint 116 — Intégration moteur : rendu stéréo + poses ⬜
+#### Sprint 119 — Intégration moteur : rendu stéréo + poses ⬜
 - [ ] `XRWebGLLayer`/`XRProjectionLayer` branché sur la surface wgpu du moteur ;
   boucle `XRFrame` (deux vues caméra) cohabitant avec la boucle `winit` existante.
 - [ ] Poses tête + contrôleurs/mains (`XRInputSource`) injectées dans `src/app/`.
@@ -1807,7 +1828,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : une scène RusteeGear s'affiche en stéréo dans un casque simulé
   (IWE) ou réel (Quest via navigateur).
 
-#### Sprint 117 — Tests XR automatisés + polish ⬜
+#### Sprint 120 — Tests XR automatisés + polish ⬜
 - [ ] Scénarios IWE scriptés (déplacement contrôleur, gâchette, préhension d'objet)
   rejoués après chaque changement, via le pont MCP d'IWE si un agent est disponible.
 - **Livrable** : une checklist d'interactions XR de base (viser, saisir, téléporter)
@@ -1819,7 +1840,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ---
 
-### PHASE S — Extensions quasi-gratuites (118 → 127)
+### PHASE S — Extensions quasi-gratuites (121 → 130)
 
 > Issue du même **audit comparatif à 200 fonctionnalités** que les phases K→Q
 > (Godot / Unity / Unreal / RusteeGear, 2026-07-13, re-vérifié dans le code le
@@ -1835,7 +1856,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 > (FMOD/Wwise), pas de GI/Nanite, pas de consoles. Sprints insérables n'importe
 > où après leurs prérequis respectifs — même logique de réservoir que P.
 
-#### Sprint 118 — Audio confort (DSP, reverb, ducking, musique adaptative) ⬜
+#### Sprint 121 — Audio confort (DSP, reverb, ducking, musique adaptative) ⬜
 **Objectif** : transformer le bus musique/SFX (Sprint 104) en mixeur complet.
 - [ ] Reverb/EQ/limiteur natifs à `kira` sur le bus SFX.
 - [ ] Zones de réverbération : triggers (Sprint 89) qui changent le send.
@@ -1845,7 +1866,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : une zone de danger assourdit la musique ; les pas d'un combat font baisser la musique puis remonter (ducking) ; 2 layers de musique se croisent sans coupure.
 - **Prérequis livré** : bus musique/SFX + panning (Sprint 104).
 
-#### Sprint 119 — Post-effets HDR (exposition auto, grading, vignette) ⬜
+#### Sprint 122 — Post-effets HDR (exposition auto, grading, vignette) ⬜
 **Objectif** : finir la chaîne HDR (Sprint 90) avec ses effets quasi gratuits.
 - [ ] Exposition auto : histogramme compute sur la cible HDR.
 - [ ] Color grading : LUT 3D appliquée dans la passe finale.
@@ -1854,25 +1875,25 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : une scène très sombre puis très claire s'expose automatiquement ; une LUT de test change visiblement l'ambiance ; vignette activable/désactivable.
 - **Prérequis livré** : cible HDR + tone mapping (Sprint 90).
 
-#### Sprint 120 — SSAO ⬜
+#### Sprint 123 — SSAO ⬜
 - [ ] Occlusion ambiante hémisphère + blur, branchée sur la cible HDR.
 - **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
 - **Livrable** : les coins et recoins d'une scène de test s'assombrissent visiblement par rapport au rendu sans SSAO (comparaison avant/après).
 - **Prérequis livré** : cible HDR (Sprint 90).
 
-#### Sprint 121 — Variants de shaders + cache ⬜
+#### Sprint 124 — Variants de shaders + cache ⬜
 - [ ] Quelques `#ifdef` maison (ombres on/off, skinning) assemblés à la compilation des pipelines.
 - **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/`.
 - **Livrable** : un objet non skinné et un objet skinné cohabitent dans la même scène sans repli sur un unique pipeline monolithique.
 - **Prérequis livré** : skinning GPU (Sprint 86).
 
-#### Sprint 122 — Forces de zone (vent, buoyancy) ⬜
+#### Sprint 125 — Forces de zone (vent, buoyancy) ⬜
 - [ ] Force appliquée aux corps rapier dans un trigger.
 - **Fichiers** : `src/runtime/physics.rs`, `src/app/mod.rs`.
 - **Livrable** : un objet dynamique traversant une zone de vent est visiblement poussé ; retrouve son comportement normal en sortant.
 - **Prérequis livré** : triggers + événement exit (Sprint 102).
 
-#### Sprint 123 — Pipeline assets, extensions ⬜
+#### Sprint 126 — Pipeline assets, extensions ⬜
 - [ ] Presets qualité par plateforme (généralisation de la réduction mobile existante).
 - [ ] Graphe de dépendances d'assets depuis le manifeste GUID (Sprint 95).
 - [ ] Règles de budget (polycount, tailles) dans le contrôle qualité APK existant.
@@ -1881,12 +1902,12 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : renommer/déplacer un asset référencé ailleurs le signale avant l'export ; un import audio trop fort est normalisé.
 - **Prérequis livré** : manifeste GUID (Sprint 95).
 
-#### Sprint 124 — Compression Zstd des packs embarqués ⬜
+#### Sprint 127 — Compression Zstd des packs embarqués ⬜
 - [ ] Crate `zstd` sur le blob d'assets embarqué dans le player.
 - **Fichiers** : `src/assets.rs`, `packaging/`.
 - **Livrable** : taille du `.apk`/`.dmg` mesurée avant/après, réduction documentée.
 
-#### Sprint 125 — Outillage éditeur (recherche de références, profilers, breakpoints Lua) ⬜
+#### Sprint 128 — Outillage éditeur (recherche de références, profilers, breakpoints Lua) ⬜
 - [ ] Graphe de références sur le manifeste GUID (« qui utilise cet asset ? »).
 - [ ] Profiler CPU : vue timeline par-dessus les spans `tracing` existants.
 - [ ] Profiler mémoire : compteurs par sous-système (au lieu du seul total global).
@@ -1894,7 +1915,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/editor/mod.rs`, `src/app/mod.rs`.
 - **Livrable** : supprimer un asset référencé ailleurs est signalé avant coup ; un script Lua peut être mis en pause à une ligne donnée.
 
-#### Sprint 126 — Terrain sculpté + placement assisté ⬜
+#### Sprint 129 — Terrain sculpté + placement assisté ⬜
 - [ ] Brosse de hauteur (raycast → heightmap → re-upload de la texture de terrain).
 - [ ] Scatter aléatoire d'instances.
 - [ ] Drop physique : laisser rapier poser les objets scattérés au sol.
@@ -1902,7 +1923,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : une brosse en mode édition creuse/soulève le terrain visiblement ; un scatter de rochers tombe et se stabilise au sol sans intervention manuelle.
 - **Prérequis livré** : raycast Lua/éditeur (Sprint 102).
 
-#### Sprint 127 — Localisation + abilities généralisées ⬜
+#### Sprint 130 — Localisation + abilities généralisées ⬜
 - [ ] Table de clés FR/EN pour le texte runtime (pas l'éditeur). RTL : hors scope, assumé.
 - [ ] `combat.rs` (homing, knockback, manches) généralisé en données déclaratives (coût, cooldown, effets à durée) — sans viser l'abstraction complète d'un GAS façon Unreal.
 - **Fichiers** : `src/app/combat.rs`, `src/assets.rs`.
