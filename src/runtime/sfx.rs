@@ -53,11 +53,49 @@ impl Sfx {
     }
 }
 
-/// Joue l'effet (le génère et le met en cache au premier appel).
+/// Amplitude de la variation de hauteur (fraction du débit de lecture
+/// normal) appliquée à chaque déclenchement (Sprint 108) — assez pour que
+/// dix pas d'affilée ne sonnent plus identiques, assez faible pour ne pas
+/// dénaturer le timbre de chaque effet.
+const PITCH_VARIATION: f32 = 0.08;
+
+/// Amplitude de la variation de volume (fraction du volume de base, déjà
+/// baké dans le WAV via `segments()`) appliquée à chaque déclenchement.
+const VOLUME_VARIATION: f32 = 0.15;
+
+/// Tire `(variation de hauteur, variation de volume)`, chacune dans
+/// `[1 - VAR, 1 + VAR]` — xorshift64 maison graine sur l'horloge système,
+/// même patron que `scene::demos` (pas de dépendance `rand` pour un tirage
+/// aussi simple, cf. le choix assumé documenté dans `runtime::savegame`).
+/// Une seule graine, deux tirages successifs (pas deux graines indépendantes
+/// tirées de l'horloge à quelques nanosecondes d'écart, qui pourraient
+/// coïncider).
+fn synth_variation() -> (f32, f32) {
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        | 1; // xorshift dégénère à 0 si la graine est 0 : jamais nulle.
+    let mut next_unit = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % 100_000) as f32 / 100_000.0 // [0, 1)
+    };
+    let pitch = 1.0 + (next_unit() * 2.0 - 1.0) * PITCH_VARIATION;
+    let volume = 1.0 + (next_unit() * 2.0 - 1.0) * VOLUME_VARIATION;
+    (pitch, volume)
+}
+
+/// Joue l'effet (le génère et le met en cache au premier appel), avec une
+/// légère variation aléatoire de hauteur/volume à chaque déclenchement
+/// (Sprint 108) — le contenu mis en cache reste inchangé (cf. la doc de
+/// `Audio::play_bytes`), seule la lecture varie.
 pub fn play(audio: &mut Audio, sfx: Sfx) {
     let (segs, vol) = sfx.segments();
     let wav = synth_wav(segs, vol);
-    audio.play_bytes(sfx.key(), &wav);
+    let (pitch, gain) = synth_variation();
+    audio.play_bytes(sfx.key(), &wav, gain, pitch);
 }
 
 /// Construit un WAV PCM 16 bits mono (44,1 kHz) à partir de segments de tons sinus,
@@ -132,5 +170,35 @@ mod tests {
             let (segs, vol) = s.segments();
             assert!(synth_wav(segs, vol).len() > 44);
         }
+    }
+
+    #[test]
+    fn synth_variation_stays_within_the_documented_bounds() {
+        for _ in 0..20 {
+            let (pitch, volume) = synth_variation();
+            assert!(
+                (1.0 - PITCH_VARIATION..=1.0 + PITCH_VARIATION).contains(&pitch),
+                "pitch hors bornes : {pitch}"
+            );
+            assert!(
+                (1.0 - VOLUME_VARIATION..=1.0 + VOLUME_VARIATION).contains(&volume),
+                "volume hors bornes : {volume}"
+            );
+        }
+    }
+
+    /// Livrable du Sprint 108 : « dix pas d'affilée ne sonnent plus
+    /// identiques ». Assertion tolérante (l'échantillon varie), pas une
+    /// valeur exacte attendue — c'est un tirage aléatoire.
+    #[test]
+    fn synth_variation_does_not_repeat_the_same_value_ten_times_in_a_row() {
+        let pitches: Vec<f32> = (0..20).map(|_| synth_variation().0).collect();
+        let min = pitches.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = pitches.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max > min,
+            "20 tirages consécutifs ne devraient pas tous renvoyer la même \
+             valeur de hauteur (obtenu : {pitches:?})"
+        );
     }
 }

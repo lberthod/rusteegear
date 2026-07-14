@@ -1859,9 +1859,21 @@ régression client. Une manche décidée ne coupe plus tout le process
   `docs/architecture.md`.
 - **Livrable** : CI plus fiable (aucun test ne dépend d'un `$HOME` réel ni d'un socket sans opt-in) ; documentation d'architecture consultable en 5 minutes.
 
-#### Sprint 108 — Audio : randomisation ⬜
-- [ ] ± pitch/volume par déclenchement (RNG du Sprint 81).
-- **Fichiers** : `src/runtime/sfx.rs`.
+#### Sprint 108 — Audio : randomisation ✅ FAIT
+- [x] **± pitch/volume par déclenchement** (`src/runtime/sfx.rs::synth_
+      variation`) : xorshift64 maison graine sur l'horloge système, même
+      patron que `scene::demos` (pas de dépendance `rand`). **Trouvé en
+      concevant le sprint** : `Audio::play_bytes` (`src/runtime/audio.rs`)
+      met en cache le `StaticSoundData` décodé par clé fixe — faire varier
+      le contenu du WAV resynthétisé à chaque appel n'aurait donc aucun
+      effet après le premier appel (le cache rejoue l'ancien son, ignore les
+      octets fraîchement passés). La variation s'applique à la **lecture**
+      à la place : `play_bytes` prend maintenant `gain`/`playback_rate`
+      (kira `StaticSoundData::playback_rate`, pas encore utilisé dans ce
+      dépôt — fait varier la hauteur perçue d'un son court, technique
+      standard pour un effet procédural bon marché), appliqués aussi bien
+      au chemin cache qu'au premier décodage.
+- **Fichiers** : `src/runtime/sfx.rs`, `src/runtime/audio.rs`.
 - **Livrable** : dix pas d'affilée ne sonnent plus identiques.
 
 #### Sprint 109 — Widgets de HUD déclaratifs ⬜

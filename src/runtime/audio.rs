@@ -191,18 +191,30 @@ impl Audio {
 
     /// Joue un son **généré en mémoire** (WAV synthétisé), mis en cache sous `key`.
     /// Sert aux effets sonores du jeu (ramassage, saut, victoire, défaite).
-    pub fn play_bytes(&mut self, key: &str, bytes: &[u8]) {
-        if let Some(data) = self.cache.get(key).cloned() {
-            self.start_on(data, 1.0, Track::Sfx);
-            return;
-        }
-        match StaticSoundData::from_cursor(std::io::Cursor::new(bytes.to_vec())) {
-            Ok(data) => {
-                self.cache.insert(key.to_string(), data.clone());
-                self.start_on(data, 1.0, Track::Sfx);
+    /// `gain`/`playback_rate` (Sprint 108, randomisation) s'appliquent à la
+    /// **lecture**, pas au contenu mis en cache : `bytes` n'est décodé qu'au
+    /// premier appel pour une `key` donnée (cf. le cache ci-dessous) — faire
+    /// varier le contenu resynthétisé à chaque appel n'aurait donc aucun
+    /// effet après le premier ; varier gain/débit de lecture, si.
+    /// `playback_rate` (1.0 = normal) modifie aussi la hauteur perçue du
+    /// son, technique standard pour un effet procédural bon marché.
+    pub fn play_bytes(&mut self, key: &str, bytes: &[u8], gain: f32, playback_rate: f32) {
+        let data = if let Some(cached) = self.cache.get(key).cloned() {
+            cached
+        } else {
+            match StaticSoundData::from_cursor(std::io::Cursor::new(bytes.to_vec())) {
+                Ok(data) => {
+                    self.cache.insert(key.to_string(), data.clone());
+                    data
+                }
+                Err(e) => {
+                    log::error!("SFX '{key}' illisible : {e}");
+                    return;
+                }
             }
-            Err(e) => log::error!("SFX '{key}' illisible : {e}"),
-        }
+        };
+        let data = data.playback_rate(playback_rate as f64);
+        self.start_on(data, gain, Track::Sfx);
     }
 
     /// À appeler chaque frame : récupère les sons décodés et joue ceux en attente.
@@ -316,6 +328,20 @@ mod tests {
         audio.set_music_volume(0.5);
         audio.set_sfx_volume(0.0);
         audio.play_music_streaming_gain("chemin/inexistant.mp3", 0.5, 0.0);
+        audio.stop_all();
+    }
+
+    /// Sprint 108 : `play_bytes` accepte un gain/débit de lecture différents
+    /// de 1.0 (variation aléatoire des effets sonores) sans jamais paniquer,
+    /// que l'`AudioManager` soit disponible ou non (même esprit que le test
+    /// ci-dessus). Passe par `sfx::play` (un vrai `Sfx`) plutôt qu'un WAV
+    /// factice, et l'appelle deux fois pour exercer les deux chemins
+    /// (décodage au premier appel, cache ensuite).
+    #[test]
+    fn play_bytes_with_varied_gain_and_pitch_never_panics() {
+        let mut audio = Audio::new();
+        crate::runtime::sfx::play(&mut audio, crate::runtime::sfx::Sfx::Jump);
+        crate::runtime::sfx::play(&mut audio, crate::runtime::sfx::Sfx::Jump);
         audio.stop_all();
     }
 }
