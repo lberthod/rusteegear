@@ -391,3 +391,62 @@ impl AppState {
         self.selection = self.selected.last().copied();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Invariant : la primaire (si présente) appartient toujours à l'ensemble sélectionné.
+    fn assert_selection_invariant(app: &AppState) {
+        if let Some(p) = app.selection {
+            assert!(
+                app.selected.contains(&p),
+                "primaire {p} absente de selected {:?}",
+                app.selected
+            );
+        } else {
+            assert!(
+                app.selected.is_empty(),
+                "selection None mais selected non vide"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_helpers_keep_invariant() {
+        let mut app = AppState::new();
+        app.select_single(2);
+        assert_eq!(app.selection, Some(2));
+        assert_eq!(app.selected, vec![2]);
+        assert_selection_invariant(&app);
+
+        app.toggle_select(5); // ajoute
+        assert_eq!(app.selection, Some(5));
+        assert!(app.selected.contains(&2) && app.selected.contains(&5));
+        assert_selection_invariant(&app);
+
+        app.toggle_select(5); // retire → primaire repasse au dernier restant
+        assert!(!app.selected.contains(&5));
+        assert_eq!(app.selection, Some(2));
+        assert_selection_invariant(&app);
+
+        app.toggle_select(2); // retire le dernier → plus rien
+        assert_eq!(app.selection, None);
+        assert!(app.selected.is_empty());
+        assert_selection_invariant(&app);
+
+        app.select_single(0);
+        app.clear_selection();
+        assert_selection_invariant(&app);
+    }
+
+    #[test]
+    fn highlight_levels() {
+        let mut app = AppState::new();
+        app.select_single(0);
+        app.toggle_select(1);
+        assert_eq!(app.highlight_of(1), 1.0); // primaire
+        assert_eq!(app.highlight_of(0), 0.55); // autre sélectionné
+        assert_eq!(app.highlight_of(2), 0.0); // non sélectionné
+    }
+}

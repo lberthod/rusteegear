@@ -70,3 +70,62 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::DebugView;
+    use super::*;
+
+    #[test]
+    fn debug_line_accumulates_and_is_owned_by_the_caller_to_clear() {
+        // `AppState` ne se vide jamais elle-même : c'est `Renderer::render` qui lit et
+        // vide `debug_lines` après dessin — vérifié ici côté accumulation
+        // pure, sans dépendre du GPU.
+        let mut app = AppState::new();
+        assert!(app.debug_lines.is_empty());
+        app.debug_line(Vec3::ZERO, Vec3::X, [1.0, 0.0, 0.0]);
+        app.debug_line(Vec3::Y, Vec3::Z, [0.0, 1.0, 0.0]);
+        assert_eq!(app.debug_lines.len(), 2);
+        assert_eq!(app.debug_lines[0], (Vec3::ZERO, Vec3::X, [1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn debug_box_draws_exactly_twelve_edges() {
+        let mut app = AppState::new();
+        app.debug_box(Vec3::ZERO, Vec3::splat(1.0), [1.0, 1.0, 1.0]);
+        assert_eq!(app.debug_lines.len(), 12, "une boîte a 12 arêtes");
+        // Chaque sommet du segment doit être à distance `sqrt(3)` du centre (un coin
+        // d'un cube de demi-taille 1), à l'exception près qu'un segment relie deux coins
+        // adjacents — on vérifie plutôt que toutes les coordonnées valent ±1.
+        for (a, b, _) in &app.debug_lines {
+            for p in [a, b] {
+                assert!(p.x.abs() == 1.0 && p.y.abs() == 1.0 && p.z.abs() == 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn debug_sphere_draws_three_rings_of_segments_all_on_the_radius() {
+        let mut app = AppState::new();
+        let center = Vec3::new(2.0, 0.0, 0.0);
+        app.debug_sphere(center, 3.0, [0.2, 0.6, 1.0]);
+        // 3 anneaux × 16 segments (SEGMENTS interne) = 48 segments.
+        assert_eq!(app.debug_lines.len(), 48);
+        for (a, b, _) in &app.debug_lines {
+            assert!(((*a - center).length() - 3.0).abs() < 1e-4);
+            assert!(((*b - center).length() - 3.0).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn debug_view_defaults_to_shaded_and_encodes_distinct_uniform_values() {
+        // `AppState::new()` doit démarrer en rendu normal (pas en vue de debug par
+        // surprise) ; les 3 vues doivent être distinguables côté shader (main.wgsl
+        // branche sur `> 0.5` / `> 1.5`), donc strictement croissantes.
+        assert_eq!(AppState::new().debug_view, DebugView::Shaded);
+        let shaded = DebugView::Shaded.as_uniform();
+        let normals = DebugView::Normals.as_uniform();
+        let depth = DebugView::Depth.as_uniform();
+        assert!(shaded < normals && normals < depth);
+    }
+}
