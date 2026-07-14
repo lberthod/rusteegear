@@ -2136,21 +2136,40 @@ le WebSocket applicatif natif.
 - **Livrable** : 358 tests lib + 48 tests réseau (`--features net_tests`) verts,
   clippy -D warnings et fmt propres.
 
-#### Sprint 113d — Éditeur : wizard de démarrage pour non-développeur ⬜
+#### Sprint 113d — Éditeur : wizard de démarrage pour non-développeur ✅ FAIT
 **Objectif** : réduire la marche d'entrée de l'inspecteur egui actuel (sliders/DragValue
 bruts) pour un utilisateur qui ne code pas.
-- [ ] Écran « Nouveau projet » guidé : choix d'un template (scène vide / démo
-      contrôleur / niveau de combat) au lieu de partir d'une scène nue.
-- [ ] Panneau « Ajouter un objet » simplifié en avant-plan (cartes avec icône/aperçu)
-      pour les actions les plus courantes du menu Ajouter (déjà riche depuis les
-      Sprints 40-41), sans dupliquer sa logique.
-- [ ] Info-bulles/aide contextuelle sur les champs techniques (metallic/roughness,
-      colliders, etc.) plutôt qu'une refonte complète de l'inspecteur.
-- **Fichiers** : `src/editor/mod.rs`, `src/editor/windows.rs`.
-- **Livrable** : un nouvel utilisateur crée une scène jouable (objet + contrôle mobile
-  + build APK) en suivant le wizard, sans avoir lu de doc technique au préalable.
+- [x] Écran « Nouveau projet » guidé (`windows::new_project_wizard_window`, nouvelle
+      fenêtre `Panels::new_project_wizard`) : 3 cartes — Scène vide / Démo contrôleur /
+      Niveau de combat (démo vagues de zombies) — chacune déclenche **exactement**
+      `actions.new_scene`/`load_controller`/`load_ai_duel`, les mêmes flags déjà
+      consommés par `menu_fichier`/`gfx::renderer::render`, aucune logique de
+      chargement dupliquée. Le bouton « Nouveau projet » du menu Fichier ouvre
+      maintenant ce wizard au lieu de vider la scène directement.
+- [x] Panneau « Ajouter un objet » simplifié (`windows::add_object_cards_window`,
+      `Panels::add_object_cards`, accessible via « 🃏 Ajouter (cartes)… » en tête du
+      menu Ajouter) : grille de cartes icône+nom pour les 6 primitives (même
+      `actions.add = Some(kind)` que le sous-menu existant) + une carte lumière
+      ponctuelle (même ligne `scene.point_lights.push` que `menu_ajouter`, gardée par
+      `MAX_POINT_LIGHTS`) — reste ouvert après un clic pour enchaîner plusieurs ajouts.
+- [x] Info-bulles ajoutées (`src/editor/mod.rs`, inspecteur) : métallique/rugosité/
+      émission (`Matériau`) et Collider/Auto (`Physique`) — pas de refonte de
+      l'inspecteur, juste `.on_hover_text(...)` sur les champs qui n'en avaient pas
+      encore (le pattern existait déjà sur CCD/couches de collision).
+- **Fichiers** : `src/editor/mod.rs`, `src/editor/windows.rs`, `src/editor/menus.rs`.
+- **Livrable** : un nouvel utilisateur ouvre « Nouveau projet », choisit un template,
+  ajoute un objet via les cartes, règle son matériau avec les info-bulles pour se
+  repérer — le build APK (« 📦 Build & Export… ») était déjà entièrement câblé dans
+  l'éditeur avant ce sprint (cf. `src/editor/export.rs`), pas de travail
+  supplémentaire nécessaire là. 342 tests, clippy -D warnings et fmt propres.
+- **Non vérifié visuellement** : l'éditeur est une fenêtre native (wgpu/winit), pas
+  capturable dans cet environnement ; le build web (`packaging/web`) est un export
+  **Player** seul (scène embarquée), pas l'éditeur — donc pas utilisable non plus
+  pour une vérification visuelle. À confirmer par l'utilisateur en lançant l'éditeur
+  en local.
 - **Risques** : ne pas dupliquer la logique existante du menu Ajouter (Sprint 40) —
-  le wizard appelle les mêmes actions, ne réimplémente rien.
+  respecté : le wizard et le panneau de cartes appellent les mêmes `UiActions`/
+  mutations `Scene` que les menus existants, sans réimplémenter quoi que ce soit.
 
 #### Sprint 113e — Documentation « créateur de jeu » ⬜
 **Objectif** : combler l'absence totale de doc utilisateur (`docs/` = 100 % technique

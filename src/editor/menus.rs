@@ -14,8 +14,12 @@ pub(super) fn menu_fichier(
     actions: &mut UiActions,
 ) {
     ui.menu_button("Fichier", |ui| {
-        if ui.button("✨  Nouveau projet").clicked() {
-            actions.new_scene = true;
+        if ui
+            .button("✨  Nouveau projet")
+            .on_hover_text("Ouvre un choix guidé de template (scène vide, démo, niveau de combat)")
+            .clicked()
+        {
+            actions.open_new_project_wizard = true;
             ui.close();
         }
         if ui
@@ -297,6 +301,17 @@ pub(super) fn menu_ajouter(
 ) {
     use crate::scene::{MAX_POINT_LIGHTS, PointLight};
     ui.menu_button("Ajouter", |ui| {
+        if ui
+            .button("🃏  Ajouter (cartes)…")
+            .on_hover_text(
+                "Panneau simplifié avec icônes pour les objets/lumière les plus courants",
+            )
+            .clicked()
+        {
+            actions.open_add_object_cards = true;
+            ui.close();
+        }
+        ui.separator();
         // --- Objet 3D ---
         ui.menu_button("🧱  Objet 3D", |ui| {
             for (kind, label) in [

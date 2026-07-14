@@ -3,7 +3,9 @@
 //! de scripts, navigateur d'assets, prévisualisation HUD. Extrait de
 //! `editor/mod.rs`.
 
-use crate::scene::{HudAnchor, HudBinding, HudWidget, HudWidgetKind, Scene};
+use crate::scene::{
+    HudAnchor, HudBinding, HudWidget, HudWidgetKind, MAX_POINT_LIGHTS, MeshKind, PointLight, Scene,
+};
 
 use super::{HudPreview, Panels, StatusInfo, UiActions, export, readiness};
 
@@ -1240,6 +1242,137 @@ pub(super) fn crash_log_window(
         open = false;
     }
     panels.crash_log = open;
+}
+
+/// Fenêtre « Nouveau projet » guidée (Sprint 113d) : au lieu de partir directement
+/// d'une scène nue, propose un choix de template — la marche d'entrée d'un
+/// utilisateur qui ne code pas. Chaque carte déclenche **exactement** l'action déjà
+/// câblée par l'entrée de menu équivalente dans `menus::menu_fichier`
+/// (`actions.new_scene`/`load_controller`/`load_ai_duel`, consommées dans
+/// `gfx::renderer::render`) : aucune logique de chargement de scène n'est
+/// réimplémentée ici, juste une présentation guidée en avant-plan.
+pub(super) fn new_project_wizard_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.new_project_wizard;
+    let mut close_after = false;
+    egui::Window::new("✨  Nouveau projet")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(340.0)
+        .show(ctx, |ui| {
+            ui.label("Comment démarrer ?");
+            ui.add_space(8.0);
+            if ui
+                .add_sized([320.0, 36.0], egui::Button::new("📄  Scène vide"))
+                .on_hover_text(
+                    "Repart de zéro, sans aucun objet — pour construire son propre niveau.",
+                )
+                .clicked()
+            {
+                actions.new_scene = true;
+                close_after = true;
+            }
+            if ui
+                .add_sized([320.0, 36.0], egui::Button::new("🕹  Démo contrôleur"))
+                .on_hover_text(
+                    "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor — \
+                     un bon point de départ pour explorer les contrôles sans écrire de script.",
+                )
+                .clicked()
+            {
+                actions.load_controller = true;
+                close_after = true;
+            }
+            if ui
+                .add_sized([320.0, 36.0], egui::Button::new("⚔  Niveau de combat"))
+                .on_hover_text(
+                    "Manches de monstres qui poursuivent le joueur (style Call of Zombies) — \
+                     pour explorer combat/vagues/vie sans repartir de zéro.",
+                )
+                .clicked()
+            {
+                actions.load_ai_duel = true;
+                close_after = true;
+            }
+            ui.add_space(4.0);
+            ui.small(
+                "D'autres démos (donjon, duel, course, MMORPG…) restent disponibles dans \
+                 le menu Fichier.",
+            );
+        });
+    if close_after {
+        open = false;
+    }
+    panels.new_project_wizard = open;
+}
+
+/// Fenêtre « Ajouter un objet » simplifiée (Sprint 113d) : cartes avec icône pour
+/// les actions les plus courantes du menu Ajouter (déjà riche depuis les Sprints
+/// 40-41, cf. `menus::menu_ajouter`), en avant-plan plutôt que dans un sous-menu —
+/// même mécanisme d'ajout (`actions.add`, `AppState::add_object`), pas de logique
+/// dupliquée. Reste ouverte après un clic (contrairement à l'assistant « Nouveau
+/// projet ») : ajouter plusieurs objets à la suite est le cas d'usage normal ici.
+pub(super) fn add_object_cards_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &mut Scene,
+    actions: &mut UiActions,
+) {
+    let mut open = panels.add_object_cards;
+    egui::Window::new("🃏  Ajouter un objet")
+        .open(&mut open)
+        .resizable(false)
+        .default_width(260.0)
+        .show(ctx, |ui| {
+            ui.label("Objets 3D :");
+            egui::Grid::new("add_object_cards_grid")
+                .num_columns(3)
+                .spacing([6.0, 6.0])
+                .show(ui, |ui| {
+                    for (i, (kind, icon, label)) in [
+                        (MeshKind::Cube, "🧊", "Cube"),
+                        (MeshKind::Sphere, "⚪", "Sphère"),
+                        (MeshKind::Plane, "▦", "Plan"),
+                        (MeshKind::Cylinder, "🛢", "Cylindre"),
+                        (MeshKind::Capsule, "💊", "Capsule"),
+                        (MeshKind::Terrain, "⛰", "Terrain"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        if ui
+                            .add_sized([76.0, 56.0], egui::Button::new(format!("{icon}\n{label}")))
+                            .clicked()
+                        {
+                            actions.add = Some(kind);
+                        }
+                        if i % 3 == 2 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.separator();
+            ui.label("Lumière :");
+            let can_add_light = scene.point_lights.len() < MAX_POINT_LIGHTS;
+            if ui
+                .add_enabled(
+                    can_add_light,
+                    egui::Button::new("💡  Ponctuelle").min_size([76.0, 32.0].into()),
+                )
+                .on_hover_text(if can_add_light {
+                    "Éclaire dans toutes les directions depuis un point (comme une ampoule)."
+                } else {
+                    "Nombre maximal de lumières ponctuelles déjà atteint."
+                })
+                .clicked()
+            {
+                scene.point_lights.push(PointLight::default());
+            }
+        });
+    panels.add_object_cards = open;
 }
 
 fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {

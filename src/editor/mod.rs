@@ -140,6 +140,14 @@ struct Panels {
     /// le menu Aide. Écran **volontaire** : rien n'est envoyé nulle part depuis ici,
     /// juste consultation/copie/suppression locale (cf. doc de `crash_log`).
     crash_log: bool,
+    /// Fenêtre « Nouveau projet » guidée (Sprint 113d) : choix d'un template
+    /// (scène vide / démo contrôleur / niveau de combat) plutôt que de partir
+    /// directement d'une scène nue.
+    new_project_wizard: bool,
+    /// Fenêtre « Ajouter un objet » simplifiée (Sprint 113d) : cartes avec icône
+    /// pour les actions les plus courantes du menu Ajouter, en avant-plan plutôt
+    /// que dans un sous-menu.
+    add_object_cards: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -253,6 +261,10 @@ pub struct UiActions {
     pub ai_generate_scene: Option<(crate::app::ai::AiRequest, bool)>,
     /// Demande d'ouverture de la fenêtre « Générer une scène (IA) ».
     pub open_ai_scene: bool,
+    /// Demande d'ouverture de la fenêtre « Nouveau projet » guidée (Sprint 113d).
+    pub open_new_project_wizard: bool,
+    /// Demande d'ouverture de la fenêtre « Ajouter un objet » simplifiée (Sprint 113d).
+    pub open_add_object_cards: bool,
     /// Définir la caméra de jeu sur la vue actuelle.
     pub set_game_camera: bool,
     /// Retirer la caméra de jeu.
@@ -751,6 +763,10 @@ fn build_ui(
         status,
         actions,
     );
+    // Fenêtre « Nouveau projet » guidée (Sprint 113d).
+    windows::new_project_wizard_window(root.ctx(), panels, actions);
+    // Fenêtre « Ajouter un objet » simplifiée (Sprint 113d).
+    windows::add_object_cards_window(root.ctx(), panels, scene, actions);
     optimize_window(root.ctx(), panels, scene, actions);
     asset_browser_window(root.ctx(), panels, scene, *selection, actions);
     scripts_window(root.ctx(), panels, scene, selection, selected);
@@ -798,6 +814,13 @@ fn build_ui(
     // Ouverture différée de la fenêtre « Générer une scène (IA) » (demandée par le menu).
     if actions.open_ai_scene {
         panels.ai_scene = true;
+    }
+    // Ouverture différée des fenêtres du Sprint 113d (assistants pour non-développeur).
+    if actions.open_new_project_wizard {
+        panels.new_project_wizard = true;
+    }
+    if actions.open_add_object_cards {
+        panels.add_object_cards = true;
     }
     // « Run Device » (toolbar) : build Android + installation sur le téléphone branché.
     if actions.run_device {
@@ -1213,8 +1236,17 @@ fn build_ui(
                         if obj.physics != PhysicsKind::None {
                             ui.horizontal(|ui| {
                                 use crate::runtime::physics::ColliderShape as Cs;
-                                ui.label("Collider");
-                                ui.selectable_value(&mut obj.collider_shape, Cs::Auto, "Auto");
+                                ui.label("Collider").on_hover_text(
+                                    "Forme invisible utilisée pour les collisions physiques \
+                                     (rebonds, blocages) — indépendante du mesh visible affiché.",
+                                );
+                                ui.selectable_value(&mut obj.collider_shape, Cs::Auto, "Auto")
+                                    .on_hover_text(
+                                        "Devine la forme la plus proche du mesh (Box pour un \
+                                         cube, Sphère pour... une sphère, etc.) — le bon choix \
+                                         par défaut, à ne changer qu'en cas de comportement \
+                                         physique inattendu.",
+                                    );
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Box, "Box");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Sphere, "Sphère");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Capsule, "Capsule");
@@ -1291,15 +1323,30 @@ fn build_ui(
                         ui.collapsing("Matériau", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Métallique");
-                                ui.add(egui::Slider::new(&mut obj.metallic, 0.0..=1.0));
+                                ui.add(egui::Slider::new(&mut obj.metallic, 0.0..=1.0))
+                                    .on_hover_text(
+                                        "0 = plastique/bois (reflets diffus), 1 = métal pur \
+                                         (reflets nets, pas de couleur diffuse). La plupart des \
+                                         objets du quotidien sont proches de 0.",
+                                    );
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Rugosité");
-                                ui.add(egui::Slider::new(&mut obj.roughness, 0.04..=1.0));
+                                ui.add(egui::Slider::new(&mut obj.roughness, 0.04..=1.0))
+                                    .on_hover_text(
+                                        "Bas = surface lisse et brillante (reflet net, comme du \
+                                         verre poli), haut = surface mate mais diffuse la lumière \
+                                         (reflet étalé, comme du plâtre).",
+                                    );
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Émission");
-                                ui.add(egui::Slider::new(&mut obj.emissive, 0.0..=3.0));
+                                ui.add(egui::Slider::new(&mut obj.emissive, 0.0..=3.0))
+                                    .on_hover_text(
+                                        "0 = l'objet ne brille pas par lui-même (couleur normale, \
+                                         éclairée par les lumières de la scène). Au-dessus de 0, \
+                                         l'objet émet sa propre lumière (néon, écran, lave).",
+                                    );
                             });
                         });
                         ui.separator();
