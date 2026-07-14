@@ -1578,13 +1578,33 @@ régression client. Une manche décidée ne coupe plus tout le process
   prefab}.rs`.
 - **Risque** : refactor pur — fait seul, aucun sprint gameplay en parallèle.
 
-#### Sprint 103a-3 — Maintenabilité : commentaires d'historique vers `docs/audits/` ⬜
-- [ ] Commentaires trop volumineux qui documentent l'historique de sprint plutôt que
-      le comportement actuel : déplacer l'historique vers `docs/audits` (à créer),
-      garder dans le code uniquement les invariants importants.
-- **Fichiers** : `src/**/*.rs` (commentaires), nouveau `docs/audits/`.
+#### Sprint 103a-3 — Maintenabilité : commentaires d'historique vers `docs/audits/` 🟡 PILOTE FAIT
+- [x] **Convention établie** : `docs/audits/README.md` documente le partage entre code
+      (invariants/pièges non évidents, jamais de numéro de sprint ni de date) et
+      `docs/audits/<module>.md` (récit — attribution par sprint, bugs réels trouvés en
+      testant, essais écartés).
+- [x] **Pilote sur `src/runtime/physics.rs`** (le fichier le plus dense en références
+      « Sprint N » du projet) : tous les tags `(Sprint N)`, dates (`2026-07-12`) et
+      récits de bugs (« constaté en test réel… », « trouvé en écrivant les tests… »)
+      retirés des commentaires ; historique déplacé dans `docs/audits/physics.md`
+      (attribution par sprint + 6 bugs réels avec leur cause et leur correctif).
+      Comportement inchangé : mouvement de texte de commentaires uniquement.
+- [x] **Livrable vérifié** : 312 tests lib + 4 bin + 8 golden toujours verts,
+      `cargo clippy`/`cargo fmt` propres — aucun changement de code, seulement de
+      commentaires.
+- [ ] **Reste à faire** (généralisation, décision différée à une session ultérieure) :
+      appliquer la même convention aux autres fichiers denses en historique —
+      `src/app/mod.rs` et ses sous-modules, `src/scene/mod.rs` et ses sous-modules,
+      `src/editor/mod.rs` et ses sous-modules — chacun avec son
+      `docs/audits/<module>.md`. Périmètre volontairement non traité d'un coup : un
+      balayage complet de `src/**/*.rs` en une seule passe produirait un diff énorme,
+      difficile à relire, sur un jugement subjectif (quel commentaire est un
+      « invariant important » vs de l'« historique ») — un fichier ou un sous-système
+      à la fois, comme ce pilote.
+- **Fichiers** : `docs/audits/README.md`, `docs/audits/physics.md`,
+  `src/runtime/physics.rs` (commentaires seulement). Reste : `src/**/*.rs`.
 - **Livrable** : commentaires du code recentrés sur les invariants, historique déplacé
-  en doc.
+  en doc — fait pour `physics.rs`, à généraliser.
 
 #### Sprint 103b — Character controller kinématique ⬜
 **Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.

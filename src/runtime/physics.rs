@@ -21,18 +21,18 @@ pub enum ColliderShape {
     Box,
     Sphere,
     Capsule,
-    /// Collider fidèle à la géométrie importée (Sprint 100) : un triangle par
-    /// triangle du mesh — pour un **décor statique** uniquement (`TriMesh` n'a pas
-    /// de volume défini, rapier refuse un corps dynamique avec ce collider ; sans
-    /// garde-fou, un objet dynamique en TriMesh traverserait tout sans jamais entrer
-    /// en collision). Coûteux par rapport aux primitives, mais exact — un décor à la
-    /// silhouette complexe (rochers, architecture) n'a plus besoin d'un `Box`/
-    /// `ConvexHull` approximatif.
+    /// Collider fidèle à la géométrie importée : un triangle par triangle du mesh —
+    /// pour un **décor statique** uniquement (`TriMesh` n'a pas de volume défini,
+    /// rapier refuse un corps dynamique avec ce collider ; sans garde-fou, un objet
+    /// dynamique en TriMesh traverserait tout sans jamais entrer en collision).
+    /// Coûteux par rapport aux primitives, mais exact — un décor à la silhouette
+    /// complexe (rochers, architecture) n'a plus besoin d'un `Box`/`ConvexHull`
+    /// approximatif.
     TriMesh,
-    /// Enveloppe convexe des vertices importés (Sprint 100) : plus fidèle qu'un
-    /// `Box`, plus léger qu'un `TriMesh`, et **utilisable en dynamique**
-    /// (contrairement à `TriMesh`) — le bon choix par défaut pour un décor importé
-    /// non convexe qu'on veut quand même pouvoir faire bouger.
+    /// Enveloppe convexe des vertices importés : plus fidèle qu'un `Box`, plus léger
+    /// qu'un `TriMesh`, et **utilisable en dynamique** (contrairement à `TriMesh`) —
+    /// le bon choix par défaut pour un décor importé non convexe qu'on veut quand
+    /// même pouvoir faire bouger.
     ConvexHull,
 }
 
@@ -74,15 +74,15 @@ pub struct Physics {
     controlled: Vec<(usize, RigidBodyHandle)>,
     /// Collider → index d'objet, pour **tous** les colliders construits (statiques
     /// inclus, contrairement à `dynamic`/`controlled` qui ne suivent que ce qui doit
-    /// être recopié/piloté chaque frame) — Sprint 102 : nécessaire pour retrouver quel
-    /// objet une requête spatiale (`raycast`/`overlap_sphere`) a touché.
+    /// être recopié/piloté chaque frame) — nécessaire pour retrouver quel objet une
+    /// requête spatiale (`raycast`/`overlap_sphere`) a touché.
     collider_owner: std::collections::HashMap<ColliderHandle, usize>,
 }
 
-/// Résultat d'un `Physics::raycast` (Sprint 102) : point d'impact (monde), distance
-/// parcourue depuis l'origine, et index de l'objet touché (`None` si le collider
-/// touché n'a pas été retrouvé dans `collider_owner` — ne doit pas arriver en
-/// pratique, tous les colliders construits par `build` y sont enregistrés).
+/// Résultat d'un `Physics::raycast` : point d'impact (monde), distance parcourue
+/// depuis l'origine, et index de l'objet touché (`None` si le collider touché n'a
+/// pas été retrouvé dans `collider_owner` — ne doit pas arriver en pratique, tous
+/// les colliders construits par `build` y sont enregistrés).
 pub struct RaycastHit {
     pub point: Vec3,
     pub distance: f32,
@@ -127,8 +127,8 @@ impl Physics {
             if controllable {
                 builder = builder.lock_rotations();
             }
-            // CCD (Sprint 101) : cf. la doc de `SceneObject::ccd` — seulement les
-            // objets qui en ont explicitement besoin (missiles/projectiles rapides).
+            // CCD : cf. la doc de `SceneObject::ccd` — seulement les objets qui en
+            // ont explicitement besoin (missiles/projectiles rapides).
             if obj.ccd {
                 builder = builder.ccd_enabled(true);
             }
@@ -154,8 +154,8 @@ impl Physics {
                 let half = (he.y.abs() - r).max(0.01);
                 ColliderBuilder::capsule_y(half, r)
             };
-            // Vertices bruts du mesh importé, mis à l'échelle de l'objet (Sprint 100) —
-            // même principe que `he` ci-dessus pour les primitives : le collider rapier
+            // Vertices bruts du mesh importé, mis à l'échelle de l'objet — même
+            // principe que `he` ci-dessus pour les primitives : le collider rapier
             // n'a pas de transform d'échelle séparée, l'échelle doit être bakée dans la
             // géométrie fournie. `None` pour tout ce qui n'est pas `MeshKind::Imported`
             // (primitives) ou dont l'import n'a pas encore chargé de données.
@@ -174,8 +174,8 @@ impl Physics {
                         .collect(),
                 )
             };
-            // Silhouette exacte (Sprint 100) : un triangle rapier par triangle du mesh
-            // importé. Réservé au décor **statique** par l'appelant (cf. `ColliderShape::
+            // Silhouette exacte : un triangle rapier par triangle du mesh importé.
+            // Réservé au décor **statique** par l'appelant (cf. `ColliderShape::
             // TriMesh` ci-dessous) — `TriMesh` n'a pas de propriétés de masse définies,
             // rapier ne sait pas en faire un corps dynamique cohérent.
             let trimesh = || -> Option<ColliderBuilder> {
@@ -196,8 +196,8 @@ impl Physics {
                     .ok()
                     .map(ColliderBuilder::new)
             };
-            // Enveloppe convexe (Sprint 100) : plus fidèle qu'une boîte, et — contrairement
-            // à `TriMesh` — utilisable sur un corps dynamique (volume défini, propriétés
+            // Enveloppe convexe : plus fidèle qu'une boîte, et — contrairement à
+            // `TriMesh` — utilisable sur un corps dynamique (volume défini, propriétés
             // de masse calculables).
             let convex_hull = || -> Option<ColliderBuilder> {
                 Some(ColliderBuilder::new(SharedShape::convex_hull(
@@ -231,20 +231,18 @@ impl Physics {
                     _ => cuboid(),
                 },
             }
-            // Aucun rebond (0.0) : un personnage n'est pas une balle — à 0.5
-            // (valeur précédente), chaque atterrissage/contact avec un mur ou un
-            // autre joueur renvoyait la moitié de la vitesse d'impact, donnant un
-            // mouvement instable qui « bug » visuellement (constaté en test réel,
-            // 2026-07-12 : « comme une boule qui bug, pas fluide »). Rien dans le
-            // projet ne dépend d'un rebond (aucun mécanisme de type trampoline).
+            // Aucun rebond : un personnage n'est pas une balle (cf. docs/audits/
+            // physics.md pour le mouvement instable observé avec un rebond non nul).
+            // Rien dans le projet ne dépend d'un rebond (aucun mécanisme de type
+            // trampoline).
             .restitution(0.0)
             .friction(0.6)
-            // Couches de collision (Sprint 101) : `Group::from_bits_truncate` ignore
-            // silencieusement les bits au-delà de 32 plutôt que de paniquer sur une
-            // valeur mal formée — un JSON de scène corrompu/ancien ne doit pas faire
-            // planter l'entrée en Play. `And` : les deux objets doivent s'accepter
-            // mutuellement (cf. la doc de `InteractionGroups`), le mode le plus
-            // intuitif pour une paire couche/masque.
+            // Couches de collision : `Group::from_bits_truncate` ignore silencieusement
+            // les bits au-delà de 32 plutôt que de paniquer sur une valeur mal formée —
+            // un JSON de scène corrompu/ancien ne doit pas faire planter l'entrée en
+            // Play. `And` : les deux objets doivent s'accepter mutuellement (cf. la doc
+            // de `InteractionGroups`), le mode le plus intuitif pour une paire
+            // couche/masque.
             .collision_groups(InteractionGroups::new(
                 Group::from_bits_truncate(obj.collision_layer),
                 Group::from_bits_truncate(obj.collision_mask),
@@ -296,13 +294,12 @@ impl Physics {
     /// renforcée en descente (cf. `FALL_GRAVITY_FACTOR` : saut vif plutôt que
     /// « lunaire »). `jump_speed` = vitesse initiale du saut (m/s). `accel` (m/s²)
     /// borne la variation de vitesse horizontale par seconde — `0.0` fixe la vitesse
-    /// instantanément (comportement historique, utilisé par l'IA/le recul qui n'ont
-    /// pas besoin d'inertie). Une valeur positive (mouvement du joueur, cf.
-    /// `Controller::acceleration`) lisse départs et arrêts au lieu d'un « on/off »
-    /// robotique, avec un freinage plus fort que l'accélération (`BRAKE_FACTOR` :
-    /// arrêts nets) et une autorité réduite en l'air (`AIR_CONTROL` : arc de saut
-    /// crédible) — audit qualité du déplacement, 2026-07-12. Renvoie `true` si un
-    /// **saut** a effectivement été déclenché (objet au sol).
+    /// instantanément (utilisé par l'IA/le recul, qui n'ont pas besoin d'inertie). Une
+    /// valeur positive (mouvement du joueur, cf. `Controller::acceleration`) lisse
+    /// départs et arrêts au lieu d'un « on/off » robotique, avec un freinage plus fort
+    /// que l'accélération (`BRAKE_FACTOR` : arrêts nets) et une autorité réduite en
+    /// l'air (`AIR_CONTROL` : arc de saut crédible). Renvoie `true` si un **saut** a
+    /// effectivement été déclenché (objet au sol).
     #[allow(clippy::too_many_arguments)] // paramètres physiques distincts d'un même appel
     pub fn control(
         &mut self,
@@ -381,17 +378,15 @@ impl Physics {
     /// Force la position du corps rigide (dynamique) de l'objet `index`, sans
     /// effet s'il n'en a pas (objet statique/sans physique) — utilisé par la
     /// réconciliation réseau du joueur local (`app::network_client::apply_
-    /// local_network_position`, Sprint 66bis, `SPRINTNETWORK.md`).
+    /// local_network_position`, `SPRINTNETWORK.md`).
     ///
     /// **Nécessaire, pas cosmétique** : `step` recopie la pose du corps
     /// rigide dans `scene.objects[index].transform` à *chaque* appel (sync à
     /// sens unique physique → transform, jamais l'inverse) — écrire
     /// directement dans `transform.position` sans passer par cette méthode
     /// n'a donc d'effet que pour la frame courante ; `step` l'écrase dès le
-    /// tick suivant avec la position du corps rigide, resté inchangé. Bug
-    /// réel trouvé en testant l'app réellement (capture d'écran utilisateur :
-    /// personnage qui semble dupliqué/trembler entre deux points, la
-    /// correction n'ayant jamais persisté au-delà d'une frame).
+    /// tick suivant avec la position du corps rigide, resté inchangé (cf.
+    /// docs/audits/physics.md pour le bug réel que ça a causé).
     pub fn set_position(&mut self, index: usize, pos: Vec3) {
         if let Some(&(_, handle)) = self.dynamic.iter().find(|&&(i, _)| i == index)
             && let Some(body) = self.bodies.get_mut(handle)
@@ -400,9 +395,9 @@ impl Physics {
         }
     }
 
-    /// Impose la vitesse linéaire d'un corps dynamique (Sprint 101) : utile pour un
-    /// projectile qui doit partir à une vitesse connue dès sa création, plutôt que de
-    /// l'accélérer progressivement comme le ferait `control` pour un joueur piloté.
+    /// Impose la vitesse linéaire d'un corps dynamique : utile pour un projectile qui
+    /// doit partir à une vitesse connue dès sa création, plutôt que de l'accélérer
+    /// progressivement comme le ferait `control` pour un joueur piloté.
     pub fn set_velocity(&mut self, index: usize, v: Vec3) {
         if let Some(&(_, handle)) = self.dynamic.iter().find(|&&(i, _)| i == index)
             && let Some(body) = self.bodies.get_mut(handle)
@@ -412,14 +407,13 @@ impl Physics {
     }
 
     /// Broad-phase **jetable**, reconstruite à la volée pour une requête spatiale
-    /// ponctuelle (`raycast`/`overlap_sphere`, Sprint 102) — délibérément distincte de
+    /// ponctuelle (`raycast`/`overlap_sphere`) — délibérément distincte de
     /// `self.broad` (la BVH incrémentale que `step` fait vivre d'un pas à l'autre) :
     /// la peupler nous-mêmes ici évite de perturber son état interne (compteurs de
-    /// changement, détection de première passe) entre deux pas de simulation, ce qui
-    /// a fait dérailler la physique réelle en test (chasseurs/joueur téléportés) lors
-    /// d'un premier essai avec une BVH partagée. Reconstruire à chaque appel coûte
-    /// O(nombre de colliders) — acceptable à l'échelle d'un script par tick, pas
-    /// d'un appel par frame et par pixel.
+    /// changement, détection de première passe) entre deux pas de simulation (cf.
+    /// docs/audits/physics.md — la réutiliser a fait dérailler la physique réelle en
+    /// test). Reconstruire à chaque appel coûte O(nombre de colliders) — acceptable à
+    /// l'échelle d'un script par tick, pas d'un appel par frame et par pixel.
     fn query_broad_phase(&self) -> DefaultBroadPhase {
         let mut broad = DefaultBroadPhase::new();
         let handles: Vec<ColliderHandle> = self.collider_owner.keys().copied().collect();
@@ -434,13 +428,13 @@ impl Physics {
         broad
     }
 
-    /// Lance un rayon dans le monde physique (Sprint 102), via le `QueryPipeline` de
-    /// rapier — brique de `raycast()` côté Lua (`src/app/mod.rs`) : capteur de sol
-    /// (rayon vers le bas), ligne de vue d'un cône de vision, etc. `mask` filtre les
-    /// colliders par couche (mêmes bits que `collision_layer`/`collision_mask`, Sprint
-    /// 101) : seuls les colliders dont la couche recoupe `mask` sont touchés. `dir`
-    /// n'a pas besoin d'être normalisé ; direction nulle → `None` sans planter plutôt
-    /// que de diviser par zéro (`Vec3::try_normalize`).
+    /// Lance un rayon dans le monde physique, via le `QueryPipeline` de rapier —
+    /// brique de `raycast()` côté Lua (`src/app/mod.rs`) : capteur de sol (rayon vers
+    /// le bas), ligne de vue d'un cône de vision, etc. `mask` filtre les colliders par
+    /// couche (mêmes bits que `collision_layer`/`collision_mask`) : seuls les colliders
+    /// dont la couche recoupe `mask` sont touchés. `dir` n'a pas besoin d'être
+    /// normalisé ; direction nulle → `None` sans planter plutôt que de diviser par
+    /// zéro (`Vec3::try_normalize`).
     pub fn raycast(&self, origin: Vec3, dir: Vec3, max_toi: f32, mask: u32) -> Option<RaycastHit> {
         let dir = dir.try_normalize()?;
         let broad = self.query_broad_phase();
@@ -464,7 +458,7 @@ impl Physics {
     }
 
     /// Renvoie les index d'objets dont le collider recoupe une sphère de `radius`
-    /// centrée en `center` (Sprint 102, `QueryPipeline::intersect_shape`) — brique
+    /// centrée en `center` (`QueryPipeline::intersect_shape`) — brique
     /// d'`overlap_sphere()` côté Lua : détection de proximité (ennemis dans un rayon,
     /// zone d'effet), sans avoir à lancer un rayon par direction possible. Même
     /// filtrage par couche que `raycast`.
@@ -521,13 +515,12 @@ mod tests {
     use super::*;
     use crate::scene::{ImportedMesh, Scene, SceneObject};
 
-    /// Décor triangulaire (Sprint 100) : un seul triangle plat couvrant la moitié
-    /// « arrière-gauche » du carré `[-1, 1] × [-1, 1]` (z=0 fixe) — sa boîte englobante
-    /// est le carré entier, mais sa silhouette réelle laisse le coin « avant-droit »
-    /// (x>0, z>0 environ) complètement vide. Un collider `Box`/`Auto` (bounding box)
-    /// bloquerait donc n'importe où sur tout le carré ; un `TriMesh`/`ConvexHull`
-    /// fidèle ne bloque que sur la moitié réellement couverte — c'est exactement la
-    /// différence que ce sprint doit démontrer.
+    /// Décor triangulaire : un seul triangle plat couvrant la moitié « arrière-gauche »
+    /// du carré `[-1, 1] × [-1, 1]` (z=0 fixe) — sa boîte englobante est le carré
+    /// entier, mais sa silhouette réelle laisse le coin « avant-droit » (x>0, z>0
+    /// environ) complètement vide. Un collider `Box`/`Auto` (bounding box) bloquerait
+    /// donc n'importe où sur tout le carré ; un `TriMesh`/`ConvexHull` fidèle ne
+    /// bloque que sur la moitié réellement couverte.
     fn wedge_scene(shape: ColliderShape) -> Scene {
         use crate::gfx::mesh::{MeshData, Vertex};
         let v = |x: f32, z: f32| Vertex {
@@ -540,9 +533,8 @@ mod tests {
             vertices: vec![v(-1.0, -1.0), v(1.0, -1.0), v(-1.0, 1.0)],
             // Ordre choisi pour une normale +Y (règle de la main droite) : une boule
             // qui tombe dessus doit heurter la face « du dessus », pas le dos du
-            // triangle (trouvé en testant réellement — l'ordre [0,1,2] donne une
-            // normale vers -Y et la boule tombait au travers malgré un TriMesh construit
-            // avec succès).
+            // triangle — l'ordre [0,1,2] donnerait une normale vers -Y, et la boule
+            // tomberait au travers malgré un TriMesh construit avec succès.
             indices: vec![0, 2, 1],
         };
         let mut imported = ImportedMesh {
@@ -571,9 +563,8 @@ mod tests {
     /// Départ bas (0.5 m, pas 3 m) : un `TriMesh` n'a pas d'épaisseur, et une boule
     /// qui tombe assez vite peut le traverser en un seul pas de simulation sans jamais
     /// être détectée en collision (tunneling) — la CCD qui corrigerait ça sur un corps
-    /// dynamique rapide est le sujet du **Sprint 101** (`ccd` par objet), pas de celui-ci.
-    /// Une chute courte reste assez lente pour ne pas tunneliser, sans avoir besoin
-    /// d'anticiper ce mécanisme.
+    /// dynamique rapide (`ccd` par objet) est hors sujet ici. Une chute courte reste
+    /// assez lente pour ne pas tunneliser, sans avoir besoin d'anticiper ce mécanisme.
     fn drop_ball(scene: &mut Scene, name: &str, x: f32, z: f32) -> usize {
         scene.objects.push(SceneObject {
             name: name.into(),
@@ -586,10 +577,10 @@ mod tests {
         scene.objects.len() - 1
     }
 
-    /// Livrable du Sprint 100 : un décor importé (`TriMesh`) doit bloquer une boule
-    /// qui tombe sur sa silhouette réelle, et **laisser tomber** une boule au-dessus
-    /// d'un coin vide de sa boîte englobante — la preuve que le collider suit la
-    /// géométrie, pas juste l'AABB (déjà le comportement `Auto`/`Box` d'avant ce sprint).
+    /// Un décor importé (`TriMesh`) doit bloquer une boule qui tombe sur sa silhouette
+    /// réelle, et **laisser tomber** une boule au-dessus d'un coin vide de sa boîte
+    /// englobante — la preuve que le collider suit la géométrie, pas juste l'AABB
+    /// (`Auto`/`Box` ne suivent que l'AABB).
     #[test]
     fn a_trimesh_collider_follows_the_actual_silhouette_not_the_bounding_box() {
         let mut scene = wedge_scene(ColliderShape::TriMesh);
@@ -611,10 +602,10 @@ mod tests {
         );
     }
 
-    /// Contre-épreuve : **sans** le repli `TriMesh` de ce sprint (`Auto`, la boîte
-    /// englobante du triangle), la même boule « coin vide » resterait bloquée — la
-    /// preuve que le test précédent mesure bien la fidélité du collider, pas autre
-    /// chose (ex. une gravité qui ne s'applique jamais).
+    /// Contre-épreuve : **sans** le repli `TriMesh` (`Auto`, la boîte englobante du
+    /// triangle), la même boule « coin vide » resterait bloquée — la preuve que le
+    /// test précédent mesure bien la fidélité du collider, pas autre chose (ex. une
+    /// gravité qui ne s'applique jamais).
     #[test]
     fn without_trimesh_the_bounding_box_wrongly_blocks_the_empty_corner() {
         let mut scene = wedge_scene(ColliderShape::Auto);
@@ -683,12 +674,12 @@ mod tests {
         scene
     }
 
-    /// Livrable du Sprint 100, second cas : contrairement à `TriMesh` (pas de
-    /// propriétés de masse), un `ConvexHull` doit fonctionner sur un corps
-    /// **dynamique** — c'est tout l'intérêt de proposer les deux formes plutôt qu'une
-    /// seule. Un rocher importé tombe sur un sol et doit s'y arrêter, pas le traverser
-    /// (ce qui arriverait si `SharedShape::convex_hull` échouait silencieusement et
-    /// que le repli `cuboid()` était lui-même mal dimensionné).
+    /// Second cas : contrairement à `TriMesh` (pas de propriétés de masse), un
+    /// `ConvexHull` doit fonctionner sur un corps **dynamique** — c'est tout l'intérêt
+    /// de proposer les deux formes plutôt qu'une seule. Un rocher importé tombe sur un
+    /// sol et doit s'y arrêter, pas le traverser (ce qui arriverait si
+    /// `SharedShape::convex_hull` échouait silencieusement et que le repli `cuboid()`
+    /// était lui-même mal dimensionné).
     #[test]
     fn a_convex_hull_collider_works_on_a_dynamic_body() {
         let mut scene = floor_and_falling_rock(ColliderShape::ConvexHull);
@@ -746,10 +737,9 @@ mod tests {
         scene
     }
 
-    /// Livrable du Sprint 101 : un missile assez rapide pour traverser un mur fin en
-    /// un seul pas de simulation (le même « tunneling » rencontré en écrivant les
-    /// tests du Sprint 100, cf. `drop_ball`) ne doit plus le faire une fois `ccd`
-    /// activé.
+    /// Un missile assez rapide pour traverser un mur fin en un seul pas de simulation
+    /// (le même « tunneling » que `drop_ball` évite en partant bas) ne doit plus le
+    /// faire une fois `ccd` activé.
     #[test]
     fn ccd_prevents_a_fast_missile_from_tunneling_through_a_thin_wall() {
         let mut scene = missile_and_thin_wall(true);
@@ -783,10 +773,10 @@ mod tests {
         );
     }
 
-    /// Livrable secondaire du Sprint 101 : `collision_mask` doit pouvoir faire
-    /// ignorer une couche précise — un missile qui ne collisionne pas la couche du
-    /// mur (`collision_mask` sans le bit du mur) doit le traverser à vitesse normale
-    /// (pas besoin de `ccd` ici, la vitesse reste modeste).
+    /// `collision_mask` doit pouvoir faire ignorer une couche précise — un missile
+    /// qui ne collisionne pas la couche du mur (`collision_mask` sans le bit du mur)
+    /// doit le traverser à vitesse normale (pas besoin de `ccd` ici, la vitesse reste
+    /// modeste).
     #[test]
     fn a_collision_mask_lets_a_projectile_ignore_a_specific_layer() {
         let mut scene = Scene::default();
@@ -1038,7 +1028,7 @@ mod tests {
     }
 
     /// Sol plat (index 0) + mur vertical (index 1), tous deux statiques — sert aux
-    /// tests du Sprint 102 (`raycast`/`overlap_sphere`, `QueryPipeline`).
+    /// tests de `raycast`/`overlap_sphere` (`QueryPipeline`).
     fn ground_and_wall_scene() -> Scene {
         let mut scene = Scene::default();
         scene.objects.push(SceneObject {
@@ -1060,9 +1050,9 @@ mod tests {
         scene
     }
 
-    /// Livrable du Sprint 102 : `raycast` doit trouver le collider le plus proche sur
-    /// la trajectoire et identifier l'objet touché — brique du « capteur de sol »
-    /// (rayon vers le bas) et du « cône de vision » (ligne de vue vers une cible).
+    /// `raycast` doit trouver le collider le plus proche sur la trajectoire et
+    /// identifier l'objet touché — brique du « capteur de sol » (rayon vers le bas)
+    /// et du « cône de vision » (ligne de vue vers une cible).
     #[test]
     fn raycast_hits_the_nearest_collider_and_reports_its_object_index() {
         let scene = ground_and_wall_scene();
@@ -1114,9 +1104,9 @@ mod tests {
         );
     }
 
-    /// Livrable secondaire : `mask` doit filtrer les colliders par couche, mêmes bits
-    /// que `collision_layer`/`collision_mask` (Sprint 101) — un rayon ne doit toucher
-    /// que les colliders dont la couche recoupe le masque demandé.
+    /// `mask` doit filtrer les colliders par couche, mêmes bits que
+    /// `collision_layer`/`collision_mask` — un rayon ne doit toucher que les colliders
+    /// dont la couche recoupe le masque demandé.
     #[test]
     fn raycast_mask_filters_by_collision_layer() {
         let mut scene = Scene::default();
@@ -1142,9 +1132,9 @@ mod tests {
         );
     }
 
-    /// Livrable du Sprint 102 : `overlap_sphere` doit détecter les colliders à portée
-    /// et ignorer ceux hors de la sphère — brique du « cône de vision » (détection de
-    /// proximité avant même de tester l'angle/la ligne de vue).
+    /// `overlap_sphere` doit détecter les colliders à portée et ignorer ceux hors de
+    /// la sphère — brique du « cône de vision » (détection de proximité avant même de
+    /// tester l'angle/la ligne de vue).
     #[test]
     fn overlap_sphere_finds_colliders_within_radius_and_ignores_far_ones() {
         let mut scene = Scene::default();
