@@ -4,7 +4,8 @@
 
 use glam::{Quat, Vec3};
 
-use super::{AppState, DEFAULT_CHASE_DISTANCE, DEFAULT_CHASE_PITCH, scene_path};
+use super::simulation::{DEFAULT_CHASE_DISTANCE, DEFAULT_CHASE_PITCH};
+use super::{AppState, scene_path};
 use crate::gfx::mesh::MeshData;
 use crate::scene::{ImportedMesh, MeshKind, Scene, SceneObject, Transform};
 

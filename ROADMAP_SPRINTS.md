@@ -1751,12 +1751,38 @@ régression client. Une manche décidée ne coupe plus tout le process
   `src/gfx/renderer.rs`.
 - **Livrable** : réglages M/SFX dans les paramètres ; musique longue sans pic mémoire (profiler).
 
-#### Sprint 105a-1 — Maintenabilité : extraction `app/simulation.rs` + `app/scripting.rs` ⬜
+#### Sprint 105a-1 — Maintenabilité : extraction `app/simulation.rs` + `app/scripting.rs` ✅ FAIT
 **Objectif** : réduire encore `app/mod.rs` avant d'y ajouter l'audio/HUD des sprints suivants — même logique que **103a-1**, périmètre différent (ce qui restait « cœur non déplaçable » à l'issue de 103a-1).
-- [ ] `app/simulation.rs` : boucle `advance_play`/`sim_step`, accumulateur à pas fixe, interpolation de poses de rendu (`restore_sim_poses`/`blend_render_poses`) — déplacés hors de `app/mod.rs`, méthodes telles quelles.
-- [ ] `app/scripting.rs` (ou `app/lua.rs`) : API Lua complète (`run_script`, `save.get`/`save.set`, `emit`, `spawn`, etc.) sortie de `app/mod.rs`.
-- **Fichiers** : `src/app/mod.rs`, nouveaux `src/app/{simulation,scripting}.rs`.
-- **Livrable** : `app/mod.rs` encore réduit, comportement inchangé — 312 tests lib + 4 bin + 8 golden toujours verts, `cargo clippy`/`cargo fmt` propres.
+- [x] **`app/simulation.rs`** : `advance_play`/`sim_step`/`restore_sim_poses`/
+      `blend_render_poses` + leurs consts/fonctions utilitaires
+      (`camera_relative_move`, `apply_deadzone`, `fixed_substeps`,
+      `rotate_towards_smooth`…) — déplacés **méthodes telles quelles**, aucun
+      changement de comportement.
+- [x] **`app/scripting.rs`** : `run_script` (API Lua complète — `save.get`/
+      `save.set`, `emit`, `spawn`, `raycast`/`overlap_sphere`…) et
+      `script_key`, déplacés verbatim — déjà des fonctions libres n'touchant
+      jamais `AppState`, extraction directe.
+- [x] **Règle de visibilité** (confirmée sur le split 103a-1 déjà en place) :
+      un item privé défini dans `mod.rs` reste visible depuis tous les
+      sous-modules sans rien changer ; seul le sens inverse (un item défini
+      dans un sous-module, appelé depuis `mod.rs`/un module frère) demande
+      `pub(super)` — appliqué à `sim_step`/`restore_sim_poses`/
+      `blend_render_poses` (appelées par les tests de `mod.rs`),
+      `camera_relative_move` (appelée aussi par `network_client.rs`), et
+      `DEFAULT_CHASE_PITCH`/`DEFAULT_CHASE_DISTANCE` (appelées aussi par
+      `persistence.rs`, `use` mis à jour dans ces deux fichiers).
+- [x] **Tests laissés en place** dans l'unique `mod tests` de `mod.rs` (suit
+      le précédent `combat.rs`/`persistence.rs`/`network_client.rs` de
+      103a-1, pas celui de `ai.rs`/`fireball.rs` qui ont leur propre module
+      de tests) — seuls les chemins d'appel des symboles déplacés changent
+      (`use super::simulation::{...}`/`use super::scripting::{...}` en tête
+      du bloc de tests), aucune logique de test modifiée.
+- **Fichiers** : `src/app/mod.rs`, nouveaux `src/app/{simulation,scripting}.rs`,
+  `src/app/persistence.rs`, `src/app/network_client.rs` (mise à jour des
+  imports).
+- **Livrable** : `app/mod.rs` réduit de 5969 à 4561 lignes (-24 %),
+  comportement inchangé — 323 tests lib + 5 bin toujours verts, `cargo
+  clippy`/`cargo fmt` propres.
 
 #### Sprint 105a-2 — Maintenabilité : durcissement des entrées réseau/fichiers ⬜
 - [ ] Tailles max sur les messages réseau ; validation `lobby`/`name`/`firebase_uid`.

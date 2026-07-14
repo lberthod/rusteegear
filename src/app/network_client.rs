@@ -624,7 +624,7 @@ fn network_move_axes(
 ) -> (f32, f32) {
     let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
     let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
-    let (mut mx, mut my) = super::camera_relative_move(raw_mx, raw_my, camera_yaw);
+    let (mut mx, mut my) = super::simulation::camera_relative_move(raw_mx, raw_my, camera_yaw);
     // `thrust()` (clavier + pavé tactile W/A/S/D) et non `key_thrust` seul : le
     // pavé de l'APK doit être vu par le serveur exactement comme le clavier.
     let thrust = inp.thrust();
