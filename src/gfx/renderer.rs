@@ -1510,6 +1510,13 @@ impl Renderer {
         editor.on_window_event(window, event)
     }
 
+    /// Réglages persistés courants (clé API, remapping manette…), `None` en rendu
+    /// headless (pas d'`Editor`). Sprint 110 : lu par `App::gamepad_bindings`, qui
+    /// n'a sinon aucun accès direct à `Editor` (privé à ce module).
+    pub fn settings(&self) -> Option<&crate::app::settings::Settings> {
+        self.editor.as_ref().map(|e| e.settings())
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();

@@ -116,6 +116,13 @@ pub struct PlayerInput {
     pub touch_thrust: f32,
     /// Rotation « tank » du pavé tactile (A/D) — même principe que `touch_thrust`.
     pub touch_turn: f32,
+    /// Avance/recul « tank » du stick gauche de la manette (Sprint 110), zone morte
+    /// déjà appliquée — canal séparé de `key_thrust`/`touch_thrust`, cumulé avec eux
+    /// via `thrust()`, même principe que les deux autres sources.
+    pub gamepad_thrust: f32,
+    /// Rotation « tank » du stick gauche de la manette — même principe que
+    /// `gamepad_thrust`, cumulée via `turn()`.
+    pub gamepad_turn: f32,
     /// Saut clavier (Espace) maintenu enfoncé.
     pub jump: bool,
     /// Attaque clavier (J) maintenue enfoncée.
@@ -135,12 +142,13 @@ impl PlayerInput {
     /// `network_move_axes`) passe par ici — mêmes contrôles au clavier, au tactile
     /// (APK) et en aperçu mobile desktop, sans qu'aucune source n'écrase l'autre.
     pub fn thrust(&self) -> f32 {
-        (self.key_thrust + self.touch_thrust).clamp(-1.0, 1.0)
+        (self.key_thrust + self.touch_thrust + self.gamepad_thrust).clamp(-1.0, 1.0)
     }
 
-    /// Rotation « tank » effective : clavier (A/D) + pavé tactile, borné à [-1, 1].
+    /// Rotation « tank » effective : clavier (A/D) + pavé tactile + stick gauche
+    /// manette (Sprint 110), borné à [-1, 1].
     pub fn turn(&self) -> f32 {
-        (self.key_turn + self.touch_turn).clamp(-1.0, 1.0)
+        (self.key_turn + self.touch_turn + self.gamepad_turn).clamp(-1.0, 1.0)
     }
 }
 

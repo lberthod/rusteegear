@@ -409,8 +409,46 @@ pub(super) fn settings_window(
                 settings.save();
                 actions.sfx_volume = Some(settings.sfx_volume);
             }
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("🎮 Manette");
+            ui.small(
+                "Stick gauche : déplacement « tank » (même axes que A/D/W/S). \
+                 Boutons ci-dessous, remappables sur toute manette branchée \
+                 (Xbox/PlayStation/Switch Pro — noms génériques par position).",
+            );
+            let mut changed = false;
+            changed |= gamepad_binding_row(ui, "Saut", &mut settings.gamepad.jump);
+            changed |= gamepad_binding_row(ui, "Attaque", &mut settings.gamepad.attack);
+            changed |= gamepad_binding_row(ui, "Tir", &mut settings.gamepad.fire);
+            changed |= gamepad_binding_row(ui, "Soin", &mut settings.gamepad.heal);
+            if changed {
+                settings.save();
+            }
         });
     panels.settings = open;
+}
+
+/// Une ligne de remapping manette : libellé d'action + menu déroulant des boutons
+/// assignables (`app::input::GAMEPAD_BUTTON_NAMES`). Renvoie `true` si la valeur a
+/// changé ce frame (l'appelant décide alors de persister).
+fn gamepad_binding_row(ui: &mut egui::Ui, action_label: &str, bound: &mut String) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(action_label);
+        egui::ComboBox::from_id_salt(("gamepad_binding", action_label))
+            .selected_text(bound.as_str())
+            .show_ui(ui, |ui| {
+                for name in crate::app::input::GAMEPAD_BUTTON_NAMES {
+                    if ui.selectable_label(bound == name, *name).clicked() && bound != name {
+                        *bound = (*name).to_string();
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
 }
 
 /// Overlay Multijoueur minimal pour le mode Player (mobile/APK) : adresse +

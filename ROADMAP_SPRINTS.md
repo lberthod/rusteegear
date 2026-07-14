@@ -1920,10 +1920,39 @@ régression client. Une manche décidée ne coupe plus tout le process
   éditables dans l'éditeur, sans toucher au moteur — coexiste avec le HUD
   historique plutôt que de le remplacer (limite assumée de ce sprint).
 
-#### Sprint 110 — Manettes + remapping ⬜
-- [ ] Crate `gilrs` ; table actions→touches persistée, éditable dans les paramètres.
-- **Fichiers** : `src/app/input.rs`, `src/app/settings.rs`.
-- **Livrable** : démo jouable à la manette Bluetooth sur desktop et Android.
+#### Sprint 110 — Manettes + remapping ✅ FAIT
+- [x] **Crate `gilrs`** : énumérée au lancement (`App::resumed`), dégrade en
+      silence si aucun backend n'est disponible (ex. CI sans udev) — le jeu
+      reste jouable au clavier/tactile. Interrogée à chaque tour de boucle
+      (`App::poll_gamepad`, appelée depuis `about_to_wait`) : `gilrs` n'a pas
+      de mécanisme de callback propre à intégrer à celle de winit.
+- [x] **Stick gauche → contrôles « tank »** (`PlayerInput::gamepad_thrust`/
+      `gamepad_turn`, zone morte 15 % via `app::input::apply_deadzone`) :
+      cumulés avec clavier (WASD) et pavé tactile dans `thrust()`/`turn()`,
+      même principe que les deux sources existantes — aucune des trois
+      n'écrase les autres.
+- [x] **Boutons → saut/attaque/tir/soin** (`App::recompute_action_buttons`) :
+      combine touches d'action clavier (Espace/J/K/H) et boutons manette
+      tenus, recalculé à chaque changement plutôt qu'assigné directement —
+      **trouvé en concevant le sprint** : l'ancien code assignait `inp.jump =
+      pressed` à la touche, ce qui aurait fait courtcircuiter la manette
+      relâcher la touche ou vice-versa ; il fallait déjà une notion de
+      « tenu » par source, combinée en OR, comme pour les axes.
+- [x] **Table de remapping persistée** (`settings::GamepadBindings`,
+      4 actions → nom de bouton `gilrs`, ex. `"South"`) : sérialisée en JSON
+      par nom plutôt que par discriminant d'enum (`gilrs::Button`
+      n'implémente pas `Serialize`), éditable dans le panneau ⚙ Paramètres
+      › 🎮 Manette (menu déroulant par action). Défaut Xbox South/West/East/
+      North (Saut/Attaque/Tir/Soin), cohérent avec le voisinage clavier
+      J/K/H.
+- **Fichiers** : `src/app/input.rs`, `src/app/settings.rs`, `src/app/mod.rs`
+  (`PlayerInput`), `src/lib.rs` (boucle d'événements), `src/gfx/renderer.rs`
+  (`Renderer::settings`), `src/editor/windows.rs` (panneau).
+- **Livrable** : la démo contrôleur (existante, pas de nouvelle scène requise
+  — mêmes axes tank que le clavier) se joue au stick + boutons d'une manette
+  Bluetooth sur desktop, remapping compris. `cargo check --target
+  aarch64-linux-android` compile sans erreur avec `gilrs` — jeu à la manette
+  sur un vrai appareil non testé dans ce sprint (pas d'accès matériel ici).
 
 #### Sprint 111 — Hot-reload (assets + Lua) ⬜
 - [ ] `notify` sur le dossier assets → réimport async ; invalidation des chunks Lua modifiés en cours de Play.

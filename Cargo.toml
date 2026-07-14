@@ -89,6 +89,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 wgpu = "29.0.3"
 winit = "0.30.13"
+gilrs = "0.11.2"
 
 # Sélecteur de fichiers + client HTTP (génération de scripts par IA) : desktop
 # uniquement (Firebase/IA restent hors mobile pour l'instant, cf. réseau ci-dessous).

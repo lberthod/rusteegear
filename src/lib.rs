@@ -39,6 +39,18 @@ struct App {
     /// à chaque pression/relâchement, plutôt que d'écraser l'axe avec la seule
     /// touche qui vient de changer — cf. `recompute_move_axes`.
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
+    /// Touches d'action tenues (Espace/J/K/H) — cf. `recompute_action_buttons`.
+    action_keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
+
+    // --- manette (Sprint 110) ---
+    /// `None` si aucune manette n'a pu être énumérée au lancement (pas de backend
+    /// disponible) — le jeu reste jouable au clavier/tactile, cf. `resumed`.
+    gilrs: Option<gilrs::Gilrs>,
+    /// Boutons manette actuellement tenus, tous contrôleurs connectés confondus
+    /// (pas de multi-manette local pour l'instant — un seul joueur par poste).
+    gamepad_held: std::collections::HashSet<gilrs::Button>,
+    /// Stick gauche brut (avant zone morte, cf. `app::input::apply_deadzone`).
+    gamepad_axes: (f32, f32),
 }
 
 /// Résout un axe (-1/0/1) à partir de l'état « tenu » des deux touches
@@ -114,12 +126,91 @@ impl App {
             }
         }
     }
+
+    /// Table de remapping manette courante, lue dans les paramètres persistés (cf.
+    /// `editor::Editor::settings`) — valeurs par défaut si l'éditeur n'est pas encore
+    /// initialisé (ne devrait pas arriver : `resumed` crée `Renderer`/`Editor` avant
+    /// toute entrée manette possible).
+    fn gamepad_bindings(&self) -> app::settings::GamepadBindings {
+        self.renderer
+            .as_ref()
+            .and_then(|r| r.settings())
+            .map(|s| s.gamepad.clone())
+            .unwrap_or_default()
+    }
+
+    /// Recalcule saut/attaque/tir/soin à partir de **toutes** les sources tenues
+    /// (touches d'action clavier + boutons manette), même principe que
+    /// `axis_from_held` pour les axes : combiner plutôt qu'écraser, sinon relâcher
+    /// une des deux sources couperait l'action même si l'autre est encore tenue.
+    fn recompute_action_buttons(&mut self) {
+        use winit::keyboard::KeyCode;
+        let bindings = self.gamepad_bindings();
+        let gp =
+            app::input::resolve_gamepad_input(&self.gamepad_held, self.gamepad_axes, &bindings);
+        let keys = &self.action_keys_held;
+        let inp = &mut self.state.input_state;
+        inp.jump = keys.contains(&KeyCode::Space) || gp.jump;
+        inp.attack = keys.contains(&KeyCode::KeyJ) || gp.attack;
+        inp.fire = keys.contains(&KeyCode::KeyK) || gp.fire;
+        inp.heal = keys.contains(&KeyCode::KeyH) || gp.heal;
+        inp.gamepad_turn = gp.turn;
+        inp.gamepad_thrust = gp.thrust;
+    }
+
+    /// Vide les événements `gilrs` en attente (branchement/débranchement, boutons,
+    /// axes) et recalcule l'état combiné — appelé à chaque tour de boucle
+    /// (`about_to_wait`), `gilrs` n'ayant pas de mécanisme de callback/event-loop
+    /// propre à intégrer à celle de winit.
+    fn poll_gamepad(&mut self) {
+        let Some(gilrs) = self.gilrs.as_mut() else {
+            return;
+        };
+        let mut changed = false;
+        while let Some(gilrs::Event { event, .. }) = gilrs.next_event() {
+            match event {
+                gilrs::EventType::ButtonPressed(btn, _) => {
+                    self.gamepad_held.insert(btn);
+                    changed = true;
+                }
+                gilrs::EventType::ButtonReleased(btn, _) => {
+                    self.gamepad_held.remove(&btn);
+                    changed = true;
+                }
+                gilrs::EventType::AxisChanged(gilrs::Axis::LeftStickX, v, _) => {
+                    self.gamepad_axes.0 = v;
+                    changed = true;
+                }
+                gilrs::EventType::AxisChanged(gilrs::Axis::LeftStickY, v, _) => {
+                    self.gamepad_axes.1 = v;
+                    changed = true;
+                }
+                gilrs::EventType::Disconnected => {
+                    self.gamepad_held.clear();
+                    self.gamepad_axes = (0.0, 0.0);
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            self.recompute_action_buttons();
+        }
+    }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_some() {
             return;
+        }
+        if self.gilrs.is_none() {
+            match gilrs::Gilrs::new() {
+                Ok(g) => self.gilrs = Some(g),
+                // Pas de backend manette sur cette plateforme/config (ex. CI sans
+                // udev) : dégrade en silence, clavier/tactile restent utilisables.
+                Err(e) => log::info!("Manette indisponible ({e}) — clavier/tactile seuls."),
+            }
         }
         let attrs = Window::default_attributes()
             .with_title("RusteeGear")
@@ -278,16 +369,21 @@ impl ApplicationHandler for App {
                             self.keys_held.remove(&code);
                         }
                     }
-                    let inp = &mut self.state.input_state;
-                    match code {
-                        KeyCode::Space => inp.jump = pressed,
-                        KeyCode::KeyJ => inp.attack = pressed,
-                        // Boule de feu (attaque à distance, cf. `app::fireball`) :
-                        // voisine de J (Attaque) pour garder les deux sous la main.
-                        KeyCode::KeyK => inp.fire = pressed,
-                        // Soin coopératif (cf. `app::health`) : voisine de J/K.
-                        KeyCode::KeyH => inp.heal = pressed,
-                        _ => {}
+                    // Espace/J/K/H : tenus dans un ensemble séparé (plutôt qu'assignés
+                    // directement à `inp.jump`/etc.) pour pouvoir les combiner avec la
+                    // manette (cf. `recompute_action_buttons`) sans que l'une des deux
+                    // sources n'écrase l'état de l'autre au relâchement.
+                    let is_action_key = matches!(
+                        code,
+                        KeyCode::Space | KeyCode::KeyJ | KeyCode::KeyK | KeyCode::KeyH
+                    );
+                    if is_action_key {
+                        if pressed {
+                            self.action_keys_held.insert(code);
+                        } else {
+                            self.action_keys_held.remove(&code);
+                        }
+                        self.recompute_action_buttons();
                     }
                     if is_move_key {
                         // Recalcule les axes à partir de **toutes** les touches
@@ -335,6 +431,7 @@ impl ApplicationHandler for App {
     /// économiser CPU/batterie sur desktop tout en restant réactif aux entrées
     /// et aux chargements asynchrones.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.poll_gamepad();
         if let Some(renderer) = &self.renderer
             && let Some(window) = &renderer.window
         {

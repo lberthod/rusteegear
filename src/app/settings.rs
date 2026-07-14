@@ -34,6 +34,38 @@ pub struct Settings {
     /// `runtime::audio::Audio::set_sfx_volume`).
     #[serde(default = "default_volume")]
     pub sfx_volume: f32,
+    /// Remapping manette (Sprint 110) : quel bouton `gilrs` déclenche chaque action.
+    #[serde(default)]
+    pub gamepad: GamepadBindings,
+}
+
+/// Table de remapping manette → action, persistée et éditable dans les paramètres
+/// (panneau « 🎮 Manette »). Chaque champ est un nom de `app::input::
+/// GAMEPAD_BUTTON_NAMES` (pas un `gilrs::Button` directement : celui-ci n'implémente
+/// pas `Serialize`, et un nom stable en JSON survit mieux à une évolution de la
+/// dépendance qu'un discriminant d'enum sérialisé tel quel).
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(default)]
+pub struct GamepadBindings {
+    pub jump: String,
+    pub attack: String,
+    pub fire: String,
+    pub heal: String,
+}
+
+impl Default for GamepadBindings {
+    /// South/West/East/North : disposition Xbox par défaut (A = Saut, X = Attaque,
+    /// B = Tir, Y = Soin) — cohérente avec les voisins clavier J/K/H (Attaque/Tir/
+    /// Soin groupés), sans obliger à une manette précise (les noms `gilrs`
+    /// sont génériques par position, pas par étiquette de fabricant).
+    fn default() -> Self {
+        Self {
+            jump: "South".into(),
+            attack: "West".into(),
+            fire: "East".into(),
+            heal: "North".into(),
+        }
+    }
 }
 
 fn default_model() -> String {
@@ -58,6 +90,7 @@ impl Default for Settings {
             firebase_database_url: String::new(),
             music_volume: default_volume(),
             sfx_volume: default_volume(),
+            gamepad: GamepadBindings::default(),
         }
     }
 }
@@ -128,5 +161,25 @@ mod tests {
         assert_eq!(settings.deepseek_api_key, "sk-test");
         assert_eq!(settings.music_volume, 1.0);
         assert_eq!(settings.sfx_volume, 1.0);
+        assert_eq!(settings.gamepad, GamepadBindings::default());
+    }
+
+    /// Sprint 110 : un `settings.json` antérieur (sans le champ `gamepad`) doit
+    /// continuer à charger, avec les bindings manette par défaut — même garde-fou
+    /// que le test volume ci-dessus, pour le champ ajouté par ce sprint-ci.
+    #[test]
+    fn an_old_settings_file_without_gamepad_field_loads_with_default_bindings() {
+        let old_json = r#"{
+            "deepseek_api_key": "",
+            "deepseek_model": "deepseek-chat",
+            "deepseek_temperature": 0.2,
+            "firebase_api_key": "",
+            "firebase_database_url": "",
+            "music_volume": 0.8,
+            "sfx_volume": 0.8
+        }"#;
+        let settings: Settings = serde_json::from_str(old_json)
+            .expect("un ancien settings.json sans `gamepad` doit rester lisible");
+        assert_eq!(settings.gamepad, GamepadBindings::default());
     }
 }
