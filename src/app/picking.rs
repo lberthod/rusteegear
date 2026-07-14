@@ -498,6 +498,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ray_aabb_hit_in_front() {
+        // rayon partant de -10 sur Z+, visant le cube unité à l'origine
+        let t = ray_aabb(
+            Vec3::new(0.0, 0.0, -10.0),
+            Vec3::Z,
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+        );
+        assert!(t.is_some());
+        assert!((t.unwrap() - 9.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn ray_aabb_miss_to_the_side() {
+        let t = ray_aabb(
+            Vec3::new(5.0, 0.0, -10.0),
+            Vec3::Z,
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+        );
+        assert!(t.is_none());
+    }
+
+    #[test]
+    fn ray_aabb_behind_returns_none() {
+        // box derrière l'origine du rayon (qui regarde Z+)
+        let t = ray_aabb(
+            Vec3::new(0.0, 0.0, 10.0),
+            Vec3::Z,
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+        );
+        assert!(t.is_none());
+    }
+
+    #[test]
+    fn point_segment_dist_basics() {
+        // distance d'un point au milieu d'un segment horizontal
+        let d = point_segment_dist((1.0, 2.0), (0.0, 0.0), (2.0, 0.0));
+        assert!((d - 2.0).abs() < 1e-9);
+        // projection au-delà de l'extrémité => distance à l'extrémité
+        let d2 = point_segment_dist((5.0, 0.0), (0.0, 0.0), (2.0, 0.0));
+        assert!((d2 - 3.0).abs() < 1e-9);
+        // segment dégénéré (longueur nulle)
+        let d3 = point_segment_dist((3.0, 4.0), (0.0, 0.0), (0.0, 0.0));
+        assert!((d3 - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn maybe_snap_angle_rounds_to_the_nearest_15_degrees_only_when_active() {
         let almost_20deg = 20.0_f32.to_radians();
         assert_eq!(

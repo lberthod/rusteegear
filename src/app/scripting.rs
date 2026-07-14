@@ -387,6 +387,12 @@ mod tests {
     use super::*;
     use crate::scene::{MeshKind, Scene, SceneObject};
 
+    #[test]
+    fn script_key_stable_and_distinct() {
+        assert_eq!(script_key("obj.x = 1"), script_key("obj.x = 1"));
+        assert_ne!(script_key("obj.x = 1"), script_key("obj.x = 2"));
+    }
+
     /// Sol plat statique seul (comme `physics::tests::ground_and_wall_scene`, sans le
     /// mur) — sert au « capteur de sol » scripté en Lua.
     fn floor_only_scene() -> Scene {
