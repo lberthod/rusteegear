@@ -2,6 +2,7 @@
 //! Mappe les objets de la scène vers des corps rigides et recopie les poses.
 
 use glam::{Quat, Vec3};
+use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::prelude::*;
 
 use crate::scene::{MeshKind, Scene};
@@ -56,6 +57,43 @@ const AIR_CONTROL: f32 = 0.35;
 /// la hauteur de saut (`jump_height`, atteinte à la montée) reste exacte.
 const FALL_GRAVITY_FACTOR: f32 = 1.6;
 
+/// Hauteur maximale (m, absolue) qu'une marche automatique du contrôleur
+/// cinématique du joueur (Sprint 103b) franchit sans ralentir — cf.
+/// `KinematicCharacterController::autostep`. Absolue plutôt que relative à la
+/// capsule : une marche d'escalier standard (~30 cm) ne dépend pas de la
+/// taille du personnage. Livrable du sprint : « escalier montable ».
+const PLAYER_AUTOSTEP_HEIGHT: f32 = 0.3;
+
+/// Largeur minimale de replat (fraction du rayon de la capsule) exigée après
+/// une marche automatique — sans ça, le joueur « grimperait » sur un rebord
+/// trop étroit pour s'y tenir debout.
+const PLAYER_AUTOSTEP_MIN_WIDTH: f32 = 0.5;
+
+/// Pente maximale (degrés) que le joueur peut gravir sans glisser.
+const PLAYER_MAX_SLOPE_CLIMB_DEG: f32 = 50.0;
+
+/// Pente (degrés) au-delà de laquelle le joueur glisse automatiquement, même
+/// à l'arrêt (`KinematicCharacterController::min_slope_slide_angle`).
+const PLAYER_MIN_SLOPE_SLIDE_DEG: f32 = 45.0;
+
+/// Distance de rattrapage au sol (fraction de la hauteur de la capsule,
+/// `snap_to_ground`) : évite un décollement visible en descendant une
+/// marche/pente à vitesse normale.
+const PLAYER_SNAP_TO_GROUND: f32 = 0.2;
+
+/// État propre au contrôleur cinématique du joueur (Sprint 103b) : un corps
+/// `kinematic_position_based` n'a pas de `linvel` géré par rapier (il est
+/// déplacé par consigne, pas par force/vitesse) — on garde donc nous-mêmes la
+/// vitesse horizontale visée, la vitesse verticale, et le dernier statut « au
+/// sol » renvoyé par `move_shape` (utilisé au tick suivant, pas de requête de
+/// sol à chaque appel).
+#[derive(Clone, Copy)]
+struct KinematicState {
+    hvel: Vec3,
+    vspeed: f32,
+    grounded: bool,
+}
+
 pub struct Physics {
     bodies: RigidBodySet,
     colliders: ColliderSet,
@@ -70,12 +108,19 @@ pub struct Physics {
     ccd: CCDSolver,
     /// (index d'objet, handle) pour les corps dynamiques à recopier.
     dynamic: Vec<(usize, RigidBodyHandle)>,
-    /// (index d'objet, handle) pour les objets **pilotables** (joystick/gyro/saut).
+    /// (index d'objet, handle) pour les objets **pilotables** dynamiques (IA
+    /// poursuivante, recul/knockback) — le joueur n'y est plus depuis le
+    /// Sprint 103b, cf. `kinematic` ci-dessous.
     controlled: Vec<(usize, RigidBodyHandle)>,
+    /// (index d'objet, handle, état) pour le(s) joueur(s) (Sprint 103b) :
+    /// corps `kinematic_position_based`, piloté par `KinematicCharacterController`
+    /// plutôt que par vitesse/force — gère nativement pentes, marches et snap
+    /// au sol, contrairement à l'ancienne heuristique `cur.y.abs() < 1.0`.
+    kinematic: Vec<(usize, RigidBodyHandle, KinematicState)>,
     /// Collider → index d'objet, pour **tous** les colliders construits (statiques
-    /// inclus, contrairement à `dynamic`/`controlled` qui ne suivent que ce qui doit
-    /// être recopié/piloté chaque frame) — nécessaire pour retrouver quel objet une
-    /// requête spatiale (`raycast`/`overlap_sphere`) a touché.
+    /// inclus, contrairement à `dynamic`/`controlled`/`kinematic` qui ne suivent que
+    /// ce qui doit être recopié/piloté chaque frame) — nécessaire pour retrouver
+    /// quel objet une requête spatiale (`raycast`/`overlap_sphere`) a touché.
     collider_owner: std::collections::HashMap<ColliderHandle, usize>,
 }
 
@@ -96,40 +141,52 @@ impl Physics {
         let mut colliders = ColliderSet::new();
         let mut dynamic = Vec::new();
         let mut controlled = Vec::new();
+        let mut kinematic = Vec::new();
         let mut collider_owner = std::collections::HashMap::new();
 
         for (i, obj) in scene.objects.iter().enumerate() {
-            // Un objet pilotable (joystick/gyro/saut) OU une IA poursuivante **visible**
-            // devient un corps dynamique, même sans physique explicite, pour entrer en
-            // collision avec le décor — les deux sont « pilotés » par `Physics::control`
-            // (le joueur par l'entrée, l'IA par la direction vers le joueur, cf.
-            // `App::advance_play`). Un chasseur masqué (manche pas encore révélée, ou
-            // vaincu) n'a pas de corps : sinon son collider bloquerait le joueur alors
-            // qu'il est invisible (cf. `App::init_waves`/`update_waves`).
-            let controllable = obj.controller.as_ref().is_some_and(|c| c.input || c.gyro)
-                || (obj.ai_chaser.is_some() && obj.visible);
-            let is_dynamic = match obj.physics {
-                PhysicsKind::None if !controllable => continue,
-                PhysicsKind::Dynamic => true,
-                _ => controllable,
-            };
+            // Le joueur (joystick/gyro) devient un corps **kinématique** (Sprint
+            // 103b, `KinematicCharacterController` : pentes/marches/snap au sol
+            // natifs) ; une IA poursuivante **visible** reste un corps dynamique
+            // ordinaire piloté par vitesse, comme avant — les deux sont « pilotés »
+            // par `Physics::control` (le joueur par l'entrée, l'IA par la direction
+            // vers le joueur, cf. `App::advance_play`), qui distingue en interne
+            // selon la liste (`kinematic` vs `controlled`). Un chasseur masqué
+            // (manche pas encore révélée, ou vaincu) n'a pas de corps : sinon son
+            // collider bloquerait le joueur alors qu'il est invisible (cf.
+            // `App::init_waves`/`update_waves`).
+            let is_player = obj.controller.as_ref().is_some_and(|c| c.input || c.gyro);
+            let is_ai = obj.ai_chaser.is_some() && obj.visible;
+            let controllable = is_player || is_ai;
+            if matches!(obj.physics, PhysicsKind::None) && !controllable {
+                continue;
+            }
+            let is_dynamic = !is_player && (obj.physics == PhysicsKind::Dynamic || controllable);
 
             let t = &obj.transform;
             let (axis, angle) = t.rotation.to_axis_angle();
             let rotvec = axis * angle;
 
-            let mut builder = if is_dynamic {
+            let mut builder = if is_player {
+                RigidBodyBuilder::kinematic_position_based()
+            } else if is_dynamic {
                 RigidBodyBuilder::dynamic()
             } else {
                 RigidBodyBuilder::fixed()
             };
-            // Objet pilotable : on bloque les rotations pour qu'il reste debout.
-            if controllable {
+            // Objet pilotable dynamique (IA) : on bloque les rotations pour qu'il
+            // reste debout — moot pour un corps kinématique, jamais soumis au
+            // solveur de toute façon (sa rotation reste entièrement pilotée par
+            // l'appelant, jamais par rapier).
+            if controllable && !is_player {
                 builder = builder.lock_rotations();
             }
             // CCD : cf. la doc de `SceneObject::ccd` — seulement les objets qui en
-            // ont explicitement besoin (missiles/projectiles rapides).
-            if obj.ccd {
+            // ont explicitement besoin (missiles/projectiles rapides, toujours
+            // dynamiques : un corps kinématique est déplacé par shapecast
+            // successif, jamais par intégration rapide sujette au tunneling
+            // que la CCD corrige).
+            if obj.ccd && !is_player {
                 builder = builder.ccd_enabled(true);
             }
             let body = builder
@@ -255,7 +312,21 @@ impl Physics {
             if is_dynamic {
                 dynamic.push((i, handle));
             }
-            if controllable {
+            if is_player {
+                kinematic.push((
+                    i,
+                    handle,
+                    KinematicState {
+                        hvel: Vec3::ZERO,
+                        vspeed: 0.0,
+                        // Vrai par défaut : au repos à l'apparition (vitesse nulle),
+                        // même convention que l'ancienne heuristique dynamique
+                        // (`cur.y.abs() < 1.0`, vraie tant qu'aucune chute n'a
+                        // commencé).
+                        grounded: true,
+                    },
+                ));
+            } else if controllable {
                 controlled.push((i, handle));
             }
         }
@@ -284,6 +355,7 @@ impl Physics {
             ccd: CCDSolver::new(),
             dynamic,
             controlled,
+            kinematic,
             collider_owner,
         }
     }
@@ -311,6 +383,9 @@ impl Physics {
         accel: f32,
         dt: f32,
     ) -> bool {
+        if let Some(slot) = self.kinematic.iter().position(|&(i, _, _)| i == index) {
+            return self.control_kinematic(slot, vx, vz, jump, jump_speed, accel, dt);
+        }
         let mut jumped = false;
         for &(i, handle) in &self.controlled {
             if i != index {
@@ -365,20 +440,156 @@ impl Physics {
         jumped
     }
 
-    /// Vitesse linéaire (m/s) du corps rigide dynamique de l'objet `index`,
-    /// `None` s'il n'en a pas. Sert au rattrapage doux à l'arrêt de la
-    /// réconciliation réseau (cf. `app::network_client`) : distinguer « joueur
-    /// immobile » (on peut aligner sans gêner) de « en plein déplacement ».
+    /// Chemin `control` pour un corps **kinématique** (joueur, Sprint 103b) : même
+    /// contrat que la boucle `dynamic` ci-dessus (freinage/autorité en l'air/chute
+    /// accélérée identiques, cf. `BRAKE_FACTOR`/`AIR_CONTROL`/`FALL_GRAVITY_FACTOR`),
+    /// mais la vitesse n'existe plus dans rapier (corps `kinematic_position_based`) :
+    /// elle est gardée dans `KinematicState` et le déplacement réel passe par
+    /// `KinematicCharacterController::move_shape`, qui gère nativement pentes/
+    /// marches/snap au sol (contrairement à l'ancienne heuristique `cur.y.abs() <
+    /// 1.0`, remplacée ici par `state.grounded`, le résultat du `move_shape`
+    /// précédent).
+    #[allow(clippy::too_many_arguments)]
+    fn control_kinematic(
+        &mut self,
+        slot: usize,
+        vx: f32,
+        vz: f32,
+        jump: bool,
+        jump_speed: f32,
+        accel: f32,
+        dt: f32,
+    ) -> bool {
+        let (_, handle, state) = self.kinematic[slot];
+
+        let grounded = state.grounded;
+        let do_jump = jump && grounded;
+        let vspeed = if do_jump {
+            jump_speed
+        } else if grounded {
+            // Pas de solveur de contact pour maintenir un corps kinématique au
+            // repos sur le sol : on remet explicitement à zéro plutôt que de
+            // laisser une vitesse verticale résiduelle s'accumuler.
+            0.0
+        } else {
+            // Gravité manuelle (rapier n'intègre pas de gravité sur un corps
+            // kinématique) : base + excès de chute combinés en un seul terme,
+            // même physique que l'ancien couple step()+control() sur corps
+            // dynamique (cf. `FALL_GRAVITY_FACTOR`).
+            let factor = if state.vspeed < 0.0 {
+                FALL_GRAVITY_FACTOR
+            } else {
+                1.0
+            };
+            state.vspeed - 9.81 * factor * dt
+        };
+
+        let (nx, nz) = if accel > 0.0 {
+            let cur = state.hvel;
+            let cur_sq = cur.x * cur.x + cur.z * cur.z;
+            let braking = vx * cur.x + vz * cur.z < cur_sq - 1e-6;
+            let mut a = accel;
+            if braking {
+                a *= BRAKE_FACTOR;
+            }
+            if !grounded {
+                a *= AIR_CONTROL;
+            }
+            let dx = vx - cur.x;
+            let dz = vz - cur.z;
+            let dist = (dx * dx + dz * dz).sqrt();
+            let max_step = a * dt;
+            if dist <= max_step || dist < 1e-6 {
+                (vx, vz)
+            } else {
+                (cur.x + dx / dist * max_step, cur.z + dz / dist * max_step)
+            }
+        } else {
+            (vx, vz)
+        };
+
+        let Some(body) = self.bodies.get(handle) else {
+            return false;
+        };
+        let Some(&collider_handle) = body.colliders().first() else {
+            return false;
+        };
+        let Some(collider) = self.colliders.get(collider_handle) else {
+            return false;
+        };
+        let shape = collider.shape();
+        let shape_pos = *body.position();
+        let translation = body.translation();
+
+        let desired = Vector::new(nx, vspeed, nz) * dt;
+        let filter = QueryFilter::new().exclude_rigid_body(handle);
+        let queries = self.broad.as_query_pipeline(
+            self.narrow.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            filter,
+        );
+        let controller = KinematicCharacterController {
+            slide: true,
+            autostep: Some(CharacterAutostep {
+                max_height: CharacterLength::Absolute(PLAYER_AUTOSTEP_HEIGHT),
+                min_width: CharacterLength::Relative(PLAYER_AUTOSTEP_MIN_WIDTH),
+                include_dynamic_bodies: false,
+            }),
+            max_slope_climb_angle: PLAYER_MAX_SLOPE_CLIMB_DEG.to_radians(),
+            min_slope_slide_angle: PLAYER_MIN_SLOPE_SLIDE_DEG.to_radians(),
+            snap_to_ground: Some(CharacterLength::Relative(PLAYER_SNAP_TO_GROUND)),
+            ..Default::default()
+        };
+        let movement = controller.move_shape(dt, &queries, shape, &shape_pos, desired, |_| {});
+        let new_translation = translation + movement.translation;
+
+        // Vitesse horizontale dérivée du mouvement **réel** (post-collision), pas
+        // de la cible commandée : un mur doit freiner le joueur visiblement au
+        // tick suivant, pas être ignoré par la continuité d'accélération (même
+        // sensation que le solveur de contact sur l'ancien corps dynamique). La
+        // composante verticale reste analytique (`vspeed` calculé ci-dessus) :
+        // un petit ajustement de `snap_to_ground` ne doit pas se lire comme un
+        // freinage de chute.
+        let new_hvel = if dt > 1e-6 {
+            Vec3::new(movement.translation.x, 0.0, movement.translation.z) / dt
+        } else {
+            Vec3::ZERO
+        };
+        self.kinematic[slot].2 = KinematicState {
+            hvel: new_hvel,
+            vspeed,
+            grounded: movement.grounded,
+        };
+
+        if let Some(body) = self.bodies.get_mut(handle) {
+            body.set_next_kinematic_translation(new_translation);
+        }
+
+        do_jump
+    }
+
+    /// Vitesse linéaire (m/s) de l'objet `index` (corps dynamique **ou**
+    /// kinématique, Sprint 103b), `None` s'il n'en a pas. Sert au rattrapage
+    /// doux à l'arrêt de la réconciliation réseau (cf. `app::network_client`) :
+    /// distinguer « joueur immobile » (on peut aligner sans gêner) de « en
+    /// plein déplacement ». Un corps kinématique n'a pas de `linvel` géré par
+    /// rapier — on renvoie la vitesse suivie nous-mêmes dans `KinematicState`
+    /// (cf. `control_kinematic`), mise à jour à chaque appel de `control`.
     pub fn velocity(&self, index: usize) -> Option<Vec3> {
+        if let Some(&(_, _, state)) = self.kinematic.iter().find(|&&(i, _, _)| i == index) {
+            return Some(Vec3::new(state.hvel.x, state.vspeed, state.hvel.z));
+        }
         let &(_, handle) = self.dynamic.iter().find(|&&(i, _)| i == index)?;
         let v = self.bodies.get(handle)?.linvel();
         Some(Vec3::new(v.x, v.y, v.z))
     }
 
-    /// Force la position du corps rigide (dynamique) de l'objet `index`, sans
-    /// effet s'il n'en a pas (objet statique/sans physique) — utilisé par la
-    /// réconciliation réseau du joueur local (`app::network_client::apply_
-    /// local_network_position`, `SPRINTNETWORK.md`).
+    /// Force la position du corps rigide (dynamique **ou** kinématique,
+    /// Sprint 103b) de l'objet `index`, sans effet s'il n'en a pas (objet
+    /// statique/sans physique) — utilisé par la réconciliation réseau du
+    /// joueur local (`app::network_client::apply_local_network_position`,
+    /// `SPRINTNETWORK.md`).
     ///
     /// **Nécessaire, pas cosmétique** : `step` recopie la pose du corps
     /// rigide dans `scene.objects[index].transform` à *chaque* appel (sync à
@@ -387,7 +598,15 @@ impl Physics {
     /// n'a donc d'effet que pour la frame courante ; `step` l'écrase dès le
     /// tick suivant avec la position du corps rigide, resté inchangé (cf.
     /// docs/audits/physics.md pour le bug réel que ça a causé).
+    /// `set_translation` fonctionne aussi bien sur un corps kinématique
+    /// (téléportation directe, hors de `move_shape`) que dynamique.
     pub fn set_position(&mut self, index: usize, pos: Vec3) {
+        if let Some(&(_, handle, _)) = self.kinematic.iter().find(|&&(i, _, _)| i == index) {
+            if let Some(body) = self.bodies.get_mut(handle) {
+                body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
+            }
+            return;
+        }
         if let Some(&(_, handle)) = self.dynamic.iter().find(|&&(i, _)| i == index)
             && let Some(body) = self.bodies.get_mut(handle)
         {
@@ -481,7 +700,11 @@ impl Physics {
             .collect()
     }
 
-    /// Avance la simulation de `dt` et recopie les poses des corps dynamiques.
+    /// Avance la simulation de `dt` et recopie les poses des corps dynamiques
+    /// **et** kinématiques (Sprint 103b). `pipeline.step` déplace un corps
+    /// kinématique vers la translation programmée par `control_kinematic` via
+    /// `set_next_kinematic_translation` — la recopie ci-dessous ne fait que
+    /// refléter ce résultat dans `transform`, comme pour un corps dynamique.
     pub fn step(&mut self, dt: f32, scene: &mut Scene) {
         self.integration.dt = dt.clamp(1.0 / 240.0, 1.0 / 20.0);
         self.pipeline.step(
@@ -500,6 +723,14 @@ impl Physics {
         );
 
         for &(i, handle) in &self.dynamic {
+            if let (Some(body), Some(obj)) = (self.bodies.get(handle), scene.objects.get_mut(i)) {
+                let t = body.translation();
+                obj.transform.position = Vec3::new(t.x, t.y, t.z);
+                let r = body.rotation();
+                obj.transform.rotation = Quat::from_xyzw(r.x, r.y, r.z, r.w);
+            }
+        }
+        for &(i, handle, _) in &self.kinematic {
             if let (Some(body), Some(obj)) = (self.bodies.get(handle), scene.objects.get_mut(i)) {
                 let t = body.translation();
                 obj.transform.position = Vec3::new(t.x, t.y, t.z);
@@ -921,16 +1152,33 @@ mod tests {
         );
     }
 
+    /// Laisse le joueur (corps kinématique, Sprint 103b) se poser réellement au
+    /// sol (gravité + `move_shape`/snap au sol) avant de mesurer la maths de
+    /// `control` — à l'apparition, la capsule n'est pas encore en contact avec
+    /// le sol (`Scene::controller_demo` la fait tomber depuis y=1.0), et un
+    /// corps kinématique détecte l'air *réellement* (shapecast) là où l'ancien
+    /// corps dynamique se croyait « au sol » dès la première frame (heuristique
+    /// de vitesse, toujours vraie à vitesse nulle) — sans se poser d'abord, les
+    /// tests ci-dessous mesureraient l'autorité réduite de l'air (`AIR_CONTROL`)
+    /// au lieu de celle du sol.
+    fn settle_on_ground(phys: &mut Physics, scene: &mut Scene, p: usize) {
+        let dt = 1.0 / 60.0;
+        for _ in 0..40 {
+            phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
+            phys.step(dt, scene);
+        }
+    }
+
     #[test]
     fn control_with_acceleration_ramps_up_instead_of_snapping_to_target() {
-        let scene = Scene::controller_demo();
+        let mut scene = Scene::controller_demo();
         let p = player_index(&scene);
         let mut phys = Physics::build(&scene);
+        settle_on_ground(&mut phys, &mut scene, p);
         // Accélération de 4 m/s² : après un seul pas de 1/60 s, la vitesse ne doit
         // pas déjà valoir la cible (8 m/s) — contrairement à `accel = 0.0` (instantané).
         phys.control(p, 8.0, 0.0, false, 0.0, 4.0, 1.0 / 60.0);
-        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
-        let vx = phys.bodies.get(handle).unwrap().linvel().x;
+        let vx = phys.velocity(p).unwrap().x;
         assert!(
             vx > 0.0 && vx < 8.0,
             "la vitesse doit monter progressivement, pas instantanément (vx={vx})"
@@ -939,21 +1187,37 @@ mod tests {
 
     #[test]
     fn control_brakes_harder_than_it_accelerates() {
-        // Vitesse lancée à 8 m/s (accel 0 = instantané), puis cible 0 avec accel 20 :
-        // le freinage doit être `BRAKE_FACTOR` fois plus fort que l'accélération —
-        // arrêt net quand le joueur relâche, pas une glissade symétrique du départ.
-        let scene = Scene::controller_demo();
+        // Le freinage doit décélérer nettement plus vite (`BRAKE_FACTOR`) qu'une
+        // accélération de même magnitude ne fait progresser la vitesse depuis
+        // l'arrêt — arrêt net quand le joueur relâche, pas une glissade symétrique
+        // du départ. Comparaison entre deux scénarios (plutôt qu'une formule
+        // figée sur la vitesse absolue) : un corps kinématique subit un léger
+        // frottement de contact avec le sol (`KinematicCharacterController`, sans
+        // équivalent sur l'ancien corps dynamique) qui décale une vitesse absolue
+        // exacte, mais affecte les deux scénarios de façon comparable — le
+        // *ratio* freinage/accélération reste la grandeur fiable à tester.
+        let mut scene = Scene::controller_demo();
         let p = player_index(&scene);
-        let mut phys = Physics::build(&scene);
         let dt = 1.0 / 60.0;
-        phys.control(p, 8.0, 0.0, false, 0.0, 0.0, dt);
-        phys.control(p, 0.0, 0.0, false, 0.0, 20.0, dt);
-        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
-        let vx = phys.bodies.get(handle).unwrap().linvel().x;
-        let expected = 8.0 - 20.0 * BRAKE_FACTOR * dt;
+
+        let mut phys_brake = Physics::build(&scene);
+        settle_on_ground(&mut phys_brake, &mut scene, p);
+        phys_brake.control(p, 8.0, 0.0, false, 0.0, 0.0, dt);
+        let v1 = phys_brake.velocity(p).unwrap().x;
+        phys_brake.control(p, 0.0, 0.0, false, 0.0, 20.0, dt);
+        let brake_delta = v1 - phys_brake.velocity(p).unwrap().x;
+
+        let mut scene2 = Scene::controller_demo();
+        let mut phys_accel = Physics::build(&scene2);
+        settle_on_ground(&mut phys_accel, &mut scene2, p);
+        phys_accel.control(p, 8.0, 0.0, false, 0.0, 20.0, dt);
+        let accel_delta = phys_accel.velocity(p).unwrap().x;
+
         assert!(
-            (vx - expected).abs() < 1e-4,
-            "le freinage doit appliquer accel×{BRAKE_FACTOR} (vx={vx}, attendu={expected})"
+            brake_delta > accel_delta * (BRAKE_FACTOR * 0.75),
+            "le freinage (Δ={brake_delta}) doit décélérer nettement plus vite \
+             que l'accélération (Δ={accel_delta}) ne progresse (facteur \
+             attendu ≈ {BRAKE_FACTOR})"
         );
     }
 
@@ -969,8 +1233,7 @@ mod tests {
         // Saut : vitesse verticale nette (5 m/s) → plus « au sol » pour l'appel suivant.
         phys.control(p, 0.0, 0.0, true, 5.0, 0.0, dt);
         phys.control(p, 8.0, 0.0, false, 0.0, 20.0, dt);
-        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
-        let vx = phys.bodies.get(handle).unwrap().linvel().x;
+        let vx = phys.velocity(p).unwrap().x;
         let expected = 20.0 * AIR_CONTROL * dt;
         assert!(
             (vx - expected).abs() < 1e-4,
@@ -992,24 +1255,24 @@ mod tests {
             phys.step(dt, &mut scene);
         }
         phys.control(p, 0.0, 0.0, true, 6.0, 0.0, dt);
-        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
         for _ in 0..200 {
-            if phys.bodies.get(handle).unwrap().linvel().y < -1.5 {
+            if phys.velocity(p).unwrap().y < -1.5 {
                 break;
             }
             phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
             phys.step(dt, &mut scene);
         }
-        let vy_before = phys.bodies.get(handle).unwrap().linvel().y;
+        let vy_before = phys.velocity(p).unwrap().y;
         assert!(
             vy_before < -1.5,
             "le joueur doit être en chute (vy={vy_before})"
         );
-        // Un appel `control` seul (sans pas de simulation) doit ajouter l'excès de
-        // gravité de chute — la part de base (×1) restant intégrée par `step`.
+        // Un appel `control` seul (sans pas de simulation) doit appliquer la
+        // gravité de chute renforcée en un seul coup (pas de solveur `step`
+        // séparé pour un corps kinématique, cf. `control_kinematic`).
         phys.control(p, 0.0, 0.0, false, 0.0, 0.0, dt);
-        let vy_after = phys.bodies.get(handle).unwrap().linvel().y;
-        let boost = 9.81 * (FALL_GRAVITY_FACTOR - 1.0) * dt;
+        let vy_after = phys.velocity(p).unwrap().y;
+        let boost = 9.81 * FALL_GRAVITY_FACTOR * dt;
         assert!(
             (vy_before - vy_after - boost).abs() < 1e-3,
             "la chute doit être accélérée de {boost} m/s par pas (avant={vy_before}, après={vy_after})"
@@ -1018,13 +1281,193 @@ mod tests {
 
     #[test]
     fn control_with_zero_acceleration_snaps_instantly_as_before() {
-        let scene = Scene::controller_demo();
+        let mut scene = Scene::controller_demo();
         let p = player_index(&scene);
         let mut phys = Physics::build(&scene);
+        settle_on_ground(&mut phys, &mut scene, p);
         phys.control(p, 8.0, 0.0, false, 0.0, 0.0, 1.0 / 60.0);
-        let handle = phys.controlled.iter().find(|&&(i, _)| i == p).unwrap().1;
-        let vx = phys.bodies.get(handle).unwrap().linvel().x;
-        assert!((vx - 8.0).abs() < 1e-5, "vx doit valoir la cible, vx={vx}");
+        let vx = phys.velocity(p).unwrap().x;
+        assert!(
+            (vx - 8.0).abs() < 0.05,
+            "vx doit valoir la cible à peu près instantanément, vx={vx}"
+        );
+    }
+
+    fn kinematic_player(pos: Vec3) -> SceneObject {
+        SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(pos),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                move_speed: 2.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Livrable du Sprint 103b (« escalier montable ») : un escalier de 4 marches
+    /// de 20 cm de haut (sous `PLAYER_AUTOSTEP_HEIGHT` = 30 cm) doit être franchi
+    /// sans ralentir en butant contre chaque contremarche — la preuve que
+    /// `KinematicCharacterController::autostep` fait le travail que l'ancienne
+    /// heuristique de vitesse (`cur.y.abs() < 1.0`, sans aucune notion de forme du
+    /// sol) ne pouvait pas faire.
+    #[test]
+    fn kinematic_player_climbs_a_low_staircase() {
+        const STEP_RISE: f32 = 0.2;
+        const STEP_DEPTH: f32 = 0.6;
+        const STEPS: i32 = 4;
+
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -0.1, -1.5))
+                .with_scale(Vec3::new(4.0, 0.2, 3.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        for k in 0..STEPS {
+            let top = STEP_RISE * (k + 1) as f32;
+            scene.objects.push(SceneObject {
+                name: format!("Marche {k}"),
+                mesh: crate::scene::MeshKind::Cube,
+                transform: crate::scene::Transform::from_pos(Vec3::new(
+                    0.0,
+                    top * 0.5,
+                    (k as f32 + 0.5) * STEP_DEPTH,
+                ))
+                .with_scale(Vec3::new(4.0, top, STEP_DEPTH)),
+                physics: PhysicsKind::Static,
+                ..Default::default()
+            });
+        }
+        // Palier au sommet : sans lui, le joueur (avancée constante en +Z) finit
+        // par dépasser le bord de la dernière marche et tombe dans le vide — ce
+        // test vérifie l'ascension, pas la chute derrière l'escalier.
+        let top_step = STEP_RISE * STEPS as f32;
+        scene.objects.push(SceneObject {
+            name: "Palier".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(
+                0.0,
+                top_step * 0.5,
+                STEPS as f32 * STEP_DEPTH + 1.0,
+            ))
+            .with_scale(Vec3::new(4.0, top_step, 2.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene
+            .objects
+            .push(kinematic_player(Vec3::new(0.0, 1.0, -1.5)));
+        let p = scene.objects.len() - 1;
+
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        for _ in 0..200 {
+            phys.control(p, 0.0, 2.0, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        let pos = scene.objects[p].transform.position;
+        assert!(
+            pos.z > STEP_DEPTH * STEPS as f32 - 1.0,
+            "le joueur doit avoir avancé jusqu'au sommet de l'escalier (z={})",
+            pos.z
+        );
+        assert!(
+            pos.y > top_step - STEP_RISE * 1.5,
+            "le joueur doit être monté sur les marches (y={}, sommet={})",
+            pos.y,
+            top_step
+        );
+    }
+
+    /// Décor en pente : un plan incliné statique (rotation autour de X), du bas
+    /// (z négatif, y≈0) vers le haut (z positif). `angle_deg` positif fait monter
+    /// la pente en +Z, direction dans laquelle le joueur avance dans les tests.
+    fn ramp_scene(angle_deg: f32) -> (Scene, usize) {
+        let theta = -angle_deg.to_radians();
+        let mut scene = Scene::default();
+        // Sol plat avant le bas de la rampe (bord bas ≈ z=-2.7, cf. commentaire
+        // ci-dessous) — sans lui, le joueur tombe dans le vide avant même
+        // d'atteindre la rampe.
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -0.1, -4.5))
+                .with_scale(Vec3::new(4.0, 0.2, 3.5)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Rampe".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform {
+                position: Vec3::new(0.0, angle_deg.to_radians().sin() * 3.0, 0.0),
+                rotation: Quat::from_rotation_x(theta),
+                scale: Vec3::new(4.0, 0.2, 6.0),
+            },
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        // Départ à plat, juste avant le bas de la rampe (bord bas ≈ z=-2.7 pour
+        // une demi-longueur de 3 m, cf. calcul géométrique en commentaire du test).
+        scene
+            .objects
+            .push(kinematic_player(Vec3::new(0.0, 1.0, -4.0)));
+        let p = scene.objects.len() - 1;
+        (scene, p)
+    }
+
+    /// Pente franchissable (25°, sous `PLAYER_MAX_SLOPE_CLIMB_DEG` = 50°) : le
+    /// joueur doit rester au contact et monter avec elle, pas rebondir/tunneler.
+    #[test]
+    fn kinematic_player_climbs_a_gentle_slope() {
+        // 220 pas (~3,7 s) : le joueur atteint le haut de la rampe (~z=2,7) sans
+        // la dépasser — au-delà, il marcherait dans le vide derrière la rampe,
+        // ce que ce test ne vérifie pas.
+        let (mut scene, p) = ramp_scene(25.0);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        for _ in 0..220 {
+            phys.control(p, 0.0, 2.0, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        let pos = scene.objects[p].transform.position;
+        assert!(
+            pos.y > 2.0,
+            "le joueur doit avoir grimpé une pente franchissable (y={})",
+            pos.y
+        );
+        assert!(
+            pos.z > -1.0,
+            "le joueur doit avoir avancé sur la pente (z={})",
+            pos.z
+        );
+    }
+
+    /// Contre-épreuve : une pente trop raide (65°, au-delà de
+    /// `PLAYER_MAX_SLOPE_CLIMB_DEG`/`PLAYER_MIN_SLOPE_SLIDE_DEG`) ne doit pas se
+    /// gravir comme la précédente — le joueur reste bloqué en bas / glisse,
+    /// loin de la hauteur atteinte sur la pente franchissable.
+    #[test]
+    fn kinematic_player_cannot_climb_a_steep_slope() {
+        let (mut scene, p) = ramp_scene(65.0);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        for _ in 0..360 {
+            phys.control(p, 0.0, 2.0, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        let pos = scene.objects[p].transform.position;
+        assert!(
+            pos.y < 0.8,
+            "une pente trop raide ne doit pas être gravie comme une pente \
+             franchissable (y={})",
+            pos.y
+        );
     }
 
     /// Sol plat (index 0) + mur vertical (index 1), tous deux statiques — sert aux

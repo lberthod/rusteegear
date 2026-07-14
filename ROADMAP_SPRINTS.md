@@ -1616,12 +1616,54 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Livrable** : commentaires du code recentrés sur les invariants, historique déplacé
   en doc — fait sur l'ensemble du projet.
 
-#### Sprint 103b — Character controller kinématique ⬜
+#### Sprint 103b — Character controller kinématique ✅ FAIT
 **Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.
-- [ ] Migration vers `KinematicCharacterController` de rapier.
-- **Fichiers** : `src/runtime/physics.rs`, `src/app/multiplayer.rs`, `src/bin/server.rs`.
+- [x] **Migration vers `KinematicCharacterController` de rapier**
+      (`src/runtime/physics.rs`) : le joueur (`obj.controller` avec `input`/
+      `gyro`, local **et** réseau — client et serveur partagent le même
+      `sim_step`) devient un corps `kinematic_position_based`, piloté par
+      `move_shape` (nouveau chemin `Physics::control_kinematic`) plutôt que
+      par `set_linvel`. Remplace l'ancienne heuristique « au sol » (`cur.y.
+      abs() < 1.0`, sans aucune notion de forme du sol) par le vrai résultat
+      du shapecast de rapier — gère nativement pentes (`max_slope_climb_
+      angle`/`min_slope_slide_angle`), marches (`autostep`, 30 cm) et snap au
+      sol. Les chasseurs IA et le recul (`stagger`, qui ne cible jamais le
+      joueur) restent des corps dynamiques classiques, chemin `control`
+      inchangé — scope contenu au joueur, comme demandé par le risque du
+      sprint.
+- [x] **API externe inchangée** : `Physics::control`/`velocity`/`set_position`
+      gardent la même signature et sémantique (dispatch interne selon le
+      type de corps) — `src/app/mod.rs` (site d'appel), `src/app/
+      network_client.rs` (réconciliation réseau) et `src/app/multiplayer.rs`/
+      `src/bin/server.rs` n'ont nécessité **aucune** modification, confirmé
+      par grep (client et serveur appellent le même code, aucune logique de
+      mouvement dupliquée).
+- [x] **Livrable vérifié** par 3 nouveaux tests bout-en-bout (physique réelle) :
+      un joueur franchit un escalier de 4 marches de 20 cm sans ralentir
+      (`kinematic_player_climbs_a_low_staircase`) ; une pente de 25°
+      (franchissable) est gravie en restant au contact
+      (`kinematic_player_climbs_a_gentle_slope`) ; une pente de 65° (contre-
+      épreuve, au-delà des seuils) n'est pas gravie de la même façon
+      (`kinematic_player_cannot_climb_a_steep_slope`). Les 5 tests d'inertie
+      existants (rampe d'accélération, freinage, autorité réduite en l'air,
+      chute accélérée) ont été réécrits pour lire `Physics::velocity`
+      (boîte noire) au lieu d'inspecter `linvel()` du corps rigide — plus
+      valable pour un corps kinématique, qui n'a pas de vitesse gérée par
+      rapier. **Trouvé en écrivant les tests** : à l'apparition, la capsule
+      du joueur n'est pas encore posée au sol (spawn à 0,5 m de hauteur) —
+      un corps kinématique détecte l'air *réellement* (shapecast) là où
+      l'ancien corps dynamique se croyait « au sol » dès la première frame
+      (heuristique de vitesse, toujours vraie à vitesse nulle) : les tests
+      d'inertie qui ne laissaient pas le joueur se poser d'abord mesuraient
+      involontairement l'autorité réduite de l'air ; corrigé en les faisant
+      se stabiliser au sol avant de mesurer (`settle_on_ground`). Le
+      frottement de contact du `KinematicCharacterController` (sans
+      équivalent sur l'ancien corps dynamique) rendait aussi une assertion
+      de freinage à formule exacte trop fragile ; remplacée par une
+      comparaison de deux scénarios réels (ratio freinage/accélération).
+- **Fichiers** : `src/runtime/physics.rs` (seul fichier modifié — voir note
+  ci-dessus sur l'absence d'impact réseau).
 - **Livrable** : escalier montable en solo et en ligne.
-- **Risque** : seul sprint qui menace l'acquis multijoueur — le faire **seul**, pas groupé.
 
 #### Sprint 103c — Audit complet de la prédiction réseau ⬜
 **Objectif** : revalider la prédiction/réconciliation réseau après la migration du contrôleur, façon sprints 72–77.
