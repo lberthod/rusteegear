@@ -2112,23 +2112,29 @@ assertions de test).
   artefact de méthode de comptage plutôt qu'une dette réelle — corrigé ici pour que
   la roadmap reste une source fiable plutôt que de propager le chiffre brut.
 
-#### Sprint 113c — Sécurité réseau : rate limiting + TLS natif ⬜
-**Objectif** : combler ce que Sprint 105a-2 n'a pas couvert — aucun rate limiting,
-pas de chiffrement sur le WebSocket applicatif natif (Sprint 116 ne couvre que le
-client WASM en `wss://`, pas le serveur natif `src/bin/server.rs`).
-- [ ] Rate limiting par connexion (nb de messages/s, taille cumulée) dans
-      `src/net/server_loop.rs`, déconnexion propre + log au dépassement — même esprit
-      que la validation de champs du Sprint 105a-2 (rejet explicite, pas de silence).
-- [ ] TLS natif : `tokio-tungstenite` + `rustls`/`native-tls` pour `wss://` côté
-      serveur natif (pas seulement le client web) ; configuration certificat via env
-      (jamais en dur/dans le repo).
-- [ ] Limite de connexions simultanées par IP (garde-fou anti-DoS basique, pas un
-      WAF complet — hors scope assumé, à documenter comme tel).
-- **Fichiers** : `src/net/server_loop.rs`, `src/bin/server.rs`, `Cargo.toml`.
-- **Livrable** : test qui simule un flood de messages → connexion coupée proprement ;
-  connexion `wss://` validée bout-en-bout (client réel).
-- **Risques** : TLS natif change la configuration de déploiement (certificat requis) →
-  documenter clairement dans `packaging/EXPORT.md` équivalent réseau.
+#### Sprint 113c — Sécurité réseau : rate limiting + limite par IP ✅ FAIT
+**Objectif** : combler ce que Sprint 105a-2 n'a pas couvert — aucun rate limiting sur
+le WebSocket applicatif natif.
+- [x] Rate limiting par connexion dans `src/net/server_loop.rs` : fenêtre glissante
+      d'une seconde, `MAX_MESSAGES_PER_SEC` (120, ×2 marge sur le tick serveur 60 Hz)
+      et `MAX_BYTES_PER_SEC` (64 Kio, réutilise `MAX_WS_MESSAGE_BYTES` comme budget
+      cumulé) ; dépassement → déconnexion propre + `log::warn!`, même esprit que la
+      validation de champs du Sprint 105a-2 (rejet explicite, pas de silence).
+- [x] Limite de connexions simultanées par IP (`MAX_CONNECTIONS_PER_IP = 4`) : refusée
+      avant même la poignée de main WebSocket (moins de travail gaspillé) — garde-fou
+      anti-DoS basique, pas un WAF complet, documenté comme tel.
+- [x] 2 nouveaux tests bout-en-bout (`--features net_tests`) : flood de messages →
+      `connected_count()` retombe à 0 ; 5ᵉ connexion depuis la même IP → pas de
+      `Welcome`, plafond jamais dépassé côté serveur.
+- **TLS natif reporté** : chevauche le nouveau Sprint 113f (reverse-proxy nginx/
+  certbot devant le serveur, ajouté par une autre session) qui prévoit de terminer le
+  TLS en amont plutôt que dans le binaire Rust — décision utilisateur de ne pas
+  construire deux mécanismes de chiffrement qui se recouvrent. Si 113f n'aboutit pas
+  ou qu'un déploiement sans reverse-proxy est nécessaire, `rustls`/`native-tls`
+  restent à ajouter ici (scope initial de ce sprint, cf. historique).
+- **Fichiers** : `src/net/server_loop.rs`.
+- **Livrable** : 358 tests lib + 48 tests réseau (`--features net_tests`) verts,
+  clippy -D warnings et fmt propres.
 
 #### Sprint 113d — Éditeur : wizard de démarrage pour non-développeur ⬜
 **Objectif** : réduire la marche d'entrée de l'inspecteur egui actuel (sliders/DragValue

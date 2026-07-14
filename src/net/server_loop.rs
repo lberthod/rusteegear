@@ -17,10 +17,11 @@
 //! la durée de vie du serveur.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -42,6 +43,58 @@ fn server_ws_config() -> WebSocketConfig {
     WebSocketConfig::default()
         .max_message_size(Some(MAX_WS_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_WS_MESSAGE_BYTES))
+}
+
+/// Rate limiting par connexion (Sprint 113c) : `MAX_WS_MESSAGE_BYTES` borne déjà la
+/// taille d'un message *individuel*, mais rien n'empêchait jusqu'ici un client de les
+/// enchaîner sans limite — un flood de petits messages valides passe outre ce filtre.
+/// Fenêtre glissante d'une seconde, réinitialisée en continu (pas de fuite mémoire :
+/// juste deux compteurs + un `Instant` par connexion).
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
+/// Un client légitime envoie au plus un `Input` par tick serveur (`SERVER_TICK` =
+/// ~60 Hz, cf. `src/bin/server.rs`) ; ×2 pour absorber le jitter réseau/scheduling
+/// sans pénaliser un client honnête proche de la limite.
+const MAX_MESSAGES_PER_SEC: u32 = 120;
+/// Un `Input`/`Leave` légitime tient sur quelques dizaines d'octets encodés en
+/// `bincode` — réutilise `MAX_WS_MESSAGE_BYTES` comme budget *cumulé* par seconde
+/// (pas par message) : très généreux pour du trafic légitime, mais empêche un
+/// client d'atteindre `MAX_MESSAGES_PER_SEC` en enchaînant des trames proches du
+/// maximum autorisé par message.
+const MAX_BYTES_PER_SEC: usize = MAX_WS_MESSAGE_BYTES;
+
+/// Connexions simultanées tolérées depuis une même adresse IP (Sprint 113c,
+/// garde-fou anti-DoS basique — pas un WAF complet, cf. ROADMAP_SPRINTS.md). Assez
+/// pour un joueur légitime avec plusieurs onglets/instances de test, pas assez pour
+/// qu'une seule machine épuise les ressources du serveur en ouvrant des centaines de
+/// sockets.
+const MAX_CONNECTIONS_PER_IP: usize = 4;
+
+type IpCounts = Arc<Mutex<HashMap<IpAddr, usize>>>;
+
+fn lock_ip_counts(counts: &IpCounts) -> std::sync::MutexGuard<'_, HashMap<IpAddr, usize>> {
+    counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Décrémente le compteur de connexions de `ip` à la destruction (toutes les sorties
+/// de `handle_connection`, y compris via `?`, doivent libérer leur créneau — un
+/// `Drop` évite de dupliquer ce nettoyage sur chaque chemin de sortie).
+struct IpGuard {
+    counts: IpCounts,
+    ip: IpAddr,
+}
+
+impl Drop for IpGuard {
+    fn drop(&mut self) {
+        let mut counts = lock_ip_counts(&self.counts);
+        if let Some(n) = counts.get_mut(&self.ip) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
 }
 
 /// Message reçu d'un client, avec l'identifiant du joueur qui l'a envoyé.
@@ -83,11 +136,13 @@ impl NetServer {
         let (tx, rx) = channel::<Inbound>();
         let outboxes: Outboxes = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU32::new(1));
+        let ip_counts: IpCounts = Arc::new(Mutex::new(HashMap::new()));
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::io::Result<SocketAddr>>();
         let addr = addr.to_string();
         let accept_outboxes = outboxes.clone();
         let accept_next_id = next_id.clone();
+        let accept_ip_counts = ip_counts.clone();
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -128,10 +183,32 @@ impl NetServer {
                     if let Err(e) = stream.set_nodelay(true) {
                         log::warn!("TCP_NODELAY impossible sur {peer} : {e}");
                     }
+
+                    // Garde-fou anti-DoS basique (Sprint 113c) : refusée avant même la
+                    // poignée de main WebSocket, moins de travail gaspillé qu'un refus
+                    // après handshake pour une IP déjà au plafond.
+                    {
+                        let mut counts = lock_ip_counts(&accept_ip_counts);
+                        let n = counts.entry(peer.ip()).or_insert(0);
+                        if *n >= MAX_CONNECTIONS_PER_IP {
+                            log::warn!(
+                                "Connexion refusée depuis {} : déjà {n} connexion(s) simultanée(s) (max {MAX_CONNECTIONS_PER_IP})",
+                                peer.ip()
+                            );
+                            continue;
+                        }
+                        *n += 1;
+                    }
+                    let ip_guard = IpGuard {
+                        counts: accept_ip_counts.clone(),
+                        ip: peer.ip(),
+                    };
+
                     let tx = tx.clone();
                     let outboxes = accept_outboxes.clone();
                     let next_id = accept_next_id.clone();
                     tokio::spawn(async move {
+                        let _ip_guard = ip_guard;
                         if let Err(e) = handle_connection(stream, peer, tx, outboxes, next_id).await
                         {
                             log::info!("Connexion {peer} terminée : {e}");
@@ -248,15 +325,36 @@ async fn handle_connection(
     // Pompe entrante : décode chaque trame en `ClientMsg` et la transmet au thread
     // principal via le canal synchrone (jamais bloquant : `std::sync::mpsc` est
     // non borné, même choix que pour les imports glTF/IA dans `app/mod.rs`).
+    // Rate limiting (Sprint 113c) : fenêtre glissante d'une seconde, réinitialisée
+    // dès qu'elle est dépassée — état purement local à cette tâche, pas besoin de
+    // le partager (chaque connexion a la sienne).
     let inbound_tx = tx.clone();
     let inbound = async move {
+        let mut window_start = Instant::now();
+        let mut window_msgs: u32 = 0;
+        let mut window_bytes: usize = 0;
         while let Some(Ok(msg)) = stream.next().await {
-            if let Message::Binary(bytes) = msg
-                && let Ok(client_msg) = protocol::decode::<ClientMsg>(&bytes)
-            {
-                let is_leave = matches!(client_msg, ClientMsg::Leave);
-                if inbound_tx.send((id, client_msg)).is_err() || is_leave {
+            if let Message::Binary(bytes) = msg {
+                let now = Instant::now();
+                if now.duration_since(window_start) >= RATE_LIMIT_WINDOW {
+                    window_start = now;
+                    window_msgs = 0;
+                    window_bytes = 0;
+                }
+                window_msgs += 1;
+                window_bytes += bytes.len();
+                if window_msgs > MAX_MESSAGES_PER_SEC || window_bytes > MAX_BYTES_PER_SEC {
+                    log::warn!(
+                        "Connexion {peer} (joueur {id}) coupée : rate limit dépassé \
+                         ({window_msgs} messages / {window_bytes} octets dans la dernière seconde)"
+                    );
                     break;
+                }
+                if let Ok(client_msg) = protocol::decode::<ClientMsg>(&bytes) {
+                    let is_leave = matches!(client_msg, ClientMsg::Leave);
+                    if inbound_tx.send((id, client_msg)).is_err() || is_leave {
+                        break;
+                    }
                 }
             }
         }
@@ -393,5 +491,104 @@ mod tests {
                 ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 1 })
             );
         }
+    }
+
+    /// Sprint 113c : un client qui enchaîne les messages au-delà de
+    /// `MAX_MESSAGES_PER_SEC` dans la fenêtre d'une seconde doit être coupé
+    /// proprement (pas de panic serveur, juste une déconnexion), pas laissé libre
+    /// de continuer à flooder indéfiniment.
+    #[test]
+    fn flooding_messages_disconnects_the_client_cleanly() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let client = NetClient::connect(&url, "Flooder", None).expect("connexion du client");
+        client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("le client doit recevoir un Welcome");
+        server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("le serveur doit recevoir le Join");
+
+        let mut waited = Duration::ZERO;
+        while server.connected_count() < 1 && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert_eq!(server.connected_count(), 1);
+
+        // Bien au-delà de MAX_MESSAGES_PER_SEC (120), enchaînés sans pause : sur
+        // localhost, largement sous la seconde de la fenêtre de rate limiting.
+        for _ in 0..(MAX_MESSAGES_PER_SEC * 3) {
+            client.send(&ClientMsg::Input {
+                move_x: 0.0,
+                move_y: 0.0,
+                aim_yaw: 0.0,
+                attack: false,
+                jump: false,
+                fire: false,
+                weapon: 0,
+                heal: false,
+            });
+        }
+
+        let mut waited = Duration::ZERO;
+        while server.connected_count() > 0 && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert_eq!(
+            server.connected_count(),
+            0,
+            "le serveur doit avoir coupé la connexion qui a floodé"
+        );
+    }
+
+    /// Sprint 113c : au-delà de `MAX_CONNECTIONS_PER_IP` connexions simultanées
+    /// depuis la même adresse, les suivantes doivent être refusées (garde-fou
+    /// anti-DoS basique) au lieu d'être acceptées sans limite.
+    #[test]
+    fn per_ip_connection_limit_caps_simultaneous_sockets() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let mut clients = Vec::new();
+        for i in 0..MAX_CONNECTIONS_PER_IP {
+            let c = NetClient::connect(&url, &format!("Client{i}"), None)
+                .unwrap_or_else(|e| panic!("connexion {i} attendue sous le plafond : {e}"));
+            c.inbox
+                .recv_timeout(Duration::from_secs(2))
+                .expect("Welcome attendu sous le plafond");
+            clients.push(c);
+        }
+
+        let mut waited = Duration::ZERO;
+        while server.connected_count() < MAX_CONNECTIONS_PER_IP && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert_eq!(server.connected_count(), MAX_CONNECTIONS_PER_IP);
+
+        // La connexion suivante, toujours depuis 127.0.0.1, dépasse le plafond : soit
+        // la poignée de main échoue (TCP fermé avant le handshake WS), soit elle
+        // n'obtient jamais de Welcome — dans les deux cas, le nombre de clients
+        // effectivement connectés côté serveur ne doit pas dépasser le plafond.
+        if let Ok(over_limit) = NetClient::connect(&url, "OverLimit", None) {
+            let got_welcome = over_limit
+                .inbox
+                .recv_timeout(Duration::from_millis(500))
+                .is_ok();
+            assert!(
+                !got_welcome,
+                "une connexion au-delà du plafond par IP ne doit pas recevoir de Welcome"
+            );
+        }
+        assert_eq!(
+            server.connected_count(),
+            MAX_CONNECTIONS_PER_IP,
+            "le plafond par IP ne doit jamais être dépassé côté serveur"
+        );
     }
 }
