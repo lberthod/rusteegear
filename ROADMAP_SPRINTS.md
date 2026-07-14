@@ -2032,7 +2032,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ### PHASE Q — Web, la vitrine (114 → 117)
 
-#### Sprint 114 — Build wasm32 🟡 défrichage fait, rendu non résolu
+#### Sprint 114 — Build wasm32 ✅ FAIT
 - [x] **La lib compile pour `wasm32-unknown-unknown`** (`cargo build --lib
       --target wasm32-unknown-unknown`, `packaging/build_web.sh`). A demandé
       d'exclure trois familles de dépendances de cette cible (mêmes principes
@@ -2099,61 +2099,77 @@ régression client. Une manche décidée ne coupe plus tout le process
       futur backend natif sans format srgb non plus). **Golden tests
       inchangés** (le chemin headless force toujours `Rgba8UnormSrgb`, donc
       `needs_srgb_encode = 0.0`, comportement byte-identique à avant).
-- [ ] **Toujours non résolu : le canvas reste noir même après ce correctif.**
-      Diagnostic poussé bien plus loin cette session (logs `web_sys::console`
-      insérés puis retirés à chaque étape) — tout ce qui suit est vérifié
-      **sain**, pas juste supposé :
-      - `surface.get_current_texture()` → `Success` à chaque frame (jamais
-        `Outdated`/`Timeout`/`Occluded`/`Validation`).
-      - `draw_plan` contient bien 16 objets (la scène embarquée charge
-        correctement, ce n'est pas une scène vide).
-      - Caméra/lumière : `eye`, `target`, `distance`, `pitch`, `yaw`,
-        couleurs de ciel, `ambient` — toutes les valeurs sont cohérentes,
-        aucun NaN/dégénérescence.
-      - `resize()` n'est appelé **qu'une fois**, avec la bonne taille
-        (1024×720) — pas de boucle de resize qui invaliderait `hdr_view`
-        entre l'écriture de la passe principale et sa lecture par
-        `tonemap()`.
-      - Le correctif sRGB ci-dessus n'a **rien changé** visuellement : donc
-        soit son hypothèse était correcte mais insuffisante (une seconde
-        cause additionnelle masque encore tout), soit le vrai problème est
-        ailleurs (aucune couleur n'atteint `hdr_view` du tout, pas un
-        problème d'encodage d'une couleur qui y arrive bel et bien).
-      - Repéré en lisant le code sans le vérifier à l'exécution : le
-        `mipgen_pipeline` (mip-chain des textures importées) cible en dur
-        `wgpu::TextureFormat::Rgba8UnormSrgb` au lieu de suivre le format
-        réel de la texture — sans rapport avec la surface d'affichage
-        (n'explique pas un canvas entièrement noir), mais à corriger un jour
-        si des textures glTF s'affichent avec un gamma faux sur wasm32.
-      - **Prochaine étape concrète** pour qui reprend ce fil : le clear color
-        du `main_pass` est un flat `{0.07, 0.08, 0.1}` (avant tout dessin) —
-        si même ce clear n'apparaît pas (post-gamma, un gris bleuté visible,
-        pas du noir pur), la passe principale n'écrit peut-être jamais dans
-        `hdr_view` du tout côté web. Étape la plus rentable : inspecter la
-        frame capturée par les DevTools WebGPU de Chrome (`chrome://gpu`,
-        onglet **GPU process** → **WebGPU Report**, ou l'extension officielle
-        *WebGPU Inspector*) plutôt que de continuer à deviner depuis les
-        logs Rust — un outil de capture de frame GPU montrerait directement
-        quelle passe écrit quoi, ce qu'aucun `console.log` ne peut révéler.
+- [x] **Cause racine du canvas noir trouvée et corrigée : violation
+      d'uniformité WGSL dans le shader d'ombre, invisible côté natif.**
+      Après avoir vérifié sains un par un `get_current_texture()` (`Success`
+      à chaque frame), `draw_plan` (16 objets, scène bien chargée),
+      caméra/lumière (valeurs cohérentes, aucun NaN), `resize()` (appelé une
+      seule fois, bonne taille) — et constaté qu'un test décisif (forcer la
+      couleur de clear du `main_pass`, puis celle du `tonemap_pass`, à une
+      couleur criarde) **n'avait toujours aucun effet visible**, l'utilisateur
+      a ouvert les vraies DevTools Chrome (mon outil de lecture de console ne
+      remontait pas ces messages) : trois erreurs de validation WebGPU en
+      cascade, invisibles côté natif (Metal/Vulkan les acceptent sans
+      broncher) :
+      1. **`main.wgsl::shadow_factor`** : `textureSampleCompare` appelé après
+         un retour anticipé conditionné par `world_pos` (donc non-uniforme
+         d'un fragment à l'autre) → « must only be called from uniform
+         control flow ». Ceci invalidait `main_shader` → `pipeline` →
+         `main_pass` tout entier : **rien n'était jamais dessiné**, d'où
+         `hdr_view` resté à zéro (le navigateur initialise les textures à
+         zéro par sécurité) et un `tonemap` qui ne pouvait que produire du
+         noir, quel que soit son propre code. **Corrigé** : le retour
+         anticipé devient un booléen (`in_bounds`), la boucle PCF
+         `textureSampleCompare` s'exécute maintenant **toujours**
+         (inconditionnellement), et un `select()` final choisit 1.0 (éclairé)
+         hors carte d'ombre plutôt que d'éviter l'appel — flux de contrôle
+         uniforme garanti, quel que soit `world_pos`. Golden tests
+         inchangés (`cargo test --test golden_render --test
+         golden_skinning` : 8/8 toujours verts, même image pixel pour pixel).
+      2. **`skinned_pipeline_layout`** : 5 groupes de liaison (`camera`,
+         `model`, `shadow`, `tex`, `joint`) dépassent la limite WebGPU par
+         défaut (4, cf. `pipeline_layout` du chemin non skinné qui reste
+         pile à la limite). **Non corrigé** — fusionner un groupe demanderait
+         de toucher des layouts partagés par plusieurs pipelines (risque de
+         casser le rendu skinné natif, testé par `golden_skinning.rs`) pour
+         un bénéfice qui ne concerne que les meshes animés sur le web, hors
+         scope de ce sprint (aucun mesh skinné dans la démo mobile
+         embarquée — `draw_plan_skinned.len() == 0` sur cette scène).
+         **Limitation connue** : un objet avec animation squelettale ne
+         s'affichera pas sur wasm32 tant que ce n'est pas retravaillé.
+      3. **`bloom_chain`** (mip-chain du bloom) : demande 4 niveaux de mip
+         pour une texture 2×2 (max valide : 2) — repéré comme transitoire,
+         probablement dû à une taille de canvas non encore stabilisée au
+         tout premier appel de `Renderer::new` sur le web, avant que le
+         `resize()` (bonne taille, confirmé appelé une fois) ne recrée la
+         chaîne correctement. **Non corrigé** : aucun effet observable une
+         fois `resize()` passé, les golden tests (qui exercent ce chemin en
+         conditions normales) restent verts.
+      **Résultat vérifié dans un vrai Chrome** (capture de pixels réels via
+      `canvas.getContext('2d').drawImage(webgpuCanvas, …)` +
+      `getImageData`, pas juste une capture d'écran compressée) : sol,
+      personnage (capsule), overlay tactile (joystick WASD, bouton
+      Inventaire) s'affichent correctement, stables sur plusieurs frames.
 - **Fichiers** : nouveau `src/time_compat.rs`, `.cargo/config.toml`,
   `packaging/web/index.html`, `packaging/build_web.sh` ; modifiés :
   `src/lib.rs`, `src/runtime/audio.rs`, `src/app/mod.rs`, `src/app/
   simulation.rs`, `src/net/mod.rs`, `src/app/network_client.rs`, `src/app/
   ai.rs`, `src/editor/export.rs`, `src/editor/menus.rs`, `src/gfx/
   renderer.rs` (encodage sRGB manuel du `tonemap`), `src/gfx/shaders/
-  tonemap.wgsl`, `Cargo.toml`, `.github/workflows/ci.yml` (job
+  tonemap.wgsl`, `src/gfx/shaders/main.wgsl` (flux de contrôle uniforme de
+  `shadow_factor`), `Cargo.toml`, `.github/workflows/ci.yml` (job
   `cross-build` étendu, build seul).
-- **Livrable** : la lib compile et s'exécute sans erreur pour
-  `wasm32-unknown-unknown`, vérifié en conditions réelles (Chrome, WebGPU) —
-  mais **la scène ne s'affiche pas encore** (canvas noir), donc le livrable
-  initial (« la démo mobile tourne dans Chrome ») n'est pas atteint. Pas de
-  job CI de déploiement tant que ce n'est pas résolu (juste un build de
-  non-régression, cf. `ci.yml`).
-- **Risque avéré** : au-delà des API bloquantes anticipées (fichiers,
-  threads — confirmées : réseau, Lua, audio streaming), le rendu lui-même
-  a un problème encore non diagnostiqué. Sprint à rouvrir avant 115/116 avec
-  du temps dédié au diagnostic visuel, plutôt que de construire audio/réseau
-  web par-dessus un rendu qui ne s'affiche pas.
+- **Livrable** : la démo mobile (sol, joueur, overlay tactile) s'affiche et
+  tourne dans Chrome via WebGPU, vérifié par lecture de pixels réels — pas
+  de job CI de déploiement pour l'instant (juste un build de non-régression,
+  cf. `ci.yml`) : servir la page publiquement reste un geste manuel
+  (`packaging/build_web.sh` + un serveur statique) tant qu'un vrai pipeline
+  de déploiement n'est pas mis en place.
+- **Limitation connue** : le scripting Lua, l'audio et le réseau restent
+  inertes/absents sur wasm32 (prévu Sprints 115/116) ; les meshes à
+  animation squelettale ne s'affichent pas (limite de bind groups WebGPU,
+  cf. ci-dessus) — à retravailler si des scènes animées doivent tourner sur
+  le web.
 
 #### Sprint 115 — Assets & audio web ⬜
 - [ ] Assets par fetch async (le chemin async existant aide) ; contexte audio web pour kira.

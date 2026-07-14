@@ -83,13 +83,20 @@ fn vs_main(in: VsIn) -> VsOut {
 fn shadow_factor(world_pos: vec3<f32>) -> f32 {
     let lp = light.light_vp * vec4<f32>(world_pos, 1.0);
     let proj = lp.xyz / lp.w;
-    // hors de la carte d'ombre → considéré éclairé
-    if proj.x < -1.0 || proj.x > 1.0 || proj.y < -1.0 || proj.y > 1.0 || proj.z > 1.0 {
-        return 1.0;
-    }
+    // Hors de la carte d'ombre → considéré éclairé. Calculé en booléen, PAS en
+    // retour anticipé : `textureSampleCompare` (boucle PCF plus bas) doit rester
+    // atteint en flux de contrôle **uniforme** (exigé par la validation WebGPU —
+    // Chrome le rejette explicitement, contrairement aux backends natifs qui
+    // l'acceptaient sans broncher, Sprint 114). Un retour anticipé basé sur
+    // `world_pos` — qui varie par fragment — ferait sortir certains threads du
+    // quad avant l'appel à la texture, ce qui casse le calcul des dérivées
+    // implicites dont dépend l'échantillonnage.
+    let in_bounds =
+        proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z <= 1.0;
     let uv = vec2<f32>(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
     let bias = 0.003;
-    // PCF 3x3 pour adoucir le bord
+    // PCF 3x3 pour adoucir le bord — toujours exécuté, même hors carte d'ombre
+    // (le résultat est alors ignoré par le `select` final, cf. ci-dessus).
     var sum = 0.0;
     let texel = 1.0 / 1024.0;
     for (var dx = -1; dx <= 1; dx = dx + 1) {
@@ -98,7 +105,7 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
             sum = sum + textureSampleCompare(shadow_map, shadow_samp, uv + o, proj.z - bias);
         }
     }
-    return sum / 9.0;
+    return select(sum / 9.0, 1.0, !in_bounds);
 }
 
 @fragment

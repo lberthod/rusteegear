@@ -385,7 +385,7 @@ le développement). Historique sprint par sprint :
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
 | **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ✅ |
 | **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, hot-reload, snapping + profiler GPU, crash log + rustdoc | 104 → 113 | ✅ (106/107 non numérotés, tampons non utilisés) |
-| **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | 🟡 (114 : compile/s'exécute sans erreur, rendu encore noir — voir ROADMAP_SPRINTS.md) |
+| **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | 🟢 (114 fait — la scène s'affiche dans Chrome ; 115/116 restants) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -493,13 +493,14 @@ maintenabilité `app`/tests système + `docs/architecture.md` (105a-1/2/3), widg
 de HUD déclaratifs sérialisés dans la scène (109), manettes + remapping via
 `gilrs` (110), hot-reload assets (`notify`) + Lua (111), snapping éditeur
 position/rotation + profiler GPU (112), journal de crash volontaire + `cargo doc`
-publiable sur GitHub Pages (113). **En cours — Phase Q, la vitrine web** :
-la lib compile et s'exécute sans erreur pour `wasm32-unknown-unknown`
-(WebGPU s'initialise, la boucle de rendu tourne), mais la scène ne s'affiche
-pas encore — canvas noir, cause non identifiée (Sprint 114, détail dans
-[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)). Restent donc le rendu web à
-finir de déboguer, puis assets & audio web (115), multijoueur navigateur
-(116). Puis R (WebXR).
+publiable sur GitHub Pages (113), build wasm32/WebGPU — sol, joueur et
+overlay tactile s'affichent dans Chrome, vérifié par lecture de pixels réels
+(114). **En cours — Phase Q, la vitrine web** : restent assets & audio web
+(115, le scripting Lua et l'audio sont pour l'instant inertes sur wasm32),
+puis multijoueur navigateur (116). Limitation connue : les meshes à
+animation squelettale ne s'affichent pas encore sur le web (limite de bind
+groups WebGPU, détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)). Puis
+R (WebXR).
 
 ---
 

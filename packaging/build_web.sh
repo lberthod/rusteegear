@@ -3,11 +3,10 @@
 # Pré-requis : rustup target add wasm32-unknown-unknown ; cargo install wasm-bindgen-cli
 # (version EXACTE de la crate `wasm-bindgen` du lockfile — cf. Cargo.lock).
 #
-# État connu à ce sprint : compile et s'exécute dans Chrome sans panic (moteur,
-# éditeur exclus du binaire web restant compilés mais inertes), mais le premier
-# rendu affiche un canvas noir plutôt que la scène — bug non résolu (cf.
-# ROADMAP_SPRINTS.md Sprint 114). Utile pour continuer le diagnostic, pas encore
-# pour une démo publique.
+# État connu à ce sprint : la scène (sol, joueur, overlay tactile) s'affiche dans
+# Chrome via WebGPU. Scripting Lua, audio et réseau restent inertes/absents sur
+# wasm32 (Sprints 115/116) ; les meshes à animation squelettale ne s'affichent
+# pas encore (limite de bind groups WebGPU, cf. ROADMAP_SPRINTS.md Sprint 114).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
