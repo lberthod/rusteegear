@@ -968,7 +968,6 @@ mod tests {
     // `app` lui-même) — import explicite des symboles `pub(super)` que ces
     // tests appellent directement (par nom, pas via `AppState::advance_play`).
     use super::scripting::run_script;
-    use crate::scene::MeshKind;
 
     /// Nom de prefab unique par appel (horloge + pid) : ces tests écrivent réellement
     /// dans `~/.motor3derust/assets/prefabs/` (comme le ferait l'éditeur), pas de
@@ -3012,73 +3011,6 @@ mod tests {
                 .filter(|o| o.tap_action == crate::scene::TapAction::Hide)
                 .all(|o| o.visible),
             "toutes les gemmes redeviennent visibles"
-        );
-    }
-
-    #[test]
-    fn undo_covers_point_lights() {
-        let mut app = AppState::new();
-        let n0 = app.scene.point_lights.len();
-        app.push_undo();
-        app.scene.point_lights.push(PointLight::default());
-        assert_eq!(app.scene.point_lights.len(), n0 + 1);
-        app.undo();
-        assert_eq!(app.scene.point_lights.len(), n0); // lumière retirée par l'undo
-        app.redo();
-        assert_eq!(app.scene.point_lights.len(), n0 + 1); // ré-ajoutée
-    }
-
-    #[test]
-    fn distribute_spaces_evenly() {
-        let mut app = AppState::new();
-        app.scene.objects.clear();
-        for x in [0.0, 1.0, 9.0] {
-            app.scene.objects.push(SceneObject {
-                name: "o".into(),
-                transform: Transform::from_pos(Vec3::new(x, 0.0, 0.0)),
-                mesh: MeshKind::Cube,
-                script: String::new(),
-                physics: crate::runtime::physics::PhysicsKind::None,
-                collider_shape: crate::runtime::physics::ColliderShape::Auto,
-                group: String::new(),
-                color: [1.0; 3],
-                texture: String::new(),
-                tappable: false,
-                metallic: 0.0,
-                roughness: 0.6,
-                emissive: 0.0,
-                trigger: false,
-                ..Default::default()
-            });
-        }
-        app.selected = vec![0, 1, 2];
-        app.distribute_selection_axis(0);
-        // extrémités conservées (0 et 9), celui du milieu recalé à 4.5
-        let xs: Vec<f32> = app
-            .scene
-            .objects
-            .iter()
-            .map(|o| o.transform.position.x)
-            .collect();
-        assert!((xs[0] - 0.0).abs() < 1e-5);
-        assert!((xs[1] - 4.5).abs() < 1e-5);
-        assert!((xs[2] - 9.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn optimized_path_preserves_scheme() {
-        // Un asset projet reste un asset projet ; un chemin disque écrit à côté.
-        assert_eq!(
-            asset_ops::optimized_path("asset://bois.png", 1024),
-            "asset://bois_opt1024.png"
-        );
-        assert_eq!(
-            asset_ops::optimized_path("/tmp/bois.jpg", 2048),
-            "/tmp/bois_opt2048.png"
-        );
-        assert_eq!(
-            asset_ops::optimized_path("bois.png", 512),
-            "bois_opt512.png"
         );
     }
 

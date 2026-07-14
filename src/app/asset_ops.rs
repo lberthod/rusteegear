@@ -232,3 +232,22 @@ pub(super) fn optimized_path(path: &str, max_px: u32) -> String {
         format!("{parent}/{name}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optimized_path_preserves_scheme() {
+        // Un asset projet reste un asset projet ; un chemin disque écrit à côté.
+        assert_eq!(
+            optimized_path("asset://bois.png", 1024),
+            "asset://bois_opt1024.png"
+        );
+        assert_eq!(
+            optimized_path("/tmp/bois.jpg", 2048),
+            "/tmp/bois_opt2048.png"
+        );
+        assert_eq!(optimized_path("bois.png", 512), "bois_opt512.png");
+    }
+}
