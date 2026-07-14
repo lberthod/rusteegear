@@ -1,7 +1,7 @@
 //! Fenêtres flottantes de l'éditeur : réglages, multijoueur (connexion, chat,
 //! classement), scène assistée par IA, pipeline d'optimisation d'assets, éditeur
 //! de scripts, navigateur d'assets, prévisualisation HUD. Extrait de
-//! `editor/mod.rs` (Sprint 103a-2).
+//! `editor/mod.rs`.
 
 use crate::scene::Scene;
 
@@ -17,7 +17,7 @@ pub(super) fn tool_windows(
     console_input: &mut String,
     actions: &mut UiActions,
 ) {
-    // --- Console (logs en mémoire + commandes, Sprint 82) ---
+    // --- Console (logs en mémoire + commandes) ---
     egui::Window::new("🖥  Console")
         .open(&mut panels.console)
         .default_size([460.0, 320.0])
@@ -391,11 +391,10 @@ pub(super) fn settings_window(
     panels.settings = open;
 }
 
-/// Overlay Multijoueur minimal pour le mode Player (mobile/APK, Sprint 65) :
-/// adresse + pseudo + connecter/déconnecter, replié par défaut pour ne pas
-/// gêner le joystick. Pas de compte Firebase/chat/classement ici — hors scope
-/// de ce premier test (cf. `multiplayer_window`, l'équivalent complet côté
-/// éditeur desktop).
+/// Overlay Multijoueur minimal pour le mode Player (mobile/APK) : adresse +
+/// pseudo + connecter/déconnecter, replié par défaut pour ne pas gêner le
+/// joystick. Pas de compte Firebase/chat/classement ici (cf.
+/// `multiplayer_window`, l'équivalent complet côté éditeur desktop).
 pub(super) fn mobile_multiplayer_overlay(
     ctx: &egui::Context,
     server_url: &mut String,
@@ -411,8 +410,8 @@ pub(super) fn mobile_multiplayer_overlay(
         .resizable(false)
         // Décalage vertical généreux (pas seulement 8 px) : en plein écran immersif
         // (NativeActivity Android), la zone de rendu passe sous la barre de statut
-        // système — un petit décalage laissait l'icône 🌐 cachée dessous, invisible
-        // et donc impossible à toucher (constaté en testant sur un vrai téléphone).
+        // système — un petit décalage laisserait l'icône 🌐 cachée dessous, invisible
+        // et donc impossible à toucher.
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 56.0))
         .default_width(220.0)
         .show(ctx, |ui| {
@@ -889,7 +888,7 @@ pub(super) fn asset_browser_window(
 /// La scène a-t-elle un joueur pilotable équipé d'une arme à distance
 /// (`Controller::fire_button` non vide) ? Sert à n'afficher le réticule de
 /// visée que quand il a un sens — pas dans une démo sans tir à distance.
-/// Fenêtre « 👁 Aperçu HUD » (Sprint 93) : cases à cocher pour prévisualiser en
+/// Fenêtre « 👁 Aperçu HUD » : cases à cocher pour prévisualiser en
 /// Édition les overlays normalement réservés à Play (réticule, inventaire,
 /// joueurs…), sans lancer la simulation — utile pour ajuster leur position ou
 /// leur lisibilité. État purement éditeur : rien ici n'est écrit dans la

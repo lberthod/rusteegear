@@ -1,6 +1,6 @@
 //! Persistance : sauvegarde/chargement de scène (JSON), sauvegarde de partie
-//! (`SaveGame`, Sprint 98), import glTF en tâche de fond, redémarrage de partie
-//! (`restart_game`) et score. Extrait de `app/mod.rs` (Sprint 103a).
+//! (`SaveGame`), import glTF en tâche de fond, redémarrage de partie
+//! (`restart_game`) et score. Extrait de `app/mod.rs`.
 
 use glam::{Quat, Vec3};
 
@@ -72,7 +72,7 @@ impl AppState {
         self.score
     }
 
-    /// Capture l'état de partie courant dans une `SaveGame` (Sprint 98) : score,
+    /// Capture l'état de partie courant dans une `SaveGame` : score,
     /// position de chaque objet, variables de script (`save.get`/`save.set` en Lua).
     pub fn capture_save(&self) -> crate::runtime::savegame::SaveGame {
         crate::runtime::savegame::SaveGame {
@@ -88,7 +88,7 @@ impl AppState {
         }
     }
 
-    /// Restaure une `SaveGame` sur la scène **actuellement chargée** (Sprint 98) : les
+    /// Restaure une `SaveGame` sur la scène **actuellement chargée** : les
     /// positions s'appliquent objet par objet dans l'ordre, jusqu'au plus court des
     /// deux tableaux — une scène qui a changé depuis la sauvegarde (objets ajoutés/
     /// retirés) ne plante pas, elle restaure juste ce qui correspond encore.
@@ -115,7 +115,7 @@ impl AppState {
     }
 
     /// Incrémente le score de `n` points en émettant un événement `score:N` par valeur
-    /// **traversée** (Sprint 93) — pas seulement la valeur finale : deux pièces
+    /// **traversée** — pas seulement la valeur finale : deux pièces
     /// ramassées le même tick ne doivent pas faire sauter `score:3` pour un script qui
     /// l'attend via `on_event`. Point de passage unique de **tous** les gains de score
     /// (pièces, armes, attaques, boule de feu, zones mortelles) : c'est ce qui rend
@@ -220,7 +220,7 @@ impl AppState {
             tangents: Vec::new(),
             notifies: std::collections::HashMap::new(),
         };
-        // Squelette/clips (Sprints 84-85) + tangentes (Sprint 92) : reparse le fichier
+        // Squelette/clips + tangentes : reparse le fichier
         // séparément, cf. `ImportedMesh::load_skinning` — silencieux si le mesh est
         // statique (squelette).
         imported.load_skinning();

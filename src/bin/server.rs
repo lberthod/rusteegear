@@ -1,25 +1,22 @@
-//! Serveur de jeu headless (Sprints 51-55, SPRINT_MMORPG.md) : fait tourner des
-//! manches en réutilisant `scene`/`runtime`/`app::combat`/`app::multiplayer`
-//! **sans fenêtre ni GPU** (aucune dépendance à `gfx`/`egui`/`winit` dans ce
-//! binaire), et accepte des connexions WebSocket (`net::server_loop`).
+//! Serveur de jeu headless : fait tourner des manches en réutilisant
+//! `scene`/`runtime`/`app::combat`/`app::multiplayer` **sans fenêtre ni GPU**
+//! (aucune dépendance à `gfx`/`egui`/`winit` dans ce binaire), et accepte des
+//! connexions WebSocket (`net::server_loop`).
 //!
-//! **Multi-salons (Sprint 82, GAMEDESIGN_EN_LIGNE.md §3.3)** : un process sert
-//! désormais plusieurs salons simultanément, chacun sa propre `AppState`
-//! (donc sa propre scène, ses propres joueurs, sa propre victoire/défaite) —
+//! **Multi-salons** (cf. GAMEDESIGN_EN_LIGNE.md §3.3) : un process sert
+//! plusieurs salons simultanément, chacun sa propre `AppState` (donc sa propre
+//! scène, ses propres joueurs, sa propre victoire/défaite) —
 //! `ClientMsg::Join::lobby` choisit le salon (créé à la demande au premier
 //! join, fermé quand son dernier joueur part). Portée volontairement mesurée,
 //! pas un vrai matchmaking MMO : pas de découverte de salons, juste un code à
 //! saisir (cf. `net::protocol::DEFAULT_LOBBY`, utilisé par tous les clients
 //! actuels — ils continuent donc à se retrouver dans le même salon partagé
 //! tant qu'aucune UI ne propose de choisir un autre code). Une manche décidée
-//! (victoire/défaite) ne termine plus le *process* : seul ce salon est
+//! (victoire/défaite) ne termine pas le *process* : seul ce salon est
 //! réinitialisé en place (les joueurs encore connectés y sont re-spawnés),
-//! les autres salons continuent sans interruption — avant ce sprint, la fin
-//! d'une manche arrêtait tout le serveur (systemd le relançait, mais coupait
-//! au passage la connexion de tout le monde, y compris d'autres joueurs qui
-//! n'avaient rien à voir avec cette manche-là).
+//! les autres salons continuent sans interruption.
 //!
-//! **Progression Firebase (Sprint 57)** : optionnelle, activée par 4 variables
+//! **Progression Firebase** : optionnelle, activée par 4 variables
 //! d'environnement (`FIREBASE_API_KEY`, `FIREBASE_DATABASE_URL`,
 //! `FIREBASE_SERVER_EMAIL`, `FIREBASE_SERVER_PASSWORD` — un compte Firebase
 //! dédié au serveur, cf. le commentaire « Qui écrit la progression ? » dans
@@ -37,24 +34,13 @@ use motor3derust::net::firebase::{
 use motor3derust::net::protocol::{ClientMsg, DEFAULT_LOBBY, PlayerId, ServerMsg};
 use motor3derust::net::server_loop::NetServer;
 
-/// Cadence réseau visée pour le serveur (cf. SPRINT_MMORPG.md Sprint 51 : découplée
-/// du 60 Hz physique local, qui reste piloté par l'accumulateur à pas fixe existant
-/// dans `AppState::advance_play`).
-///
-/// **Relevée de 20 Hz à 50 Hz (2026-07-12)** : à 20 Hz, chaque fantôme distant
-/// n'a une position fraîche que toutes les 50 ms, et `RemoteEntity::sample`
-/// interpole *entre* les deux derniers snapshots reçus — donc affiche toujours
-/// un état vieux d'au moins un tick, en plus du round-trip réseau réel. Constaté
-/// en test réel : latence perçue trop grande sur le mouvement des autres
-/// joueurs. Le Sprint 61 a mesuré une large marge à 16 joueurs même à 20 Hz
-/// (30 threads OS, aucune limite CPU/réseau atteinte) — 60 Hz reste trivial à
-/// cette échelle (2 joueurs de test).
-///
-/// **Alignée sur 60 Hz (2026-07-12)**, la cadence de `advance_play`/la physique
-/// elle-même (`FIXED_DT` dans `AppState::advance_play`) : un tick réseau par
-/// pas physique, au lieu d'un rythme intermédiaire arbitraire — chaque
-/// `Snapshot` reflète alors un état fraîchement simulé, jamais un état déjà
-/// périmé de plusieurs pas physiques en attendant le prochain tick réseau.
+/// Cadence réseau du serveur : alignée sur la cadence de la physique elle-même
+/// (`FIXED_DT` dans `AppState::advance_play`) — un tick réseau par pas
+/// physique, au lieu d'un rythme intermédiaire arbitraire, pour que chaque
+/// `Snapshot` reflète un état fraîchement simulé plutôt qu'un état déjà périmé
+/// de plusieurs pas physiques en attendant le prochain tick réseau (cf.
+/// docs/audits/misc.md pour la latence perçue que mesurait une cadence plus
+/// basse, et la marge CPU/réseau disponible à cette fréquence).
 const SERVER_TICK: Duration = Duration::from_millis(16); // ~60 Hz
 
 /// Durée maximale d'une manche avant arrêt de sécurité (évite une boucle infinie si
@@ -72,19 +58,18 @@ const XP_PER_LEVEL: u32 = 1000;
 
 /// Durée sans le moindre message d'un joueur réseau (même un `Input` inchangé —
 /// cf. le protocole, un client légitime en envoie un par tick) au-delà de
-/// laquelle il est considéré perdu et retiré de la partie (Sprint 60). Un
-/// client frappé de silence radio (freeze, crash sans fermeture propre de la
-/// socket) ne doit pas laisser un objet fantôme immobile indéfiniment dans la
-/// manche des autres joueurs.
+/// laquelle il est considéré perdu et retiré de la partie. Un client frappé de
+/// silence radio (freeze, crash sans fermeture propre de la socket) ne doit
+/// pas laisser un objet fantôme immobile indéfiniment dans la manche des
+/// autres joueurs.
 ///
-/// **Relevé de 10 s à 60 s (constaté en test réel du 2026-07-12)** : le rendu
-/// desktop (`winit`/macOS) ralentit ou suspend `advance_play` — donc l'envoi
+/// Volontairement généreux (pas quelques secondes) : le rendu desktop
+/// (`winit`/macOS) ralentit ou suspend `advance_play` — donc l'envoi
 /// d'`Input` — quand la fenêtre n'est plus au premier plan/est occultée (App
-/// Nap), et Android fait de même en arrière-plan. Un client légitime qui perd
-/// juste le focus quelques secondes se faisait éjecter par cette limite,
-/// silencieusement (aucune des deux apps ne détecte sa propre éviction),
-/// rendant le multijoueur quasi inutilisable dès qu'on changeait de fenêtre
-/// pour regarder autre chose.
+/// Nap), et Android fait de même en arrière-plan ; aucune des deux apps ne
+/// détecte sa propre éviction, donc un client légitime qui perd juste le
+/// focus quelques secondes ne doit pas se faire éjecter silencieusement (cf.
+/// docs/audits/misc.md).
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// État d'un salon côté binaire (pas dans `AppState`, qui ne connaît que les
@@ -141,9 +126,8 @@ impl Room {
     /// Recharge une manche fraîche **sans déconnecter** les joueurs déjà
     /// présents : ils sont re-spawnés dans la scène recomposée. Appelé quand
     /// la manche de ce salon se termine (victoire/défaite) ou dépasse
-    /// `MAX_DURATION` — avant le Sprint 82, la fin d'une manche arrêtait tout
-    /// le *process* (donc tous les salons et toutes les connexions) ; ici,
-    /// seul ce salon repart, les autres ne sont pas affectés.
+    /// `MAX_DURATION` — seul ce salon repart, les autres salons ne sont pas
+    /// affectés.
     fn restart(&mut self) {
         let ids: Vec<PlayerId> = self.lobby.names.keys().copied().collect();
         self.app = AppState::new();
@@ -487,11 +471,10 @@ fn main() {
                 }
                 award_progress(&firebase, &room.lobby, room.app.score());
                 post_leaderboard(&firebase, &room.lobby, room.app.score());
-                // Une manche décidée ne ferme plus tout le serveur (avant le
-                // Sprint 82) : seul CE salon repart, les autres continuent —
-                // sauf s'il est déjà vide (dernier joueur parti entre-temps),
-                // auquel cas autant le fermer plutôt que de le faire tourner
-                // pour personne.
+                // Une manche décidée ne ferme pas tout le serveur : seul CE
+                // salon repart, les autres continuent — sauf s'il est déjà
+                // vide (dernier joueur parti entre-temps), auquel cas autant
+                // le fermer plutôt que de le faire tourner pour personne.
                 if room.connected_ids().is_empty() {
                     to_close.push(code.clone());
                 } else {
@@ -522,7 +505,7 @@ mod tests {
 
     use super::*;
 
-    /// Bout-en-bout Sprint 55, à travers un vrai socket (pas seulement les
+    /// Bout-en-bout à travers un vrai socket (pas seulement les
     /// méthodes `AppState` testées isolément dans `app::multiplayer::tests`) :
     /// un `NetClient` rejoint, obtient un objet pilotable, son `Input` déplace
     /// *cet* objet, puis `Leave` le retire. Reproduit exactement la boucle de
@@ -620,7 +603,7 @@ mod tests {
         );
     }
 
-    /// Sprint 60 : un joueur qui ne donne plus signe de vie (freeze, crash sans
+    /// Un joueur qui ne donne plus signe de vie (freeze, crash sans
     /// `Leave` propre) doit être retiré après le délai de timeout, sans bloquer
     /// la partie des autres. Utilise un `timeout` court (paramètre de
     /// `evict_timed_out_players`) plutôt que `CLIENT_TIMEOUT` (60 s réelles).
@@ -670,9 +653,9 @@ mod tests {
         assert!(!player_room.contains_key(&player_id));
     }
 
-    /// Sprint 82 (GAMEDESIGN_EN_LIGNE.md §3.3) : deux clients qui rejoignent des
-    /// salons différents ne doivent jamais se voir l'un l'autre — chacun reste
-    /// dans sa propre `AppState`, avec ses propres indices d'objets.
+    /// Deux clients qui rejoignent des salons différents (cf.
+    /// GAMEDESIGN_EN_LIGNE.md §3.3) ne doivent jamais se voir l'un l'autre —
+    /// chacun reste dans sa propre `AppState`, avec ses propres indices d'objets.
     #[test]
     fn two_clients_in_different_lobbies_land_in_separate_rooms() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -715,7 +698,7 @@ mod tests {
         assert_eq!(rooms["salon-b"].lobby.names.len(), 1);
     }
 
-    /// Sprint 82 : quand le dernier joueur d'un salon part, le salon disparaît
+    /// Quand le dernier joueur d'un salon part, le salon disparaît
     /// (pas de manche qui tourne indéfiniment pour personne).
     #[test]
     fn a_room_closes_once_its_last_player_leaves() {

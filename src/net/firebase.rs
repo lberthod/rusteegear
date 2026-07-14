@@ -1,8 +1,8 @@
-//! Backend annexe Firebase — comptes joueurs (SPRINT_MMORPG.md, Sprint 56).
-//! Desktop uniquement, via l'API REST (`ureq`, déjà utilisé pour l'IA DeepSeek
-//! dans `app/ai.rs`) — Firebase n'a pas de SDK Rust officiel.
+//! Backend annexe Firebase — comptes joueurs. Desktop uniquement, via l'API
+//! REST (`ureq`, déjà utilisé pour l'IA DeepSeek dans `app/ai.rs`) — Firebase
+//! n'a pas de SDK Rust officiel.
 //!
-//! Rappel de scope (SPRINT_MMORPG.md §0) : Firebase RTDB ne transporte **jamais**
+//! Rappel de scope : Firebase RTDB ne transporte **jamais**
 //! le gameplay temps réel (position, coups) — uniquement des données peu
 //! fréquentes. Ici : l'identité du joueur (email/mot de passe → `uid` + pseudo).
 //!
@@ -61,8 +61,8 @@ struct FirebaseErrorDetail {
     message: String,
 }
 
-/// Progression persistante d'un joueur (SPRINT_MMORPG.md, Sprint 57) : niveau
-/// et XP cumulés entre les parties, stockés sous `/users/{uid}/progress`.
+/// Progression persistante d'un joueur : niveau et XP cumulés entre les
+/// parties, stockés sous `/users/{uid}/progress`.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, serde::Serialize)]
 pub struct PlayerProgress {
     #[serde(default = "default_level")]
@@ -96,8 +96,7 @@ fn parse_progress_response(body: &str) -> Result<PlayerProgress, String> {
     serde_json::from_value(v).map_err(|e| format!("Progression Firebase illisible : {e}"))
 }
 
-/// Message de chat d'un salon (SPRINT_MMORPG.md, Sprint 58), sous
-/// `/lobbies/{code}/chat/{push_id}`.
+/// Message de chat d'un salon, sous `/lobbies/{code}/chat/{push_id}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 pub struct ChatMessage {
     pub sender: String,
@@ -129,7 +128,7 @@ fn parse_chat_messages(body: &str) -> Result<Vec<ChatMessage>, String> {
     Ok(messages)
 }
 
-/// Présence d'un joueur (SPRINT_MMORPG.md, Sprint 58), sous `/presence/{uid}`.
+/// Présence d'un joueur, sous `/presence/{uid}`.
 ///
 /// **Limite assumée** : la présence RTDB "officielle" (SDK JS/natif) utilise
 /// `onDisconnect()`, une fonctionnalité **liée à la connexion WebSocket du SDK
@@ -175,8 +174,7 @@ fn parse_presence_map(body: &str) -> Result<Vec<(String, Presence)>, String> {
         .collect()
 }
 
-/// Entrée du classement global (SPRINT_MMORPG.md, Sprint 59), sous
-/// `/leaderboard/{push_id}`.
+/// Entrée du classement global, sous `/leaderboard/{push_id}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 pub struct LeaderboardEntry {
     pub name: String,
@@ -479,10 +477,10 @@ mod net_io {
     }
 
     /// Ajoute une entrée au classement global. `auth_token` explicite pour la
-    /// même raison qu'à `set_progress` (Sprint 57) : le score est une donnée
-    /// compétitive, seul le serveur de jeu doit pouvoir l'écrire — les règles
-    /// RTDB doivent refuser l'écriture au client (cf. le commentaire « Qui
-    /// écrit la progression ? »).
+    /// même raison qu'à `set_progress` : le score est une donnée compétitive,
+    /// seul le serveur de jeu doit pouvoir l'écrire — les règles RTDB doivent
+    /// refuser l'écriture au client (cf. le commentaire « Qui écrit la
+    /// progression ? »).
     pub fn post_leaderboard_entry(
         config: &FirebaseConfig,
         auth_token: &str,
@@ -510,9 +508,9 @@ mod net_io {
     /// ne lit que le nécessaire (`limitToLast` côté requête RTDB serait idéal,
     /// mais RTDB REST trie par clé sans champ `orderBy` indexé côté serveur ici
     /// — on lit tout puis on trie/tronque côté client, correct à l'échelle
-    /// visée mais **pas** pour un nœud qui grossirait sans limite). Documenté
-    /// dans SPRINT_MMORPG.md comme risque à traiter avant une mise en
-    /// production durable (garder un top N côté serveur, ex. purge périodique).
+    /// visée mais **pas** pour un nœud qui grossirait sans limite) — risque à
+    /// traiter avant une mise en production durable (garder un top N côté
+    /// serveur, ex. purge périodique).
     pub fn get_top_leaderboard(
         config: &FirebaseConfig,
         limit: usize,
@@ -541,14 +539,15 @@ pub use net_io::{
     sign_in, sign_up,
 };
 
-// --- Qui écrit la progression ? (SPRINT_MMORPG.md, Sprint 57) ---------------
+// --- Qui écrit la progression ? ---------------------------------------------
 //
 // `set_progress` prend un `auth_token` explicite plutôt que de dépendre d'une
 // `AuthSession` de joueur, parce que la progression (XP, niveau) est une
 // donnée **compétitive** : si le client pouvait l'écrire avec son propre
 // token, il pourrait s'attribuer n'importe quel score. Les règles RTDB
 // doivent donc refuser l'écriture au propriétaire (contrairement au profil,
-// cf. Sprint 56) et ne l'autoriser qu'à un compte serveur dédié, ex. :
+// dont la lecture/écriture peut rester au propriétaire) et ne l'autoriser
+// qu'à un compte serveur dédié, ex. :
 // ```json
 // "progress": { "$uid": {
 //   ".read": "auth != null && auth.uid === $uid",

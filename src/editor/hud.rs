@@ -1,5 +1,5 @@
 //! HUD de jeu (mode Play) : vie, arme équipée, manches, classement multijoueur,
-//! réticule, overlay tactile mobile. Extrait de `editor/mod.rs` (Sprint 103a-2).
+//! réticule, overlay tactile mobile. Extrait de `editor/mod.rs`.
 
 use crate::scene::{HudLayout, Scene};
 
@@ -70,7 +70,8 @@ pub(super) fn hud_anchor(
     base + egui::vec2(offset[0], offset[1])
 }
 
-/// (cf. le pavé W/A/S/D : carrés vides constatés sur APK réel, 2026-07-13).
+/// (même contrainte de fonte que le pavé W/A/S/D de `mobile_overlay` : les
+/// glyphes manquants sur Android rendent des carrés vides).
 pub(super) fn weapon_hud(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -87,9 +88,9 @@ pub(super) fn weapon_hud(
         egui::Id::new("hud_weapon"),
     ));
     // Plaque de fond semi-transparente (comme `health_bar`) : sans elle, le
-    // texte devient illisible sur un sol clair (vert olive, sable...) —
-    // constaté en jeu réel, 2026-07-13. Une seule plaque sous les deux lignes,
-    // pas une par ligne : plus net visuellement qu'un empilement de rectangles.
+    // texte devient illisible sur un sol clair (vert olive, sable...). Une
+    // seule plaque sous les deux lignes, pas une par ligne : plus net
+    // visuellement qu'un empilement de rectangles.
     let bg = egui::Rect::from_center_size(center, box_size);
     painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
@@ -116,11 +117,11 @@ pub(super) fn weapon_hud(
 /// scène a des collectibles — la carte multijoueur n'en a pas, donc sans ce
 /// HUD dédié, aucun score n'était jamais visible en ligne.
 ///
-/// **Position sous l'overlay Multijoueur** (constaté en jeu réel,
-/// 2026-07-13) : la fenêtre repliable `mobile_multiplayer_overlay` occupe
-/// déjà le coin haut-droite (ancrée à `y=56`, ~30 px de haut une fois
-/// repliée) — un premier essai à `y=86` la chevauchait encore pile sur son
-/// bord. `y=112` laisse une vraie marge en dessous.
+/// **Position sous l'overlay Multijoueur** : la fenêtre repliable
+/// `mobile_multiplayer_overlay` occupe déjà le coin haut-droite (ancrée à
+/// `y=56`, ~30 px de haut une fois repliée) — `y=112` garde une vraie marge
+/// en dessous (cf. docs/audits/editor.md pour le premier réglage qui la
+/// chevauchait encore).
 pub(super) fn kills_hud(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -156,9 +157,8 @@ pub(super) fn kills_hud(
 /// pas par un champ dédié). Liste chaque arme connue (pastille de couleur +
 /// nom), surligne l'arme équipée, et permet d'en équiper une autre d'un clic
 /// — un vrai panneau d'inventaire plutôt que le simple cycle du bouton
-/// tactile « Arme » (Sprint 79), demandé en jeu réel pour « voir tout son
-/// inventaire » d'un coup. N'apparaît que si la scène a un joueur équipé
-/// d'une arme à distance (cf. `scene_has_ranged_weapon`).
+/// tactile « Arme ». N'apparaît que si la scène a un joueur équipé d'une arme
+/// à distance (cf. `scene_has_ranged_weapon`).
 ///
 /// Positionné par rapport à `area` (la zone de jeu : cadre téléphone en
 /// Aperçu mobile, ou tout l'écran en player autonome) et non par rapport à
@@ -369,9 +369,8 @@ pub(super) fn scene_has_ranged_weapon(scene: &Scene) -> bool {
 /// Réticule de visée (centre de l'écran) : petite croix + point central,
 /// dessinée en Play dès que la scène a un contrôleur d'arme à distance
 /// (`fire_button` non vide) — sans lui, viser une cible avec la boule de feu
-/// n'a aucun repère visuel, ce qui « ne fait pas vrai jeu » (demandé en jeu
-/// réel, 2026-07-13). Discrète (fines lignes blanches semi-transparentes),
-/// pour ne jamais gêner la lecture de la scène.
+/// n'a aucun repère visuel. Discrète (fines lignes blanches
+/// semi-transparentes), pour ne jamais gêner la lecture de la scène.
 pub(super) fn crosshair(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -549,14 +548,11 @@ pub(super) fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
 }
 
 /// Bannière « Vaincu » pour un joueur réseau à 0 PV (GAMEDESIGN_EN_LIGNE.md
-/// §3.1) : sans elle, la mort en multijoueur n'avait **aucun** retour
-/// persistant à l'écran — juste un flash rouge d'un tiers de seconde
-/// (`damage_flash`) puis plus rien, l'objet devenant invisible en silence.
-/// Un joueur qui meurt se retrouvait donc face à un écran figé/vide sans
-/// explication, indiscernable d'un vrai bug (constaté en jeu réel, 2026-07-13).
-/// Distincte de `lose_banner` (`self.lost`, pensé pour un joueur local unique
-/// touchant une zone mortelle) : ici la manche **continue** pour les autres,
-/// ce n'est pas une défaite de salon — pas de bouton Rejouer, juste l'attente.
+/// §3.1) — sans retour visuel persistant, un joueur à 0 PV se retrouverait
+/// face à un écran figé/vide, indiscernable d'un bug. Distincte de
+/// `lose_banner` (`self.lost`, pensé pour un joueur local unique touchant une
+/// zone mortelle) : ici la manche **continue** pour les autres, ce n'est pas
+/// une défaite de salon — pas de bouton Rejouer, juste l'attente.
 pub(super) fn defeated_banner(ctx: &egui::Context, area: egui::Rect) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -658,8 +654,7 @@ pub(super) fn mobile_overlay(
 
     // --- Pavé « tank » W/A/S/D (bas-gauche), à la place du joystick si activé :
     // mêmes contrôles que le clavier desktop — W/S avance/recule le long de
-    // l'orientation *actuelle* du personnage, A/D le fait pivoter (demandé le
-    // 2026-07-13 : « les touches WASD disponibles sur APK et macOS »). L'ancienne
+    // l'orientation *actuelle* du personnage, A/D le fait pivoter. L'ancienne
     // croix directionnelle écrivait `input.joy` (déplacement caméra-relatif),
     // un simple doublon discret du joystick — le pavé tank apporte, lui, le
     // second schéma de contrôle du jeu au tactile.
@@ -678,9 +673,8 @@ pub(super) fn mobile_overlay(
                         Vec2::splat(btn),
                     )
                 };
-                // Lettres ASCII plutôt que ▲▼◀▶ : les triangles haut/bas manquaient
-                // de la fonte embarquée sur Android — carrés vides constatés sur
-                // l'APK réel (capture d'écran utilisateur, 2026-07-13).
+                // Lettres ASCII plutôt que ▲▼◀▶ : les triangles haut/bas manquent de
+                // la fonte embarquée sur Android (rendus en carrés vides).
                 let up = ui.put(cell(1.0, 0.0), egui::Button::new("W").corner_radius(10.0));
                 let left = ui.put(cell(0.0, 1.0), egui::Button::new("A").corner_radius(10.0));
                 let right = ui.put(cell(2.0, 1.0), egui::Button::new("D").corner_radius(10.0));
@@ -741,13 +735,12 @@ pub(super) fn mobile_overlay(
         let btn = 64.0;
         let spacing = 8.0;
         // Grille (2 colonnes max) plutôt qu'une seule rangée qui s'allonge avec
-        // le nombre de boutons : au-delà de Saut/Attaque (2 boutons, comme les
-        // premières démos), une rangée unique — Saut/Feu/Arme/Soin, 4 boutons —
-        // déborde assez à gauche pour chevaucher le pavé tank W/A/S/D sur un
-        // téléphone de largeur courante (constaté en jeu réel sur APK,
-        // Sprint 84 : « Sa » de Saut caché derrière le S du pavé). Une grille
-        // qui pousse en hauteur, jamais en largeur, garde une empreinte
-        // horizontale fixe (2 colonnes) quel que soit le nombre de boutons.
+        // le nombre de boutons : au-delà de Saut/Attaque (2 boutons), une rangée
+        // unique — Saut/Feu/Arme/Soin, 4 boutons — déborde assez à gauche pour
+        // chevaucher le pavé tank W/A/S/D sur un téléphone de largeur courante.
+        // Une grille qui pousse en hauteur, jamais en largeur, garde une
+        // empreinte horizontale fixe (2 colonnes) quel que soit le nombre de
+        // boutons.
         const COLS: usize = 2;
         let cols = cfg.buttons.len().min(COLS);
         let rows = cfg.buttons.len().div_ceil(cols);

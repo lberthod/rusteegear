@@ -1,17 +1,16 @@
-//! Client réseau (SPRINT_MMORPG.md) : connecte l'éditeur/le player à un
-//! serveur RusteeGear (`src/bin/server.rs`) pour jouer à plusieurs. Desktop et
-//! Android depuis le Sprint 65 (pas encore iOS, cf. `net/mod.rs`) pour tout ce
-//! qui touche à *rejoindre une partie* (`connect_to_server`, `poll_network`…).
-//! Le compte Firebase/chat/classement reste desktop uniquement — sur Android
-//! et iOS, ces méthodes existent mais sont des no-op (même convention que
+//! Client réseau : connecte l'éditeur/le player à un serveur RusteeGear
+//! (`src/bin/server.rs`) pour jouer à plusieurs. Desktop et Android pour tout
+//! ce qui touche à *rejoindre une partie* (`connect_to_server`,
+//! `poll_network`…) — pas encore iOS (cf. `net/mod.rs`). Le compte
+//! Firebase/chat/classement reste desktop uniquement — sur Android et iOS,
+//! ces méthodes existent mais sont des no-op (même convention que
 //! `app::ai`, qui a la même contrainte : `ureq` n'est pas ciblé sur mobile).
 //!
 //! Le joueur local reste **piloté par prédiction**, exactement comme en solo
 //! (`sim_step` ne change pas) : ce module se contente d'envoyer son `Input` au
 //! serveur, et d'afficher les *autres* joueurs reçus par `Snapshot` comme des
 //! objets « fantômes » — sans physique ni script, leur position suit le
-//! dernier `Snapshot` reçu, interpolée (cf. `net::interpolation::RemoteEntity`,
-//! Sprint 54).
+//! dernier `Snapshot` reçu, interpolée (cf. `net::interpolation::RemoteEntity`).
 
 use super::AppState;
 
@@ -42,30 +41,22 @@ pub struct RemotePlayer {
 }
 
 /// Fraction de l'écart comblée à chaque appel de `apply_local_network_position`
-/// quand `reconcile` dépasse `SNAP_THRESHOLD` (Sprint 66, corrigé au
-/// « Sprint 66bis » — cf. `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md`).
+/// quand `reconcile` dépasse `SNAP_THRESHOLD` (cf. `SPRINTNETWORK.md`,
+/// `AUDIT_LATENCE_MULTIJOUEUR.md`).
 ///
-/// **Bug de la première version (2026-07-12), trouvé en testant réellement
-/// l'app** : elle figeait la position sur une interpolation entre deux points
-/// **captés une fois** (`from`/`to`) et maintenue pendant `120 ms`, écrasant
-/// à chaque frame ce que `sim_step`/`Physics::step` venaient de calculer à
-/// partir de l'input réel. Or `Physics::step` (`runtime/physics.rs`) recopie
-/// la pose du corps rigide dans `transform.position` à **chaque** tick, avant
-/// que cette fonction ne s'exécute (sync à sens unique physique → transform,
-/// jamais l'inverse) — donc toute correction qu'on y écrit est de toute façon
-/// remplacée par la vraie position physique dès le tick suivant. Figer
-/// l'écran sur une ligne entre deux points immobiles pendant que la vraie
-/// position continuait d'avancer produisait exactement le symptôme
-/// rapporté : personnage qui semble bloqué/trembler entre deux points,
-/// ignorant l'input pendant toute la fenêtre de correction.
-///
-/// Le correctif : ne jamais figer plusieurs frames sur une cible ancienne.
-/// Chaque frame où l'écart dépasse le seuil, on ne fait qu'un petit pas
-/// (`CORRECTION_PULL`) depuis la position **fraîche** de ce tick vers la
-/// position autoritative — jamais une valeur mémorisée. Le mouvement piloté
-/// par l'input n'est donc jamais interrompu ; seule une légère dérive vers la
-/// position serveur s'ajoute par-dessus, tick après tick, tant que l'écart
-/// reste significatif.
+/// **Ne jamais figer une cible sur plusieurs frames** : `Physics::step`
+/// (`runtime/physics.rs`) recopie la pose du corps rigide dans
+/// `transform.position` à **chaque** tick, avant que cette fonction ne
+/// s'exécute (sync à sens unique physique → transform, jamais l'inverse) —
+/// une correction qui interpolerait vers une cible mémorisée d'un appel
+/// précédent serait donc remplacée par la vraie position physique dès le
+/// tick suivant, sans jamais converger (cf. docs/audits/app-network.md pour
+/// le bug réel que ça a causé). Chaque frame où l'écart dépasse le seuil, on
+/// ne fait donc qu'un petit pas (`CORRECTION_PULL`) depuis la position
+/// **fraîche** de ce tick vers la position autoritative — jamais une valeur
+/// mémorisée. Le mouvement piloté par l'input n'est donc jamais interrompu ;
+/// seule une légère dérive vers la position serveur s'ajoute par-dessus,
+/// tick après tick, tant que l'écart reste significatif.
 const CORRECTION_PULL: f32 = 0.15;
 
 /// Fenêtre (s) de l'historique des positions prédites du joueur local
@@ -88,16 +79,16 @@ const IDLE_SETTLE_MIN: f32 = 0.03;
 /// Fraction de l'écart comblée par frame quand le joueur est **immobile** et que
 /// l'écart avec la position serveur est sous `SNAP_THRESHOLD` (donc ignoré par
 /// `reconcile`). Sans ce rattrapage, chaque client garde à l'arrêt un décalage
-/// permanent (jusqu'à ~0,5 m) avec la vérité serveur — le serveur du VPS (physique
-/// plus ancienne, freinage plus mou) s'arrête systématiquement quelques dizaines de
-/// cm plus loin que la prédiction locale. Constaté en comparant deux écrans au même
-/// instant (macOS vs APK, 2026-07-13) : les deux joueurs à l'arrêt n'étaient pas
-/// aux mêmes positions relatives sur les deux appareils. 5 %/frame ≈ imperceptible
-/// (~0,25 s pour combler la moitié de l'écart), et uniquement à l'arrêt — le
-/// ressenti en mouvement ne change pas.
+/// permanent (jusqu'à ~0,5 m) avec la vérité serveur — le serveur (physique
+/// plus ancienne, freinage plus mou) s'arrête systématiquement quelques
+/// dizaines de cm plus loin que la prédiction locale, et les autres clients ne
+/// voient pas la même position relative que le joueur lui-même (cf.
+/// docs/audits/app-network.md). 5 %/frame ≈ imperceptible (~0,25 s pour
+/// combler la moitié de l'écart), et uniquement à l'arrêt — le ressenti en
+/// mouvement ne change pas.
 const IDLE_SETTLE_PULL: f32 = 0.05;
 
-/// Intervalle minimal entre deux envois de `ClientMsg::Input` (Sprint 68,
+/// Intervalle minimal entre deux envois de `ClientMsg::Input` (cf.
 /// `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2) — aligné sur
 /// `SERVER_TICK` (`src/bin/server.rs`, ~60 Hz) : le serveur ne consomme
 /// l'input qu'une fois par tick, envoyer plus souvent (jusqu'à la fréquence
@@ -185,7 +176,7 @@ impl AppState {
     /// (`defeated_banner`, `editor/mod.rs`) : sans retour explicite ici, un
     /// joueur qui meurt voyait son personnage disparaître en silence — un
     /// flash rouge d'un tiers de seconde puis un écran figé, indiscernable
-    /// d'un vrai bug (constaté en jeu réel, 2026-07-13).
+    /// d'un vrai bug.
     pub fn is_locally_defeated(&self) -> bool {
         self.is_connected() && self.net_local_health.is_some_and(|h| h <= 0.0)
     }
@@ -247,8 +238,8 @@ impl AppState {
         // une direction différente sans que son mouvement n'en tienne compte
         // une fois reçu côté serveur.
         //
-        // **Plafonné à `INPUT_SEND_INTERVAL` (Sprint 68)** : `poll_network` est
-        // appelée une fois par frame de rendu, potentiellement bien au-dessus
+        // **Plafonné à `INPUT_SEND_INTERVAL`** : `poll_network` est appelée
+        // une fois par frame de rendu, potentiellement bien au-dessus
         // du tick serveur (ex. 144 Hz) — sans ce plafond, la plupart des
         // messages envoyés seraient jetés sans effet côté serveur (`set_
         // network_input` remplace l'entrée précédente, il ne les cumule pas),
@@ -278,7 +269,7 @@ impl AppState {
             self.handle_server_msg(msg);
         }
 
-        // `sample_delayed` (Sprint 67, `SPRINTNETWORK.md`) plutôt que `sample`
+        // `sample_delayed` (cf. `SPRINTNETWORK.md`) plutôt que `sample`
         // à `now` directement : affiche les fantômes légèrement dans le passé
         // (`interpolation::RENDER_DELAY`) pour rester fluide sous gigue
         // réseau, cf. `AUDIT_LATENCE_MULTIJOUEUR.md` §2.4. Réutilise le `now`
@@ -293,7 +284,7 @@ impl AppState {
                 o.transform.rotation = glam::Quat::from_rotation_y(yaw);
                 o.visible = visible;
             }
-            // Animation répliquée (Sprint 88) : le clip n'est **pas** interpolé
+            // Animation répliquée : le clip n'est **pas** interpolé
             // comme la position (cf. `RemoteEntity::latest_anim_clip`) — juste
             // poussé dans `AnimationState::set_clip()` du fantôme dès qu'il
             // change, pour bénéficier du même fondu enchaîné qu'en solo.
@@ -309,47 +300,36 @@ impl AppState {
         // par `advance_play` *après* la physique — appliquer la position réseau
         // ici (avant `sim_step`) serait aussitôt écrasé par la simulation locale
         // du même objet, produisant un aller-retour visible entre les deux
-        // positions à chaque frame (constaté en test réel : effet de dédoublement
-        // du personnage en mouvement, 2026-07-12).
+        // positions à chaque frame.
     }
 
     /// Réconcilie le joueur local avec la position renvoyée par le serveur : à
     /// appeler **après** la physique locale (`sim_step`).
     ///
-    /// **Prédiction + réconciliation (2026-07-12)**, pas un simple écrasement :
-    /// une première version affichait telle quelle la position du serveur,
-    /// systématiquement — le serveur restait bien la seule source de vérité,
-    /// mais le joueur local attendait alors un aller-retour réseau complet
-    /// avant de voir le moindre mouvement, ce qui, aux ~150-250 ms de latence
-    /// réelle vers le VPS, rendait le jeu poisseux (constaté en test réel :
-    /// « pas fluide, pas temps réel »). `sim_step` continue donc de piloter le
-    /// joueur local en prédiction immédiate (comme en solo) ; le serveur reste
-    /// autoritaire mais ne **corrige** que si l'écart dépasse
-    /// `interpolation::SNAP_THRESHOLD` (triche, désync, perte de paquets) —
-    /// cf. `net::interpolation::reconcile`, écrit dès le Sprint 54 mais jamais
-    /// câblé jusqu'ici.
+    /// **Prédiction + réconciliation**, pas un simple écrasement : `sim_step`
+    /// continue de piloter le joueur local en prédiction immédiate (comme en
+    /// solo) ; le serveur reste autoritaire mais ne **corrige** que si l'écart
+    /// dépasse `interpolation::SNAP_THRESHOLD` (triche, désync, perte de
+    /// paquets) — cf. `net::interpolation::reconcile`. Afficher telle quelle
+    /// la position serveur à chaque snapshot ferait attendre au joueur local
+    /// un aller-retour réseau complet avant de voir le moindre mouvement.
     ///
-    /// **Correction par petits pas (Sprint 66, révisé — bug trouvé en testant
-    /// réellement l'app le 2026-07-12, cf. `SPRINTNETWORK.md`)** : une
-    /// première version mémorisait `from`/`to` une fois puis figeait la
-    /// position affichée sur une interpolation entre ces deux points figés
-    /// pendant `120 ms` — mais `Physics::step` (`runtime/physics.rs`) recopie
-    /// la pose du corps rigide dans `transform.position` à **chaque** tick,
-    /// avant que cette fonction ne s'exécute (sync à sens unique physique →
-    /// transform, jamais l'inverse). Cette correction figée écrasait donc,
-    /// frame après frame, la vraie position fraîchement calculée à partir de
-    /// l'input réel — le personnage semblait bloqué/trembler entre deux
-    /// points pendant toute la fenêtre de correction, ignorant l'input.
-    ///
-    /// Le correctif : ne jamais figer une cible. Chaque frame où l'écart
-    /// dépasse `SNAP_THRESHOLD`, on ne fait qu'un petit pas
-    /// (`CORRECTION_PULL`) depuis la position **fraîche** de ce tick
-    /// (`o.transform.position`, déjà mise à jour par `sim_step`/`Physics::
-    /// step` avant cet appel) vers `server_pos` — jamais une valeur
-    /// mémorisée d'un tick précédent. Le mouvement piloté par l'input n'est
-    /// donc jamais interrompu ; seule une légère dérive vers la position
-    /// serveur s'ajoute par-dessus, tant que l'écart reste significatif.
-    /// Rien à faire si non connecté ou si aucun snapshot n'est encore arrivé.
+    /// **Correction par petits pas, jamais une cible figée** (cf.
+    /// `SPRINTNETWORK.md`) : chaque frame où l'écart dépasse
+    /// `SNAP_THRESHOLD`, on ne fait qu'un petit pas (`CORRECTION_PULL`)
+    /// depuis la position **fraîche** de ce tick (`o.transform.position`,
+    /// déjà mise à jour par `sim_step`/`Physics::step` avant cet appel) vers
+    /// `server_pos` — jamais une valeur mémorisée d'un tick précédent.
+    /// `Physics::step` (`runtime/physics.rs`) recopie la pose du corps rigide
+    /// dans `transform.position` à **chaque** tick, avant que cette fonction
+    /// ne s'exécute (sync à sens unique physique → transform, jamais
+    /// l'inverse) : une correction basée sur une cible mémorisée serait donc
+    /// écrasée avant de pouvoir converger (cf. docs/audits/app-network.md
+    /// pour le bug réel que ça a causé). Le mouvement piloté par l'input
+    /// n'est donc jamais interrompu ; seule une légère dérive vers la
+    /// position serveur s'ajoute par-dessus, tant que l'écart reste
+    /// significatif. Rien à faire si non connecté ou si aucun snapshot n'est
+    /// encore arrivé.
     pub(super) fn apply_local_network_position(&mut self) {
         if self.net_client.is_none() {
             return;
@@ -373,10 +353,10 @@ impl AppState {
             // Vraie désynchronisation = la position serveur n'est **nulle part**
             // sur notre trajectoire récente. Si elle est proche d'un point où l'on
             // est réellement passé, le serveur est simplement en retard de la
-            // latence : corriger là-dessus (ancien comportement, comparaison à la
-            // seule position instantanée) déclenchait une traction continue dès
-            // qu'on bougeait — le personnage freinait par à-coups et tremblait à
-            // l'arrêt (constaté en vidéo, 2026-07-12, serveur VPS à ~200 ms).
+            // latence : corriger là-dessus (comparaison à la seule position
+            // instantanée) déclencherait une traction continue dès qu'on bouge —
+            // le personnage freinerait par à-coups et tremblerait à l'arrêt (cf.
+            // docs/audits/app-network.md).
             let on_recent_path = self
                 .net_local_history
                 .iter()
@@ -413,16 +393,15 @@ impl AppState {
             // l'anti-triche ici).
             o.visible = visible;
 
-            // **Indispensable, pas cosmétique** (bug trouvé en testant l'app
-            // réellement) : écrire uniquement dans `transform.position` ne
-            // survit qu'à la frame courante — `Physics::step` la recopie
-            // depuis le corps rigide à *chaque* tick (sync à sens unique
-            // physique → transform, jamais l'inverse), donc sans cet appel,
-            // la correction est effacée dès le tick suivant et ne progresse
-            // jamais : elle oscille indéfiniment entre la position physique
-            // (inchangée) et `server_pos`, un aller-retour visible à chaque
-            // frame (rapporté par l'utilisateur comme un personnage
-            // « dupliqué »/tremblant entre deux points).
+            // **Indispensable, pas cosmétique** : écrire uniquement dans
+            // `transform.position` ne survit qu'à la frame courante —
+            // `Physics::step` la recopie depuis le corps rigide à *chaque*
+            // tick (sync à sens unique physique → transform, jamais
+            // l'inverse), donc sans cet appel, la correction est effacée dès
+            // le tick suivant et ne progresse jamais : elle oscille
+            // indéfiniment entre la position physique (inchangée) et
+            // `server_pos`, un aller-retour visible à chaque frame (cf.
+            // docs/audits/app-network.md pour le bug réel que ça a causé).
             if let Some(new_pos) = correction
                 && let Some(physics) = &mut self.physics
             {
@@ -481,7 +460,7 @@ impl AppState {
                             o.transform.position = glam::Vec3::from_array(e.position);
                             o.transform.rotation = glam::Quat::from_rotation_y(e.yaw);
                             o.visible = e.visible;
-                            // Animation répliquée (Sprint 88) : même mécanisme que
+                            // Animation répliquée : même mécanisme que
                             // pour les fantômes de joueurs, cf. `poll_network`.
                             if !e.anim_clip.is_empty()
                                 && let Some(state) = o.animation.as_mut()
@@ -579,27 +558,18 @@ impl AppState {
     }
 }
 
-/// Calcule la direction **monde** (`move_x`/`move_y`) à envoyer au serveur pour le
-/// joueur local, à partir de son `PlayerInput`, du yaw de la caméra (joystick/
-/// flèches, cf. `camera_relative_move`) et de son yaw propre s'il est connu (avance/
-/// recul clavier « tank », `key_thrust`).
-///
-/// **Bug corrigé (2026-07-12, constaté en test réel)** : `key_thrust` (W/S) n'était
-/// pas inclus ici — le serveur ne voyait donc jamais ce mouvement, et la
-/// réconciliation (`apply_local_network_position`) finissait par annuler la
-/// prédiction locale au bout de quelques secondes, donnant l'impression que le
-/// déplacement au clavier « buguait ». Même formule que `AppState::advance_play`
-/// (`-sin(yaw)`/`-cos(yaw)`) pour rester cohérent avec le mouvement prédit localement.
 /// Construit le `ClientMsg::Input` envoyé au serveur à partir de l'état local
 /// **complet** — exactement les mêmes sources que la prédiction locale de
-/// `sim_step` : joystick/croix tactile + flèches (`network_move_axes`), poussée
-/// clavier W/S, gyroscope si l'objet joueur l'active, et saut/attaque venant
-/// aussi bien du clavier que des **boutons tactiles nommés**
-/// (`Controller::jump_button`/`attack_button`). Bug corrigé (2026-07-13, même
-/// famille que le signe W/S) : le message n'envoyait que `inp.jump`/`inp.attack`
-/// (clavier) — sur APK, sauter ou attaquer au bouton tactile restait invisible
-/// pour le serveur : le joueur sautait à l'écran (prédiction) mais jamais dans
-/// la simulation autoritaire, d'où corrections/incohérences en ligne.
+/// `sim_step` : joystick/croix tactile + flèches (`network_move_axes`),
+/// poussée clavier/tactile W/S (`key_thrust`/`touch_thrust`, même formule que
+/// `AppState::advance_play` : `-sin(yaw)`/`-cos(yaw)`, pour rester cohérent
+/// avec le mouvement prédit localement), gyroscope si l'objet joueur l'active,
+/// et saut/attaque venant aussi bien du clavier que des **boutons tactiles
+/// nommés** (`Controller::jump_button`/`attack_button`) — omettre l'une de ces
+/// sources laisserait le serveur ignorer un mouvement que la prédiction
+/// locale affiche pourtant, et la réconciliation finirait par tirer le joueur
+/// en arrière pour un mouvement qu'il a réellement fait (cf.
+/// docs/audits/app-network.md).
 fn network_input_msg(
     inp: &super::PlayerInput,
     camera_yaw: f32,
@@ -664,13 +634,11 @@ fn network_move_axes(
         // Convention **joystick** attendue par le serveur (cf. `sim_step` :
         // `vz += -move_y × vitesse`), pas du Z monde : `move_y` positif = avant
         // (-Z à yaw 0). La composante monde de la poussée est `vz = -cos(yaw)`,
-        // donc `move_y = +cos(yaw)` une fois la négation du serveur appliquée.
-        // Bug corrigé (constaté en jeu réel, 2026-07-13) : `-yaw.cos()` envoyait
-        // au serveur une avance W **inversée en Z** — la prédiction locale
-        // partait devant, le serveur simulait l'arrière, et dès que l'écart
-        // sortait de la trajectoire récente (> `SNAP_THRESHOLD`), la
-        // réconciliation tirait le joueur vers cette position à contresens
-        // (« ça repart dans une autre direction »).
+        // donc `move_y = +cos(yaw)` une fois la négation du serveur appliquée —
+        // envoyer `-yaw.cos()` ici inverserait l'avance W en Z côté serveur, et
+        // la réconciliation tirerait le joueur à contresens de sa prédiction
+        // locale dès que l'écart dépasse `SNAP_THRESHOLD` (cf.
+        // docs/audits/app-network.md).
         mx += thrust * -yaw.sin();
         my += thrust * yaw.cos();
     }
@@ -764,7 +732,7 @@ impl AppState {
     /// Poste un message dans le chat du salon `lobby_code` (thread de fond),
     /// puis rafraîchit la liste. Nécessite un compte connecté (`sign_in`/
     /// `sign_up`) : les règles RTDB réservent l'écriture aux comptes
-    /// authentifiés (cf. `net::firebase`, Sprint 58). Sans effet si non
+    /// authentifiés (cf. `net::firebase`). Sans effet si non
     /// connecté à un compte, ou si une requête de chat est déjà en cours.
     pub fn request_send_chat_message(
         &mut self,
@@ -843,7 +811,7 @@ impl AppState {
 
     /// Rafraîchit le classement global (les `limit` meilleurs scores, lecture
     /// publique — ne nécessite pas de compte connecté ; l'écriture reste
-    /// réservée au serveur de jeu, cf. `net::firebase`, Sprint 59). Sans effet
+    /// réservée au serveur de jeu, cf. `net::firebase`). Sans effet
     /// si une requête est déjà en cours.
     pub fn request_refresh_leaderboard(
         &mut self,
@@ -905,7 +873,7 @@ fn fetch_chat_lines(
 }
 
 /// iOS uniquement : `net::client` n'y est pas encore compilé (cf. `net/mod.rs`),
-/// contrairement à Android depuis le Sprint 65.
+/// contrairement à Android.
 #[cfg(target_os = "ios")]
 impl AppState {
     pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
@@ -1065,7 +1033,7 @@ mod tests {
 
     /// Une fois un `uid` Firebase connu, `connect_to_server` doit le
     /// transmettre au `Join` — c'est ce qui permet au serveur de créditer la
-    /// bonne progression (Sprint 57). Vérifié à travers un vrai socket : le
+    /// bonne progression. Vérifié à travers un vrai socket : le
     /// `Join` reçu côté serveur doit porter le même `uid`.
     #[test]
     fn connect_to_server_forwards_the_known_firebase_uid() {
@@ -1097,7 +1065,7 @@ mod tests {
     /// Sans compte connecté (`firebase_id_token` absent), l'envoi d'un message
     /// de chat ne doit ni planter ni démarrer de requête réseau — les règles
     /// RTDB refuseraient de toute façon l'écriture à un client anonyme
-    /// (cf. `net::firebase`, Sprint 58).
+    /// (cf. `net::firebase`).
     #[test]
     fn sending_chat_without_an_account_is_a_no_op() {
         let mut app = AppState::new();
@@ -1219,7 +1187,7 @@ mod tests {
     /// chaque `Snapshot`), pas un état local présumé — sans ce garde-fou HUD
     /// (`defeated_banner`, `editor/mod.rs`), un joueur à 0 PV disparaissait de
     /// l'écran sans le moindre message (juste le flash rouge d'un tiers de
-    /// seconde), indiscernable d'un bug (constaté en jeu réel, 2026-07-13).
+    /// seconde), indiscernable d'un bug.
     #[test]
     fn is_locally_defeated_reflects_the_servers_health_once_it_reaches_zero() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1259,7 +1227,7 @@ mod tests {
         );
     }
 
-    /// Sprint 66 (`SPRINTNETWORK.md`, §2.3 de `AUDIT_LATENCE_MULTIJOUEUR.md`) :
+    /// cf. `SPRINTNETWORK.md`, §2.3 de `AUDIT_LATENCE_MULTIJOUEUR.md` :
     /// un écart au-dessus de `SNAP_THRESHOLD` ne doit **jamais** faire sauter
     /// le joueur local directement à la position autoritative en un seul
     /// appel — seulement un petit pas (`CORRECTION_PULL`) vers elle.
@@ -1352,15 +1320,14 @@ mod tests {
         );
     }
 
-    /// **Bug réel constaté en vidéo (2026-07-12, serveur VPS à ~200 ms)** : la
-    /// position renvoyée par le serveur date d'une latence + un tick — en pleine
-    /// course à 4,5 m/s elle est *toujours* ~1 m derrière la prédiction, au-delà
-    /// de `SNAP_THRESHOLD`. L'ancienne comparaison à la seule position
-    /// *instantanée* déclenchait donc une traction arrière continue pendant tout
-    /// déplacement : vitesse en dents de scie et tremblement à l'arrêt, visibles
-    /// image par image dans l'enregistrement. Une position serveur **sur notre
-    /// trajectoire récente** signifie « en phase, juste en retard » : aucune
-    /// correction ne doit s'appliquer.
+    /// La position renvoyée par le serveur date d'une latence + un tick — en
+    /// pleine course elle est *toujours* en retard par rapport à la
+    /// prédiction, au-delà de `SNAP_THRESHOLD`. Comparer à la seule position
+    /// *instantanée* déclencherait donc une traction arrière continue pendant
+    /// tout déplacement (cf. docs/audits/app-network.md pour le bug réel que
+    /// ça a causé). Une position serveur **sur notre trajectoire récente**
+    /// signifie « en phase, juste en retard » : aucune correction ne doit
+    /// s'appliquer.
     #[test]
     fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1410,14 +1377,12 @@ mod tests {
         );
     }
 
-    /// **Constaté en comparant deux écrans au même instant (macOS vs APK,
-    /// 2026-07-13)** : à l'arrêt, les positions relatives des deux joueurs
-    /// différaient d'un appareil à l'autre. Sous `SNAP_THRESHOLD`, `reconcile`
-    /// ne corrige volontairement rien — mais le serveur (physique plus
-    /// ancienne) s'arrête quelques dizaines de cm plus loin que la prédiction
-    /// locale : chaque client gardait un décalage permanent avec la position
-    /// que les autres voient de lui. Un joueur **immobile** doit converger
-    /// doucement vers la vérité serveur.
+    /// Sous `SNAP_THRESHOLD`, `reconcile` ne corrige volontairement rien —
+    /// mais le serveur (physique plus ancienne) s'arrête quelques dizaines de
+    /// cm plus loin que la prédiction locale : sans rattrapage, chaque client
+    /// garderait un décalage permanent avec la position que les autres voient
+    /// de lui (cf. docs/audits/app-network.md). Un joueur **immobile** doit
+    /// converger doucement vers la vérité serveur.
     #[test]
     fn an_idle_player_softly_settles_onto_the_server_position() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1458,20 +1423,15 @@ mod tests {
         );
     }
 
-    /// **Bug réel trouvé en testant l'app réelle (2026-07-12)** : la première
-    /// version de ce sprint mémorisait une cible figée (`from`/`to`) et
-    /// écrasait `transform.position` avec une interpolation entre ces deux
-    /// points fixes pendant 120 ms — mais `Physics::step`
-    /// (`runtime/physics.rs`) recopie la pose du corps rigide dans
-    /// `transform.position` à *chaque* tick, avant cette fonction. Toute
-    /// correction figée sur une ancienne cible écrasait donc la vraie
-    /// position, fraîchement avancée par l'input réel, pendant toute la
-    /// fenêtre de correction — le joueur semblait bloqué/trembler entre deux
-    /// points, l'input étant purement ignoré. Ce test simule un mouvement
-    /// local (`sim_step`) entre deux appels de `apply_local_network_position`
-    /// et vérifie que ce mouvement **n'est jamais écrasé** : la position
-    /// finale doit refléter à la fois le mouvement local et un petit pas de
-    /// correction, jamais uniquement l'un ou l'autre.
+    /// Une correction basée sur une cible mémorisée (`from`/`to` figés)
+    /// écraserait la vraie position, fraîchement avancée par l'input réel, à
+    /// chaque tick où `Physics::step` (`runtime/physics.rs`) la recopie
+    /// depuis le corps rigide (cf. docs/audits/app-network.md pour le bug
+    /// réel que ça a causé). Ce test simule un mouvement local (`sim_step`)
+    /// entre deux appels de `apply_local_network_position` et vérifie que ce
+    /// mouvement **n'est jamais écrasé** : la position finale doit refléter à
+    /// la fois le mouvement local et un petit pas de correction, jamais
+    /// uniquement l'un ou l'autre.
     #[test]
     fn a_correction_never_discards_local_movement_that_happened_between_calls() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1520,16 +1480,14 @@ mod tests {
         );
     }
 
-    /// **Bug réel trouvé en testant l'app réellement (capture d'écran
-    /// utilisateur : personnage dupliqué/tremblant entre deux points),
-    /// cf. `SPRINTNETWORK.md` Sprint 66bis.** Avec la physique réellement
-    /// construite (`Physics::build`), une correction qui n'écrit que dans
-    /// `transform.position` sans passer par `Physics::set_position` est
-    /// effacée dès le tick physique suivant — `Physics::step` recopie la pose
-    /// du corps rigide (resté inchangé) par-dessus. Ce test simule
-    /// exactement cette séquence (correction, puis un tick physique, comme
-    /// le ferait `advance_play` à la frame suivante) et vérifie que la
-    /// correction **survit**.
+    /// Avec la physique réellement construite (`Physics::build`), une
+    /// correction qui n'écrit que dans `transform.position` sans passer par
+    /// `Physics::set_position` est effacée dès le tick physique suivant —
+    /// `Physics::step` recopie la pose du corps rigide (resté inchangé)
+    /// par-dessus (cf. docs/audits/app-network.md, `SPRINTNETWORK.md`). Ce
+    /// test simule exactement cette séquence (correction, puis un tick
+    /// physique, comme le ferait `advance_play` à la frame suivante) et
+    /// vérifie que la correction **survit**.
     #[test]
     fn a_local_position_correction_survives_the_next_physics_step() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1564,7 +1522,7 @@ mod tests {
         // step`, appelé avant `apply_local_network_position` en temps normal,
         // cf. `advance_play`) : sans `Physics::set_position`, cette étape
         // aurait ramené la position exactement à `predicted` (le corps
-        // rigide, jamais informé de la correction) — le bug exact rapporté.
+        // rigide, jamais informé de la correction) — cf. docs/audits/app-network.md.
         app.physics
             .as_mut()
             .expect("construite ci-dessus")
@@ -1578,7 +1536,7 @@ mod tests {
         );
     }
 
-    /// Sprint 68 (`SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2) :
+    /// cf. `SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.2 :
     /// `poll_network` est appelée une fois par frame de rendu, potentiellement
     /// bien plus souvent que le tick serveur — sans plafond, un client sur un
     /// écran rapide enverrait un `Input` par frame affichée. Ce test appelle
@@ -1612,14 +1570,13 @@ mod tests {
 
     #[test]
     fn network_move_axes_includes_keyboard_thrust_along_the_players_own_yaw() {
-        // Bug corrigé une première fois (sans le yaw du joueur, W/S ne produisait
-        // aucune direction à envoyer au serveur), puis une seconde (2026-07-13) :
-        // la composante `move_y` était envoyée en **Z monde** (`-cos(yaw)`) alors
-        // que le serveur attend la convention *joystick* (`move_y` positif =
-        // avant, il applique `vz = -move_y × vitesse`, cf. `sim_step`). Résultat
-        // en jeu réel : W prédit vers l'avant en local mais simulé vers l'arrière
-        // par le serveur — la réconciliation finissait par tirer le joueur à
-        // contresens en pleine course.
+        // Sans le yaw du joueur, W/S ne produit aucune direction à envoyer au
+        // serveur. La composante `move_y` doit suivre la convention *joystick*
+        // (`move_y` positif = avant, le serveur applique `vz = -move_y ×
+        // vitesse`, cf. `sim_step`), pas le Z monde — les confondre ferait
+        // prédire W vers l'avant en local et simuler vers l'arrière côté
+        // serveur, la réconciliation tirant alors le joueur à contresens en
+        // pleine course (cf. docs/audits/app-network.md).
         let inp = super::super::PlayerInput {
             key_thrust: 1.0,
             ..Default::default()
@@ -1648,10 +1605,11 @@ mod tests {
 
     #[test]
     fn network_input_msg_sends_touch_jump_attack_and_gyro_like_local_prediction() {
-        // Même famille que le bug de signe W/S (2026-07-13) : le message réseau ne
-        // partait que du clavier (`inp.jump`/`inp.attack`) — sur APK, le bouton
-        // tactile « Saut »/« Attaque » et le gyroscope pilotaient la prédiction
-        // locale mais restaient invisibles pour le serveur.
+        // Le message réseau doit inclure les boutons tactiles nommés et le
+        // gyroscope, pas seulement le clavier (`inp.jump`/`inp.attack`) : sur
+        // APK, le bouton tactile « Saut »/« Attaque » et le gyroscope pilotent
+        // la prédiction locale mais resteraient invisibles pour le serveur
+        // s'ils n'étaient pas transmis ici aussi (cf. docs/audits/app-network.md).
         let obj = crate::scene::SceneObject {
             controller: Some(crate::scene::Controller {
                 input: true,

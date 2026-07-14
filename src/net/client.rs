@@ -1,20 +1,20 @@
-//! Transport WebSocket côté client (SPRINT_MMORPG.md, Sprint 53).
+//! Transport WebSocket côté client.
 //!
 //! Même schéma que `server_loop` : un thread de fond dédié pousse les
 //! `ServerMsg` reçus dans `inbox` (canal `std::sync::mpsc`), et `send` encode
-//! un `ClientMsg` vers le serveur. La boucle `winit` (Sprint 54+) n'a qu'à
-//! `try_recv()` sur `inbox` une fois par frame, exactement comme elle le fait
-//! déjà pour les imports glTF ou les réponses IA asynchrones.
+//! un `ClientMsg` vers le serveur. La boucle `winit` n'a qu'à `try_recv()` sur
+//! `inbox` une fois par frame, exactement comme elle le fait déjà pour les
+//! imports glTF ou les réponses IA asynchrones.
 //!
-//! **Runtime `current_thread` (corrigé à l'audit du 2026-07-07, cf.
-//! AUDIT_MMORPG.md §4.3)** : une connexion réseau n'a besoin que d'un thread
-//! pour attendre les octets qui arrivent, pas d'un pool de threads ouvriers —
-//! `tokio::runtime::Runtime::new()` (utilisé avant ce correctif) construit par
-//! défaut un runtime **multi-thread** (un ouvrier par CPU logique). Un
-//! `current_thread` n'a pas de thread ouvrier propre : il ne progresse que
-//! pendant qu'un thread appelle `block_on` dessus — d'où le thread dédié
-//! ci-dessous, qui `block_on` la boucle de vie entière de la connexion (pas
-//! seulement la connexion initiale).
+//! **Runtime `current_thread`** : une connexion réseau n'a besoin que d'un
+//! thread pour attendre les octets qui arrivent, pas d'un pool de threads
+//! ouvriers — `tokio::runtime::Runtime::new()` construit par défaut un
+//! runtime **multi-thread** (un ouvrier par CPU logique, cf. docs/audits/
+//! net.md pour le coût constaté). Un `current_thread` n'a pas de thread
+//! ouvrier propre : il ne progresse que pendant qu'un thread appelle
+//! `block_on` dessus — d'où le thread dédié ci-dessous, qui `block_on` la
+//! boucle de vie entière de la connexion (pas seulement la connexion
+//! initiale).
 
 use std::sync::mpsc::{Receiver, channel};
 
@@ -36,10 +36,10 @@ impl NetClient {
     /// `ClientMsg::Join`. Bloquant le temps de la connexion TCP/WebSocket initiale
     /// (raisonnable au lancement/join d'un salon, pas dans la boucle de rendu).
     /// `firebase_uid` : `uid` obtenu par `net::firebase::sign_in`/`sign_up`, si le
-    /// joueur s'est connecté avant de rejoindre (cf. Sprint 57) ; `None` pour une
-    /// partie locale/anonyme. Rejoint `protocol::DEFAULT_LOBBY` (le salon partagé
-    /// historique) — cf. `connect_to_lobby` pour choisir un autre salon
-    /// (Sprint 82, GAMEDESIGN_EN_LIGNE.md §3.3).
+    /// joueur s'est connecté avant de rejoindre ; `None` pour une partie
+    /// locale/anonyme. Rejoint `protocol::DEFAULT_LOBBY` (le salon partagé par
+    /// défaut) — cf. `connect_to_lobby` pour choisir un autre salon (cf.
+    /// GAMEDESIGN_EN_LIGNE.md §3.3).
     pub fn connect(
         url: &str,
         name: &str,
@@ -90,8 +90,8 @@ impl NetClient {
                         return;
                     }
                 };
-                // Cf. le même correctif côté serveur (`server_loop.rs`) : sans
-                // ça, l'algorithme de Nagle retarde nos petites trames fréquentes
+                // Même raison que côté serveur (`server_loop.rs`) : sans ça,
+                // l'algorithme de Nagle retarde nos petites trames fréquentes
                 // (`Input` à chaque frame) de plusieurs dizaines de ms.
                 if let Err(e) = ws.get_ref().get_ref().set_nodelay(true) {
                     log::warn!("TCP_NODELAY impossible côté client : {e}");

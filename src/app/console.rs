@@ -1,4 +1,4 @@
-//! Console développeur (Sprint 82) et contrôle du pas fixe de simulation (Sprint 81). Extrait de `app/mod.rs` (Sprint 103a).
+//! Console développeur et contrôle du pas fixe de simulation. Extrait de `app/mod.rs`.
 
 use glam::Vec3;
 
@@ -6,7 +6,7 @@ use super::AppState;
 
 impl AppState {
     /// Demande l'exécution d'exactement un pas fixe de simulation à la prochaine frame,
-    /// même en pause (Sprint 81 : bouton « ⏭ » de la toolbar). Sans effet si l'app n'est
+    /// même en pause (bouton « ⏭ » de la toolbar). Sans effet si l'app n'est
     /// pas en Play — la pause n'a alors aucun sens.
     pub fn request_step(&mut self) {
         if self.playing {
@@ -14,7 +14,7 @@ impl AppState {
         }
     }
 
-    /// Console développeur (Sprint 82) : exécute une commande texte, retourne le
+    /// Console développeur : exécute une commande texte, retourne le
     /// message à afficher dans la Console (jamais vide, y compris en cas d'erreur —
     /// pas de panique sur une saisie invalide, juste un message explicite).
     ///

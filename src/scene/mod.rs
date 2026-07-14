@@ -107,40 +107,39 @@ pub struct ImportedMesh {
     pub aabb_min: Vec3,
     #[serde(skip)]
     pub aabb_max: Vec3,
-    /// Squelette du glTF (Sprint 84), `None` si le fichier n'a pas de skin — un mesh
+    /// Squelette du glTF, `None` si le fichier n'a pas de skin — un mesh
     /// statique n'a simplement rien à squeletter.
     #[serde(skip)]
     pub skeleton: Option<import::Skeleton>,
-    /// Clips d'animation du glTF (Sprint 85), liés aux joints de `skeleton` ci-dessus.
+    /// Clips d'animation du glTF, liés aux joints de `skeleton` ci-dessus.
     /// Vide si le fichier n'a ni skin ni animation.
     #[serde(skip)]
     pub clips: Vec<import::Clip>,
-    /// Poids de peau par sommet (Sprint 84), alignés avec `data.vertices` — nécessaires
-    /// pour construire le mesh GPU skinné (Sprint 86 : `gfx::mesh::SkinnedVertex`).
+    /// Poids de peau par sommet, alignés avec `data.vertices` — nécessaires
+    /// pour construire le mesh GPU skinné (`gfx::mesh::SkinnedVertex`).
     #[serde(skip)]
     pub vertex_skins: Vec<import::VertexSkin>,
-    /// Tangente par sommet (Sprint 92), alignée avec `data.vertices` : xyz = tangente,
+    /// Tangente par sommet, alignée avec `data.vertices` : xyz = tangente,
     /// w = signe de la bitangente (`cross(normal, tangent) * w`). Calculée pour **tout**
     /// mesh importé (skinné ou non) — contrairement à `skeleton`/`clips`/`vertex_skins`,
     /// rien ici ne dépend d'un skin glTF. Donnée pure, pas encore consommée par le
-    /// rendu (aucun normal mapping ce sprint) : prépare le terrain pour un futur sprint,
-    /// même logique que `skeleton` avant le skinning GPU (Sprint 86).
+    /// rendu (aucun normal mapping actuellement).
     #[serde(skip)]
     pub tangents: Vec<[f32; 4]>,
-    /// Marqueurs temporels par nom de clip (Sprint 99) : `(temps en secondes dans le
+    /// Marqueurs temporels par nom de clip : `(temps en secondes dans le
     /// clip, nom d'événement)`. **Sérialisé** — contrairement à `clips` ci-dessus,
     /// entièrement rederivé du glTF à chaque chargement (le format n'a pas de notion
     /// standard de marqueur) : ce champ-ci est authored à la main (éditeur ou test), il
     /// doit donc survivre à la sauvegarde/au chargement de la scène. Un événement
-    /// `anim:<nom>` (cf. `AppState::game_events`, Sprint 93) est émis quand la lecture
+    /// `anim:<nom>` (cf. `AppState::game_events`) est émis quand la lecture
     /// d'un clip franchit son temps — cf. `notifies_crossed`.
     #[serde(default)]
     pub notifies: std::collections::HashMap<String, Vec<(f32, String)>>,
 }
 
 impl ImportedMesh {
-    /// Recharge `skeleton`/`clips`/`vertex_skins` depuis `path` (Sprints 84-85), **et**
-    /// `tangents` depuis `data` déjà chargée (Sprint 92) — malgré son nom, cette méthode
+    /// Recharge `skeleton`/`clips`/`vertex_skins` depuis `path`, **et**
+    /// `tangents` depuis `data` déjà chargée — malgré son nom, cette méthode
     /// recalcule toute donnée dérivée non sérialisée d'un mesh importé, pas seulement le
     /// squelettage ; regroupées ici plutôt qu'en méthodes séparées puisque tous les
     /// appelants (`reload_imported`, tests) les invoquent toujours ensemble, juste après
@@ -172,10 +171,10 @@ impl ImportedMesh {
     }
 
     /// Combine `data.vertices` (position/normale/couleur/uv) et `vertex_skins`
-    /// (joints/poids) en un `SkinnedMeshData` prêt pour le GPU (Sprint 86-87). `None` si
+    /// (joints/poids) en un `SkinnedMeshData` prêt pour le GPU. `None` si
     /// le mesh n'a pas de squelette, ou si les deux tableaux ont désynchronisé (ne devrait
     /// jamais arriver — les deux sont construits dans le même ordre par
-    /// `import::build_from`/`read_vertex_skins`, cf. Sprint 84 — mais un mesh statique
+    /// `import::build_from`/`read_vertex_skins` — mais un mesh statique
     /// rendu avec des données incohérentes serait pire qu'un mesh simplement pas skinné).
     pub fn skinned_mesh_data(&self) -> Option<crate::gfx::mesh::SkinnedMeshData> {
         self.skeleton.as_ref()?;
@@ -232,13 +231,12 @@ pub struct AudioSource {
 }
 
 /// Mécanique de résolution de l'attaque du joueur (cf. `Controller::attack_mode`).
-/// `Single` reste le comportement par défaut de toutes les démos existantes — un audit
-/// antérieur a justement retiré l'attaque en zone du comportement par défaut (un swing
-/// qui vainc tout un groupe convergent avant qu'aucun monstre n'ait pu mordre triviale
-/// le combat, cf. commit « attack_at cible désormais une seule cible, pas la zone »).
+/// `Single` reste le comportement par défaut de toutes les démos existantes : une
+/// résolution de zone par défaut vainc trivialement tout un groupe convergent avant
+/// qu'aucun monstre n'ait pu mordre (cf. docs/audits/scene-mod.md).
 /// `Zone` redevient disponible ici en **opt-in par arme** (cf. `Weapon::mode`, le
 /// Marteau) : le coût (préparation/recharge longues) compense le fait de vaincre tout
-/// un groupe d'un coup, ce que l'ancien comportement par défaut ne compensait pas.
+/// un groupe d'un coup, ce qu'un défaut non compensé ne ferait pas.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum AttackMode {
     /// Missile unique verrouillé sur la cible `attackable` la plus proche à portée au
@@ -275,7 +273,7 @@ pub struct Controller {
     /// Accélération/décélération (m/s²) appliquée à la vitesse horizontale de `input` :
     /// 0 = vitesse imposée instantanément (comportement historique, robotique). Une
     /// valeur positive lisse les départs/arrêts façon jeu d'action moderne (cf.
-    /// `Physics::control`) — demandé le 2026-07-12 pour un déplacement moins abrupt.
+    /// `Physics::control`).
     #[serde(default = "default_acceleration")]
     pub acceleration: f32,
     /// Vitesse de rotation (rad/s) à laquelle le personnage tourne progressivement
@@ -323,11 +321,11 @@ pub struct Controller {
     #[serde(default = "default_attack_cooldown")]
     pub attack_cooldown: f32,
     /// Temps de préparation (s) entre l'appui et le départ du missile (0 = tir immédiat).
-    /// Audit gameplay : le temps de vol du missile ne suffit pas à garantir un risque
-    /// en 1 contre 1 (un missile homing tiré dès l'entrée en portée arrive presque
-    /// toujours avant qu'un monstre en approche directe n'atteigne sa propre portée de
-    /// morsure) — un temps de préparation, lui, laisse la cible continuer d'approcher
-    /// *avant même que le missile ne parte*, créant une vraie fenêtre de vulnérabilité.
+    /// Le temps de vol du missile seul ne suffit pas à garantir un risque en 1 contre 1
+    /// (un missile homing tiré dès l'entrée en portée arrive presque toujours avant
+    /// qu'un monstre en approche directe n'atteigne sa propre portée de morsure) — un
+    /// temps de préparation, lui, laisse la cible continuer d'approcher *avant même que
+    /// le missile ne parte*, créant une vraie fenêtre de vulnérabilité.
     /// Cf. `AppState::attack_charge`.
     #[serde(default = "default_attack_windup")]
     pub attack_windup: f32,
@@ -538,10 +536,9 @@ pub struct SceneObject {
     /// Forme du collider (Auto = déduite du mesh).
     #[serde(default)]
     pub collider_shape: crate::runtime::physics::ColliderShape,
-    /// Détection de collision continue (Sprint 101) : évite qu'un corps rapide et fin
+    /// Détection de collision continue : évite qu'un corps rapide et fin
     /// (missile, projectile) traverse un décor mince sans jamais entrer en collision
-    /// en un seul pas de simulation (« tunneling », cf. Sprint 100 — un `TriMesh` sans
-    /// épaisseur pouvait déjà être traversé par un objet lâché de trop haut). Coûteux
+    /// en un seul pas de simulation (« tunneling » — cf. docs/audits/physics.md). Coûteux
     /// (calcul supplémentaire par pas) : `false` par défaut, réservé aux objets qui en
     /// ont réellement besoin plutôt qu'activé partout par précaution.
     #[serde(default)]
@@ -587,7 +584,7 @@ pub struct SceneObject {
     /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
     #[serde(default)]
     pub trigger: bool,
-    // --- Composants mobiles Android (Sprint 41) ---
+    // --- Composants mobiles Android ---
     /// Fait de cet objet un objet **pilotable** (joystick/gyroscope/saut/attaque) : `None`
     /// pour la grande majorité des objets d'une scène (décor, ennemis, pièces...), qui
     /// n'ont pas besoin de ces champs. Regroupe ce qui était 8 champs plats séparés
@@ -625,18 +622,18 @@ pub struct SceneObject {
     /// > 0 ⇒ pièce **bonus** (score continu), hors objectif de victoire.
     #[serde(default)]
     pub respawn_delay: f32,
-    /// Animation squelettale (Sprint 87) : `None` pour la grande majorité des objets —
+    /// Animation squelettale : `None` pour la grande majorité des objets —
     /// seuls les meshes importés skinnés (`ImportedMesh::skeleton` renseigné) en ont un
     /// usage réel ; sans effet sur un mesh statique (aucun joint à animer).
     #[serde(default)]
     pub animation: Option<AnimationState>,
-    /// Lien vers un prefab (Sprint 96) : `None` pour un objet indépendant (la grande
+    /// Lien vers un prefab : `None` pour un objet indépendant (la grande
     /// majorité). `Some` fait de cet objet une **instance** — resynchronisée depuis le
     /// template par `Scene::sync_prefab_instances`, champ par champ, sauf ceux listés
     /// dans `PrefabInstance::overrides`.
     #[serde(default)]
     pub prefab: Option<PrefabInstance>,
-    /// Étiquette libre (Sprint 97) interrogeable en Lua via `find_tag("nom")` — vide =
+    /// Étiquette libre interrogeable en Lua via `find_tag("nom")` — vide =
     /// n'apparaît dans aucune recherche. Distinct de `group` (dossier de la hiérarchie,
     /// usage éditeur) et de `name` (affichage, pas forcément stable/unique) : un tag
     /// sert spécifiquement au script à retrouver des objets par rôle de gameplay
@@ -645,9 +642,9 @@ pub struct SceneObject {
     pub tag: String,
 }
 
-/// Instance d'un prefab (Sprint 96) : un `SceneObject` sérialisé, partagé par plusieurs
-/// objets de la scène qui y renvoient tous par référence stable (`asset-id://`, Sprint
-/// 95) plutôt que de dupliquer ses champs — modifier le fichier prefab puis appeler
+/// Instance d'un prefab : un `SceneObject` sérialisé, partagé par plusieurs
+/// objets de la scène qui y renvoient tous par référence stable (`asset-id://`)
+/// plutôt que de dupliquer ses champs — modifier le fichier prefab puis appeler
 /// `Scene::sync_prefab_instances` répercute le changement sur toutes les instances,
 /// sauf les champs que chacune a explicitement surchargés.
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -664,7 +661,7 @@ pub struct PrefabInstance {
     pub overrides: Vec<String>,
 }
 
-/// Composant optionnel : lecture d'un clip d'animation squelettale (Sprint 87). `None` =
+/// Composant optionnel : lecture d'un clip d'animation squelettale. `None` =
 /// pose de liaison figée (mesh skinné mais immobile) — même logique que `Controller`/
 /// `Combat` : la plupart des objets, même skinnés, n'ont pas forcément besoin d'un clip
 /// qui tourne (ex. un décor posé en pose figée).
@@ -681,7 +678,7 @@ pub struct AnimationState {
     /// Multiplicateur de vitesse de lecture (1.0 = normal, 0 = figé sur `time` courant).
     #[serde(default = "default_anim_speed")]
     pub speed: f32,
-    /// Clip quitté pendant une transition en fondu (Sprint 87) ; vide = pas de transition
+    /// Clip quitté pendant une transition en fondu ; vide = pas de transition
     /// en cours, `clip` se lit pur. Renseigné par `set_clip` quand `clip` change.
     #[serde(default)]
     pub prev_clip: String,
@@ -699,7 +696,7 @@ pub struct AnimationState {
 }
 
 impl AnimationState {
-    /// Durée du fondu enchaîné entre deux clips (secondes) — cf. Sprint 87.
+    /// Durée du fondu enchaîné entre deux clips (secondes).
     pub const CROSSFADE_SECONDS: f32 = 0.2;
 
     /// Change le clip joué, en démarrant un fondu enchaîné depuis le clip actuel si
@@ -899,8 +896,8 @@ fn default_physics() -> PhysicsKind {
     PhysicsKind::None
 }
 
-/// Toutes les couches (Sprint 101) : défaut pour `collision_layer`/`collision_mask`,
-/// équivalent à l'absence de filtrage — le comportement d'avant ce sprint.
+/// Toutes les couches : défaut pour `collision_layer`/`collision_mask`,
+/// équivalent à l'absence de filtrage.
 fn default_collision_mask() -> u32 {
     u32::MAX
 }
@@ -928,10 +925,10 @@ pub struct Scene {
     /// Caméra de jeu : point de vue appliqué à l'entrée en mode Play (None = orbite éditeur).
     #[serde(default)]
     pub game_camera: Option<GameCamera>,
-    /// Ciel (dégradé horizon/zénith) + brouillard exponentiel (Sprint 89).
+    /// Ciel (dégradé horizon/zénith) + brouillard exponentiel.
     #[serde(default)]
     pub sky: Sky,
-    /// Version du schéma JSON (Sprint 95) : `0` = scène antérieure à ce champ
+    /// Version du schéma JSON : `0` = scène antérieure à ce champ
     /// (« legacy »), migrée automatiquement par `Scene::load` (cf. `migrate`). Ne pas
     /// relire à la main ; sert seulement à savoir quelles migrations restent à
     /// appliquer, jamais à décider d'un comportement de gameplay.
@@ -939,7 +936,7 @@ pub struct Scene {
     pub version: u32,
     /// Décalages des overlays HUD (réticule, arme, frags, inventaire, joueurs) par
     /// rapport à leur position par défaut — réglables en les glissant dans l'éditeur
-    /// (panneau 👁 Aperçu HUD › 🖐 Repositionner), Sprint 98. Persistés dans la scène :
+    /// (panneau 👁 Aperçu HUD › 🖐 Repositionner). Persistés dans la scène :
     /// s'appliquent donc aussi bien en Play qu'en jeu exporté (APK/player), pas
     /// seulement à l'aperçu éditeur.
     #[serde(default)]
@@ -959,7 +956,7 @@ pub struct HudLayout {
     pub roster: [f32; 2],
 }
 
-/// Fond de scène (Sprint 89) : dégradé de ciel dessiné derrière toute la géométrie,
+/// Fond de scène : dégradé de ciel dessiné derrière toute la géométrie,
 /// et brouillard exponentiel mélangé dans le shader PBR selon la distance à la caméra.
 ///
 /// **Par défaut identique à l'ancien fond fixe** (`0.07, 0.08, 0.1`, la même couleur que
@@ -978,7 +975,7 @@ pub struct Sky {
     /// Densité du brouillard exponentiel (0 = désactivé). Le facteur de mélange est
     /// `1 - exp(-distance * fog_density)` — cf. `main.wgsl`.
     pub fog_density: f32,
-    /// Intensité du bloom (0 = désactivé, Sprint 91) : halo ajouté aux zones dont la
+    /// Intensité du bloom (0 = désactivé) : halo ajouté aux zones dont la
     /// radiance HDR dépasse 1.0 (émissifs, spéculaire fort). L'opt-out mobile ne
     /// touche pas ce champ — cf. `RenderQuality::bloom_enabled`, qui coupe
     /// l'application du réglage (et les passes GPU correspondantes) sans changer la
@@ -1021,8 +1018,7 @@ pub struct MobileControls {
     /// Affiche un pavé « tank » W/A/S/D (coin bas-gauche) à la place du
     /// joystick : mêmes contrôles que le clavier desktop — W/S avance/recule le
     /// long de l'orientation *actuelle* du personnage, A/D le fait pivoter
-    /// (cf. `PlayerInput::thrust`/`turn` ; demandé le 2026-07-13 pour retrouver
-    /// les contrôles tank sur APK). Prioritaire sur `joystick` si les deux sont
+    /// (cf. `PlayerInput::thrust`/`turn`). Prioritaire sur `joystick` si les deux sont
     /// actifs (cf. `mobile_overlay`), pour ne jamais superposer les deux dans le
     /// même coin de l'écran.
     #[serde(default)]
@@ -1163,8 +1159,8 @@ pub(super) fn demo_obj(name: &str, mesh: MeshKind, pos: Vec3) -> SceneObject {
 /// Nombre de niveaux de la démo contrôleur (cf. `Scene::controller_level`).
 pub const CONTROLLER_LEVELS: u32 = 2;
 
-/// Marqueurs franchis entre deux temps de lecture d'un clip de durée `duration`
-/// (Sprint 99), rebouclé exactement comme `Clip::sample_joint` (`rem_euclid`). Gère le
+/// Marqueurs franchis entre deux temps de lecture d'un clip de durée `duration`,
+/// rebouclé exactement comme `Clip::sample_joint` (`rem_euclid`). Gère le
 /// passage du bouclage : un marqueur proche de la fin (ex. 0.95 s d'un clip de 1 s)
 /// n'est pas manqué même si la lecture vient de reboucler à 0 sur ce même pas — sans
 /// ce cas, un pas qui traverse la fin du clip (`prev_time` proche de `duration`,
@@ -1207,12 +1203,12 @@ pub fn notifies_crossed(
 mod tests {
     use super::*;
 
-    /// Intégration bout en bout (Sprint 87) : un `SceneObject.animation` fait bouger un
+    /// Intégration bout en bout : un `SceneObject.animation` fait bouger un
     /// mesh skinné à travers `Renderer::render_scene_headless`, pas seulement les briques
     /// isolées (déjà testées ailleurs : `Clip::sample_joint`, `ImportedMesh::load_skinning`,
     /// `skinned_mesh_data`, le pipeline GPU via `tests/golden_skinning.rs`). Sauté (pas en
     /// échec) sans GPU headless — même raison que `tests/golden_render.rs` (CI Linux sans
-    /// GPU) : cf. Sprint 80.
+    /// GPU).
     #[test]
     fn scene_object_animation_moves_a_skinned_mesh_through_the_full_render_path() {
         let bytes = import::tests::animated_skinned_glb();
@@ -1279,7 +1275,7 @@ mod tests {
         );
     }
 
-    /// Intégration bout en bout du fondu enchaîné (Sprint 87) : un `SceneObject` en
+    /// Intégration bout en bout du fondu enchaîné : un `SceneObject` en
     /// pleine transition (`blend` intermédiaire, `prev_clip` renseigné) doit produire un
     /// rendu **différent** de la pose de liaison pure et du clip cible pur — preuve que
     /// `prepare_skinned_draws` prend bien la branche mélangée (`compute_joint_matrices_blended`)
@@ -1339,7 +1335,7 @@ mod tests {
 
         let base = AnimationState {
             clip: clip_name,
-            time: 1.0, // clip cible pur : à t=1.0, translation (10,0,0) — cf. fixture Sprint 85
+            time: 1.0, // clip cible pur : à t=1.0, translation (10,0,0) de la fixture
             speed: 1.0,
             prev_clip: "PoseDeLiaisonInexistante".into(), // cf. doc du test
             prev_time: 0.0,
@@ -1361,7 +1357,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         // Comparaison volontairement limitée à « mi-transition vs pose de liaison pure » :
-        // à blend=1.0 la translation du clip (10 unités sur X, fixture Sprint 85) pousse
+        // à blend=1.0 la translation du clip (10 unités sur X de la fixture) pousse
         // l'objet hors du petit cadre 64×64 de ce test, rendant blend=0.5 et blend=1.0
         // visuellement indiscernables (les deux hors champ) bien que les matrices de
         // joints diffèrent réellement entre les deux (déjà prouvé au niveau CPU par
@@ -1382,9 +1378,9 @@ mod tests {
 
     #[test]
     fn imported_mesh_load_skinning_populates_skeleton_clips_and_vertex_skins() {
-        // Réutilise la fixture .glb du Sprint 84 (`import::tests`) plutôt que d'en
+        // Réutilise la fixture .glb existante (`import::tests`) plutôt que d'en
         // reconstruire une : elle est déjà vérifiée correcte, seule la *plomberie*
-        // `ImportedMesh::load_skinning` (Sprint 87) est nouvelle ici.
+        // `ImportedMesh::load_skinning` est testée ici.
         let path = import::tests::write_temp_glb(
             &import::tests::skinned_triangle_glb(),
             "scene_load_skinning",
@@ -1444,7 +1440,7 @@ mod tests {
         let skinned = m.skinned_mesh_data().expect("mesh skinné : Some attendu");
         assert_eq!(skinned.vertices.len(), 3);
         assert_eq!(skinned.indices, m.data.indices);
-        // Sommet 2 de la fixture (cf. Sprint 84) : joints [0,1,0,0], poids [0.5,0.5,0,0].
+        // Sommet 2 de la fixture : joints [0,1,0,0], poids [0.5,0.5,0,0].
         assert_eq!(skinned.vertices[2].joints, [0, 1, 0, 0]);
         assert_eq!(skinned.vertices[2].weights, [0.5, 0.5, 0.0, 0.0]);
         // Géométrie transportée telle quelle depuis `data.vertices`.
@@ -1453,7 +1449,7 @@ mod tests {
 
     #[test]
     fn load_skinning_also_populates_tangents_for_any_imported_mesh() {
-        // Sprint 92 : contrairement au squelette (skin glTF requis), les tangentes
+        // Contrairement au squelette (skin glTF requis), les tangentes
         // sont calculées pour n'importe quel mesh importé — vérifié ici sur la même
         // fixture skinnée que `skinned_mesh_data_combines_geometry_and_skin_weights`,
         // mais rien dans `compute_tangents` ne dépend du skin.
@@ -1715,9 +1711,9 @@ mod tests {
 
     #[test]
     fn a_legacy_json_file_loads_at_the_current_version() {
-        // Sprint 95, le livrable : « une scène v1 se charge en v2 » — ici, une scène
-        // sans champ `version` du tout (fichier antérieur à ce sprint) doit ressortir
-        // de `Scene::load` au numéro courant, migrations appliquées.
+        // Une scène sans champ `version` du tout (fichier antérieur à l'introduction de
+        // ce champ) doit ressortir de `Scene::load` au numéro courant, migrations
+        // appliquées.
         let json = r#"{"objects":[],"groups":["A","A","B"]}"#;
         let path = std::env::temp_dir().join(format!(
             "rusteegear_legacy_scene_test_{}.json",
@@ -1737,8 +1733,8 @@ mod tests {
     #[test]
     fn a_scene_already_at_the_current_version_is_left_untouched_by_migrate() {
         // `migrate` ne doit rien changer à une scène déjà à jour, même avec des
-        // doublons de groupe (probablement volontaires — l'utilisateur a pu les
-        // recréer après le Sprint 95) : le nettoyage n'est appliqué qu'à `version == 0`.
+        // doublons de groupe (probablement volontaires, recréés à la main par
+        // l'utilisateur) : le nettoyage n'est appliqué qu'à `version == 0`.
         let mut scene = Scene {
             groups: vec!["A".into(), "A".into()],
             version: Scene::CURRENT_VERSION,
@@ -1764,8 +1760,8 @@ mod tests {
 
     #[test]
     fn modifying_a_prefab_updates_its_instances_except_overrides() {
-        // Le livrable du Sprint 96 : un prefab « gemme » modifié met à jour ses N
-        // instances, sauf les propriétés surchargées.
+        // Un prefab « gemme » modifié met à jour ses N instances, sauf les propriétés
+        // surchargées.
         let name = unique_prefab_name("gemme");
         let gemme_v1 = SceneObject {
             name: "Gemme".into(),

@@ -1,7 +1,7 @@
 //! Opérations d'édition sur la sélection courante : sélection simple/multiple,
 //! presse-papiers (copier/couper/coller), alignement/distribution, groupes,
 //! undo/redo, et manipulation d'objets (ajout, suppression, duplication, reset).
-//! Extrait de `app/mod.rs` (Sprint 103a) — logique d'éditeur pure, sans dépendance
+//! Extrait de `app/mod.rs` — logique d'éditeur pure, sans dépendance
 //! au mode Play/scripts/réseau.
 
 use glam::{Quat, Vec3};

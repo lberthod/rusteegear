@@ -1,6 +1,6 @@
 //! Requêtes de gameplay sur la scène : AABB monde/locale, zones mortelles,
 //! ramassage (pièces, armes), combat (portée d'attaque, dégâts), lumières les
-//! plus proches. Extrait de `scene/mod.rs` (Sprint 103a-2).
+//! plus proches. Extrait de `scene/mod.rs`.
 
 use glam::Vec3;
 

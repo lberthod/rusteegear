@@ -1,7 +1,7 @@
 //! Picking et gizmo d'édition : conversion écran → NDC/monde, sélection par clic
 //! (objet, lumière), poignées de translation/rotation/échelle (`pick_axis`/`pick_ring`),
 //! et `handle_input` qui orchestre tout ça à partir d'un `InputEvent` agnostique de la
-//! plateforme. Extrait de `app/mod.rs` (Sprint 103a) — aucune dépendance gameplay/réseau,
+//! plateforme. Extrait de `app/mod.rs` — aucune dépendance gameplay/réseau,
 //! seulement caméra + sélection + scène.
 
 use glam::{Mat4, Quat, Vec3, Vec4};
@@ -125,7 +125,7 @@ impl AppState {
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
                 {
-                    // Debug drawing (Sprint 83) : visualise le rayon de picking envoyé.
+                    // Debug drawing : visualise le rayon de picking envoyé.
                     let (ray_origin, ray_dir) = self.ray(cx, cy);
                     self.debug_line(ray_origin, ray_origin + ray_dir * 30.0, [1.0, 0.9, 0.2]);
                     // Priorité au marqueur de lumière (petit), sinon objet 3D.
@@ -219,9 +219,9 @@ impl AppState {
                 {
                     // Rotation horizontale seulement (le zoom vient du pinch/molette,
                     // cf. `InputEvent::Scroll`) : l'angle de plongée (`pitch`) reste fixe,
-                    // façon caméra de suivi à la Zelda — un angle vertical libre rendait
-                    // le repère visuel instable (le sol/l'horizon basculaient au moindre
-                    // geste), demandé à corriger en conditions réelles le 2026-07-12.
+                    // façon caméra de suivi à la Zelda — un angle vertical libre rend
+                    // le repère visuel instable (le sol/l'horizon basculent au moindre
+                    // geste).
                     self.camera.yaw -= (x - lx) as f32 * 0.005;
                 }
                 self.last_cursor = Some((x, y));

@@ -1,4 +1,4 @@
-//! Configuration de build/export persistée (Sprint 20) : nom de l'app, identifiant
+//! Configuration de build/export persistée : nom de l'app, identifiant
 //! de bundle, version, numéro de build. Éditée dans le panneau Export, sauvegardée
 //! dans `~/.motor3derust/build_config.json` et transmise aux scripts de packaging.
 
@@ -63,7 +63,7 @@ impl RenderQuality {
         }
     }
 
-    /// Bloom activé pour ce niveau de qualité (Sprint 91) : opt-out sur « Basse » — la
+    /// Bloom activé pour ce niveau de qualité : opt-out sur « Basse » — la
     /// chaîne de mips down/upsample ajoute plusieurs passes plein écran par frame, un
     /// coût qu'un appareil visant ce palier (cf. `light_budget`) n'a pas à payer. Ni
     /// `Sky::bloom_intensity`, ni le shader ne changent : le réglage scène reste ce
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn bloom_is_only_disabled_on_low_quality() {
-        // Sprint 91 : l'opt-out mobile ne concerne que le palier le plus bas — Medium
+        // L'opt-out mobile ne concerne que le palier le plus bas — Medium
         // et High doivent laisser le bloom s'exprimer (sous réserve de `BuildConfig::
         // bloom` et de l'intensité de la scène, gérés séparément).
         assert!(!RenderQuality::Low.bloom_enabled());
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn old_build_config_json_without_bloom_field_loads_with_default_enabled() {
         // Round-trip rétrocompatible (même logique que `msaa`/`shadows`) : un fichier
-        // de config sauvegardé avant le Sprint 91 n'a pas le champ `bloom` — doit se
+        // de config plus ancien peut ne pas avoir le champ `bloom` — doit se
         // charger avec le bloom activé par défaut plutôt que de rejeter le JSON.
         let old_json = r#"{
             "app_name": "MonJeu",
@@ -162,7 +162,7 @@ pub struct BuildConfig {
     #[serde(default)]
     pub ios_profile: String,
 
-    // --- Application Android (Sprint 39) ---
+    // --- Application Android ---
     /// Orientation d'écran imposée.
     #[serde(default)]
     pub orientation: Orientation,
@@ -179,7 +179,7 @@ pub struct BuildConfig {
     #[serde(default)]
     pub splash_path: String,
 
-    // --- Rendu mobile (Sprint 39) : visés par le player, persistés et transmis au build ---
+    // --- Rendu mobile : visés par le player, persistés et transmis au build ---
     /// Qualité de rendu visée.
     #[serde(default)]
     pub render_quality: RenderQuality,
@@ -192,7 +192,7 @@ pub struct BuildConfig {
     /// Anti-aliasing MSAA (1 = désactivé, 2 ou 4 = échantillons).
     #[serde(default = "default_msaa")]
     pub msaa: u32,
-    /// Bloom activé pour ce build (Sprint 91) : combiné à `RenderQuality::
+    /// Bloom activé pour ce build : combiné à `RenderQuality::
     /// bloom_enabled()` (opt-out automatique sur qualité « Basse ») — les deux
     /// doivent être vrais pour que le renderer calcule le halo (cf. `AppState::
     /// bloom_enabled`). Un opt-out manuel indépendant de la qualité reste possible

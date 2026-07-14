@@ -1,4 +1,4 @@
-//! Transport WebSocket côté serveur (SPRINT_MMORPG.md, Sprint 53).
+//! Transport WebSocket côté serveur.
 //!
 //! `NetServer` accepte des connexions dans un thread dédié, et n'expose au
 //! reste du programme que des canaux `std::sync::mpsc` **synchrones** — le
@@ -7,12 +7,11 @@
 //! boucle principale). La boucle de jeu (`AppState`, `src/bin/server.rs`) n'a
 //! donc jamais besoin de connaître `tokio`.
 //!
-//! **Runtime `current_thread` (corrigé à l'audit du 2026-07-07, cf.
-//! AUDIT_MMORPG.md §4.3)** : à l'échelle visée (2-16 joueurs/salon), accepter
-//! des connexions et faire progresser une poignée de sockets est un travail
-//! d'attente réseau, pas de calcul parallèle — un runtime multi-thread
-//! (`tokio::runtime::Runtime::new()`, utilisé avant ce correctif) réserve un
-//! thread ouvrier par CPU logique pour rien. Le thread dédié ci-dessous
+//! **Runtime `current_thread`** : à l'échelle visée (2-16 joueurs/salon),
+//! accepter des connexions et faire progresser une poignée de sockets est un
+//! travail d'attente réseau, pas de calcul parallèle — un runtime multi-thread
+//! (`tokio::runtime::Runtime::new()`) réserverait un thread ouvrier par CPU
+//! logique pour rien (cf. docs/audits/net.md). Le thread dédié ci-dessous
 //! `block_on` la boucle d'acceptation *et* toutes les connexions (via
 //! `tokio::spawn`, ordonnancées coopérativement sur ce seul thread) pour toute
 //! la durée de vie du serveur.
@@ -95,8 +94,7 @@ impl NetServer {
                     // Sans ça, l'algorithme de Nagle retarde nos petites trames
                     // fréquentes (`Input`/`Snapshot`, quelques dizaines d'octets,
                     // plusieurs par seconde) jusqu'à ~40 ms pour les regrouper —
-                    // exactement le pire cas pour ce trafic, et une bonne part de
-                    // la latence perçue constatée en test réel (2026-07-12).
+                    // exactement le pire cas pour ce trafic (cf. docs/audits/net.md).
                     if let Err(e) = stream.set_nodelay(true) {
                         log::warn!("TCP_NODELAY impossible sur {peer} : {e}");
                     }
@@ -194,9 +192,9 @@ async fn handle_connection(
 
     // Relaie aussi le `Join` lui-même au thread principal (contrairement au
     // `Welcome`, géré ici) : c'est le signal qui doit faire apparaître le joueur
-    // dans la partie (cf. `AppState::spawn_network_player`, Sprint 55). Une
-    // défaillance d'envoi ici (thread principal arrêté) ne doit pas empêcher la
-    // connexion de continuer, donc pas de `?`.
+    // dans la partie (cf. `AppState::spawn_network_player`). Une défaillance
+    // d'envoi ici (thread principal arrêté) ne doit pas empêcher la connexion
+    // de continuer, donc pas de `?`.
     let _ = tx.send((
         id,
         ClientMsg::Join {
@@ -255,7 +253,7 @@ mod tests {
     use super::super::client::NetClient;
     use super::*;
 
-    /// Bout-en-bout transport (cf. SPRINT_MMORPG.md Sprint 53) : un `NetClient` se
+    /// Bout-en-bout transport : un `NetClient` se
     /// connecte, envoie un `Join`, reçoit son `Welcome`, puis envoie un `Input` que
     /// le serveur doit recevoir avec le bon `PlayerId`. Vérifie la plomberie
     /// WebSocket + (dé)sérialisation sans dépendre d'une fenêtre graphique (aucun
@@ -276,8 +274,8 @@ mod tests {
         };
 
         // Le serveur relaie aussi le `Join` initial au thread principal (cf.
-        // `AppState::spawn_network_player`, Sprint 55) : c'est le premier message
-        // dans `inbox`, avant l'`Input` envoyé ci-dessous.
+        // `AppState::spawn_network_player`) : c'est le premier message dans
+        // `inbox`, avant l'`Input` envoyé ci-dessous.
         let (join_id, join_msg) = server
             .inbox
             .recv_timeout(Duration::from_secs(2))
@@ -324,8 +322,7 @@ mod tests {
     }
 
     /// Deux clients dans le même salon obtiennent des identifiants distincts, et un
-    /// `broadcast` atteint les deux (préfigure la Snapshot diffusée à chaque tick,
-    /// Sprint 55).
+    /// `broadcast` atteint les deux (préfigure la Snapshot diffusée à chaque tick).
     #[test]
     fn broadcast_reaches_every_connected_client() {
         let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");

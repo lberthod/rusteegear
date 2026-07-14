@@ -1,6 +1,5 @@
 //! Pipeline d'assets pour l'export mobile : optimisation de textures, rassemblement
-//! en `asset://`, conversion en puissances de 2, bake lighting. Extrait de `app/mod.rs`
-//! (Sprint 103a).
+//! en `asset://`, conversion en puissances de 2, bake lighting. Extrait de `app/mod.rs`.
 
 use super::AppState;
 
@@ -207,7 +206,7 @@ impl AppState {
 /// Chemin de la copie optimisée d'une texture (`foo.png` → `foo_opt2048.png`).
 /// Conserve le schéma `asset://`/`bundle://` éventuel ; sinon écrit à côté du fichier.
 pub(super) fn optimized_path(path: &str, max_px: u32) -> String {
-    // Une référence `asset-id://<uuid>` (Sprint 95) n'a pas de nom de fichier en soi —
+    // Une référence `asset-id://<uuid>` n'a pas de nom de fichier en soi —
     // la résoudre d'abord vers son `asset://<nom>` courant, sinon le nom dérivé serait
     // l'uuid tel quel (illisible, et incohérent d'une exécution à l'autre si l'asset
     // est renommé entre-temps).

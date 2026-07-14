@@ -85,7 +85,7 @@ fn build_from(
     Ok((MeshData { vertices, indices }, min, max))
 }
 
-/// Calcule une tangente par sommet (Sprint 92) quand le glTF n'en fournit pas
+/// Calcule une tangente par sommet quand le glTF n'en fournit pas
 /// (notre lecteur n'essaie pas encore de lire l'attribut `TANGENT` — aucun des
 /// modèles de test n'en porte un, ce serait un chantier à part). Méthode de Lengyel
 /// (la même que la plupart des moteurs implémentent, souvent appelée « à la
@@ -158,8 +158,8 @@ pub fn compute_tangents(vertices: &[Vertex], indices: &[u32]) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// Un os (joint) du squelette d'un modèle skinné (Sprint 84), avec sa hiérarchie
-/// parent/enfant et sa pose de liaison inverse — nécessaire au skinning GPU (Sprint 86)
+/// Un os (joint) du squelette d'un modèle skinné, avec sa hiérarchie
+/// parent/enfant et sa pose de liaison inverse — nécessaire au skinning GPU
 /// mais délibérément **sans** dépendance au rendu ici : données pures.
 #[derive(Debug, Clone)]
 pub struct Joint {
@@ -192,7 +192,7 @@ impl Skeleton {
 
 /// Indices + poids des (jusqu'à 4) os influençant un sommet skinné (convention glTF
 /// `JOINTS_0`/`WEIGHTS_0`). Les poids somment à 1.0 dans un glTF bien formé ; un sommet
-/// non influencé (poids tous nuls) reste à sa position bind pose au skinning (Sprint 86).
+/// non influencé (poids tous nuls) reste à sa position bind pose au skinning.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct VertexSkin {
     pub joints: [u16; 4],
@@ -200,9 +200,8 @@ pub struct VertexSkin {
 }
 
 /// Lit le squelette (hiérarchie de joints + poses de liaison) et les poids de peau par
-/// sommet du **premier skin** du fichier, s'il en a un (Sprint 84 : données pures, sans
-/// rendu — le skinning GPU proprement dit arrive au Sprint 86, l'échantillonnage de clips
-/// au Sprint 85).
+/// sommet du **premier skin** du fichier, s'il en a un — données pures, sans rendu ni
+/// échantillonnage de clip (cf. `compute_joint_matrices`/`Clip` pour la suite).
 ///
 /// `Ok(None)` (pas une erreur) si le glTF n'a pas de skin : un mesh statique n'a
 /// simplement rien à squeletter.
@@ -295,7 +294,7 @@ fn read_vertex_skins(doc: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Ve
     skins
 }
 
-/// Interpolation d'un canal d'animation glTF prise en charge (Sprint 85). `CubicSpline`
+/// Interpolation d'un canal d'animation glTF prise en charge. `CubicSpline`
 /// n'est **pas** géré : rare en pratique (Mixamo/Blender exportent en Linear/Step) et
 /// nécessiterait de porter les tangentes entrée/sortie — un canal `CubicSpline` est
 /// ignoré (le joint garde sa pose de liaison sur cette propriété) plutôt que
@@ -340,8 +339,8 @@ struct TrackQuat {
 /// plus court (inverse `b` si son produit scalaire avec `a` est négatif), lerp des 4
 /// composantes, puis normalise. C'est ce que spécifie glTF pour l'interpolation
 /// « Linear » des rotations — pas slerp, moins coûteux et suffisant à fréquence
-/// d'échantillonnage normale. Partagé par `TrackQuat::sample` (Sprint 85) et
-/// `compute_joint_matrices_blended` (Sprint 87, crossfade entre deux clips).
+/// d'échantillonnage normale. Partagé par `TrackQuat::sample` et
+/// `compute_joint_matrices_blended` (crossfade entre deux clips).
 fn nlerp(a: Quat, b: Quat, t: f32) -> Quat {
     let b = if a.dot(b) < 0.0 { -b } else { b };
     (a * (1.0 - t) + b * t).normalize()
@@ -392,7 +391,7 @@ fn sample_keyed<V: Copy>(
 
 /// Les canaux animés d'**un** joint (jusqu'à 3 : translation, rotation, scale). Un joint
 /// non mentionné dans un clip n'a pas d'entrée dans `Clip::tracks` — sa pose de liaison
-/// (Sprint 84) s'applique telle quelle sur toute la durée du clip.
+/// s'applique telle quelle sur toute la durée du clip.
 #[derive(Debug, Clone, Default)]
 struct JointTracks {
     translation: Option<TrackVec3>,
@@ -400,11 +399,11 @@ struct JointTracks {
     scale: Option<TrackVec3>,
 }
 
-/// Transform locale échantillonnée d'un joint à un instant donné (Sprint 85) : chaque
+/// Transform locale échantillonnée d'un joint à un instant donné : chaque
 /// composante est `Some` seulement si le clip anime effectivement cette propriété — les
 /// composantes `None` doivent retomber sur la pose de liaison du joint (`Joint::bind_local`
 /// décomposée), pas sur une valeur neutre arbitraire. Cette fusion pose de liaison / pose
-/// animée est le travail de l'appelant (Sprint 86, skinning), délibérément hors de ce sprint.
+/// animée est le travail de l'appelant (skinning), délibérément hors de ce module.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct JointPose {
     pub translation: Option<Vec3>,
@@ -413,8 +412,8 @@ pub struct JointPose {
 }
 
 /// Un clip d'animation : plusieurs canaux (typiquement 3 par joint animé : T/R/S),
-/// échantillonnable à un temps quelconque, en boucle (Sprint 85 — CPU pur, sans lien au
-/// rendu ; le skinning GPU proprement dit arrive au Sprint 86).
+/// échantillonnable à un temps quelconque, en boucle — CPU pur, sans lien au rendu
+/// (le skinning GPU consomme le résultat séparément).
 #[derive(Debug, Clone, Default)]
 pub struct Clip {
     pub name: String,
@@ -425,7 +424,7 @@ pub struct Clip {
 }
 
 impl Clip {
-    /// Clip sans piste de joint (Sprint 99) : pour les tests d'échange
+    /// Clip sans piste de joint : pour les tests d'échange
     /// notifies/événements, qui n'ont besoin que de `name`/`duration` — `tracks` reste
     /// privé (jamais construit à la main hors de ce module), d'où ce constructeur
     /// plutôt qu'un accès direct au champ depuis `app::mod` (tests de `notifies_crossed`).
@@ -457,7 +456,7 @@ impl Clip {
     }
 }
 
-/// Lit les clips d'animation du **premier skin** du glTF (Sprint 85) : chaque canal
+/// Lit les clips d'animation du **premier skin** du glTF : chaque canal
 /// (`doc.animations()[..].channels()`) qui cible un nœud faisant partie des joints du skin
 /// devient une piste de `Clip`. Les canaux ciblant un nœud hors du skin (caméra, lumière,
 /// morph targets…) sont ignorés — hors périmètre de l'animation squelettale.
@@ -557,10 +556,10 @@ fn decompose(m: Mat4) -> (Vec3, Quat, Vec3) {
 }
 
 /// Transform locale (T, R, S) d'un joint à un instant donné : pose de liaison, avec les
-/// composantes que le clip anime réellement écrasées (`JointPose`, Sprint 85 — chaque
+/// composantes que le clip anime réellement écrasées (`JointPose` — chaque
 /// champ `Option`, jamais de valeur neutre inventée pour une composante non animée).
 /// `clip = None` ⇒ pose de liaison pure. Partagé par `compute_joint_matrices` (un clip)
-/// et `compute_joint_matrices_blended` (Sprint 87, deux clips mélangés).
+/// et `compute_joint_matrices_blended` (deux clips mélangés).
 fn local_pose(
     joint: &Joint,
     joint_index: usize,
@@ -582,7 +581,7 @@ fn local_pose(
 }
 
 /// Résout la hiérarchie monde d'un squelette à partir d'une transform locale par joint —
-/// partagé par `compute_joint_matrices` et `compute_joint_matrices_blended` (Sprint 87),
+/// partagé par `compute_joint_matrices` et `compute_joint_matrices_blended`,
 /// qui ne diffèrent que par la façon dont `local_of` calcule cette transform (un clip,
 /// ou un mélange de deux). Renvoie `monde_du_joint * inverse_bind` : la partie
 /// `inverse_bind` annule la pose de liaison pour ne laisser que le **déplacement** depuis
@@ -631,8 +630,8 @@ fn resolve_world_matrices(
         .collect()
 }
 
-/// Calcule, pour chaque joint d'un `Skeleton`, la matrice à envoyer au shader de skinning
-/// (Sprint 86). `clip = None` ⇒ pose de liaison pure (équivalent à un modèle statique :
+/// Calcule, pour chaque joint d'un `Skeleton`, la matrice à envoyer au shader de skinning.
+/// `clip = None` ⇒ pose de liaison pure (équivalent à un modèle statique :
 /// chaque matrice résultante est proche de l'identité, à l'erreur de précision flottante
 /// près — cf. test).
 pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f32) -> Vec<Mat4> {
@@ -642,8 +641,8 @@ pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f3
     })
 }
 
-/// Comme `compute_joint_matrices`, mais mélange (crossfade) deux clips (Sprint 87 :
-/// transitions douces entre états d'animation, ex. idle→run). Le mélange se fait au
+/// Comme `compute_joint_matrices`, mais mélange (crossfade) deux clips — transitions
+/// douces entre états d'animation, ex. idle→run. Le mélange se fait au
 /// niveau de la pose **locale** de chaque joint — translation/échelle en lerp, rotation
 /// en nlerp — **avant** de composer la hiérarchie une seule fois avec le résultat.
 /// Mélanger des matrices **monde** directement serait faux pour la rotation (une matrice
@@ -888,11 +887,10 @@ pub(crate) mod tests {
     /// Écrit des octets GLB dans un fichier temporaire unique, pour exercer l'API
     /// publique `load_gltf_skeleton(path)` de bout en bout (pas seulement les fonctions
     /// internes `build_skeleton`/`read_vertex_skins`, déjà testées séparément ci-dessus).
-    /// Un compteur atomique, pas seulement `std::process::id()` : `cargo test` exécute les
-    /// tests d'un même binaire sur plusieurs **threads** du même processus. Deux tests
-    /// utilisant le même `name` avec seulement le PID en suffixe écrivaient donc le même
-    /// chemin en parallèle — l'un tronquait le fichier pendant que l'autre le lisait
-    /// (« failed to fill whole buffer », intermittent selon l'ordonnancement des threads).
+    /// Compteur atomique en plus du PID : `cargo test` exécute les tests d'un même
+    /// binaire sur plusieurs **threads** du même processus, donc le PID seul ne suffit
+    /// pas à distinguer deux tests utilisant le même `name` (cf. docs/audits/scene-import.md
+    /// pour l'échec intermittent que ça causait).
     static TEMP_GLB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     pub(crate) fn write_temp_glb(bytes: &[u8], name: &str) -> std::path::PathBuf {
@@ -1145,7 +1143,7 @@ pub(crate) mod tests {
         let clip = &clips[0];
 
         // Le joint 0 n'a pas de canal de rotation/scale dans cette fixture : l'appelant
-        // (Sprint 86) doit retomber sur la pose de liaison, pas sur une valeur inventée.
+        // doit retomber sur la pose de liaison, pas sur une valeur inventée.
         let pose = clip.sample_joint(0, 0.5);
         assert!(pose.rotation.is_none());
         assert!(pose.scale.is_none());
@@ -1237,9 +1235,9 @@ pub(crate) mod tests {
         let _ = std::fs::remove_file(&path);
         let clip = &clips[0];
 
-        // Joint 0 : translation linéaire de (0,0,0) à t=0 vers (10,0,0) à t=1 (fixture du
-        // Sprint 85). Mélanger clip A (t=0, translation (0,0,0)) et clip B (t=1,
-        // translation (10,0,0)) à blend=0.5 doit donner (5,0,0) — le lerp attendu.
+        // Joint 0 : translation linéaire de (0,0,0) à t=0 vers (10,0,0) à t=1. Mélanger
+        // clip A (t=0, translation (0,0,0)) et clip B (t=1, translation (10,0,0)) à
+        // blend=0.5 doit donner (5,0,0) — le lerp attendu.
         let matrices =
             compute_joint_matrices_blended(&skeleton, Some(clip), 0.0, Some(clip), 1.0, 0.5);
         let translation = matrices[0].col(3).truncate();

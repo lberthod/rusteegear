@@ -1,7 +1,6 @@
 //! Barre de menus de l'éditeur (Fichier/Édition/Ajouter/Outils/Aide) : nouveau/
 //! ouvrir/enregistrer/exporter, undo/redo/copier-coller, ajout de primitives et de
-//! démos, réglages rapides (gizmo, physique). Extrait de `editor/mod.rs`
-//! (Sprint 103a-2).
+//! démos, réglages rapides (gizmo, physique). Extrait de `editor/mod.rs`.
 
 use crate::app::GizmoMode;
 use crate::scene::{MeshKind, Scene};

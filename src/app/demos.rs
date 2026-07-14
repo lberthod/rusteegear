@@ -1,6 +1,6 @@
 //! Chargeurs de démo/scène embarquée : chaque fonction remplace `scene` par une des
 //! démos prédéfinies (`crate::scene::Scene::*_demo`) et réinitialise l'état de jeu
-//! associé (vie, manches, sélection). Extrait de `app/mod.rs` (Sprint 103a).
+//! associé (vie, manches, sélection). Extrait de `app/mod.rs`.
 
 use super::AppState;
 use crate::scene::Scene;
@@ -91,7 +91,7 @@ impl AppState {
     }
 
     /// Charge la démo « MMORPG » (cf. `Scene::mmorpg_demo`) : arène minimale sans
-    /// monstres/manches, dédiée au test multijoueur PC ↔ mobile (Sprint 65).
+    /// monstres/manches, dédiée au test multijoueur PC ↔ mobile.
     pub fn load_mmorpg_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::mmorpg_demo();

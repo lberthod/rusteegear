@@ -1,4 +1,4 @@
-//! Contrôle qualité APK / « APK Readiness Check » (Sprint 32).
+//! Contrôle qualité APK / « APK Readiness Check ».
 //!
 //! Analyse la scène et la configuration de build pour signaler ce qui empêcherait
 //! un export Android propre : scène vide, objets sans collider, textures trop
@@ -178,7 +178,7 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
         Check::new(Status::Ok, format!("Version : {}", config.version.trim()))
     });
 
-    // --- Application Android (Sprint 39) ---
+    // --- Application Android ---
     checks.push(if config.min_sdk > config.target_sdk {
         Check::new(
             Status::Fail,

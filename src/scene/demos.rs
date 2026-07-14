@@ -1,6 +1,6 @@
 //! Scènes de démo prêtes à jouer (`Scene::mobile_demo`, `Scene::zombies_demo`,
 //! niveaux du contrôleur, etc.) et la scène embarquée du player exporté.
-//! Extrait de `scene/mod.rs` (Sprint 103a-2).
+//! Extrait de `scene/mod.rs`.
 
 use glam::Vec3;
 
@@ -1052,9 +1052,9 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         }
     }
 
-    /// Démo « MMORPG » (Sprint 65) : arène minimale dédiée au test multijoueur
-    /// PC ↔ mobile — pas de monstres ni de manches (contrairement à
-    /// `zombies_demo`), juste un joueur pilotable (joystick + saut) sur une
+    /// Démo « MMORPG » : arène minimale dédiée au test multijoueur PC ↔ mobile —
+    /// pas de monstres ni de manches (contrairement à `zombies_demo`), juste un
+    /// joueur pilotable (joystick + saut) sur une
     /// carte simple avec quelques repères visuels statiques, pour voir
     /// clairement un joueur desktop et un joueur APK se déplacer l'un par
     /// rapport à l'autre (fantômes réseau, cf. `app::network_client`).

@@ -1,10 +1,9 @@
 //! Système de combat : attaque du joueur (préparation → missile homing → impact),
 //! recul (knockback), mise à mort par ring-out, et système de manches (`Combat::wave`).
 //!
-//! Extrait de `app/mod.rs` (cf. AUDIT.md §7.4 et SPRINT_MMORPG.md, Sprint 50) pour isoler
-//! la surface de gameplay qu'un futur serveur de jeu réseau (SPRINT_MMORPG.md, Sprint 51+)
-//! devra piloter en autorité — sans toucher au reste de la boucle (scripts, physique,
-//! caméra), qui reste dans `app/mod.rs`.
+//! Extrait de `app/mod.rs` pour isoler la surface de gameplay qu'un futur serveur de
+//! jeu réseau (cf. SPRINT_MMORPG.md) devra piloter en autorité — sans toucher au reste
+//! de la boucle (scripts, physique, caméra), qui reste dans `app/mod.rs`.
 
 use glam::Vec3;
 
@@ -22,8 +21,8 @@ pub(super) struct AttackProjectile {
 }
 
 /// Vitesse du missile (m/s). Volontairement pas instantanée : le temps de vol laisse la
-/// cible continuer d'approcher, donc mordre avant l'impact — le risque qu'une résolution
-/// immédiate au tir ne pouvait pas garantir (cf. audit_sprint.md).
+/// cible continuer d'approcher, donc mordre avant que l'impact ne soit résolu — une
+/// garantie de risque qui reste partielle (cf. docs/audits/app-misc.md).
 const ATTACK_PROJECTILE_SPEED: f32 = 10.0;
 
 /// Vitesse horizontale (m/s) du recul (knockback) infligé à une cible touchée qui

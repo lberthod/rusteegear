@@ -3,7 +3,7 @@
 //! cible), avance en ligne droite et frappe le premier obstacle physique ou
 //! monstre `attackable` sur son chemin.
 //!
-//! **Multi-armes (Sprint 79)** : trois profils (cf. `RANGED_WEAPONS`) aux
+//! **Multi-armes** : trois profils (cf. `RANGED_WEAPONS`) aux
 //! compromis distincts — vitesse/recharge/dégâts/portée — sélectionnés au clavier
 //! (1/2/3), au bouton tactile « Arme » (cycle, cf. `Controller::weapon_button`)
 //! ou par `ClientMsg::Input::weapon` en ligne (borné côté serveur).
@@ -46,7 +46,7 @@ pub struct RangedWeapon {
 /// `ClientMsg::Input::weapon`. L'ordre est un contrat réseau : le serveur et les
 /// clients doivent partager la même table (même binaire ou même commit).
 pub const RANGED_WEAPONS: &[RangedWeapon] = &[
-    // Équilibrée : la boule de feu historique (Sprint 78).
+    // Équilibrée : la boule de feu historique.
     RangedWeapon {
         label: "Boule de feu",
         speed: 12.0,
@@ -633,7 +633,7 @@ mod tests {
         );
     }
 
-    /// Sprint 80 (GAMEDESIGN_EN_LIGNE.md §3.1) : un joueur réseau vaincu (0 PV)
+    /// GAMEDESIGN_EN_LIGNE.md §3.1 : un joueur réseau vaincu (0 PV)
     /// devient spectateur — son `fire: true` ne doit plus rien déclencher, même
     /// si son objet est encore techniquement présent dans `scene.objects`.
     #[test]
@@ -664,10 +664,10 @@ mod tests {
         );
     }
 
-    /// Sprint 79 (audit) : la direction du tir réseau vient de l'`aim_yaw` envoyé
+    /// La direction du tir réseau vient de l'`aim_yaw` envoyé
     /// par le client — l'orientation que ce joueur **voit à son écran** — pas de
-    /// l'orientation serveur de l'objet (qui, avant ce sprint, ne pivotait
-    /// jamais : le bloc d'orientation de `sim_step` est réservé au joueur local).
+    /// l'orientation serveur de l'objet (le bloc d'orientation de `sim_step`
+    /// est réservé au joueur local, qui ne pivote jamais autrement côté serveur).
     #[test]
     fn a_network_fireball_flies_along_the_clients_aim_yaw() {
         let mut app = app_with(scene_with_monster_ahead(false));
@@ -695,7 +695,7 @@ mod tests {
         );
     }
 
-    /// Sprint 79 (audit) : l'`aim_yaw` reçu oriente aussi l'**objet** du joueur
+    /// L'`aim_yaw` reçu oriente aussi l'**objet** du joueur
     /// réseau — c'est ce yaw que `network_snapshot` diffuse aux autres clients ;
     /// sans ça, les fantômes des autres joueurs ne pivotaient jamais.
     #[test]
@@ -894,14 +894,13 @@ mod tests {
              (trouvés : {})",
             monsters.len()
         );
-        // Revenu à des cibles statiques (2026-07-13, audit en conditions réelles) :
-        // `ai_chaser` (Sprint 80, poursuite active) a été retiré de la carte
-        // embarquée — malgré le plafond de chasseurs actifs (Sprint 85) et la
-        // portée de détection réseau (Sprint 86), la poursuite restait perçue
-        // comme un bug par un joueur solo réel (« les monstres bougent, tout
-        // bug »). Des cibles immobiles, abattues à distance, ne peuvent
-        // structurellement plus produire ce ressenti — la vie individualisée
-        // (§3.1) reste utile dès qu'un vrai danger mobile sera réintroduit.
+        // Revenu à des cibles statiques : `ai_chaser` (poursuite active) a été
+        // retiré de la carte embarquée — la poursuite active reste perçue
+        // comme un bug par un joueur solo qui ne s'attend pas à des monstres
+        // mobiles (cf. docs/audits/app-network.md). Des cibles immobiles,
+        // abattues à distance, ne peuvent structurellement plus produire ce
+        // ressenti — la vie individualisée (§3.1) reste utile dès qu'un vrai
+        // danger mobile sera réintroduit.
         assert!(
             monsters.iter().all(|o| o.ai_chaser.is_none()),
             "les monstres de la carte multijoueur doivent rester des cibles \

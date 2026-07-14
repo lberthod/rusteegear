@@ -45,16 +45,11 @@ struct App {
 /// opposées. Fonction pure, testable sans dépendre de winit ou d'une fenêtre
 /// réelle.
 ///
-/// **Correctif (2026-07-12, déplacements WASD)** : l'ancien code assignait
-/// directement `v` (0.0 ou 1.0 selon pressé/relâché) à l'axe pour la touche
-/// qui venait de changer, sans tenir compte de l'autre touche du même axe.
-/// Conséquence concrète : tenir A (gauche, axe=-1), puis appuyer D (droite,
-/// axe=+1) pendant que A est encore enfoncée, puis relâcher D — l'axe
-/// retombait à 0 (D relâchée écrit `v=0.0` sans condition) au lieu de revenir
-/// à -1 (A est pourtant toujours enfoncée). Ce bug rendait les changements de
-/// direction rapides (fréquents en jeu) imprécis/saccadés. En recalculant
-/// l'axe à partir de l'état actuel des **deux** touches à chaque changement,
-/// le résultat est toujours cohérent avec ce qui est réellement enfoncé.
+/// Recalcule l'axe à partir de l'état actuel des **deux** touches à chaque
+/// changement, plutôt que d'assigner directement la valeur de la seule touche
+/// qui vient de changer — sinon relâcher une touche opposée à une autre
+/// encore enfoncée remettrait l'axe à 0 au lieu de revenir à la direction
+/// encore tenue (cf. docs/audits/misc.md pour le bug concret que ça évite).
 fn axis_from_held(negative: bool, positive: bool) -> f32 {
     match (negative, positive) {
         (true, false) => -1.0,
@@ -222,11 +217,11 @@ impl ApplicationHandler for App {
             // (egui) ne l'a pas repéré cette frame précise. Un appui immobile sur
             // un bouton (la croix directionnelle, contrairement au joystick, ne
             // génère quasiment aucun `TouchPhase::Moved` une fois le doigt posé)
-            // peut laisser l'état « survolé/enfoncé » d'egui en retard d'une frame
-            // : sans cette garde, ce trou laissait passer le toucher jusqu'à
-            // l'orbite caméra, qui bougeait la vue au lieu de déplacer le
-            // personnage (constaté en test réel sur l'APK, 2026-07-12). L'orbite
-            // tactile reste réservée à l'éditeur/l'aperçu (sans contrôles mobiles).
+            // peut laisser l'état « survolé/enfoncé » d'egui en retard d'une frame :
+            // sans cette garde, ce trou laisserait passer le toucher jusqu'à
+            // l'orbite caméra, qui bougerait la vue au lieu de déplacer le
+            // personnage. L'orbite tactile reste réservée à l'éditeur/l'aperçu
+            // (sans contrôles mobiles).
             WindowEvent::Touch(touch) if !(self.state.player && self.state.scene.mobile.any()) => {
                 self.handle_touch(touch);
             }
@@ -316,9 +311,9 @@ impl ApplicationHandler for App {
                         inp.key_move.0 = axis_from_held(arrow_left, arrow_right);
                         inp.key_move.1 = axis_from_held(arrow_down, arrow_up);
                         // WASD : contrôles « tank », indépendants de la caméra. A/D
-                        // tournent le personnage sur lui-même (A = droite, D = gauche —
-                        // demandé le 2026-07-12) plutôt que de le faire strafer ; W/S
-                        // avancent/reculent le long de son orientation *actuelle* (cf.
+                        // tournent le personnage sur lui-même (A = droite, D = gauche)
+                        // plutôt que de le faire strafer ; W/S avancent/reculent le
+                        // long de son orientation *actuelle* (cf.
                         // `AppState::advance_play`). Tourner à droite fait décroître le
                         // yaw (cf. `Physics::face_direction` : yaw=0 pointe vers -Z, et
                         // tourner vers +X, à droite, correspond à un yaw négatif).
@@ -430,7 +425,7 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
 
-    // Sauvegarde de partie (Sprint 98) : seule façon d'obtenir un dossier écrivable
+    // Sauvegarde de partie : seule façon d'obtenir un dossier écrivable
     // garanti sur Android (`$HOME` n'existe pas) — posé une fois, avant tout accès à
     // `assets::user_dir()` (`AppState::save_game`/`load_game`, en cours de Play).
     match android_app.internal_data_path() {

@@ -164,15 +164,15 @@ pub struct AppState {
     tapped_obj: Option<usize>,
     /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
     sim_accumulator: f32,
-    /// Multiplicateur du temps simulé (Sprint 81) : 1.0 = normal, 0 = figé, &gt;1 = accéléré.
+    /// Multiplicateur du temps simulé : 1.0 = normal, 0 = figé, &gt;1 = accéléré.
     /// N'affecte que le `dt` consommé par la physique/les scripts, jamais le FPS affiché
     /// ni le pas fixe lui-même (`FIXED_DT` reste 1/60 s : seul le nombre de pas exécutés
     /// par frame change). Utile pour déboguer la physique et le réseau au ralenti.
     pub time_scale: f32,
-    /// Pas unique demandé pendant la pause (Sprint 81, cf. `request_step`) : consommé
+    /// Pas unique demandé pendant la pause (cf. `request_step`) : consommé
     /// (remis à `false`) au tout début du prochain `advance_play`.
     step_requested: bool,
-    /// Segments de debug drawing (Sprint 83) : (début, fin, couleur), accumulés pendant la
+    /// Segments de debug drawing : (début, fin, couleur), accumulés pendant la
     /// frame par le picking et le gameplay (`debug_line`/`debug_box`/`debug_sphere`), lus et
     /// vidés par `Renderer::render` après dessin — jamais persistants au-delà d'une frame.
     pub debug_lines: Vec<(Vec3, Vec3, [f32; 3])>,
@@ -181,7 +181,7 @@ pub struct AppState {
     /// rendu (cf. `advance_play`) : le rendu affiche un mélange des deux pondéré par
     /// l'accumulateur, au lieu de la dernière pose brute — sans quoi une frame affiche
     /// tantôt 0, tantôt 2 pas de simulation selon l'alignement rendu/60 Hz, un
-    /// à-coup visible en continu (« judder », constaté : déplacement « pas fluide »).
+    /// à-coup visible en continu (« judder »).
     sim_prev_poses: Vec<(Vec3, Quat, Vec3)>,
     /// Poses après le **dernier** pas de simulation — l'état « vrai » de la simulation,
     /// restauré avant chaque nouveau pas (cf. `restore_sim_poses` : les transforms
@@ -198,7 +198,7 @@ pub struct AppState {
     lost: bool,
     /// Score : nombre total de pièces ramassées dans la partie (bonus respawn inclus).
     score: u32,
-    /// File d'événements de gameplay (Sprint 93) : noms émis pendant le tick courant
+    /// File d'événements de gameplay : noms émis pendant le tick courant
     /// (par un script via `emit("nom")`, ou par le moteur — ex. `score:N` à chaque
     /// point marqué), **délivrés aux scripts au tick fixe suivant** via
     /// `on_event("nom")` puis jetés — un événement se consomme en un tick, il ne
@@ -207,13 +207,13 @@ pub struct AppState {
     /// intra-tick : peu importe quel objet émet ou écoute en premier dans la boucle
     /// des scripts, tous les auditeurs voient l'événement au même tick.
     game_events: Vec<String>,
-    /// Zones de déclenchement actives au tick **précédent** (Sprint 102, `sim_step`) :
+    /// Zones de déclenchement actives au tick **précédent** (cf. `sim_step`) :
     /// indices d'objets `trigger` en contact avec le joueur au tick d'avant. Sert à
     /// détecter la sortie (`obj.exited`) — le tick où un objet quitte cet ensemble sans
     /// y être revenu — plutôt que de la déduire uniquement de `obj.triggered` qui ne
     /// dit que « en contact maintenant », jamais « vient de cesser de l'être ».
     trigger_prev: std::collections::HashSet<usize>,
-    /// Variables de script persistantes (Sprint 98), lues/écrites en Lua via
+    /// Variables de script persistantes, lues/écrites en Lua via
     /// `save.get("clé")`/`save.set("clé", valeur)` — contrairement à `game_events`,
     /// ne se vide jamais toute seule : c'est l'état que `runtime::savegame::SaveGame`
     /// capture/restaure (avec le score et les positions). Global au jeu, pas par objet
@@ -236,7 +236,7 @@ pub struct AppState {
     /// config persistée à chaque entrée en Play, pilote le nombre de lumières
     /// ponctuelles envoyées au shader (perf en mode interactif « Basse » qualité).
     pub render_quality: crate::app::build_config::RenderQuality,
-    /// Bloom activé pour ce build (Sprint 91, `build_config::BuildConfig::bloom`) :
+    /// Bloom activé pour ce build (`build_config::BuildConfig::bloom`) :
     /// relu comme `render_quality` ci-dessus. Combiné à
     /// `RenderQuality::bloom_enabled()` (opt-out automatique sur qualité « Basse ») —
     /// les deux doivent être vrais pour que le renderer calcule le bloom.
@@ -278,14 +278,14 @@ pub struct AppState {
     /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
     /// la frame suivante).
     stagger: Vec<(usize, Vec3, f32)>,
-    /// Joueurs réseau connectés (cf. `multiplayer.rs`, Sprint 55) : indice de
+    /// Joueurs réseau connectés (cf. `multiplayer.rs`) : indice de
     /// l'objet de scène que chacun pilote, dans `scene.objects`.
     network_players: HashMap<crate::net::protocol::PlayerId, usize>,
     /// Dernier `Input` reçu de chaque joueur réseau (remplacé, pas cumulé : le
     /// client renvoie son état complet à chaque message).
     network_inputs: HashMap<crate::net::protocol::PlayerId, multiplayer::NetworkInput>,
     /// Temps de recharge (s) restant avant la prochaine attaque possible de
-    /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`, Sprint 60).
+    /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`).
     network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
     /// Vie individualisée de chaque joueur réseau (0..1, cf. `app::health`,
     /// GAMEDESIGN_EN_LIGNE.md §3.1) : remplace le champ scalaire unique
@@ -330,7 +330,7 @@ pub struct AppState {
     /// solo entend ses sons directement, il n'a personne à prévenir).
     pending_net_events: Vec<crate::net::protocol::GameEvent>,
     /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
-    /// a rejoint une partie en ligne. Desktop + Android (Sprint 65) : `net::client`
+    /// a rejoint une partie en ligne. Desktop + Android seulement : `net::client`
     /// dépend de `tokio`, pas encore ciblé sur iOS (cf. `net/mod.rs`).
     #[cfg(not(target_os = "ios"))]
     net_client: Option<crate::net::client::NetClient>,
@@ -351,11 +351,8 @@ pub struct AppState {
     /// que rapportée par le serveur — même mécanisme d'interpolation que les
     /// fantômes des autres joueurs (`RemoteEntity`). Sert de référence
     /// autoritative pour la réconciliation (`apply_local_network_position`) :
-    /// le joueur local reste piloté par prédiction immédiate (`sim_step`,
-    /// inchangé), le serveur ne corrige que si l'écart dépasse
-    /// `interpolation::SNAP_THRESHOLD` (cf. Sprint 54/2026-07-12 pour
-    /// l'historique de ce choix, ce commentaire décrivait encore l'ancien
-    /// comportement « sans prédiction » avant correction).
+    /// le joueur local reste piloté par prédiction immédiate (`sim_step`), le
+    /// serveur ne corrige que si l'écart dépasse `interpolation::SNAP_THRESHOLD`.
     #[cfg(not(target_os = "ios"))]
     net_local_interp: crate::net::interpolation::RemoteEntity,
     /// Dernière vie connue du joueur local (0..1, cf. `app::health`,
@@ -376,23 +373,23 @@ pub struct AppState {
     /// position prédite *instantanée* la déclare « désynchronisée » dès qu'on bouge
     /// (écart ≈ vitesse × latence ≈ 1 m au-delà de `SNAP_THRESHOLD` à 4,5 m/s sur le
     /// VPS réel) — d'où une correction continue qui freinait et faisait trembler le
-    /// personnage en pleine course (constaté en vidéo, 2026-07-12). La position
+    /// personnage en pleine course. La position
     /// serveur est donc validée contre la **trajectoire récente** : si elle est
     /// proche d'un point où l'on est réellement passé, on est en phase (le serveur
     /// est juste en retard), pas de correction.
     #[cfg(not(target_os = "ios"))]
     net_local_history: std::collections::VecDeque<(std::time::Instant, Vec3)>,
-    /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur (Sprint 68,
-    /// `SPRINTNETWORK.md`) : `poll_network` est appelée une fois par frame de
-    /// rendu, potentiellement bien au-dessus du tick serveur — ce champ sert
-    /// à plafonner le débit d'envoi à `network_client::INPUT_SEND_INTERVAL`
-    /// plutôt que d'envoyer un message par frame affichée.
+    /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur : `poll_network`
+    /// est appelée une fois par frame de rendu, potentiellement bien au-dessus du
+    /// tick serveur — ce champ sert à plafonner le débit d'envoi à
+    /// `network_client::INPUT_SEND_INTERVAL` plutôt que d'envoyer un message par
+    /// frame affichée.
     #[cfg(not(target_os = "ios"))]
     net_last_input_sent: Option<std::time::Instant>,
     /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
     /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
-    /// créditer la progression au bon compte (Sprint 57). `None` = partie
-    /// anonyme, sans compte.
+    /// créditer la progression au bon compte. `None` = partie anonyme, sans
+    /// compte.
     firebase_uid: Option<String>,
     /// Une requête Firebase (sign in/up) est en cours (évite d'en empiler
     /// plusieurs si l'utilisateur clique deux fois).
@@ -428,7 +425,7 @@ pub struct AppState {
     pub show_grid: bool,
     /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
     pub snap: bool,
-    /// Vue de debug du rendu (Sprint 83) : Éclairé/Normales/Profondeur.
+    /// Vue de debug du rendu : Éclairé/Normales/Profondeur.
     pub debug_view: DebugView,
     pub camera: OrbitCamera,
 
@@ -511,7 +508,7 @@ pub enum GizmoMode {
     Scale,
 }
 
-/// Vue de debug du rendu principal (Sprint 83) : remplace l'éclairage par une
+/// Vue de debug du rendu principal : remplace l'éclairage par une
 /// visualisation directe d'une grandeur du pipeline. Encodé en `f32` (0/1/2) dans un canal
 /// inutilisé de l'uniform d'éclairage (`SceneUniform::ambient.y`) plutôt que d'agrandir
 /// l'uniform — cf. `write_uniforms` et `main.wgsl`.
@@ -947,7 +944,7 @@ impl AppState {
 
         // En pause : on reste en mode Play (snapshot conservé) mais on gèle la
         // simulation (ni scripts, ni physique, ni avance du temps) — sauf si un pas
-        // unique a été demandé (Sprint 81, cf. `request_step`) : dans ce cas on laisse
+        // unique a été demandé (cf. `request_step`) : dans ce cas on laisse
         // passer exactement cette frame pour avancer d'un pas fixe, puis on regèle.
         let step_once = self.paused && self.step_requested;
         self.step_requested = false;
@@ -956,12 +953,12 @@ impl AppState {
             return;
         }
 
-        // --- Simulation découplée du rendu : pas de temps FIXE (Sprint 45) ---
+        // --- Simulation découplée du rendu : pas de temps FIXE ---
         // On accumule le temps réel écoulé et on simule par incréments fixes, quel que
         // soit le framerate → physique et scripts déterministes, indépendants du FPS.
         const FIXED_DT: f32 = 1.0 / 60.0;
         const MAX_SUBSTEPS: u32 = 5;
-        // Time scale (Sprint 81) : n'affecte que le temps *consommé* par la simulation,
+        // Time scale : n'affecte que le temps *consommé* par la simulation,
         // jamais `dt` lui-même (déjà utilisé ci-dessus pour le FPS affiché) ni `FIXED_DT`.
         // Pas unique en pause : force exactement un pas, indépendamment de `time_scale`
         // (`self.sim_accumulator` vaut 0 en entrant ici, cf. le early-return ci-dessus
@@ -987,7 +984,7 @@ impl AppState {
             for _ in 0..steps {
                 self.sim_step(FIXED_DT);
             }
-            // --- Interpolation de rendu (fluidité du déplacement, 2026-07-12) ---
+            // --- Interpolation de rendu ---
             // La simulation avance par pas fixes de 1/60 s, mais les frames de rendu
             // ne s'alignent jamais exactement dessus (écran 120 Hz, gigue de frame…) :
             // afficher la dernière pose brute donne un mouvement saccadé (« judder »,
@@ -1092,8 +1089,7 @@ impl AppState {
 
         // Position réseau du joueur local : appliquée *après* la physique (cf. sa
         // doc) pour ne pas être aussitôt écrasée par `sim_step`, qui recalculerait
-        // sinon une position légèrement différente à partir de l'ancienne — d'où
-        // le dédoublement visuel constaté en test réel avant ce correctif.
+        // sinon une position légèrement différente à partir de l'ancienne.
         self.apply_local_network_position();
 
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
@@ -1113,8 +1109,7 @@ impl AppState {
             // (toujours au centre de l'écran) pointe dans la direction de VUE de la
             // caméra, pas celle du TIR (`aim_yaw`, l'orientation du personnage) — les
             // deux divergent dès qu'on tourne en tank (A/D) sans faire pivoter la
-            // caméra à la souris, qui n'existe pas au tactile. Signalé en jeu réel,
-            // 2026-07-13 : « le réticule ne suit pas quand j'avance ». Repos des
+            // caméra à la souris, qui n'existe pas au tactile. Repos des
             // autres démos (joystick, plateformes) intentionnellement inchangé : la
             // caméra libre indépendante du personnage y est voulue, pas un défaut.
             if self
@@ -1154,21 +1149,21 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
-        // Avance la lecture des clips d'animation squelettale (Sprint 87) : indépendant
+        // Avance la lecture des clips d'animation squelettale : indépendant
         // des scripts/tap actions ci-dessous — un objet skinné anime, script ou pas.
-        // Le bouclage lui-même vit dans `Clip::sample_joint` (Sprint 85), pas ici.
-        // Marqueurs temporels (Sprint 99) : accumulés ici, délivrés aux scripts **ce
+        // Le bouclage lui-même vit dans `Clip::sample_joint`, pas ici.
+        // Marqueurs temporels : accumulés ici, délivrés aux scripts **ce
         // même tick** (fusionnés dans `events_in` plus bas) — contrairement aux
-        // événements du Sprint 93 qui attendent le tick suivant pour rester
-        // indépendants de l'ordre des scripts, cette boucle-ci s'exécute entièrement
-        // avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
+        // événements de gameplay (`game_events`) qui attendent le tick suivant pour
+        // rester indépendants de l'ordre des scripts, cette boucle-ci s'exécute
+        // entièrement avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
         let mut anim_notify_events: Vec<String> = Vec::new();
         let scene = &mut self.scene;
         for obj in scene.objects.iter_mut() {
             if let Some(anim) = obj.animation.as_mut() {
                 let prev_time = anim.time;
                 anim.time += dt * anim.speed;
-                // Fondu enchaîné (Sprint 87) : le clip quitté continue de jouer pendant
+                // Fondu enchaîné : le clip quitté continue de jouer pendant
                 // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
                 // `CROSSFADE_SECONDS` — au-delà, plus rien à faire (transition terminée,
                 // `prev_clip` ignoré par le rendu tant que `blend == 1.0`).
@@ -1216,7 +1211,7 @@ impl AppState {
             }
             None => std::collections::HashSet::new(),
         };
-        // Sortie de zone (Sprint 102) : objets `trigger` qui étaient en contact au tick
+        // Sortie de zone : objets `trigger` qui étaient en contact au tick
         // précédent (`trigger_prev`) et ne le sont plus ce tick-ci — exposé aux scripts
         // via `obj.exited`, symétrique de `obj.triggered`. Calculé avant de remplacer
         // `trigger_prev` par `triggered` (sinon la différence serait toujours vide).
@@ -1224,11 +1219,11 @@ impl AppState {
             self.trigger_prev.difference(&triggered).copied().collect();
         self.trigger_prev = triggered.clone();
         let mut vibrations: Vec<f32> = Vec::new();
-        // Événements de gameplay (Sprint 93) : ceux émis au tick précédent (scripts ou
+        // Événements de gameplay : ceux émis au tick précédent (scripts ou
         // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
         // de ce tick s'accumulent dans `events_out` et seront délivrés au suivant.
         let mut events_in = std::mem::take(&mut self.game_events);
-        // Marqueurs d'animation (Sprint 99) franchis plus haut, livrés ce même tick.
+        // Marqueurs d'animation franchis plus haut, livrés ce même tick.
         events_in.extend(anim_notify_events);
         let mut events_out: Vec<String> = Vec::new();
         // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
@@ -1243,7 +1238,7 @@ impl AppState {
             .iter()
             .map(|o| o.transform.position)
             .collect();
-        // `find_tag` (Sprint 97) : instantané pris **avant** la boucle, pas de vue
+        // `find_tag` : instantané pris **avant** la boucle, pas de vue
         // vivante sur `scene.objects` (déjà emprunté mutable ci-dessous). Un objet
         // masqué ce tick (destroy) ou pas encore spawné n'y figure pas.
         let tagged: Vec<(String, Vec3)> = self
@@ -1253,7 +1248,7 @@ impl AppState {
             .filter(|o| o.visible && !o.tag.is_empty())
             .map(|o| (o.tag.clone(), o.transform.position))
             .collect();
-        // `spawn()`/`obj:destroy()` (Sprint 97) : accumulés pendant la boucle des
+        // `spawn()`/`obj:destroy()` : accumulés pendant la boucle des
         // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
         // mutable par l'itération ci-dessous.
         let mut spawn_requests: Vec<(String, Vec3)> = Vec::new();
@@ -1319,7 +1314,7 @@ impl AppState {
             ) {
                 log::error!("Script '{}' : {e}", obj.name);
             }
-            // `obj:destroy()` (Sprint 97) : suppression douce, cf. sa doc dans
+            // `obj:destroy()` : suppression douce, cf. sa doc dans
             // `run_script` — jamais un retrait de `scene.objects`.
             if destroy_requested {
                 obj.visible = false;
@@ -1329,7 +1324,7 @@ impl AppState {
         // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
         // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
         self.game_events = events_out;
-        // `spawn()` (Sprint 97) : appliqué maintenant que `scene.objects` n'est plus
+        // `spawn()` : appliqué maintenant que `scene.objects` n'est plus
         // emprunté — ajout en fin de tableau (jamais d'insertion/retrait ailleurs),
         // les indices existants (réseau, undo, IA) restent donc valides. Physique
         // reconstruite une seule fois si des objets ont réellement été ajoutés (coûte
@@ -1397,7 +1392,7 @@ impl AppState {
             let (tilt, space) = (inp.tilt, inp.jump);
             let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
             let mut any_jump = false;
-            // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`, Sprint 55) :
+            // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`) :
             // chacun a son propre `NetworkInput`, distinct de `self.input_state`
             // (qui ne pilote que l'objet « joueur local », clavier/tactile/gyro de
             // cette instance — ex. l'éditeur desktop, ou un client sans réseau).
@@ -1420,8 +1415,7 @@ impl AppState {
             // dont on impose la rotation à chaque frame via `RigidBody::set_rotation`
             // déstabilisait le solveur de contacts de rapier — vibrations visibles
             // dès qu'on combinait beaucoup de rotation et de déplacement en même
-            // temps (constaté en test réel, 2026-07-12 : « du bruit, ça bug »).
-            // Inutile physiquement de toute façon : le collider est une capsule,
+            // temps. Inutile physiquement de toute façon : le collider est une capsule,
             // parfaitement symétrique autour de l'axe Y, donc une rotation de lacet
             // ne change jamais sa géométrie de collision.
             let mut player_facing: Vec<(usize, f32)> = Vec::new();
@@ -1455,7 +1449,7 @@ impl AppState {
                 }
                 // Avance/recul « tank » (W/S clavier) : le long de l'orientation
                 // *actuelle* du personnage plutôt que de la caméra, contrairement au
-                // reste du déplacement (demandé le 2026-07-12). `-sin(yaw)`/`-cos(yaw)`
+                // reste du déplacement. `-sin(yaw)`/`-cos(yaw)`
                 // = même formule que l'inverse de `camera_relative_move` (yaw=0 ⇒ avant
                 // = -Z, cf. `Physics::face_direction`).
                 if ctrl.input && net_input.is_none() && key_thrust != 0.0 {
@@ -1475,11 +1469,8 @@ impl AppState {
                 // `network_client::apply_local_network_position`), l'écraser ici avec
                 // notre propre calcul créerait un conflit d'autorité.
                 // Joueur réseau : son orientation vient de l'`aim_yaw` de son
-                // `Input` — celle que **son** client prédit et affiche (Sprint
-                // 79). Avant ça, aucun code ne faisait pivoter les objets des
-                // joueurs réseau côté serveur : fantômes figés vers -Z sur les
-                // écrans des autres, et tir à distance partant de l'orientation
-                // de spawn au lieu de celle que le tireur voyait.
+                // `Input` — celle que **son** client prédit et affiche, pas un
+                // recalcul local qui entrerait en conflit avec elle.
                 if ctrl.input
                     && let Some(n) = net_input
                 {
@@ -1500,14 +1491,14 @@ impl AppState {
                         // W/S « tank » : le personnage garde son orientation, ne tourne
                         // jamais pour « faire face » au déplacement — sinon reculer
                         // (vecteur de vitesse pointant vers l'arrière) le ferait pivoter
-                        // à 180° en continu (bug corrigé le 2026-07-12).
+                        // à 180° en continu.
                         cur_yaw
                     } else if vx * vx + vz * vz > 1e-6 {
                         // Rotation vers la direction de déplacement en amorti
                         // **exponentiel** (rapide au départ, doux à l'approche) plutôt
                         // qu'à vitesse constante + arrêt sec (`rotate_towards`) : la
                         // vitesse angulaire constante donnait un pivot mécanique qui
-                        // « claquait » en fin de course (audit qualité, 2026-07-12).
+                        // « claquait » en fin de course.
                         let target_yaw = (-vx).atan2(-vz);
                         rotate_towards_smooth(cur_yaw, target_yaw, ctrl.turn_speed, dt)
                     } else {
@@ -1538,9 +1529,8 @@ impl AppState {
                         .map(|(i, &t)| (i, (t - obj.transform.position).length_squared()))
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                         .expect("candidate_targets vérifié non vide ci-dessus");
-                    // Portée de détection, **réseau uniquement** (audit en conditions
-                    // réelles, 2026-07-13, GAMEDESIGN_EN_LIGNE.md) : le plafond
-                    // ci-dessus étale l'ARRIVÉE des chasseurs dans le temps, mais avec
+                    // Portée de détection, **réseau uniquement** (GAMEDESIGN_EN_LIGNE.md) :
+                    // le plafond ci-dessus étale l'ARRIVÉE des chasseurs dans le temps, mais avec
                     // un seul joueur solo connecté, il n'empêche pas la convergence
                     // *finale* — au bout d'assez de temps, tous les monstres de la
                     // carte se relaient jusqu'à l'unique cible, même partis de l'autre
@@ -1561,11 +1551,10 @@ impl AppState {
                     }
                     by_target.entry(target_i).or_default().push((idx, dist_sq));
                 }
-                // Plafond de chasseurs actifs par cible (audit en conditions réelles,
-                // 2026-07-13) : sans lui, TOUS les monstres visibles convergent au même
-                // instant sur l'unique joueur présent (le cas le plus courant en test
-                // solo) — vu en jeu réel, 4-5 monstres acculant un joueur contre un mur
-                // en quelques secondes, sans la moindre fenêtre pour riposter ou fuir.
+                // Plafond de chasseurs actifs par cible : sans lui, TOUS les monstres
+                // visibles convergent au même instant sur l'unique joueur présent (le cas
+                // le plus courant en solo), acculant le joueur contre un mur en quelques
+                // secondes sans la moindre fenêtre pour riposter ou fuir.
                 // Recalculé chaque frame par distance : seuls les `MAX_ACTIVE_CHASERS_
                 // PER_TARGET` chasseurs les plus proches d'une cible donnée avancent
                 // réellement ce tick ; les autres restent en place (toujours visibles/
@@ -1762,10 +1751,7 @@ impl AppState {
                 // logique de dégâts/couleur), donc sans cette exclusion, un
                 // monstre pouvait être désigné « le joueur » dès qu'aucun objet
                 // pilotable n'était visible (ex. avant qu'un joueur réseau ne
-                // rejoigne un serveur headless) — trouvé en testant réellement
-                // le serveur multijoueur, cf. AUDIT_MMORPG.md : les monstres se
-                // « déclenchaient » alors entre eux et vidaient la vie partagée
-                // en quelques secondes, sans le moindre joueur connecté.
+                // rejoigne un serveur headless), cf. AUDIT_MMORPG.md.
                 self.scene.objects.iter().position(|o| {
                     o.visible
                         && !o.script.trim().is_empty()
@@ -1801,8 +1787,7 @@ fn scene_path() -> String {
 
 /// Angle de plongée (radians) de la caméra de suivi par défaut : resserré derrière
 /// l'épaule du personnage plutôt que le recul plus « isométrique » d'avant (~35°,
-/// `0.62`) — plus proche d'une vue façon jeu d'action à la troisième personne,
-/// demandé le 2026-07-12 (« vue derrière le personnage… genre FPS vue haut »).
+/// `0.62`) — plus proche d'une vue façon jeu d'action à la troisième personne.
 const DEFAULT_CHASE_PITCH: f32 = 0.75;
 
 /// Recul (mètres) de la caméra de suivi par défaut : plus proche que l'ancien 11.0,
@@ -1821,7 +1806,7 @@ fn script_key(src: &str) -> u64 {
 /// façon caméra de suivi à la Zelda : pousser le joystick « en haut » éloigne le
 /// personnage de la caméra, quelle que soit sa rotation actuelle, plutôt que de
 /// toujours avancer selon les mêmes axes du monde (ce qui rendait le déplacement
-/// incohérent dès que la caméra pivotait — corrigé le 2026-07-12). `yaw = 0`
+/// incohérent dès que la caméra pivotait). `yaw = 0`
 /// laisse `(mx, my)` inchangé (compatible avec le comportement d'origine).
 ///
 /// Appelée à la fois par `sim_step` (prédiction locale du joueur, caméra de *ce*
@@ -1840,7 +1825,7 @@ fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
 /// distincte de `Controller::turn_speed` : ce dernier (10 rad/s) est un taux de
 /// *rattrapage* de l'orientation automatique (amorti exponentiel, la vitesse retombe
 /// en approchant la cible) — tenu en continu comme vitesse brute, il ferait tourner
-/// le personnage à ~570°/s, impossible à doser (audit qualité, 2026-07-12).
+/// le personnage à ~570°/s, impossible à doser.
 /// 3 rad/s ≈ 170°/s : demi-tour en ~1 s, vif mais contrôlable.
 const MANUAL_TURN_SPEED: f32 = 3.0;
 
@@ -1848,19 +1833,18 @@ const MANUAL_TURN_SPEED: f32 = 3.0;
 /// **même** cible en même temps (cf. le bloc de pilotage IA plus haut) : au-delà,
 /// les monstres en surnombre restent en place plutôt que de tous converger d'un
 /// coup — sans ce plafond, un joueur seul face à plusieurs monstres se faisait
-/// acculer contre un mur en quelques secondes, sans fenêtre de riposte (audit en
-/// conditions réelles, 2026-07-13). 2 = toujours une vraie menace à plusieurs
-/// (pas trivialisé à un seul assaillant), sans jamais submerger instantanément.
+/// acculer contre un mur en quelques secondes, sans fenêtre de riposte. 2 = toujours
+/// une vraie menace à plusieurs (pas trivialisé à un seul assaillant), sans jamais
+/// submerger instantanément.
 const MAX_ACTIVE_CHASERS_PER_TARGET: usize = 2;
 
 /// Portée de détection (m) au-delà de laquelle un `AiChaser` reste totalement
 /// immobile, quelle que soit la cible la plus proche parmi `candidate_targets`
-/// (audit en conditions réelles, 2026-07-13 — le plafond ci-dessus étale
-/// l'arrivée des chasseurs dans le temps, mais avec un seul joueur solo,
-/// n'empêche pas la convergence *finale* : au bout d'assez de temps, tous les
-/// monstres de la carte se relaient jusqu'à l'unique cible, même partis de
-/// l'autre bout de l'arène). ~9 m : sur l'arène embarquée (24×24 m, monstres
-/// à ±8 m du centre, joueurs qui apparaissent près du centre), seul 1-2
+/// (le plafond ci-dessus étale l'arrivée des chasseurs dans le temps, mais avec
+/// un seul joueur solo, n'empêche pas la convergence *finale* : au bout d'assez
+/// de temps, tous les monstres de la carte se relaient jusqu'à l'unique cible,
+/// même partis de l'autre bout de l'arène). ~9 m : sur l'arène embarquée (24×24 m,
+/// monstres à ±8 m du centre, joueurs qui apparaissent près du centre), seul 1-2
 /// monstres réagissent tant qu'on reste près du point d'apparition — les
 /// autres ne s'activent que si on s'aventure dans leur secteur.
 const CHASER_DETECT_RANGE: f32 = 9.0;
@@ -1885,7 +1869,7 @@ fn shortest_angle(cur: f32, target: f32) -> f32 {
 /// dt/2 = un pas de dt). Utilisé pour l'orientation du joueur local (cf.
 /// `advance_play`), purement cinématique — n'implique jamais le corps rigide :
 /// forcer une rotation sur un corps en contact avec le décor déstabilisait le
-/// solveur de contacts de rapier (vibrations, corrigé le 2026-07-12).
+/// solveur de contacts de rapier (vibrations).
 fn rotate_towards_smooth(cur: f32, target: f32, rate: f32, dt: f32) -> f32 {
     cur + shortest_angle(cur, target) * (1.0 - (-rate * dt).exp())
 }
@@ -1896,21 +1880,19 @@ fn rotate_towards_smooth(cur: f32, target: f32, rate: f32, dt: f32) -> f32 {
 /// composante) : en diagonale (ex. W+D tenus ensemble), le vecteur résultant
 /// `(1.0, 1.0)` a une longueur de √2 ≈ 1.41, soit un déplacement ~41 % plus
 /// rapide en diagonale qu'en ligne droite — un défaut classique de mouvement
-/// (« diagonal is faster ») qui rend le jeu moins agréable à manier
-/// (demandé le 2026-07-12 : optimiser le ressenti des déplacements).
+/// (« diagonal is faster ») qui rend le jeu moins agréable à manier.
 /// Rayon mort du joystick virtuel (0..1) : en-deçà, l'entrée est ramenée à zéro plutôt
 /// que transmise brute. Un joystick tactile/analogique imparfait ne revient pas
 /// toujours exactement au centre au repos — sans seuil, ce résidu ferait dériver
-/// lentement le personnage même sans action du joueur (demandé le 2026-07-12).
+/// lentement le personnage même sans action du joueur.
 const JOYSTICK_DEADZONE: f32 = 0.15;
 
 /// Écrase `v` à zéro si sa longueur est sous `threshold` (rayon mort), puis
 /// **remappe** la plage utile `[threshold, 1]` vers `[0, 1]` (même direction).
 /// Sans ce remappage, l'entrée sautait d'un coup de 0 à `threshold` en sortant du
 /// rayon mort — un « cran » perceptible au joystick, l'inverse d'un départ
-/// progressif (fluidité du déplacement, 2026-07-12). Avec lui, la vitesse démarre
-/// à zéro exactement au bord du rayon mort et monte continûment jusqu'au plein
-/// débattement.
+/// progressif. Avec lui, la vitesse démarre à zéro exactement au bord du rayon
+/// mort et monte continûment jusqu'au plein débattement.
 fn apply_deadzone(v: (f32, f32), threshold: f32) -> (f32, f32) {
     let len = (v.0 * v.0 + v.1 * v.1).sqrt();
     if len < threshold {
@@ -2008,22 +1990,22 @@ fn run_script(
     obj.set("b", color[2])?;
     obj.set("tapped", tapped)?;
     obj.set("triggered", triggered)?;
-    // `obj.exited` (Sprint 102) : symétrique de `triggered` — vrai le tick où le
+    // `obj.exited` : symétrique de `triggered` — vrai le tick où le
     // contact avec cette zone `trigger` vient de cesser (cf. `AppState::trigger_prev`
     // dans `sim_step`), pas juste « pas en contact » (qui vaudrait aussi tant que le
     // joueur n'est jamais entré).
     obj.set("exited", exited)?;
-    // `obj.anim` (Sprint 87) : clip actuellement joué, lu en écriture après l'appel pour
+    // `obj.anim` : clip actuellement joué, lu en écriture après l'appel pour
     // piloter la FSM depuis Lua (`obj.anim = "run"` démarre un fondu enchaîné vers ce
     // clip). N'existe que pour les objets skinnés ; ignoré silencieusement sinon, comme
     // `hud` reste vide tant qu'aucun script n'y touche.
     obj.set("anim", anim.as_ref().map(|a| a.clip.as_str()).unwrap_or(""))?;
 
-    // `obj:destroy()` (Sprint 97) : suppression **douce** — `visible = false`, comme
+    // `obj:destroy()` : suppression **douce** — `visible = false`, comme
     // les monstres vaincus (`Scene::attack_at`) ou les collectibles ramassés
     // (`Scene::collect_at`) — pas un vrai retrait de `scene.objects` (ça invaliderait
     // les indices que d'autres systèmes retiennent d'une frame à l'autre : réseau,
-    // undo, IA — le refactor à handles générationnels du Sprint 94, pas encore fait).
+    // undo, IA — pas de handles générationnels pour l'instant).
     // Appelée en syntaxe méthode (`obj:destroy()`) : Lua passe `obj` lui-même comme
     // premier argument, ignoré ici (la fermeture sait déjà quel objet elle sert).
     let destroy_tbl = lua.create_table()?;
@@ -2079,7 +2061,7 @@ fn run_script(
         Ok(())
     })?;
 
-    // `debug.line(x1,y1,z1,x2,y2,z2,r,g,b)` (Sprint 83) : visualise un raycast, une ligne
+    // `debug.line(x1,y1,z1,x2,y2,z2,r,g,b)` : visualise un raycast, une ligne
     // de vue, une trajectoire — visible une frame, comme `AppState::debug_line` côté Rust.
     // Accumule un segment de 9 nombres par appel, décodé après `func.call`.
     let debug_tbl = lua.create_table()?;
@@ -2113,7 +2095,7 @@ fn run_script(
     let debug_api = lua.create_table()?;
     debug_api.set("line", debug_line)?;
 
-    // Événements de gameplay (Sprint 93). `emit("nom")` accumule (délivré à tous les
+    // Événements de gameplay. `emit("nom")` accumule (délivré à tous les
     // scripts au tick suivant, cf. `AppState::game_events`) ; `on_event("nom")` teste
     // les événements reçus ce tick. Un ensemble (nom → true) plutôt qu'une liste à
     // parcourir côté Lua : `on_event` est le geste attendu dans un script — « ce tick,
@@ -2132,13 +2114,13 @@ fn run_script(
         Ok(received.get::<bool>(name.as_str()).unwrap_or(false))
     })?;
 
-    // `spawn(prefab_ref, x, y, z)` (Sprint 97) : accumule une demande (référence de
+    // `spawn(prefab_ref, x, y, z)` : accumule une demande (référence de
     // prefab `asset-id://…`, position), appliquée **après** la boucle des scripts par
     // `AppState::sim_step` — jamais pendant, `scene.objects` est en cours d'itération
     // mutable à ce moment-là. Les nouveaux objets sont ajoutés en fin de tableau : les
     // indices existants (réseau, undo, IA) restent valides, contrairement à une
     // suppression (cf. `obj:destroy()`, volontairement plus prudente pour la même
-    // raison — pas le retrait/réutilisation de slots du Sprint 94, pas encore fait).
+    // raison — pas de retrait/réutilisation de slots pour l'instant).
     let spawn_tbl = lua.create_table()?;
     let spawn_ref = spawn_tbl.clone();
     let spawn = lua.create_function(move |lua, (prefab, x, y, z): (String, f32, f32, f32)| {
@@ -2151,7 +2133,7 @@ fn run_script(
         Ok(())
     })?;
 
-    // `find_tag("nom")` (Sprint 97) : instantané pris **avant** la boucle des scripts
+    // `find_tag("nom")` : instantané pris **avant** la boucle des scripts
     // (`AppState::sim_step`) — un objet tout juste spawné/détruit ce même tick n'y
     // apparaît donc pas encore/plus, disponible seulement au tick suivant. Ne renvoie
     // que la position (pas de référence vivante à l'objet : les scripts n'ont accès
@@ -2174,12 +2156,12 @@ fn run_script(
         Ok(out)
     })?;
 
-    // `save.get("clé")`/`save.set("clé", valeur)` (Sprint 98) : état de script
+    // `save.get("clé")`/`save.set("clé", valeur)` : état de script
     // persistant, capturé par `runtime::savegame::SaveGame` avec le score et les
     // positions. Partagé (pas par objet) : les scripts s'exécutent séquentiellement
     // dans la boucle de `sim_step`, donc un script voit déjà ce qu'un précédent a
     // écrit ce même tick — cohérent avec l'ordre naturel d'exécution, pas besoin
-    // d'un décalage d'un tick comme pour les événements du Sprint 93 (ceux-là
+    // d'un décalage d'un tick comme pour les événements de gameplay (ceux-là
     // *doivent* attendre le tick suivant pour être indépendants de l'ordre des
     // scripts ; ici l'ordre séquentiel est simplement accepté tel quel).
     let vars_cell = std::rc::Rc::new(std::cell::RefCell::new(std::mem::take(vars)));
@@ -2210,7 +2192,7 @@ fn run_script(
     g.set("find_tag", find_tag)?;
     g.set("save", save_api)?;
     g.set("debug", debug_api)?;
-    // `raycast`/`overlap_sphere` (Sprint 102) : requêtes spatiales via le `QueryPipeline`
+    // `raycast`/`overlap_sphere` : requêtes spatiales via le `QueryPipeline`
     // de rapier (`Physics::raycast`/`overlap_sphere`) — capteur de sol (rayon vers le
     // bas), cône de vision (ligne de vue vers une cible trouvée par `find_tag`), etc.
     // Fermetures **scopées** (`lua.scope`, contrairement aux autres fonctions Lua
@@ -2336,7 +2318,7 @@ mod tests {
     /// Nom de prefab unique par appel (horloge + pid) : ces tests écrivent réellement
     /// dans `~/.motor3derust/assets/prefabs/` (comme le ferait l'éditeur), pas de
     /// répertoire de test isolé pour cette brique — cf. le commentaire équivalent dans
-    /// `scene::tests::unique_prefab_name` (Sprint 96).
+    /// `scene::tests::unique_prefab_name`.
     fn unique_test_prefab_name(tag: &str) -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
@@ -2435,7 +2417,7 @@ mod tests {
     fn apply_deadzone_starts_from_zero_at_the_edge_of_the_deadzone() {
         // Continuité au bord du rayon mort : juste au-dessus du seuil, l'entrée doit
         // être quasi nulle (départ progressif), pas sauter d'un coup à ~0.15 — le
-        // « cran » perceptible que le remappage supprime (fluidité, 2026-07-12).
+        // « cran » perceptible que le remappage supprime.
         let (mx, my) = apply_deadzone((JOYSTICK_DEADZONE + 0.01, 0.0), JOYSTICK_DEADZONE);
         let len = (mx * mx + my * my).sqrt();
         assert!(
@@ -2558,8 +2540,7 @@ mod tests {
     fn camera_relative_move_rotates_forward_with_the_camera() {
         // À 90° (caméra tournée d'un quart de tour), « avancer » (my=1) ne doit
         // plus pointer vers -Z mais vers -X : le joystick doit suivre la caméra,
-        // pas rester bloqué sur les axes du monde (demandé le 2026-07-12, façon
-        // caméra de suivi à la Zelda).
+        // pas rester bloqué sur les axes du monde (façon caméra de suivi à la Zelda).
         let (wx, wz) = camera_relative_move(0.0, 1.0, std::f32::consts::FRAC_PI_2);
         assert!((wx - -1.0).abs() < 1e-4, "wx={wx}");
         assert!(wz.abs() < 1e-4, "wz={wz}");
@@ -2590,7 +2571,7 @@ mod tests {
 
     #[test]
     fn step_requested_advances_exactly_one_fixed_tick_while_paused() {
-        // Sprint 81 : le bouton « ⏭ » doit avancer d'exactement un pas fixe en pause,
+        // Le bouton « ⏭ » doit avancer d'exactement un pas fixe en pause,
         // ni plus (pas de rattrapage), ni moins (pas d'attente supplémentaire), puis
         // regeler la simulation tant qu'aucune nouvelle demande n'arrive.
         let mut app = AppState::new();
@@ -2788,7 +2769,7 @@ mod tests {
     #[test]
     fn debug_line_accumulates_and_is_owned_by_the_caller_to_clear() {
         // `AppState` ne se vide jamais elle-même : c'est `Renderer::render` qui lit et
-        // vide `debug_lines` après dessin (Sprint 83) — vérifié ici côté accumulation
+        // vide `debug_lines` après dessin — vérifié ici côté accumulation
         // pure, sans dépendre du GPU.
         let mut app = AppState::new();
         assert!(app.debug_lines.is_empty());
@@ -2965,7 +2946,7 @@ mod tests {
 
     #[test]
     fn script_debug_line_is_read_back_into_debug_out() {
-        // Sprint 83 : `debug.line(...)` côté Lua doit atterrir dans `debug_out`, avec les
+        // `debug.line(...)` côté Lua doit atterrir dans `debug_out`, avec les
         // mêmes coordonnées/couleur que ce que le script a passé — un appel par ligne de
         // script, deux appels ici pour vérifier qu'ils s'accumulent sans s'écraser.
         let lua = Lua::new();
@@ -3011,7 +2992,7 @@ mod tests {
 
     #[test]
     fn script_emit_lands_in_events_out_and_on_event_reads_events_in() {
-        // Sprint 93 : `emit("x")` doit atterrir dans `events_out` (délivré au tick
+        // `emit("x")` doit atterrir dans `events_out` (délivré au tick
         // suivant par `sim_step`), et `on_event` doit refléter exactement `events_in`
         // — vrai pour un nom reçu, faux pour tout le reste (y compris ce qu'on est en
         // train d'émettre : pas de livraison intra-tick, cf. doc de `game_events`).
@@ -3060,7 +3041,7 @@ mod tests {
 
     #[test]
     fn a_door_opens_on_score_3_without_direct_coupling() {
-        // Livrable du Sprint 93, bout en bout (App réel) : une « porte » scriptée
+        // Bout en bout (App réel) : une « porte » scriptée
         // s'ouvre quand le score atteint 3, sans référencer ni les pièces ni le
         // joueur — elle n'écoute que l'événement `score:3` émis par le moteur
         // (`add_score`). Les 3 pièces sont sur le joueur : toutes ramassées le même
@@ -3129,7 +3110,7 @@ mod tests {
 
     #[test]
     fn script_calling_obj_destroy_soft_deletes_via_visible_false() {
-        // Sprint 97 : `obj:destroy()` doit se traduire par `visible = false` — une
+        // `obj:destroy()` doit se traduire par `visible = false` — une
         // suppression douce, pas un retrait de `scene.objects` (cf. la doc de
         // `run_script`, cette dernière casserait les indices retenus ailleurs).
         let mut app = AppState::new();
@@ -3144,13 +3125,13 @@ mod tests {
         app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         assert!(!app.scene.objects[0].visible, "l'objet devait être masqué");
-        // Toujours dans `scene.objects` : ce n'est pas un vrai retrait (Sprint 94, pas fait).
+        // Toujours dans `scene.objects` : ce n'est pas un vrai retrait.
         assert_eq!(app.scene.objects.len(), 1);
     }
 
     #[test]
     fn find_tag_returns_positions_of_matching_visible_objects() {
-        // Sprint 97 : `find_tag` doit renvoyer la position de chaque objet visible
+        // `find_tag` doit renvoyer la position de chaque objet visible
         // portant le tag demandé, aucun autre — testé directement sur `run_script`
         // (pas besoin d'un `AppState` complet pour cette brique).
         let lua = Lua::new();
@@ -3197,7 +3178,7 @@ mod tests {
 
     #[test]
     fn a_spawned_enemy_via_lua_joins_the_scene_and_can_be_found_by_tag() {
-        // Livrable du Sprint 97 : un script peut faire apparaître un ennemi depuis un
+        // Un script peut faire apparaître un ennemi depuis un
         // prefab (`spawn`), et cet ennemi devient trouvable par `find_tag` (au tick
         // suivant : `find_tag` lit un instantané pris avant la boucle des scripts).
         let name = unique_test_prefab_name("ennemi97");
@@ -3234,9 +3215,9 @@ mod tests {
 
     #[test]
     fn lua_coroutines_work_out_of_the_box() {
-        // Sprint 97 : `mlua::Lua::new()` charge la stdlib Lua complète, coroutines
+        // `mlua::Lua::new()` charge la stdlib Lua complète, coroutines
         // incluses — rien à câbler côté moteur, juste à vérifier que ça tourne
-        // réellement (pas seulement supposé), avant de cocher la case du sprint.
+        // réellement.
         let lua = Lua::new();
         let src = "\
             local co = coroutine.create(function()
@@ -3255,7 +3236,7 @@ mod tests {
 
     #[test]
     fn script_save_set_persists_and_save_get_reads_it_back() {
-        // Sprint 98 : `save.set`/`save.get` doivent partager le même état que
+        // `save.set`/`save.get` doivent partager le même état que
         // `AppState::lua_vars` — c'est cet état que `SaveGame` capture/restaure.
         let lua = Lua::new();
         let src = "save.set('pv_max', 42.0); obj.x = save.get('pv_max')";
@@ -3293,7 +3274,7 @@ mod tests {
 
     #[test]
     fn saving_and_loading_a_game_restores_score_position_and_lua_vars() {
-        // Le livrable du Sprint 98 : la progression (score, positions, variables de
+        // La progression (score, positions, variables de
         // script) doit survivre à une sauvegarde puis un chargement — testé bout en
         // bout via `AppState::save_game`/`load_game`, qui écrivent réellement dans
         // `user://` (comme le ferait le jeu réel sur desktop ou Android).
@@ -3340,7 +3321,7 @@ mod tests {
 
     #[test]
     fn an_anim_notify_gates_the_combat_hit_window() {
-        // Livrable du Sprint 99 : le coup ne doit « toucher » (ici : le script met
+        // Le coup ne doit « toucher » (ici : le script met
         // `in_window` à 1 via `save.set`) que pendant la fenêtre d'animation délimitée
         // par deux marqueurs (`hit_open`/`hit_close`), pas avant, pas après.
         let mut imported = crate::scene::ImportedMesh {
@@ -3418,7 +3399,7 @@ mod tests {
 
     #[test]
     fn script_setting_obj_anim_starts_a_crossfade() {
-        // Sprint 87 (exposition Lua) : `obj.anim = "run"` doit atterrir dans
+        // Exposition Lua : `obj.anim = "run"` doit atterrir dans
         // `AnimationState` via `set_clip`, avec le fondu enchaîné qu'il déclenche
         // (`prev_clip` retient l'ancien clip, `blend` repart à 0).
         use crate::scene::AnimationState;
@@ -4248,12 +4229,9 @@ mod tests {
         );
     }
 
-    /// Audit en conditions réelles (2026-07-13, GAMEDESIGN_EN_LIGNE.md) : un
-    /// joueur solo signalait que « tout » se précipite sur lui en quelques
-    /// secondes — en réalité, 4-5 monstres convergeant tous en même temps sur
-    /// l'unique cible disponible, sans plafond. Vérifie que sur 3 chasseurs
-    /// visant la même cible, seuls les `MAX_ACTIVE_CHASERS_PER_TARGET` (2) plus
-    /// proches avancent réellement ; le 3e reste sur place ce tick.
+    /// Vérifie que sur 3 chasseurs visant la même cible, seuls les
+    /// `MAX_ACTIVE_CHASERS_PER_TARGET` (2) plus proches avancent réellement ;
+    /// le 3e reste sur place ce tick (cf. GAMEDESIGN_EN_LIGNE.md).
     #[test]
     fn only_the_nearest_chasers_up_to_the_cap_advance_on_a_single_target() {
         let mut sol = crate::scene::SceneObject {
@@ -4323,11 +4301,9 @@ mod tests {
         );
     }
 
-    /// Audit en conditions réelles (2026-07-13, GAMEDESIGN_EN_LIGNE.md) : même
-    /// après le plafond par cible, un joueur **réseau** solo signalait que les
-    /// monstres « vont en direction du joueur » quelle que soit sa position
-    /// sur la carte — le plafond étale l'arrivée dans le temps, mais avec une
-    /// seule cible vivante connectée, tous finissent par converger. Vérifie
+    /// Même après le plafond par cible, avec une seule cible réseau vivante
+    /// connectée, les chasseurs finissent par tous converger (le plafond étale
+    /// l'arrivée dans le temps, il ne l'empêche pas). Vérifie
     /// qu'un chasseur **hors de portée de détection** (`CHASER_DETECT_RANGE`)
     /// reste totalement immobile face à un unique joueur réseau, même s'il
     /// serait autrement le seul/le plus proche (donc jamais relégué par le
@@ -5599,7 +5575,7 @@ mod tests {
     fn tank_controls_turn_then_thrust_move_the_player_along_its_own_facing() {
         // Bout en bout : A/D (rotation manuelle) et W/S (avance/recul) doivent piloter le
         // joueur indépendamment de la caméra, contrairement au joystick/flèches
-        // (demandé le 2026-07-12 : contrôles « tank »).
+        // (contrôles « tank »).
         let mut app = AppState::new();
         app.load_controller_demo();
         app.playing = true;
@@ -5654,12 +5630,8 @@ mod tests {
 
     #[test]
     fn tank_controls_reversing_never_spins_the_player_around() {
-        // Bug réel constaté en jeu (2026-07-12) : tenir S en boucle faisait pivoter le
-        // personnage à 180° au lieu de simplement reculer, car le vecteur de vitesse
-        // (pointant vers l'arrière) était passé à `face_direction`, qui tournait alors
-        // le joueur pour lui « faire face » — recalculé chaque frame à partir du
-        // nouveau cap, ça partait en spirale et donnait l'impression de rester
-        // bloqué/tourner sur soi-même. L'orientation doit rester fixe pendant S.
+        // Garde-fou : l'orientation doit rester fixe pendant S (recul), pas se
+        // remettre à tourner vers le vecteur de vitesse (cf. docs/audits/app-mod.md).
         let mut app = AppState::new();
         app.load_controller_demo();
         app.playing = true;
@@ -5692,7 +5664,7 @@ mod tests {
     }
 
     /// Sol plat statique seul (comme `physics::tests::ground_and_wall_scene`, sans le
-    /// mur) — sert au « capteur de sol » scripté en Lua (Sprint 102).
+    /// mur) — sert au « capteur de sol » scripté en Lua.
     fn floor_only_scene() -> Scene {
         let mut scene = Scene::default();
         scene.objects.push(SceneObject {
@@ -5708,8 +5680,8 @@ mod tests {
 
     #[test]
     fn raycast_lua_ground_sensor_reports_hit_point_and_draws_a_debug_line() {
-        // Livrable du Sprint 102 : un « capteur de sol » scripté en Lua — un rayon vers
-        // le bas via `raycast()`, visualisé au debug drawing (Sprint 83) jusqu'au point
+        // Un « capteur de sol » scripté en Lua — un rayon vers
+        // le bas via `raycast()`, visualisé au debug drawing jusqu'au point
         // d'impact renvoyé.
         let scene = floor_only_scene();
         let phys = crate::runtime::physics::Physics::build(&scene);
@@ -5836,7 +5808,7 @@ mod tests {
     }
 
     /// Deux sphères statiques (proche/loin) — sert au « cône de vision » scripté en
-    /// Lua (Sprint 102, détection de proximité avant le test d'angle/ligne de vue).
+    /// Lua (détection de proximité avant le test d'angle/ligne de vue).
     fn near_and_far_spheres_scene() -> Scene {
         let mut scene = Scene::default();
         scene.objects.push(SceneObject {
@@ -5861,7 +5833,7 @@ mod tests {
         // Brique du « cône de vision » : compter ce qui se trouve à portée avant même
         // de tester l'angle — `overlap_sphere()` renvoie un compte, pas une liste
         // d'objets (les scripts n'ont pas de handle direct sur les autres objets,
-        // seulement des positions via `find_tag`, cf. Sprint 97).
+        // seulement des positions via `find_tag`).
         let scene = near_and_far_spheres_scene();
         let phys = crate::runtime::physics::Physics::build(&scene);
         let lua = Lua::new();
@@ -5900,8 +5872,8 @@ mod tests {
 
     #[test]
     fn obj_exited_is_true_only_on_the_tick_a_trigger_zone_is_left() {
-        // Symétrique de `script_reacts_to_trigger` (`obj.triggered`, Sprint 66bis) :
-        // `obj.exited` (Sprint 102) doit être vrai exactement le tick où le contact
+        // Symétrique de `script_reacts_to_trigger` (`obj.triggered`) :
+        // `obj.exited` doit être vrai exactement le tick où le contact
         // cesse, pas avant (encore en contact) ni après (déjà retombé à faux ailleurs).
         let lua = Lua::new();
         let src = "if obj.exited then obj.y = 9.0 end";

@@ -1,20 +1,20 @@
-//! Dessin de debug (Sprint 83) : segments visibles une frame, consommés par le
+//! Dessin de debug : segments visibles une frame, consommés par le
 //! renderer puis vidés — `debug_line` est la primitive, `debug_box`/`debug_sphere`
 //! la composent pour des formes usuelles (AABB, capteur sphérique). Extrait de
-//! `app/mod.rs` (Sprint 103a) : aucune dépendance au reste de la boucle de jeu.
+//! `app/mod.rs` : aucune dépendance au reste de la boucle de jeu.
 
 use glam::Vec3;
 
 use super::AppState;
 
 impl AppState {
-    /// Dessine un segment de debug, visible pendant exactement une frame de rendu
-    /// (Sprint 83). Ex. visualiser un raycast, une ligne de vue, une trajectoire.
+    /// Dessine un segment de debug, visible pendant exactement une frame de rendu.
+    /// Ex. visualiser un raycast, une ligne de vue, une trajectoire.
     pub fn debug_line(&mut self, a: Vec3, b: Vec3, color: [f32; 3]) {
         self.debug_lines.push((a, b, color));
     }
 
-    /// Dessine les 12 arêtes d'une boîte alignée aux axes, en fil de fer (Sprint 83).
+    /// Dessine les 12 arêtes d'une boîte alignée aux axes, en fil de fer.
     /// `half_extents` : demi-tailles sur chaque axe (toujours positives).
     pub fn debug_box(&mut self, center: Vec3, half_extents: Vec3, color: [f32; 3]) {
         let h = half_extents.abs();
@@ -49,8 +49,8 @@ impl AppState {
         }
     }
 
-    /// Dessine une sphère en fil de fer (3 anneaux orthogonaux), à `segments` côtés chacun
-    /// (Sprint 83). Même construction que les anneaux de rotation du gizmo (`RING_SEGMENTS`
+    /// Dessine une sphère en fil de fer (3 anneaux orthogonaux), à `segments` côtés chacun.
+    /// Même construction que les anneaux de rotation du gizmo (`RING_SEGMENTS`
     /// dans `gfx::renderer`), dupliquée ici volontairement : cette méthode vit côté
     /// gameplay (`AppState`), sans dépendance au module GPU.
     pub fn debug_sphere(&mut self, center: Vec3, radius: f32, color: [f32; 3]) {

@@ -1,5 +1,5 @@
 //! Panneau « Build & Export » : lance les scripts de packaging (`.dmg` / `.apk` / `.ipa`)
-//! depuis l'UI, en thread de fond, avec log streamé. Sprint 19.
+//! depuis l'UI, en thread de fond, avec log streamé.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -358,7 +358,7 @@ impl ExportPanel {
                             }
                         });
                         ui.checkbox(&mut self.config.bloom, "Bloom").on_hover_text(
-                            "Halo autour des zones surexposées (Sprint 91) ; coupé \
+                            "Halo autour des zones surexposées ; coupé \
                              automatiquement en qualité Basse même si coché ici.",
                         );
                         ui.weak("Persisté + transmis au build ; appliqué par le player là où c'est pris en charge.");
@@ -814,7 +814,7 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             .env("BUILD_NUMBER", cfg.build_number.to_string())
             .env("INSTALL_DEVICE", if install { "1" } else { "0" })
             .env("PLAYER_BUILD", "1") // exporte un player jouable (cf. build_dmg.sh)
-            // --- Application Android (Sprint 39) ---
+            // --- Application Android ---
             .env("ANDROID_ORIENTATION", cfg.orientation.manifest_value())
             .env("MIN_SDK", cfg.min_sdk.to_string())
             .env("TARGET_SDK", cfg.target_sdk.to_string())

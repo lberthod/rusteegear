@@ -1,4 +1,4 @@
-//! Messages échangés entre client et serveur (SPRINT_MMORPG.md, Sprint 52).
+//! Messages échangés entre client et serveur.
 //!
 //! Sérialisation via `bincode` (compact, binaire) plutôt que JSON : ces messages
 //! circulent potentiellement plusieurs fois par seconde et par joueur (snapshots),
@@ -13,10 +13,9 @@ use serde::{Deserialize, Serialize};
 pub type PlayerId = u32;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
-/// clients actuels (Sprint 82, GAMEDESIGN_EN_LIGNE.md §3.3) s'y retrouvent
-/// donc ensemble, comme avant l'introduction du multi-salons : le serveur
-/// route désormais par code de salon, mais rien ne change tant qu'aucune UI
-/// ne propose d'en choisir un autre.
+/// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
+/// retrouvent donc ensemble : le serveur route par code de salon, mais rien
+/// ne change tant qu'aucune UI ne propose d'en choisir un autre.
 pub const DEFAULT_LOBBY: &str = "default";
 
 /// Message envoyé par un client au serveur.
@@ -26,16 +25,15 @@ pub enum ClientMsg {
     Join {
         name: String,
         /// `uid` Firebase (cf. `net::firebase::AuthSession`), si le joueur s'est
-        /// connecté avant de rejoindre (Sprint 56/57) — sert au serveur pour
-        /// créditer la progression de fin de manche au bon compte. `None` pour
-        /// une partie locale/anonyme (pas de régression : identique à l'absence
-        /// de compte).
+        /// connecté avant de rejoindre — sert au serveur pour créditer la
+        /// progression de fin de manche au bon compte. `None` pour une partie
+        /// locale/anonyme (identique à l'absence de compte, aucune régression).
         firebase_uid: Option<String>,
         /// Code du salon à rejoindre (créé à la demande s'il n'existe pas
         /// encore, cf. `bin/server.rs::Room`) — vide traité comme
         /// `DEFAULT_LOBBY` côté serveur (rétrocompatible : un client qui
         /// n'envoie rien de particulier atterrit dans le même salon partagé
-        /// que tout le monde, comme avant le Sprint 82).
+        /// que tout le monde).
         lobby: String,
     },
     /// État des contrôles pour le tick courant (cf. `app::PlayerInput`, en plus
@@ -49,11 +47,10 @@ pub enum ClientMsg {
         /// prédit/affiche localement. Le serveur l'applique telle quelle (après
         /// nettoyage `NaN`/infini) : l'orientation n'a pas d'enjeu anti-triche
         /// (le collider est une capsule symétrique) mais elle décide de la
-        /// direction du **tir** — sans elle, le serveur ne faisait jamais
-        /// pivoter les joueurs réseau (le bloc d'orientation de `sim_step` est
-        /// réservé au joueur local) : fantômes figés vers -Z et boule de feu
-        /// partant dans l'orientation de spawn, pas là où le joueur regarde
-        /// (audit du 2026-07-13, Sprint 79).
+        /// direction du **tir** — le bloc d'orientation de `sim_step` est
+        /// réservé au joueur local, ce champ est la seule source d'orientation
+        /// pour un joueur réseau côté serveur/autres clients (cf.
+        /// docs/audits/net.md pour le bug réel que son absence a causé).
         aim_yaw: f32,
         attack: bool,
         jump: bool,
@@ -81,7 +78,7 @@ pub enum ServerMsg {
     Welcome { player_id: PlayerId },
     /// Un autre joueur a rejoint le salon.
     PlayerJoined { player_id: PlayerId, name: String },
-    /// Un joueur a quitté (volontairement ou par timeout, cf. Sprint 60).
+    /// Un joueur a quitté (volontairement ou par timeout).
     PlayerLeft { player_id: PlayerId },
     /// Delta d'état du monde depuis le dernier snapshot envoyé à ce client.
     Snapshot(Snapshot),
@@ -93,14 +90,13 @@ pub enum ServerMsg {
 /// malgré le nom — `AppState::network_snapshot` (`app/multiplayer.rs`)
 /// diffuse l'état complet de tous les joueurs réseau à chaque tick, identique
 /// pour tous les clients (`NetServer::broadcast`, pas de `send_to`
-/// individualisé). Suffisant à l'échelle visée (mesuré au Sprint 61 :
-/// ~368 octets pour 16 joueurs, ~30x sous un budget large de 200 Ko/s/joueur)
-/// — pas l'état complet de *la scène* non plus, seulement les entités pilotées
-/// par un joueur réseau (les monstres/décor ne sont pas encore diffusés, cf.
-/// `network_snapshot`). Un vrai delta par client (mémoriser le dernier état
-/// envoyé à chaque `PlayerId`) resterait à faire si le nombre d'entités
-/// diffusées grandissait significativement (cf. `AUDIT_LATENCE_MULTIJOUEUR.md`
-/// §2.1, `SPRINTNETWORK.md` Sprint 70) — pas justifié aujourd'hui.
+/// individualisé) — pas l'état complet de *la scène* non plus, seulement les
+/// entités pilotées par un joueur réseau (les monstres/décor ne sont pas
+/// encore diffusés, cf. `network_snapshot`). Un vrai delta par client
+/// (mémoriser le dernier état envoyé à chaque `PlayerId`) resterait à faire
+/// si le nombre d'entités diffusées grandissait significativement (cf.
+/// docs/audits/net.md pour la mesure qui montre que ce n'est pas justifié
+/// aujourd'hui).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     /// Numéro de tick serveur (monotone), pour que le client ignore un snapshot
@@ -124,7 +120,7 @@ pub struct ProjectileState {
 }
 
 /// État minimal d'une entité de `scene.objects`, suffisant pour l'affichage/
-/// l'interpolation côté client (Sprint 54) — pas la représentation complète de
+/// l'interpolation côté client — pas la représentation complète de
 /// `SceneObject` (mesh, script, composants...), qui reste une donnée de scène
 /// locale au client, chargée une fois au join, pas retransmise à chaque tick.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,17 +148,16 @@ pub struct EntityDelta {
     /// monstres synchronisés (`Combat::hp`, non normalisé). Absent (`None`,
     /// pas sérialisé à 0 par défaut) pour un décor sans vie.
     pub health: Option<f32>,
-    /// Animation répliquée (Sprint 88) : nom du clip actuellement joué côté serveur
+    /// Animation répliquée : nom du clip actuellement joué côté serveur
     /// (vide = objet non skinné ou pose de liaison, cf. `AnimationState::clip`).
     /// **Pas** de temps de lecture ici : chaque client avance déjà localement le
     /// temps de son propre `AnimationState` à chaque pas fixe, que l'objet soit
     /// local ou un fantôme réseau (cf. `AppState::sim_step`) — seul le *choix* du
     /// clip a besoin d'être répliqué, via `AnimationState::set_clip()` (fondu
-    /// enchaîné inclus, cf. Sprint 87), pour que tous les écrans jouent la même
-    /// animation. `String` plutôt qu'un indice numérique dans
-    /// `ImportedMesh::clips` : robuste même si l'ordre des clips différait d'un
-    /// client à l'autre, pour un coût négligeable tant que peu d'entités animées
-    /// sont diffusées (cf. Sprint 61, aucune optimisation nécessaire à cette échelle).
+    /// enchaîné inclus), pour que tous les écrans jouent la même animation.
+    /// `String` plutôt qu'un indice numérique dans `ImportedMesh::clips` :
+    /// robuste même si l'ordre des clips différait d'un client à l'autre, pour
+    /// un coût négligeable tant que peu d'entités animées sont diffusées.
     #[serde(default)]
     pub anim_clip: String,
     /// Frags individualisés (GAMEDESIGN_EN_LIGNE.md — brique de progression pour
@@ -211,7 +206,7 @@ impl std::fmt::Display for CodecError {
 impl std::error::Error for CodecError {}
 
 /// Encode un message en binaire compact (`bincode`) pour l'envoi sur le transport
-/// (Sprint 53 : WebSocket, une trame binaire par message).
+/// (WebSocket, une trame binaire par message).
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, CodecError> {
     bincode::serialize(msg).map_err(CodecError)
 }
@@ -345,10 +340,10 @@ mod tests {
     }
 
     /// Mesure la taille d'un snapshot réaliste (16 joueurs + quelques monstres actifs)
-    /// pour documenter le coût réseau (objectif SPRINT_MMORPG.md : < 200 octets/joueur/
-    /// tick). Pas une assertion stricte de taille exacte (le format peut évoluer) mais
-    /// une garde-fou générale contre une régression grossière (ex. passer en JSON par
-    /// erreur, ou dupliquer les données par inadvertance).
+    /// pour documenter le coût réseau (objectif : < 200 octets/joueur/tick). Pas une
+    /// assertion stricte de taille exacte (le format peut évoluer) mais une garde-fou
+    /// générale contre une régression grossière (ex. passer en JSON par erreur, ou
+    /// dupliquer les données par inadvertance).
     #[test]
     fn snapshot_size_for_sixteen_players_stays_compact() {
         let entities: Vec<EntityDelta> = (0..16 + 4) // 16 joueurs + 4 monstres actifs

@@ -1,7 +1,6 @@
-//! Réglages utilisateur persistés (Sprint 33) : clé API DeepSeek pour la
-//! génération de scripts Lua par IA, et (Sprint 56, SPRINT_MMORPG.md) config
-//! Firebase pour les comptes multijoueur. Stockés dans
-//! `~/.motor3derust/settings.json`.
+//! Réglages utilisateur persistés : clé API DeepSeek pour la
+//! génération de scripts Lua par IA, et config Firebase pour les comptes
+//! multijoueur. Stockés dans `~/.motor3derust/settings.json`.
 
 use std::path::PathBuf;
 

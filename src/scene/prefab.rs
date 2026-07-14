@@ -1,17 +1,16 @@
 //! Prefabs : sauvegarde d'un objet comme prefab réutilisable, instanciation, et
 //! resynchronisation des instances existantes avec leur prefab source. Extrait de
-//! `scene/mod.rs` (Sprint 103a-2).
+//! `scene/mod.rs`.
 
 use glam::Vec3;
 
 use super::{PrefabInstance, Scene, SceneObject};
 
 impl Scene {
-    /// Sauvegarde `obj` comme prefab (Sprint 96) dans `assets_dir()/prefabs/<name>.json`,
-    /// enregistré dans le manifeste d'assets (Sprint 95) pour une référence stable —
-    /// c'est ce qui permet de renommer le fichier prefab sans casser les instances qui
-    /// le référencent. `Err` si `assets_dir()` est indisponible (pas de `$HOME`) ou si
-    /// l'écriture disque échoue.
+    /// Sauvegarde `obj` comme prefab dans `assets_dir()/prefabs/<name>.json`, enregistré
+    /// dans le manifeste d'assets pour une référence stable — c'est ce qui permet de
+    /// renommer le fichier prefab sans casser les instances qui le référencent. `Err` si
+    /// `assets_dir()` est indisponible (pas de `$HOME`) ou si l'écriture disque échoue.
     pub fn save_prefab(obj: &SceneObject, name: &str) -> Result<String, String> {
         let json = serde_json::to_string_pretty(obj).map_err(|e| e.to_string())?;
         let dir = crate::assets::assets_dir()
@@ -45,11 +44,11 @@ impl Scene {
         Some(obj)
     }
 
-    /// Resynchronise toutes les instances de prefab de la scène (Sprint 96) : pour
-    /// chaque objet lié (`obj.prefab.is_some()`), copie depuis le template chaque champ
-    /// **non listé** dans `PrefabInstance::overrides` — le livrable du sprint (modifier
-    /// un prefab « gemme » met à jour ses 20 instances, sauf leurs surcharges). Fusion au
-    /// niveau JSON (`serde_json::Value`) plutôt que champ Rust par champ : `SceneObject`
+    /// Resynchronise toutes les instances de prefab de la scène : pour chaque objet lié
+    /// (`obj.prefab.is_some()`), copie depuis le template chaque champ **non listé** dans
+    /// `PrefabInstance::overrides` — modifier un prefab « gemme » met à jour toutes ses
+    /// instances, sauf leurs surcharges. Fusion au niveau JSON (`serde_json::Value`)
+    /// plutôt que champ Rust par champ : `SceneObject`
     /// a des dizaines de champs, et une fusion générique évite d'avoir à étendre cette
     /// fonction à chaque nouveau champ ajouté au type. Un template introuvable (fichier
     /// prefab supprimé/déplacé) laisse l'instance telle quelle — pas d'erreur bruyante

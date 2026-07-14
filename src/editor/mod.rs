@@ -65,9 +65,9 @@ pub struct Editor {
     mp_lobby_code: String,
     /// Message en cours de saisie dans le chat de la fenêtre Multijoueur.
     mp_chat_input: String,
-    /// Commande en cours de saisie dans la Console (Sprint 82).
+    /// Commande en cours de saisie dans la Console.
     console_input: String,
-    /// Réglages du panneau « Aperçu HUD » (Sprint 93).
+    /// Réglages du panneau « Aperçu HUD ».
     hud_preview: HudPreview,
 }
 
@@ -87,10 +87,10 @@ struct HudPreview {
     weapon_hud: bool,
     kills: bool,
     roster: bool,
-    /// 🖐 Repositionner (Sprint 98) : rend les overlays cochés glissables à la
-    /// souris ; leur position est alors écrite dans `Scene::hud_layout`. Séparé
-    /// de `open` pour ne pas activer le glisser par accident dès l'ouverture
-    /// du panneau.
+    /// 🖐 Repositionner : rend les overlays cochés glissables à la souris ;
+    /// leur position est alors écrite dans `Scene::hud_layout`. Séparé de
+    /// `open` pour ne pas activer le glisser par accident dès l'ouverture du
+    /// panneau.
     reposition: bool,
 }
 
@@ -133,7 +133,7 @@ pub struct StatusInfo<'a> {
     pub grid: bool,
     /// L'aimantation (snap) est-elle active ?
     pub snap: bool,
-    /// Vue de debug active (Sprint 83) : Éclairé/Normales/Profondeur.
+    /// Vue de debug active : Éclairé/Normales/Profondeur.
     pub debug_view: crate::app::DebugView,
 }
 
@@ -152,9 +152,9 @@ pub struct UiActions {
     pub duplicate: bool,
     pub undo: bool,
     pub redo: bool,
-    /// « ⏭ » (Sprint 81) : avance d'exactement un pas fixe pendant la pause.
+    /// « ⏭ » : avance d'exactement un pas fixe pendant la pause.
     pub step_frame: bool,
-    /// Commande saisie dans la console (Sprint 82), à exécuter via
+    /// Commande saisie dans la console, à exécuter via
     /// `AppState::run_console_command`.
     pub console_command: Option<String>,
     /// « Nouveau projet » : vide la scène.
@@ -250,7 +250,7 @@ pub struct UiActions {
     pub toggle_grid: bool,
     /// Basculer l'aimantation (snap) au déplacement.
     pub toggle_snap: bool,
-    /// Nouvelle vue de debug demandée (Sprint 83) : Éclairé/Normales/Profondeur.
+    /// Nouvelle vue de debug demandée : Éclairé/Normales/Profondeur.
     pub set_debug_view: Option<crate::app::DebugView>,
 }
 
@@ -309,9 +309,9 @@ impl Editor {
 
     /// Mode Player : dessine **uniquement** les contrôles tactiles en surimpression
     /// (pas de panneaux d'éditeur) et met à jour l'état d'entrée lu par les scripts.
-    /// Depuis le Sprint 65, ajoute aussi un petit overlay Multijoueur (adresse +
-    /// pseudo + connecter/déconnecter) repliable, pour rejoindre un serveur
-    /// RusteeGear depuis un APK — les actions demandées sont renvoyées dans un
+    /// Ajoute aussi un petit overlay Multijoueur (adresse + pseudo +
+    /// connecter/déconnecter) repliable, pour rejoindre un serveur RusteeGear
+    /// depuis un APK — les actions demandées sont renvoyées dans un
     /// `UiActions` (même convention que `run`) pour être traitées par l'appelant.
     #[allow(clippy::too_many_arguments)] // états distincts à passer à l'overlay
     pub fn run_player_overlay(
@@ -356,7 +356,7 @@ impl Editor {
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
             }
-            // Décalages persistés dans la scène (Scene::hud_layout, Sprint 98) : pas de
+            // Décalages persistés dans la scène (Scene::hud_layout) : pas de
             // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
             let mut layout = scene.hud_layout;
@@ -365,8 +365,8 @@ impl Editor {
             // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
             // affiché en Play, contrairement au score de `collectibles_hud` juste en
             // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
-            // multijoueur n'en a pas — sans ce HUD dédié, le joueur ne voyait *aucun*
-            // score, cf. audit en conditions réelles, 2026-07-13).
+            // multijoueur n'en a pas — cf. docs/audits/editor.md pour l'absence de
+            // score en ligne que ce HUD dédié corrige).
             kills_hud(ctx, area, kills, &mut layout.kills, false);
             multiplayer_roster_panel(ctx, area, roster, &mut layout.roster, false);
             if scene_has_ranged_weapon(scene) {
@@ -431,7 +431,7 @@ impl Editor {
         selected_light: &mut Option<usize>,
         playing: &mut bool,
         paused: &mut bool,
-        // Multiplicateur du temps simulé (Sprint 81) — voir `AppState::time_scale`.
+        // Multiplicateur du temps simulé — voir `AppState::time_scale`.
         time_scale: &mut f32,
         gizmo_mode: &mut GizmoMode,
         input_state: &mut crate::app::PlayerInput,
@@ -648,7 +648,7 @@ fn build_ui(
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings);
-    // Fenêtre « 👁 Aperçu HUD » (Sprint 93) : prévisualiser les overlays de jeu en Édition.
+    // Fenêtre « 👁 Aperçu HUD » : prévisualiser les overlays de jeu en Édition.
     hud_preview_window(root.ctx(), hud_preview);
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer_window(
@@ -683,7 +683,7 @@ fn build_ui(
     asset_browser_window(root.ctx(), panels, scene, *selection, actions);
     scripts_window(root.ctx(), panels, scene, selection, selected);
 
-    // Fenêtre flottante « Build & Export » (Sprint 19).
+    // Fenêtre flottante « Build & Export ».
     export.ui(root.ctx(), scene);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
     tool_windows(
@@ -758,7 +758,7 @@ fn build_ui(
                     *playing = false;
                     *paused = false;
                 }
-                // Pas unique (Sprint 81) : n'a de sens qu'en pause.
+                // Pas unique : n'a de sens qu'en pause.
                 if ui
                     .add_enabled(*paused, egui::Button::new("⏭"))
                     .on_hover_text("Avancer d'un pas fixe")
@@ -768,7 +768,7 @@ fn build_ui(
                 }
             }
             ui.separator();
-            // Time scale (Sprint 81) : ralenti/accélère la simulation pour déboguer la
+            // Time scale : ralenti/accélère la simulation pour déboguer la
             // physique et le réseau. Préréglages + valeur affichée plutôt qu'un slider :
             // les valeurs qui comptent en pratique sont peu nombreuses (figé/ralenti/normal/rapide).
             ui.label("⏱");
@@ -840,7 +840,7 @@ fn build_ui(
                     *device_portrait = !*device_portrait;
                 }
             }
-            // Aperçu HUD (Sprint 93) : voir réticule/inventaire/joueurs en Édition,
+            // Aperçu HUD : voir réticule/inventaire/joueurs en Édition,
             // sans passer par Play (cf. `HudPreview`).
             if ui
                 .selectable_label(hud_preview.open, "👁 Aperçu HUD")
@@ -873,7 +873,7 @@ fn build_ui(
             {
                 actions.toggle_snap = true;
             }
-            // Vue de debug (Sprint 83) : remplace l'éclairage par les normales ou la
+            // Vue de debug : remplace l'éclairage par les normales ou la
             // profondeur, pour voir directement ce que le pipeline calcule.
             ui.separator();
             ui.label("👁");
@@ -1132,9 +1132,9 @@ fn build_ui(
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Box, "Box");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Sphere, "Sphère");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Capsule, "Capsule");
-                                // TriMesh/ConvexHull (Sprint 100) : n'ont de sens que pour un
-                                // modèle importé — leur géométrie vient des vertices du glTF,
-                                // rien de tel n'existe pour une primitive (Cube/Sphère/...).
+                                // TriMesh/ConvexHull : n'ont de sens que pour un modèle importé
+                                // — leur géométrie vient des vertices du glTF, rien de tel
+                                // n'existe pour une primitive (Cube/Sphère/...).
                                 if matches!(obj.mesh, crate::scene::MeshKind::Imported(_)) {
                                     ui.selectable_value(
                                         &mut obj.collider_shape,
@@ -1338,9 +1338,7 @@ fn build_ui(
                                         );
                                     });
                                 }
-                                // Feu/Arme/Soin (fireball.rs) : mêmes combos bouton tactile que
-                                // Saut, jusqu'ici invisibles dans l'inspecteur — seul le JSON de
-                                // scène pouvait les régler, cf. `assets/player_scene.json`.
+                                // Feu/Arme/Soin (fireball.rs) : mêmes combos bouton tactile que Saut.
                                 let button_combo =
                                     |ui: &mut egui::Ui, label: &str, salt: &str, field: &mut String| {
                                         ui.horizontal(|ui| {

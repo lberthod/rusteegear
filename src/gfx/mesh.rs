@@ -49,7 +49,7 @@ pub struct MeshData {
     pub indices: Vec<u32>,
 }
 
-/// Sommet skinné (Sprint 86) : `Vertex` + jusqu'à 4 os influents et leurs poids
+/// Sommet skinné : `Vertex` + jusqu'à 4 os influents et leurs poids
 /// (convention glTF `JOINTS_0`/`WEIGHTS_0`, cf. `scene::import::VertexSkin`). Un type
 /// **séparé** de `Vertex` plutôt qu'un ajout de champs à `Vertex` : ça laisse tous les
 /// meshes statiques (primitives, imports glTF sans skin) et leur pipeline inchangés —
@@ -61,7 +61,7 @@ pub struct SkinnedVertex {
     pub normal: [f32; 3],
     pub color: [f32; 3],
     pub uv: [f32; 2],
-    /// Indices dans la palette de matrices de joints (cf. `Renderer` — Sprint 86).
+    /// Indices dans la palette de matrices de joints (cf. `Renderer`).
     /// `u32` plutôt que `u16` (format du glTF source) : format de vertex GPU plus simple
     /// et plus largement pris en charge, au prix de 8 octets non significatifs par sommet
     /// — négligeable face au reste du vertex.
@@ -142,7 +142,7 @@ impl GpuMesh {
         }
     }
 
-    /// Identique à `new`, pour un mesh skinné (Sprint 86). `GpuMesh` lui-même ne connaît
+    /// Identique à `new`, pour un mesh skinné. `GpuMesh` lui-même ne connaît
     /// que des buffers bruts — indépendant du format de vertex, seul l'upload diffère.
     pub fn new_skinned(device: &wgpu::Device, data: &SkinnedMeshData) -> Self {
         let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -440,7 +440,7 @@ pub fn capsule(color: [f32; 3]) -> MeshData {
     // déplacement (yaw=0 ⇒ le personnage avance vers -Z, cf. les tests
     // `camera_relative_move_*`). Sans ça, la capsule est parfaitement symétrique en
     // rotation : impossible de voir à l'écran vers où le personnage regarde une fois
-    // que la rotation-vers-le-déplacement a été ajoutée (demandé le 2026-07-12).
+    // que la rotation suit le déplacement.
     const FACE_COLOR: [f32; 3] = [0.08, 0.08, 0.08];
     const FACE_ROW_MIN: u32 = 1;
     const FACE_ROW_MAX: u32 = 5;

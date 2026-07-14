@@ -1,5 +1,5 @@
-//! Prédiction client & interpolation des entités distantes (SPRINT_MMORPG.md,
-//! Sprint 54). Logique **pure** (aucune dépendance à `winit`/`AppState`) : ce
+//! Prédiction client & interpolation des entités distantes. Logique **pure**
+//! (aucune dépendance à `winit`/`AppState`) : ce
 //! qui rend le jeu jouable malgré la latence tient dans ces deux règles —
 //! interpoler les autres entités entre deux snapshots plutôt que les téléporter
 //! à chaque tick réseau, et ne corriger la position prédite du joueur local que
@@ -22,8 +22,8 @@ struct Timed<T> {
     value: T,
 }
 
-/// Nombre de snapshots conservés par entité distante (Sprint 67,
-/// `SPRINTNETWORK.md`) — plus que les 2 minimums nécessaires pour interpoler
+/// Nombre de snapshots conservés par entité distante — plus que les 2
+/// minimums nécessaires pour interpoler
 /// « avant/après » l'instant courant : sert à retrouver les deux snapshots qui
 /// encadrent un instant **passé** (`now - RENDER_DELAY`, cf. `sample_delayed`)
 /// même quand le dernier paquet en date est arrivé en retard. Toujours borné
@@ -31,13 +31,13 @@ struct Timed<T> {
 /// `RENDER_DELAY` dans le passé.
 const HISTORY_CAPACITY: usize = 6;
 
-/// Délai de rendu (Sprint 67, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.4) : les
-/// fantômes distants sont affichés à `now - RENDER_DELAY` plutôt qu'à `now`.
-/// Sans ce délai, `sample` interpolait entre les deux *derniers* snapshots
-/// reçus — correct tant qu'ils arrivent à intervalle régulier, mais dès qu'un
-/// paquet est retardé au-delà de cet intervalle, l'échantillon se figeait sur
-/// le dernier état connu jusqu'à l'arrivée du suivant (saccade visible sous
-/// gigue réseau réelle). En restant systématiquement un peu dans le passé, il
+/// Délai de rendu : les fantômes distants sont affichés à `now - RENDER_DELAY`
+/// plutôt qu'à `now`. Sans ce délai, `sample` interpole entre les deux
+/// *derniers* snapshots reçus — correct tant qu'ils arrivent à intervalle
+/// régulier, mais dès qu'un paquet est retardé au-delà de cet intervalle,
+/// l'échantillon se fige sur le dernier état connu jusqu'à l'arrivée du
+/// suivant (saccade visible sous gigue réseau réelle, cf. docs/audits/net.md).
+/// En restant systématiquement un peu dans le passé, il
 /// y a presque toujours un snapshot de part et d'autre de l'instant demandé
 /// dans l'historique (`HISTORY_CAPACITY`), même si le tout dernier paquet est
 /// en retard. Valeur choisie assez large devant un tick serveur de 16 ms
@@ -113,14 +113,13 @@ impl RemoteEntity {
         self.sample(now.checked_sub(RENDER_DELAY).unwrap_or(now))
     }
 
-    /// Dernier clip d'animation connu pour cette entité (Sprint 88, réplication de
-    /// l'animation). Contrairement à la position, on ne l'interpole pas dans le
-    /// temps : chaque client avance déjà localement le temps de lecture de son
-    /// propre `AnimationState` à chaque pas fixe, qu'il s'agisse d'un objet local
-    /// ou d'un fantôme réseau (cf. `AppState::sim_step`) — seul le *choix* du
-    /// clip a besoin d'être répliqué, via `AnimationState::set_clip()` (fondu
-    /// enchaîné inclus, cf. Sprint 87). `None` tant qu'aucun snapshot n'est
-    /// encore arrivé.
+    /// Dernier clip d'animation connu pour cette entité. Contrairement à la
+    /// position, on ne l'interpole pas dans le temps : chaque client avance
+    /// déjà localement le temps de lecture de son propre `AnimationState` à
+    /// chaque pas fixe, qu'il s'agisse d'un objet local ou d'un fantôme réseau
+    /// (cf. `AppState::sim_step`) — seul le *choix* du clip a besoin d'être
+    /// répliqué, via `AnimationState::set_clip()` (fondu enchaîné inclus).
+    /// `None` tant qu'aucun snapshot n'est encore arrivé.
     pub fn latest_anim_clip(&self) -> Option<&str> {
         self.history.back().map(|t| t.value.anim_clip.as_str())
     }
@@ -209,8 +208,8 @@ mod tests {
 
     #[test]
     fn latest_anim_clip_tracks_the_most_recent_snapshot() {
-        // Sprint 88 : le clip répliqué doit refléter le dernier snapshot reçu, pas
-        // le premier — contrairement à la position, jamais interpolé/mélangé.
+        // Le clip répliqué doit refléter le dernier snapshot reçu, pas le
+        // premier — contrairement à la position, jamais interpolé/mélangé.
         let mut e = RemoteEntity::default();
         let t0 = Instant::now();
         let mut idle = delta([0.0, 0.0, 0.0], 0.0);
@@ -297,15 +296,11 @@ mod tests {
         assert_eq!(reconcile(predicted, authoritative), Some(authoritative));
     }
 
-    /// Sprint 67 (`SPRINTNETWORK.md`, `AUDIT_LATENCE_MULTIJOUEUR.md` §2.4) :
-    /// avant ce sprint, `RemoteEntity` ne gardait que les 2 derniers snapshots
-    /// — dès que le dernier paquet en date était en retard, `sample(now)`
-    /// dépassait `latest.at` et se figeait sur le dernier état connu.
     /// `sample_delayed` interroge `now - RENDER_DELAY`, un instant qui reste
     /// généralement encadré par deux snapshots déjà reçus dans l'historique
     /// élargi (`HISTORY_CAPACITY`) même quand le tout dernier paquet accuse un
     /// retard inférieur à `RENDER_DELAY` — donc toujours interpolé en douceur,
-    /// pas figé.
+    /// pas figé (contrairement à `sample(now)` direct, cf. docs/audits/net.md).
     #[test]
     fn sample_delayed_keeps_interpolating_smoothly_when_the_latest_packet_is_late() {
         let mut e = RemoteEntity::default();

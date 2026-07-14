@@ -1,6 +1,6 @@
-//! Salons multijoueurs (SPRINT_MMORPG.md, Sprint 55) : associe chaque joueur
+//! Salons multijoueurs (cf. SPRINT_MMORPG.md) : associe chaque joueur
 //! réseau (`PlayerId`) à un objet de la scène qu'il pilote, sur le même principe
-//! que `combat.rs` (Sprint 50) — isoler la surface de gameplay qu'un transport
+//! que `combat.rs` — isoler la surface de gameplay qu'un transport
 //! réseau doit piloter, sans mélanger cette logique au reste de `AppState`.
 //!
 //! `pub` (contrairement à `combat`, privé) : `src/bin/server.rs` — un binaire
@@ -94,8 +94,7 @@ impl AppState {
     /// monstres le poursuivent quand même et sa santé s'épuise sans qu'il ne
     /// bouge jamais — la manche se terminait en défaite après quelques
     /// secondes, **avant même qu'un joueur n'ait eu le temps de se
-    /// connecter** (bug trouvé en testant réellement deux applications l'une
-    /// contre l'autre, cf. AUDIT_MMORPG.md). `spawn_network_player` masque
+    /// connecter** (cf. AUDIT_MMORPG.md). `spawn_network_player` masque
     /// aussi ce gabarit dès le premier joueur, donc cet appel n'est utile que
     /// pour la fenêtre *avant* ce premier join.
     pub fn hide_local_player_template(&mut self) {
@@ -117,7 +116,7 @@ impl AppState {
     /// (nouvel objet ⇒ nouveau corps rigide). `None` si la scène ne contient
     /// aucun gabarit pilotable (aucune manche/démo compatible chargée).
     ///
-    /// **Idempotent (bug corrigé à l'audit du 2026-07-07)** : si `id` a déjà un
+    /// **Idempotent** : si `id` a déjà un
     /// objet (un second `ClientMsg::Join` du même client — rejeu réseau, bug
     /// client, ou trame forgée par un client modifié : rien dans le protocole
     /// n'empêchait un client d'envoyer `Join` une seconde fois après le
@@ -129,8 +128,7 @@ impl AppState {
     /// spawn en trop reconstruit toute la physique de la scène (coût qui
     /// grandit avec le nombre d'objets).
     ///
-    /// **Recyclage des emplacements orphelins (audit en conditions réelles,
-    /// 2026-07-13)** : `despawn_network_player` ne retire jamais l'objet du
+    /// **Recyclage des emplacements orphelins** : `despawn_network_player` ne retire jamais l'objet du
     /// `Vec` (juste `visible = false`, cf. sa doc — retirer décalerait les
     /// indices des joueurs encore connectés). Sans recyclage, un salon qui
     /// voit beaucoup de va-et-vient (reconnexions, tests, joueurs qui
@@ -165,7 +163,7 @@ impl AppState {
         // deux corps rigides spawnés au même point s'interpénètrent et la physique
         // les sépare par une violente impulsion à la première étape de simulation.
         // Cercle serré autour du gabarit (pas une ligne qui s'éloigne de +5 m par
-        // joueur, cf. l'audit du 2026-07-12) : tous les joueurs démarrent proches
+        // joueur) : tous les joueurs démarrent proches
         // les uns des autres, dans le même coin de la carte, pour pouvoir se voir
         // et marcher les uns vers les autres dès la connexion plutôt que de devoir
         // traverser toute l'arène.
@@ -179,8 +177,8 @@ impl AppState {
         // ce reset, chaque joueur réseau hérite du `visible=false` du gabarit et
         // `network_snapshot` diffuse cette invisibilité telle quelle — les clients
         // ne voient alors jamais aucun fantôme, quelle que soit la justesse du reste
-        // du pipeline réseau (bug constaté en conditions réelles, 2026-07-12 : deux
-        // vrais clients connectés, positions bien reçues, `visible` toujours faux).
+        // du pipeline réseau (cf. docs/audits/app-network.md pour le bug réel
+        // que ça a causé).
         template.visible = true;
         let index = match reusable_index {
             Some(i) => {
@@ -216,7 +214,7 @@ impl AppState {
         Some(index)
     }
 
-    /// Retire un joueur réseau (déconnexion volontaire ou timeout, cf. Sprint 60) :
+    /// Retire un joueur réseau (déconnexion volontaire ou timeout) :
     /// masque son objet (comme un ennemi vaincu, cf. `Combat::attackable`) plutôt
     /// que de le retirer du `Vec` — un retrait décalerait les indices de tous les
     /// joueurs suivants dans `scene.objects`, cassant leur mapping `network_players`.
@@ -233,7 +231,7 @@ impl AppState {
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
-    /// Oublie tous les joueurs réseau (audit du 2026-07-07, cf. AUDIT_MMORPG.md
+    /// Oublie tous les joueurs réseau (cf. AUDIT_MMORPG.md
     /// §4.2) : à appeler chaque fois que `scene.objects` est remis à un état
     /// antérieur en bloc (`restart_game`, transition Play→Edit dans
     /// `advance_play`), qui ne connaît pas les objets ajoutés en cours de partie
@@ -258,7 +256,7 @@ impl AppState {
     /// delta, cf. `ClientMsg::Input`). Sans effet si `id` n'est pas (ou plus)
     /// connecté (message reçu après une déconnexion, par exemple).
     ///
-    /// **Durcissement (Sprint 60)** : les valeurs brutes reçues du réseau ne
+    /// **Durcissement** : les valeurs brutes reçues du réseau ne
     /// sont **jamais** dignes de confiance (cf. `sanitize_network_input`) — un
     /// client modifié pourrait envoyer `NaN`/`Infinity` (bytes bincode arbitraires,
     /// pas nécessairement produits par un client légitime passant par des sliders
@@ -311,7 +309,7 @@ impl AppState {
         self.network_kills.get(&id).copied()
     }
 
-    /// Résout les attaques des joueurs réseau pour ce tick (Sprint 60) : décompte
+    /// Résout les attaques des joueurs réseau pour ce tick : décompte
     /// les temps de recharge, puis pour chaque joueur dont l'`Input` demande une
     /// attaque et dont le temps de recharge est écoulé, frappe immédiatement à
     /// portée (`NETWORK_ATTACK_RANGE`) depuis sa position — validation **serveur**
@@ -442,8 +440,7 @@ mod tests {
         app
     }
 
-    /// Régression trouvée en testant réellement un serveur headless
-    /// (cf. AUDIT_MMORPG.md) : `hide_local_player_template` masque le gabarit
+    /// Régression (cf. AUDIT_MMORPG.md) : `hide_local_player_template` masque le gabarit
     /// avant le premier join, pour qu'aucun objet ne soit désigné « le
     /// joueur ». Sans exclure explicitement les monstres (`ai_chaser`/
     /// `combat.attackable`, qui portent aussi un script) du repli « premier
@@ -494,7 +491,7 @@ mod tests {
         assert_eq!(app.network_player_count(), 2);
     }
 
-    /// Régression (trouvée à l'audit du 2026-07-07) : rien dans le protocole
+    /// Régression : rien dans le protocole
     /// n'empêche un client d'envoyer un second `Join` (rejeu, bug client, trame
     /// forgée — cf. `net::server_loop::handle_connection`, qui ne borne que la
     /// *première* trame à être un `Join`). Avant le correctif, ce second appel
@@ -536,7 +533,7 @@ mod tests {
         );
     }
 
-    /// Audit en conditions réelles (2026-07-13) : sans recyclage, chaque
+    /// Sans recyclage, chaque
     /// `Join` pousse un nouveau clone dans `scene.objects`, pour toujours —
     /// un salon de longue durée (beaucoup de va-et-vient) grossit sans borne
     /// et alourdit chaque `Physics::build` (reconstruit à chaque join/leave),
@@ -698,7 +695,7 @@ mod tests {
 
     #[test]
     fn network_snapshot_reports_the_player_animation_clip() {
-        // Sprint 88 : le clip joué par un joueur réseau (s'il a un
+        // Le clip joué par un joueur réseau (s'il a un
         // `AnimationState`) doit atterrir dans son `EntityDelta`, pour que les
         // autres écrans jouent la même animation sur son fantôme.
         let mut app = app_with_zombies_demo();
@@ -743,9 +740,8 @@ mod tests {
         // join. Sans le correctif (`template.visible = true` dans
         // `spawn_network_player`), chaque joueur réseau héritait de ce
         // `visible=false` — invisible pour toujours dans le `Snapshot`, malgré
-        // des positions correctement transmises (bug constaté en conditions
-        // réelles le 2026-07-12 : deux vrais clients connectés, jamais l'un
-        // visible pour l'autre).
+        // des positions correctement transmises (cf. docs/audits/app-network.md
+        // pour le bug réel que ça a causé).
         let mut app = app_with_zombies_demo();
         app.hide_local_player_template();
         let index = app.spawn_network_player(1).unwrap();

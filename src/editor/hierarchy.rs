@@ -1,6 +1,6 @@
 //! Panneau de hiérarchie de la scène : arbre des objets (groupes, drag & drop
 //! de réordonnancement), filtre par nom, badges d'état (physique, script, tag).
-//! Extrait de `editor/mod.rs` (Sprint 103a-2).
+//! Extrait de `editor/mod.rs`.
 
 use crate::runtime::physics::PhysicsKind;
 use crate::scene::{MeshKind, Scene};

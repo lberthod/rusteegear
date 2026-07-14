@@ -1,4 +1,4 @@
-//! Capture des logs en mémoire pour la Console intégrée (Sprint 32).
+//! Capture des logs en mémoire pour la Console intégrée.
 //!
 //! On installe un logger qui *tee* : il délègue à `env_logger` (sortie stderr
 //! habituelle) **et** conserve les dernières lignes dans un tampon circulaire que

@@ -1,4 +1,4 @@
-//! Assets embarqués dans le binaire (Sprint 24) : modèles glTF et sons copiés
+//! Assets embarqués dans le binaire : modèles glTF et sons copiés
 //! dans `assets/bundle/` à l'export, inclus à la compilation. Le player les résout
 //! ainsi sans dépendre de chemins disque (qui n'existent pas sur l'appareil cible).
 //!
@@ -18,31 +18,31 @@ pub const SCHEME: &str = "bundle://";
 /// Préfixe d'un asset de projet (dossier `~/.motor3derust/assets/`, édition desktop).
 pub const ASSET_SCHEME: &str = "asset://";
 
-/// Préfixe d'une référence **stable** vers un asset de projet (Sprint 95) : un uuid
+/// Préfixe d'une référence **stable** vers un asset de projet : un uuid
 /// plutôt qu'un nom de fichier, résolu via le manifeste (`register_asset`/
 /// `resolve_asset_id`) — survit à un renommage du fichier sous-jacent (`rename_asset`),
 /// contrairement à `asset://<nom>` qui casse dès que `<nom>` change. `import_to_assets`
-/// délivre désormais ce schéma pour les nouveaux imports ; les scènes existantes qui
+/// délivre ce schéma pour les nouveaux imports ; les scènes existantes qui
 /// référencent encore `asset://<nom>` en dur ne sont pas migrées rétroactivement — un
 /// asset doit être ré-importé/enregistré pour devenir rename-safe.
 pub const ASSET_ID_SCHEME: &str = "asset-id://";
 
-/// Nom du fichier de manifeste (Sprint 95) dans `assets_dir()` — exclu de
+/// Nom du fichier de manifeste dans `assets_dir()` — exclu de
 /// `list_assets()` : c'est une donnée interne de ce module, pas un asset à afficher/
 /// importer dans l'éditeur.
 const MANIFEST_FILE: &str = "manifest.json";
 
 /// Vrai si `path` désigne un asset déjà géré par ce module (embarqué, projet, ou
 /// référence stable) — par opposition à un chemin disque externe qui reste à importer.
-/// Centralise ce qui était, avant le Sprint 95, un `starts_with(SCHEME) ||
-/// starts_with(ASSET_SCHEME)` répété à 4 endroits (import glTF, audio, dimensions de
-/// texture, collecte d'assets) — chacun aurait dû être mis à jour séparément pour
-/// reconnaître `asset-id://` sans ce point de passage unique.
+/// Point de passage unique pour reconnaître les trois schémas (`SCHEME`/`ASSET_SCHEME`/
+/// `ASSET_ID_SCHEME`) : les 4 appelants (import glTF, audio, dimensions de texture,
+/// collecte d'assets) partagent cette même logique plutôt que de la dupliquer chacun
+/// de leur côté.
 pub fn is_known_scheme(path: &str) -> bool {
     path.starts_with(SCHEME) || path.starts_with(ASSET_SCHEME) || path.starts_with(ASSET_ID_SCHEME)
 }
 
-/// Manifeste `uuid → nom de fichier courant` (Sprint 95), persisté dans
+/// Manifeste `uuid → nom de fichier courant`, persisté dans
 /// `assets_dir()/manifest.json`. Le nom de fichier peut changer (renommage) sans que
 /// l'uuid ne change : c'est cette indirection qui rend une référence `asset-id://`
 /// stable dans le temps, contrairement à un chemin `asset://<nom>` en dur.
@@ -152,9 +152,8 @@ fn rename_asset_at(dir: &std::path::Path, id: &str, new_name: &str) -> bool {
 
 /// Renomme un asset de projet en gardant son uuid stable dans le manifeste : les scènes
 /// qui référencent `asset-id://<uuid>` continuent de résoudre vers le fichier après
-/// renommage — le livrable du Sprint 95 (« renommer un asset ne casse plus une scène »).
-/// `false` si `id` est inconnu du manifeste ou si le renommage disque échoue (ex. nom de
-/// destination déjà pris).
+/// renommage. `false` si `id` est inconnu du manifeste ou si le renommage disque échoue
+/// (ex. nom de destination déjà pris).
 pub fn rename_asset(id: &str, new_name: &str) -> bool {
     match assets_dir() {
         Some(dir) => rename_asset_at(&dir, id, new_name),
@@ -178,7 +177,7 @@ pub fn assets_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".motor3derust").join("assets"))
 }
 
-/// Préfixe d'une donnée **utilisateur** (Sprint 98) — sauvegardes de partie, distinct
+/// Préfixe d'une donnée **utilisateur** — sauvegardes de partie, distinct
 /// des assets de projet (`asset://`, en lecture pour l'essentiel) : ce schéma désigne
 /// un dossier écrit **par le jeu lui-même** en cours de Play, sur desktop comme sur
 /// Android (où `$HOME` n'existe pas — cf. `set_android_data_dir`).
@@ -228,7 +227,7 @@ pub fn write_user_bytes(name: &str, data: &[u8]) -> Result<(), String> {
 }
 
 /// Lit les octets d'un chemin quel que soit son schéma : `asset-id://` (référence
-/// stable, résolue puis relue récursivement — Sprint 95), `bundle://` (embarqué),
+/// stable, résolue puis relue récursivement), `bundle://` (embarqué),
 /// `asset://` (dossier projet, repli sur le bundle), ou chemin disque classique.
 pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
     if let Some(resolved) = resolve_asset_id(path) {
@@ -250,9 +249,9 @@ pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
 }
 
 /// Copie un fichier disque dans le dossier d'assets de projet et renvoie une référence
-/// stable `asset-id://<uuid>` (Sprint 95 — avant, un `asset://<nom>` en dur, cassé par
-/// un renommage ultérieur du fichier), ou `None` si la copie échoue. Idempotent pour un
-/// schéma déjà connu (renvoyé tel quel, y compris un `asset://` hérité d'avant ce sprint).
+/// stable `asset-id://<uuid>` (contrairement à un `asset://<nom>` en dur, qui casse
+/// dès qu'on renomme le fichier), ou `None` si la copie échoue. Idempotent pour un
+/// schéma déjà connu (renvoyé tel quel, y compris un `asset://` hérité d'anciennes scènes).
 pub fn import_to_assets(src: &str) -> Option<String> {
     if is_known_scheme(src) {
         return Some(src.to_string());
@@ -336,8 +335,8 @@ mod tests {
 
     #[test]
     fn renaming_an_asset_keeps_its_id_resolvable() {
-        // Le livrable du Sprint 95 : un renommage ne doit pas casser la référence
-        // stable — c'est précisément ce que `asset://<nom>` en dur ne permettait pas.
+        // Un renommage ne doit pas casser la référence stable — c'est précisément
+        // ce que `asset://<nom>` en dur ne permettait pas.
         let dir = temp_assets_dir("rename");
         std::fs::write(dir.join("arbre.glb"), b"contenu glb factice").unwrap();
         let id = register_asset_at(&dir, "arbre.glb");

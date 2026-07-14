@@ -1,5 +1,5 @@
 //! Sauvegarde/chargement JSON de la scène (avec migration de version) et rechargement
-//! des meshes importés après un `Load`. Extrait de `scene/mod.rs` (Sprint 103a-2).
+//! des meshes importés après un `Load`. Extrait de `scene/mod.rs`.
 
 use glam::Vec3;
 
@@ -98,7 +98,7 @@ impl Scene {
         Ok(scene)
     }
 
-    /// Version courante du schéma JSON de `Scene` (Sprint 95).
+    /// Version courante du schéma JSON de `Scene`.
     pub const CURRENT_VERSION: u32 = 1;
 
     /// Met `self` à jour au schéma courant : applique les migrations manquantes selon

@@ -1578,33 +1578,43 @@ régression client. Une manche décidée ne coupe plus tout le process
   prefab}.rs`.
 - **Risque** : refactor pur — fait seul, aucun sprint gameplay en parallèle.
 
-#### Sprint 103a-3 — Maintenabilité : commentaires d'historique vers `docs/audits/` 🟡 PILOTE FAIT
+#### Sprint 103a-3 — Maintenabilité : commentaires d'historique vers `docs/audits/` ✅ FAIT
 - [x] **Convention établie** : `docs/audits/README.md` documente le partage entre code
       (invariants/pièges non évidents, jamais de numéro de sprint ni de date) et
       `docs/audits/<module>.md` (récit — attribution par sprint, bugs réels trouvés en
       testant, essais écartés).
 - [x] **Pilote sur `src/runtime/physics.rs`** (le fichier le plus dense en références
-      « Sprint N » du projet) : tous les tags `(Sprint N)`, dates (`2026-07-12`) et
-      récits de bugs (« constaté en test réel… », « trouvé en écrivant les tests… »)
-      retirés des commentaires ; historique déplacé dans `docs/audits/physics.md`
-      (attribution par sprint + 6 bugs réels avec leur cause et leur correctif).
-      Comportement inchangé : mouvement de texte de commentaires uniquement.
-- [x] **Livrable vérifié** : 312 tests lib + 4 bin + 8 golden toujours verts,
-      `cargo clippy`/`cargo fmt` propres — aucun changement de code, seulement de
-      commentaires.
-- [ ] **Reste à faire** (généralisation, décision différée à une session ultérieure) :
-      appliquer la même convention aux autres fichiers denses en historique —
-      `src/app/mod.rs` et ses sous-modules, `src/scene/mod.rs` et ses sous-modules,
-      `src/editor/mod.rs` et ses sous-modules — chacun avec son
-      `docs/audits/<module>.md`. Périmètre volontairement non traité d'un coup : un
-      balayage complet de `src/**/*.rs` en une seule passe produirait un diff énorme,
-      difficile à relire, sur un jugement subjectif (quel commentaire est un
-      « invariant important » vs de l'« historique ») — un fichier ou un sous-système
-      à la fois, comme ce pilote.
-- **Fichiers** : `docs/audits/README.md`, `docs/audits/physics.md`,
-  `src/runtime/physics.rs` (commentaires seulement). Reste : `src/**/*.rs`.
+      « Sprint N » du projet) pour valider la convention avant de généraliser : tags
+      `(Sprint N)`, dates, récits de bugs retirés des commentaires ; historique déplacé
+      dans `docs/audits/physics.md`.
+- [x] **Généralisé à tout `src/**/*.rs`** (~40 fichiers, ~400 références « Sprint N » au
+      total) — traité fichier par fichier/sous-système en parallèle plutôt qu'en un seul
+      balayage, pour garder chaque diff relisible : `gfx/renderer.rs` (le plus dense, 68
+      références), `app/mod.rs` (66), `scene/mod.rs` (28 blocs), `scene/import.rs`,
+      les sous-modules réseau d'`app/` (`network_client.rs`, `multiplayer.rs`,
+      `fireball.rs`), tout `editor/*`, tout `net/*`, les petits fichiers divers
+      (`bin/server.rs`, `assets.rs`, `runtime/savegame.rs`, `gfx/mesh.rs`, `lib.rs`,
+      `log_buffer.rs`), et le reste des sous-modules `app/*`. Complété par un passage
+      manuel sur 4 petits sous-modules `scene/*` (`demos.rs`, `queries.rs`,
+      `persistence.rs`, `prefab.rs`) qui n'avaient été assignés à aucun groupe.
+- [x] **10 fichiers `docs/audits/*.md` créés** (un par gros fichier ou groupe de petits
+      fichiers apparentés, cf. `docs/audits/README.md`) : `physics.md`, `renderer.md`,
+      `app-mod.md`, `app-network.md`, `app-misc.md`, `scene-mod.md`, `scene-import.md`,
+      `editor.md`, `net.md`, `misc.md` — chacun avec une section « Attribution par
+      sprint » (terse) et « Bugs réels trouvés en testant » (cause + correctif). Un vrai
+      bug non lié à l'historique a été trouvé et corrigé au passage (`gfx/renderer.rs` :
+      un commentaire sur `skinned_pipeline` disait encore « pas branché sur la boucle de
+      rendu générale », resté périmé depuis l'intégration réelle — corrigé pour décrire
+      l'état actuel).
+- [x] **Livrable vérifié** : 312 tests lib + 4 bin + 8 golden toujours verts, `cargo
+      clippy`/`cargo fmt` propres — changement de commentaires uniquement, vérifié par
+      un contrôle systématique (diff limité aux lignes `//`/`///`/`//!`) sur les 40
+      fichiers touchés.
+- **Fichiers** : `docs/audits/{README,physics,renderer,app-mod,app-network,app-misc,
+  scene-mod,scene-import,editor,net,misc}.md` ; ~40 fichiers `src/**/*.rs`
+  (commentaires seulement).
 - **Livrable** : commentaires du code recentrés sur les invariants, historique déplacé
-  en doc — fait pour `physics.rs`, à généraliser.
+  en doc — fait sur l'ensemble du projet.
 
 #### Sprint 103b — Character controller kinématique ⬜
 **Objectif** : marches, pentes, snap au sol — **sans casser le multijoueur**.

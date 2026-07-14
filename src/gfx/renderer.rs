@@ -46,7 +46,7 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     /// Position de la caméra (xyz), pour le terme spéculaire. w inutilisé.
     eye: [f32; 4],
-    /// Inverse de `view_proj` (Sprint 89) : déplie un point NDC du plan lointain en
+    /// Inverse de `view_proj` : déplie un point NDC du plan lointain en
     /// position monde, pour reconstruire la direction de vue dans `sky.wgsl` sans
     /// dépendre d'un dégradé fixe en espace écran (qui resterait immobile si la
     /// caméra pivote). Inutilisé par les autres shaders (`main.wgsl`/`skinned.wgsl`/
@@ -82,7 +82,7 @@ struct SceneUniform {
     light_vp: [[f32; 4]; 4],
     num_points: [f32; 4], // x = nombre de lumières ponctuelles actives
     points: [PointLightU; crate::scene::MAX_POINT_LIGHTS],
-    /// Ciel + brouillard (Sprint 89) : ajoutés en fin de struct pour ne décaler aucun
+    /// Ciel + brouillard : ajoutés en fin de struct pour ne décaler aucun
     /// des offsets existants ci-dessus (moins de risque de désync avec les shaders qui
     /// ne déclarent qu'un préfixe de cet uniform).
     sky_horizon: [f32; 4], // rgb, w inutilisé
@@ -90,7 +90,7 @@ struct SceneUniform {
     fog: [f32; 4],        // rgb = couleur, w = densité
 }
 
-/// Paramètre du bloom (Sprint 91, groupe dédié du `tonemap_pipeline`) : juste
+/// Paramètre du bloom (groupe dédié du `tonemap_pipeline`) : juste
 /// l'intensité, dans son propre petit uniform plutôt que dans `SceneUniform` — le
 /// tone mapping est une passe séparée avec son propre bind group, pas de raison de
 /// lui faire porter tout `Light`/`Camera` pour un seul flottant.
@@ -104,7 +104,7 @@ const SHADOW_SIZE: u32 = 1024;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// Cible de rendu HDR (Sprint 90) : la scène (ciel, grille, objets, gizmos, debug
+/// Cible de rendu HDR : la scène (ciel, grille, objets, gizmos, debug
 /// drawing, skinning) est dessinée dans cette texture intermédiaire — pas directement
 /// dans le format d'affichage final — pour que les valeurs > 1 (émissifs, spéculaire
 /// fort) restent représentables au lieu d'être écrêtées avant même le tone mapping.
@@ -112,16 +112,16 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// `Rgba32Float`, filtrable nativement sans extension GPU supplémentaire).
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// Nombre de niveaux de la chaîne de mips du bloom (Sprint 91) : mip 0 = moitié de la
+/// Nombre de niveaux de la chaîne de mips du bloom : mip 0 = moitié de la
 /// résolution HDR, chaque niveau suivant moitié du précédent. 4 est un compromis
 /// raisonnable — assez pour un halo doux qui s'étend sur plusieurs pixels, sans
 /// multiplier les passes plein écran par frame (2×(N-1) + 1 = 7 passes ici).
 const BLOOM_MIP_LEVELS: u32 = 4;
 
-/// Skinning GPU (Sprint 86-87) : matrices par instance skinnée dans la palette de
+/// Skinning GPU : matrices par instance skinnée dans la palette de
 /// joints — généreux pour un rig réel (Mixamo : ~50-65 os).
 const JOINT_CAPACITY: usize = 128;
-/// Nombre d'objets skinnés distincts dessinables dans une même frame (Sprint 87) : un
+/// Nombre d'objets skinnés distincts dessinables dans une même frame : un
 /// créneau par instance dans `Renderer::joint_buf`, sélectionné au dessin par offset
 /// dynamique. Augmenter est un changement d'une ligne si besoin.
 const MAX_SKINNED_INSTANCES: usize = 8;
@@ -139,7 +139,7 @@ struct InstanceDraw {
 }
 
 pub struct Renderer {
-    /// `None` en rendu headless (Sprint 80 : tests de non-régression visuelle) — pas de
+    /// `None` en rendu headless (tests de non-régression visuelle) — pas de
     /// fenêtre, pas de surface d'écran, pas d'UI egui.
     pub window: Option<Arc<Window>>,
     surface: Option<wgpu::Surface<'static>>,
@@ -149,17 +149,17 @@ pub struct Renderer {
     pub size: winit::dpi::PhysicalSize<u32>,
 
     pipeline: wgpu::RenderPipeline,
-    /// Fond de ciel (Sprint 89), dessiné en premier dans la passe principale.
+    /// Fond de ciel, dessiné en premier dans la passe principale.
     sky_pipeline: wgpu::RenderPipeline,
-    /// Tone mapping HDR → LDR (Sprint 90), dessiné après la passe principale.
+    /// Tone mapping HDR → LDR, dessiné après la passe principale.
     tonemap_pipeline: wgpu::RenderPipeline,
     tonemap_layout: wgpu::BindGroupLayout,
     tonemap_sampler: wgpu::Sampler,
-    /// Cible HDR (Sprint 90) de la passe principale en mode fenêtré — redimensionnée
+    /// Cible HDR de la passe principale en mode fenêtré — redimensionnée
     /// dans `resize()`, comme `depth_view`. Les chemins headless/test créent la leur en
     /// local (taille demandée par l'appelant, indépendante de la fenêtre).
     hdr_view: wgpu::TextureView,
-    /// Chaîne de bloom (Sprint 91), cf. `render_bloom` — trois pipelines partageant
+    /// Chaîne de bloom, cf. `render_bloom` — trois pipelines partageant
     /// `bloom_sample_layout` (seuil, downsample, upsample) et une petite texture à
     /// plusieurs mips en mode fenêtré (`bloom_mip_views`, redimensionnée dans
     /// `resize()` comme `hdr_view`).
@@ -178,7 +178,7 @@ pub struct Renderer {
 
     meshes: HashMap<MeshKind, GpuMesh>,
     imported_gpu: Vec<GpuMesh>,
-    /// Mesh GPU skinné (Sprint 87), aligné avec `imported_gpu`/`Scene::imported` :
+    /// Mesh GPU skinné, aligné avec `imported_gpu`/`Scene::imported` :
     /// `None` pour un import statique (pas de skin), `Some` sinon. Séparé de
     /// `imported_gpu` plutôt qu'un enum : le mesh statique reste disponible même pour un
     /// objet skinné (utile si un jour un LOD non skinné est voulu), et la grande majorité
@@ -190,7 +190,7 @@ pub struct Renderer {
     models_capacity: usize,
     /// Plan de rendu de la frame : un descripteur par objet, dans l'ordre du buffer d'instances.
     draw_plan: Vec<InstanceDraw>,
-    /// Objets skinnés (Sprint 87) : (indice scène, instance_index dans `models_buf`),
+    /// Objets skinnés : (indice scène, instance_index dans `models_buf`),
     /// hors du batching de `draw_plan` (chaque objet a sa propre palette de joints,
     /// dessiné individuellement par `draw_skinned_objects`). Leurs `ModelUniform` occupent
     /// la queue de `models_buf`, après les objets statiques de `draw_plan`.
@@ -207,7 +207,7 @@ pub struct Renderer {
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vbuf: wgpu::Buffer,
 
-    // --- debug drawing (Sprint 83) : mêmes pipeline/format que les gizmos, buffer
+    // --- debug drawing : mêmes pipeline/format que les gizmos, buffer
     //     séparé et redimensionnable (le nombre de segments n'est pas borné à l'avance,
     //     contrairement aux gizmos de manipulation). Vidé (`AppState::debug_lines`)
     //     après chaque frame de rendu.
@@ -229,7 +229,7 @@ pub struct Renderer {
     tex_sampler: wgpu::Sampler,
     /// Bind groups de texture par chemin ; "" = texture blanche par défaut.
     textures: HashMap<String, wgpu::BindGroup>,
-    /// Génération de mipmaps à l'import (Sprint 92) : pipeline/layout/sampler dédiés,
+    /// Génération de mipmaps à l'import : pipeline/layout/sampler dédiés,
     /// utilisés par `make_texture` pour chaque niveau au-delà du mip 0.
     mipgen_pipeline: wgpu::RenderPipeline,
     mipgen_layout: wgpu::BindGroupLayout,
@@ -239,12 +239,11 @@ pub struct Renderer {
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
     backend: String,
 
-    // --- skinning GPU (Sprint 86) : palette de matrices de joints (groupe 4) + pipeline
-    //     dédié (vertex `skinned.wgsl`, fragment `fs_main` de main.wgsl **partagée**, même
-    //     éclairage que le chemin statique). Pas encore branché sur la boucle de rendu de
-    //     scène générale (`render`/`render_scene_headless`) — capacité vérifiée par un
-    //     rendu headless dédié, `render_skinned_test` (tests). L'intégration éditeur
-    //     (SceneObject animé, Play) est un chantier séparé, délibérément hors de ce sprint.
+    // --- skinning GPU : palette de matrices de joints (groupe 4) + pipeline dédié
+    //     (vertex `skinned.wgsl`, fragment `fs_main` de main.wgsl **partagée**, même
+    //     éclairage que le chemin statique). Dessine les objets skinnés de la scène
+    //     (`render`/`render_scene_headless`, via `draw_plan_skinned`) ; `render_skinned_test`
+    //     couvre en plus un chemin headless dédié à un seul mesh, hors scène.
     skinned_pipeline: wgpu::RenderPipeline,
     joint_buf: wgpu::Buffer,
     joint_bind_group: wgpu::BindGroup,
@@ -257,7 +256,7 @@ impl Renderer {
         Self::new_impl(Some(window), size).await
     }
 
-    /// Rendu headless : pas de fenêtre ni de surface d'écran (Sprint 80, golden tests).
+    /// Rendu headless : pas de fenêtre ni de surface d'écran (golden tests).
     /// `compatible_surface: None` à la création de l'adaptateur ; format fixe
     /// (`Rgba8UnormSrgb`) puisqu'il n'y a pas de surface pour en dicter un.
     pub async fn new_headless(width: u32, height: u32) -> Result<Renderer, String> {
@@ -443,7 +442,7 @@ impl Renderer {
             ],
         });
 
-        // --- Génération de mipmaps à l'import (Sprint 92) : chaîne de blits, un niveau
+        // --- Génération de mipmaps à l'import : chaîne de blits, un niveau
         // à la fois, chacun un simple échantillonnage bilinéaire du niveau précédent
         // (moitié résolution) — cf. `make_texture`/`mip_count_for`. Pipeline dédiée
         // (pas celle du bloom, format différent — `Rgba8UnormSrgb` des textures
@@ -547,7 +546,7 @@ impl Renderer {
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            // Mipmaps (Sprint 92) : sans `mipmap_filter`, le sampler resterait bloqué
+            // Mipmaps : sans `mipmap_filter`, le sampler resterait bloqué
             // sur le mip 0 quelle que soit la chaîne générée par `make_texture` — la
             // sélection/mélange de mip selon la distance (dérivées d'écran) ne se
             // déclenche qu'avec ce filtre renseigné.
@@ -625,7 +624,7 @@ impl Renderer {
             cache: None,
         });
 
-        // --- Ciel (Sprint 89) : triangle plein écran sans vertex buffer, dessiné en
+        // --- Ciel : triangle plein écran sans vertex buffer, dessiné en
         // premier dans la passe principale (avant la géométrie), profondeur à `Always`/
         // pas d'écriture pour ne jamais l'emporter sur un objet réel ni polluer le depth
         // buffer que la passe de géométrie s'apprête à remplir. Réutilise `camera_layout`
@@ -679,7 +678,7 @@ impl Renderer {
             cache: None,
         });
 
-        // --- Tone mapping (Sprint 90) : passe plein écran qui convertit `HDR_FORMAT`
+        // --- Tone mapping : passe plein écran qui convertit `HDR_FORMAT`
         // (rempli par `pipeline`/`sky_pipeline`/`grid_pipeline`/`gizmo_pipeline`/
         // `skinned_pipeline` ci-dessus) vers `config.format`, le format d'affichage réel
         // — c'est la seule pipeline de cette fonction qui cible encore `config.format`
@@ -688,7 +687,7 @@ impl Renderer {
             label: Some("tonemap_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/tonemap.wgsl").into()),
         });
-        // `bloom_sample_layout` (Sprint 91) : texture + sampler seuls, partagée par les
+        // `bloom_sample_layout` : texture + sampler seuls, partagée par les
         // 3 passes de la chaîne de bloom (seuil, downsample, upsample) — plus légère que
         // `tonemap_layout` ci-dessous, qui porte en plus la texture de bloom déjà
         // remontée et son intensité.
@@ -733,7 +732,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Bloom (Sprint 91) : texture déjà remontée à sa taille pleine par le
+                // Bloom : texture déjà remontée à sa taille pleine par le
                 // filtrage bilinéaire du sampler (cf. `Renderer::render_bloom`).
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
@@ -804,7 +803,7 @@ impl Renderer {
         });
         let hdr_view = create_hdr_view(&device, size.width, size.height);
 
-        // --- Bloom (Sprint 91) : seuil + chaîne de mips down/upsample, cf.
+        // --- Bloom : seuil + chaîne de mips down/upsample, cf.
         // `Renderer::render_bloom`. Les 3 passes partagent `bloom_sample_layout` (texture
         // + sampler) et le shader `bloom.wgsl` ; seul le blend state distingue
         // downsample (REPLACE) d'upsample (ADD, accumule sur le niveau déjà rempli par
@@ -899,10 +898,10 @@ impl Renderer {
         let bloom_intensity_buf = create_uniform(&device, "bloom_intensity", 16);
         let bloom_mip_views = create_bloom_mip_views(&device, size.width, size.height);
 
-        // --- Skinning GPU (Sprint 86) : palette de joints (groupe 4), pipeline vertex
+        // --- Skinning GPU : palette de joints (groupe 4), pipeline vertex
         // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
         // même `fs_main` : un seul endroit qui connaît l'éclairage).
-        // Décalage dynamique (Sprint 87, intégration Play) : plusieurs objets skinnés
+        // Décalage dynamique : plusieurs objets skinnés
         // distincts peuvent être dessinés dans la même frame, chacun avec sa propre
         // palette de joints — un seul gros buffer, un « créneau » par instance, sélectionné
         // au dessin via un offset dynamique plutôt que de réécrire le buffer entre chaque
@@ -1104,7 +1103,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        // Debug drawing (Sprint 83) : capacité initiale modeste (256 segments), doublée à
+        // Debug drawing : capacité initiale modeste (256 segments), doublée à
         // la demande (cf. `ensure_debug_capacity`) — le volume dépend du gameplay, pas
         // connu à l'avance contrairement aux gizmos de manipulation.
         const INITIAL_DEBUG_CAPACITY: usize = 512; // 512 sommets = 256 segments
@@ -1252,8 +1251,8 @@ impl Renderer {
             create_bloom_mip_views(&self.device, new_size.width, new_size.height);
     }
 
-    /// Recrée `debug_vbuf` en le doublant tant qu'il ne peut pas contenir `n` sommets
-    /// (Sprint 83), même politique de croissance que `create_models_buffer`.
+    /// Recrée `debug_vbuf` en le doublant tant qu'il ne peut pas contenir `n` sommets,
+    /// même politique de croissance que `create_models_buffer`.
     fn ensure_debug_capacity(&mut self, n: usize) {
         if n <= self.debug_capacity {
             return;
@@ -1269,7 +1268,7 @@ impl Renderer {
     }
 
     /// Envoie la palette de matrices de joints d'**une** instance skinnée au GPU, dans son
-    /// créneau `slot` du buffer partagé (Sprint 86-87 : offset dynamique, cf. commentaire
+    /// créneau `slot` du buffer partagé (offset dynamique, cf. commentaire
     /// sur `JOINT_SLOT_BYTES`). Tronque silencieusement (`log::warn!`) au-delà de
     /// `joint_capacity` plutôt que de paniquer ou d'écrire hors créneau — un rig
     /// anormalement gros dégraderait l'anim plutôt que de planter le rendu. `slot` au-delà
@@ -1299,7 +1298,7 @@ impl Renderer {
     }
 
     /// Calcule et envoie au GPU la palette de joints de chaque objet skinné visible de la
-    /// frame (Sprint 87 — `self.draw_plan_skinned`, déjà construit par `write_uniforms`),
+    /// frame (`self.draw_plan_skinned`, déjà construit par `write_uniforms`),
     /// **avant** toute passe de rendu (cf. commentaire aux sites d'appel : `write_buffer`
     /// n'est pas ordonné avec les draw calls d'un encoder pas encore soumis). Renvoie les
     /// offsets dynamiques, dans l'ordre de `draw_plan_skinned`, à passer à
@@ -1328,7 +1327,7 @@ impl Renderer {
                 .filter(|a| !a.clip.is_empty())
                 .and_then(|a| find_clip(&a.clip));
             let time = anim.map(|a| a.time).unwrap_or(0.0);
-            // Fondu enchaîné (Sprint 87) : `blend < 1.0` tant qu'une transition est en
+            // Fondu enchaîné : `blend < 1.0` tant qu'une transition est en
             // cours (cf. `AppState::sim_step`) — mélange avec le clip quitté au niveau
             // des poses locales, pas des matrices monde (`compute_joint_matrices_blended`).
             let matrices = match anim.filter(|a| a.blend < 1.0 && !a.prev_clip.is_empty()) {
@@ -1385,7 +1384,7 @@ impl Renderer {
         }
     }
 
-    /// Rendu headless d'**un** mesh skinné, en une seule instance (Sprint 86, chemin de
+    /// Rendu headless d'**un** mesh skinné, en une seule instance (chemin de
     /// test/vérification dédié — pas piloté par `draw_plan_skinned`). `app` ne sert qu'à
     /// fournir caméra + lumière (`write_uniforms`) ; sa scène n'est pas dessinée ici.
     pub fn render_skinned_test(
@@ -1445,7 +1444,7 @@ impl Renderer {
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
-        // Cible HDR (Sprint 90), locale à cet appel — cf. `hdr_view` de `render()`.
+        // Cible HDR, locale à cet appel — cf. `hdr_view` de `render()`.
         let hdr_view = create_hdr_view(&self.device, width, height);
 
         let mut encoder = self
@@ -1494,8 +1493,8 @@ impl Renderer {
             pass.draw_indexed(0..gpu_mesh.num_indices, 0, 0..1);
         }
 
-        // Tone mapping (Sprint 90) : HDR → `view` (le format lu par `finish_and_read_rgba`).
-        // Pas de bloom ici (Sprint 91) : ce chemin sert uniquement au golden test de
+        // Tone mapping : HDR → `view` (le format lu par `finish_and_read_rgba`).
+        // Pas de bloom ici : ce chemin sert uniquement au golden test de
         // skinning, qui n'a pas besoin du post-effet — `hdr_view` réutilisée comme
         // source de bloom factice, neutralisée par une intensité à 0.
         self.tonemap(&mut encoder, &hdr_view, &hdr_view, 0.0, &view);
@@ -1536,7 +1535,7 @@ impl Renderer {
         while self.imported_gpu.len() < scene.imported.len() {
             let m = &scene.imported[self.imported_gpu.len()];
             self.imported_gpu.push(GpuMesh::new(&self.device, &m.data));
-            // Skinning GPU (Sprint 87) : mesh skinné en plus du statique si le glTF a un
+            // Skinning GPU : mesh skinné en plus du statique si le glTF a un
             // skin (`ImportedMesh::skeleton`) — `None` sinon, la grande majorité des imports.
             let skinned = m
                 .skinned_mesh_data()
@@ -1654,7 +1653,7 @@ impl Renderer {
         let scene_uniform = SceneUniform {
             light_dir: [l.dir[0], l.dir[1], l.dir[2], 0.0],
             light_color: [l.color[0], l.color[1], l.color[2], 0.0],
-            // .y : vue de debug (Sprint 83) — canal inutilisé jusqu'ici, réutilisé plutôt
+            // .y : vue de debug — canal inutilisé jusqu'ici, réutilisé plutôt
             // que d'agrandir l'uniform. Décodé dans `main.wgsl`.
             ambient: [l.ambient, app.debug_view.as_uniform(), 0.0, 0.0],
             light_vp: light_vp.to_cols_array_2d(),
@@ -1719,7 +1718,7 @@ impl Renderer {
         self.draw_plan.clear();
         for &i in order.iter() {
             let obj = &app.scene.objects[i];
-            // Skinning GPU (Sprint 87) : un objet skinné a sa propre palette de joints,
+            // Skinning GPU : un objet skinné a sa propre palette de joints,
             // incompatible avec le batching par instances de ce plan — dessiné à part par
             // `draw_skinned_objects`, jamais ici (sinon il apparaîtrait deux fois).
             if is_skinned(&app.scene, obj.mesh) {
@@ -1742,7 +1741,7 @@ impl Renderer {
             });
         }
 
-        // Objets skinnés (Sprint 87) : leur ModelUniform occupe la queue de `models`,
+        // Objets skinnés : leur ModelUniform occupe la queue de `models`,
         // après tous les objets statiques ci-dessus — `draw_skinned_objects` s'en sert
         // comme `base_instance` pour un draw individuel par objet (chacun avec sa propre
         // palette de joints, incompatible avec le batching des statiques).
@@ -1779,7 +1778,7 @@ impl Renderer {
         }
     }
 
-    /// Chaîne de bloom (Sprint 91) : seuil (`hdr_source` → `mip_views[0]`), descente
+    /// Chaîne de bloom : seuil (`hdr_source` → `mip_views[0]`), descente
     /// (`mip_views[i]` → `mip_views[i+1]`, remplace), puis remontée (`mip_views[i+1]` →
     /// `mip_views[i]`, additionne) — `mip_views[0]` porte le résultat final en sortie,
     /// à moitié résolution HDR, remonté à pleine taille par le filtrage bilinéaire du
@@ -1853,7 +1852,7 @@ impl Renderer {
         }
     }
 
-    /// Passe de tone mapping (Sprint 90) + composition du bloom (Sprint 91) : lit
+    /// Passe de tone mapping + composition du bloom : lit
     /// `hdr_source` (`HDR_FORMAT`, rempli par la passe principale) et `bloom_source`
     /// (résultat de `render_bloom`, `mip_views[0]`), écrit le résultat dans `output`
     /// (format d'affichage final, `config.format`). Partagée par les trois chemins de
@@ -2316,7 +2315,7 @@ impl Renderer {
         };
         app.camera.aspect = dw / dh.max(1.0);
         self.write_uniforms(app);
-        // Skinning GPU (Sprint 87) : joint_buf entièrement rempli AVANT la passe (comme
+        // Skinning GPU : joint_buf entièrement rempli AVANT la passe (comme
         // les lignes de debug ci-dessous) — `queue.write_buffer` n'est pas ordonné avec
         // les draw calls d'un encoder pas encore soumis, donc rien de tout ça ne peut
         // être fait entre deux `draw_indexed` de la passe principale plus bas.
@@ -2450,7 +2449,7 @@ impl Renderer {
             verts.len() as u32
         };
 
-        // Debug drawing (Sprint 83) : segments accumulés pendant la frame (picking,
+        // Debug drawing : segments accumulés pendant la frame (picking,
         // gameplay), dessinés une fois puis vidés — jamais persistants d'une frame à
         // l'autre, contrairement aux gizmos de manipulation ci-dessus.
         let debug_count = {
@@ -2541,7 +2540,7 @@ impl Renderer {
         }
 
         {
-            // Sprint 90 : la passe principale dessine dans `hdr_view` (HDR_FORMAT),
+            // La passe principale dessine dans `hdr_view` (HDR_FORMAT),
             // pas directement dans `view` — `self.tonemap()` fait le dernier maillon
             // vers le format d'affichage, après cette passe.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2578,7 +2577,7 @@ impl Renderer {
             pass.set_viewport(dx, dy, dw, dh, 0.0, 1.0);
             pass.set_scissor_rect(dx as u32, dy as u32, dw as u32, dh as u32);
 
-            // Ciel (Sprint 89) : dessiné en premier, derrière tout le reste.
+            // Ciel : dessiné en premier, derrière tout le reste.
             pass.set_pipeline(&self.sky_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.draw(0..3, 0..1);
@@ -2644,7 +2643,7 @@ impl Renderer {
                 pass.draw(0..gizmo_count, 0..1);
             }
 
-            // Debug drawing (Sprint 83) : même pipeline lignes, buffer dédié.
+            // Debug drawing : même pipeline lignes, buffer dédié.
             if debug_count > 0 {
                 pass.set_pipeline(&self.gizmo_pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -2652,12 +2651,12 @@ impl Renderer {
                 pass.draw(0..debug_count, 0..1);
             }
 
-            // Objets skinnés (Sprint 87) : un draw individuel par objet, palettes déjà
+            // Objets skinnés : un draw individuel par objet, palettes déjà
             // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
-        // Bloom (Sprint 91) : passes de seuil/downsample/upsample sautées entièrement
+        // Bloom : passes de seuil/downsample/upsample sautées entièrement
         // si désactivé (opt-out mobile, `RenderQuality::bloom_enabled`) — pas seulement
         // neutralisées côté shader, un vrai gain de perf sur le palier visé.
         let bloom_intensity = if app.bloom_enabled && app.render_quality.bloom_enabled() {
@@ -2668,7 +2667,7 @@ impl Renderer {
         if bloom_intensity > 0.0 {
             self.render_bloom(&mut encoder, &self.hdr_view, &self.bloom_mip_views);
         }
-        // Tone mapping (Sprint 90) : HDR → `view` (format d'affichage réel), avant l'UI
+        // Tone mapping : HDR → `view` (format d'affichage réel), avant l'UI
         // (l'UI egui reste en LDR, peinte par-dessus l'image déjà tonemappée).
         self.tonemap(
             &mut encoder,
@@ -2698,7 +2697,7 @@ impl Renderer {
     }
 
     /// Rendu headless d'une scène dans une texture hors-écran : passe d'ombre + passe
-    /// principale, **sans** grille, gizmos ni UI egui (Sprint 80 : golden tests de
+    /// principale, **sans** grille, gizmos ni UI egui (golden tests de
     /// non-régression visuelle). Le pipeline utilisé — mêmes shaders, mêmes bind groups —
     /// est celui de [`Renderer::render`] : un shader qui dérive fait dériver les deux.
     /// Retourne les pixels RGBA8 (`width`×`height`, 4 octets/pixel, sans padding de ligne).
@@ -2713,7 +2712,7 @@ impl Renderer {
         self.sync_textures(&app.scene);
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
         self.write_uniforms(app);
-        // Skinning GPU (Sprint 87) : cf. commentaire équivalent dans `render()`.
+        // Skinning GPU : cf. commentaire équivalent dans `render()`.
         let skinned_offsets = self.prepare_skinned_draws(&app.scene);
 
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -2749,13 +2748,13 @@ impl Renderer {
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
-        // Cible HDR (Sprint 90), locale à cet appel — cf. `hdr_view` de `render()`.
+        // Cible HDR, locale à cet appel — cf. `hdr_view` de `render()`.
         let hdr_view = create_hdr_view(&self.device, width, height);
-        // Chaîne de bloom (Sprint 91), locale à cet appel — cf. `bloom_mip_views` de
+        // Chaîne de bloom, locale à cet appel — cf. `bloom_mip_views` de
         // `render()`.
         let bloom_mip_views = create_bloom_mip_views(&self.device, width, height);
 
-        // Debug drawing (Sprint 83) : même logique que `render()` (préparer + vider avant
+        // Debug drawing : même logique que `render()` (préparer + vider avant
         // les passes, dessiner après les meshes texturés dans la passe principale).
         let debug_count = {
             let verts: Vec<GizmoVertex> = app
@@ -2839,7 +2838,7 @@ impl Renderer {
         }
 
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
-        // Dessine dans `hdr_view` (Sprint 90) ; `self.tonemap()` fait le dernier pas
+        // Dessine dans `hdr_view` ; `self.tonemap()` fait le dernier pas
         // vers `view`, juste avant la lecture des pixels.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2872,7 +2871,7 @@ impl Renderer {
             });
             pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
 
-            // Ciel (Sprint 89) : même geste que dans `render()`.
+            // Ciel : même geste que dans `render()`.
             pass.set_pipeline(&self.sky_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.draw(0..3, 0..1);
@@ -2919,7 +2918,7 @@ impl Renderer {
                 i = group_end;
             }
 
-            // Debug drawing (Sprint 83).
+            // Debug drawing.
             if debug_count > 0 {
                 pass.set_pipeline(&self.gizmo_pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -2927,11 +2926,11 @@ impl Renderer {
                 pass.draw(0..debug_count, 0..1);
             }
 
-            // Objets skinnés (Sprint 87) : cf. commentaire équivalent dans `render()`.
+            // Objets skinnés : cf. commentaire équivalent dans `render()`.
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
 
-        // Bloom (Sprint 91) : cf. commentaire équivalent dans `render()`.
+        // Bloom : cf. commentaire équivalent dans `render()`.
         let bloom_intensity = if app.bloom_enabled && app.render_quality.bloom_enabled() {
             app.scene.sky.bloom_intensity
         } else {
@@ -2940,7 +2939,7 @@ impl Renderer {
         if bloom_intensity > 0.0 {
             self.render_bloom(&mut encoder, &hdr_view, &bloom_mip_views);
         }
-        // Tone mapping (Sprint 90) : HDR → `view` (le format lu par `finish_and_read_rgba`).
+        // Tone mapping : HDR → `view` (le format lu par `finish_and_read_rgba`).
         self.tonemap(
             &mut encoder,
             &hdr_view,
@@ -2953,8 +2952,8 @@ impl Renderer {
     }
 
     /// Copie `target` vers un buffer lisible CPU, soumet `encoder` et attend le résultat —
-    /// partagé par tous les rendus headless (`render_scene_headless`, `render_skinned_test`
-    /// (Sprint 86)). `encoder` doit déjà contenir toutes les passes de dessin dans `target` ;
+    /// partagé par tous les rendus headless (`render_scene_headless`, `render_skinned_test`).
+    /// `encoder` doit déjà contenir toutes les passes de dessin dans `target` ;
     /// cette méthode ne fait que la copie finale + lecture.
     fn finish_and_read_rgba(
         &self,
@@ -3021,7 +3020,7 @@ impl Renderer {
     }
 }
 
-/// `true` si `mesh` référence un import glTF skinné (Sprint 87) — c'est-à-dire dont
+/// `true` si `mesh` référence un import glTF skinné — c'est-à-dire dont
 /// `ImportedMesh::skeleton` est renseigné. Toujours `false` pour les primitives, qui ne
 /// sont jamais skinnées.
 fn is_skinned(scene: &Scene, mesh: MeshKind) -> bool {
@@ -3055,7 +3054,7 @@ fn load_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
     Some((img.into_raw(), w, h))
 }
 
-/// Nombre de mips pour une texture `width`×`height` (Sprint 92) : `1 + log2(plus
+/// Nombre de mips pour une texture `width`×`height` : `1 + log2(plus
 /// grande dimension)`, la formule standard — 256 → 9 niveaux (256..1), 1×1 → 1 (rien
 /// à générer). `leading_zeros` sur `u32` : direct, sans dépendance à une fonction
 /// `log2` flottante (imprécisions d'arrondi à éviter sur un compte de niveaux entier).
@@ -3064,7 +3063,7 @@ fn mip_count_for(width: u32, height: u32) -> u32 {
 }
 
 /// Crée une texture RGBA8 + son bind group (groupe 3) prêt à lier, avec sa chaîne de
-/// mips complète (Sprint 92) : sans elle, un objet texturé vu de loin agrège l'aliasing
+/// mips complète : sans elle, un objet texturé vu de loin agrège l'aliasing
 /// du mip 0 au lieu de moyenner vers une version plus petite — c'est tout l'intérêt de
 /// `mip_count_for`/de générer les niveaux suivants ici plutôt que de rester à 1 seul.
 #[allow(clippy::too_many_arguments)]
@@ -3093,9 +3092,9 @@ fn make_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        // `RENDER_ATTACHMENT` en plus de `TEXTURE_BINDING`/`COPY_DST` (déjà là avant ce
-        // sprint) : chaque mip > 0 est rempli en le ciblant comme cible de rendu
-        // (blit), pas via `write_texture` (qui n'a pas de filtre de réduction intégré).
+        // `RENDER_ATTACHMENT` en plus de `TEXTURE_BINDING`/`COPY_DST` : chaque mip > 0
+        // est rempli en le ciblant comme cible de rendu (blit), pas via `write_texture`
+        // (qui n'a pas de filtre de réduction intégré).
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -3391,7 +3390,7 @@ fn create_depth_view(
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-/// Texture HDR intermédiaire (Sprint 90) : cible de la passe principale avant tone
+/// Texture HDR intermédiaire : cible de la passe principale avant tone
 /// mapping. `width`/`height` explicites plutôt qu'une `SurfaceConfiguration` : réutilisée
 /// aussi bien par le chemin fenêtré (taille de la fenêtre) que par les rendus headless
 /// (taille demandée par l'appelant, indépendante de toute fenêtre).
@@ -3413,7 +3412,7 @@ fn create_hdr_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Text
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-/// Chaîne de mips du bloom (Sprint 91) : une texture à `BLOOM_MIP_LEVELS` niveaux,
+/// Chaîne de mips du bloom : une texture à `BLOOM_MIP_LEVELS` niveaux,
 /// démarrant à moitié de la résolution HDR (`width`/`height` = celles de `hdr_view`) —
 /// une vue par niveau (`base_mip_level` fixé, `mip_level_count: 1`), utilisable aussi
 /// bien comme cible de rendu que comme texture échantillonnée (jamais les deux à la
@@ -3455,7 +3454,7 @@ mod tests {
 
     #[test]
     fn mip_count_for_matches_the_standard_formula() {
-        // Sprint 92 : 1 + log2(plus grande dimension) — vérifié contre des puissances
+        // 1 + log2(plus grande dimension) — vérifié contre des puissances
         // de deux connues plutôt qu'en réimplémentant la formule dans le test.
         assert_eq!(mip_count_for(1, 1), 1); // rien à générer sous une texture 1×1
         assert_eq!(mip_count_for(2, 2), 2);

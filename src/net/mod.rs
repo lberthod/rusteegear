@@ -1,11 +1,10 @@
-//! Réseau multijoueur (SPRINT_MMORPG.md, phases N/O/P) : protocole, transport
-//! WebSocket, puis Firebase RTDB en backend annexe (Sprint 56+). Ce module ne
-//! dépend jamais de `gfx`/`egui`/`winit` : il doit rester utilisable tel quel
-//! depuis `src/bin/server.rs` (headless).
+//! Réseau multijoueur : protocole, transport WebSocket, puis Firebase RTDB en
+//! backend annexe. Ce module ne dépend jamais de `gfx`/`egui`/`winit` : il
+//! doit rester utilisable tel quel depuis `src/bin/server.rs` (headless).
 //!
 //! `server_loop` reste desktop-only (un serveur headless n'a pas de sens sur
-//! mobile). `client` est desktop + Android depuis le Sprint 65 (rejoindre un
-//! salon depuis un APK, cf. `app::network_client`) — pas encore iOS. `firebase`
+//! mobile). `client` est desktop + Android (rejoindre un salon depuis un APK,
+//! cf. `app::network_client`) — pas encore iOS. `firebase`
 //! (comptes/chat/classement, `ureq`) reste desktop-only : `rfd`/`ureq` ne
 //! ciblent pas mobile, cf. `Cargo.toml`. Le `protocol` (types + sérialisation,
 //! sans I/O) est compilé partout, y compris dans la lib `cdylib` Android/iOS.
