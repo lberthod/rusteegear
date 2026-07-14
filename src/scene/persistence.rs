@@ -78,6 +78,7 @@ impl Scene {
             game_camera: None,
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
+            hud_widgets: Vec::new(),
             version: Scene::CURRENT_VERSION,
         })
     }

@@ -941,6 +941,102 @@ pub struct Scene {
     /// seulement à l'aperçu éditeur.
     #[serde(default)]
     pub hud_layout: HudLayout,
+    /// Widgets de HUD déclaratifs (texte, image, jauge, bouton) : contenu et
+    /// liaison aux valeurs de jeu décrits en donnée de scène plutôt qu'en code Rust
+    /// dédié — un niveau exporté peut définir son propre HUD sans toucher au moteur.
+    /// S'affichent au-dessus des overlays historiques (`hud_layout`), pas à leur
+    /// place : ceux-ci restent le chemin garanti (vie, viseur…) tant que tous les
+    /// niveaux existants n'ont pas migré.
+    #[serde(default)]
+    pub hud_widgets: Vec<HudWidget>,
+}
+
+/// Point d'ancrage d'un `HudWidget` dans la zone de jeu (`play_rect`) : le widget
+/// est positionné relativement à ce coin, `offset` s'ajoutant dans le sens qui
+/// l'éloigne du bord (ex. `TopRight` + `offset [-10, 10]` reste à l'intérieur).
+#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Debug)]
+pub enum HudAnchor {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+}
+
+impl HudAnchor {
+    /// Position du point d'ancrage en fraction de la zone de jeu (0..1 sur x et y).
+    pub fn fraction(self) -> (f32, f32) {
+        match self {
+            HudAnchor::TopLeft => (0.0, 0.0),
+            HudAnchor::TopRight => (1.0, 0.0),
+            HudAnchor::BottomLeft => (0.0, 1.0),
+            HudAnchor::BottomRight => (1.0, 1.0),
+            HudAnchor::Center => (0.5, 0.5),
+        }
+    }
+}
+
+/// Valeur de jeu à laquelle lier le contenu d'un widget (texte formaté, remplissage
+/// d'une jauge). `None` = contenu statique, aucune liaison.
+#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Debug)]
+pub enum HudBinding {
+    #[default]
+    None,
+    Health,
+    Score,
+    Kills,
+    Wave,
+}
+
+/// Contenu d'un `HudWidget`. Les 4 natures couvertes par le Sprint 109 —
+/// texte, image, jauge, bouton — en plus de l'ancrage (`HudAnchor`) commun à tous.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub enum HudWidgetKind {
+    /// `content` est affiché tel quel si `binding` vaut `None`, sinon la valeur
+    /// liée est ajoutée après un espace (ex. `content = "Score"`, `binding = Score`
+    /// → « Score 42 »).
+    Text {
+        content: String,
+        binding: HudBinding,
+    },
+    /// Image chargée depuis un chemin d'asset (`assets::read_bytes`), mise en
+    /// cache par le renderer — cf. `editor::hud::hud_widgets`.
+    Image { path: String },
+    /// Barre de progression : `binding.value() / max` (borné à [0, 1]).
+    Gauge {
+        binding: HudBinding,
+        max: f32,
+        color: [f32; 3],
+    },
+    /// Bouton cliquable : pousse l'événement de gameplay `hud:<action>` (lisible
+    /// en Lua via `on_event`), même mécanisme que `emit()` — cf. `AppState::push_hud_event`.
+    Button { label: String, action: String },
+}
+
+impl Default for HudWidgetKind {
+    fn default() -> Self {
+        HudWidgetKind::Text {
+            content: String::new(),
+            binding: HudBinding::None,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[serde(default)]
+pub struct HudWidget {
+    /// Identifiant stable (clé egui + cache image) : à choisir unique dans la scène,
+    /// pas régénéré automatiquement (une scène éditée à la main doit pouvoir en
+    /// fixer un lisible).
+    pub id: String,
+    pub anchor: HudAnchor,
+    /// Décalage en pixels par rapport au point d'ancrage (cf. `HudAnchor::fraction`).
+    pub offset: [f32; 2],
+    /// Taille en pixels (image, jauge, bouton — ignorée pour le texte, qui se
+    /// dimensionne à son contenu).
+    pub size: [f32; 2],
+    pub kind: HudWidgetKind,
 }
 
 /// Cf. `Scene::hud_layout`. Chaque champ est un décalage `[x, y]` en pixels par
@@ -2625,5 +2721,69 @@ mod tests {
             s.weapon_pickup_at(Vec3::new(500.0, 0.5, 500.0), 0.9)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn hud_anchor_fraction_matches_the_named_corner() {
+        assert_eq!(HudAnchor::TopLeft.fraction(), (0.0, 0.0));
+        assert_eq!(HudAnchor::TopRight.fraction(), (1.0, 0.0));
+        assert_eq!(HudAnchor::BottomLeft.fraction(), (0.0, 1.0));
+        assert_eq!(HudAnchor::BottomRight.fraction(), (1.0, 1.0));
+        assert_eq!(HudAnchor::Center.fraction(), (0.5, 0.5));
+    }
+
+    #[test]
+    fn hud_widget_round_trips_through_json_with_its_kind_and_binding_intact() {
+        let widgets = vec![
+            HudWidget {
+                id: "score_label".into(),
+                anchor: HudAnchor::TopRight,
+                offset: [-10.0, 10.0],
+                size: [0.0, 0.0],
+                kind: HudWidgetKind::Text {
+                    content: "Score".into(),
+                    binding: HudBinding::Score,
+                },
+            },
+            HudWidget {
+                id: "health_gauge".into(),
+                anchor: HudAnchor::BottomLeft,
+                offset: [10.0, -10.0],
+                size: [160.0, 18.0],
+                kind: HudWidgetKind::Gauge {
+                    binding: HudBinding::Health,
+                    max: 1.0,
+                    color: [0.8, 0.15, 0.15],
+                },
+            },
+            HudWidget {
+                id: "restart_btn".into(),
+                anchor: HudAnchor::Center,
+                offset: [0.0, 0.0],
+                size: [140.0, 36.0],
+                kind: HudWidgetKind::Button {
+                    label: "Recommencer".into(),
+                    action: "restart".into(),
+                },
+            },
+        ];
+        let scene = Scene {
+            hud_widgets: widgets.clone(),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&scene).unwrap();
+        let back: Scene = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.hud_widgets, widgets);
+    }
+
+    #[test]
+    fn scene_without_hud_widgets_field_deserializes_to_an_empty_vec() {
+        // Scène pré-Sprint 109 (JSON antérieur, sans le champ) : ne doit pas échouer
+        // à charger, cf. `#[serde(default)]` sur `Scene::hud_widgets`.
+        let legacy = r#"{"objects": []}"#;
+        let scene: Scene = serde_json::from_str(legacy).unwrap();
+        assert!(scene.hud_widgets.is_empty());
     }
 }

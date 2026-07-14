@@ -1991,6 +1991,9 @@ impl Renderer {
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
                 }
+                for action in &actions.hud_clicks {
+                    app.push_hud_event(action);
+                }
                 player_net_actions = Some(actions);
                 Some(output)
             } else {
@@ -2050,6 +2053,9 @@ impl Renderer {
             );
             if let Some(i) = actions.select_weapon {
                 app.select_weapon(i);
+            }
+            for action in &actions.hud_clicks {
+                app.push_hud_event(action);
             }
             if actions.save {
                 app.save();
@@ -3052,8 +3058,10 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// Décode une image (disque ou `bundle://`) en RGBA8 + dimensions.
-fn load_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
+/// Décode une image (disque ou `bundle://`) en RGBA8 + dimensions. `pub(crate)` :
+/// aussi utilisé par `editor::hud` pour les widgets HUD `Image` (cf. Sprint 109),
+/// pas seulement les textures de mesh de ce module.
+pub(crate) fn load_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
     let bytes = crate::assets::read_bytes(path)?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();

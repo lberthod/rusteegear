@@ -5,9 +5,9 @@
 use glam::Vec3;
 
 use super::{
-    AiChaser, AudioSource, Combat, Controller, GameCamera, HudLayout, Light, MeshKind,
-    MobileControls, PointLight, Scene, SceneObject, Sky, TapAction, Transform, WEAPONS,
-    WeaponPickup, demo_obj,
+    AiChaser, AudioSource, Combat, Controller, GameCamera, HudAnchor, HudBinding, HudLayout,
+    HudWidget, HudWidgetKind, Light, MeshKind, MobileControls, PointLight, Scene, SceneObject, Sky,
+    TapAction, Transform, WEAPONS, WeaponPickup, demo_obj,
 };
 use crate::runtime::physics::PhysicsKind;
 
@@ -436,6 +436,34 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 buttons: vec!["Saut".into(), "Attaque".into()],
                 ..Default::default()
             },
+            // Widgets HUD déclaratifs (Sprint 109) : score en bas-gauche et jauge de
+            // vie en bas-droite, en plus des overlays historiques (barre de vie
+            // haut-gauche, manche haut-centre…) — démontrent le système texte/jauge
+            // dans un niveau réellement joué, sans remplacer les overlays déjà
+            // éprouvés (vie, viseur…) ni leurs tests.
+            hud_widgets: vec![
+                HudWidget {
+                    id: "score_label".into(),
+                    anchor: HudAnchor::BottomLeft,
+                    offset: [16.0, -16.0],
+                    size: [0.0, 0.0],
+                    kind: HudWidgetKind::Text {
+                        content: "Score".into(),
+                        binding: HudBinding::Score,
+                    },
+                },
+                HudWidget {
+                    id: "health_gauge".into(),
+                    anchor: HudAnchor::BottomRight,
+                    offset: [-16.0, -16.0],
+                    size: [140.0, 14.0],
+                    kind: HudWidgetKind::Gauge {
+                        binding: HudBinding::Health,
+                        max: 1.0,
+                        color: [0.8, 0.15, 0.15],
+                    },
+                },
+            ],
             ..Default::default()
         }
     }
@@ -1585,6 +1613,7 @@ end"
             game_camera: None,
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
+            hud_widgets: Vec::new(),
             version: Scene::CURRENT_VERSION,
         }
     }
@@ -1620,6 +1649,7 @@ end"
             game_camera: None,
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
+            hud_widgets: Vec::new(),
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
@@ -1703,6 +1733,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             game_camera: None,
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
+            hud_widgets: Vec::new(),
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {

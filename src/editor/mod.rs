@@ -14,10 +14,10 @@ use winit::window::Window;
 
 use hierarchy::hierarchy_panel;
 use hud::{
-    RosterEntry, collectibles_hud, crosshair, damage_vignette, defeated_banner, health_bar,
-    hud_preview_overlays, kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel,
-    restart_button, scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud,
-    weapon_inventory_panel,
+    HudImageCache, HudWidgetValues, RosterEntry, collectibles_hud, crosshair, damage_vignette,
+    defeated_banner, health_bar, hud_preview_overlays, hud_widgets, kills_hud, lose_banner,
+    mobile_overlay, multiplayer_roster_panel, restart_button, scene_has_ranged_weapon,
+    touch_feedback, wave_hud, weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -69,6 +69,12 @@ pub struct Editor {
     console_input: String,
     /// Réglages du panneau « Aperçu HUD ».
     hud_preview: HudPreview,
+    /// Texte saisi pour l'identifiant du prochain widget HUD créé (panneau
+    /// « 🧩 Widgets HUD »).
+    hud_widget_new_id: String,
+    /// Textures des widgets HUD `Image`, mises en cache par chemin d'asset — cf.
+    /// `hud::HudImageCache`.
+    hud_image_cache: HudImageCache,
 }
 
 /// Réglages du panneau « 👁 Aperçu HUD » : quels overlays de jeu (réticule,
@@ -121,6 +127,8 @@ struct Panels {
     scripts: bool,
     /// Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer: bool,
+    /// Fenêtre « 🧩 Widgets HUD » (édition de `Scene::hud_widgets`).
+    hud_widgets_editor: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -188,6 +196,9 @@ pub struct UiActions {
     pub connect_to_server: Option<(String, String)>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
     pub disconnect_from_server: bool,
+    /// Widgets HUD `Button` cliqués ce frame (leur champ `action`) — à transmettre à
+    /// `AppState::push_hud_event` (délivrés aux scripts via `on_event("hud:<action>")`).
+    pub hud_clicks: Vec<String>,
     /// Fenêtre Multijoueur : « Se connecter (compte) » Firebase demandé (email, mot de passe).
     pub firebase_sign_in: Option<(String, String)>,
     /// Fenêtre Multijoueur : « Créer un compte » Firebase demandé (email, mot de passe).
@@ -301,6 +312,8 @@ impl Editor {
             mp_chat_input: String::new(),
             console_input: String::new(),
             hud_preview: HudPreview::default(),
+            hud_widget_new_id: String::new(),
+            hud_image_cache: HudImageCache::default(),
         }
     }
 
@@ -413,6 +426,13 @@ impl Editor {
                 net_connected,
                 &mut actions,
             );
+            let values = HudWidgetValues {
+                health: hud_health.unwrap_or(1.0),
+                score,
+                kills,
+                wave,
+            };
+            actions.hud_clicks = hud_widgets(ctx, area, scene, &values, &mut self.hud_image_cache);
         });
         self.winit_state
             .handle_platform_output(window, output.platform_output.clone());
@@ -483,6 +503,8 @@ impl Editor {
         let mp_chat_input = &mut self.mp_chat_input;
         let console_input = &mut self.console_input;
         let hud_preview = &mut self.hud_preview;
+        let hud_image_cache = &mut self.hud_image_cache;
+        let hud_widget_new_id = &mut self.hud_widget_new_id;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -535,6 +557,8 @@ impl Editor {
                 selected_weapon,
                 roster,
                 hud_preview,
+                hud_image_cache,
+                hud_widget_new_id,
                 &mut actions,
             );
         });
@@ -648,12 +672,16 @@ fn build_ui(
     selected_weapon: usize,
     roster: &[RosterEntry],
     hud_preview: &mut HudPreview,
+    hud_image_cache: &mut HudImageCache,
+    hud_widget_new_id: &mut String,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
     // Fenêtre « 👁 Aperçu HUD » : prévisualiser les overlays de jeu en Édition.
     hud_preview_window(root.ctx(), hud_preview);
+    // Fenêtre « 🧩 Widgets HUD » : ajouter/éditer les widgets déclaratifs de la scène.
+    windows::hud_widgets_window(root.ctx(), panels, scene, hud_widget_new_id);
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer_window(
         root.ctx(),
@@ -855,6 +883,17 @@ fn build_ui(
                 .clicked()
             {
                 hud_preview.open = !hud_preview.open;
+            }
+            // Widgets HUD déclaratifs (`Scene::hud_widgets`) : texte/image/jauge/
+            // bouton ancrés dans la scène — cf. Sprint 109.
+            if ui
+                .selectable_label(panels.hud_widgets_editor, "🧩 Widgets HUD")
+                .on_hover_text(
+                    "Ajouter/éditer des widgets HUD déclaratifs (texte, image, jauge, bouton)",
+                )
+                .clicked()
+            {
+                panels.hud_widgets_editor = !panels.hud_widgets_editor;
             }
             if ui
                 .selectable_label(scene.camera_follow, "🎥 Suivi")
@@ -1578,6 +1617,18 @@ fn build_ui(
     } else {
         input_state.joy = (0.0, 0.0);
         input_state.buttons.clear();
+    }
+    // Widgets HUD déclaratifs (`Scene::hud_widgets`) : visibles en Play comme en
+    // Édition (via 👁 Aperçu HUD) — même logique que `hud_preview_overlays`
+    // ci-dessus pour les overlays historiques.
+    if *playing || hud_preview.open {
+        let values = HudWidgetValues {
+            health: hud_health.unwrap_or(1.0),
+            score,
+            kills,
+            wave,
+        };
+        actions.hud_clicks = hud_widgets(root.ctx(), play_rect, scene, &values, hud_image_cache);
     }
 
     // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState

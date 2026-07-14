@@ -1733,6 +1733,45 @@ mod tests {
     }
 
     #[test]
+    fn push_hud_event_reaches_scripts_prefixed_with_hud_via_on_event() {
+        // Cf. `editor::hud::hud_widgets` : un widget `Button` cliqué appelle
+        // `AppState::push_hud_event(action)`, qui doit se lire côté script exactement
+        // comme un `emit()` Lua préfixé `hud:` — même file d'événements
+        // (`AppState::game_events`), un script ne doit pas pouvoir distinguer les deux
+        // sources.
+        let mut app = AppState::new();
+        let mut scene = crate::scene::Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Porte HUD".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            script: "if on_event('hud:jump') then obj.y = 9.0 end".into(),
+            ..Default::default()
+        });
+        app.scene = scene;
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        // Transition Edit→Play d'abord : elle vide `game_events` (nouvelle partie), donc
+        // le clic HUD doit être poussé après, sans quoi il serait perdu avant même
+        // d'atteindre un script.
+        app.advance_play();
+        app.push_hud_event("jump");
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        let porte = app
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Porte HUD")
+            .unwrap();
+        assert!(
+            (porte.transform.position.y - 9.0).abs() < 1e-4,
+            "le clic HUD devait se lire via on_event('hud:jump') (y = {})",
+            porte.transform.position.y
+        );
+    }
+
+    #[test]
     fn script_calling_obj_destroy_soft_deletes_via_visible_false() {
         // `obj:destroy()` doit se traduire par `visible = false` — une
         // suppression douce, pas un retrait de `scene.objects` (cf. la doc de

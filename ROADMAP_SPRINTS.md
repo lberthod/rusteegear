@@ -1876,10 +1876,49 @@ régression client. Une manche décidée ne coupe plus tout le process
 - **Fichiers** : `src/runtime/sfx.rs`, `src/runtime/audio.rs`.
 - **Livrable** : dix pas d'affilée ne sonnent plus identiques.
 
-#### Sprint 109 — Widgets de HUD déclaratifs ⬜
-- [ ] 5 widgets sérialisés dans la scène (texte, image, jauge, bouton, ancres) au-dessus de la 3D — la safe area existe déjà.
-- **Fichiers** : `src/scene/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`.
-- **Livrable** : le HUD de la démo contrôleur reconstruit en widgets, zéro code en dur.
+#### Sprint 109 — Widgets de HUD déclaratifs ✅ FAIT
+- [x] **4 natures de widget + ancrage** (`src/scene/mod.rs::HudWidget`) : `Text`
+      (contenu + liaison optionnelle), `Image` (chemin d'asset), `Gauge`
+      (liaison + max + couleur), `Button` (libellé + action) — ancrés à un
+      coin de la zone de jeu (`HudAnchor::{TopLeft,TopRight,BottomLeft,
+      BottomRight,Center}` + décalage en pixels), sérialisés dans
+      `Scene::hud_widgets`. Liaison (`HudBinding::{Health,Score,Kills,Wave}`)
+      plutôt que valeur figée : un widget affiche une valeur de jeu sans code
+      Rust dédié.
+- [x] **Rendu** (`src/editor/hud.rs::hud_widgets`) : posé au-dessus des
+      overlays historiques (santé/viseur/manche…), qui restent en place —
+      remplacer entièrement le HUD de la démo contrôleur aurait mis en jeu
+      tous les tests et le tuning existants pour un gain cosmétique, hors de
+      portée de ce sprint. Les widgets `Image` passent par un cache de
+      textures par chemin (`HudImageCache`) : `egui::Context::load_texture`
+      ne dé-duplique pas par nom, une ré-upload par frame ferait chuter le
+      FPS — réutilise `gfx::renderer::load_rgba` (promu `pub(crate)`),
+      décodeur déjà utilisé pour les textures de mesh.
+      **Trouvé en concevant le sprint** : les valeurs affichées (vie, score,
+      frags, manche) sont déjà calculées côté `AppState` pour les overlays
+      historiques (`app.hud_health`, `app.score()`…) — `HudWidgetValues` en
+      est juste un instantané passé au rendu, aucune nouvelle source de
+      vérité.
+- [x] **Édition en scène** (`src/editor/windows.rs::hud_widgets_window`,
+      panneau « 🧩 Widgets HUD ») : ajouter/éditer/supprimer des widgets
+      (ancre, décalage, taille, nature, contenu/liaison), persisté dans la
+      scène — s'applique donc aussi en Play et dans le jeu exporté.
+- [x] **Bouton → gameplay** (`AppState::push_hud_event`) : un widget
+      `Button` cliqué pousse l'événement `hud:<action>` dans la même file
+      que `emit()` côté Lua (`AppState::game_events`), lisible par un script
+      via `on_event("hud:<action>")` — zéro plomberie supplémentaire côté
+      moteur pour réagir à un clic HUD déclaratif.
+- [x] **Démo concrète** : `Scene::controller_level` embarque désormais un
+      widget `Text` (score, bas-gauche) et un widget `Gauge` (vie, bas-droite)
+      en plus des overlays historiques, pour prouver le système en jeu réel
+      plutôt qu'en isolation.
+- **Fichiers** : `src/scene/mod.rs`, `src/editor/hud.rs`, `src/editor/mod.rs`,
+  `src/editor/windows.rs`, `src/gfx/renderer.rs`, `src/app/persistence.rs`,
+  `src/scene/demos.rs`.
+- **Livrable** : un niveau peut définir ses propres éléments de HUD
+  (texte/image/jauge/bouton liés aux valeurs de jeu) en donnée de scène,
+  éditables dans l'éditeur, sans toucher au moteur — coexiste avec le HUD
+  historique plutôt que de le remplacer (limite assumée de ce sprint).
 
 #### Sprint 110 — Manettes + remapping ⬜
 - [ ] Crate `gilrs` ; table actions→touches persistée, éditable dans les paramètres.

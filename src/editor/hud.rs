@@ -1,9 +1,154 @@
 //! HUD de jeu (mode Play) : vie, arme équipée, manches, classement multijoueur,
 //! réticule, overlay tactile mobile. Extrait de `editor/mod.rs`.
 
-use crate::scene::{HudLayout, Scene};
+use crate::scene::{HudAnchor, HudBinding, HudLayout, HudWidgetKind, Scene};
 
 use super::{HudPreview, UiActions};
+
+/// Valeurs de jeu consultables par un `HudBinding` — snapshot pris une fois par
+/// frame côté appelant (`AppState`), cette couche de rendu ne connaît pas `AppState`
+/// directement (cf. le reste du module, purement fonction de `area`/`scene`).
+pub(super) struct HudWidgetValues {
+    pub health: f32,
+    pub score: u32,
+    pub kills: u32,
+    pub wave: u32,
+}
+
+fn hud_binding_value(binding: HudBinding, v: &HudWidgetValues) -> f32 {
+    match binding {
+        HudBinding::None => 0.0,
+        HudBinding::Health => v.health,
+        HudBinding::Score => v.score as f32,
+        HudBinding::Kills => v.kills as f32,
+        HudBinding::Wave => v.wave as f32,
+    }
+}
+
+/// Cache de textures pour les widgets `Image` : une texture GPU par chemin
+/// d'asset, chargée une fois — `egui::Context::load_texture` ne dé-duplique pas par
+/// nom, une ré-upload par frame ferait chuter le FPS. `None` mémorise un chemin
+/// invalide pour ne pas retenter le décodage à chaque frame.
+pub(super) type HudImageCache = std::collections::HashMap<String, Option<egui::TextureHandle>>;
+
+fn hud_image<'a>(
+    ctx: &egui::Context,
+    cache: &'a mut HudImageCache,
+    path: &str,
+) -> Option<&'a egui::TextureHandle> {
+    cache
+        .entry(path.to_string())
+        .or_insert_with(|| {
+            let (rgba, w, h) = crate::gfx::renderer::load_rgba(path)?;
+            let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            Some(ctx.load_texture(path, color, egui::TextureOptions::default()))
+        })
+        .as_ref()
+}
+
+/// Widgets déclaratifs `Scene::hud_widgets` (texte, image, jauge, bouton), ancrés à
+/// un coin de la zone de jeu via `HudAnchor` — cf. doc de `HudWidget`. Renvoie
+/// l'`action` de chaque bouton cliqué ce frame, à transmettre à
+/// `AppState::push_hud_event` (même mécanisme que `emit()` côté Lua : lu au tick
+/// suivant via `on_event("hud:<action>")`).
+pub(super) fn hud_widgets(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    scene: &Scene,
+    values: &HudWidgetValues,
+    image_cache: &mut HudImageCache,
+) -> Vec<String> {
+    let mut clicked = Vec::new();
+    for widget in &scene.hud_widgets {
+        let (fx, fy) = widget.anchor.fraction();
+        let anchor_pos = egui::pos2(
+            area.left() + area.width() * fx + widget.offset[0],
+            area.top() + area.height() * fy + widget.offset[1],
+        );
+        let pivot = match widget.anchor {
+            HudAnchor::TopLeft => egui::Align2::LEFT_TOP,
+            HudAnchor::TopRight => egui::Align2::RIGHT_TOP,
+            HudAnchor::BottomLeft => egui::Align2::LEFT_BOTTOM,
+            HudAnchor::BottomRight => egui::Align2::RIGHT_BOTTOM,
+            HudAnchor::Center => egui::Align2::CENTER_CENTER,
+        };
+        egui::Area::new(egui::Id::new(("hud_widget", widget.id.as_str())))
+            .fixed_pos(anchor_pos)
+            .pivot(pivot)
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .show(ctx, |ui| match &widget.kind {
+                HudWidgetKind::Text { content, binding } => {
+                    let text = match binding {
+                        HudBinding::None => content.clone(),
+                        b => format!("{content} {}", hud_binding_value(*b, values) as i64),
+                    };
+                    ui.colored_label(egui::Color32::WHITE, text);
+                }
+                HudWidgetKind::Image { path } => {
+                    if let Some(tex) = hud_image(ctx, image_cache, path) {
+                        let size = if widget.size == [0.0, 0.0] {
+                            tex.size_vec2()
+                        } else {
+                            egui::vec2(widget.size[0], widget.size[1])
+                        };
+                        ui.image((tex.id(), size));
+                    }
+                }
+                HudWidgetKind::Gauge {
+                    binding,
+                    max,
+                    color,
+                } => {
+                    let frac = if *max > 0.0 {
+                        (hud_binding_value(*binding, values) / max).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let w = if widget.size[0] > 0.0 {
+                        widget.size[0]
+                    } else {
+                        160.0
+                    };
+                    let h = if widget.size[1] > 0.0 {
+                        widget.size[1]
+                    } else {
+                        16.0
+                    };
+                    let col = egui::Color32::from_rgb(
+                        (color[0].clamp(0.0, 1.0) * 255.0) as u8,
+                        (color[1].clamp(0.0, 1.0) * 255.0) as u8,
+                        (color[2].clamp(0.0, 1.0) * 255.0) as u8,
+                    );
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_width(w)
+                            .desired_height(h)
+                            .fill(col),
+                    );
+                }
+                HudWidgetKind::Button { label, action } => {
+                    let w = if widget.size[0] > 0.0 {
+                        widget.size[0]
+                    } else {
+                        120.0
+                    };
+                    let h = if widget.size[1] > 0.0 {
+                        widget.size[1]
+                    } else {
+                        32.0
+                    };
+                    if ui
+                        .add_sized([w, h], egui::Button::new(label.as_str()))
+                        .clicked()
+                    {
+                        clicked.push(action.clone());
+                    }
+                }
+            });
+    }
+    clicked
+}
 
 /// Flash rouge plein écran quand la vie baisse (contact ennemi) : retour immédiat, même
 /// sans regarder la barre de vie. `intensity` (1 = pic du coup) décroît vers 0 côté App.

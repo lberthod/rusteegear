@@ -3,7 +3,7 @@
 //! de scripts, navigateur d'assets, prévisualisation HUD. Extrait de
 //! `editor/mod.rs`.
 
-use crate::scene::Scene;
+use crate::scene::{HudAnchor, HudBinding, HudWidget, HudWidgetKind, Scene};
 
 use super::{HudPreview, Panels, StatusInfo, UiActions, export, readiness};
 
@@ -952,4 +952,199 @@ pub(super) fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) 
             );
         });
     preview.open = open;
+}
+
+/// Fenêtre « 🧩 Widgets HUD » : ajouter/éditer/supprimer les widgets déclaratifs de
+/// `Scene::hud_widgets` (texte, image, jauge, bouton) — cf. Sprint 109. Contrairement
+/// à `hud_preview_window` (bascules d'aperçu, état purement éditeur), tout ici est
+/// écrit directement dans la scène : persisté, s'applique aussi en Play et dans le
+/// jeu exporté.
+pub(super) fn hud_widgets_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &mut Scene,
+    new_id: &mut String,
+) {
+    let mut open = panels.hud_widgets_editor;
+    egui::Window::new("🧩 Widgets HUD")
+        .open(&mut open)
+        .default_width(320.0)
+        .default_height(420.0)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(new_id)
+                        .hint_text("identifiant (ex. score_label)")
+                        .desired_width(ui.available_width() - 90.0),
+                );
+                if ui.button("➕ Ajouter").clicked() && !new_id.trim().is_empty() {
+                    scene.hud_widgets.push(HudWidget {
+                        id: new_id.trim().to_string(),
+                        anchor: HudAnchor::TopLeft,
+                        offset: [10.0, 10.0],
+                        size: [0.0, 0.0],
+                        kind: HudWidgetKind::default(),
+                    });
+                    new_id.clear();
+                }
+            });
+            ui.separator();
+            let mut remove: Option<usize> = None;
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (i, w) in scene.hud_widgets.iter_mut().enumerate() {
+                    ui.push_id(i, |ui| {
+                        egui::CollapsingHeader::new(if w.id.is_empty() {
+                            format!("(sans nom) #{i}")
+                        } else {
+                            w.id.clone()
+                        })
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("id");
+                                ui.text_edit_singleline(&mut w.id);
+                            });
+                            egui::ComboBox::from_label("ancre")
+                                .selected_text(format!("{:?}", w.anchor))
+                                .show_ui(ui, |ui| {
+                                    for a in [
+                                        HudAnchor::TopLeft,
+                                        HudAnchor::TopRight,
+                                        HudAnchor::BottomLeft,
+                                        HudAnchor::BottomRight,
+                                        HudAnchor::Center,
+                                    ] {
+                                        ui.selectable_value(&mut w.anchor, a, format!("{a:?}"));
+                                    }
+                                });
+                            ui.horizontal(|ui| {
+                                ui.label("décalage");
+                                ui.add(egui::DragValue::new(&mut w.offset[0]).prefix("x "));
+                                ui.add(egui::DragValue::new(&mut w.offset[1]).prefix("y "));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("taille (0 = auto)");
+                                ui.add(egui::DragValue::new(&mut w.size[0]).prefix("l "));
+                                ui.add(egui::DragValue::new(&mut w.size[1]).prefix("h "));
+                            });
+                            ui.separator();
+                            let kind_label = match &w.kind {
+                                HudWidgetKind::Text { .. } => "Texte",
+                                HudWidgetKind::Image { .. } => "Image",
+                                HudWidgetKind::Gauge { .. } => "Jauge",
+                                HudWidgetKind::Button { .. } => "Bouton",
+                            };
+                            egui::ComboBox::from_label("nature")
+                                .selected_text(kind_label)
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_label(kind_label == "Texte", "Texte")
+                                        .clicked()
+                                    {
+                                        w.kind = HudWidgetKind::Text {
+                                            content: String::new(),
+                                            binding: HudBinding::None,
+                                        };
+                                    }
+                                    if ui
+                                        .selectable_label(kind_label == "Image", "Image")
+                                        .clicked()
+                                    {
+                                        w.kind = HudWidgetKind::Image {
+                                            path: String::new(),
+                                        };
+                                    }
+                                    if ui
+                                        .selectable_label(kind_label == "Jauge", "Jauge")
+                                        .clicked()
+                                    {
+                                        w.kind = HudWidgetKind::Gauge {
+                                            binding: HudBinding::Health,
+                                            max: 1.0,
+                                            color: [0.8, 0.15, 0.15],
+                                        };
+                                    }
+                                    if ui
+                                        .selectable_label(kind_label == "Bouton", "Bouton")
+                                        .clicked()
+                                    {
+                                        w.kind = HudWidgetKind::Button {
+                                            label: String::new(),
+                                            action: String::new(),
+                                        };
+                                    }
+                                });
+                            match &mut w.kind {
+                                HudWidgetKind::Text { content, binding } => {
+                                    ui.horizontal(|ui| {
+                                        ui.label("contenu");
+                                        ui.text_edit_singleline(content);
+                                    });
+                                    binding_combo(ui, binding);
+                                }
+                                HudWidgetKind::Image { path } => {
+                                    ui.horizontal(|ui| {
+                                        ui.label("chemin");
+                                        ui.text_edit_singleline(path);
+                                    });
+                                }
+                                HudWidgetKind::Gauge {
+                                    binding,
+                                    max,
+                                    color,
+                                } => {
+                                    binding_combo(ui, binding);
+                                    ui.horizontal(|ui| {
+                                        ui.label("max");
+                                        ui.add(egui::DragValue::new(max).speed(0.1));
+                                    });
+                                    ui.color_edit_button_rgb(color);
+                                }
+                                HudWidgetKind::Button { label, action } => {
+                                    ui.horizontal(|ui| {
+                                        ui.label("libellé");
+                                        ui.text_edit_singleline(label);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("action");
+                                        ui.text_edit_singleline(action);
+                                    })
+                                    .response
+                                    .on_hover_text("Lu côté script via on_event(\"hud:<action>\")");
+                                }
+                            }
+                            if ui.button("🗑 Supprimer ce widget").clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    });
+                }
+            });
+            if scene.hud_widgets.is_empty() {
+                ui.small(
+                    "Aucun widget. Un widget « Bouton » émet l'événement de gameplay \
+                     `hud:<action>` (lisible en Lua via on_event) quand il est cliqué.",
+                );
+            }
+            if let Some(i) = remove {
+                scene.hud_widgets.remove(i);
+            }
+        });
+    panels.hud_widgets_editor = open;
+}
+
+fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
+    egui::ComboBox::from_label("liaison")
+        .selected_text(format!("{binding:?}"))
+        .show_ui(ui, |ui| {
+            for b in [
+                HudBinding::None,
+                HudBinding::Health,
+                HudBinding::Score,
+                HudBinding::Kills,
+                HudBinding::Wave,
+            ] {
+                ui.selectable_value(binding, b, format!("{b:?}"));
+            }
+        });
 }

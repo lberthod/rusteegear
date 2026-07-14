@@ -143,6 +143,14 @@ impl AppState {
         }
     }
 
+    /// Émet l'événement de gameplay `hud:<action>` pour un clic sur un widget HUD
+    /// `Button` (`Scene::hud_widgets`, cf. Sprint 109) — même file que `emit()` côté
+    /// Lua (`AppState::game_events`), lu au tick suivant via `on_event("hud:<action>")`.
+    /// Le préfixe évite toute collision avec un nom d'événement choisi par un script.
+    pub(crate) fn push_hud_event(&mut self, action: &str) {
+        self.game_events.push(format!("hud:{action}"));
+    }
+
     /// Passe au niveau suivant (boucle au niveau 1 après le dernier) et le charge en Play.
     pub fn next_level(&mut self) {
         self.level = self.level % crate::scene::CONTROLLER_LEVELS + 1;
