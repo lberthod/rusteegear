@@ -125,6 +125,24 @@ pub(super) fn tool_windows(
                 scene.imported.len()
             ));
             ui.label(format!("Textures : {n_tex} unique(s)"));
+            // --- Profiler GPU (Sprint 112) : timestamp queries par passe + draw calls ---
+            ui.separator();
+            ui.strong("GPU (frame précédente)");
+            if status.gpu_pass_timings_ms.is_empty() {
+                ui.small(
+                    "Aucune mesure encore — les timestamp queries démarrent dès que \
+                     cette fenêtre est ouverte (coût réel, pas actif sinon). Peut \
+                     aussi rester vide si l'adaptateur ne les supporte pas.",
+                );
+            } else {
+                for (name, ms) in status.gpu_pass_timings_ms {
+                    ui.label(format!("{name} : {ms:.2} ms"));
+                }
+            }
+            ui.label(format!(
+                "🔺 ~{} draw calls (estimation)",
+                status.gpu_draw_calls
+            ));
         });
 
     // --- Contrôle qualité APK (APK Readiness Check) ---

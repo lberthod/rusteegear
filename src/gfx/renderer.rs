@@ -138,6 +138,62 @@ struct InstanceDraw {
     visible: bool,
 }
 
+/// Nombre de marqueurs temporels écrits par frame (Sprint 112) : un avant chaque
+/// passe mesurée plus un final, soit `GPU_PROFILER_MARKS - 1` intervalles nommés
+/// dans `GpuProfiler::PASS_NAMES` (ombre / scène / HDR+bloom / UI).
+const GPU_PROFILER_MARKS: u32 = 5;
+
+/// Timestamp queries GPU par passe (Sprint 112), actives seulement quand le
+/// panneau Profiler est ouvert (`Editor::profiler_open`) — `write_timestamp` a un
+/// coût réel (synchronisation GPU), pas question de le payer à chaque frame par
+/// défaut, même si `Features::TIMESTAMP_QUERY_INSIDE_ENCODERS` est disponible.
+/// `None` sur `Renderer` si l'adaptateur ne supporte pas cette feature (dégrade en
+/// silence — le profiler FPS/mémoire reste utilisable sans elle).
+struct GpuProfiler {
+    query_set: wgpu::QuerySet,
+    /// Résultats bruts (ticks GPU) résolus depuis `query_set` — recopiés ici pour
+    /// pouvoir mapper `readback_buf` en lecture (`COPY_DST | MAP_READ` ne peut pas
+    /// aussi servir de cible de résolution, `QUERY_RESOLVE` l'exige séparé).
+    resolve_buf: wgpu::Buffer,
+    readback_buf: wgpu::Buffer,
+    /// Durée d'un tick GPU en nanosecondes (`Queue::get_timestamp_period`), fixe
+    /// pour la durée de vie du device — convertit les deltas de ticks en ms.
+    period_ns: f32,
+}
+
+impl GpuProfiler {
+    /// Noms des `GPU_PROFILER_MARKS - 1` intervalles, dans l'ordre où `render`
+    /// écrit les marqueurs correspondants.
+    const PASS_NAMES: [&'static str; 4] = ["Ombres", "Scène", "HDR + Bloom", "UI (egui)"];
+
+    fn new(device: &wgpu::Device, period_ns: f32) -> Self {
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("gpu_profiler_timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: GPU_PROFILER_MARKS,
+        });
+        let buf_size = u64::from(GPU_PROFILER_MARKS) * 8; // u64 par timestamp
+        let resolve_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gpu_profiler_resolve"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gpu_profiler_readback"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            query_set,
+            resolve_buf,
+            readback_buf,
+            period_ns,
+        }
+    }
+}
+
 pub struct Renderer {
     /// `None` en rendu headless (tests de non-régression visuelle) — pas de
     /// fenêtre, pas de surface d'écran, pas d'UI egui.
@@ -248,6 +304,18 @@ pub struct Renderer {
     joint_buf: wgpu::Buffer,
     joint_bind_group: wgpu::BindGroup,
     joint_capacity: usize,
+
+    // --- profiler GPU (Sprint 112) ---
+    /// `None` si l'adaptateur ne supporte pas `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
+    gpu_profiler: Option<GpuProfiler>,
+    /// Durée (ms) de chaque passe mesurée à la dernière lecture réussie — vide tant
+    /// qu'aucune frame n'a été profilée (panneau jamais ouvert, ou pas de support GPU).
+    gpu_pass_timings_ms: Vec<(&'static str, f32)>,
+    /// Estimation du nombre de draw calls de la dernière frame (scène + ombre,
+    /// cf. `Renderer::render`) — dérivée de `draw_plan`/`draw_plan_skinned`, pas
+    /// comptée sur chaque site d'appel réel (bloom/tonemap/UI ajoutent quelques
+    /// draws fixes non comptés ici, negligibles face au coût de la scène).
+    last_frame_draw_calls: u32,
 }
 
 impl Renderer {
@@ -287,10 +355,18 @@ impl Renderer {
             .await
             .map_err(|e| format!("Aucun adaptateur GPU trouvé : {e}"))?;
 
+        // Profiler GPU (Sprint 112) : timestamp queries, demandées seulement si
+        // l'adaptateur les supporte — sinon `required_features` resterait vide et
+        // `GpuProfiler::new` ne serait jamais appelé (`gpu_profiler` reste `None`,
+        // dégradation silencieuse comme pour `gilrs`/`notify`).
+        let profiler_features =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        let requested_features = profiler_features & adapter.features();
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("device"),
-                required_features: wgpu::Features::empty(),
+                required_features: requested_features,
                 // Limites du GPU réel (iOS/mobile en ont de plus basses que les défauts).
                 required_limits: adapter.limits(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -299,6 +375,10 @@ impl Renderer {
             })
             .await
             .map_err(|e| format!("Échec création du device : {e}"))?;
+
+        let gpu_profiler = requested_features
+            .contains(profiler_features)
+            .then(|| GpuProfiler::new(&device, queue.get_timestamp_period()));
 
         let backend = format!("{:?}", adapter.get_info().backend);
 
@@ -1231,6 +1311,9 @@ impl Renderer {
             joint_buf,
             joint_bind_group,
             joint_capacity: JOINT_CAPACITY,
+            gpu_profiler,
+            gpu_pass_timings_ms: Vec::new(),
+            last_frame_draw_calls: 0,
         })
     }
 
@@ -1937,6 +2020,51 @@ impl Renderer {
         pass.draw(0..3, 0..1);
     }
 
+    /// Lit les timestamp queries de la frame qu'on vient de soumettre (Sprint 112) et
+    /// remplit `gpu_pass_timings_ms`. Appelée seulement quand le panneau Profiler est
+    /// ouvert (`render`) : `map_async` + `device.poll(Wait)` bloque jusqu'à ce que le
+    /// GPU ait fini — un vrai coût, acceptable pour un outil de dev opt-in, exclu du
+    /// chemin de rendu par défaut. `resolve_query_set` renvoie des ticks GPU bruts
+    /// (`u64`), convertis en ms via `period_ns` (`Queue::get_timestamp_period`).
+    fn read_gpu_pass_timings(&mut self) {
+        let Some(prof) = self.gpu_profiler.as_ref() else {
+            return;
+        };
+        let slice = prof.readback_buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        let Ok(Ok(())) = rx.recv() else {
+            return;
+        };
+        let ticks: Vec<u64> = {
+            let data = slice.get_mapped_range();
+            data.chunks_exact(8)
+                .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
+        prof.readback_buf.unmap();
+        self.gpu_pass_timings_ms = GpuProfiler::PASS_NAMES
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &name)| {
+                let (t0, t1) = (*ticks.get(i)?, *ticks.get(i + 1)?);
+                let ms = t1.saturating_sub(t0) as f32 * prof.period_ns / 1_000_000.0;
+                Some((name, ms))
+            })
+            .collect();
+    }
+
+    /// Durée (ms) de chaque passe GPU mesurée à la dernière frame profilée, et
+    /// estimation du nombre de draw calls (Sprint 112) — lu par le panneau
+    /// « 📊 Profiler FPS ». Vide si le panneau n'a jamais été ouvert, ou si
+    /// l'adaptateur ne supporte pas les timestamp queries.
+    pub fn gpu_profiler_info(&self) -> (&[(&'static str, f32)], u32) {
+        (&self.gpu_pass_timings_ms, self.last_frame_draw_calls)
+    }
+
     pub fn render(&mut self, app: &mut AppState) {
         // 0. Acquérir la surface EN PREMIER. Si indisponible, on sort avant de lancer
         //    egui : sinon on jetterait le `textures_delta` de la frame (atlas de police),
@@ -1963,6 +2091,9 @@ impl Renderer {
         let Some(mut editor) = self.editor.take() else {
             return;
         };
+        // Profiler GPU (Sprint 112) : n'écrit les timestamp queries que si le
+        // panneau est ouvert **et** le device les supporte — cf. doc de `GpuProfiler`.
+        let gpu_profiling = editor.profiler_open() && self.gpu_profiler.is_some();
 
         // 1. Construire l'UI éditeur. En mode player : pas de panneaux, mais on
         //    dessine quand même les contrôles tactiles (joystick + boutons).
@@ -2019,6 +2150,7 @@ impl Renderer {
                 None
             }
         } else {
+            let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
             let status = crate::editor::StatusInfo {
                 fps: app.fps(),
                 backend: &self.backend,
@@ -2026,6 +2158,8 @@ impl Renderer {
                 grid: app.show_grid,
                 snap: app.snap,
                 debug_view: app.debug_view,
+                gpu_pass_timings_ms,
+                gpu_draw_calls,
             };
             let net_status = app.net_status.clone();
             let net_connected = app.is_connected();
@@ -2518,6 +2652,10 @@ impl Renderer {
                 label: Some("encoder"),
             });
 
+        if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
+            encoder.write_timestamp(&prof.query_set, 0);
+        }
+
         // Passe d'ombre : profondeur de la scène depuis la lumière → carte d'ombre.
         {
             let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2568,6 +2706,9 @@ impl Renderer {
                 }
                 i = j;
             }
+        }
+        if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
+            encoder.write_timestamp(&prof.query_set, 1);
         }
 
         {
@@ -2686,6 +2827,9 @@ impl Renderer {
             // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
             self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
         }
+        if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
+            encoder.write_timestamp(&prof.query_set, 2);
+        }
 
         // Bloom : passes de seuil/downsample/upsample sautées entièrement
         // si désactivé (opt-out mobile, `RenderQuality::bloom_enabled`) — pas seulement
@@ -2707,6 +2851,9 @@ impl Renderer {
             bloom_intensity,
             &view,
         );
+        if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
+            encoder.write_timestamp(&prof.query_set, 3);
+        }
 
         // 3. Peindre l'UI egui par-dessus la scène (sauf en mode player).
         let extra = match full_output {
@@ -2722,8 +2869,25 @@ impl Renderer {
         };
         self.editor = Some(editor);
 
+        // Estimation du nombre de draw calls (ombre + scène — cf. doc de
+        // `last_frame_draw_calls`, bloom/tonemap/UI ajoutent quelques draws fixes
+        // non comptés ici) : coût dominant d'une frame, pas besoin de compter chaque
+        // site d'appel pour que le chiffre reste utile en pratique.
+        self.last_frame_draw_calls =
+            2 * (self.draw_plan.len() as u32 + self.draw_plan_skinned.len() as u32);
+
+        if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
+            encoder.write_timestamp(&prof.query_set, 4);
+            encoder.resolve_query_set(&prof.query_set, 0..GPU_PROFILER_MARKS, &prof.resolve_buf, 0);
+            let buf_size = u64::from(GPU_PROFILER_MARKS) * 8;
+            encoder.copy_buffer_to_buffer(&prof.resolve_buf, 0, &prof.readback_buf, 0, buf_size);
+        }
+
         self.queue
             .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
+        if gpu_profiling {
+            self.read_gpu_pass_timings();
+        }
         frame.present();
     }
 

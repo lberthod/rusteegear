@@ -143,6 +143,14 @@ pub struct StatusInfo<'a> {
     pub snap: bool,
     /// Vue de debug active : Éclairé/Normales/Profondeur.
     pub debug_view: crate::app::DebugView,
+    /// Durée (ms) de chaque passe GPU mesurée à la dernière frame profilée
+    /// (Sprint 112, `Renderer::gpu_profiler_info`) — vide si le panneau Profiler
+    /// n'a jamais été ouvert, ou si l'adaptateur ne supporte pas les timestamp
+    /// queries (`Features::TIMESTAMP_QUERY_INSIDE_ENCODERS`).
+    pub gpu_pass_timings_ms: &'a [(&'static str, f32)],
+    /// Estimation du nombre de draw calls de la dernière frame — cf. doc de
+    /// `Renderer::last_frame_draw_calls`.
+    pub gpu_draw_calls: u32,
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
@@ -322,6 +330,13 @@ impl Editor {
     /// à partir de la config sans dupliquer l'état.
     pub fn settings(&self) -> &crate::app::settings::Settings {
         &self.settings
+    }
+
+    /// Panneau « 📊 Profiler FPS » ouvert ? Lu par `Renderer::render` (Sprint 112)
+    /// pour ne payer le coût des timestamp queries GPU que quand ce panneau est
+    /// visible — même logique que `fps_history`, qui ne s'accumule aussi que là.
+    pub fn profiler_open(&self) -> bool {
+        self.panels.profiler
     }
 
     /// Mode Player : dessine **uniquement** les contrôles tactiles en surimpression
@@ -911,7 +926,10 @@ fn build_ui(
             }
             if ui
                 .selectable_label(status.snap, "🧲 Snap")
-                .on_hover_text("Aimanter les déplacements à la grille (pas 0.5)")
+                .on_hover_text(
+                    "Aimanter position (pas 0.5) et rotation (pas 15°) au gizmo — \
+                     tenir Ctrl pendant un glissé inverse ponctuellement ce réglage",
+                )
                 .clicked()
             {
                 actions.toggle_snap = true;

@@ -1978,10 +1978,30 @@ régression client. Une manche décidée ne coupe plus tout le process
   frame suivante, sans redémarrer ; un script édité en cours de Play prend
   effet au tick suivant (déjà vrai avant ce sprint, maintenant testé).
 
-#### Sprint 112 — Éditeur : snapping + profiler GPU ⬜
-- [ ] Snap position/rotation au pas (touche modificatrice) ; timestamp queries wgpu par passe + compteur de draw calls.
-- **Fichiers** : `src/gfx/`, `src/editor/mod.rs`.
-- **Livrable** : coût des passes ombre/scène/HDR/bloom lisible dans le profiler.
+#### Sprint 112 — Éditeur : snapping + profiler GPU ✅ FAIT
+- [x] **Snap rotation** (`app/picking.rs::maybe_snap_angle`) : pas de 15°, même
+      principe que le snap position existant (`maybe_snap`, pas de 0.5) —
+      appliqué au **delta** du glissé, pas à l'angle absolu (le point de départ
+      n'a pas de raison d'être déjà un multiple de 15°).
+- [x] **Touche modificatrice** (`AppState::snap_modifier`/`set_snap_modifier`/
+      `effective_snap`) : Ctrl tenu pendant un glissé **inverse** `snap`
+      ponctuellement (façon Blender), lu à chaque `CursorMoved` (pas seulement
+      `ModifiersChanged`, sinon Ctrl tenu *avant* de commencer le glissé ne
+      serait jamais vu pendant celui-ci).
+- [x] **Profiler GPU** (`gfx/renderer.rs::GpuProfiler`) : timestamp queries
+      (`Features::TIMESTAMP_QUERY_INSIDE_ENCODERS`, demandées seulement si
+      l'adaptateur les supporte — dégrade en silence sinon) autour de 4 passes
+      (Ombres / Scène / HDR+Bloom / UI), lues seulement quand le panneau
+      « 📊 Profiler FPS » est ouvert (`Editor::profiler_open`) — le
+      `map_async` + `device.poll(Wait)` a un coût réel, exclu du chemin de
+      rendu par défaut. Compteur de draw calls dérivé de `draw_plan`/
+      `draw_plan_skinned` (estimation affichée comme telle, même esprit que le
+      « Mémoire (estimation) » déjà existant).
+- **Fichiers** : `src/app/mod.rs`, `src/app/picking.rs`, `src/gfx/renderer.rs`,
+  `src/editor/mod.rs`, `src/editor/windows.rs`, `src/lib.rs`.
+- **Livrable** : coût des passes ombre/scène/HDR+bloom/UI lisible dans le
+  profiler, dès qu'on l'ouvre ; snap position+rotation au gizmo, débrayable à
+  la volée avec Ctrl.
 
 #### Sprint 113 — Production : crash log + rustdoc ⬜
 - [ ] `panic::set_hook` → fichier dans `user://` + écran d'envoi **volontaire** (pas de télémétrie automatique, par principe).

@@ -326,6 +326,12 @@ impl ApplicationHandler for App {
                 self.state.handle_input(ev);
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // Touche modificatrice de snap (Ctrl, Sprint 112) : lue à chaque
+                // mouvement plutôt que sur `ModifiersChanged` seul — sinon tenir Ctrl
+                // *avant* de commencer un glissé de gizmo ne serait vu qu'au prochain
+                // changement de modificateur, potentiellement jamais pendant ce glissé.
+                self.state
+                    .set_snap_modifier(self.modifiers.state().control_key());
                 self.state.handle_input(InputEvent::PointerMove {
                     x: position.x,
                     y: position.y,

@@ -432,8 +432,15 @@ pub struct AppState {
     leaderboard_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::LeaderboardLine>, String>>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
-    /// Aimantation : les translations au gizmo s'alignent sur la grille (pas de 0.5).
+    /// Aimantation : les translations/rotations au gizmo s'alignent sur un pas
+    /// (0.5 en position, 15° en rotation — cf. `picking::maybe_snap`/`maybe_snap_angle`).
     pub snap: bool,
+    /// Touche modificatrice tenue (Ctrl) pendant un glissé de gizmo (Sprint 112) :
+    /// inverse temporairement `snap` — permet un ajustement fin ponctuel sans
+    /// changer le réglage persistant, ou l'inverse (aimanter ponctuellement sans
+    /// l'activer globalement). Positionné par la plateforme (`set_snap_modifier`),
+    /// jamais persisté (état d'entrée pure, comme `additive`).
+    snap_modifier: bool,
     /// Vue de debug du rendu : Éclairé/Normales/Profondeur.
     pub debug_view: DebugView,
     pub camera: OrbitCamera,
@@ -675,6 +682,7 @@ impl AppState {
             leaderboard_rx,
             show_grid: true,
             snap: false,
+            snap_modifier: false,
             debug_view: DebugView::default(),
             camera: OrbitCamera::new(1.0),
             viewport: (1.0, 1.0),
@@ -825,6 +833,19 @@ impl AppState {
     /// Le prochain clic de sélection sera additif (Cmd/Maj enfoncé), positionné par la plateforme.
     pub fn set_additive(&mut self, additive: bool) {
         self.additive = additive;
+    }
+
+    /// Touche modificatrice de snap (Ctrl) tenue ou non, positionné par la
+    /// plateforme à chaque mouvement de souris — cf. doc de `snap_modifier`.
+    pub fn set_snap_modifier(&mut self, held: bool) {
+        self.snap_modifier = held;
+    }
+
+    /// Snap effectif pour le glissé de gizmo en cours : `snap` inversé par la
+    /// touche modificatrice tenue (Blender : Ctrl bascule temporairement l'état
+    /// affiché par le bouton 🧲, sans le modifier).
+    pub(crate) fn effective_snap(&self) -> bool {
+        self.snap ^ self.snap_modifier
     }
 
     /// Demande la fermeture de l'application (traitée par la boucle d'événements).

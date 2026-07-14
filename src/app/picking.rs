@@ -149,11 +149,12 @@ impl AppState {
                 // Déplacement d'une lumière sélectionnée (translate uniquement).
                 if let (Some(axis), Some(li)) = (self.active_axis, self.drag_light) {
                     let a = axis_dir(axis);
+                    let snap = self.effective_snap();
                     if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y)
                         && let Some(pl) = self.scene.point_lights.get_mut(li)
                     {
                         let delta = a * (t - self.drag_start_t);
-                        pl.position = maybe_snap(self.drag_orig_pos + delta, self.snap).to_array();
+                        pl.position = maybe_snap(self.drag_orig_pos + delta, snap).to_array();
                     }
                     self.last_cursor = Some((x, y));
                     return;
@@ -165,7 +166,7 @@ impl AppState {
                         GizmoMode::Translate => {
                             if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y) {
                                 let delta = a * (t - self.drag_start_t);
-                                let snap = self.snap;
+                                let snap = self.effective_snap();
                                 if self.drag_orig_positions.len() > 1 {
                                     // déplace toute la sélection en bloc
                                     for (i, orig) in &self.drag_orig_positions {
@@ -198,7 +199,10 @@ impl AppState {
                         }
                         GizmoMode::Rotate => {
                             if let Some(ang) = self.ring_drag_angle(self.drag_orig_pos, a, x, y) {
-                                let delta = ang - self.drag_start_angle;
+                                let delta = maybe_snap_angle(
+                                    ang - self.drag_start_angle,
+                                    self.effective_snap(),
+                                );
                                 let rot = Quat::from_axis_angle(a, delta);
                                 // Rotation autour du pivot commun (position + orientation).
                                 let pivot = self.drag_pivot;
@@ -431,6 +435,18 @@ fn maybe_snap(p: Vec3, snap: bool) -> Vec3 {
     )
 }
 
+/// Aligne un delta de rotation (radians) sur un pas de 15° si `snap` est actif —
+/// même principe que `maybe_snap`, appliqué au delta plutôt qu'à l'angle absolu
+/// (le point de départ du glissé n'a pas de raison d'être lui-même un multiple de
+/// 15°, seul le mouvement appliqué doit s'y aligner).
+fn maybe_snap_angle(delta: f32, snap: bool) -> f32 {
+    if !snap {
+        return delta;
+    }
+    const STEP: f32 = std::f32::consts::PI / 12.0; // 15°
+    (delta / STEP).round() * STEP
+}
+
 /// Distance 2D (pixels) entre un point et un segment.
 pub(super) fn point_segment_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (px, py) = p;
@@ -474,5 +490,64 @@ pub(super) fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<
         Some(tmin.max(0.0))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maybe_snap_angle_rounds_to_the_nearest_15_degrees_only_when_active() {
+        let almost_20deg = 20.0_f32.to_radians();
+        assert_eq!(
+            maybe_snap_angle(almost_20deg, false),
+            almost_20deg,
+            "snap inactif : le delta doit passer inchangé"
+        );
+        let snapped = maybe_snap_angle(almost_20deg, true);
+        assert!(
+            (snapped - 15.0_f32.to_radians()).abs() < 1e-5,
+            "20° doit s'aligner sur le pas le plus proche (15°), obtenu {}°",
+            snapped.to_degrees()
+        );
+        // Négatif : symétrique, pas de biais vers zéro ou l'infini.
+        let snapped_neg = maybe_snap_angle((-20.0_f32).to_radians(), true);
+        assert!((snapped_neg - (-15.0_f32).to_radians()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn maybe_snap_angle_leaves_an_exact_multiple_of_the_step_untouched() {
+        let exact_30deg = 30.0_f32.to_radians();
+        let snapped = maybe_snap_angle(exact_30deg, true);
+        assert!((snapped - exact_30deg).abs() < 1e-5);
+    }
+
+    /// Sprint 112 : la touche modificatrice (Ctrl) doit **inverser** `snap`, pas le
+    /// remplacer — bouton actif + Ctrl tenu = snap désactivé ponctuellement, et
+    /// inversement, exactement le comportement attendu d'un raccourci « Blender-like ».
+    #[test]
+    fn effective_snap_is_toggled_by_the_modifier_key_in_both_directions() {
+        let mut app = AppState::new();
+        assert!(!app.snap);
+        assert!(!app.effective_snap());
+
+        app.set_snap_modifier(true);
+        assert!(
+            app.effective_snap(),
+            "snap off + Ctrl tenu doit activer le snap ponctuellement"
+        );
+
+        app.snap = true;
+        assert!(
+            !app.effective_snap(),
+            "snap on + Ctrl tenu doit désactiver le snap ponctuellement"
+        );
+
+        app.set_snap_modifier(false);
+        assert!(
+            app.effective_snap(),
+            "snap on sans Ctrl doit rester actif, sans changement"
+        );
     }
 }
