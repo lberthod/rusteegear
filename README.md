@@ -193,7 +193,7 @@ set_health(0..1)                       -- barre de vie du HUD
 **IA (DeepSeek)** — clé/modèle/température dans les Paramètres
 - **Générer** ou **optimiser** un script Lua depuis une consigne ; **générer une scène** entière (remplacer/ajouter) ; historique des prompts.
 
-**Outils** — Console (logs), Profiler FPS + mémoire, **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système.
+**Outils** — Console (logs), Profiler FPS + mémoire + **GPU** (timestamp queries par passe, draw calls), **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système, **journal de crash** (consultation/copie volontaire, aucun envoi automatique), **hot-reload** des assets retouchés en cours d'édition, **snap** position/rotation au gizmo (Ctrl pour inverser ponctuellement).
 
 **Démos** — `Fichier → Démo mobile`, `Démo gameplay` (toute l'API scriptée) et **`Démo contrôleur`** (joueur jouable au joystick + saut + collisions, **sans script**).
 
@@ -384,7 +384,7 @@ le développement). Historique sprint par sprint :
 | **M** — Image (ciel + brouillard, HDR/tone mapping, bloom, mipmaps + tangentes) | 89 → 92 | ✅ |
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
 | **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ✅ |
-| **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, confort | 104 → 113 | 🟢 (104, 105a-1/2/3, 108, 109, 110 faits ; 106/107 non numérotés/tampons ; 111-113 restants) |
+| **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, hot-reload, snapping + profiler GPU, crash log + rustdoc | 104 → 113 | ✅ (106/107 non numérotés, tampons non utilisés) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -486,14 +486,15 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
   **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
 - **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
-**En cours — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
-la Phase O (physique & feel, character controller, audit réseau) est terminée. En
-Phase P : audio bus/panning/streaming (104) et randomisation pitch/volume (108),
+**Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
+audio bus/panning/streaming (104) et randomisation pitch/volume (108),
 maintenabilité `app`/tests système + `docs/architecture.md` (105a-1/2/3), widgets
 de HUD déclaratifs sérialisés dans la scène (109), manettes + remapping via
-`gilrs` (110). Restent le hot-reload assets/Lua (111), le snapping éditeur +
-profiler GPU (112) et le crash log + rustdoc publié (113). Après quoi : Q
-(WASM/WebGPU, vitrine web), R (WebXR).
+`gilrs` (110), hot-reload assets (`notify`) + Lua (111), snapping éditeur
+position/rotation + profiler GPU (112), journal de crash volontaire + `cargo doc`
+publiable sur GitHub Pages (113). **En cours — Phase Q, la vitrine web** : build
+`wasm32`/WebGPU (114), assets & audio web (115), multijoueur navigateur (116).
+Puis R (WebXR).
 
 ---
 

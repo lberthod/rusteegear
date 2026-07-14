@@ -12,6 +12,7 @@ use winit::window::{Window, WindowId};
 
 pub mod app;
 pub mod assets;
+pub mod crash_log;
 pub mod editor;
 pub mod gfx;
 pub mod log_buffer;
@@ -561,6 +562,7 @@ fn guest_name() -> String {
 /// Point d'entrée desktop (et iOS via le bin).
 pub fn run() {
     crate::log_buffer::install();
+    crate::crash_log::install();
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
         Err(e) => {
@@ -600,6 +602,9 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
              partie ne fonctionneront pas cette session."
         ),
     }
+    // Après `set_android_data_dir` : le hook de crash écrit dans `user://`, qui en
+    // dépend sur Android (cf. doc de `crash_log::install`).
+    crate::crash_log::install();
 
     let event_loop = match EventLoop::builder().with_android_app(android_app).build() {
         Ok(el) => el,

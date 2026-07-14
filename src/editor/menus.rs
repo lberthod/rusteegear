@@ -563,6 +563,10 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
             panels.diagnostic = true;
             ui.close();
         }
+        if ui.button("🩹  Journal de crash").clicked() {
+            panels.crash_log = true;
+            ui.close();
+        }
         ui.separator();
         ui.hyperlink_to(
             "📖  Guide export APK",

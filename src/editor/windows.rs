@@ -1189,6 +1189,59 @@ pub(super) fn hud_widgets_window(
     panels.hud_widgets_editor = open;
 }
 
+/// Fenêtre « 🩹 Journal de crash » (Sprint 113) : consultation **volontaire** d'une
+/// trace de panic capturée par `crash_log::install` — aucun envoi automatique nulle
+/// part, juste voir/copier le texte, et le supprimer une fois consulté. S'ouvre
+/// automatiquement au lancement s'il y a quelque chose à montrer (cf. `Editor::new`),
+/// sinon accessible depuis le menu Aide.
+pub(super) fn crash_log_window(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    crash_log_text: &mut Option<String>,
+) {
+    let mut open = panels.crash_log;
+    let mut clear = false;
+    egui::Window::new("🩹 Journal de crash")
+        .open(&mut open)
+        .default_size([480.0, 360.0])
+        .show(ctx, |ui| match crash_log_text {
+            Some(text) => {
+                ui.label(
+                    "RusteeGear a planté lors d'une session précédente. Rien n'est \
+                     envoyé automatiquement : copiez ce texte pour le joindre à un \
+                     rapport de bug si vous le souhaitez, ou fermez pour l'oublier.",
+                );
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(text)
+                                .desired_width(ui.available_width())
+                                .font(egui::TextStyle::Monospace),
+                        );
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("📋 Copier").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                    }
+                    if ui.button("🗑 Fermer et supprimer").clicked() {
+                        clear = true;
+                    }
+                });
+            }
+            None => {
+                ui.label("Aucun crash enregistré depuis la dernière suppression.");
+            }
+        });
+    if clear {
+        crate::crash_log::clear();
+        *crash_log_text = None;
+        open = false;
+    }
+    panels.crash_log = open;
+}
+
 fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
     egui::ComboBox::from_label("liaison")
         .selected_text(format!("{binding:?}"))

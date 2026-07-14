@@ -1,4 +1,4 @@
-//! Caméra orbitale : produit la matrice view-projection (compatible NDC wgpu, z in [0,1]).
+//! Caméra orbitale : produit la matrice view-projection (compatible NDC wgpu, z in \[0,1\]).
 
 use glam::{Mat4, Vec3};
 

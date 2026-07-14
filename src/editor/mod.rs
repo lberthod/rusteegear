@@ -75,6 +75,12 @@ pub struct Editor {
     /// Textures des widgets HUD `Image`, mises en cache par chemin d'asset — cf.
     /// `hud::HudImageCache`.
     hud_image_cache: HudImageCache,
+    /// Contenu du journal de crash (Sprint 113), lu **une fois** à la construction
+    /// — `None` si `crash_log::read()` n'a rien trouvé. Mis à `None` par « Fermer »
+    /// (`crash_log::clear` supprime aussi le fichier) : pas de re-lecture à chaque
+    /// frame, le fichier ne change pas en cours de session (seul un panic l'écrit,
+    /// et celui-ci termine le process avant que cette valeur ne compte à nouveau).
+    crash_log_text: Option<String>,
 }
 
 /// Réglages du panneau « 👁 Aperçu HUD » : quels overlays de jeu (réticule,
@@ -129,6 +135,11 @@ struct Panels {
     multiplayer: bool,
     /// Fenêtre « 🧩 Widgets HUD » (édition de `Scene::hud_widgets`).
     hud_widgets_editor: bool,
+    /// Fenêtre « 🩹 Journal de crash » (Sprint 113) — ouverte automatiquement au
+    /// lancement si `crash_log::read()` a trouvé une trace, sinon accessible depuis
+    /// le menu Aide. Écran **volontaire** : rien n'est envoyé nulle part depuis ici,
+    /// juste consultation/copie/suppression locale (cf. doc de `crash_log`).
+    crash_log: bool,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -298,6 +309,14 @@ impl Editor {
                 predictable_texture_filtering: false,
             },
         );
+        // Ouvre automatiquement le journal de crash s'il y en a un à consulter —
+        // l'utilisateur n'a pas à savoir qu'un menu Aide existe pour le trouver.
+        let crash_log_text = crate::crash_log::read();
+        let panels = Panels {
+            crash_log: crash_log_text.is_some(),
+            ..Default::default()
+        };
+
         Editor {
             ctx,
             winit_state,
@@ -306,7 +325,7 @@ impl Editor {
             hier_filter: String::new(),
             hier_new_group: String::new(),
             hier_rename: None,
-            panels: Panels::default(),
+            panels,
             settings: crate::app::settings::Settings::load(),
             ai_prompt: String::new(),
             ai_scene_prompt: String::new(),
@@ -322,6 +341,7 @@ impl Editor {
             hud_preview: HudPreview::default(),
             hud_widget_new_id: String::new(),
             hud_image_cache: HudImageCache::default(),
+            crash_log_text,
         }
     }
 
@@ -520,6 +540,7 @@ impl Editor {
         let hud_preview = &mut self.hud_preview;
         let hud_image_cache = &mut self.hud_image_cache;
         let hud_widget_new_id = &mut self.hud_widget_new_id;
+        let crash_log_text = &mut self.crash_log_text;
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -574,6 +595,7 @@ impl Editor {
                 hud_preview,
                 hud_image_cache,
                 hud_widget_new_id,
+                crash_log_text,
                 &mut actions,
             );
         });
@@ -689,6 +711,7 @@ fn build_ui(
     hud_preview: &mut HudPreview,
     hud_image_cache: &mut HudImageCache,
     hud_widget_new_id: &mut String,
+    crash_log_text: &mut Option<String>,
     actions: &mut UiActions,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
@@ -697,6 +720,8 @@ fn build_ui(
     hud_preview_window(root.ctx(), hud_preview);
     // Fenêtre « 🧩 Widgets HUD » : ajouter/éditer les widgets déclaratifs de la scène.
     windows::hud_widgets_window(root.ctx(), panels, scene, hud_widget_new_id);
+    // Fenêtre « 🩹 Journal de crash » (Sprint 113) : écran volontaire de consultation.
+    windows::crash_log_window(root.ctx(), panels, crash_log_text);
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer_window(
         root.ctx(),

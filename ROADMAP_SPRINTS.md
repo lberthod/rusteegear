@@ -2003,11 +2003,32 @@ régression client. Une manche décidée ne coupe plus tout le process
   profiler, dès qu'on l'ouvre ; snap position+rotation au gizmo, débrayable à
   la volée avec Ctrl.
 
-#### Sprint 113 — Production : crash log + rustdoc ⬜
-- [ ] `panic::set_hook` → fichier dans `user://` + écran d'envoi **volontaire** (pas de télémétrie automatique, par principe).
-- [ ] `cargo doc` publié en CI (GitHub Pages) ; semver des releases.
-- **Fichiers** : `src/main.rs`, `.github/workflows/`.
-- **Livrable** : un panic Android laisse une trace exploitable ; doc API en ligne.
+#### Sprint 113 — Production : crash log + rustdoc ✅ FAIT
+- [x] **Journal de crash** (nouveau `src/crash_log.rs`) : `install()` pose un
+      `panic::set_hook` qui écrit message + emplacement + pile d'appels
+      (`Backtrace::force_capture`, indépendant de `RUST_BACKTRACE`) dans
+      `user://crash_log.txt`, puis délègue au hook précédent (comportement
+      stderr inchangé). Appelé dans `lib.rs::run` (desktop/iOS) et
+      `android_main` (après `set_android_data_dir`, dont `user_dir()` dépend
+      sur Android). Écran de consultation **🩹 Journal de crash**
+      (`editor/windows.rs`) : s'ouvre seul au lancement suivant s'il y a
+      quelque chose à montrer, bouton Copier + Fermer et supprimer — **aucun
+      envoi automatique**, par principe (menu Aide si fermé par erreur).
+- [x] **`cargo doc` → GitHub Pages** (nouveau `.github/workflows/docs.yml`) :
+      build sur push `main`, déployé via `actions/deploy-pages`. Nécessite
+      d'activer Pages une fois dans Settings → Pages → Source = *GitHub
+      Actions* (pas automatisable depuis un fichier de workflow) — le
+      workflow tourne sans ça, mais ne sert rien tant que ce n'est pas fait.
+- [x] **Semver des releases** : déjà en place avant ce sprint —
+      `release.yml` se déclenche sur un tag `v*` et en dérive `APP_VERSION`
+      (`versionName` de l'APK). Rien à ajouter ; noté ici pour cocher la case
+      explicitement plutôt que la laisser ambiguë.
+- **Fichiers** : nouveau `src/crash_log.rs`, `src/lib.rs`, `src/editor/mod.rs`,
+  `src/editor/menus.rs`, `src/editor/windows.rs`, nouveau
+  `.github/workflows/docs.yml`.
+- **Livrable** : un panic (desktop ou Android) laisse une trace exploitable,
+  consultable/copiable au lancement suivant sans jamais partir tout seul ;
+  doc API publiable en ligne dès Pages activé côté GitHub.
 
 ### PHASE Q — Web, la vitrine (114 → 117)
 

@@ -1,0 +1,71 @@
+name: Docs
+
+# Publie `cargo doc` (doc API du crate) sur GitHub Pages à chaque push sur main.
+# Nécessite d'activer Pages une fois dans Settings → Pages → Source = « GitHub
+# Actions » (pas configurable depuis ce fichier) — sans ça, ce workflow tourne
+# mais rien n'est servi.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Une seule publication à la fois ; n'annule pas un déploiement déjà en cours
+# (contrairement au CI de build/test, une doc à moitié publiée serait pire que
+# tard mais complète).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: cargo doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer la toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Mêmes dépendances système que ci.yml (winit/wgpu/egui) : `cargo doc`
+      # compile les dépendances pour extraire leurs signatures, donc a besoin
+      # des mêmes libs natives que `cargo build`.
+      - name: Dépendances système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libasound2-dev libudev-dev pkg-config
+
+      - name: cargo doc
+        run: cargo doc --no-deps --lib
+
+      # `cargo doc` ne génère pas de page d'accueil à la racine : redirige vers
+      # la doc du crate (seule cible utile, pas de workspace multi-crates ici).
+      - name: Page d'accueil (redirection)
+        run: |
+          echo '<meta http-equiv="refresh" content="0; url=motor3derust/index.html">' \
+            > target/doc/index.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    name: Déployer sur Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
