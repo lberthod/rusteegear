@@ -2171,19 +2171,33 @@ bruts) pour un utilisateur qui ne code pas.
   respecté : le wizard et le panneau de cartes appellent les mêmes `UiActions`/
   mutations `Scene` que les menus existants, sans réimplémenter quoi que ce soit.
 
-#### Sprint 113e — Documentation « créateur de jeu » ⬜
+#### Sprint 113e — Documentation « créateur de jeu » ✅ FAIT (texte seul)
 **Objectif** : combler l'absence totale de doc utilisateur (`docs/` = 100 % technique
 aujourd'hui : `architecture.md` + `docs/audits/*`).
-- [ ] Nouveau `docs/guide-createur/` : tutoriel pas-à-pas (créer une scène → ajouter
-      un objet contrôlable → HUD → build APK), sans jargon Rust.
-- [ ] Capture d'écran/GIF du wizard du Sprint 113d à chaque étape.
-- [ ] Section « Créer son premier jeu » liée depuis le README (distincte de la
-      section technique existante « Pourquoi Rust »/stack).
-- **Fichiers** : nouveau `docs/guide-createur/*.md`, `README.md` (lien).
-- **Livrable** : quelqu'un qui n'a jamais vu le projet peut suivre le guide et
-  exporter un APK jouable sans assistance.
-- **Risques** : doc qui pourrit vite si le wizard change → à écrire après 113d,
-  pas avant.
+- [x] Nouveau `docs/guide-createur/index.md` : tutoriel pas-à-pas (créer une scène
+      → ajouter un objet contrôlable → HUD → build APK), sans jargon Rust. Chaque
+      étape a été vérifiée contre le code réel de l'éditoriale (labels de menu, noms
+      de champs exacts) plutôt que devinée — ex. le chemin exact pour rendre un objet
+      pilotable (`Inspecteur ▸ 🧩 Composants mobiles (Android) ▸ 🕹 Input Receiver`)
+      et pour la barre de vie (`Ajouter ▸ 📱 UI mobile ▸ ❤ Barre de vie (HUD)`).
+- [ ] **Capture d'écran/GIF du wizard du Sprint 113d : pas fait.** L'éditeur est une
+      fenêtre native (wgpu/winit) qu'aucun outil de cet environnement ne peut
+      capturer, et le build web (`packaging/web`) est un export **Player** seul
+      (scène embarquée), pas l'éditeur — donc aucun moyen automatisé d'obtenir des
+      captures. Reste à faire manuellement (lancer `cargo run`, capturer chaque
+      étape du guide).
+- [x] Section « 🎨 Créer son premier jeu » ajoutée au README, juste après
+      « 🚀 Démarrage rapide » et avant « 🧱 Architecture » — distincte de la section
+      technique « Pourquoi Rust ? », qui reste plus haut.
+- **Fichiers** : nouveau `docs/guide-createur/index.md`, `README.md` (lien).
+- **Livrable partiel** : le texte du guide est complet et navigable de bout en bout
+  (scène → objet pilotable → HUD → export APK) ; il manque les captures d'écran
+  pour un livrable pleinement conforme à l'objectif initial (« sans avoir lu de doc
+  technique au préalable » — le texte seul devrait déjà y suffire, les images
+  restent un plus).
+- **Risques** : doc qui pourrit vite si le wizard change → écrite après 113d comme
+  prévu, et chaque référence UI vérifiée contre le code source du 113d au moment de
+  l'écriture (pas de dérive à ce stade).
 
 #### Sprint 113f — Déploiement web : WSS obligatoire derrière HTTPS ⬜
 **Objectif** : le jeu exporté en wasm32 et déployé sur un hébergeur HTTPS (cas FTP

@@ -449,6 +449,20 @@ cargo run -- --player           # mode player (scène plein écran)
 
 ---
 
+## 🎨 Créer son premier jeu
+
+Vous ne codez pas et voulez juste construire un niveau jouable ? Le guide
+**[docs/guide-createur/index.md](docs/guide-createur/index.md)** vous emmène pas
+à pas, boutons et cases à cocher uniquement : créer une scène → ajouter un
+objet pilotable → HUD (barre de vie, joystick) → export en `.apk` jouable sur
+votre téléphone. Aucune ligne de code, aucun jargon Rust.
+
+(La section « Pourquoi Rust ? » plus haut et l'architecture ci-dessous
+s'adressent plutôt à quelqu'un qui veut comprendre/modifier le moteur
+lui-même.)
+
+---
+
 ## 🧱 Architecture
 
 ```
