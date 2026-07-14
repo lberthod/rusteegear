@@ -151,7 +151,8 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 
 **Runtime de jeu** (Play ▶ / Pause ⏸ / Stop ⏹, aperçu réinitialisable)
 - **Physique** `rapier3d` (Statique / Dynamique) avec **collider explicite** (Auto/Box/Sphère/Capsule).
-- **Audio** `kira` : son par objet, autoplay, **spatialisation** (volume selon distance), cache asynchrone.
+- **Audio** `kira` : son par objet, autoplay, **spatialisation** (volume selon distance), cache asynchrone,
+  **bus musique/effets séparés + panning + streaming** (Sprint 104) et **randomisation pitch/volume** par déclenchement (Sprint 108).
 - **Caméra de jeu** + **suivi** automatique de l'objet joueur.
 
 **🎮 Mini-jeu jouable — _sans écrire une ligne de script_**
@@ -180,6 +181,14 @@ set_health(0..1)                       -- barre de vie du HUD
 - **Aperçu device** (cadre téléphone, portrait/paysage) façon simulateur tactile.
 - **Contrôles tactiles** : joystick virtuel + boutons, **zones de déclenchement**, **barre de vie**.
 - **macOS** (éditeur, `.dmg`), **Android** (`.apk`, identité surchargée), **iOS** — player tactile (resume).
+
+**Manette** (`gilrs`, Sprint 110)
+- **Stick gauche** → déplacement « tank », cumulé avec clavier/tactile ; **saut/attaque/tir/soin** au bouton.
+- **Remapping** persisté, éditable dans **⚙ Paramètres › 🎮 Manette** (menu déroulant par action).
+
+**HUD déclaratif** (Sprint 109)
+- **Widgets** texte / image / jauge / bouton, **ancrés** dans la scène (`Scene::hud_widgets`), liés aux valeurs de jeu (vie, score, frags, manche).
+- Édités dans le panneau **🧩 Widgets HUD**, sans code moteur ; un bouton cliqué émet un événement lisible en Lua (`on_event("hud:<action>")`).
 
 **IA (DeepSeek)** — clé/modèle/température dans les Paramètres
 - **Générer** ou **optimiser** un script Lua depuis une consigne ; **générer une scène** entière (remplacer/ajouter) ; historique des prompts.
@@ -374,7 +383,8 @@ le développement). Historique sprint par sprint :
 | **L** — Animation squelettale (skinning glTF → blending → exposition Lua → réplication réseau) | 84 → 88 | ✅ |
 | **M** — Image (ciel + brouillard, HDR/tone mapping, bloom, mipmaps + tangentes) | 89 → 92 | ✅ |
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
-| **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | 🟢 (100/101/102/103a faits ; 103b/103c restants) |
+| **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ✅ |
+| **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, confort | 104 → 113 | 🟢 (104, 105a-1/2/3, 108, 109, 110 faits ; 106/107 non numérotés/tampons ; 111-113 restants) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -476,15 +486,14 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
   **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
 - **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
-**En cours — Phase O, physique & feel** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
-la Phase N (chaîne gameplay événementielle) est livrée pour l'essentiel (reste le
-Sprint 94, cycle de vie/handles génération­nels, reporté). La Phase O se termine par
-103a-103c : **103a** est fait — découpage de `app/mod.rs`/`AppState` en 7
-sous-modules, même traitement pour `editor/mod.rs`/`scene/mod.rs`, et migration des
-commentaires d'historique de tout `src/**/*.rs` vers `docs/audits/`. Restent
-**103b** (character controller kinématique) et **103c** (audit de la prédiction
-réseau après la migration). Après quoi : P (audio/HUD/confort), Q (WASM/WebGPU,
-vitrine web), R (WebXR).
+**En cours — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
+la Phase O (physique & feel, character controller, audit réseau) est terminée. En
+Phase P : audio bus/panning/streaming (104) et randomisation pitch/volume (108),
+maintenabilité `app`/tests système + `docs/architecture.md` (105a-1/2/3), widgets
+de HUD déclaratifs sérialisés dans la scène (109), manettes + remapping via
+`gilrs` (110). Restent le hot-reload assets/Lua (111), le snapping éditeur +
+profiler GPU (112) et le crash log + rustdoc publié (113). Après quoi : Q
+(WASM/WebGPU, vitrine web), R (WebXR).
 
 ---
 
