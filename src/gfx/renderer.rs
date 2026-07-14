@@ -1551,6 +1551,18 @@ impl Renderer {
         }
     }
 
+    /// Hot-reload (Sprint 111) : vide le cache de textures (sauf la blanche par
+    /// défaut, `""`, qui n'est pas chargée depuis un fichier) suite à un changement
+    /// détecté dans le dossier d'assets de projet. `sync_textures` recharge alors
+    /// depuis le disque au prochain appel — la nouvelle version d'un fichier
+    /// retouché s'affiche donc sans redémarrer, quel que soit le schéma utilisé
+    /// pour le référencer (`asset://`, `asset-id://`) : plus simple et robuste
+    /// qu'une invalidation ciblée par chemin, qui devrait résoudre chaque forme
+    /// vers le même fichier disque avant de savoir laquelle jeter.
+    pub(crate) fn invalidate_asset_textures(&mut self) {
+        self.textures.retain(|k, _| k.is_empty());
+    }
+
     /// Charge les textures référencées par la scène pas encore en cache.
     fn sync_textures(&mut self, scene: &Scene) {
         for obj in &scene.objects {
@@ -3486,5 +3498,74 @@ mod tests {
         // tant que l'autre n'est pas encore à 1).
         assert_eq!(mip_count_for(256, 64), 9);
         assert_eq!(mip_count_for(64, 256), 9);
+    }
+
+    /// Sprint 111 : preuve que `invalidate_asset_textures` force un rechargement
+    /// depuis le disque au prochain `sync_textures`, plutôt que de continuer à
+    /// servir la version déjà en cache — c'est tout le mécanisme du hot-reload
+    /// (`lib.rs::poll_asset_hot_reload` appelle cette méthode dès qu'un événement du
+    /// dossier d'assets arrive). Utilise un chemin disque brut (pas `asset://`) :
+    /// `assets::read_bytes` le lit tel quel via `std::fs::read`, donc le test n'a
+    /// besoin de toucher ni `$HOME` ni le dossier d'assets réel (cf. la garde-fou
+    /// d'isolation des tests système, Sprint 105a-3).
+    #[test]
+    fn invalidate_asset_textures_forces_a_reload_from_disk_on_the_next_sync() {
+        let mut renderer = match pollster::block_on(Renderer::new_headless(64, 64)) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "invalidate_asset_textures_forces_a_reload_from_disk_on_the_next_sync : \
+                     pas de GPU headless ({e}) — test sauté."
+                );
+                return;
+            }
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "motor3derust_hot_reload_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("texture.png");
+        image::save_buffer(&path, &[255, 0, 0, 255], 1, 1, image::ColorType::Rgba8).unwrap();
+
+        let scene = crate::scene::Scene {
+            objects: vec![crate::scene::SceneObject {
+                texture: path.to_str().unwrap().to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        renderer.sync_textures(&scene);
+        assert!(
+            renderer.textures.contains_key(path.to_str().unwrap()),
+            "la texture doit être en cache après le premier sync"
+        );
+
+        renderer.invalidate_asset_textures();
+        assert!(
+            !renderer.textures.contains_key(path.to_str().unwrap()),
+            "invalidate_asset_textures doit vider l'entrée (sauf la blanche par défaut)"
+        );
+        assert!(
+            renderer.textures.contains_key(""),
+            "la texture blanche par défaut ne doit pas être jetée"
+        );
+
+        // Re-synchroniser recharge bien depuis le disque (le fichier n'a pas
+        // changé ici, mais c'est exactement ce que ferait une retouche réelle : le
+        // point important est qu'aucun état ne bloque le rechargement après coup).
+        renderer.sync_textures(&scene);
+        assert!(
+            renderer.textures.contains_key(path.to_str().unwrap()),
+            "sync_textures doit recharger l'entrée invalidée"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

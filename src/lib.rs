@@ -51,6 +51,17 @@ struct App {
     gamepad_held: std::collections::HashSet<gilrs::Button>,
     /// Stick gauche brut (avant zone morte, cf. `app::input::apply_deadzone`).
     gamepad_axes: (f32, f32),
+
+    // --- hot-reload des assets de projet (Sprint 111, desktop uniquement) ---
+    /// Récepteur des événements du dossier d'assets (`assets::assets_dir()`) —
+    /// gardé avec le `Watcher` qui l'alimente (cf. `resumed`) : abandonner le
+    /// `Watcher` arrêterait la surveillance côté OS. `None` si le dossier était
+    /// indisponible au lancement (`$HOME` absent) ou sur mobile.
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    asset_watch: Option<(
+        notify::RecommendedWatcher,
+        std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    )>,
 }
 
 /// Résout un axe (-1/0/1) à partir de l'état « tenu » des deux touches
@@ -197,6 +208,27 @@ impl App {
             self.recompute_action_buttons();
         }
     }
+
+    /// Vide les événements du watcher d'assets en attente (Sprint 111) et invalide
+    /// le cache de textures du renderer dès qu'un fichier a bougé — appelé à chaque
+    /// tour de boucle, même principe que `poll_gamepad` (pas de callback à
+    /// intégrer à l'event-loop de winit, `notify` livre sur son propre thread via
+    /// un canal). Groupe tous les événements en attente en une seule invalidation
+    /// plutôt qu'une par événement : un éditeur d'image écrit souvent plusieurs
+    /// fois de suite (fichier temporaire + renommage) pour une seule retouche.
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    fn poll_asset_hot_reload(&mut self) {
+        let Some((_, rx)) = self.asset_watch.as_ref() else {
+            return;
+        };
+        let mut changed = false;
+        while rx.try_recv().is_ok() {
+            changed = true;
+        }
+        if changed && let Some(renderer) = self.renderer.as_mut() {
+            renderer.invalidate_asset_textures();
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -211,6 +243,10 @@ impl ApplicationHandler for App {
                 // udev) : dégrade en silence, clavier/tactile restent utilisables.
                 Err(e) => log::info!("Manette indisponible ({e}) — clavier/tactile seuls."),
             }
+        }
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        if self.asset_watch.is_none() {
+            self.asset_watch = start_asset_watch();
         }
         let attrs = Window::default_attributes()
             .with_title("RusteeGear")
@@ -432,6 +468,8 @@ impl ApplicationHandler for App {
     /// et aux chargements asynchrones.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_gamepad();
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        self.poll_asset_hot_reload();
         if let Some(renderer) = &self.renderer
             && let Some(window) = &renderer.window
         {
@@ -445,6 +483,30 @@ impl ApplicationHandler for App {
             ));
         }
     }
+}
+
+/// Démarre la surveillance du dossier d'assets de projet (Sprint 111), créé au
+/// besoin (comme `assets::write_user_bytes_at` le fait déjà pour `user://`) — sans
+/// ça, un poste qui n'a encore rien importé n'aurait pas de dossier à surveiller et
+/// le hot-reload resterait inactif jusqu'au premier import suivi d'un redémarrage.
+/// `None` si `$HOME` est indisponible (pas de dossier possible) ou si le backend de
+/// surveillance de l'OS ne démarre pas (dégrade en silence, comme `poll_gamepad`
+/// pour une manette absente — l'édition manuelle du fichier JSON de scène reste le
+/// filet de secours dans les deux cas).
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn start_asset_watch() -> Option<(
+    notify::RecommendedWatcher,
+    std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+)> {
+    use notify::Watcher;
+    let dir = crate::assets::assets_dir()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = notify::recommended_watcher(tx).ok()?;
+    watcher
+        .watch(&dir, notify::RecursiveMode::NonRecursive)
+        .ok()?;
+    Some((watcher, rx))
 }
 
 /// Icône de fenêtre/dock, embarquée dans le binaire (PNG 64×64 décodé au lancement).

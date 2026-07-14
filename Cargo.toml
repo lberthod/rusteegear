@@ -96,6 +96,10 @@ gilrs = "0.11.2"
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.17.2"
 ureq = { version = "2.12", features = ["json"] }
+# Hot-reload des assets de projet (Sprint 111) : concept desktop uniquement — pas de
+# dossier `~/.motor3derust/assets/` à surveiller sur mobile (Android a son propre
+# dossier de données d'app, iOS reste hors scope comme les deux dépendances ci-dessus).
+notify = "8.2.0"
 
 # Réseau multijoueur (WebSocket, SPRINT_MMORPG.md Sprint 53) : desktop + Android
 # (Sprint 65) — pas de TLS ici (`ws://`, jamais `wss://`), donc pas de dépendance

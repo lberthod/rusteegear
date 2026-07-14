@@ -1267,6 +1267,32 @@ mod tests {
         assert!(app.scene.objects[0].animation.is_none());
     }
 
+    /// Sprint 111 (hot-reload) : `script_cache` est clé par hash du **contenu** du
+    /// script (`scripting::script_key`), pas par identité d'objet — retoucher le
+    /// texte d'un script en cours de Play (panneau « Scripts », ou IA) doit donc
+    /// prendre effet dès le tick suivant, sans repasser par Stop/Play. Même principe
+    /// que les textures, cf. `gfx::renderer::tests::invalidate_asset_textures_
+    /// forces_a_reload_from_disk_on_the_next_sync` — mais ici aucune invalidation
+    /// n'est nécessaire : la clé change d'elle-même avec le texte.
+    #[test]
+    fn editing_an_objects_script_mid_play_takes_effect_on_the_next_tick_without_restarting_play() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            script: "obj.x = 1".into(),
+            ..Default::default()
+        });
+        app.sim_step(0.1);
+        assert_eq!(app.scene.objects[0].transform.position.x, 1.0);
+
+        app.scene.objects[0].script = "obj.x = 2".into();
+        app.sim_step(0.1);
+        assert_eq!(
+            app.scene.objects[0].transform.position.x, 2.0,
+            "le nouveau texte du script doit s'appliquer dès le tick suivant, sans redémarrer Play"
+        );
+    }
+
     #[test]
     fn sim_step_advances_a_crossfade_towards_completion_and_stops() {
         use crate::scene::AnimationState;

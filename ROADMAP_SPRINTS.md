@@ -1954,10 +1954,29 @@ régression client. Une manche décidée ne coupe plus tout le process
   aarch64-linux-android` compile sans erreur avec `gilrs` — jeu à la manette
   sur un vrai appareil non testé dans ce sprint (pas d'accès matériel ici).
 
-#### Sprint 111 — Hot-reload (assets + Lua) ⬜
-- [ ] `notify` sur le dossier assets → réimport async ; invalidation des chunks Lua modifiés en cours de Play.
-- **Fichiers** : `src/assets.rs`, `src/runtime/mod.rs`.
-- **Livrable** : retoucher une texture ou un script se voit sans redémarrer.
+#### Sprint 111 — Hot-reload (assets + Lua) ✅ FAIT
+- [x] **Assets** (`notify`, desktop uniquement) : `lib.rs::start_asset_watch`
+      surveille `assets::assets_dir()` (créé au besoin) sur son propre thread ;
+      `App::poll_asset_hot_reload`, appelée à chaque tour de boucle comme
+      `poll_gamepad` (Sprint 110), vide le canal et appelle `Renderer::
+      invalidate_asset_textures` dès qu'un événement arrive. Invalidation
+      globale du cache de textures (pas ciblée par chemin) : un objet peut
+      référencer le même fichier via `asset://`, `asset-id://` ou un chemin brut
+      — les résoudre tous vers le même fichier avant de savoir quoi jeter
+      aurait été plus complexe pour un gain nul (`sync_textures` recharge tout
+      à la demande, coût négligible à l'échelle d'un projet solo).
+- [x] **Lua : trouvé en concevant le sprint** — `script_cache` (`AppState`)
+      est déjà clé par **hash du contenu** du script (`scripting::script_key`),
+      pas par identité d'objet ni chemin de fichier (les scripts sont du texte
+      inline dans la scène, jamais des fichiers `.lua` séparés). Retoucher un
+      script en cours de Play change donc la clé de lui-même : le nouveau texte
+      s'exécute dès le tick suivant, sans invalidation à écrire. Aucun code
+      Lua modifié ; seul un test-preuve confirme ce comportement déjà correct.
+- **Fichiers** : `Cargo.toml` (dépendance `notify`, desktop uniquement),
+  `src/lib.rs`, `src/gfx/renderer.rs` (`invalidate_asset_textures`).
+- **Livrable** : retoucher une texture depuis un logiciel externe se voit à la
+  frame suivante, sans redémarrer ; un script édité en cours de Play prend
+  effet au tick suivant (déjà vrai avant ce sprint, maintenant testé).
 
 #### Sprint 112 — Éditeur : snapping + profiler GPU ⬜
 - [ ] Snap position/rotation au pas (touche modificatrice) ; timestamp queries wgpu par passe + compteur de draw calls.
