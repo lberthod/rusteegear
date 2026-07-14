@@ -32,7 +32,7 @@
 | **P — Audio, HUD & confort** | 104 → 113 | Bus/panning, widgets HUD, manettes, hot-reload, profiler GPU, crash log |
 | **P2 — Dette, sécurité & accessibilité** | 113a → 113f | Découper les god-modules, durcir unwrap/réseau, rendre l'éditeur et la doc accessibles à un non-développeur |
 | **Q — Web (ex-« pistes Phase J »)** | 114 → 117 | WASM/WebGPU, multijoueur navigateur, vitrine publique |
-| **S — Extensions quasi-gratuites** | 118 → 127 | Suites peu coûteuses de K/L/M/N/O/P (audio confort, post-effets HDR, SSAO, pipeline assets, outillage éditeur…) pour dépasser 100/200 sur la grille des 200 fonctionnalités |
+| **S — Extensions quasi-gratuites** | 121 → 135 | Suites peu coûteuses de K→Q (audio confort, post-effets HDR, SSAO, pipeline assets, outillage éditeur, particules, IK, cycle de vie) pour dépasser 100/200 sur la grille des 200 fonctionnalités |
 | **R — WebXR** | 115 → 117 | Casque dans le navigateur (spike isolé → rendu stéréo → tests IWE) — traitée en dernier par choix de priorité, malgré des numéros de sprint antérieurs à S |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
@@ -2497,21 +2497,31 @@ connection may not be initiated from a page loaded over HTTPS »*.
 > (événements → prefabs → spawn → save), une physique fidèle, un audio vivant, et il tourne dans
 > un navigateur — sans avoir trahi un seul refus assumé.
 
-### PHASE S — Extensions quasi-gratuites (121 → 130)
+### PHASE S — Extensions quasi-gratuites (121 → 135)
 
 > Issue du même **audit comparatif à 200 fonctionnalités** que les phases K→Q
-> (Godot / Unity / Unreal / RusteeGear, 2026-07-13, re-vérifié dans le code le
-> 13 juillet après les sprints 80→99) : une fois K, L, M et N livrées, le score
-> RusteeGear sur la grille remonte à ~82–85 / 200, encore loin de la barre
-> symbolique de 100. Plutôt que d'inventer de nouveaux chantiers, ces 10 sprints
-> activent des items déjà catalogués dans l'audit comme « quasi gratuits » ou
-> « une petite marche » une fois un prérequis précis posé — et ce prérequis
-> (bus audio, cible HDR, manifeste GUID, skinning GPU, triggers) est justement
-> livré par K/L/M/N/O. Avec S, la projection franchit **~101–104 / 200** — une
-> projection de lecture de grille, pas une mesure, tant que ces sprints ne sont
-> pas livrés. **Aucun refus assumé (🔴) n'est reconsidéré** : pas de boîte noire
-> (FMOD/Wwise), pas de GI/Nanite, pas de consoles. Sprints insérables n'importe
-> où après leurs prérequis respectifs — même logique de réservoir que P.
+> (Godot / Unity / Unreal / RusteeGear, 2026-07-13, re-vérifié dans le code les
+> 13 et 14 juillet après les sprints 80→117) : une fois K→Q livrées, le score
+> RusteeGear sur la grille remonte à **79,5 / 200** (mesuré, pas projeté),
+> encore sous la barre symbolique de 100. Les sprints 121→130 activent dix
+> chantiers déjà catalogués dans l'audit comme « quasi gratuits » ou « une
+> petite marche » une fois un prérequis précis posé — et ce prérequis (bus
+> audio, cible HDR, manifeste GUID, skinning GPU, triggers) est justement
+> livré par K→Q. **Recalcul precis (pas une estimation à la louche comme la
+> première passe)** : ces dix sprints, une fois livrés, valent **+19 points**
+> sur la grille (79,5 → **98,5 / 200**) — déjà tout près de 100. Les sprints
+> **131→135**, ajoutés le 15 juillet pour finir de franchir la barre,
+> reprennent des chantiers déjà **flagués 🟢 « à faire »** dans ce rapport mais
+> jamais programmés (RNG, versioning de schéma, particules) plus deux
+> promotions raisonnées de 🟠 vers 🟢 (ombres cascadées, IK/look-at, cycle de
+> vie + handles — ce dernier étant le Sprint 94 rouvert, **risque identique**
+> à l'époque, atténué mais pas annulé par le découpage en sous-modules du
+> Sprint 103a). Avec 121→135, la projection franchit **~105 / 200** — une
+> projection de lecture de grille, pas une mesure, tant que ces sprints ne
+> sont pas livrés. **Aucun refus assumé (🔴) n'est reconsidéré** : pas de
+> boîte noire (FMOD/Wwise), pas de GI/Nanite, pas de consoles. Sprints
+> insérables n'importe où après leurs prérequis respectifs — même logique de
+> réservoir que P.
 
 #### Sprint 121 — Audio confort (DSP, reverb, ducking, musique adaptative) ⬜
 **Objectif** : transformer le bus musique/SFX (Sprint 104) en mixeur complet.
@@ -2586,11 +2596,53 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Fichiers** : `src/app/combat.rs`, `src/assets.rs`.
 - **Livrable** : la démo contrôleur passe en anglais par un réglage ; une nouvelle capacité de combat s'ajoute par des données, sans nouveau code Rust.
 
-> **Définition de « terminé » S** : dix chantiers 🟠 déjà documentés comme peu coûteux
-> sont livrés, sans qu'aucun refus assumé (🔴) n'ait été reconsidéré — mixeur audio
-> complet, chaîne HDR finie (expo/grading/vignette/SSAO), pipeline assets et
-> outillage éditeur étoffés, terrain sculptable, moteur utilisable en anglais.
-> Projection : ~101–104 / 200 sur la grille des 200 fonctionnalités.
+#### Sprint 131 — Noyau : versioning de schéma + RNG déterministe global ⬜
+**Objectif** : deux chantiers 🟢 « à faire » catalogués dès le premier audit (n° 10, 18), jamais programmés faute de sprint dédié.
+- [ ] **Versioning de schéma des scènes** : champ `version` déjà présent (Sprint 95) — ajouter de vraies migrations testées (au moins une migration réelle, pas juste le champ).
+- [ ] **RNG déterministe global** : `fastrand`/xorshift **seedé par partie**, propagé explicitement (pas de `SystemTime` caché) ; le xorshift audio du Sprint 108 en devient un cas d'usage parmi d'autres plutôt qu'un système isolé.
+- **Fichiers** : `src/scene/persistence.rs` (migrations), nouveau `src/runtime/rng.rs`, `src/runtime/sfx.rs` (rebranché sur le RNG global).
+- **Livrable** : une scène v1 se charge en v2 avec un test de migration réel ; deux parties avec la même seed produisent le même tirage (test de reproductibilité).
+
+#### Sprint 132 — Particules CPU + billboards + transparence triée ⬜
+**Objectif** : chantier 🟢 catalogué dès le premier audit (n° 61–62, 64, 74), jamais programmé.
+- [ ] Pool de quads billboardés sur l'instancing existant (impacts, fumée, pluie).
+- [ ] Émetteurs édités dans l'inspecteur (taux, durée de vie, vitesse, couleur).
+- [ ] Alpha blending + tri par distance pour les billboards transparents.
+- [ ] Trails/ribbons et particules GPU compute : non — hors scope de ce sprint (et probablement définitivement, cf. OIT/GPU-driven déjà refusés).
+- **Fichiers** : nouveau `src/runtime/particles.rs`, `src/gfx/renderer.rs`, `src/scene/mod.rs`.
+- **Livrable** : le missile du mode combat laisse une traînée de particules à l'impact, éditable sans toucher au moteur.
+
+#### Sprint 133 — Ombres : cascades + point/spot ⬜
+**Objectif** : promotion raisonnée de 🟠 vers 🟢 (n° 30–31) — la cible HDR et le SSAO (Sprints 90, 123) rendent le rendu assez mûr pour approfondir les ombres plutôt que d'ouvrir un nouveau continent.
+- [ ] 2–3 cascades (CSM) sur la shadow map directionnelle existante.
+- [ ] Atlas pour 1–2 lumières spot (les points restent hors scope — cubemaps, chantier distinct).
+- **Fichiers** : `src/gfx/renderer.rs`, `src/gfx/shaders/main.wgsl`.
+- **Livrable** : golden test mis à jour montrant une ombre nette au premier plan et lisible au loin (avant : un seul plan de netteté) ; une lumière spot projette une ombre.
+- **Risque** : golden tests de rendu à re-générer (Sprint 80) — vérifier qu'aucune régression visuelle n'est masquée par la mise à jour des références.
+
+#### Sprint 134 — Animation : IK deux-os + look-at/aim ⬜
+**Objectif** : promotion raisonnée de 🟠 vers 🟢, sous-ensemble ciblé du chantier n° 100–103 (uniquement 101 et 103 — foot placement et couches d'animation restent 🟠, plus dépendants d'un vrai besoin de gameplay).
+- [ ] IK deux-os analytique (loi des cosinus) applicable à un bras/une jambe du squelette.
+- [ ] Look-at/aim : rotation d'un bone (tête, torse) vers une cible monde, pondérée par un poids 0–1.
+- **Fichiers** : `src/scene/import.rs` (ou nouveau `src/runtime/ik.rs`), `src/app/simulation.rs`.
+- **Livrable** : un personnage regarde le joueur quand il est proche (look-at pondéré) ; un bras atteint visiblement un point cible via l'IK deux-os, testé sur des angles connus.
+
+#### Sprint 135 — Cycle de vie + handles générationnels (réouverture du Sprint 94) ⬜
+**Objectif** : le Sprint 94 avait été sciemment sauté (« trop risqué à ce stade »— indices utilisés par le réseau et l'undo). Le découpage en sous-modules des Sprints 103a-1/2/3 réduit la surface de risque (les call-sites sont désormais localisés par sous-système plutôt qu'éparpillés dans un fichier de 7500 lignes), mais **le risque de fond reste le même** : ne pas le sous-estimer une seconde fois.
+- [ ] File de commandes spawn/despawn appliquée en fin de tick fixe (remplace la suppression douce `visible=false` actuelle).
+- [ ] `slotmap` (index + génération) sur `scene.objects` — migration des call-sites réseau (`network_client.rs`, `multiplayer.rs`, `bin/server.rs`) et undo (`selection.rs`) un par un, jamais en bloc.
+- **Fichiers** : `src/scene/mod.rs`, `src/app/persistence.rs` (undo), `src/app/network_client.rs`, `src/app/multiplayer.rs`, `src/bin/server.rs`.
+- **Livrable** : détruire un objet en Play n'invalide aucune référence tenue par le réseau ou l'historique undo (tests dédiés) ; un test de charge réseau (façon Sprint 61) confirme l'absence de régression de latence/débit.
+- **Risque** : **le plus élevé de la phase S**, hérité tel quel du Sprint 94 — à faire **seul**, sans autre sprint gameplay/réseau en parallèle, comme le Sprint 103b/103c l'avait fait pour le character controller.
+
+> **Définition de « terminé » S** : quinze chantiers 🟢 (dix « quasi gratuits » du 14
+> juillet + cinq du 15 juillet, dont deux promotions raisonnées de 🟠 et une
+> réouverture assumée du Sprint 94) sont livrés, sans qu'aucun refus assumé (🔴)
+> n'ait été reconsidéré — mixeur audio complet, chaîne HDR finie (expo/grading/
+> vignette/SSAO/cascades), particules, IK de base, cycle de vie propre du moteur,
+> pipeline assets et outillage éditeur étoffés, terrain sculptable, moteur
+> utilisable en anglais. Projection : **~105 / 200** sur la grille des 200
+> fonctionnalités (mesuré à 79,5 avant cette phase).
 
 ---
 
@@ -2667,10 +2719,11 @@ connection may not be initiated from a page loaded over HTTPS »*.
   pour non-développeur, doc « créateur de jeu » publiée.
 - **Q** : la démo multijoueur jouable **dans le navigateur**, lien public dans le README.
 - **S** : mixeur audio complet (DSP, ducking, musique adaptative), chaîne HDR finie
-  (exposition auto, grading, vignette, SSAO), pipeline assets et outillage éditeur
-  étoffés, terrain sculptable, moteur localisable — score projeté ~101–104 / 200
-  sur la grille des 200 fonctionnalités, sans qu'un seul refus assumé (🔴) n'ait
-  été reconsidéré.
+  (exposition auto, grading, vignette, SSAO, cascades), pipeline assets et outillage
+  éditeur étoffés, terrain sculptable, particules, IK de base, cycle de vie propre
+  (handles générationnels), moteur localisable — score projeté ~105 / 200 sur la
+  grille des 200 fonctionnalités (mesuré à 79,5 avant cette phase), sans qu'un seul
+  refus assumé (🔴) n'ait été reconsidéré.
 - **R** : une scène RusteeGear s'affiche **en stéréo dans un casque** (simulé via
   Immersive Web Emulator ou réel via navigateur), poses tête/contrôleurs prises en
   compte, interactions XR de base validées par des scénarios rejouables — traitée
