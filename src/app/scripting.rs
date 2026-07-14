@@ -381,3 +381,281 @@ pub(super) fn run_script(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::{MeshKind, Scene, SceneObject};
+
+    /// Sol plat statique seul (comme `physics::tests::ground_and_wall_scene`, sans le
+    /// mur) — sert au « capteur de sol » scripté en Lua.
+    fn floor_only_scene() -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: MeshKind::Cube,
+            transform: Transform::from_pos(Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene
+    }
+
+    #[test]
+    fn raycast_lua_ground_sensor_reports_hit_point_and_draws_a_debug_line() {
+        // Un « capteur de sol » scripté en Lua — un rayon vers
+        // le bas via `raycast()`, visualisé au debug drawing jusqu'au point
+        // d'impact renvoyé.
+        let scene = floor_only_scene();
+        let phys = crate::runtime::physics::Physics::build(&scene);
+        let lua = Lua::new();
+        let src = "local hit = raycast(0, 5, 0, 0, -1, 0, 100)\n\
+                   if hit then\n\
+                     obj.y = hit.dist\n\
+                     debug.line(0, 5, 0, hit.x, hit.y, hit.z, 0, 1, 0)\n\
+                   end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut debug_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut debug_out,
+            false,
+            Some(&phys),
+        )
+        .unwrap();
+        assert!(
+            (t.position.y - 5.5).abs() < 0.05,
+            "hit.dist doit valoir ~5.5 m (y={})",
+            t.position.y
+        );
+        assert_eq!(debug_out.len(), 1, "le capteur doit dessiner une ligne");
+        let (a, b, color) = debug_out[0];
+        assert_eq!(a, Vec3::new(0.0, 5.0, 0.0));
+        assert!((b.y - -0.5).abs() < 0.05, "point d'impact au sol (b={b})");
+        assert_eq!(color, [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn raycast_lua_returns_nil_when_nothing_is_hit() {
+        let scene = floor_only_scene();
+        let phys = crate::runtime::physics::Physics::build(&scene);
+        let lua = Lua::new();
+        // Vers le haut : rien au-dessus du sol, `raycast` doit renvoyer `nil`.
+        let src = "if raycast(0, 5, 0, 0, 1, 0, 100) == nil then obj.x = 42.0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            Some(&phys),
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 42.0);
+    }
+
+    #[test]
+    fn raycast_lua_without_a_physics_world_returns_nil_instead_of_panicking() {
+        // Hors mode Play (`self.physics == None`, cf. `AppState::advance_play`) : les
+        // scripts qui appellent `raycast`/`overlap_sphere` ne doivent pas planter,
+        // juste ne rien trouver.
+        let lua = Lua::new();
+        let src = "if raycast(0,0,0, 1,0,0, 10) == nil then obj.x = 1.0 end\n\
+                   obj.y = overlap_sphere(0, 0, 0, 5)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 1.0);
+        assert_eq!(t.position.y, 0.0);
+    }
+
+    /// Deux sphères statiques (proche/loin) — sert au « cône de vision » scripté en
+    /// Lua (détection de proximité avant le test d'angle/ligne de vue).
+    fn near_and_far_spheres_scene() -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Proche".into(),
+            mesh: MeshKind::Sphere,
+            transform: Transform::from_pos(Vec3::new(1.0, 0.0, 0.0)).with_scale(Vec3::splat(0.2)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Loin".into(),
+            mesh: MeshKind::Sphere,
+            transform: Transform::from_pos(Vec3::new(20.0, 0.0, 0.0)).with_scale(Vec3::splat(0.2)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene
+    }
+
+    #[test]
+    fn overlap_sphere_lua_counts_only_colliders_within_radius() {
+        // Brique du « cône de vision » : compter ce qui se trouve à portée avant même
+        // de tester l'angle — `overlap_sphere()` renvoie un compte, pas une liste
+        // d'objets (les scripts n'ont pas de handle direct sur les autres objets,
+        // seulement des positions via `find_tag`).
+        let scene = near_and_far_spheres_scene();
+        let phys = crate::runtime::physics::Physics::build(&scene);
+        let lua = Lua::new();
+        let src = "obj.x = overlap_sphere(0, 0, 0, 2)\n\
+                   obj.y = overlap_sphere(0, 0, 0, 25)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            Some(&phys),
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 1.0, "seule la sphère proche est à 2 m");
+        assert_eq!(t.position.y, 2.0, "les deux sphères sont à moins de 25 m");
+    }
+
+    #[test]
+    fn obj_exited_is_true_only_on_the_tick_a_trigger_zone_is_left() {
+        // Symétrique de `script_reacts_to_trigger` (`obj.triggered`) :
+        // `obj.exited` doit être vrai exactement le tick où le contact
+        // cesse, pas avant (encore en contact) ni après (déjà retombé à faux ailleurs).
+        let lua = Lua::new();
+        let src = "if obj.exited then obj.y = 9.0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
+        let input = PlayerInput::default();
+        // Encore en contact (`triggered`) : pas de sortie, `exited` doit être faux.
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            true,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.y, 0.0);
+        // Le contact vient de cesser : `exited` doit être vrai ce tick.
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.position.y, 9.0);
+    }
+}

@@ -1069,3 +1069,100 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tank_controls_turn_then_thrust_move_the_player_along_its_own_facing() {
+        // Bout en bout : A/D (rotation manuelle) et W/S (avance/recul) doivent piloter le
+        // joueur indépendamment de la caméra, contrairement au joystick/flèches
+        // (contrôles « tank »).
+        let mut app = AppState::new();
+        app.load_controller_demo();
+        app.playing = true;
+        let pi = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("la démo contrôleur a un joueur pilotable");
+
+        // D tenue (tourner à gauche, cf. doc `PlayerInput::key_turn`) : le yaw doit
+        // augmenter par rapport à sa valeur de départ (0). Peu de pas : avec
+        // `MANUAL_TURN_SPEED` (3 rad/s), rester bien en-deçà de π pour ne pas
+        // « boucler » et fausser la lecture (`to_scaled_axis` ramène l'angle dans
+        // (-π, π]).
+        app.input_state.key_turn = 1.0;
+        for _ in 0..5 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        }
+        app.input_state.key_turn = 0.0;
+        let yaw = app.scene.objects[pi]
+            .transform
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+        assert!(
+            yaw > 0.1,
+            "D doit tourner le joueur vers la gauche, yaw={yaw}"
+        );
+
+        // Puis W tenue : le joueur doit avancer le long de cette orientation, pas vers
+        // le -Z monde qu'utiliserait un déplacement caméra-relative.
+        let p0 = app.scene.objects[pi].transform.position;
+        app.input_state.key_thrust = 1.0;
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        }
+        let moved = app.scene.objects[pi].transform.position - p0;
+        let expected_dir = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+        assert!(
+            moved.length() > 0.3,
+            "W doit faire avancer le joueur, déplacement={moved:?}"
+        );
+        assert!(
+            moved.normalize().dot(expected_dir) > 0.8,
+            "l'avance doit suivre l'orientation du joueur (yaw={yaw}), pas la caméra : \
+             déplacement={moved:?}, attendu≈{expected_dir:?}"
+        );
+    }
+
+    #[test]
+    fn tank_controls_reversing_never_spins_the_player_around() {
+        // Garde-fou : l'orientation doit rester fixe pendant S (recul), pas se
+        // remettre à tourner vers le vecteur de vitesse (cf. docs/audits/app-mod.md).
+        let mut app = AppState::new();
+        app.load_controller_demo();
+        app.playing = true;
+        let pi = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("la démo contrôleur a un joueur pilotable");
+        let yaw0 = app.scene.objects[pi]
+            .transform
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+
+        app.input_state.key_thrust = -1.0; // S tenue
+        for _ in 0..90 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+            app.advance_play();
+        }
+        let yaw1 = app.scene.objects[pi]
+            .transform
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+        assert!(
+            (yaw1 - yaw0).abs() < 1e-3,
+            "reculer (S) ne doit jamais faire tourner le personnage : yaw0={yaw0}, yaw1={yaw1}"
+        );
+    }
+}
