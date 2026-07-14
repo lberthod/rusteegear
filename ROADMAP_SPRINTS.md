@@ -2083,23 +2083,66 @@ régression client. Une manche décidée ne coupe plus tout le process
       reçu ni focus ni interaction — plausible que ce soit un artefact du
       navigateur headless/automatisé plutôt qu'un bug moteur, à confirmer
       dans un onglet normal.
-- [ ] **Non résolu : le canvas reste noir.** Le pipeline tourne sans erreur
-      (confirmé par des logs `web_sys::console` insérés puis retirés) mais
-      n'affiche ni le dégradé de ciel ni la géométrie de la scène embarquée
-      (`assets/player_scene.json`, chargée avec succès — pas un problème de
-      scène vide). Cause non identifiée : candidats les plus probables un
-      format de surface/texture incompatible entre le backend WebGPU
-      natif (desktop) et celui du navigateur, ou une passe de rendu qui
-      suppose une capacité absente du backend web de `wgpu`. Prochaine étape
-      pour qui reprend ce fil : comparer `wgpu::Surface::get_capabilities`
-      entre les deux backends, puis instrumenter `Renderer::render` passe par
-      passe.
+- [x] **Corrigé en cours de route : la surface WebGPU du navigateur n'a
+      aucun format sRGB.** `wgpu::Surface::get_capabilities` renvoie côté
+      natif (Metal, macOS) `[Bgra8UnormSrgb, Bgra8Unorm, Rgba16Float,
+      Rgb10a2Unorm]` (choisi : `Bgra8UnormSrgb`), côté Chrome/WebGPU
+      seulement `[Bgra8Unorm, Rgba8Unorm, Rgba16Float]` — **aucune variante
+      srgb**, `alpha_modes=[Opaque]` (normal). `tonemap.wgsl` écrivait une
+      couleur linéaire en supposant qu'une vue de surface sRGB l'encoderait
+      automatiquement à l'écriture (vrai côté natif, jamais vrai côté web).
+      Corrigé : `Renderer::tonemap` calcule `needs_srgb_encode =
+      !config.format.is_srgb()` et le passe au shader (`BloomParams.
+      intensity.y`, champ déjà présent, inutilisé) ; `tonemap.wgsl` applique
+      l'encodage OETF sRGB standard lui-même quand ce flag est actif — suit
+      le format réellement choisi, pas un `#[cfg(wasm32)]` (robuste à un
+      futur backend natif sans format srgb non plus). **Golden tests
+      inchangés** (le chemin headless force toujours `Rgba8UnormSrgb`, donc
+      `needs_srgb_encode = 0.0`, comportement byte-identique à avant).
+- [ ] **Toujours non résolu : le canvas reste noir même après ce correctif.**
+      Diagnostic poussé bien plus loin cette session (logs `web_sys::console`
+      insérés puis retirés à chaque étape) — tout ce qui suit est vérifié
+      **sain**, pas juste supposé :
+      - `surface.get_current_texture()` → `Success` à chaque frame (jamais
+        `Outdated`/`Timeout`/`Occluded`/`Validation`).
+      - `draw_plan` contient bien 16 objets (la scène embarquée charge
+        correctement, ce n'est pas une scène vide).
+      - Caméra/lumière : `eye`, `target`, `distance`, `pitch`, `yaw`,
+        couleurs de ciel, `ambient` — toutes les valeurs sont cohérentes,
+        aucun NaN/dégénérescence.
+      - `resize()` n'est appelé **qu'une fois**, avec la bonne taille
+        (1024×720) — pas de boucle de resize qui invaliderait `hdr_view`
+        entre l'écriture de la passe principale et sa lecture par
+        `tonemap()`.
+      - Le correctif sRGB ci-dessus n'a **rien changé** visuellement : donc
+        soit son hypothèse était correcte mais insuffisante (une seconde
+        cause additionnelle masque encore tout), soit le vrai problème est
+        ailleurs (aucune couleur n'atteint `hdr_view` du tout, pas un
+        problème d'encodage d'une couleur qui y arrive bel et bien).
+      - Repéré en lisant le code sans le vérifier à l'exécution : le
+        `mipgen_pipeline` (mip-chain des textures importées) cible en dur
+        `wgpu::TextureFormat::Rgba8UnormSrgb` au lieu de suivre le format
+        réel de la texture — sans rapport avec la surface d'affichage
+        (n'explique pas un canvas entièrement noir), mais à corriger un jour
+        si des textures glTF s'affichent avec un gamma faux sur wasm32.
+      - **Prochaine étape concrète** pour qui reprend ce fil : le clear color
+        du `main_pass` est un flat `{0.07, 0.08, 0.1}` (avant tout dessin) —
+        si même ce clear n'apparaît pas (post-gamma, un gris bleuté visible,
+        pas du noir pur), la passe principale n'écrit peut-être jamais dans
+        `hdr_view` du tout côté web. Étape la plus rentable : inspecter la
+        frame capturée par les DevTools WebGPU de Chrome (`chrome://gpu`,
+        onglet **GPU process** → **WebGPU Report**, ou l'extension officielle
+        *WebGPU Inspector*) plutôt que de continuer à deviner depuis les
+        logs Rust — un outil de capture de frame GPU montrerait directement
+        quelle passe écrit quoi, ce qu'aucun `console.log` ne peut révéler.
 - **Fichiers** : nouveau `src/time_compat.rs`, `.cargo/config.toml`,
   `packaging/web/index.html`, `packaging/build_web.sh` ; modifiés :
   `src/lib.rs`, `src/runtime/audio.rs`, `src/app/mod.rs`, `src/app/
   simulation.rs`, `src/net/mod.rs`, `src/app/network_client.rs`, `src/app/
-  ai.rs`, `src/editor/export.rs`, `src/editor/menus.rs`, `Cargo.toml`,
-  `.github/workflows/ci.yml` (job `cross-build` étendu, build seul).
+  ai.rs`, `src/editor/export.rs`, `src/editor/menus.rs`, `src/gfx/
+  renderer.rs` (encodage sRGB manuel du `tonemap`), `src/gfx/shaders/
+  tonemap.wgsl`, `Cargo.toml`, `.github/workflows/ci.yml` (job
+  `cross-build` étendu, build seul).
 - **Livrable** : la lib compile et s'exécute sans erreur pour
   `wasm32-unknown-unknown`, vérifié en conditions réelles (Chrome, WebGPU) —
   mais **la scène ne s'affiche pas encore** (canvas noir), donc le livrable

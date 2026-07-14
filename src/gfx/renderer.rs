@@ -1970,11 +1970,28 @@ impl Renderer {
         bloom_intensity: f32,
         output: &wgpu::TextureView,
     ) {
+        // Le shader écrit une couleur linéaire (0..1 après tone mapping) en
+        // supposant qu'une vue sRGB de `output` applique l'encodage gamma
+        // automatiquement au moment de l'écriture (comportement standard des
+        // formats *Srgb — c'est ce qui se passe côté natif, `config.format` y
+        // est toujours srgb, cf. `new_impl`). Sur wasm32/WebGPU (Chrome, testé
+        // Sprint 114), le canvas n'expose **aucun** format de surface srgb
+        // (uniquement `Bgra8Unorm`) : sans ce correctif, l'image sortait
+        // beaucoup trop sombre (quasi noire à l'écran) faute d'encodage —
+        // `needs_srgb_encode` fait appliquer l'encodage **dans le shader** à la
+        // place quand la surface réelle n'est pas srgb, quelle que soit la
+        // plateforme (pas un `#[cfg(wasm32)]` : suit le format effectivement
+        // choisi, robuste à un futur backend natif sans format srgb non plus).
+        let needs_srgb_encode = if self.config.format.is_srgb() {
+            0.0
+        } else {
+            1.0
+        };
         self.queue.write_buffer(
             &self.bloom_intensity_buf,
             0,
             bytemuck::bytes_of(&BloomUniform {
-                intensity: [bloom_intensity, 0.0, 0.0, 0.0],
+                intensity: [bloom_intensity, needs_srgb_encode, 0.0, 0.0],
             }),
         );
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {

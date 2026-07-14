@@ -12,9 +12,20 @@
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
 struct BloomParams {
     // x = intensité (0 = désactivé, cf. `RenderQuality::bloom_enabled` — l'opt-out
-    // mobile met cette valeur à 0 sans changer le shader). yzw inutilisés (alignement).
+    // mobile met cette valeur à 0 sans changer le shader). y = 1.0 si la surface
+    // réelle n'a **pas** de format sRGB (ex. wasm32/WebGPU, Sprint 114) : le shader
+    // doit alors encoder le gamma lui-même, sinon fait automatiquement par une vue
+    // sRGB côté natif — cf. le commentaire de `Renderer::tonemap`. zw inutilisés.
     intensity: vec4<f32>,
 };
+
+// Encodage OETF sRGB standard (IEC 61966-2-1), appliqué canal par canal —
+// utilisé seulement quand `bloom.intensity.y > 0.5` (cf. plus haut).
+fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
 @group(0) @binding(3) var<uniform> bloom: BloomParams;
 
 struct VsOut {
@@ -53,5 +64,9 @@ fn fs_tonemap(in: VsOut) -> @location(0) vec4<f32> {
     let hdr = textureSample(hdr_tex, hdr_samp, in.uv).rgb;
     let bloom_col = textureSample(bloom_tex, hdr_samp, in.uv).rgb;
     let combined = hdr + bloom_col * bloom.intensity.x;
-    return vec4<f32>(aces_tonemap(combined), 1.0);
+    var mapped = aces_tonemap(combined);
+    if bloom.intensity.y > 0.5 {
+        mapped = srgb_encode(mapped);
+    }
+    return vec4<f32>(mapped, 1.0);
 }
