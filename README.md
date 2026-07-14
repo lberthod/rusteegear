@@ -385,7 +385,7 @@ le développement). Historique sprint par sprint :
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
 | **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ✅ |
 | **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, hot-reload, snapping + profiler GPU, crash log + rustdoc | 104 → 113 | ✅ (106/107 non numérotés, tampons non utilisés) |
-| **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | 🟢 (114 fait — la scène s'affiche dans Chrome ; 115/116 restants) |
+| **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | 🟢 (114/115 faits — jouable au clavier avec effets sonores dans Chrome ; 116 restant) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -495,11 +495,14 @@ de HUD déclaratifs sérialisés dans la scène (109), manettes + remapping via
 position/rotation + profiler GPU (112), journal de crash volontaire + `cargo doc`
 publiable sur GitHub Pages (113), build wasm32/WebGPU — sol, joueur et
 overlay tactile s'affichent dans Chrome, vérifié par lecture de pixels réels
-(114). **En cours — Phase Q, la vitrine web** : restent assets & audio web
-(115, le scripting Lua et l'audio sont pour l'instant inertes sur wasm32),
-puis multijoueur navigateur (116). Limitation connue : les meshes à
-animation squelettale ne s'affichent pas encore sur le web (limite de bind
-groups WebGPU, détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)). Puis
+(114), assets embarqués + audio (`kira`, SFX) fonctionnels sur le web —
+démo contrôleur jouable au clavier dans le navigateur (115). **En cours —
+Phase Q, la vitrine web** : reste le multijoueur navigateur (116). Le
+scripting Lua reste inerte sur wasm32, et la musique/ambiance en flux
+n'est pas encore portée sur le web (`kira::sound::streaming` exclut ce
+target). Limitation connue : les meshes à animation squelettale ne
+s'affichent pas encore sur le web (limite de bind groups WebGPU, détail
+dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)). Puis
 R (WebXR).
 
 ---

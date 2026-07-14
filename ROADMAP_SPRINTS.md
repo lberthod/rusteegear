@@ -29,10 +29,11 @@
 | **M — Image** | 89 → 92 | Ciel/fog, HDR + tone mapping, bloom, mipmaps |
 | **N — Chaîne gameplay** | 93 → 99 | Événements → prefabs → spawn/destroy Lua → save |
 | **O — Physique & feel** | 100 → 103 | Exposer rapier (trimesh, CCD, couches), character controller |
-| **P — Audio, HUD & confort** | 104 → 110 | Bus/panning, widgets HUD, manettes, hot-reload, profiler GPU |
-| **Q — Web (ex-« pistes Phase J »)** | 111 → 114 | WASM/WebGPU, multijoueur navigateur, vitrine publique |
-| **R — WebXR** | 115 → 117 | Casque dans le navigateur (spike isolé → rendu stéréo → tests IWE) |
+| **P — Audio, HUD & confort** | 104 → 113 | Bus/panning, widgets HUD, manettes, hot-reload, profiler GPU, crash log |
+| **P2 — Dette, sécurité & accessibilité** | 113a → 113e | Découper les god-modules, durcir unwrap/réseau, rendre l'éditeur et la doc accessibles à un non-développeur |
+| **Q — Web (ex-« pistes Phase J »)** | 114 → 117 | WASM/WebGPU, multijoueur navigateur, vitrine publique |
 | **S — Extensions quasi-gratuites** | 118 → 127 | Suites peu coûteuses de K/L/M/N/O/P (audio confort, post-effets HDR, SSAO, pipeline assets, outillage éditeur…) pour dépasser 100/200 sur la grille des 200 fonctionnalités |
+| **R — WebXR** | 115 → 117 | Casque dans le navigateur (spike isolé → rendu stéréo → tests IWE) — traitée en dernier par choix de priorité, malgré des numéros de sprint antérieurs à S |
 
 > Phases A et B améliorent le cœur **partagé** par toutes les plateformes.
 > Les faire avant C évite de réécrire des features sur plusieurs cibles.
@@ -2030,6 +2031,104 @@ régression client. Une manche décidée ne coupe plus tout le process
   consultable/copiable au lancement suivant sans jamais partir tout seul ;
   doc API publiable en ligne dès Pages activé côté GitHub.
 
+### PHASE P2 — Dette, sécurité & accessibilité (113a → 113e)
+
+> Issue de l'audit comparatif du 2026-07-14 (7 axes notés, vérifiés dans le code).
+> Ces 5 sprints ne changent pas de gameplay — ils font passer le moteur de
+> « prototype avancé » à « base saine pour du public non technique et une
+> exposition réseau réelle ». Insérables n'importe où après leurs prérequis,
+> comme les sprints tampons de la Phase P.
+
+#### Sprint 113a — Découpage des god-modules ⬜
+**Objectif** : ramener `app/mod.rs` (4612 l.) et `renderer.rs` (3490 l.) sous ~1500-2000
+lignes chacun, dans l'esprit des extractions déjà faites (103a-1, 105a-1).
+- [ ] `app/mod.rs` : extraire ce qui reste extractible en modules dédiés (candidats à
+      identifier au sprint — ex. gestion HUD/input restante non déjà sortie en
+      `simulation.rs`/`scripting.rs`), méthodes déplacées **telles quelles**, aucun
+      changement de comportement (règle de visibilité `pub(super)` déjà établie).
+- [ ] `renderer.rs` : séparer setup pipeline / passes de rendu / gestion ressources GPU
+      en sous-modules `gfx/pipelines.rs`, `gfx/passes.rs` (ou équivalent), sans toucher
+      aux shaders ni changer l'ordre des passes.
+- [ ] `scene/mod.rs` (2789 l.) : si le temps le permet, extraire les types de données
+      (widgets HUD, contrôles mobiles, prefabs) des méthodes d'API scène.
+- **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs`, `src/scene/mod.rs`.
+- **Livrable** : nombre de lignes avant/après documenté par fichier ; 100 % des tests
+  existants toujours verts ; `cargo clippy`/`cargo fmt` propres ; aucun changement de
+  comportement observable.
+- **Risques** : gros diff mécanique → vérifier par un diff limité aux déplacements
+  (pas de logique modifiée), comme fait au Sprint 105a-1.
+
+#### Sprint 113b — Audit complet unwrap/expect/panic en code de production ⬜
+**Objectif** : réconcilier l'annonce du Sprint 46 (« 0 unwrap/expect en code de prod »,
+scope `gfx/renderer.rs` + `lib.rs`) avec l'état actuel du crate entier
+(**248 `.unwrap()` + 146 `.expect()` + 8 `panic!`** hors tests, tous modules confondus).
+- [ ] Grep exhaustif hors `#[cfg(test)]`/`tests/` ; classer chaque site en
+      (a) invariant vraiment garanti (documenter pourquoi, laisser tel quel),
+      (b) à durcir en `Result`/`let…else`/valeur par défaut sûre.
+- [ ] Durcir en priorité les chemins atteignables depuis une entrée utilisateur/réseau/
+      fichier (import assets, chargement de scène, réseau) — même patron que le Sprint 28
+      (`let … else` sur le tactile) et le Sprint 46 (init GPU).
+- [ ] Étendre l'audit ponctuel du Sprint 46 en **vérification CI** : un job/script qui
+      grep les `unwrap()`/`expect()` hors tests et échoue si le nombre dépasse une
+      liste blanche documentée (évite la régression silencieuse qui a motivé ce sprint).
+- **Fichiers** : `src/app/*.rs`, `src/runtime/*.rs`, `src/net/*.rs`, `src/scene/*.rs`,
+  nouveau script/CI de vérification.
+- **Livrable** : compte avant/après documenté par fichier ; liste blanche justifiée
+  pour les unwraps restants ; CI qui empêche la régression future.
+- **Risques** : certains `unwrap()` masquent un vrai bug latent → traiter au cas par
+  cas, ne pas juste remplacer par `expect()` avec un message (ça ne change rien au
+  panic) sauf si l'invariant est réellement garanti.
+
+#### Sprint 113c — Sécurité réseau : rate limiting + TLS natif ⬜
+**Objectif** : combler ce que Sprint 105a-2 n'a pas couvert — aucun rate limiting,
+pas de chiffrement sur le WebSocket applicatif natif (Sprint 116 ne couvre que le
+client WASM en `wss://`, pas le serveur natif `src/bin/server.rs`).
+- [ ] Rate limiting par connexion (nb de messages/s, taille cumulée) dans
+      `src/net/server_loop.rs`, déconnexion propre + log au dépassement — même esprit
+      que la validation de champs du Sprint 105a-2 (rejet explicite, pas de silence).
+- [ ] TLS natif : `tokio-tungstenite` + `rustls`/`native-tls` pour `wss://` côté
+      serveur natif (pas seulement le client web) ; configuration certificat via env
+      (jamais en dur/dans le repo).
+- [ ] Limite de connexions simultanées par IP (garde-fou anti-DoS basique, pas un
+      WAF complet — hors scope assumé, à documenter comme tel).
+- **Fichiers** : `src/net/server_loop.rs`, `src/bin/server.rs`, `Cargo.toml`.
+- **Livrable** : test qui simule un flood de messages → connexion coupée proprement ;
+  connexion `wss://` validée bout-en-bout (client réel).
+- **Risques** : TLS natif change la configuration de déploiement (certificat requis) →
+  documenter clairement dans `packaging/EXPORT.md` équivalent réseau.
+
+#### Sprint 113d — Éditeur : wizard de démarrage pour non-développeur ⬜
+**Objectif** : réduire la marche d'entrée de l'inspecteur egui actuel (sliders/DragValue
+bruts) pour un utilisateur qui ne code pas.
+- [ ] Écran « Nouveau projet » guidé : choix d'un template (scène vide / démo
+      contrôleur / niveau de combat) au lieu de partir d'une scène nue.
+- [ ] Panneau « Ajouter un objet » simplifié en avant-plan (cartes avec icône/aperçu)
+      pour les actions les plus courantes du menu Ajouter (déjà riche depuis les
+      Sprints 40-41), sans dupliquer sa logique.
+- [ ] Info-bulles/aide contextuelle sur les champs techniques (metallic/roughness,
+      colliders, etc.) plutôt qu'une refonte complète de l'inspecteur.
+- **Fichiers** : `src/editor/mod.rs`, `src/editor/windows.rs`.
+- **Livrable** : un nouvel utilisateur crée une scène jouable (objet + contrôle mobile
+  + build APK) en suivant le wizard, sans avoir lu de doc technique au préalable.
+- **Risques** : ne pas dupliquer la logique existante du menu Ajouter (Sprint 40) —
+  le wizard appelle les mêmes actions, ne réimplémente rien.
+
+#### Sprint 113e — Documentation « créateur de jeu » ⬜
+**Objectif** : combler l'absence totale de doc utilisateur (`docs/` = 100 % technique
+aujourd'hui : `architecture.md` + `docs/audits/*`).
+- [ ] Nouveau `docs/guide-createur/` : tutoriel pas-à-pas (créer une scène → ajouter
+      un objet contrôlable → HUD → build APK), sans jargon Rust.
+- [ ] Capture d'écran/GIF du wizard du Sprint 113d à chaque étape.
+- [ ] Section « Créer son premier jeu » liée depuis le README (distincte de la
+      section technique existante « Pourquoi Rust »/stack).
+- **Fichiers** : nouveau `docs/guide-createur/*.md`, `README.md` (lien).
+- **Livrable** : quelqu'un qui n'a jamais vu le projet peut suivre le guide et
+  exporter un APK jouable sans assistance.
+- **Risques** : doc qui pourrit vite si le wizard change → à écrire après 113d,
+  pas avant.
+
+---
+
 ### PHASE Q — Web, la vitrine (114 → 117)
 
 #### Sprint 114 — Build wasm32 ✅ FAIT
@@ -2171,9 +2270,51 @@ régression client. Une manche décidée ne coupe plus tout le process
   cf. ci-dessus) — à retravailler si des scènes animées doivent tourner sur
   le web.
 
-#### Sprint 115 — Assets & audio web ⬜
-- [ ] Assets par fetch async (le chemin async existant aide) ; contexte audio web pour kira.
-- **Livrable** : démo contrôleur complète, jouable au clavier dans le navigateur.
+#### Sprint 115 — Assets & audio web ✅ FAIT
+- [x] **Assets** : rien à faire — les assets du player exporté sont
+      embarqués à la compilation (`include_dir!`, `assets::read_bytes` lit
+      la mémoire, jamais le disque) pour **toutes** les plateformes, web
+      compris. Vérifié : sol, personnage, ombres, textures s'affichent
+      correctement dans Chrome (cf. Sprint 114) sans aucun chemin de fetch
+      async supplémentaire. Le chemin `asset://`/fichier réel (édition
+      desktop uniquement) reste hors scope du player web, comme prévu.
+- [x] **Contexte audio web pour kira** : `kira` supporte `wasm32-unknown-
+      unknown` nativement (backend `cpal` en feature `wasm-bindgen`, Web
+      Audio sous le capot) — pas besoin de réinventer un contexte, juste de
+      ne plus le contourner. `src/runtime/audio.rs` réunifié : `Audio` est
+      maintenant **un seul** struct/impl partagé entre toutes les
+      plateformes (le stub muet du Sprint 114 est remplacé), avec seulement
+      deux points `#[cfg]` structurels — pas des différences de
+      comportement, mais des capacités **absentes** de la cible :
+      - `play_music_streaming_gain` (musique/ambiance en flux) : `kira::
+        sound::streaming` s'exclut lui-même de wasm32 (ouvre un vrai
+        descripteur de fichier) — stub côté web (log + silence), ré-
+        implémentable plus tard en chargement complet (`StaticSoundData`)
+        si le besoin se confirme.
+      - Décodage en fond (`std::thread::spawn`) pour un chemin de fichier
+        hors asset connu : pas de threads OS accessibles sur wasm32 sans
+        config spéciale, et de toute façon aucun fichier réel à lire côté
+        web — remplacé par un message d'erreur (chemin qui n'est de toute
+        façon jamais emprunté par le player exporté, tous ses sons étant
+        des assets embarqués).
+      Tous les autres chemins (`play`, `play_gain` pour un asset connu,
+      `play_bytes` pour les SFX synthétisés de `sfx.rs`, `set_music_volume`/
+      `set_sfx_volume`, `stop_all`) sont désormais du code **partagé**,
+      zéro divergence wasm32/natif. Vérifié dans Chrome : `AudioManager::
+      new()` s'initialise sans avertissement (le seul signal disponible
+      sans matériel audio pour écouter réellement), clic sur le bouton
+      « Saut » (déclenche un SFX via `sfx::play`) sans erreur console.
+- [x] **Vérifié dans un vrai Chrome** : personnage déplaçable (WASD), bouton
+      Saut réactif, sol/ombres/UI corrects, scène dynamique (le sol change
+      de teinte en direct — la boucle de simulation tourne bien à chaque
+      frame), aucune erreur console.
+- **Fichiers** : `src/runtime/audio.rs` (réécrit — un seul chemin de code
+  partagé au lieu du stub Sprint 114).
+- **Livrable** : démo contrôleur jouable au clavier dans Chrome, assets et
+  effets sonores fonctionnels. Musique/ambiance en flux et scripting Lua
+  restent hors scope web (respectivement stub silencieux et Sprint dédié
+  futur) — pas dans le scope initial de ce sprint-ci, qui portait sur
+  assets + **audio de base** (SFX), livré.
 
 #### Sprint 116 — Multijoueur navigateur ⬜
 - [ ] Client WebSocket compilé en WASM (déjà en WebSocket — avantage décisif) ; passage en `wss://`.

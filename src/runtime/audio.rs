@@ -1,32 +1,34 @@
 //! Audio simple via kira : décodage en thread de fond + cache pour éviter tout lag.
 //!
-//! wasm32 (Sprint 114, défrichage) : `Audio` devient un stub sans effet plus bas
-//! dans ce fichier. `kira::sound::streaming` exclut lui-même `wasm32-unknown-
-//! unknown` (musique en flux : ouvre un vrai descripteur de fichier), et
-//! `StaticSoundData::from_file`/`std::thread::spawn` (décodage en fond) supposent
-//! tous deux un système de fichiers/threading natif absents du navigateur. Le
-//! Sprint 115 (« Assets & audio web ») est le bon endroit pour un vrai portage
-//! (Web Audio via le backend `cpal` web de kira, streaming par `fetch`), pas ici.
+//! wasm32 (Sprint 115) : `kira` supporte nativement ce target (backend `cpal`
+//! "wasm-bindgen", Web Audio sous le capot) — la quasi-totalité de ce module est
+//! donc partagée entre plateformes sans `#[cfg]`. Deux exceptions structurelles,
+//! pas de simple différence de comportement :
+//! - **Musique en flux** (`play_music_streaming_gain`) : `kira::sound::streaming`
+//!   s'exclut lui-même de `wasm32-unknown-unknown` (ouvre un vrai descripteur de
+//!   fichier, absent du navigateur) — stub côté web, cf. sa doc plus bas.
+//! - **Décodage en fond d'un chemin hors asset connu** (`play_gain`, branche
+//!   `std::thread::spawn`) : pas de threads OS sur `wasm32-unknown-unknown` sans
+//!   configuration spécifique (workers + atomics, hors scope) ; de toute façon pas
+//!   de système de fichiers réel pour `StaticSoundData::from_file` sur le web —
+//!   remplacé par un simple message d'erreur, cf. `play_gain`.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use glam::Vec3;
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+use kira::track::{TrackBuilder, TrackHandle};
+use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween};
+
+#[cfg(not(target_arch = "wasm32"))]
+use kira::Panning;
 #[cfg(not(target_arch = "wasm32"))]
 use kira::sound::FromFileError;
 #[cfg(not(target_arch = "wasm32"))]
-use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
-#[cfg(not(target_arch = "wasm32"))]
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
-#[cfg(not(target_arch = "wasm32"))]
-use kira::track::{TrackBuilder, TrackHandle};
-#[cfg(not(target_arch = "wasm32"))]
-use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Panning, Tween};
 
 /// Convertit un gain linéaire (0..1) en décibels (kira). 0 → quasi-silence.
-#[cfg(not(target_arch = "wasm32"))]
 fn gain_to_db(gain: f32) -> f32 {
     if gain <= 0.001 {
         -60.0
@@ -59,14 +61,21 @@ pub fn camera_panning(eye: Vec3, target: Vec3, source: Vec3) -> f32 {
 /// (fichiers réels, potentiellement longs) des effets sonores synthétisés
 /// (`sfx.rs`), pour un réglage de volume indépendant des deux (cf.
 /// `Audio::set_music_volume`/`set_sfx_volume`).
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Track {
     Music,
     Sfx,
 }
 
+/// Handles des sons **en flux** en cours de lecture — `Vec` côté natif, absent
+/// côté web (cf. la doc de `play_music_streaming_gain`). Un alias plutôt qu'un
+/// deuxième `struct Audio` complet : c'est le seul champ dont le *type* diffère
+/// entre les deux cibles, tout le reste du code est partagé tel quel.
 #[cfg(not(target_arch = "wasm32"))]
+type StreamingHandles = Vec<StreamingSoundHandle<FromFileError>>;
+#[cfg(target_arch = "wasm32")]
+type StreamingHandles = ();
+
 pub struct Audio {
     /// Jamais relu après `new()` (tout passe désormais par `music_track`/
     /// `sfx_track`, Sprint 104) mais doit rester en vie : kira arrête la
@@ -82,8 +91,8 @@ pub struct Audio {
     /// Sons **en flux** en cours de lecture (Sprint 104, `StreamingSoundData`) :
     /// type de handle distinct de `StaticSoundHandle`, pas de décodage complet
     /// en mémoire — évite le pic mémoire d'une musique longue entièrement
-    /// décodée à l'avance.
-    streaming_playing: Vec<StreamingSoundHandle<FromFileError>>,
+    /// décodée à l'avance. Absent sur wasm32, cf. `StreamingHandles`.
+    streaming_playing: StreamingHandles,
     /// Sons déjà décodés (réutilisés sans re-décoder).
     cache: HashMap<String, StaticSoundData>,
     /// Chemins demandés mais pas encore décodés (avec leur gain), à jouer dès l'arrivée.
@@ -92,7 +101,6 @@ pub struct Audio {
     rx: Receiver<(String, StaticSoundData)>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Audio {
     pub fn new() -> Self {
         let (tx, rx) = channel();
@@ -122,7 +130,7 @@ impl Audio {
             music_track,
             sfx_track,
             playing: Vec::new(),
-            streaming_playing: Vec::new(),
+            streaming_playing: StreamingHandles::default(),
             cache: HashMap::new(),
             pending: HashMap::new(),
             tx,
@@ -136,7 +144,9 @@ impl Audio {
     }
 
     /// Joue un fichier avec un gain (0..1) — utilisé pour l'atténuation spatiale.
-    /// Instantané si en cache, sinon décodage en fond puis lecture à l'arrivée.
+    /// Instantané si en cache, sinon décodage en fond puis lecture à l'arrivée
+    /// (desktop/mobile uniquement, cf. plus bas — sur le web, un asset se résout
+    /// toujours via le chemin `is_known_scheme` juste au-dessus).
     pub fn play_gain(&mut self, path: &str, gain: f32) {
         if let Some(data) = self.cache.get(path).cloned() {
             self.start(data, gain);
@@ -156,7 +166,12 @@ impl Audio {
             }
             return;
         }
-        // pas encore décodé : lancer un décodage en arrière-plan (une seule fois)
+        // Chemin de fichier arbitraire (hors asset connu) : décodage en fond sur
+        // desktop/mobile. Sur le web, il n'existe ni système de fichiers réel ni
+        // thread OS accessible sans configuration spéciale (workers + atomics,
+        // hors scope) — ce chemin n'est de toute façon jamais emprunté en pratique
+        // par le player exporté (tous ses sons sont des assets embarqués).
+        #[cfg(not(target_arch = "wasm32"))]
         if !self.pending.contains_key(path) {
             self.pending.insert(path.to_string(), gain);
             let tx = self.tx.clone();
@@ -168,6 +183,10 @@ impl Audio {
                 Err(e) => log::error!("Chargement audio '{p}' échoué : {e}"),
             });
         }
+        #[cfg(target_arch = "wasm32")]
+        log::error!(
+            "Son '{path}' introuvable (pas un asset embarqué connu, pas de fichiers sur le web)"
+        );
     }
 
     /// Joue un fichier de musique/ambiance **en flux** (Sprint 104,
@@ -181,6 +200,7 @@ impl Audio {
     /// porte un état de lecture, pas `Clone`) — sans conséquence : une
     /// musique/ambiance de scène (`AudioSource`) se déclenche une fois à
     /// l'entrée en Play, jamais rejouée depuis un cache.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn play_music_streaming_gain(&mut self, path: &str, gain: f32, panning: f32) {
         let Some(track) = self.music_track.as_mut() else {
             return;
@@ -206,6 +226,17 @@ impl Audio {
             },
             Err(e) => log::error!("Son (flux) '{path}' illisible : {e}"),
         }
+    }
+
+    /// wasm32 : `kira::sound::streaming` n'existe pas pour ce target (ouvre un
+    /// vrai descripteur de fichier, cf. la doc en tête de module) — musique/
+    /// ambiance en flux indisponible sur le web pour l'instant. Un objet
+    /// `AudioSource` de scène qui en dépend reste silencieux plutôt que de faire
+    /// planter la compilation ; ré-implémentable plus tard en `StaticSoundData`
+    /// chargée entière (accepter le pic mémoire) si le besoin se confirme.
+    #[cfg(target_arch = "wasm32")]
+    pub fn play_music_streaming_gain(&mut self, path: &str, _gain: f32, _panning: f32) {
+        log::warn!("Musique/ambiance en flux indisponible sur le web : {path}");
     }
 
     /// Joue un son **généré en mémoire** (WAV synthétisé), mis en cache sous `key`.
@@ -288,44 +319,17 @@ impl Audio {
             handle.stop(Tween::default());
         }
         self.playing.clear();
-        for handle in &mut self.streaming_playing {
-            handle.stop(Tween::default());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            for handle in &mut self.streaming_playing {
+                handle.stop(Tween::default());
+            }
+            self.streaming_playing.clear();
         }
-        self.streaming_playing.clear();
         self.pending.clear();
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl Default for Audio {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// wasm32 (Sprint 114, défrichage) : même API publique que la version native
-/// ci-dessus, entièrement muette — cf. la doc en tête de fichier pour le pourquoi.
-/// Les appelants (`sfx.rs`, `app/combat.rs`, `app/health.rs`, `app/fireball.rs`…)
-/// n'ont donc pas besoin de `#[cfg]` à chaque site d'appel.
-#[cfg(target_arch = "wasm32")]
-pub struct Audio;
-
-#[cfg(target_arch = "wasm32")]
-impl Audio {
-    pub fn new() -> Self {
-        Audio
-    }
-    pub fn play(&mut self, _path: &str) {}
-    pub fn play_gain(&mut self, _path: &str, _gain: f32) {}
-    pub fn play_music_streaming_gain(&mut self, _path: &str, _gain: f32, _panning: f32) {}
-    pub fn play_bytes(&mut self, _key: &str, _bytes: &[u8], _gain: f32, _playback_rate: f32) {}
-    pub fn update(&mut self) {}
-    pub fn set_music_volume(&mut self, _v: f32) {}
-    pub fn set_sfx_volume(&mut self, _v: f32) {}
-    pub fn stop_all(&mut self) {}
-}
-
-#[cfg(target_arch = "wasm32")]
 impl Default for Audio {
     fn default() -> Self {
         Self::new()
