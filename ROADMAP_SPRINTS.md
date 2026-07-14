@@ -2330,44 +2330,6 @@ aujourd'hui : `architecture.md` + `docs/audits/*`).
 > (événements → prefabs → spawn → save), une physique fidèle, un audio vivant, et il tourne dans
 > un navigateur — sans avoir trahi un seul refus assumé.
 
-### PHASE R — WebXR, le casque dans le navigateur (118 → 120, dépend de PHASE Q)
-
-> Le Sprint 114 livre un canvas WebGPU classique en 2D plat, **pas** une session
-> WebXR — c'est un chantier séparé, à ne démarrer qu'une fois PHASE Q acquise.
-
-#### Sprint 118 — Spike : session WebXR isolée ⬜
-- [ ] `cargo build --target wasm32-unknown-unknown --lib` sur le crate actuel (sans
-  rendu) pour lister précisément les dépendances bloquantes (`mlua` vendored en C,
-  `tokio`/`tokio-tungstenite`) avant d'y toucher.
-- [ ] Exemple isolé (hors moteur) `wgpu` + `winit` + `wasm-bindgen` : triangle dans
-  un `<canvas>`, puis `navigator.xr.requestSession("immersive-vr")` + rendu stéréo
-  trivial (deux triangles colorés, un par œil).
-- **Fichiers** : `examples/` (nouveau, isolé du moteur).
-- **Livrable** : session WebXR minimale testable dans Chrome avec **Immersive Web
-  Emulator** (casque/contrôleurs simulés, sans matériel).
-- **Risque** : `mlua` vendored (C) et `tokio` incompatibles wasm32 nu — à
-  contourner ou différer avant toute intégration moteur.
-
-#### Sprint 119 — Intégration moteur : rendu stéréo + poses ⬜
-- [ ] `XRWebGLLayer`/`XRProjectionLayer` branché sur la surface wgpu du moteur ;
-  boucle `XRFrame` (deux vues caméra) cohabitant avec la boucle `winit` existante.
-- [ ] Poses tête + contrôleurs/mains (`XRInputSource`) injectées dans `src/app/`.
-- **Fichiers** : `src/gfx/renderer.rs`, `src/app/mod.rs`.
-- **Livrable** : une scène RusteeGear s'affiche en stéréo dans un casque simulé
-  (IWE) ou réel (Quest via navigateur).
-
-#### Sprint 120 — Tests XR automatisés + polish ⬜
-- [ ] Scénarios IWE scriptés (déplacement contrôleur, gâchette, préhension d'objet)
-  rejoués après chaque changement, via le pont MCP d'IWE si un agent est disponible.
-- **Livrable** : une checklist d'interactions XR de base (viser, saisir, téléporter)
-  validée sans casque physique à chaque itération.
-
-> **Hors scope confirmé** : performance réelle sur casque autonome (Quest, Pico),
-> confort/nausées, hand tracking physique imparfait — un émulateur écran ne les
-> mesure pas ; à valider sur matériel réel avant toute publication XR.
-
----
-
 ### PHASE S — Extensions quasi-gratuites (121 → 130)
 
 > Issue du même **audit comparatif à 200 fonctionnalités** que les phases K→Q
@@ -2465,6 +2427,47 @@ aujourd'hui : `architecture.md` + `docs/audits/*`).
 
 ---
 
+### PHASE R — WebXR, le casque dans le navigateur (118 → 120, dépend de PHASE Q)
+
+> Placée en tout dernier dans ce document, après S, par choix de priorité — la VR/XR
+> reste la piste la plus spéculative (matériel non testé ici, dépendante d'un
+> émulateur écran) et n'apporte rien au produit mobile/Android qui reste la cible
+> prioritaire. Le Sprint 114 livre un canvas WebGPU classique en 2D plat, **pas** une
+> session WebXR — c'est un chantier séparé, à ne démarrer qu'une fois PHASE Q acquise.
+
+#### Sprint 118 — Spike : session WebXR isolée ⬜
+- [ ] `cargo build --target wasm32-unknown-unknown --lib` sur le crate actuel (sans
+  rendu) pour lister précisément les dépendances bloquantes (`mlua` vendored en C,
+  `tokio`/`tokio-tungstenite`) avant d'y toucher.
+- [ ] Exemple isolé (hors moteur) `wgpu` + `winit` + `wasm-bindgen` : triangle dans
+  un `<canvas>`, puis `navigator.xr.requestSession("immersive-vr")` + rendu stéréo
+  trivial (deux triangles colorés, un par œil).
+- **Fichiers** : `examples/` (nouveau, isolé du moteur).
+- **Livrable** : session WebXR minimale testable dans Chrome avec **Immersive Web
+  Emulator** (casque/contrôleurs simulés, sans matériel).
+- **Risque** : `mlua` vendored (C) et `tokio` incompatibles wasm32 nu — à
+  contourner ou différer avant toute intégration moteur.
+
+#### Sprint 119 — Intégration moteur : rendu stéréo + poses ⬜
+- [ ] `XRWebGLLayer`/`XRProjectionLayer` branché sur la surface wgpu du moteur ;
+  boucle `XRFrame` (deux vues caméra) cohabitant avec la boucle `winit` existante.
+- [ ] Poses tête + contrôleurs/mains (`XRInputSource`) injectées dans `src/app/`.
+- **Fichiers** : `src/gfx/renderer.rs`, `src/app/mod.rs`.
+- **Livrable** : une scène RusteeGear s'affiche en stéréo dans un casque simulé
+  (IWE) ou réel (Quest via navigateur).
+
+#### Sprint 120 — Tests XR automatisés + polish ⬜
+- [ ] Scénarios IWE scriptés (déplacement contrôleur, gâchette, préhension d'objet)
+  rejoués après chaque changement, via le pont MCP d'IWE si un agent est disponible.
+- **Livrable** : une checklist d'interactions XR de base (viser, saisir, téléporter)
+  validée sans casque physique à chaque itération.
+
+> **Hors scope confirmé** : performance réelle sur casque autonome (Quest, Pico),
+> confort/nausées, hand tracking physique imparfait — un émulateur écran ne les
+> mesure pas ; à valider sur matériel réel avant toute publication XR.
+
+---
+
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
@@ -2492,15 +2495,19 @@ aujourd'hui : `architecture.md` + `docs/audits/*`).
   (controller kinématique) — **prédiction réseau re-validée**.
 - **P** : audio mixé/spatialisé/varié, HUD en widgets, manettes, hot-reload, profiler GPU, crash log
   local, doc API publiée.
+- **P2** : god-modules ramenés sous ~2000 lignes, unwrap/expect de prod audités et
+  sous contrôle CI, serveur réseau natif avec rate limiting + TLS, wizard éditeur
+  pour non-développeur, doc « créateur de jeu » publiée.
 - **Q** : la démo multijoueur jouable **dans le navigateur**, lien public dans le README.
-- **R** : une scène RusteeGear s'affiche **en stéréo dans un casque** (simulé via
-  Immersive Web Emulator ou réel via navigateur), poses tête/contrôleurs prises en
-  compte, interactions XR de base validées par des scénarios rejouables.
 - **S** : mixeur audio complet (DSP, ducking, musique adaptative), chaîne HDR finie
   (exposition auto, grading, vignette, SSAO), pipeline assets et outillage éditeur
   étoffés, terrain sculptable, moteur localisable — score projeté ~101–104 / 200
   sur la grille des 200 fonctionnalités, sans qu'un seul refus assumé (🔴) n'ait
   été reconsidéré.
+- **R** : une scène RusteeGear s'affiche **en stéréo dans un casque** (simulé via
+  Immersive Web Emulator ou réel via navigateur), poses tête/contrôleurs prises en
+  compte, interactions XR de base validées par des scénarios rejouables — traitée
+  en tout dernier par choix de priorité (dépend de Q, reste la plus spéculative).
 
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
