@@ -39,7 +39,7 @@ fn hud_image<'a>(
     cache
         .entry(path.to_string())
         .or_insert_with(|| {
-            let (rgba, w, h) = crate::gfx::renderer::load_rgba(path)?;
+            let (rgba, w, h) = crate::gfx::pipelines::load_rgba(path)?;
             let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
             Some(ctx.load_texture(path, color, egui::TextureOptions::default()))
         })
