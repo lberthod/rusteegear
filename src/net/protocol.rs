@@ -18,6 +18,76 @@ pub type PlayerId = u32;
 /// ne change tant qu'aucune UI ne propose d'en choisir un autre.
 pub const DEFAULT_LOBBY: &str = "default";
 
+/// Longueur maximale (caractères) d'un pseudo (`ClientMsg::Join::name`) —
+/// affiché aux autres joueurs, pas utilisé comme clé/chemin, donc plus
+/// permissif en charset que `lobby`/`firebase_uid`, mais borné en taille
+/// (Sprint 105a-2, durcissement des entrées réseau : sans cette borne, un
+/// client buggé/malveillant pouvait envoyer un nom de plusieurs Mo, stocké
+/// et rediffusé tel quel à tous les pairs).
+pub const MAX_NAME_LEN: usize = 32;
+
+/// Longueur maximale (caractères) d'un code de salon (`ClientMsg::Join::
+/// lobby`) — devient directement une clé de `HashMap<String, Room>` côté
+/// serveur (`bin/server.rs`), charset restreint (cf. `valid_join_fields`).
+pub const MAX_LOBBY_LEN: usize = 32;
+
+/// Longueur maximale (caractères) d'un `uid` Firebase (`ClientMsg::Join::
+/// firebase_uid`) — un vrai uid Firebase fait ~28 caractères alphanumériques ;
+/// cette borne est volontairement plus large pour ne pas coupler ce
+/// validateur au format exact de Firebase, tout en restant loin de tout
+/// usage légitime.
+pub const MAX_FIREBASE_UID_LEN: usize = 128;
+
+/// Valide les champs de `ClientMsg::Join` avant tout traitement côté serveur
+/// (Sprint 105a-2) : longueur bornée pour les trois champs, et charset
+/// restreint (alphanumérique + `-`/`_`) pour `lobby`/`firebase_uid` — tous
+/// deux finissent, non échappés, dans un chemin d'URL Firebase RTDB
+/// (`net::firebase::rtdb_url`) ou comme clé de `HashMap` ; un `/`, `?`, `#`
+/// ou un `..` y aurait un effet indésirable (nœud RTDB différent de celui
+/// prévu, confusion de salon). `name` (pseudo affiché, jamais utilisé comme
+/// clé/chemin) n'a pas cette contrainte de charset, seulement une longueur
+/// maximale.
+pub fn valid_join_fields(
+    name: &str,
+    lobby: &str,
+    firebase_uid: Option<&str>,
+) -> Result<(), String> {
+    let is_safe_token = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    if name.trim().is_empty() {
+        return Err("le pseudo ne peut pas être vide".to_string());
+    }
+    if name.chars().count() > MAX_NAME_LEN {
+        return Err(format!("le pseudo dépasse {MAX_NAME_LEN} caractères"));
+    }
+    // `lobby` vide est légitime (repli sur `DEFAULT_LOBBY`, cf. sa doc) — ne
+    // valide le charset que s'il est non vide.
+    if !lobby.is_empty() {
+        if lobby.chars().count() > MAX_LOBBY_LEN {
+            return Err(format!(
+                "le code de salon dépasse {MAX_LOBBY_LEN} caractères"
+            ));
+        }
+        if !is_safe_token(lobby) {
+            return Err("le code de salon contient des caractères non autorisés".to_string());
+        }
+    }
+    if let Some(uid) = firebase_uid {
+        if uid.chars().count() > MAX_FIREBASE_UID_LEN {
+            return Err(format!(
+                "l'identifiant Firebase dépasse {MAX_FIREBASE_UID_LEN} caractères"
+            ));
+        }
+        if !is_safe_token(uid) {
+            return Err("l'identifiant Firebase contient des caractères non autorisés".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Message envoyé par un client au serveur.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
@@ -385,5 +455,47 @@ mod tests {
              (< 200 octets/entité) : {bytes:?}",
             bytes.len()
         );
+    }
+
+    #[test]
+    fn valid_join_fields_accepts_a_normal_join() {
+        assert!(valid_join_fields("Alice", "salon1", Some("uid_abc-123")).is_ok());
+        // `lobby` vide est légitime (repli sur DEFAULT_LOBBY).
+        assert!(valid_join_fields("Alice", "", None).is_ok());
+    }
+
+    #[test]
+    fn valid_join_fields_rejects_an_empty_or_oversized_name() {
+        assert!(valid_join_fields("", "salon1", None).is_err());
+        assert!(valid_join_fields("   ", "salon1", None).is_err());
+        let too_long = "x".repeat(MAX_NAME_LEN + 1);
+        assert!(valid_join_fields(&too_long, "salon1", None).is_err());
+        // Pile à la limite : accepté.
+        let exact = "x".repeat(MAX_NAME_LEN);
+        assert!(valid_join_fields(&exact, "salon1", None).is_ok());
+    }
+
+    #[test]
+    fn valid_join_fields_rejects_an_oversized_or_unsafe_lobby() {
+        let too_long = "x".repeat(MAX_LOBBY_LEN + 1);
+        assert!(valid_join_fields("Alice", &too_long, None).is_err());
+        for bad in ["a/b", "a b", "a?b", "a#b", "../evil", "café"] {
+            assert!(
+                valid_join_fields("Alice", bad, None).is_err(),
+                "« {bad} » ne devrait pas être un code de salon valide"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_join_fields_rejects_an_oversized_or_unsafe_firebase_uid() {
+        let too_long = "x".repeat(MAX_FIREBASE_UID_LEN + 1);
+        assert!(valid_join_fields("Alice", "salon1", Some(&too_long)).is_err());
+        for bad in ["a/b", "a b", "a?b#c", "uid=1"] {
+            assert!(
+                valid_join_fields("Alice", "salon1", Some(bad)).is_err(),
+                "« {bad} » ne devrait pas être un uid Firebase valide"
+            );
+        }
     }
 }

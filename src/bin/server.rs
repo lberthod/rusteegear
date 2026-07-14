@@ -31,7 +31,9 @@ use motor3derust::app::multiplayer::NetworkInput;
 use motor3derust::net::firebase::{
     self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
 };
-use motor3derust::net::protocol::{ClientMsg, DEFAULT_LOBBY, PlayerId, ServerMsg};
+use motor3derust::net::protocol::{
+    ClientMsg, DEFAULT_LOBBY, PlayerId, ServerMsg, valid_join_fields,
+};
 use motor3derust::net::server_loop::NetServer;
 
 /// Cadence réseau du serveur : alignée sur la cadence de la physique elle-même
@@ -172,6 +174,15 @@ fn handle_message(
             firebase_uid,
             lobby,
         } => {
+            // Durcissement (Sprint 105a-2) : `lobby` devient une clé de `rooms`
+            // et `firebase_uid` finit non échappé dans une URL Firebase RTDB
+            // (`net::firebase::rtdb_url`) — un champ hors bornes/charset
+            // rejeté ici, avant toute inscription, plutôt qu'un comportement
+            // indéfini plus loin dans la chaîne.
+            if let Err(e) = valid_join_fields(&name, &lobby, firebase_uid.as_deref()) {
+                log::warn!("Join rejeté ({id}) : {e}");
+                return;
+            }
             let code = if lobby.trim().is_empty() {
                 DEFAULT_LOBBY.to_string()
             } else {
@@ -600,6 +611,50 @@ mod tests {
         assert!(
             !room.app.scene.objects[object_index].visible,
             "l'objet du joueur parti doit être masqué"
+        );
+    }
+
+    /// Sprint 105a-2 (durcissement des entrées réseau) : un `Join` dont le
+    /// code de salon contient des caractères interdits (`valid_join_fields`)
+    /// est rejeté — le joueur ne doit apparaître dans aucun salon, à la
+    /// différence d'un `Join` valide (cf. `joining_moving_and_leaving_
+    /// through_the_real_socket` ci-dessus). Le transport (`Welcome`) reste
+    /// inconditionnel (envoyé avant que `handle_message` ne voie le `Join`),
+    /// seule l'inscription applicative est bloquée.
+    #[test]
+    fn a_join_with_an_unsafe_lobby_code_is_rejected() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let client = NetClient::connect_to_lobby(&url, "Alice", None, "salon/traversal")
+            .expect("connexion du client");
+        let ServerMsg::Welcome { player_id } = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu (transport inconditionnel)")
+        else {
+            panic!("premier message attendu : Welcome");
+        };
+
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+
+        let room = rooms.get(DEFAULT_LOBBY).unwrap();
+        assert_eq!(
+            room.app.network_player_object(player_id),
+            None,
+            "un Join avec un code de salon invalide ne doit inscrire le joueur \
+             dans aucun salon"
+        );
+        assert!(
+            !player_room.contains_key(&player_id),
+            "un Join rejeté ne doit pas router les messages suivants de ce joueur"
         );
     }
 

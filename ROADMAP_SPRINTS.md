@@ -1784,11 +1784,49 @@ régression client. Une manche décidée ne coupe plus tout le process
   comportement inchangé — 323 tests lib + 5 bin toujours verts, `cargo
   clippy`/`cargo fmt` propres.
 
-#### Sprint 105a-2 — Maintenabilité : durcissement des entrées réseau/fichiers ⬜
-- [ ] Tailles max sur les messages réseau ; validation `lobby`/`name`/`firebase_uid`.
-- [ ] Validation des slots de sauvegarde et des noms d'assets ; encodage des URL Firebase ; refus des chemins `asset://../...`.
-- [ ] Tests dédiés pour chaque validation ajoutée.
-- **Fichiers** : `src/app/network_client.rs`, `src/bin/server.rs`, `src/assets.rs`, `src/runtime/savegame.rs`.
+#### Sprint 105a-2 — Maintenabilité : durcissement des entrées réseau/fichiers ✅ FAIT
+- [x] **Tailles/charset réseau** (`src/net/protocol.rs::valid_join_fields`) :
+      `name`/`lobby`/`firebase_uid` bornés en longueur, `lobby`/`firebase_uid`
+      restreints à un charset alphanumérique + `-`/`_` (ces deux champs
+      finissent, non échappés, dans un chemin d'URL Firebase RTDB ou comme
+      clé de `HashMap<String, Room>` côté serveur). Appelé dans `src/bin/
+      server.rs::handle_message` avant toute inscription — un `Join` invalide
+      est **loggé** (`log::warn!`) et rejeté, pas seulement silencieusement
+      ignoré comme le reste de l'ingestion réseau aujourd'hui. `src/net/
+      server_loop.rs` : `WebSocketConfig` explicite (64 Kio, au lieu des 64
+      Mio/16 Mio par défaut de tungstenite) — filet de sécurité en amont du
+      décodage, indépendant de la validation par champ.
+- [x] **Traversée de répertoire** (`src/assets.rs::safe_join`) : garde-fou
+      unique par analyse de composants de chemin (`Path::components`, pas un
+      test de sous-chaîne sur `".."`), appliqué aux trois sites vulnérables
+      identifiés — `read_user_bytes`/`write_user_bytes` (sauvegardes) et la
+      branche `asset://` de `read_bytes`. `src/runtime/savegame.rs::valid_
+      slot` ajoute une validation redondante par conception (charset +
+      longueur) donnant un message d'erreur spécifique au domaine plutôt que
+      l'échec I/O générique de `safe_join` seul.
+- [x] **Encodage des URL Firebase** (`src/net/firebase.rs::rtdb_url`) :
+      chaque segment de chemin RTDB percent-encodé
+      (`percent_encode_path_segment`, RFC 3986, implémentation minimale —
+      aucune dépendance d'encodage d'URL n'existait) — défense en profondeur
+      pour tout caractère spécial (`?`, `#`, espace, unicode) **au sein d'un
+      segment déjà délimité**. Un `/` intégré à un champ doit être rejeté en
+      amont (`valid_join_fields`) : une fois le chemin composé par
+      l'appelant, il redevient indiscernable d'un vrai séparateur de segment
+      — limite documentée explicitement plutôt que silencieuse.
+- [x] **Tests dédiés** pour chacune des quatre validations (aucune couverture
+      n'existait avant ce sprint) : `protocol.rs` (charset/longueur),
+      `server.rs` (bout-en-bout, vrai socket — un `Join` avec un salon
+      invalide n'inscrit le joueur nulle part), `assets.rs`/`savegame.rs`
+      (traversée de répertoire rejetée, cas légitimes non affectés),
+      `firebase.rs` (encodage). **Trouvé en lançant la suite complète** : le
+      test bout-en-bout existant `saving_and_loading_a_game_restores_score_
+      position_and_lua_vars` utilise un nom de slot généré (`pid_nanoseconds`,
+      ~45 caractères) pour éviter les collisions entre tests parallèles —
+      dépassait la borne de longueur initiale (32) ; portée à 64 plutôt que
+      de casser ce patron de test déjà établi.
+- **Fichiers** : `src/net/protocol.rs`, `src/net/server_loop.rs`,
+  `src/bin/server.rs`, `src/runtime/savegame.rs`, `src/assets.rs`,
+  `src/net/firebase.rs`.
 - **Livrable** : entrées invalides rejetées avec une erreur explicite plutôt qu'un comportement indéfini ; tests de validation verts.
 
 #### Sprint 105a-3 — Maintenabilité : isolation des tests système + `docs/architecture.md` ⬜

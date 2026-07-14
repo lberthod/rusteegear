@@ -223,16 +223,47 @@ fn parse_error_message(body: &str) -> Option<String> {
         .map(|e| e.error.message)
 }
 
+/// Encode un octet hors `[A-Za-z0-9._-]` en `%XX` (RFC 3986) — sous-ensemble
+/// minimal suffisant pour un segment de chemin RTDB, pas une implémentation
+/// générique d'URI. Sprint 105a-2 (durcissement) : protège l'intérieur d'un
+/// segment déjà délimité (un `?`/`#`/espace/unicode dans un `uid`/code de
+/// salon ne doit pas être interprété comme le début d'une requête ou d'une
+/// ancre). Ne protège **pas** contre un `/` intégré à un champ : une fois le
+/// chemin composé par l'appelant (`format!("users/{uid}/profile")`), un `/`
+/// à l'intérieur de `uid` redevient indiscernable d'un vrai séparateur de
+/// segment — ce cas doit être rejeté en amont (cf.
+/// `protocol::valid_join_fields`, qui restreint déjà `firebase_uid`/`lobby`
+/// à un charset sans `/`).
+fn percent_encode_path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 /// Construit l'URL REST RTDB pour `path` (ex. `"users/abc/profile"`), avec les
 /// éventuels paramètres de requête (ex. `auth=...`). Gère un `database_url`
-/// avec ou sans `/` final.
+/// avec ou sans `/` final. Chaque segment de `path` (séparé par `/`) est
+/// percent-encodé (`percent_encode_path_segment`) avant réassemblage : défense
+/// en profondeur, indépendante de toute validation faite en amont par
+/// l'appelant (cf. `protocol::valid_join_fields` pour `firebase_uid`/`lobby`).
 fn rtdb_url(database_url: &str, path: &str, query: &str) -> String {
     let base = database_url.trim_end_matches('/');
     let path = path.trim_start_matches('/');
+    let encoded_path = path
+        .split('/')
+        .map(percent_encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/");
     if query.is_empty() {
-        format!("{base}/{path}.json")
+        format!("{base}/{encoded_path}.json")
     } else {
-        format!("{base}/{path}.json?{query}")
+        format!("{base}/{encoded_path}.json?{query}")
     }
 }
 
@@ -634,6 +665,41 @@ mod tests {
         assert_eq!(
             url,
             "https://x.firebaseio.com/users/abc/profile.json?auth=tok123"
+        );
+    }
+
+    #[test]
+    fn percent_encode_path_segment_leaves_safe_characters_untouched() {
+        assert_eq!(
+            percent_encode_path_segment("uid-1234_abc.def"),
+            "uid-1234_abc.def"
+        );
+    }
+
+    #[test]
+    fn percent_encode_path_segment_encodes_special_characters() {
+        assert_eq!(percent_encode_path_segment("a/b"), "a%2Fb");
+        assert_eq!(percent_encode_path_segment("a?b"), "a%3Fb");
+        assert_eq!(percent_encode_path_segment("a#b"), "a%23b");
+        assert_eq!(percent_encode_path_segment("a b"), "a%20b");
+        // Encode octet par octet (UTF-8) : "é" (2 octets) devient deux %XX.
+        assert_eq!(percent_encode_path_segment("café"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn rtdb_url_encodes_unsafe_characters_within_a_path_segment() {
+        // Un `uid`/code de salon contenant `?` ou `#` **au sein d'un même
+        // segment** ne doit pas être interprété comme le début d'une requête
+        // ou d'une ancre — cf. Sprint 105a-2 (durcissement). Un `/` intégré à
+        // un champ, lui, doit être rejeté en amont (`protocol::valid_join_
+        // fields`) : une fois le chemin composé par l'appelant (`format!(
+        // "users/{uid}/profile")`), il redevient indiscernable d'un vrai
+        // séparateur de segment — cette fonction ne peut protéger que
+        // l'intérieur d'un segment déjà correctement délimité.
+        let url = rtdb_url("https://x.firebaseio.com", "users/abc?x#y/profile", "");
+        assert_eq!(
+            url,
+            "https://x.firebaseio.com/users/abc%3Fx%23y/profile.json",
         );
     }
 

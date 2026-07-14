@@ -25,8 +25,24 @@ use std::sync::{Arc, Mutex};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use super::protocol::{self, ClientMsg, PlayerId, ServerMsg};
+
+/// Taille maximale (octets) d'une trame/message WebSocket entrant (Sprint
+/// 105a-2, durcissement) — bien au-delà de tout `ClientMsg` légitime de ce
+/// protocole (un `Input` tient sur quelques dizaines d'octets encodés en
+/// `bincode`), très en-deçà des valeurs par défaut de tungstenite (64 Mio/
+/// message, 16 Mio/trame) : filet de sécurité en amont du décodage, avant
+/// même que `protocol::valid_join_fields` n'entre en jeu pour les champs
+/// individuels d'un `Join`.
+const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
+
+fn server_ws_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_WS_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_WS_MESSAGE_BYTES))
+}
 
 /// Message reçu d'un client, avec l'identifiant du joueur qui l'a envoyé.
 pub type Inbound = (PlayerId, ClientMsg);
@@ -162,7 +178,7 @@ async fn handle_connection(
     outboxes: Outboxes,
     next_id: Arc<AtomicU32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ws = tokio_tungstenite::accept_async(stream).await?;
+    let ws = tokio_tungstenite::accept_async_with_config(stream, Some(server_ws_config())).await?;
     let (mut sink, mut stream) = ws.split();
 
     // Première trame attendue : `ClientMsg::Join`. Toute autre trame, ou une

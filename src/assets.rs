@@ -212,18 +212,44 @@ pub fn user_dir() -> Option<PathBuf> {
     }
 }
 
+/// Joint `name` à `dir` en refusant toute évasion du dossier prévu (Sprint
+/// 105a-2, durcissement) : `None` si un composant de `name` est `..`
+/// (`Component::ParentDir`), une racine (`Component::RootDir`) ou un préfixe
+/// Windows-style (`Component::Prefix`) — analyse par composants de chemin
+/// (`Path::components`), pas un test de sous-chaîne sur `".."` (qui aurait
+/// des faux positifs sur un nom légitime comme `"foo..bar.png"` et des faux
+/// négatifs sur des variantes d'encodage). Point de passage unique pour les
+/// trois call-sites qui joignent un nom fourni par l'appelant (sauvegarde
+/// ou scène potentiellement non fiable) à un dossier de base connu.
+fn safe_join(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let path = std::path::Path::new(name);
+    if path.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    Some(dir.join(path))
+}
+
 /// Lit les octets d'un fichier `user://<nom>` (sauvegarde de partie). `None` si le
-/// dossier utilisateur est indisponible ou si le fichier n'existe pas encore (première
-/// utilisation — pas une erreur).
+/// dossier utilisateur est indisponible, si `nom` tente de sortir du dossier prévu
+/// (cf. `safe_join`), ou si le fichier n'existe pas encore (première utilisation —
+/// pas une erreur).
 pub fn read_user_bytes(name: &str) -> Option<Vec<u8>> {
-    std::fs::read(user_dir()?.join(name)).ok()
+    std::fs::read(safe_join(&user_dir()?, name)?).ok()
 }
 
 /// Écrit `data` dans `user://<nom>`, en créant le dossier utilisateur si besoin.
 pub fn write_user_bytes(name: &str, data: &[u8]) -> Result<(), String> {
     let dir = user_dir().ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(name), data).map_err(|e| e.to_string())
+    let target =
+        safe_join(&dir, name).ok_or_else(|| format!("nom de fichier invalide : « {name} »"))?;
+    std::fs::write(target, data).map_err(|e| e.to_string())
 }
 
 /// Lit les octets d'un chemin quel que soit son schéma : `asset-id://` (référence
@@ -238,7 +264,8 @@ pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
     }
     if let Some(key) = path.strip_prefix(ASSET_SCHEME) {
         if let Some(dir) = assets_dir()
-            && let Ok(b) = std::fs::read(dir.join(key))
+            && let Some(target) = safe_join(&dir, key)
+            && let Ok(b) = std::fs::read(target)
         {
             return Some(b);
         }
@@ -378,5 +405,57 @@ mod tests {
         assert!(is_known_scheme("asset://x"));
         assert!(is_known_scheme("asset-id://x"));
         assert!(!is_known_scheme("/disque/x.glb"));
+    }
+
+    #[test]
+    fn safe_join_rejects_directory_traversal() {
+        let dir = std::path::Path::new("/base");
+        for evil in ["..", "../x", "a/../../b", "../../etc/passwd"] {
+            assert!(
+                safe_join(dir, evil).is_none(),
+                "« {evil} » doit être rejeté (tentative d'évasion du dossier)"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_join_rejects_an_absolute_path() {
+        let dir = std::path::Path::new("/base");
+        assert!(
+            safe_join(dir, "/etc/passwd").is_none(),
+            "un chemin absolu doit être rejeté (ignorerait `dir`, cf. `PathBuf::join`)"
+        );
+    }
+
+    #[test]
+    fn safe_join_accepts_ordinary_relative_names() {
+        let dir = std::path::Path::new("/base");
+        assert_eq!(
+            safe_join(dir, "foo.png"),
+            Some(std::path::PathBuf::from("/base/foo.png"))
+        );
+        assert_eq!(
+            safe_join(dir, "sub/foo.png"),
+            Some(std::path::PathBuf::from("/base/sub/foo.png"))
+        );
+        // Un nom contenant ".." comme sous-chaîne (pas un composant ".." à part
+        // entière) est légitime — `safe_join` analyse les composants de chemin,
+        // pas une sous-chaîne brute.
+        assert!(safe_join(dir, "foo..bar.png").is_some());
+    }
+
+    #[test]
+    fn read_user_bytes_and_write_user_bytes_reject_traversal() {
+        // `user_dir()` dépend de `$HOME` (pas encore paramétrable, cf. Sprint
+        // 105a-3) — ce test vérifie seulement que le nom est rejeté *avant*
+        // toute écriture/lecture disque, pas le chemin final résolu.
+        assert!(
+            write_user_bytes("../evil.json", b"x").is_err(),
+            "une tentative d'évasion doit être rejetée, pas silencieusement écrite ailleurs"
+        );
+        assert!(
+            read_user_bytes("../evil.json").is_none(),
+            "une tentative d'évasion en lecture doit échouer, pas lire hors du dossier prévu"
+        );
     }
 }

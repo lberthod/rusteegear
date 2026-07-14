@@ -42,20 +42,49 @@ impl SaveGame {
     /// forcée à `CURRENT_VERSION` à l'écriture (comme `Scene::save`) : ce
     /// qui est écrit par cette version du moteur est par définition à jour.
     pub fn save_to_slot(&self, slot: &str) -> Result<(), String> {
+        if !valid_slot(slot) {
+            return Err(format!("nom de slot invalide : « {slot} »"));
+        }
         let mut to_write = self.clone();
         to_write.version = Self::CURRENT_VERSION;
         let json = serde_json::to_string_pretty(&to_write).map_err(|e| e.to_string())?;
         crate::assets::write_user_bytes(&Self::file_name(slot), json.as_bytes())
     }
 
-    /// Charge le slot `slot`. `Err` si le dossier utilisateur est indisponible, si le
-    /// fichier n'existe pas (aucune sauvegarde dans ce slot) ou si le JSON est invalide.
+    /// Charge le slot `slot`. `Err` si le nom de slot est invalide, si le dossier
+    /// utilisateur est indisponible, si le fichier n'existe pas (aucune sauvegarde
+    /// dans ce slot) ou si le JSON est invalide.
     pub fn load_from_slot(slot: &str) -> Result<Self, String> {
+        if !valid_slot(slot) {
+            return Err(format!("nom de slot invalide : « {slot} »"));
+        }
         let bytes = crate::assets::read_user_bytes(&Self::file_name(slot))
             .ok_or_else(|| format!("aucune sauvegarde dans le slot « {slot} »"))?;
         let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
+}
+
+/// Longueur maximale (caractères) d'un nom de slot. Assez large pour les
+/// noms générés par les tests bout-en-bout (`pid_nanoseconds`, cf.
+/// `app::tests::saving_and_loading_a_game_restores_score_position_and_lua_
+/// vars`, ~45 caractères), tout en restant loin de tout usage pathologique.
+const MAX_SLOT_LEN: usize = 64;
+
+/// `true` si `slot` est un nom de slot sûr (Sprint 105a-2, durcissement) :
+/// non vide, borné en longueur, alphanumérique + `-`/`_` uniquement — rejette
+/// notamment tout `/`/`..`, qui ferait sortir `file_name(slot)` du dossier
+/// `user://` prévu une fois joint par `assets::write_user_bytes`/
+/// `read_user_bytes` (celles-ci ont leur propre garde, `assets::safe_join` —
+/// cette validation-ci est redondante par conception : elle donne un message
+/// d'erreur spécifique au domaine (« nom de slot invalide ») plutôt que
+/// l'échec I/O générique que produirait `safe_join` seul).
+fn valid_slot(slot: &str) -> bool {
+    !slot.is_empty()
+        && slot.chars().count() <= MAX_SLOT_LEN
+        && slot
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]
@@ -85,5 +114,42 @@ mod tests {
         // Nom improbable pour ne pas percuter une vraie sauvegarde de l'utilisateur.
         let result = SaveGame::load_from_slot("__sprint98_test_slot_never_used__");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn valid_slot_accepts_ordinary_names() {
+        for ok in ["1", "auto", "slot-2", "save_never_used"] {
+            assert!(valid_slot(ok), "« {ok} » devrait être un slot valide");
+        }
+    }
+
+    #[test]
+    fn valid_slot_rejects_traversal_and_unsafe_names() {
+        for bad in [
+            "",
+            "../evil",
+            "a/b",
+            "a b",
+            "café",
+            &"x".repeat(MAX_SLOT_LEN + 1),
+        ] {
+            assert!(
+                !valid_slot(bad),
+                "« {bad} » ne devrait pas être un slot valide"
+            );
+        }
+    }
+
+    #[test]
+    fn save_to_slot_and_load_from_slot_reject_a_traversal_slot_name() {
+        let save = SaveGame::default();
+        assert!(
+            save.save_to_slot("../evil").is_err(),
+            "un nom de slot tentant une évasion de répertoire doit être rejeté à l'écriture"
+        );
+        assert!(
+            SaveGame::load_from_slot("../evil").is_err(),
+            "un nom de slot tentant une évasion de répertoire doit être rejeté à la lecture"
+        );
     }
 }
