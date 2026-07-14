@@ -16,7 +16,7 @@ pub mod network_client;
 mod persistence;
 mod picking;
 #[cfg(not(target_arch = "wasm32"))]
-mod scripting;
+pub mod scripting;
 mod selection;
 pub mod settings;
 mod simulation;
@@ -487,6 +487,9 @@ pub struct AppState {
     // sait pas construire Lua pour `wasm32-unknown-unknown` — Sprint 114) ---
     #[cfg(not(target_arch = "wasm32"))]
     lua: Lua,
+    /// Breakpoints Lua basiques (Sprint 128) — cf. `scripting::LuaBreakpoints`.
+    #[cfg(not(target_arch = "wasm32"))]
+    lua_breakpoints: scripting::LuaBreakpoints,
     /// Chunks Lua déjà compilés, indexés par hash de la source (évite de re-parser
     /// le même script à chaque frame).
     #[cfg(not(target_arch = "wasm32"))]
@@ -605,6 +608,18 @@ impl AppState {
         let initial_settings = crate::app::settings::Settings::load();
         audio.set_music_volume(initial_settings.music_volume);
         audio.set_sfx_volume(initial_settings.sfx_volume);
+        // Breakpoints Lua (Sprint 128) : hook installé une fois ici, sur l'instance
+        // `Lua` partagée par tous les scripts d'objet — cf. la doc de
+        // `scripting::LuaBreakpoints` pour ce que « pause » signifie concrètement
+        // dans ce moteur (pas de coroutines pour les scripts d'objet).
+        #[cfg(not(target_arch = "wasm32"))]
+        let lua = Lua::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let lua_breakpoints = scripting::LuaBreakpoints::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = lua_breakpoints.install(&lua) {
+            log::warn!("Breakpoints Lua indisponibles : {e}");
+        }
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -712,7 +727,9 @@ impl AppState {
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            lua: Lua::new(),
+            lua,
+            #[cfg(not(target_arch = "wasm32"))]
+            lua_breakpoints,
             #[cfg(not(target_arch = "wasm32"))]
             script_cache: HashMap::new(),
             time: 0.0,

@@ -399,10 +399,253 @@ pub(super) fn run_script(
     Ok(())
 }
 
+/// Un arrêt sur une ligne de breakpoint (Sprint 128) : capturé côté hook `mlua`,
+/// consommé par l'éditeur (fenêtre à venir) pour afficher où/quand un script
+/// s'est arrêté. `source` : nom du chunk tel que rapporté par `mlua` (souvent
+/// `[string "..."]` pour un chunk chargé depuis une chaîne, comme le sont tous
+/// les scripts d'objet ici — pas un nom de fichier).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BreakpointHit {
+    pub line: u32,
+    pub source: String,
+}
+
+/// Breakpoints Lua basiques (Sprint 128) : un hook `mlua` (`HookTriggers::EVERY_LINE`)
+/// installé une fois sur l'instance `Lua` partagée (`AppState::lua`, une par
+/// `AppState`, tous les scripts d'objet la partagent) interrompt l'exécution du
+/// script en cours dès qu'une ligne marquée est atteinte, en renvoyant une erreur
+/// distinctive plutôt que `VmState::Continue`.
+///
+/// **Portée volontairement limitée** : ceci n'est *pas* un vrai débogueur pas-à-pas
+/// (inspection interactive des variables, reprise après pause) — l'exécution des
+/// scripts ici est synchrone dans la boucle de jeu (`AppState::sim_step`, appelée
+/// une fois par tick), pas une coroutine qu'on pourrait suspendre puis reprendre
+/// plus tard sans redesign. « Se mettre en pause à une ligne donnée » se traduit
+/// donc concrètement par : l'exécution du script s'arrête **avant** cette ligne
+/// pour ce tick (rien après ne s'exécute, aucun champ `obj.*` n'est réécrit,
+/// cf. `run_script`), et l'arrêt est enregistré (`take_hits`) pour que l'éditeur
+/// puisse l'afficher — reproductible tick après tick tant que le breakpoint reste
+/// actif, ce qui suffit à repérer/isoler une ligne qui pose problème.
+///
+/// `Arc<Mutex<..>>` : le hook `mlua` doit être `'static` (ne peut pas emprunter
+/// `&mut AppState`), donc l'état partagé transite par une poignée clonable plutôt
+/// que par référence.
+#[derive(Clone, Default)]
+pub(super) struct LuaBreakpoints(std::sync::Arc<std::sync::Mutex<BreakpointState>>);
+
+#[derive(Default)]
+struct BreakpointState {
+    lines: std::collections::HashSet<u32>,
+    hits: Vec<BreakpointHit>,
+}
+
+fn lock_breakpoints(
+    state: &std::sync::Mutex<BreakpointState>,
+) -> std::sync::MutexGuard<'_, BreakpointState> {
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl LuaBreakpoints {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Active/désactive un breakpoint à `line` (numéro de ligne 1-indexé, comme
+    /// affiché par un éditeur de texte — même convention que `mlua::Debug::current_line`).
+    pub(super) fn set(&self, line: u32, enabled: bool) {
+        let mut state = lock_breakpoints(&self.0);
+        if enabled {
+            state.lines.insert(line);
+        } else {
+            state.lines.remove(&line);
+        }
+    }
+
+    pub(super) fn is_set(&self, line: u32) -> bool {
+        lock_breakpoints(&self.0).lines.contains(&line)
+    }
+
+    pub(super) fn lines(&self) -> Vec<u32> {
+        let mut lines: Vec<u32> = lock_breakpoints(&self.0).lines.iter().copied().collect();
+        lines.sort_unstable();
+        lines
+    }
+
+    /// Retire et renvoie tous les arrêts enregistrés depuis le dernier appel —
+    /// consommé une fois (par l'éditeur), pas relu indéfiniment.
+    pub(super) fn take_hits(&self) -> Vec<BreakpointHit> {
+        std::mem::take(&mut lock_breakpoints(&self.0).hits)
+    }
+
+    /// Installe le hook sur `lua` — à appeler une fois par instance `Lua` (typiquement
+    /// dans `AppState::new()`, juste après `Lua::new()`). `Err` uniquement si `mlua`
+    /// refuse le hook lui-même (jamais observé en pratique sur ce backend) ; pas une
+    /// erreur de script — celles-ci ne peuvent survenir qu'une fois le hook actif,
+    /// via son propre retour `Err` sur un breakpoint atteint.
+    pub(super) fn install(&self, lua: &Lua) -> mlua::Result<()> {
+        let shared = self.0.clone();
+        lua.set_hook(mlua::HookTriggers::EVERY_LINE, move |_lua, debug| {
+            let Some(line) = debug.current_line() else {
+                return Ok(mlua::VmState::Continue);
+            };
+            let line = line as u32;
+            let mut state = lock_breakpoints(&shared);
+            if state.lines.contains(&line) {
+                let source = debug
+                    .source()
+                    .source
+                    .map(|s| s.into_owned())
+                    .unwrap_or_default();
+                state.hits.push(BreakpointHit { line, source });
+                return Err(mlua::Error::RuntimeError(format!(
+                    "⏸ breakpoint (ligne {line})"
+                )));
+            }
+            Ok(mlua::VmState::Continue)
+        })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl super::AppState {
+    /// Active/désactive un breakpoint Lua à `line` — cf. la doc de
+    /// `LuaBreakpoints` pour ce que ça déclenche concrètement.
+    pub fn toggle_lua_breakpoint(&mut self, line: u32) {
+        let enabled = !self.lua_breakpoints.is_set(line);
+        self.lua_breakpoints.set(line, enabled);
+    }
+
+    /// Lignes actuellement marquées (triées), pour l'affichage éditeur.
+    pub fn lua_breakpoint_lines(&self) -> Vec<u32> {
+        self.lua_breakpoints.lines()
+    }
+
+    /// Arrêts survenus depuis le dernier appel (consommés une fois).
+    pub fn take_lua_breakpoint_hits(&mut self) -> Vec<BreakpointHit> {
+        self.lua_breakpoints.take_hits()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scene::{MeshKind, Scene, SceneObject};
+
+    /// Sprint 128 : un breakpoint sur une ligne précise interrompt l'exécution
+    /// **avant** cette ligne (rien après ne s'exécute) et enregistre l'arrêt —
+    /// une ligne non marquée n'a aucun effet, même exécutée normalement.
+    #[test]
+    fn breakpoint_stops_execution_before_the_marked_line_and_records_the_hit() {
+        let lua = Lua::new();
+        let breakpoints = LuaBreakpoints::new();
+        breakpoints.install(&lua).unwrap();
+
+        let src = "\
+            obj.x = 1\n\
+            obj.x = 2\n\
+            obj.x = 3\n";
+        let func = lua.load(src).into_function().unwrap();
+
+        // Ligne 2 marquée : `obj.x = 1` doit s'exécuter, `obj.x = 2`/`obj.x = 3` non.
+        breakpoints.set(2, true);
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
+        let input = PlayerInput::default();
+        let result = run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        );
+        assert!(
+            result.is_err(),
+            "un breakpoint atteint doit remonter comme une erreur de script"
+        );
+        assert_eq!(
+            t.position.x, 0.0,
+            "obj.x = 1 n'a pas eu le temps d'être relu (le breakpoint stoppe avant \
+             que run_script ne relise les champs modifiés, cf. sa doc)"
+        );
+
+        let hits = breakpoints.take_hits();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].line, 2);
+        // `take_hits` consomme : un deuxième appel immédiat ne doit rien retrouver.
+        assert!(breakpoints.take_hits().is_empty());
+    }
+
+    /// Une exécution sans aucun breakpoint marqué ne doit jamais être interrompue,
+    /// même avec le hook installé — le hook doit rester un no-op tant qu'aucune
+    /// ligne n'est marquée.
+    #[test]
+    fn no_breakpoints_means_normal_execution() {
+        let lua = Lua::new();
+        let breakpoints = LuaBreakpoints::new();
+        breakpoints.install(&lua).unwrap();
+
+        let func = lua.load("obj.x = 42").into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0, 1.0, 1.0];
+        let input = PlayerInput::default();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &input,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 42.0);
+        assert!(breakpoints.take_hits().is_empty());
+    }
+
+    #[test]
+    fn toggling_a_breakpoint_twice_clears_it() {
+        let breakpoints = LuaBreakpoints::new();
+        assert!(!breakpoints.is_set(5));
+        breakpoints.set(5, true);
+        assert!(breakpoints.is_set(5));
+        breakpoints.set(5, false);
+        assert!(!breakpoints.is_set(5));
+        assert!(breakpoints.lines().is_empty());
+    }
 
     #[test]
     fn script_reads_mobile_input() {

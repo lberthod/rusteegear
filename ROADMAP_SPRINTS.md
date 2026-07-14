@@ -2653,13 +2653,35 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Fichiers** : `src/assets.rs`, `packaging/`.
 - **Livrable** : taille du `.apk`/`.dmg` mesurée avant/après, réduction documentée.
 
-#### Sprint 128 — Outillage éditeur (recherche de références, profilers, breakpoints Lua) ⬜
-- [ ] Graphe de références sur le manifeste GUID (« qui utilise cet asset ? »).
-- [ ] Profiler CPU : vue timeline par-dessus les spans `tracing` existants.
-- [ ] Profiler mémoire : compteurs par sous-système (au lieu du seul total global).
-- [ ] Hooks de debug `mlua` pour des breakpoints Lua basiques.
-- **Fichiers** : `src/editor/mod.rs`, `src/app/mod.rs`.
-- **Livrable** : supprimer un asset référencé ailleurs est signalé avant coup ; un script Lua peut être mis en pause à une ligne donnée.
+#### Sprint 128 — Outillage éditeur (recherche de références, profilers, breakpoints Lua) 🟡 EN COURS
+- [x] Graphe de références sur le manifeste GUID (« qui utilise cet asset ? ») :
+      fait au Sprint 126 (`Scene::asset_references`), déjà branché dans le
+      contrôle qualité APK (`editor/readiness.rs`) — pas refait ici.
+- [ ] Profiler CPU (vue timeline par-dessus les spans `tracing`) et profiler
+      mémoire (compteurs par sous-système) : **non faits** — UI/rendu, pas
+      vérifiable visuellement dans cet environnement (même limite que documentée
+      aux sprints 113d/122/126), reportés.
+- [x] Hooks de debug `mlua` pour des breakpoints Lua basiques
+      (`app::scripting::LuaBreakpoints`) : hook `HookTriggers::EVERY_LINE`
+      installé une fois sur l'instance `Lua` partagée par tous les scripts
+      d'objet. Portée assumée et documentée : pas un vrai pas-à-pas interactif
+      (les scripts d'objet s'exécutent de façon synchrone dans la boucle de jeu,
+      pas en coroutine reprenable) — un breakpoint atteint interrompt
+      l'exécution du script **avant** la ligne marquée pour ce tick (rien après
+      ne s'exécute, aucun champ `obj.*` n'est réécrit) et enregistre l'arrêt
+      (`take_lua_breakpoint_hits`), reproductible tick après tick tant qu'il
+      reste actif — suffisant pour isoler une ligne qui pose problème.
+      `AppState::toggle_lua_breakpoint`/`lua_breakpoint_lines`/
+      `take_lua_breakpoint_hits` exposés, **pas encore câblés dans l'éditeur**
+      (fenêtre Scripts Lua) — mécanisme testé et fonctionnel, UI en suivi.
+- **Fichiers** : `src/app/scripting.rs` (`LuaBreakpoints`), `src/app/mod.rs`
+  (champ + installation du hook).
+- **Livrable partiel** : 3 nouveaux tests (dont un qui vérifie précisément que
+  l'exécution s'arrête avant la ligne marquée et que les champs modifiés après
+  ne sont pas relus) ; 358 tests au total, clippy -D warnings et fmt propres,
+  wasm32 vert (scripting déjà exclu de cette cible, aucun changement de
+  comportement là). Le graphe de références et les breakpoints sont livrés ;
+  les deux profilers restent à faire (sprint réouvrable pour ça seul).
 
 #### Sprint 129 — Terrain sculpté + placement assisté ⬜
 - [ ] Brosse de hauteur (raycast → heightmap → re-upload de la texture de terrain).
