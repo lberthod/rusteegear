@@ -996,10 +996,14 @@ mod tests {
     // tests appellent directement (par nom, pas via `AppState::advance_play`).
     use super::scripting::run_script;
 
-    /// Nom de prefab unique par appel (horloge + pid) : ces tests écrivent réellement
-    /// dans `~/.motor3derust/assets/prefabs/` (comme le ferait l'éditeur), pas de
-    /// répertoire de test isolé pour cette brique — cf. le commentaire équivalent dans
-    /// `scene::tests::unique_prefab_name`.
+    /// Nom de prefab unique par appel (horloge + pid) : contrairement aux tests de
+    /// `scene::tests` (convertis en dossier temporaire via `Scene::save_prefab_at`),
+    /// celui-ci exerce `spawn()` côté Lua (`scripting.rs`), qui appelle la variante
+    /// **globale** `Scene::instantiate_prefab` (pas de point d'injection de
+    /// répertoire dans le binding Lua, et il ne devrait pas y en avoir un rien que
+    /// pour les tests) — écrit donc réellement dans `~/.motor3derust/assets/prefabs/`,
+    /// comme le ferait l'éditeur. Nom unique pour ne pas collisionner avec un vrai
+    /// prefab de l'utilisateur.
     fn unique_test_prefab_name(tag: &str) -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()

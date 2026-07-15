@@ -87,7 +87,7 @@ fn new_asset_id() -> String {
 
 /// Cœur de `register_asset`, paramétré par `dir` (testable sans toucher
 /// `~/.motor3derust/assets/` ni l'environnement global — cf. les tests plus bas).
-fn register_asset_at(dir: &std::path::Path, name: &str) -> String {
+pub(crate) fn register_asset_at(dir: &std::path::Path, name: &str) -> String {
     let mut manifest = load_manifest_at(dir);
     if let Some(id) = manifest
         .entries
@@ -117,7 +117,7 @@ pub fn register_asset(name: &str) -> String {
     }
 }
 
-fn resolve_asset_id_at(dir: &std::path::Path, id: &str) -> Option<String> {
+pub(crate) fn resolve_asset_id_at(dir: &std::path::Path, id: &str) -> Option<String> {
     let uuid = id.strip_prefix(ASSET_ID_SCHEME)?;
     load_manifest_at(dir)
         .entries
@@ -238,7 +238,7 @@ pub fn user_dir() -> Option<PathBuf> {
 /// négatifs sur des variantes d'encodage). Point de passage unique pour les
 /// trois call-sites qui joignent un nom fourni par l'appelant (sauvegarde
 /// ou scène potentiellement non fiable) à un dossier de base connu.
-fn safe_join(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn safe_join(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     use std::path::Component;
     let path = std::path::Path::new(name);
     if path.components().any(|c| {

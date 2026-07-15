@@ -1777,24 +1777,27 @@ mod tests {
         );
     }
 
-    /// Nom de prefab unique par appel (horloge + pid), pour ne pas collisionner avec un
-    /// vrai prefab de l'utilisateur qui lancerait ces tests (ils écrivent réellement
-    /// dans `~/.motor3derust/assets/prefabs/`, comme le ferait l'éditeur — ce sprint n'a
-    /// pas de variante testable par répertoire séparé, contrairement à `assets.rs`).
-    fn unique_prefab_name(tag: &str) -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        format!("test_{tag}_{}_{}", std::process::id(), nanos)
+    /// Dossier temporaire unique par test (même schéma que `assets::tests::
+    /// temp_assets_dir`) : `Scene::save_prefab_at`/`instantiate_prefab_at`/
+    /// `sync_prefab_instances_at` ne touchent plus `~/.motor3derust/assets/` réel
+    /// depuis ce complément — auparavant ces tests y écrivaient réellement (comme le
+    /// ferait l'éditeur), faute d'une variante testable par répertoire séparé.
+    fn temp_prefabs_dir(tag: &str) -> std::path::PathBuf {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        tag.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        let dir =
+            std::env::temp_dir().join(format!("rusteegear_prefab_test_{:x}", hasher.finish()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
     fn modifying_a_prefab_updates_its_instances_except_overrides() {
         // Un prefab « gemme » modifié met à jour ses N instances, sauf les propriétés
         // surchargées.
-        let name = unique_prefab_name("gemme");
+        let dir = temp_prefabs_dir("gemme");
         let gemme_v1 = SceneObject {
             name: "Gemme".into(),
             mesh: MeshKind::Sphere,
@@ -1802,14 +1805,15 @@ mod tests {
             tap_action: TapAction::Hide,
             ..Default::default()
         };
-        let asset_id =
-            Scene::save_prefab(&gemme_v1, &name).expect("sauvegarde du prefab impossible");
+        let asset_id = Scene::save_prefab_at(&dir, &gemme_v1, "Gemme")
+            .expect("sauvegarde du prefab impossible");
 
         // 20 instances, chacune à sa propre position (transform/name surchargés par
-        // défaut par `instantiate_prefab`).
+        // défaut par `instantiate_prefab_at`).
         let mut scene = Scene::default();
         for i in 0..20 {
-            let obj = Scene::instantiate_prefab(
+            let obj = Scene::instantiate_prefab_at(
+                &dir,
                 &asset_id,
                 format!("Gemme {i}"),
                 Vec3::new(i as f32, 0.0, 0.0),
@@ -1833,8 +1837,8 @@ mod tests {
             color: [0.0, 1.0, 0.0],
             ..gemme_v1
         };
-        Scene::save_prefab(&gemme_v2, &name).unwrap();
-        scene.sync_prefab_instances();
+        Scene::save_prefab_at(&dir, &gemme_v2, "Gemme").unwrap();
+        scene.sync_prefab_instances_at(&dir);
 
         for (i, obj) in scene.objects.iter().enumerate() {
             if i == 5 {

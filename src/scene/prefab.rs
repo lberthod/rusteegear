@@ -32,16 +32,28 @@ impl Scene {
     /// renommer le fichier prefab sans casser les instances qui le référencent. `Err` si
     /// `assets_dir()` est indisponible (pas de `$HOME`) ou si l'écriture disque échoue.
     pub fn save_prefab(obj: &SceneObject, name: &str) -> Result<String, String> {
-        let json = serde_json::to_string_pretty(obj).map_err(|e| e.to_string())?;
         let dir = crate::assets::assets_dir()
-            .ok_or_else(|| "pas de dossier d'assets (HOME absent)".to_string())?
-            .join("prefabs");
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            .ok_or_else(|| "pas de dossier d'assets (HOME absent)".to_string())?;
+        Self::save_prefab_at(&dir, obj, name)
+    }
+
+    /// Cœur de `save_prefab`, paramétré par `dir` (testable sans toucher
+    /// `~/.motor3derust/assets/` ni l'environnement global — même raison et même
+    /// schéma que `assets::register_asset_at` et consorts).
+    pub(crate) fn save_prefab_at(
+        dir: &std::path::Path,
+        obj: &SceneObject,
+        name: &str,
+    ) -> Result<String, String> {
+        let json = serde_json::to_string_pretty(obj).map_err(|e| e.to_string())?;
+        let prefabs_dir = dir.join("prefabs");
+        std::fs::create_dir_all(&prefabs_dir).map_err(|e| e.to_string())?;
         let file_name = format!("{name}.json");
-        std::fs::write(dir.join(&file_name), json).map_err(|e| e.to_string())?;
-        Ok(crate::assets::register_asset(&format!(
-            "prefabs/{file_name}"
-        )))
+        std::fs::write(prefabs_dir.join(&file_name), json).map_err(|e| e.to_string())?;
+        Ok(crate::assets::register_asset_at(
+            dir,
+            &format!("prefabs/{file_name}"),
+        ))
     }
 
     /// Crée une nouvelle instance du prefab référencé par `asset_id`, positionnée à
@@ -54,7 +66,19 @@ impl Scene {
         name: impl Into<String>,
         at: Vec3,
     ) -> Option<SceneObject> {
-        let mut obj = load_prefab_object(asset_id)?;
+        let dir = crate::assets::assets_dir()?;
+        Self::instantiate_prefab_at(&dir, asset_id, name, at)
+    }
+
+    /// Cœur de `instantiate_prefab`, paramétré par `dir` — même raison que
+    /// `save_prefab_at`.
+    pub(crate) fn instantiate_prefab_at(
+        dir: &std::path::Path,
+        asset_id: &str,
+        name: impl Into<String>,
+        at: Vec3,
+    ) -> Option<SceneObject> {
+        let mut obj = load_prefab_object_at(dir, asset_id)?;
         obj.name = name.into();
         obj.transform.position = at;
         obj.prefab = Some(PrefabInstance {
@@ -74,6 +98,16 @@ impl Scene {
     /// prefab supprimé/déplacé) laisse l'instance telle quelle — pas d'erreur bruyante
     /// pour un cas qui peut survenir en édition normale.
     pub fn sync_prefab_instances(&mut self) {
+        // Pas de $HOME : rien à résoudre, comportement identique à un prefab
+        // introuvable pour chaque instance (no-op silencieux, cf. doc plus haut).
+        if let Some(dir) = crate::assets::assets_dir() {
+            self.sync_prefab_instances_at(&dir);
+        }
+    }
+
+    /// Cœur de `sync_prefab_instances`, paramétré par `dir` — même raison que
+    /// `save_prefab_at`/`instantiate_prefab_at`.
+    pub(crate) fn sync_prefab_instances_at(&mut self, dir: &std::path::Path) {
         let mut cache: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::new();
         for obj in &mut self.objects {
@@ -83,7 +117,7 @@ impl Scene {
             let template = match cache.get(&prefab.asset_id) {
                 Some(v) => v.clone(),
                 None => {
-                    let Some(v) = load_prefab_value(&prefab.asset_id) else {
+                    let Some(v) = load_prefab_value_at(dir, &prefab.asset_id) else {
                         continue;
                     };
                     cache.insert(prefab.asset_id.clone(), v.clone());
@@ -113,14 +147,18 @@ impl Scene {
     }
 }
 
-/// Charge et parse le JSON d'un prefab depuis sa référence stable (`asset-id://<uuid>`
-/// ou tout autre schéma reconnu par `assets::read_bytes`).
-fn load_prefab_value(asset_id: &str) -> Option<serde_json::Value> {
-    let bytes = crate::assets::read_bytes(asset_id)?;
-    let text = String::from_utf8(bytes).ok()?;
+/// Charge et parse le JSON d'un prefab depuis sa référence stable (`asset-id://<uuid>`),
+/// résolue dans le manifeste de `dir` puis lue directement sur disque — équivalent
+/// paramétré de `assets::read_bytes` pour le seul schéma `asset-id://`, qui est le
+/// seul que `Scene::save_prefab_at` produit.
+fn load_prefab_value_at(dir: &std::path::Path, asset_id: &str) -> Option<serde_json::Value> {
+    let resolved = crate::assets::resolve_asset_id_at(dir, asset_id)?;
+    let key = resolved.strip_prefix(crate::assets::ASSET_SCHEME)?;
+    let path = crate::assets::safe_join(dir, key)?;
+    let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
 
-fn load_prefab_object(asset_id: &str) -> Option<SceneObject> {
-    serde_json::from_value(load_prefab_value(asset_id)?).ok()
+fn load_prefab_object_at(dir: &std::path::Path, asset_id: &str) -> Option<SceneObject> {
+    serde_json::from_value(load_prefab_value_at(dir, asset_id)?).ok()
 }
