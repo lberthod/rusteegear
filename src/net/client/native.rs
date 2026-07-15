@@ -87,7 +87,18 @@ impl NetClient {
                 let (ws, _response) = match tokio_tungstenite::connect_async(&url).await {
                     Ok(v) => v,
                     Err(e) => {
-                        let _ = ready_tx.send(Err(e.to_string()));
+                        let mut msg = e.to_string();
+                        // Un « 308 Permanent Redirect » sur du ws:// est la
+                        // signature d'une façade HTTPS (ex. Caddy) qui redirige
+                        // le HTTP en clair vers le HTTPS — tungstenite ne suit
+                        // pas les redirections, donc on guide l'utilisateur.
+                        if url.starts_with("ws://") && msg.contains("308") {
+                            msg.push_str(
+                                " — ce serveur exige une connexion chiffrée : \
+                                 remplacez ws:// par wss:// dans l'adresse",
+                            );
+                        }
+                        let _ = ready_tx.send(Err(msg));
                         return;
                     }
                 };
@@ -146,5 +157,35 @@ impl NetClient {
         if let Ok(bytes) = protocol::encode(msg) {
             let _ = self.outbox.send(bytes);
         }
+    }
+}
+
+/// Tests-preuves du support TLS natif (`wss://`, feature `rustls-tls-webpki-roots`
+/// de `tokio-tungstenite`, cf. Cargo.toml). `#[ignore]` : ils dépendent du VPS
+/// réel (`ws.loicberthod.ch`) et du réseau — à lancer à la main :
+/// `cargo test --lib tls_proof -- --ignored --nocapture`.
+#[cfg(test)]
+mod tls_proof {
+    /// Le client natif ouvre bien une connexion chiffrée vers la façade Caddy.
+    #[test]
+    #[ignore]
+    fn wss_vps() {
+        let c = super::NetClient::connect("wss://ws.loicberthod.ch", "TestTLS", None);
+        match c {
+            Ok(_) => println!("OK: connexion wss établie"),
+            Err(e) => panic!("échec wss: {e}"),
+        }
+    }
+    /// Frapper la façade HTTPS en `ws://` non chiffré donne le 308 de Caddy,
+    /// enrichi de l'indice « remplacez ws:// par wss:// ».
+    #[test]
+    #[ignore]
+    fn ws_308_hint() {
+        let e = match super::NetClient::connect("ws://ws.loicberthod.ch", "TestTLS", None) {
+            Ok(_) => panic!("aurait dû échouer en ws:// (308 attendu)"),
+            Err(e) => e.to_string(),
+        };
+        println!("erreur: {e}");
+        assert!(e.contains("wss://"));
     }
 }

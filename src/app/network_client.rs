@@ -20,24 +20,19 @@ use super::AppState;
 /// test — la connexion manuelle (fenêtre/overlay Multijoueur) reste disponible
 /// pour pointer ailleurs (ex. un serveur local pendant le développement).
 ///
-/// `ws://` en clair, jamais `wss://` : le client natif (`net::client::native`,
-/// desktop + Android) n'a pas de dépendance TLS (Sprint 65 — évite d'ajouter
-/// OpenSSL/rustls à cross-compiler pour Android), donc une URL `wss://` y
-/// échouerait purement et simplement. Le port `:80` (pas `:7777`) pointe sur le
-/// reverse-proxy Caddy du VPS, qui route le `ws://` brut vers le serveur de jeu
-/// par IP (donc sans passer par le nom `api.loicberthod.ch`, cf. Caddyfile).
-#[cfg(not(target_arch = "wasm32"))]
-pub const DEFAULT_SERVER_URL: &str = "ws://179.237.71.235:80";
-
-/// Équivalent web (Sprint 113f) : un navigateur qui a chargé la page en HTTPS
-/// refuse d'ouvrir un WebSocket `ws://` non chiffré (`net::client::web` le
-/// détecte de toute façon en amont et refuse proprement, cf. sa doc) — `wss://`
-/// est donc **obligatoire** ici, pas juste préférable. `ws.loicberthod.ch` est un
-/// sous-domaine Caddy dédié (HTTPS automatique via Let's Encrypt) qui termine le
-/// TLS et relaie en clair vers le même serveur de jeu (`localhost:7777` sur le
-/// VPS) que la route `ws://…:80` utilisée par le client natif ci-dessus — même
-/// serveur, deux façades selon la plateforme.
-#[cfg(target_arch = "wasm32")]
+/// `wss://` (chiffré) partout : `ws.loicberthod.ch` est un sous-domaine Caddy
+/// dédié (HTTPS automatique via Let's Encrypt) qui termine le TLS et relaie en
+/// clair vers le serveur de jeu (`localhost:7777` sur le VPS). Obligatoire sur
+/// le web (un navigateur qui a chargé la page en HTTPS refuse un WebSocket
+/// `ws://` non chiffré — `net::client::web` le détecte en amont et refuse
+/// proprement, cf. sa doc) ; côté natif, le client (`net::client::native`,
+/// desktop + Android) parle TLS depuis que `tokio-tungstenite` embarque rustls
+/// (feature `rustls-tls-webpki-roots`, cf. Cargo.toml — avant ça, seule la
+/// route `ws://179.237.71.235:80` en clair marchait en natif ; elle existe
+/// toujours côté Caddy pour un client sans TLS). Attention : Caddy répond
+/// « 308 Permanent Redirect » si on frappe cette façade en `ws://` non chiffré
+/// (redirection HTTP→HTTPS automatique), d'où l'indice ajouté par
+/// `net::client::native` dans ce cas.
 pub const DEFAULT_SERVER_URL: &str = "wss://ws.loicberthod.ch";
 
 /// Un autre joueur réseau, affiché comme un objet fantôme dans la scène locale.

@@ -117,14 +117,16 @@ ureq = { version = "2.12", features = ["json"] }
 notify = "8.2.0"
 
 # Réseau multijoueur (WebSocket, SPRINT_MMORPG.md Sprint 53) : desktop + Android
-# (Sprint 65) — pas de TLS ici (`ws://`, jamais `wss://`), donc pas de dépendance
-# native (OpenSSL) à cross-compiler pour Android. iOS reste hors scope pour l'instant.
+# (Sprint 65). TLS via rustls (`rustls-tls-webpki-roots`, racines Mozilla embarquées :
+# pas de magasin de certificats OS à chercher sur Android) pour que `wss://` marche
+# aussi en natif — 100 % Rust, pas d'OpenSSL à cross-compiler pour Android.
+# iOS reste hors scope pour l'instant.
 # wasm32 exclu (Sprint 114, défrichage) : `tokio`/`tokio-tungstenite` supposent un
 # vrai socket TCP OS, absent du navigateur — un client réseau web passera par
 # `web_sys::WebSocket`, prévu au Sprint 116 (multijoueur navigateur), pas ici.
 [target.'cfg(not(any(target_os = "ios", target_arch = "wasm32")))'.dependencies]
 tokio = { version = "1.48", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
-tokio-tungstenite = "0.28"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # Scripting Lua : `lua-src` (vendored, compile le C de Lua) ne sait pas construire
