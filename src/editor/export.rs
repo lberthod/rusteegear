@@ -786,8 +786,9 @@ fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
     Ok((json, warns))
 }
 
-/// Copie un asset disque dans le bundle ; renvoie sa clé `bundle://…`.
-/// `Ok(None)` si le chemin est vide / déjà embarqué ; `Err` si fichier introuvable.
+/// Copie un asset disque dans le bundle, compressé zstd (Sprint 127, décompressé côté
+/// lecture par `assets::bundle_bytes`) ; renvoie sa clé `bundle://…`.
+/// `Ok(None)` si le chemin est vide / déjà embarqué ; `Err` si fichier introuvable/illisible.
 fn copy_to_bundle(
     dir: &std::path::Path,
     path: &str,
@@ -802,8 +803,25 @@ fn copy_to_bundle(
     }
     let fname = src.file_name().and_then(|s| s.to_str()).unwrap_or("asset");
     let key = format!("{prefix}_{fname}");
-    std::fs::copy(src, dir.join(&key)).map_err(|e| format!("copie de {path} : {e}"))?;
+    let data = std::fs::read(src).map_err(|e| format!("lecture de {path} : {e}"))?;
+    let compressed = compress(&data)?;
+    std::fs::write(dir.join(&key), compressed).map_err(|e| format!("copie de {path} : {e}"))?;
     Ok(Some(format!("{}{key}", crate::assets::SCHEME)))
+}
+
+/// Compression zstd (niveau par défaut) — jamais appelée en pratique sur wasm32
+/// (l'éditeur n'y tourne pas), mais `editor::export` est compilé pour toutes les
+/// cibles (`pub mod editor` inconditionnel dans `src/lib.rs`) : repli sans
+/// compression pour cette cible plutôt que de tirer `zstd` (bindings C, cf.
+/// `Cargo.toml`) dans le build wasm32.
+#[cfg(not(target_arch = "wasm32"))]
+fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::stream::encode_all(data, 0).map_err(|e| format!("compression zstd : {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
+    Ok(data.to_vec())
 }
 
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log.
@@ -884,4 +902,60 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
         let _ = tx.send(LogMsg::Done(ok));
     });
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dossier temporaire unique par test — même raison que `assets::tests::
+    /// temp_assets_dir` (tests parallèles, pas de mutation d'état global).
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        tag.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        let dir =
+            std::env::temp_dir().join(format!("rusteegear_export_test_{:x}", hasher.finish()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn copy_to_bundle_writes_a_real_zstd_frame_that_shrinks_and_round_trips() {
+        let work = temp_dir("copy_to_bundle");
+        let bundle = work.join("bundle");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let original: Vec<u8> = b"contenu de test tres repetitif "
+            .iter()
+            .cycle()
+            .take(4096)
+            .copied()
+            .collect();
+        let src = work.join("modele.glb");
+        std::fs::write(&src, &original).unwrap();
+
+        let key = copy_to_bundle(&bundle, src.to_str().unwrap(), "m0")
+            .expect("copie attendue")
+            .expect("chemin non vide, pas déjà embarqué");
+        assert_eq!(key, format!("{}m0_modele.glb", crate::assets::SCHEME));
+
+        let written = std::fs::read(bundle.join("m0_modele.glb")).unwrap();
+        assert!(
+            written.len() < original.len(),
+            "un contenu répétitif doit rétrécir : {} -> {}",
+            original.len(),
+            written.len()
+        );
+        let decoded = zstd::stream::decode_all(&written[..]).expect("flux zstd valide attendu");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn copy_to_bundle_reports_missing_files_instead_of_panicking() {
+        let work = temp_dir("copy_to_bundle_missing");
+        let err = copy_to_bundle(&work, "/chemin/qui/n/existe/pas.glb", "m0")
+            .expect_err("fichier absent attendu");
+        assert!(err.contains("introuvable"));
+    }
 }

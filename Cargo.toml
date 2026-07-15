@@ -58,6 +58,13 @@ label = "RusteeGear"
 path = "packaging/release.keystore"
 keystore_password = "android"
 
+[dev-dependencies]
+# Sprint 127 : produire de vrais octets compressés zstd dans les tests de
+# `assets::decompress` (le décodeur pur Rust `ruzstd`) — vérifie l'interopérabilité
+# réelle avec les octets qu'`editor::export::copy_to_bundle` écrit dans le bundle,
+# plutôt que de supposer que les deux implémentations s'accordent sur le format.
+zstd = "0.13.3"
+
 [features]
 # Force le mode Player dès le lancement (sans --player) : utilisé pour exporter un
 # « player » jouable du jeu créé (.dmg/.app double-cliquable qui démarre sur la scène).
@@ -88,6 +95,11 @@ serde_json = "1.0.150"
 wgpu = "29.0.3"
 winit = "0.30.13"
 gilrs = "0.11.2"
+# Sprint 127 : décompression du blob d'assets embarqué — décodeur pur Rust (pas de
+# `cc`/bindings C comme le crate `zstd`), pour rester compilable sur wasm32-unknown-
+# unknown où `bundle_bytes` (src/assets.rs) tourne aussi (Sprint 115, assets embarqués
+# partagés par toutes les cibles y compris le player web).
+ruzstd = "0.8.3"
 
 # Sélecteur de fichiers + client HTTP (génération de scripts par IA) : desktop
 # uniquement (Firebase/IA restent hors mobile pour l'instant, cf. réseau ci-dessous).
@@ -131,6 +143,12 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
 egui-winit = "0.34.3"
+# Sprint 127 : compression du blob d'assets à l'export (`editor::export::
+# copy_to_bundle`), C bindings (`zstd-sys`) — jamais exécuté sur wasm32 (l'éditeur n'y
+# tourne pas), mais `pub mod editor` est compilé pour toutes les cibles (cf.
+# `src/lib.rs`) donc exclu de la table wasm32 comme `mlua`/`egui-winit` ci-dessus,
+# repli `#[cfg]` sans compression dans `copy_to_bundle` pour cette cible.
+zstd = "0.13.3"
 
 # Android : winit a besoin d'un backend android-activity + logger natif.
 [target.'cfg(target_os = "android")'.dependencies]

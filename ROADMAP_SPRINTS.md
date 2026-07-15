@@ -2648,10 +2648,42 @@ connection may not be initiated from a page loaded over HTTPS »*.
   couverte par des tests unitaires indépendants du rendu.
 - **Prérequis livré** : manifeste GUID (Sprint 95).
 
-#### Sprint 127 — Compression Zstd des packs embarqués ⬜
-- [ ] Crate `zstd` sur le blob d'assets embarqué dans le player.
-- **Fichiers** : `src/assets.rs`, `packaging/`.
-- **Livrable** : taille du `.apk`/`.dmg` mesurée avant/après, réduction documentée.
+#### Sprint 127 — Compression Zstd des packs embarqués ✅ FAIT
+- [x] **Compression à l'export** (`editor::export::copy_to_bundle`) : chaque asset
+      copié dans `assets/bundle/` (modèles/sons référencés par la scène, cf.
+      `bundle_scene_json`) est désormais compressé zstd (`zstd::stream::encode_all`,
+      niveau par défaut) avant écriture — même clé `bundle://…`, même schéma, aucun
+      changement côté scène/appelants.
+  - `compress()` est `#[cfg]`-doublée : implémentation réelle hors wasm32,
+    passe-plat (pas de compression) sur wasm32 — l'éditeur n'y tourne jamais en
+    pratique, mais `pub mod editor` (sans `#[cfg]`, cf. `src/lib.rs`) doit rester
+    compilable pour cette cible, et `zstd` (bindings C `zstd-sys`) ne l'est pas.
+- [x] **Décompression à la lecture** (`assets::bundle_bytes`) : décodeur **pur Rust**
+      (`ruzstd`, pas de bindings C) — contrainte imposée par le Sprint 115
+      (`bundle_bytes` sert aussi le player web, `wasm32-unknown-unknown`, où `zstd`
+      ne compile pas). Signature changée `Option<&'static [u8]>` →
+      `Option<Vec<u8>>` (décompression = données possédées, plus une simple vue sur
+      le binaire) ; les deux appelants (`read_bytes`) faisaient déjà `.to_vec()`,
+      aucun changement observable pour eux.
+  - Vérifié par construction (`cargo tree --target wasm32-unknown-unknown`) :
+    `zstd`/`zstd-sys` absents de cette cible, seul `ruzstd` y est résolu.
+- [x] **Tests** : interopérabilité zstd (encodeur) → ruzstd (décodeur) sur un
+      contenu répétitif (`decompress_reads_what_zstd_actually_wrote`, vérifie aussi
+      le rétrécissement) + rejet propre d'un flux invalide
+      (`decompress_rejects_garbage`) dans `assets.rs` ; `copy_to_bundle` bout-en-bout
+      — écrit un vrai fichier, relit le bundle, confirme un flux zstd valide qui
+      rétrécit et redécode à l'identique + message d'erreur explicite pour un
+      fichier source absent, dans `editor/export.rs` (nouveau module de tests, ce
+      fichier n'en avait pas). 370 tests lib verts (4 nouveaux), clippy
+      `-D warnings` et fmt propres, build wasm32 vert.
+- **Livrable restant, hors scope de ce sprint** : mesure avant/après de la taille du
+  `.apk`/`.dmg` — nécessite un export réel (assets binaires + toolchain
+  Android/macOS), non exécutable dans cet environnement (même limite que documentée
+  aux sprints 113d/122/126/128 : rien à mesurer visuellement/binairement ici). Le
+  gain est structurel et prouvé par test (`compressed.len() < original.len()` sur
+  un contenu répétitif) plutôt que mesuré sur un binaire réel.
+- **Fichiers** : `src/assets.rs`, `src/editor/export.rs`, `Cargo.toml`
+  (`ruzstd` toutes cibles, `zstd` hors wasm32, `dev-dependencies`).
 
 #### Sprint 128 — Outillage éditeur (recherche de références, profilers, breakpoints Lua) 🟡 EN COURS
 - [x] Graphe de références sur le manifeste GUID (« qui utilise cet asset ? ») :

@@ -167,9 +167,25 @@ pub fn strip_scheme(path: &str) -> Option<&str> {
     path.strip_prefix(SCHEME)
 }
 
-/// Octets d'un asset embarqué, ou `None` s'il est absent du bundle.
-pub fn bundle_bytes(key: &str) -> Option<&'static [u8]> {
-    BUNDLE.get_file(key).map(|f| f.contents())
+/// Octets d'un asset embarqué, ou `None` s'il est absent du bundle. Décompressés à la
+/// volée (Sprint 127) : `copy_to_bundle` (`editor::export`) écrit chaque asset
+/// compressé zstd à l'export — un bundle produit avant ce sprint (contenu brut) ne
+/// décode plus, mais `assets/bundle/` est régénéré à chaque export, jamais versionné
+/// tel quel entre deux formats.
+pub fn bundle_bytes(key: &str) -> Option<Vec<u8>> {
+    let compressed = BUNDLE.get_file(key).map(|f| f.contents())?;
+    decompress(compressed)
+}
+
+/// Décompression zstd pure Rust (`ruzstd`, pas de bindings C) : doit rester
+/// compilable et correcte sur `wasm32-unknown-unknown`, où le player web lit aussi
+/// ses assets embarqués (Sprint 115).
+fn decompress(compressed: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(compressed).ok()?;
+    let mut out = Vec::new();
+    decoder.read_to_end(&mut out).ok()?;
+    Some(out)
 }
 
 /// Dossier des assets de projet (`~/.motor3derust/assets/`).
@@ -276,7 +292,7 @@ pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
         return read_bytes(&resolved);
     }
     if let Some(key) = path.strip_prefix(SCHEME) {
-        return bundle_bytes(key).map(|b| b.to_vec());
+        return bundle_bytes(key);
     }
     if let Some(key) = path.strip_prefix(ASSET_SCHEME) {
         if let Some(dir) = assets_dir()
@@ -286,7 +302,7 @@ pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
             return Some(b);
         }
         // repli : l'asset peut être embarqué (player exporté)
-        return bundle_bytes(key).map(|b| b.to_vec());
+        return bundle_bytes(key);
     }
     std::fs::read(path).ok()
 }
@@ -348,6 +364,34 @@ mod tests {
         // Le bundle par défaut est vide (.gitkeep) : une clé inconnue renvoie None
         // au lieu de paniquer.
         assert!(bundle_bytes("inexistant.glb").is_none());
+    }
+
+    #[test]
+    fn decompress_reads_what_zstd_actually_wrote() {
+        // Interopérabilité réelle : `copy_to_bundle` compresse avec le crate `zstd`
+        // (bindings C, desktop), `decompress` décode avec `ruzstd` (pur Rust, tourne
+        // aussi sur wasm32) — deux implémentations distinctes du même format, pas
+        // supposées compatibles sans preuve.
+        let original: Vec<u8> = b"abababababababababababababababababababab"
+            .iter()
+            .cycle()
+            .take(4096)
+            .copied()
+            .collect();
+        let compressed = zstd::stream::encode_all(&original[..], 0).unwrap();
+        assert!(
+            compressed.len() < original.len(),
+            "un contenu répétitif doit rétrécir : {} -> {}",
+            original.len(),
+            compressed.len()
+        );
+        let decoded = decompress(&compressed).expect("décodage attendu");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn decompress_rejects_garbage() {
+        assert!(decompress(b"pas un flux zstd").is_none());
     }
 
     /// Dossier temporaire unique par test (pas de mutation de `$HOME`/état global —
