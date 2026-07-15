@@ -18,6 +18,7 @@ pub enum Target {
     Macos,
     Android,
     Ios,
+    Web,
 }
 
 impl Target {
@@ -26,6 +27,7 @@ impl Target {
             Target::Macos => "macOS · .dmg",
             Target::Android => "Android · .apk",
             Target::Ios => "iOS · .ipa",
+            Target::Web => "Web · .zip",
         }
     }
 
@@ -35,6 +37,7 @@ impl Target {
             Target::Macos => "packaging/build_dmg.sh",
             Target::Android => "packaging/build_apk.sh",
             Target::Ios => "packaging/build_ios.sh",
+            Target::Web => "packaging/build_web.sh",
         }
     }
 }
@@ -54,7 +57,7 @@ pub struct ExportPanel {
     rx: Option<Receiver<LogMsg>>,
     running: Option<Target>,
     /// Pré-requis détectés une fois au démarrage : `Ok` = prêt, `Err` = ce qui manque.
-    prereqs: [(Target, Result<(), String>); 3],
+    prereqs: [(Target, Result<(), String>); 4],
     /// Android : installer l'APK sur l'appareil branché (adb) après le build.
     install_device: bool,
     /// `adb` est-il disponible (sinon l'option d'installation est grisée).
@@ -94,6 +97,7 @@ impl ExportPanel {
                 (Target::Macos, detect(Target::Macos)),
                 (Target::Android, detect(Target::Android)),
                 (Target::Ios, detect(Target::Ios)),
+                (Target::Web, detect(Target::Web)),
             ],
             install_device: false,
             adb_available: has_cmd("adb"),
@@ -159,7 +163,7 @@ impl ExportPanel {
             && match target {
                 Target::Android => self.adb_available,
                 Target::Ios => true,
-                Target::Macos => false,
+                Target::Macos | Target::Web => false,
             };
         self.rx = Some(run(target, cfg, install));
         self.running = Some(target);
@@ -455,7 +459,7 @@ impl ExportPanel {
 
                 ui.add_space(4.0);
                 ui.strong("⚙  Actions");
-                let targets = [Target::Macos, Target::Android, Target::Ios];
+                let targets = [Target::Macos, Target::Android, Target::Ios, Target::Web];
                 for t in targets {
                     self.card(ui, t, scene);
                 }
@@ -564,6 +568,14 @@ impl ExportPanel {
                 });
             }
             Target::Macos => {}
+            Target::Web => {
+                ui.indent("web_opt", |ui| {
+                    ui.weak(
+                        "Zip prêt à servir (HTTP statique, Chrome/WebGPU). Limite web \
+                         actuelle : musique en flux absente.",
+                    );
+                });
+            }
         }
         if launch {
             self.start(target, scene);
@@ -646,7 +658,60 @@ fn detect(target: Target) -> Result<(), String> {
             }
             Ok(())
         }
+        Target::Web => {
+            if !rust_target_installed("wasm32-unknown-unknown") {
+                return Err("rustup target add wasm32-unknown-unknown".into());
+            }
+            if !has_cmd("wasm-bindgen") {
+                return Err("cargo install wasm-bindgen-cli".into());
+            }
+            // `wasm-bindgen-cli` doit être à la version EXACTE de la crate du
+            // lockfile (contrainte de l'outil lui-même, cf. build_web.sh) — un écart
+            // ferait échouer le build avec un message cryptique en plein export.
+            if let Some(expected) = lockfile_wasm_bindgen_version()
+                && let Some(installed) = installed_wasm_bindgen_version()
+                && expected != installed
+            {
+                return Err(format!(
+                    "cargo install wasm-bindgen-cli --version {expected} (installé : {installed})"
+                ));
+            }
+            Ok(())
+        }
     }
+}
+
+/// Version de la crate `wasm-bindgen` figée dans `Cargo.lock` — la CLI doit être
+/// à la même version exacte (contrainte de `wasm-bindgen` lui-même).
+fn lockfile_wasm_bindgen_version() -> Option<String> {
+    let lock =
+        std::fs::read_to_string(std::path::Path::new(PROJECT_ROOT).join("Cargo.lock")).ok()?;
+    let mut lines = lock.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() == "name = \"wasm-bindgen\"" {
+            let version = lines
+                .next()?
+                .trim()
+                .strip_prefix("version = \"")?
+                .strip_suffix('"')?;
+            return Some(version.to_string());
+        }
+    }
+    None
+}
+
+/// Version de la CLI `wasm-bindgen` installée (`wasm-bindgen --version`).
+fn installed_wasm_bindgen_version() -> Option<String> {
+    let out = Command::new("wasm-bindgen")
+        .arg("--version")
+        .env("PATH", augmented_path())
+        .output()
+        .ok()?;
+    // Format : « wasm-bindgen 0.2.xx »
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .map(str::to_string)
 }
 
 /// Dossiers où chercher les outils, même quand l'app est lancée depuis le Finder

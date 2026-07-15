@@ -13,7 +13,7 @@ use super::passes::{aabb_visible, frustum_planes, is_skinned, mesh_key, render_i
 use super::pipelines::mip_count_for;
 use super::pipelines::{
     self, PipelineBundle, create_bloom_mip_views, create_depth_view, create_hdr_view,
-    create_models_buffer, load_rgba, make_texture,
+    create_models_buffer, create_skinned_models_bind_group, load_rgba, make_texture,
 };
 use crate::app::{AppState, GIZMO_LEN, GizmoMode, RING_SEGMENTS, axis_basis, axis_dir};
 use crate::editor::Editor;
@@ -135,6 +135,10 @@ pub(super) const MAX_SKINNED_INSTANCES: usize = 8;
 /// Taille en octets d'un créneau de la palette de joints — un objet skinné à la fois.
 pub(super) const JOINT_SLOT_BYTES: wgpu::BufferAddress =
     (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress;
+// Doit rester multiple de 256 (`minStorageBufferOffsetAlignment` WebGPU/wgpu) : le
+// binding à offset dynamique de `skinned_model_layout` (pipelines.rs) sélectionne un
+// créneau par `offset = slot * JOINT_SLOT_BYTES`.
+const _: () = assert!(JOINT_SLOT_BYTES.is_multiple_of(256));
 
 /// Descripteur d'une instance dans le plan de rendu (ordre = index dans le buffer storage).
 struct InstanceDraw {
@@ -302,14 +306,19 @@ pub struct Renderer {
     /// Nom du backend GPU réel (Metal / Vulkan / …), pour le bandeau d'état.
     backend: String,
 
-    // --- skinning GPU : palette de matrices de joints (groupe 4) + pipeline dédié
+    // --- skinning GPU : palette de matrices de joints + pipeline dédié
     //     (vertex `skinned.wgsl`, fragment `fs_main` de main.wgsl **partagée**, même
     //     éclairage que le chemin statique). Dessine les objets skinnés de la scène
     //     (`render`/`render_scene_headless`, via `draw_plan_skinned`) ; `render_skinned_test`
     //     couvre en plus un chemin headless dédié à un seul mesh, hors scène.
+    //     Groupe 1 dédié (`skinned_model_layout`) : `models` + joints fusionnés, pour
+    //     tenir dans la limite WebGPU de 4 bind groups (cf. `pipelines.rs::build`).
     skinned_pipeline: wgpu::RenderPipeline,
+    skinned_model_layout: wgpu::BindGroupLayout,
     joint_buf: wgpu::Buffer,
-    joint_bind_group: wgpu::BindGroup,
+    /// Référence `models_buf` + `joint_buf` : à recréer si l'un des deux l'est
+    /// (cf. `sync_objects`, seul site où `models_buf` change de capacité).
+    skinned_models_bind_group: wgpu::BindGroup,
     joint_capacity: usize,
 
     // --- profiler GPU (Sprint 112) ---
@@ -471,8 +480,9 @@ impl Renderer {
             mipgen_sampler,
             editor,
             skinned_pipeline,
+            skinned_model_layout,
             joint_buf,
-            joint_bind_group,
+            skinned_models_bind_group,
         } = bundle;
 
         Ok(Renderer {
@@ -530,8 +540,9 @@ impl Renderer {
             editor,
             backend,
             skinned_pipeline,
+            skinned_model_layout,
             joint_buf,
-            joint_bind_group,
+            skinned_models_bind_group,
             joint_capacity: JOINT_CAPACITY,
             gpu_profiler,
             gpu_pass_timings_ms: Vec::new(),
@@ -579,7 +590,7 @@ impl Renderer {
     /// anormalement gros dégraderait l'anim plutôt que de planter le rendu. `slot` au-delà
     /// de `MAX_SKINNED_INSTANCES` est ignoré (même logique).
     ///
-    /// Renvoie l'offset dynamique (octets) à passer à `set_bind_group(4, .., &[offset])`.
+    /// Renvoie l'offset dynamique (octets) à passer à `set_bind_group(1, &skinned_models_bind_group, &[offset])`.
     fn write_joint_matrices(&mut self, slot: usize, matrices: &[glam::Mat4]) -> u32 {
         if slot >= MAX_SKINNED_INSTANCES {
             log::warn!(
@@ -607,7 +618,7 @@ impl Renderer {
     /// **avant** toute passe de rendu (cf. commentaire aux sites d'appel : `write_buffer`
     /// n'est pas ordonné avec les draw calls d'un encoder pas encore soumis). Renvoie les
     /// offsets dynamiques, dans l'ordre de `draw_plan_skinned`, à passer à
-    /// `set_bind_group(4, .., &[offset])` lors du dessin réel dans la passe.
+    /// `set_bind_group(1, &skinned_models_bind_group, &[offset])` lors du dessin réel dans la passe.
     fn prepare_skinned_draws(&mut self, scene: &Scene) -> Vec<u32> {
         let mut offsets = Vec::with_capacity(self.draw_plan_skinned.len());
         for (slot, &(obj_idx, _instance)) in self.draw_plan_skinned.clone().iter().enumerate() {
@@ -675,10 +686,9 @@ impl Renderer {
                 .unwrap_or(&self.textures[""]);
             pass.set_pipeline(&self.skinned_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(1, &self.models_bind_group, &[]);
+            pass.set_bind_group(1, &self.skinned_models_bind_group, &[offset]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
             pass.set_bind_group(3, tex, &[]);
-            pass.set_bind_group(4, &self.joint_bind_group, &[offset]);
             pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
             pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(
@@ -789,10 +799,9 @@ impl Renderer {
             pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
             pass.set_pipeline(&self.skinned_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(1, &self.models_bind_group, &[]);
+            pass.set_bind_group(1, &self.skinned_models_bind_group, &[joint_offset]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
             pass.set_bind_group(3, &self.textures[""], &[]);
-            pass.set_bind_group(4, &self.joint_bind_group, &[joint_offset]);
             pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
             pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..gpu_mesh.num_indices, 0, 0..1);
@@ -831,6 +840,16 @@ impl Renderer {
             self.models_buf = buf;
             self.models_bind_group = bg;
             self.models_capacity = cap;
+            // `skinned_models_bind_group` référence `models_buf` par valeur : doit être
+            // recréé avec le nouveau buffer, sinon le pipeline skinné continue de
+            // dessiner avec l'ancien (erreur de validation ou instances obsolètes dès
+            // que la scène dépasse la capacité initiale avec un mesh skinné présent).
+            self.skinned_models_bind_group = create_skinned_models_bind_group(
+                &self.device,
+                &self.skinned_model_layout,
+                &self.models_buf,
+                &self.joint_buf,
+            );
         }
     }
 

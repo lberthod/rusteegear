@@ -1,5 +1,9 @@
 # RusteeGear — Game design du multijoueur, vers une logique MMORPG
 
+> **Suite** : les axes bloquants de ce document étant faits (Sprints 80-89),
+> la couche suivante (classes, progression à paliers, modes de manche,
+> contrat du jour) est définie dans [GAMEDESIGN_MMORPG.md](GAMEDESIGN_MMORPG.md).
+>
 > Document d'**audit + optimisation de game design**, distinct de
 > [SPRINT_MMORPG.md](SPRINT_MMORPG.md) (feuille de route technique
 > sprint par sprint) et [AUDIT_MMORPG.md](AUDIT_MMORPG.md) (revue de code

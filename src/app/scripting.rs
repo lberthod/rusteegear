@@ -19,6 +19,8 @@ pub(super) fn script_key(src: &str) -> u64 {
     h.finish()
 }
 
+pub(crate) use crate::scene::canonical_euler_xyz;
+
 /// Exécute le chunk Lua **déjà compilé** d'un objet : expose `obj` (x,y,z,
 /// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped), `dt`, `time` et `input`, puis relit
 /// les champs modifiés.
@@ -47,7 +49,7 @@ pub(super) fn run_script(
     physics: Option<&crate::runtime::physics::Physics>,
     reverb_out: &mut Vec<f32>,
 ) -> mlua::Result<()> {
-    let (rx, ry, rz) = t.rotation.to_euler(EulerRot::XYZ);
+    let (rx, ry, rz) = canonical_euler_xyz(t.rotation);
     let obj = lua.create_table()?;
     obj.set("x", t.position.x)?;
     obj.set("y", t.position.y)?;
@@ -1207,5 +1209,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
+    }
+
+    /// `canonical_euler_xyz` : sur un yaw pur, `ry` doit porter l'angle entier
+    /// (±180°) avec rx/rz ≈ 0 — jamais la représentation à flips
+    /// (±180°, 180°−yaw, ±180°) que `to_euler(XYZ)` produit au-delà de ±90°, et qui
+    /// rendait le round-trip lecture→réécriture de `obj.ry` instable (cf. doc de la
+    /// fonction, bug de la créature MMORPG).
+    #[test]
+    fn canonical_euler_keeps_pure_yaw_in_ry_without_180_flips() {
+        for deg in (-179..=179).step_by(7) {
+            let yaw = (deg as f32).to_radians();
+            let q = Quat::from_rotation_y(yaw);
+            let (rx, ry, rz) = canonical_euler_xyz(q);
+            assert!(
+                rx.abs() < 1e-4 && rz.abs() < 1e-4,
+                "yaw {deg}° : rx/rz doivent rester ~0 (obtenu rx={rx}, rz={rz})"
+            );
+            let mut diff = ry - yaw;
+            diff = (diff + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
+                - std::f32::consts::PI;
+            assert!(diff.abs() < 1e-4, "yaw {deg}° : ry={} attendu {yaw}", ry);
+        }
+    }
+
+    /// Le triplet canonicalisé décrit toujours la **même rotation** que le
+    /// quaternion d'origine, y compris pour des rotations quelconques (pas
+    /// seulement un yaw pur) — c'est une re-représentation, jamais une altération.
+    #[test]
+    fn canonical_euler_rebuilds_the_exact_same_rotation() {
+        let cases = [
+            Quat::from_euler(EulerRot::XYZ, 0.3, 2.1, -0.2),
+            Quat::from_euler(EulerRot::XYZ, -2.8, 0.4, 2.9),
+            Quat::from_euler(EulerRot::XYZ, 1.2, -1.4, 0.1),
+            Quat::from_rotation_x(std::f32::consts::PI),
+            Quat::from_rotation_y(-2.05), // le cas créature (~ -117°)
+        ];
+        for (i, q) in cases.into_iter().enumerate() {
+            let (rx, ry, rz) = canonical_euler_xyz(q);
+            let rebuilt = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
+            // q et -q représentent la même rotation : comparer |dot| à 1.
+            assert!(
+                q.dot(rebuilt).abs() > 1.0 - 1e-5,
+                "cas {i} : rotation altérée (dot={})",
+                q.dot(rebuilt)
+            );
+        }
     }
 }

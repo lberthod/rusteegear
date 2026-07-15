@@ -1334,6 +1334,16 @@ fn build_ui(
                                 PhysicsKind::Dynamic,
                                 "Dynamique",
                             );
+                            ui.selectable_value(
+                                &mut obj.physics,
+                                PhysicsKind::Kinematic,
+                                "Cinématique",
+                            )
+                            .on_hover_text(
+                                "Objet déplacé par script qui collisionne avec le monde : \
+                                 il glisse contre les murs, objets fixes et joueurs au \
+                                 lieu de les traverser.",
+                            );
                         });
                         if obj.physics != PhysicsKind::None {
                             ui.horizontal(|ui| {
@@ -1852,8 +1862,10 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
         );
     });
 
-    // rotation éditée en degrés via les angles d'Euler
-    let (mut rx, mut ry, mut rz) = t.rotation.to_euler(EulerRot::XYZ);
+    // rotation éditée en degrés via les angles d'Euler — canonicalisés : sans ça,
+    // un yaw au-delà de ±90° s'affiche (±180, 180−y, ±180) et éditer un seul champ
+    // recompose la rotation avec les flips (cf. `scene::canonical_euler_xyz`).
+    let (mut rx, mut ry, mut rz) = crate::scene::canonical_euler_xyz(t.rotation);
     rx = rx.to_degrees();
     ry = ry.to_degrees();
     rz = rz.to_degrees();

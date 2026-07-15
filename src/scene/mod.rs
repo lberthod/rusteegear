@@ -49,6 +49,36 @@ impl Transform {
     }
 }
 
+/// Angles d'Euler XYZ (radians) d'une rotation, **canonicalisés** pour le
+/// round-trip lecture→réécriture : `Quat::to_euler(XYZ)` contraint l'angle du
+/// milieu (Y) à [-90°, 90°], donc un yaw pur au-delà s'exprime
+/// `(±180°, 180°−yaw, ±180°)`. Piège : un script Lua (ou l'inspecteur) qui
+/// n'écrase que `ry` — le cap d'un personnage, le cas le plus courant —
+/// recompose alors son yaw avec les flips ±180° restés dans rx/rz, soit un cap
+/// effectif de `180°−ry` ; comme la représentation extraite alterne d'un tick à
+/// l'autre, la rotation flip-floppe entre `ry` et `180°−ry` à 60 Hz (bug observé
+/// sur la créature MMORPG : « les bras et la tête partent en couille dès qu'elle
+/// tourne », silhouette dédoublée — l'écart vaut 2×(|yaw|−90°), jusqu'à 180°
+/// plein sud). On renvoie le triplet **équivalent** sans flips (identité
+/// Tait-Bryan : `(a, b, c) ≡ (a∓180°, 180°−b, c∓180°)`) : même rotation, mais
+/// `ry` porte le yaw entier [-180°, 180°] et rx/rz restent proches de 0 pour
+/// une rotation quasi-planaire — stable au round-trip. Utilisé par
+/// `app::scripting::run_script` (exclu de wasm32 avec Lua, d'où sa place ici)
+/// et l'inspecteur de l'éditeur.
+pub fn canonical_euler_xyz(q: Quat) -> (f32, f32, f32) {
+    use std::f32::consts::PI;
+    let (mut rx, mut ry, mut rz) = q.to_euler(glam::EulerRot::XYZ);
+    if rx.abs() > PI * 0.5 && rz.abs() > PI * 0.5 {
+        rx -= PI * rx.signum();
+        rz -= PI * rz.signum();
+        ry = PI - ry;
+        if ry > PI {
+            ry -= 2.0 * PI;
+        }
+    }
+    (rx, ry, rz)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum MeshKind {
     #[default]
@@ -2809,5 +2839,40 @@ mod tests {
         let legacy = r#"{"objects": []}"#;
         let scene: Scene = serde_json::from_str(legacy).unwrap();
         assert!(scene.hud_widgets.is_empty());
+    }
+
+    /// Garde-fou compagnon de `the_embedded_scene_ships_monsters_and_the_fire_button`
+    /// (`app::fireball`) : chaque mesh `bundle://` référencé par la scène embarquée
+    /// doit se résoudre **réellement** (clé présente dans `assets/bundle/`, inclus à
+    /// la compilation) — les deux créatures Blender comprises, squelette inclus. Une
+    /// clé manquante ne serait sinon qu'un `log::error!` silencieux au chargement :
+    /// la créature apparaîtrait comme un mesh vide invisible dans le jeu exporté.
+    #[test]
+    fn the_embedded_scene_resolves_its_bundle_creatures() {
+        let scene = Scene::embedded_player();
+        for name in ["Créature", "Créature 2"] {
+            assert!(
+                scene.objects.iter().any(|o| o.name == name),
+                "la scène embarquée doit contenir « {name} » (cf. assets/player_scene.json)"
+            );
+        }
+        assert!(
+            scene.imported.len() >= 2,
+            "la scène embarquée doit référencer les deux glb de créatures \
+             (imports trouvés : {})",
+            scene.imported.len()
+        );
+        for m in &scene.imported {
+            assert!(
+                !m.data.vertices.is_empty(),
+                "mesh embarqué « {} » non résolu (clé absente du bundle ?)",
+                m.path
+            );
+            assert!(
+                m.skeleton.is_some(),
+                "mesh embarqué « {} » doit être skinné (créature riggée)",
+                m.path
+            );
+        }
     }
 }

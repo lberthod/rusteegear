@@ -12,6 +12,15 @@ pub enum PhysicsKind {
     None,
     Static,
     Dynamic,
+    /// Corps `kinematic_position_based` pour un objet déplacé **par script Lua**
+    /// (créature qui erre, PNJ en patrouille…) : le script écrit librement
+    /// `obj.x/y/z`, et `Physics::resolve_scripted_moves` fait passer ce déplacement
+    /// par un `KinematicCharacterController` — l'objet glisse le long des murs, des
+    /// objets fixes et du joueur au lieu de les traverser (et le joueur bute sur
+    /// son collider en retour). Distinct de `Static` (qui ne suit pas un objet
+    /// déplacé par script) et de `Dynamic` (dont le solveur écraserait la position
+    /// écrite par le script à chaque pas).
+    Kinematic,
 }
 
 /// Forme du collider en mode Play. `Auto` = déduite du mesh ; sinon forcée.
@@ -81,6 +90,13 @@ const PLAYER_MIN_SLOPE_SLIDE_DEG: f32 = 45.0;
 /// marche/pente à vitesse normale.
 const PLAYER_SNAP_TO_GROUND: f32 = 0.2;
 
+/// Vitesse de descente (m/s) appliquée aux corps kinématiques **scriptés**
+/// (`PhysicsKind::Kinematic`, cf. `Physics::resolve_scripted_moves`) : les
+/// scripts de patrouille ne pilotent que x/z, cette descente constante plaque
+/// l'objet au sol (et le fait retomber d'un rebord) sans intégrer une vraie
+/// chute libre — inutilement complexe pour un PNJ qui marche.
+const SCRIPTED_FALL_SPEED: f32 = 3.0;
+
 /// Distance (m) au-delà de laquelle `Physics::set_position` (Sprint 103c)
 /// considère qu'un déplacement kinématique imposé hors de `move_shape` a pu
 /// invalider l'état « au sol » mis en cache — largement au-dessus de ce
@@ -126,6 +142,11 @@ pub struct Physics {
     /// plutôt que par vitesse/force — gère nativement pentes, marches et snap
     /// au sol, contrairement à l'ancienne heuristique `cur.y.abs() < 1.0`.
     kinematic: Vec<(usize, RigidBodyHandle, KinematicState)>,
+    /// (index d'objet, handle) pour les objets **scriptés** à collisions
+    /// (`PhysicsKind::Kinematic`) : corps `kinematic_position_based` dont le
+    /// déplacement écrit par le script Lua est résolu chaque pas par
+    /// `resolve_scripted_moves` (glisse contre murs/objets fixes/joueur).
+    scripted: Vec<(usize, RigidBodyHandle)>,
     /// Collider → index d'objet, pour **tous** les colliders construits (statiques
     /// inclus, contrairement à `dynamic`/`controlled`/`kinematic` qui ne suivent que
     /// ce qui doit être recopié/piloté chaque frame) — nécessaire pour retrouver
@@ -151,6 +172,7 @@ impl Physics {
         let mut dynamic = Vec::new();
         let mut controlled = Vec::new();
         let mut kinematic = Vec::new();
+        let mut scripted = Vec::new();
         let mut collider_owner = std::collections::HashMap::new();
 
         for (i, obj) in scene.objects.iter().enumerate() {
@@ -170,13 +192,19 @@ impl Physics {
             if matches!(obj.physics, PhysicsKind::None) && !controllable {
                 continue;
             }
-            let is_dynamic = !is_player && (obj.physics == PhysicsKind::Dynamic || controllable);
+            // Objet scripté à collisions (cf. `PhysicsKind::Kinematic`) : corps
+            // kinématique piloté par `resolve_scripted_moves`, sauf s'il est déjà
+            // joueur (le contrôleur joueur prime) ou IA poursuivante (corps
+            // dynamique piloté par vitesse, comme avant).
+            let is_scripted = obj.physics == PhysicsKind::Kinematic && !controllable;
+            let is_dynamic =
+                !is_player && !is_scripted && (obj.physics == PhysicsKind::Dynamic || controllable);
 
             let t = &obj.transform;
             let (axis, angle) = t.rotation.to_axis_angle();
             let rotvec = axis * angle;
 
-            let mut builder = if is_player {
+            let mut builder = if is_player || is_scripted {
                 RigidBodyBuilder::kinematic_position_based()
             } else if is_dynamic {
                 RigidBodyBuilder::dynamic()
@@ -204,21 +232,30 @@ impl Physics {
                 .build();
             let handle = bodies.insert(body);
 
-            // demi-dimensions du collider : AABB local mis à l'échelle
+            // demi-dimensions du collider : AABB local mis à l'échelle. `center` :
+            // les primitives du moteur sont modélisées centrées sur l'origine
+            // (centre ≈ 0, offset sans effet), mais un mesh **importé** ne l'est
+            // presque jamais (un personnage a les pieds à l'origine, son AABB
+            // s'étend vers le haut) — sans cet offset, un collider déduit de
+            // l'AABB (Box/Sphere/Capsule/Auto) serait centré sur les pieds,
+            // à moitié enterré et débordant sous le sol.
             let (lmin, lmax) = scene.local_aabb(obj.mesh);
             let he = (lmax - lmin) * 0.5 * t.scale;
+            let center = (lmin + lmax) * 0.5 * t.scale;
             let cuboid = || {
                 ColliderBuilder::cuboid(
                     he.x.abs().max(0.01),
                     he.y.abs().max(0.01),
                     he.z.abs().max(0.01),
                 )
+                .translation(center)
             };
-            let ball = || ColliderBuilder::ball(he.x.abs().max(he.z.abs()).max(0.01));
+            let ball =
+                || ColliderBuilder::ball(he.x.abs().max(he.z.abs()).max(0.01)).translation(center);
             let capsule = || {
                 let r = he.x.abs().max(he.z.abs()).max(0.01);
                 let half = (he.y.abs() - r).max(0.01);
-                ColliderBuilder::capsule_y(half, r)
+                ColliderBuilder::capsule_y(half, r).translation(center)
             };
             // Vertices bruts du mesh importé, mis à l'échelle de l'objet — même
             // principe que `he` ci-dessus pour les primitives : le collider rapier
@@ -293,6 +330,7 @@ impl Physics {
                     MeshKind::Capsule => capsule(),
                     MeshKind::Cylinder => {
                         ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(0.01))
+                            .translation(center)
                     }
                     _ => cuboid(),
                 },
@@ -337,6 +375,8 @@ impl Physics {
                 ));
             } else if controllable {
                 controlled.push((i, handle));
+            } else if is_scripted {
+                scripted.push((i, handle));
             }
         }
 
@@ -365,6 +405,7 @@ impl Physics {
             dynamic,
             controlled,
             kinematic,
+            scripted,
             collider_owner,
         }
     }
@@ -576,6 +617,74 @@ impl Physics {
         }
 
         do_jump
+    }
+
+    /// Résout les déplacements écrits par les scripts Lua pour les objets
+    /// `PhysicsKind::Kinematic` (cf. `scripted`) — à appeler chaque pas fixe
+    /// **après** la boucle des scripts et **avant** `step`. Le script écrit
+    /// librement `obj.x/y/z` ; ici, le déplacement demandé (position écrite −
+    /// position réelle du corps) passe par un `KinematicCharacterController` :
+    /// l'objet glisse le long des murs, objets fixes et autres corps (joueur
+    /// compris) au lieu de les traverser, et la position **réellement atteinte**
+    /// est réécrite dans la scène (le script du tick suivant repart de là — même
+    /// principe que la vitesse post-collision de `control_kinematic`).
+    ///
+    /// Pas d'`autostep` (contrairement au joueur) : une créature ne doit pas
+    /// « escalader » automatiquement le joueur ou un petit obstacle — elle bute
+    /// et glisse, c'est tout. Une descente constante (`SCRIPTED_FALL_SPEED`)
+    /// plaque l'objet au sol : les scripts de patrouille ne pilotent que x/z, et
+    /// sans elle un objet apparu légèrement au-dessus du sol flotterait pour
+    /// toujours (un corps kinématique ne subit pas la gravité de rapier).
+    pub fn resolve_scripted_moves(&mut self, dt: f32, scene: &mut Scene) {
+        for slot in 0..self.scripted.len() {
+            let (index, handle) = self.scripted[slot];
+            let Some(obj) = scene.objects.get_mut(index) else {
+                continue;
+            };
+            let Some(body) = self.bodies.get(handle) else {
+                continue;
+            };
+            let Some(&collider_handle) = body.colliders().first() else {
+                continue;
+            };
+            let Some(collider) = self.colliders.get(collider_handle) else {
+                continue;
+            };
+            let shape = collider.shape();
+            let cur = body.translation();
+            // Pose du shape : translation réelle du corps, mais rotation écrite
+            // par le script ce tick (`obj.ry`, pas encore commise sur le corps),
+            // composée avec l'offset local du collider (mesh importé non centré).
+            let local = collider.position_wrt_parent().copied().unwrap_or_default();
+            let body_pose = Pose::from_parts(cur, obj.transform.rotation);
+            let shape_pos = body_pose * local;
+
+            let target = obj.transform.position;
+            let mut desired = target - cur;
+            desired.y -= SCRIPTED_FALL_SPEED * dt;
+
+            let filter = QueryFilter::new().exclude_rigid_body(handle);
+            let queries = self.broad.as_query_pipeline(
+                self.narrow.query_dispatcher(),
+                &self.bodies,
+                &self.colliders,
+                filter,
+            );
+            let controller = KinematicCharacterController {
+                slide: true,
+                snap_to_ground: Some(CharacterLength::Relative(PLAYER_SNAP_TO_GROUND)),
+                ..Default::default()
+            };
+            let movement = controller.move_shape(dt, &queries, shape, &shape_pos, desired, |_| {});
+            let resolved = cur + movement.translation;
+
+            obj.transform.position = resolved;
+            let next_rotation = obj.transform.rotation;
+            if let Some(body) = self.bodies.get_mut(handle) {
+                body.set_next_kinematic_translation(resolved);
+                body.set_next_kinematic_rotation(next_rotation);
+            }
+        }
     }
 
     /// Vitesse linéaire (m/s) de l'objet `index` (corps dynamique **ou**
@@ -1228,6 +1337,124 @@ mod tests {
         assert!(
             x < 7.2,
             "le joueur doit être bloqué par le mur de pourtour (x≈7), mais x={x}"
+        );
+    }
+
+    /// Scène « couloir » pour les corps scriptés (`PhysicsKind::Kinematic`) :
+    /// sol, mur fixe à x=+4 (face intérieure à 3.75), joueur pilotable (capsule,
+    /// donc vrai corps kinématique joueur) à x=−4, et un « marcheur » cubique au
+    /// centre dont les tests jouent le rôle du script Lua (écriture directe de
+    /// `transform.position`, exactement ce que fait `obj.x = …` côté Lua).
+    fn scripted_walker_scene(kind: PhysicsKind) -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(Vec3::new(20.0, 1.0, 20.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Mur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(4.0, 1.0, 0.0))
+                .with_scale(Vec3::new(0.5, 2.0, 4.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(-4.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Marcheur".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.5, 0.0)),
+            physics: kind,
+            ..Default::default()
+        });
+        scene
+    }
+
+    /// Preuve de la demande gameplay « les créatures ne doivent pas marcher sur
+    /// le joueur ni traverser murs et objets fixes » : un corps scripté
+    /// (`PhysicsKind::Kinematic`) dont le script force tout droit est bloqué par
+    /// le mur, puis par le joueur — sans grimper ni pousser personne.
+    #[test]
+    fn a_scripted_kinematic_body_cannot_walk_through_walls_or_the_player() {
+        let mut scene = scripted_walker_scene(PhysicsKind::Kinematic);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        let walker = 3;
+        // 10 s plein est, vers le mur (le script demande 2 m/s quoi qu'il arrive).
+        for _ in 0..600 {
+            scene.objects[walker].transform.position.x += 2.0 * dt;
+            phys.resolve_scripted_moves(dt, &mut scene);
+            phys.step(dt, &mut scene);
+        }
+        let p = scene.objects[walker].transform.position;
+        assert!(
+            p.x > 2.0,
+            "le marcheur doit avoir avancé librement (x={})",
+            p.x
+        );
+        assert!(
+            p.x < 3.3,
+            "…mais être bloqué par le mur (face intérieure à 3.75, demi-cube 0.5, \
+             arrêt attendu ≈ 3.25) : x={}",
+            p.x
+        );
+        assert!(p.y < 1.0, "…sans grimper sur le mur (y={})", p.y);
+
+        // 15 s plein ouest, vers le joueur (capsule en x=−4, rayon 0.5).
+        for _ in 0..900 {
+            scene.objects[walker].transform.position.x -= 2.0 * dt;
+            phys.resolve_scripted_moves(dt, &mut scene);
+            phys.step(dt, &mut scene);
+        }
+        let p = scene.objects[walker].transform.position;
+        let joueur = scene.objects[2].transform.position;
+        assert!(
+            p.x - joueur.x > 0.6,
+            "le marcheur doit buter sur le joueur, pas le pénétrer (demi-cube 0.5 \
+             + rayon de la capsule : l'écart doit dépasser largement le demi-cube \
+             seul) — marcheur x={}, joueur x={}",
+            p.x,
+            joueur.x
+        );
+        assert!(p.y < 1.0, "…sans marcher sur le joueur (y={})", p.y);
+        assert!(
+            (joueur.x + 4.0).abs() < 0.3,
+            "un corps kinématique ne doit pas pousser le joueur (x={})",
+            joueur.x
+        );
+    }
+
+    /// Contre-épreuve : le même marcheur **sans** corps physique (`None`, l'état
+    /// des créatures avant `PhysicsKind::Kinematic`) traverse le mur comme si de
+    /// rien n'était — c'est bien le nouveau variant qui apporte le blocage.
+    #[test]
+    fn without_kinematic_physics_the_same_scripted_walker_passes_through_the_wall() {
+        let mut scene = scripted_walker_scene(PhysicsKind::None);
+        let mut phys = Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        let walker = 3;
+        for _ in 0..600 {
+            scene.objects[walker].transform.position.x += 2.0 * dt;
+            phys.resolve_scripted_moves(dt, &mut scene);
+            phys.step(dt, &mut scene);
+        }
+        let x = scene.objects[walker].transform.position.x;
+        assert!(
+            x > 5.0,
+            "sans corps physique, rien ne devrait bloquer le marcheur (x={x})"
         );
     }
 

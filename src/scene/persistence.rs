@@ -46,6 +46,7 @@ impl Scene {
                 physics: match o.physics.as_str() {
                     "static" => PhysicsKind::Static,
                     "dynamic" => PhysicsKind::Dynamic,
+                    "kinematic" => PhysicsKind::Kinematic,
                     _ => PhysicsKind::None,
                 },
                 collider_shape: crate::runtime::physics::ColliderShape::Auto,

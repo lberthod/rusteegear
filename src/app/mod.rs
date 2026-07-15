@@ -18,6 +18,11 @@ mod persistence;
 mod picking;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scripting;
+// Backend Lua du player web (Sprint 137) : symétrique de `scripting` (mlua, natif),
+// sur `rilua` (pur Rust, compile aussi nativement — `cfg(test)` en plus de wasm32
+// permet les tests différentiels contre `mlua`, cf. `scripting_web::tests`).
+#[cfg(any(target_arch = "wasm32", test))]
+mod scripting_web;
 mod selection;
 pub mod settings;
 mod simulation;
@@ -498,6 +503,13 @@ pub struct AppState {
     /// le même script à chaque frame).
     #[cfg(not(target_arch = "wasm32"))]
     script_cache: HashMap<u64, mlua::Function>,
+    /// Backend Lua du player web (Sprint 137) — symétrique de `lua`/`script_cache`
+    /// ci-dessus, sur `rilua` au lieu de `mlua` (cf. `scripting_web`). Pas de
+    /// breakpoints ici : fonctionnalité éditeur, absente du player web.
+    #[cfg(target_arch = "wasm32")]
+    lua_web: rilua::Lua,
+    #[cfg(target_arch = "wasm32")]
+    script_cache_web: HashMap<u64, rilua::Function>,
     time: f32,
 
     // --- runtime Play ---
@@ -624,6 +636,15 @@ impl AppState {
         if let Err(e) = lua_breakpoints.install(&lua) {
             log::warn!("Breakpoints Lua indisponibles : {e}");
         }
+        #[cfg(target_arch = "wasm32")]
+        let lua_web = rilua::Lua::new().unwrap_or_else(|e| {
+            // Jamais observé en pratique (`Lua::new()` échoue seulement si l'allocation
+            // initiale du GC échoue) — `expect`-like mais loggé plutôt qu'une panique
+            // muette, un état `Lua` par défaut minimal reste préférable à planter tout
+            // le player web pour ça.
+            log::error!("Initialisation rilua impossible : {e}");
+            rilua::Lua::new_empty()
+        });
         AppState {
             scene: Scene::demo(),
             selection: None,
@@ -737,6 +758,10 @@ impl AppState {
             lua_breakpoints,
             #[cfg(not(target_arch = "wasm32"))]
             script_cache: HashMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            lua_web,
+            #[cfg(target_arch = "wasm32")]
+            script_cache_web: HashMap::new(),
             time: 0.0,
             was_playing: false,
             play_snapshot: Vec::new(),

@@ -29,8 +29,15 @@ dans `~/.motor3derust/presets/` — pratique pour « Démo », « Interne », «
 | **macOS** (.dmg) | `cargo-bundle` | `cargo install cargo-bundle` |
 | **Android** (.apk) | `cargo-apk` + NDK + cible Rust | `cargo install cargo-apk` · NDK via Android Studio · `rustup target add aarch64-linux-android` |
 | **iOS** (.ipa) | Xcode + `xcodegen` + cible Rust + identité de signature | `brew install xcodegen` · `rustup target add aarch64-apple-ios` · certificat « Apple Development » dans le trousseau |
+| **Web** (.zip) | cible wasm32 + `wasm-bindgen-cli` (version exacte du lockfile, vérifiée par le panneau) | `rustup target add wasm32-unknown-unknown` · `cargo install wasm-bindgen-cli --version <version du Cargo.lock>` |
 
 Le panneau affiche **✓ prêt** ou **⚠ + ce qui manque** par cible (détecté au lancement).
+
+> **Web** : produit `target/export/<nom>-web.zip` (index.html + wasm/JS, scène et
+> assets embarqués) — décompresser et servir en HTTP statique (ex. `python3 -m
+> http.server`), ouvrir dans Chrome (WebGPU). Scripts Lua et meshes à animation
+> squelettale fonctionnels depuis le Sprint 137. Limite actuelle du player web
+> (ROADMAP_SPRINTS.md, Sprints 114-116) : musique en flux absente.
 
 ## Installation sur appareil
 

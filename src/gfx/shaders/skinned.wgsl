@@ -16,12 +16,16 @@ struct Model {
     params: vec4<f32>, // x = surbrillance, yzw = metallic/roughness/emissive
     color: vec4<f32>,
 };
+// Groupe 1 dédié au pipeline skinné (Sprint 136) : `models` + palette de joints
+// fusionnés dans le même bind group, pour tenir dans la limite WebGPU de 4 bind
+// groups par pipeline (le pipeline non skinné, qui n'a pas de joints, garde son
+// propre `model_layout` à 4 groupes inchangé — cf. `pipelines.rs::skinned_model_layout`).
 @group(1) @binding(0) var<storage, read> models: array<Model>;
 
 // Palette de matrices de joints (Sprint 86) : `monde_du_joint * inverse_bind`, déjà
 // composées côté CPU (`scene::import::compute_joint_matrices`) — le shader n'a plus qu'à
 // mélanger selon les poids, jamais à composer de hiérarchie lui-même.
-@group(4) @binding(0) var<storage, read> joint_matrices: array<mat4x4<f32>>;
+@group(1) @binding(1) var<storage, read> joint_matrices: array<mat4x4<f32>>;
 
 struct VsIn {
     @builtin(instance_index) instance: u32,

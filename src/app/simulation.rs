@@ -9,7 +9,11 @@ use crate::time_compat::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::scripting;
+#[cfg(target_arch = "wasm32")]
+use super::scripting_web;
 use super::{AppState, multiplayer};
+#[cfg(target_arch = "wasm32")]
+use rilua::LuaApiMut;
 
 /// Angle de plongée (radians) de la caméra de suivi par défaut : resserré derrière
 /// l'épaule du personnage plutôt que le recul plus « isométrique » d'avant (~35°,
@@ -634,13 +638,60 @@ impl AppState {
             if obj.script.trim().is_empty() {
                 continue;
             }
-            // Scripting Lua indisponible sur wasm32 (`mlua`/`lua-src` ne ciblent pas
-            // `wasm32-unknown-unknown`, cf. Cargo.toml et Sprint 114) : un objet
-            // scripté reste inerte sur le web plutôt que de faire échouer la
-            // compilation — le reste de la boucle (tap, collectibles, physique) est
-            // inchangé au-dessus de ce bloc.
+            // `mlua`/`lua-src` ne ciblent pas `wasm32-unknown-unknown` (cf. Cargo.toml,
+            // Sprint 114) : sur le web, les scripts tournent sur `scripting_web`
+            // (backend `rilua`, Sprint 137) — même contrat que `scripting::run_script`
+            // ci-dessous, cf. sa doc pour ce qui diffère en interne.
             #[cfg(target_arch = "wasm32")]
-            continue;
+            {
+                let key = scripting_web::script_key(&obj.script);
+                let func = match self.script_cache_web.get(&key) {
+                    Some(f) => *f,
+                    None => match self.lua_web.load(&obj.script) {
+                        Ok(f) => {
+                            self.script_cache_web.insert(key, f);
+                            f
+                        }
+                        Err(e) => {
+                            log::error!("Compilation du script '{}' : {e}", obj.name);
+                            continue;
+                        }
+                    },
+                };
+                let tapped = self.tapped_obj == Some(idx);
+                let mut destroy_requested = false;
+                let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
+                if let Err(e) = scripting_web::run_script_web(
+                    &mut self.lua_web,
+                    &func,
+                    &mut obj.transform,
+                    &mut obj.color,
+                    &mut obj.animation,
+                    dt,
+                    time,
+                    &self.input_state,
+                    tapped,
+                    triggered.contains(&idx),
+                    &events_in,
+                    &mut events_out,
+                    &tagged,
+                    &mut spawns_this_obj,
+                    &mut destroy_requested,
+                    &mut self.lua_vars,
+                    &mut vibrations,
+                    &mut health,
+                    &mut self.debug_lines,
+                    exited.contains(&idx),
+                    self.physics.as_ref(),
+                    &mut reverb_requests,
+                ) {
+                    log::error!("Script '{}' : {e}", obj.name);
+                }
+                if destroy_requested {
+                    obj.visible = false;
+                }
+                spawn_requests.extend(spawns_this_obj);
+            }
             #[cfg(not(target_arch = "wasm32"))]
             {
                 // Récupère (ou compile une seule fois) le chunk associé à cette source.
@@ -975,6 +1026,11 @@ impl AppState {
                 *remaining -= dt;
                 *remaining > 0.0
             });
+            // Objets scriptés à collisions (`PhysicsKind::Kinematic`) : le
+            // déplacement que leurs scripts viennent d'écrire (boucle 1. plus
+            // haut) est résolu contre le monde (murs, objets fixes, joueur) —
+            // la position réellement atteinte est réécrite dans la scène.
+            phys.resolve_scripted_moves(dt, &mut self.scene);
             phys.step(dt, &mut self.scene);
             // Cf. la note plus haut : appliqué après `step` pour ne jamais passer par
             // le corps rigide, qui écraserait sinon (et déstabiliserait) cette valeur.
@@ -1394,6 +1450,227 @@ mod tests {
         app.scene.objects.push(SceneObject::default());
         app.sim_step(0.1);
         assert!(app.scene.objects[0].animation.is_none());
+    }
+
+    /// Preuve jouable : la « créature » (assets/models/creature.glb, rig
+    /// Root/Body/Head/LegL/LegR exporté depuis Blender via le connecteur MCP, clips
+    /// `Idle`/`Walk`) se déplace réellement via un script Lua de wander, pas seulement
+    /// en apparence (animation qui tourne sans que `transform.position` bouge). Le
+    /// script alterne 3s de marche (`obj.anim = "Walk"`, position qui dérive en cercle)
+    /// puis 1s d'arrêt (`obj.anim = "Idle"`, position figée) — mêmes mécanismes que
+    /// `AiChaser`/`Combat` (Lua pilote `obj.x/z` et `obj.anim`, lus par `run_script` en
+    /// fin d'appel), mais en patrouille scriptée plutôt qu'en poursuite du joueur (cf.
+    /// la doc de `AiChaser` sur cette distinction).
+    #[test]
+    fn scripted_creature_wanders_then_idles_using_the_imported_walk_and_idle_clips() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature.glb");
+        let (data, aabb_min, aabb_max) =
+            crate::scene::import::load_gltf(path).expect("creature.glb doit être un glTF valide");
+        let mut imported = crate::scene::ImportedMesh {
+            path: path.to_string(),
+            data,
+            aabb_min,
+            aabb_max,
+            ..Default::default()
+        };
+        imported.load_skinning();
+        assert!(
+            imported.skeleton.is_some(),
+            "creature.glb doit être skinné (rig Blender exporté avec Export Skins)"
+        );
+        let clip_names: Vec<&str> = imported.clips.iter().map(|c| c.name.as_str()).collect();
+        assert!(clip_names.contains(&"Idle") && clip_names.contains(&"Walk"));
+
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.imported.clear();
+        app.scene.imported.push(imported);
+        app.scene.objects.push(SceneObject {
+            mesh: crate::scene::MeshKind::Imported(0),
+            animation: Some(crate::scene::AnimationState {
+                clip: "Idle".into(),
+                ..Default::default()
+            }),
+            script: r#"
+                local t = time % 4.0
+                if t < 3.0 then
+                    obj.x = obj.x + math.sin(time * 1.5) * 0.6 * dt
+                    obj.z = obj.z + math.cos(time * 1.5) * 0.6 * dt
+                    obj.anim = "Walk"
+                else
+                    obj.anim = "Idle"
+                end
+            "#
+            .into(),
+            ..Default::default()
+        });
+
+        let dt = 1.0 / 60.0;
+        for _ in 0..(3 * 60) {
+            app.sim_step(dt);
+        }
+        let after_walk = app.scene.objects[0].transform.position;
+        assert!(
+            after_walk.distance(Vec3::ZERO) > 0.1,
+            "après 3s de phase Walk, la créature doit s'être déplacée (position={after_walk:?})"
+        );
+        assert_eq!(
+            app.scene.objects[0].animation.as_ref().unwrap().clip,
+            "Walk"
+        );
+
+        for _ in 0..60 {
+            app.sim_step(dt);
+        }
+        let after_idle = app.scene.objects[0].transform.position;
+        assert!(
+            (after_idle - after_walk).length() < 1e-5,
+            "en phase Idle la position ne doit plus bouger : avant={after_walk:?}, après={after_idle:?}"
+        );
+        assert_eq!(
+            app.scene.objects[0].animation.as_ref().unwrap().clip,
+            "Idle"
+        );
+    }
+
+    /// Preuve jouable, avec la **vraie** physique (raycasts réels contre les murs) :
+    /// la créature de `Scene::mmorpg_demo` ne doit jamais rester collée contre un mur
+    /// à jouer son animation « Walk » sans avancer. Bug observé en jeu (corrigé après
+    /// cette preuve) : le déclenchement du virage anticipé (`near_edge`) et le clamp
+    /// dur de fin de script comparaient tous deux `obj.x`/`obj.z` à la même borne
+    /// (`BOUND`) — sans marge, un rayon manquant un mur en approche tangente laissait
+    /// la créature dériver jusqu'au clamp, s'y faire plaquer chaque frame (jamais
+    /// `> BOUND` une fois clampée, donc `near_edge` restait faux), et y rester bloquée
+    /// en boucle d'animation. Ce test fait tourner ~30 s simulées du vrai script de
+    /// production (`Scene::mmorpg_demo`, pas une version simplifiée) contre le vrai
+    /// monde physique (`Physics::build`, murs/repères inclus) et échoue si la
+    /// créature passe plus d'1 s d'affilée collée à moins de 20 cm d'une borne
+    /// d'arène sans progresser.
+    #[test]
+    fn mmorpg_creature_never_gets_stuck_walking_into_a_wall() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        let idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Créature")
+            .expect(
+                "la démo MMORPG doit contenir une « Créature » (creature.glb chargé, \
+                 cf. Scene::mmorpg_demo)",
+            );
+        for (name, glb) in [
+            ("Créature 2", "creature2.glb"),
+            ("Créature 3", "creature3.glb"),
+            ("Créature 4", "creature4.glb"),
+            ("Créature 5", "creature5.glb"),
+        ] {
+            assert!(
+                app.scene.objects.iter().any(|o| o.name == name),
+                "la démo MMORPG doit aussi contenir la « {name} » ({glb}, généré \
+                 sous Blender — cf. Scene::mmorpg_demo)"
+            );
+        }
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        // Bornes réelles de l'arène (`half = 12.0` dans `Scene::mmorpg_demo`) moins une
+        // petite marge : au-delà, la créature est effectivement pressée contre un mur.
+        let arena_limit = 12.0 - 0.6;
+        let dt = 1.0 / 60.0;
+        let mut pinned_frames = 0u32;
+        let max_pinned_frames = 60; // 1 s d'affilée collée à un bord = bug
+        let mut prev_yaw: Option<f32> = None;
+        let mut prev_pos = app.scene.objects[idx].transform.position;
+        let mut idle_frames = 0u32;
+
+        for step in 0..(30 * 60) {
+            app.sim_step(dt);
+            let obj = &app.scene.objects[idx];
+            let pos = obj.transform.position;
+            assert!(
+                pos.x.abs() <= arena_limit + 0.05 && pos.z.abs() <= arena_limit + 0.05,
+                "step {step} : la créature est sortie de l'arène (position={pos:?})"
+            );
+            let pinned = pos.x.abs() > arena_limit - 0.2 || pos.z.abs() > arena_limit - 0.2;
+            pinned_frames = if pinned { pinned_frames + 1 } else { 0 };
+            assert!(
+                pinned_frames <= max_pinned_frames,
+                "step {step} : la créature semble bloquée contre un mur \
+                 ({pinned_frames} frames d'affilée près d'un bord, position={pos:?})"
+            );
+
+            // Pas de pivot brusque d'une frame à l'autre : cf. la doc de
+            // `creature_wander_script` (3ᵉ version) — un virage-cible instantané
+            // donnait des demi-tours visibles d'une frame à l'autre.
+            let (_, yaw, _) = obj.transform.rotation.to_euler(glam::EulerRot::XYZ);
+            if let Some(prev) = prev_yaw {
+                let mut delta = (yaw - prev).to_degrees();
+                delta = ((delta + 180.0).rem_euclid(360.0)) - 180.0;
+                assert!(
+                    delta.abs() < 20.0,
+                    "step {step} : virage brusque d'une frame à l'autre ({delta:.1}°) — \
+                     devrait tourner progressivement, jamais faire un demi-tour instantané"
+                );
+            }
+            prev_yaw = Some(yaw);
+
+            if (pos - prev_pos).length() < 1e-4 {
+                idle_frames += 1;
+            }
+            prev_pos = pos;
+        }
+
+        // Ne doit pas passer un temps disproportionné à l'arrêt (l'ancienne version
+        // s'arrêtait 1 s sur 4 sur un minuteur fixe, plus l'arrêt en cours de virage) :
+        // une patrouille naturelle marche la grande majorité du temps.
+        let idle_ratio = idle_frames as f32 / (30.0 * 60.0);
+        assert!(
+            idle_ratio < 0.15,
+            "la créature est restée immobile {:.0}% du temps (attendu < 15%) — \
+             trop d'arrêts pour une patrouille censée avancer en continu",
+            idle_ratio * 100.0
+        );
+    }
+
+    /// Preuve (bug observé en jeu sur la créature MMORPG : « les bras et la tête
+    /// partent en couille dès qu'elle tourne », silhouette dédoublée) : un script qui
+    /// ne réécrit que `obj.ry` doit produire un cap **stable** d'un tick à l'autre,
+    /// y compris au-delà de ±90°. Avant le correctif (`scripting::
+    /// canonical_euler_xyz`), `to_euler(XYZ)` représentait un yaw de -117° comme
+    /// (rx=180°, ry=-63°, rz=180°) ; le script écrasait `ry` seul et la
+    /// recomposition gardait les flips ±180° de rx/rz → la rotation alternait entre
+    /// -117° et -63° un tick sur deux (écart 2×(117−90) = 54°, jusqu'à 180° plein
+    /// sud) — invisible en marche vers le « nord » (|cap| < 90°, aucun flip), d'où
+    /// le symptôme « en ligne droite ça va, dès qu'il tourne ça casse ».
+    #[test]
+    fn script_rewriting_only_ry_keeps_a_stable_heading_beyond_90_degrees() {
+        for target in [-179.0f32, -117.0, -95.0, 95.0, 150.0, 179.0] {
+            let mut app = AppState::new();
+            app.scene.objects.clear();
+            app.scene.objects.push(SceneObject {
+                script: format!("obj.ry = {target}"),
+                ..Default::default()
+            });
+            let dt = 1.0 / 60.0;
+            for tick in 0..6 {
+                app.sim_step(dt);
+                // Yaw lu en YXZ (yaw en premier : plage complète ±180°, pas de
+                // représentation à flips comme le XYZ contraint à ±90° au milieu).
+                let (yaw, _, _) = app.scene.objects[0]
+                    .transform
+                    .rotation
+                    .to_euler(glam::EulerRot::YXZ);
+                let mut diff = yaw.to_degrees() - target;
+                diff = ((diff + 180.0).rem_euclid(360.0)) - 180.0;
+                assert!(
+                    diff.abs() < 0.01,
+                    "tick {tick} : cap affiché {:.2}° pour obj.ry = {target}° — \
+                     le cap doit rester exactement celui écrit par le script, \
+                     sans alternance d'un tick à l'autre",
+                    yaw.to_degrees()
+                );
+            }
+        }
     }
 
     /// Sprint 111 (hot-reload) : `script_cache` est clé par hash du **contenu** du

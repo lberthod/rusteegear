@@ -26,6 +26,7 @@ fn object_badges(obj: &crate::scene::SceneObject) -> String {
     match obj.physics {
         PhysicsKind::Static => b.push_str(" 🧱"),
         PhysicsKind::Dynamic => b.push_str(" ⚙"),
+        PhysicsKind::Kinematic => b.push_str(" 🚶"),
         PhysicsKind::None => {}
     }
     if !obj.script.trim().is_empty() {

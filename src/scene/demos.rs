@@ -5,11 +5,205 @@
 use glam::Vec3;
 
 use super::{
-    AiChaser, AudioSource, Combat, Controller, GameCamera, HudAnchor, HudBinding, HudLayout,
-    HudWidget, HudWidgetKind, Light, MeshKind, MobileControls, PointLight, Scene, SceneObject, Sky,
-    TapAction, Transform, WEAPONS, WeaponPickup, demo_obj,
+    AiChaser, AnimationState, AudioSource, Combat, Controller, GameCamera, HudAnchor, HudBinding,
+    HudLayout, HudWidget, HudWidgetKind, ImportedMesh, Light, MeshKind, MobileControls, PointLight,
+    Scene, SceneObject, Sky, TapAction, Transform, WEAPONS, WeaponPickup, demo_obj,
 };
 use crate::runtime::physics::PhysicsKind;
+
+/// Script Lua de la « créature » qui erre dans la démo MMORPG (cf.
+/// `assets/models/creature.glb` — rig Root/Body/Head/ArmL/HandL/ArmR/HandR/LegL/LegR
+/// et clips `Idle`/`Walk` exportés depuis Blender via le connecteur MCP) : patrouille
+/// scriptée à évitement d'obstacles par raycast, pas une poursuite du joueur — voir
+/// la doc de `AiChaser` sur cette distinction.
+///
+/// **6ᵉ version, sondes espacées dans le temps** — corrige un ralentissement
+/// perceptible en jeu pendant les virages (fluide en marche tout droit) : les 3
+/// rayons étaient relancés à **chaque frame en continu**, alors que
+/// `Physics::raycast`/`query_broad_phase` (`runtime::physics.rs`) reconstruisent
+/// toute la broad-phase à chaque appel — leur propre doc prévient explicitement que
+/// c'est « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et
+/// par pixel ». 3 appels/frame en continu est exactement l'usage déconseillé ; le
+/// coût passait inaperçu en ligne droite (les rayons touchent rarement quelque
+/// chose de proche) mais devenait visible en virage, précisément quand ils butent
+/// souvent sur un obstacle (table de résultat allouée côté Lua à chaque `hit`). Les
+/// rayons ne se rafraîchissent plus qu'1 frame sur `PROBE_EVERY` (~15 Hz) ; le
+/// virage reste fluide entre deux relevés grâce au lissage déjà en place
+/// (`smooth_turn`, constante de temps ~0,33 s — bien plus lente que les ~67 ms entre
+/// deux relevés à 15 Hz).
+///
+/// **5ᵉ version, vitesse binaire mais virage lissé** — la 4ᵉ version avait aussi
+/// lissé exponentiellement la vitesse d'avance (`speed_mul`, 0→1 progressif à
+/// l'arrêt/départ, même formule que le virage), en plus du virage — introduisant un
+/// nouveau défaut observé en jeu, plus subtil que les précédents : le clip `Walk`
+/// se lit à vitesse de lecture **fixe** (le script Lua n'a de prise que sur *quel*
+/// clip joue, `obj.anim`, jamais sur `AnimationState.speed` — cf.
+/// `app::scripting::run_script`, seul `obj.anim` est relu en sortie), donc une
+/// avance à vitesse *progressive* (rampe sur ~0,33 s) désynchronisait le cycle des
+/// pattes de la vitesse réelle au sol pendant toute la rampe — glissement des pieds
+/// (« certains mouvements » avaient un souci, précisément les phases d'accélération/
+/// décélération). Le virage n'a pas cette contrainte (aucune « animation de virage »
+/// séparée à synchroniser), donc reste lissé ; l'avance redevient **binaire**
+/// (`moving`, plein régime ou arrêt net) — un défaut évité à la source plutôt que
+/// masqué, en attendant une éventuelle exposition de `AnimationState.speed` à Lua.
+///
+/// **Virage lissé exponentiellement** (`smooth_turn`, `1 - e^(-SMOOTH·dt)`, même
+/// idiome que la caméra qui suit le joueur, cf. `AppState::sim_step`,
+/// framerate-indépendant) vers sa valeur « brute » calculée depuis les 3 rayons —
+/// hérité de la 4ᵉ version, toujours nécessaire : sans lissage, un rayon qui perd/
+/// regagne sa cible d'une frame à l'autre (bord d'un obstacle, coin d'un mur) fait
+/// dévier le cap d'un coup (3ᵉ version, « trop de mouvement », « ça bug »).
+///
+/// **Hystérésis sur l'arrêt/reprise** (`stop_now`, deux seuils distincts 0.5 m/0.9 m
+/// plutôt qu'un seul) : avec un seuil unique, une distance qui oscille juste autour
+/// de lui (bord d'obstacle, encore) faisait basculer `obj.anim` entre `"Walk"` et
+/// `"Idle"` à chaque frame — chaque bascule relance un fondu enchaîné
+/// (`AnimationState::set_clip`, cf. sa doc : ne redémarre que si le clip demandé
+/// *diffère* du courant), donc un flip-flop redémarrait le fondu en boucle,
+/// perceptible comme un bégaiement de l'animation. Un seuil pour s'arrêter, un
+/// seuil plus large pour repartir : il faut un dégagement net, pas juste franchir
+/// à nouveau la même ligne. `was_stopped` (état précédent) est persisté séparément
+/// (`creature_stopped`) pour que cette hystérésis fonctionne : sans mémoire d'un
+/// tick à l'autre, impossible de savoir quel seuil appliquer.
+///
+/// Reste inchangé depuis la 3ᵉ version : virage proportionnel aux 3 rayons
+/// (`probe_dist`, devant ±`PROBE_ANGLE`), léger bruit de méandre, virage anticipé
+/// vers le centre de l'arène en approche de bord (`SOFT_BOUND`, `math.atan` à deux
+/// arguments — Lua 5.4 le supporte, vérifié), et garde-fou de bornes dur en toute
+/// fin de script (`BOUND`, injecté depuis `half` pour ne pas diverger d'un futur
+/// changement de taille d'arène).
+///
+/// État persistant (`save.get`/`save.set` — `{prefix}heading`, `{prefix}turn`,
+/// `{prefix}stopped`) : la trajectoire, le lissage du virage et l'hystérésis
+/// dépendent tous de l'historique, pas seulement de l'instant présent. `save` est un
+/// espace **partagé entre tous les scripts** (pas par objet, cf. sa doc dans
+/// `app::scripting::run_script`) : `prefix` isole les clés de chaque créature —
+/// depuis la créature n°2 (renardeau, `creature2.glb`), deux instances de ce script
+/// coexistent dans la même scène et se marcheraient dessus sans ce préfixe.
+///
+/// `ray_mask` : masque de couche passé aux `raycast` des sondes. Depuis que les
+/// créatures ont un corps physique (`PhysicsKind::Kinematic`), leurs rayons
+/// partent de **l'intérieur de leur propre collider** — sans un masque qui exclut
+/// leur propre couche (`collision_layer`), chaque sonde toucherait la créature
+/// elle-même à distance 0 et elle se croirait bloquée en permanence.
+///
+/// Preuve du mouvement réel (pas juste l'animation qui tourne) :
+/// `scripted_creature_wanders_then_idles_using_the_imported_walk_and_idle_clips`.
+/// Preuve de non-blocage contre un mur + absence de virage brusque, avec la vraie
+/// physique : `mmorpg_creature_never_gets_stuck_walking_into_a_wall`
+/// (`app::simulation::tests`). Preuve des collisions (mur/joueur infranchissables) :
+/// `runtime::physics::tests::a_scripted_kinematic_body_cannot_walk_through_walls_or_the_player`.
+fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> String {
+    let bound = arena_half - 1.0;
+    format!(
+        r#"
+    local SPEED = 1.3
+    local TURN_RATE = 70.0
+    local RAY_DIST = 3.5
+    local PROBE_ANGLE = 30.0
+    local BOUND = {bound}
+    local SOFT_BOUND = BOUND - 3.0
+    local SMOOTH = 3.0
+
+    local PROBE_EVERY = 4
+
+    local heading = save.get("{prefix}heading") or 0.0
+    local smooth_turn = save.get("{prefix}turn") or 0.0
+    local was_stopped = (save.get("{prefix}stopped") or 1.0) > 0.5
+
+    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas
+    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque
+    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —
+    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par
+    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait
+    -- un ralentissement perceptible pendant les virages (justement quand les rayons
+    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la
+    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus
+    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que
+    -- de quelques centimètres dans cet intervalle.
+    local tick = (save.get("{prefix}probe_tick") or 0) + 1
+    local center_d = save.get("{prefix}center_d")
+    local left_d = save.get("{prefix}left_d")
+    local right_d = save.get("{prefix}right_d")
+    if tick >= PROBE_EVERY or center_d == nil then
+        tick = 0
+        local function probe_dist(deg)
+            local rad = math.rad(heading + deg)
+            local dx, dz = math.sin(rad), math.cos(rad)
+            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, {ray_mask})
+            if hit then
+                return hit.dist
+            end
+            return RAY_DIST
+        end
+        center_d = probe_dist(0)
+        left_d = probe_dist(-PROBE_ANGLE)
+        right_d = probe_dist(PROBE_ANGLE)
+        save.set("{prefix}center_d", center_d)
+        save.set("{prefix}left_d", left_d)
+        save.set("{prefix}right_d", right_d)
+    end
+    save.set("{prefix}probe_tick", tick)
+
+    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),
+    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.
+    local raw_turn = (right_d - left_d) / RAY_DIST
+    if center_d < RAY_DIST * 0.85 then
+        local side = (right_d >= left_d) and 1.0 or -1.0
+        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5
+    end
+    raw_turn = raw_turn + math.sin(time * 0.35) * 0.15
+
+    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then
+        local to_center = math.deg(math.atan(-obj.x, -obj.z))
+        local diff = ((to_center - heading + 180) % 360) - 180
+        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5
+    end
+    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))
+
+    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur
+    -- appliquée suit `raw_turn` progressivement, pas instantanément.
+    local smoothing = 1.0 - math.exp(-SMOOTH * dt)
+    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing
+    heading = heading + smooth_turn * TURN_RATE * dt
+
+    local rad = math.rad(heading)
+    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)
+
+    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise
+    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au
+    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :
+    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur
+    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse
+    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —
+    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le
+    -- problème à la source plutôt que de le masquer.
+    local stop_now
+    if was_stopped then
+        stop_now = center_d < 0.9
+    else
+        stop_now = center_d < 0.5
+    end
+    local moving = not stop_now
+
+    if moving then
+        obj.x = obj.x + fwd_x * SPEED * dt
+        obj.z = obj.z + fwd_z * SPEED * dt
+    end
+    obj.anim = moving and "Walk" or "Idle"
+
+    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais
+    -- sortir de l'arène.
+    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
+    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+
+    obj.ry = heading
+    save.set("{prefix}heading", heading)
+    save.set("{prefix}turn", smooth_turn)
+    save.set("{prefix}stopped", stop_now and 1.0 or 0.0)
+"#
+    )
+}
 
 impl Scene {
     /// Démo « contrôleur » **sans script** (niveau 1) : joueur pilotable au joystick,
@@ -1167,8 +1361,207 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         vent.color = [0.25, 0.75, 0.85];
         objects.push(vent);
 
+        // Créature qui erre (glb rigué/animé, cf. la doc de `creature_wander_script`) :
+        // seule différence avec les repères ci-dessus, un mesh importé skinné plutôt
+        // qu'une primitive — chemin disque du dépôt (pas `bundle://`) car cette démo
+        // tourne depuis les sources, jamais depuis un export packagé.
+        let mut imported = Vec::new();
+        let creature_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature.glb");
+        match crate::scene::import::load_gltf(creature_path) {
+            Ok((data, aabb_min, aabb_max)) => {
+                let mut mesh = ImportedMesh {
+                    path: creature_path.to_string(),
+                    data,
+                    aabb_min,
+                    aabb_max,
+                    ..Default::default()
+                };
+                mesh.load_skinning();
+                // Position de spawn à bonne distance des murs/repères (cf.
+                // `creature_wander_script` — RAY_DIST 3 m devant elle doit démarrer
+                // dégagé). Échelle 0.35 : le mesh brut mesure ~2.85 m de haut (bbox
+                // locale non affectée par l'échelle Blender de l'objet, ignorée par
+                // `import::load_gltf` qui ne lit que les sommets des primitives, pas
+                // la hiérarchie de nœuds) — beaucoup trop grand à côté du joueur
+                // (capsule d'1 m) sans ce facteur.
+                let mut creature =
+                    demo_obj("Créature", MeshKind::Imported(0), Vec3::new(0.0, 0.0, -3.0));
+                creature.transform = creature.transform.with_scale(Vec3::splat(0.35));
+                creature.animation = Some(AnimationState {
+                    clip: "Idle".into(),
+                    ..Default::default()
+                });
+                // Corps physique (cf. `PhysicsKind::Kinematic`) : la créature ne
+                // traverse plus le joueur ni les murs/objets fixes — le script
+                // écrit sa position, `Physics::resolve_scripted_moves` la résout.
+                // Couche dédiée (bit 1) : ses sondes raycast l'excluent (cf.
+                // `creature_wander_script`), tout le reste (couche par défaut =
+                // tous bits) la voit et la bloque normalement.
+                creature.physics = PhysicsKind::Kinematic;
+                creature.collision_layer = 1 << 1;
+                creature.script = creature_wander_script(half, "creature_", !(1_u32 << 1));
+                objects.push(creature);
+                imported.push(mesh);
+            }
+            Err(e) => log::error!("Créature MMORPG (assets/models/creature.glb) : {e}"),
+        }
+
+        // Créature n°2 (Sprint MMORPG, deuxième style) : quadrupède roux façon
+        // renardeau (`creature2.glb`, généré sous Blender comme le n°1 — rig
+        // Root/Body/Head/Tail/LegFL/LegFR/LegBL/LegBR, clips `Idle`/`Walk`).
+        // Même script de patrouille, mais clés `save` préfixées (l'espace `save`
+        // est partagé entre scripts) et couche de collision distincte (bit 2)
+        // pour que chaque créature ignore son propre collider dans ses sondes
+        // tout en voyant l'autre.
+        let creature2_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature2.glb");
+        match crate::scene::import::load_gltf(creature2_path) {
+            Ok((data, aabb_min, aabb_max)) => {
+                let mut mesh = ImportedMesh {
+                    path: creature2_path.to_string(),
+                    data,
+                    aabb_min,
+                    aabb_max,
+                    ..Default::default()
+                };
+                mesh.load_skinning();
+                let mesh_index = imported.len() as u32;
+                // Spawn à l'opposé du n°1, lui aussi dégagé des murs/repères.
+                let mut creature2 = demo_obj(
+                    "Créature 2",
+                    MeshKind::Imported(mesh_index),
+                    Vec3::new(3.0, 0.0, 3.0),
+                );
+                creature2.transform = creature2.transform.with_scale(Vec3::splat(0.35));
+                creature2.animation = Some(AnimationState {
+                    clip: "Idle".into(),
+                    ..Default::default()
+                });
+                creature2.physics = PhysicsKind::Kinematic;
+                creature2.collision_layer = 1 << 2;
+                creature2.script = creature_wander_script(half, "creature2_", !(1_u32 << 2));
+                objects.push(creature2);
+                imported.push(mesh);
+            }
+            Err(e) => log::error!("Créature 2 MMORPG (assets/models/creature2.glb) : {e}"),
+        }
+
+        // Créature n°3 (troisième style) : bipède trapu bleu-sarcelle à
+        // pousse-feuille sur la tête (`creature3.glb`, généré sous Blender comme
+        // les deux précédentes — rig Root/Body/Head/Crest/ArmL/ArmR/LegL/LegR,
+        // clips `Idle`/`Walk`). Même principe que la n°2 : clés `save`
+        // préfixées, couche de collision propre (bit 3) pour s'ignorer soi-même
+        // au raycast tout en voyant les deux autres créatures.
+        let creature3_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature3.glb");
+        match crate::scene::import::load_gltf(creature3_path) {
+            Ok((data, aabb_min, aabb_max)) => {
+                let mut mesh = ImportedMesh {
+                    path: creature3_path.to_string(),
+                    data,
+                    aabb_min,
+                    aabb_max,
+                    ..Default::default()
+                };
+                mesh.load_skinning();
+                let mesh_index = imported.len() as u32;
+                // Spawn au 3ᵉ coin de l'arène, dégagé des deux autres créatures.
+                let mut creature3 = demo_obj(
+                    "Créature 3",
+                    MeshKind::Imported(mesh_index),
+                    Vec3::new(-3.0, 0.0, 3.0),
+                );
+                creature3.transform = creature3.transform.with_scale(Vec3::splat(0.35));
+                creature3.animation = Some(AnimationState {
+                    clip: "Idle".into(),
+                    ..Default::default()
+                });
+                creature3.physics = PhysicsKind::Kinematic;
+                creature3.collision_layer = 1 << 3;
+                creature3.script = creature_wander_script(half, "creature3_", !(1_u32 << 3));
+                objects.push(creature3);
+                imported.push(mesh);
+            }
+            Err(e) => log::error!("Créature 3 MMORPG (assets/models/creature3.glb) : {e}"),
+        }
+
+        // Créature n°4 (quatrième style) : quadrupède façon tortue/roche, grosse
+        // carapace en dôme sur le dos (`creature4.glb`, généré sous Blender comme
+        // les précédentes — rig Root/Body/Head/Shell/LegFL/LegFR/LegBL/LegBR,
+        // clips `Idle`/`Walk`). Même principe que les n°2/3 : clés `save`
+        // préfixées, couche de collision propre (bit 4) pour s'ignorer soi-même
+        // au raycast tout en voyant les trois autres créatures.
+        let creature4_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature4.glb");
+        match crate::scene::import::load_gltf(creature4_path) {
+            Ok((data, aabb_min, aabb_max)) => {
+                let mut mesh = ImportedMesh {
+                    path: creature4_path.to_string(),
+                    data,
+                    aabb_min,
+                    aabb_max,
+                    ..Default::default()
+                };
+                mesh.load_skinning();
+                let mesh_index = imported.len() as u32;
+                // Spawn au 4ᵉ coin de l'arène, dégagé des trois autres créatures.
+                let mut creature4 = demo_obj(
+                    "Créature 4",
+                    MeshKind::Imported(mesh_index),
+                    Vec3::new(-3.0, 0.0, -3.0),
+                );
+                creature4.transform = creature4.transform.with_scale(Vec3::splat(0.35));
+                creature4.animation = Some(AnimationState {
+                    clip: "Idle".into(),
+                    ..Default::default()
+                });
+                creature4.physics = PhysicsKind::Kinematic;
+                creature4.collision_layer = 1 << 4;
+                creature4.script = creature_wander_script(half, "creature4_", !(1_u32 << 4));
+                objects.push(creature4);
+                imported.push(mesh);
+            }
+            Err(e) => log::error!("Créature 4 MMORPG (assets/models/creature4.glb) : {e}"),
+        }
+
+        // Créature n°5 (cinquième style) : bipède oisillon jaune-orangé, bec et
+        // courtes ailes (`creature5.glb`, généré sous Blender comme les
+        // précédentes — rig Root/Body/Head/WingL/WingR/LegL/LegR/Tail, clips
+        // `Idle`/`Walk`). Même principe que les n°2/3/4 : clés `save`
+        // préfixées, couche de collision propre (bit 5) pour s'ignorer
+        // soi-même au raycast tout en voyant les quatre autres créatures.
+        let creature5_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature5.glb");
+        match crate::scene::import::load_gltf(creature5_path) {
+            Ok((data, aabb_min, aabb_max)) => {
+                let mut mesh = ImportedMesh {
+                    path: creature5_path.to_string(),
+                    data,
+                    aabb_min,
+                    aabb_max,
+                    ..Default::default()
+                };
+                mesh.load_skinning();
+                let mesh_index = imported.len() as u32;
+                // Spawn au 5ᵉ point de l'arène, dégagé des quatre autres créatures.
+                let mut creature5 = demo_obj(
+                    "Créature 5",
+                    MeshKind::Imported(mesh_index),
+                    Vec3::new(3.0, 0.0, -3.0),
+                );
+                creature5.transform = creature5.transform.with_scale(Vec3::splat(0.35));
+                creature5.animation = Some(AnimationState {
+                    clip: "Idle".into(),
+                    ..Default::default()
+                });
+                creature5.physics = PhysicsKind::Kinematic;
+                creature5.collision_layer = 1 << 5;
+                creature5.script = creature_wander_script(half, "creature5_", !(1_u32 << 5));
+                objects.push(creature5);
+                imported.push(mesh);
+            }
+            Err(e) => log::error!("Créature 5 MMORPG (assets/models/creature5.glb) : {e}"),
+        }
+
         Scene {
             objects,
+            imported,
             camera_follow: true,
             point_lights: vec![PointLight {
                 position: [0.0, 10.0, 0.0],

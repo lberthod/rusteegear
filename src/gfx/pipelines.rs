@@ -204,6 +204,35 @@ pub(super) fn create_models_buffer(
     (buf, bg)
 }
 
+/// Reconstruit le bind group du groupe 1 du pipeline skinné (`skinned_model_layout`) —
+/// à rappeler chaque fois que `models_buf` est recréé (`Renderer::sync_objects`), le
+/// bind group référençant le buffer par valeur au moment de sa création.
+pub(super) fn create_skinned_models_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    models_buf: &wgpu::Buffer,
+    joint_buf: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("skinned_models_bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: models_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: joint_buf,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(JOINT_SLOT_BYTES),
+                }),
+            },
+        ],
+    })
+}
+
 pub(super) fn create_uniform(device: &wgpu::Device, label: &str, size: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
@@ -342,8 +371,9 @@ pub(super) struct PipelineBundle {
     pub(super) mipgen_sampler: wgpu::Sampler,
     pub(super) editor: Option<Editor>,
     pub(super) skinned_pipeline: wgpu::RenderPipeline,
+    pub(super) skinned_model_layout: wgpu::BindGroupLayout,
     pub(super) joint_buf: wgpu::Buffer,
-    pub(super) joint_bind_group: wgpu::BindGroup,
+    pub(super) skinned_models_bind_group: wgpu::BindGroup,
 }
 
 /// Construit toutes les pipelines/layouts/samplers/ressources GPU de départ (hors
@@ -908,27 +938,47 @@ pub(super) fn build(
     let bloom_intensity_buf = create_uniform(device, "bloom_intensity", 16);
     let bloom_mip_views = create_bloom_mip_views(device, size.width, size.height);
 
-    // --- Skinning GPU : palette de joints (groupe 4), pipeline vertex
-    // dédié + fragment **partagée** avec `pipeline` ci-dessus (même module `shader`,
-    // même `fs_main` : un seul endroit qui connaît l'éclairage).
+    // --- Skinning GPU : palette de joints, pipeline vertex dédié + fragment
+    // **partagée** avec `pipeline` ci-dessus (même module `shader`, même `fs_main` :
+    // un seul endroit qui connaît l'éclairage).
     // Décalage dynamique : plusieurs objets skinnés
     // distincts peuvent être dessinés dans la même frame, chacun avec sa propre
     // palette de joints — un seul gros buffer, un « créneau » par instance, sélectionné
     // au dessin via un offset dynamique plutôt que de réécrire le buffer entre chaque
     // draw (ce qui ne fonctionnerait pas : `queue.write_buffer` n'est pas ordonné avec
     // les draw calls d'un encoder pas encore soumis).
-    let joint_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("joint_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: true,
-                min_binding_size: None,
+    //
+    // Groupe 1 dédié (Sprint 136) : `models` + palette de joints fusionnés dans le
+    // même bind group plutôt que dans un 5e groupe séparé — WebGPU limite
+    // `maxBindGroups` à 4 par défaut, ce que les navigateurs respectent strictement
+    // (contrairement aux backends natifs, plus permissifs) ; à 5 groupes le pipeline
+    // skinné était rejeté à la validation, et le mesh skinné restait invisible sur le
+    // player web. Le pipeline non skinné n'a pas de joints et garde `model_layout`
+    // (4 groupes) inchangé — aucun layout partagé n'est modifié ici.
+    let skinned_model_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("skinned_model_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: true,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
     });
     let joint_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("joint_buf"),
@@ -936,18 +986,8 @@ pub(super) fn build(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let joint_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("joint_bind_group"),
-        layout: &joint_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: &joint_buf,
-                offset: 0,
-                size: std::num::NonZeroU64::new(JOINT_SLOT_BYTES),
-            }),
-        }],
-    });
+    let skinned_models_bind_group =
+        create_skinned_models_bind_group(device, &skinned_model_layout, &models_buf, &joint_buf);
     let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("skinned_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/skinned.wgsl").into()),
@@ -956,10 +996,9 @@ pub(super) fn build(
         label: Some("skinned_pipeline_layout"),
         bind_group_layouts: &[
             Some(&camera_layout),
-            Some(&model_layout),
+            Some(&skinned_model_layout),
             Some(&shadow_bgl),
             Some(&tex_layout),
-            Some(&joint_layout),
         ],
         immediate_size: 0,
     });
@@ -1220,7 +1259,8 @@ pub(super) fn build(
         mipgen_sampler,
         editor,
         skinned_pipeline,
+        skinned_model_layout,
         joint_buf,
-        joint_bind_group,
+        skinned_models_bind_group,
     }
 }

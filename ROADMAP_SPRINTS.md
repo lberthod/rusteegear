@@ -2956,6 +2956,58 @@ connection may not be initiated from a page loaded over HTTPS »*.
   cause — toujours d'actualité pour une session dédiée, seule, avec du temps pour
   un vrai test de charge réseau avant/après.
 
+<a id="sprint-136"></a>
+#### Sprint 136 — Meshes squelettaux visibles sur le player web ✅ FAIT
+**Objectif** : lever une des limitations connues du player web (Sprint 114) — un
+mesh skinné (rig GLB, ex. `assets/bundle/m0_creature.glb`) restait invisible dans
+Chrome, le pipeline skinné (5 bind groups : caméra, models, ombre, texture, joints)
+étant rejeté par la validation WebGPU, qui plafonne `maxBindGroups` à 4 par défaut
+(les backends natifs, plus permissifs, ne l'avaient jamais signalé).
+- [x] Groupe 1 dédié au pipeline skinné (`skinned_model_layout`, `pipelines.rs`) :
+  `models` + palette de joints fusionnés dans un seul bind group (offset dynamique
+  sur les joints) — 5 → 4 groupes, sans toucher aux layouts partagés
+  (`model_layout`, `camera_layout`, `shadow_bgl`, `tex_layout`) ni au pipeline non
+  skinné.
+- [x] `skinned.wgsl` : `joint_matrices` passe de `@group(4)` à `@group(1) @binding(1)`.
+- [x] `Renderer::sync_objects` recrée `skinned_models_bind_group` quand `models_buf`
+  grandit (référence le buffer par valeur) — piège identifié à la conception.
+- **Fichiers** : `src/gfx/pipelines.rs`, `src/gfx/renderer.rs`, `src/gfx/shaders/skinned.wgsl`.
+- **Preuve** : `golden_skinning`/`golden_render` inchangés (images pixel-identiques,
+  sans régénération) — seule la plomberie de binding a changé, pas le calcul.
+  Compilation native et `wasm32-unknown-unknown` (`--lib --release`) vérifiées.
+
+<a id="sprint-137"></a>
+#### Sprint 137 — Scripts Lua exécutés sur le player web ✅ FAIT
+**Objectif** : lever la seconde limitation connue du player web — `mlua`/`lua-src`
+(bindings C) ne compile pas pour `wasm32-unknown-unknown` (Sprint 114), les objets
+scriptés restaient inertes sur le web.
+- [x] Nouveau backend `src/app/scripting_web.rs` sur `rilua` (interpréteur Lua 5.1
+  pur Rust, compile nativement `wasm32-unknown-unknown`) — `scripting.rs` (mlua)
+  reste inchangé pour le natif.
+- [x] L'API de `rilua` s'est révélée bas niveau (pointeurs de fonction nus, pas de
+  fermetures capturantes, contrairement à l'hypothèse initiale « mlua-like ») :
+  l'état partagé entre les ~15 fonctions hôtes (`emit`, `spawn`, `save.get/set`,
+  `debug.line`, `raycast`…) transite par un accumulateur `thread_local!`
+  entièrement possédé (`ScriptAccum`, sans `unsafe`), à l'exception de l'emprunt
+  `&Physics` (`raycast`/`overlap_sphere`), porté par un pointeur brut scopé par
+  RAII (`PhysicsGuard`).
+- [x] Même contrat que `scripting::run_script` : `obj.*`, `dt`, `time`, `input`,
+  `tilt`, `emit`/`on_event`, `spawn`, `find_tag`, `save.get/set`, `debug.line`,
+  `vibrate`, `reverb`, `set_health`/`damage`, `raycast`/`overlap_sphere`,
+  `obj:destroy()`. Pas de breakpoints (fonctionnalité éditeur, absente du player web).
+- [x] Tests différentiels (`scripting_web::tests::differential`) : mêmes scripts
+  exécutés sur `mlua` et `rilua`, résultats comparés — `rilua` compile aussi en
+  natif (pur Rust), ce qui rend ces tests exécutables par `cargo test` ordinaire.
+- **Fichiers** : `src/app/scripting_web.rs` (nouveau), `src/app/mod.rs`
+  (`lua_web`/`script_cache_web`), `src/app/simulation.rs` (boucle scripts wasm),
+  `Cargo.toml` (`rilua = "=0.1.21"`, wasm32 + dev-dependencies).
+- **Limite connue** : Lua 5.1 (pas 5.4 comme `mlua`) — pas de `goto`, `//`,
+  opérateurs bit à bit natifs ni entiers ; l'API du moteur (`obj.*`, `emit`,
+  `spawn`…) reste du Lua commun aux deux versions.
+- **Preuve** : `cargo test` (suite complète, y compris différentiels) ; compilation
+  `wasm32-unknown-unknown --lib --release` vérifiée ; `cargo clippy --all-targets`
+  et `cargo fmt` propres.
+
 > **Définition de « terminé » S** : quinze chantiers 🟢 (dix « quasi gratuits » du 14
 > juillet + cinq du 15 juillet, dont deux promotions raisonnées de 🟠 et une
 > réouverture assumée du Sprint 94) sont livrés, sans qu'aucun refus assumé (🔴)

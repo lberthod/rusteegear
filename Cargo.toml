@@ -64,6 +64,12 @@ keystore_password = "android"
 # réelle avec les octets qu'`editor::export::copy_to_bundle` écrit dans le bundle,
 # plutôt que de supposer que les deux implémentations s'accordent sur le format.
 zstd = "0.13.3"
+# Sprint 137 : `rilua` (backend Lua du player web) est pur Rust — compile aussi en
+# natif, ce qui permet des tests différentiels directs contre `mlua` (même script,
+# même état initial, même résultat attendu) sans passer par une cible wasm32 pour
+# les exécuter. Cf. `[target.'cfg(target_arch = "wasm32")'.dependencies]` plus bas
+# pour la même dépendance côté web.
+rilua = "=0.1.21"
 
 [features]
 # Force le mode Player dès le lancement (sans --player) : utilisé pour exporter un
@@ -132,9 +138,9 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # Scripting Lua : `lua-src` (vendored, compile le C de Lua) ne sait pas construire
 # Lua pour `wasm32-unknown-unknown` (« don't know how to build Lua for
 # wasm32-unknown-unknown », Sprint 114) — aucune option de contournement légère
-# (pas de Lua système sur le web, pas de port wasm32 connu de `lua-src`). Un objet
-# scripté reste inerte sur le web en attendant un sprint dédié (interpréteur Lua
-# pur Rust, ou WASI) ; le reste du moteur (rendu, physique, scène) n'en dépend pas.
+# (pas de Lua système sur le web, pas de port wasm32 connu de `lua-src`). Remplacé
+# sur cette cible par `rilua` (Sprint 137, cf. `app::scripting_web`), un
+# interpréteur Lua 5.1 pur Rust qui compile nativement pour `wasm32-unknown-unknown`.
 #
 # `egui-winit` (même table, toujours « pas wasm32 ») : sa feature par défaut
 # `clipboard` (presse-papiers OS via `arboard`) est indisponible sur wasm32 —
@@ -168,6 +174,11 @@ android_logger = "0.14"
 # commentaire ci-dessus) — garde juste `links` (`webbrowser`, qui compile tel quel).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+# Backend Lua du player web (Sprint 137, cf. `app::scripting_web`) — version épinglée
+# (crate jeune, 0.1.x) : une montée de version doit être délibérée, pas silencieuse
+# via `cargo update`. Aussi en `[dev-dependencies]` (pur Rust, compile nativement)
+# pour les tests différentiels contre `mlua` (`scripting_web::tests`).
+rilua = "=0.1.21"
 # `std::time::Instant`/`SystemTime` paniquent purement et simplement sur
 # wasm32-unknown-unknown (« time not implemented on this platform », constaté à
 # l'exécution dans Chrome, Sprint 114) — `web-time` a une API identique, adossée à

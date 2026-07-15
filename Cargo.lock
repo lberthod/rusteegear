@@ -2030,6 +2030,7 @@ dependencies = [
  "pollster",
  "rapier3d",
  "rfd",
+ "rilua",
  "ruzstd",
  "serde",
  "serde_json",
@@ -3126,6 +3127,12 @@ dependencies = [
  "web-sys",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "rilua"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "352e6f00a3dc75d7f99d9c6b7ad15291cdf371f21ee08d66a8ddf7ff0fb6846e"
 
 [[package]]
 name = "ring"

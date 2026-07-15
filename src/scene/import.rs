@@ -40,10 +40,17 @@ fn build_from(
     let mut indices: Vec<u32> = Vec::new();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
-    let color = [0.8, 0.8, 0.82];
 
     for mesh in doc.meshes() {
         for prim in mesh.primitives() {
+            // Teinte de la primitive : `base_color_factor` du matériau glTF (pas de
+            // texture — le moteur n'a qu'une couleur par sommet, pas de pipeline de
+            // texture pour les meshes importés). `Material::default()` de la crate
+            // `gltf` renvoie déjà `[1.0, 1.0, 1.0, 1.0]` (blanc, le défaut de la
+            // spec glTF) pour une primitive sans matériau — pas besoin de gérer ce
+            // cas à part, `base_color_factor()` le couvre.
+            let [r, g, b, _a] = prim.material().pbr_metallic_roughness().base_color_factor();
+            let color = [r, g, b];
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
             let positions: Vec<[f32; 3]> = match reader.read_positions() {
                 Some(p) => p.collect(),
@@ -1400,6 +1407,130 @@ pub(crate) mod tests {
                 t[0].is_finite() && t[1].is_finite() && t[2].is_finite(),
                 "tangente non finie sur triangle dégénéré : {t:?}"
             );
+        }
+    }
+
+    /// Preuve sur le **vrai** asset (audit du bug « bras/tête déformés en virage »,
+    /// finalement causé par le round-trip Euler des scripts, cf.
+    /// `app::scripting::canonical_euler_xyz`) : les données de peau de
+    /// `creature.glb` sont saines — poids normalisés, indices dans la palette — et
+    /// le skinning CPU reste borné à travers une grille de fondus Walk↔Idle : aucune
+    /// combinaison (temps × temps × blend) ne projette un sommet loin de la bbox de
+    /// liaison, ce qui exclut toute déformation « qui part en couille » d'origine
+    /// données/blending, quel que soit l'enchaînement de transitions en jeu.
+    #[test]
+    fn creature_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        assert_creature_glb_sane(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/models/creature.glb"
+        ));
+    }
+
+    /// Même preuve pour la créature n°2 (quadrupède `creature2.glb`, généré sous
+    /// Blender comme le n°1 mais avec un rig différent — pattes/queue au lieu de
+    /// bras/jambes) : les données de skinning et les fondus Walk↔Idle doivent être
+    /// tout aussi sains, le pipeline d'import ne fait aucun cas particulier.
+    #[test]
+    fn creature2_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        assert_creature_glb_sane(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/models/creature2.glb"
+        ));
+    }
+
+    /// Même preuve pour la créature n°3 (bipède trapu `creature3.glb`, troisième
+    /// style — rig Root/Body/Head/Crest/ArmL/ArmR/LegL/LegR).
+    #[test]
+    fn creature3_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        assert_creature_glb_sane(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/models/creature3.glb"
+        ));
+    }
+
+    /// Même preuve pour la créature n°4 (quadrupède tortue/roche `creature4.glb`,
+    /// quatrième style — rig Root/Body/Head/Shell/LegFL/LegFR/LegBL/LegBR).
+    #[test]
+    fn creature4_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        assert_creature_glb_sane(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/models/creature4.glb"
+        ));
+    }
+
+    /// Même preuve pour la créature n°5 (oisillon `creature5.glb`, cinquième
+    /// style — rig Root/Body/Head/WingL/WingR/LegL/LegR/Tail).
+    #[test]
+    fn creature5_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        assert_creature_glb_sane(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/models/creature5.glb"
+        ));
+    }
+
+    fn assert_creature_glb_sane(path: &str) {
+        let (data, aabb_min, aabb_max) = load_gltf(path).expect("glb de créature lisible");
+        let mut m = crate::scene::ImportedMesh {
+            path: path.to_string(),
+            data,
+            aabb_min,
+            aabb_max,
+            ..Default::default()
+        };
+        m.load_skinning();
+        let skeleton = m.skeleton.as_ref().expect("creature.glb skinné");
+        let n_joints = skeleton.joints.len();
+        let walk = m
+            .clips
+            .iter()
+            .find(|c| c.name == "Walk")
+            .expect("clip Walk");
+        let idle = m
+            .clips
+            .iter()
+            .find(|c| c.name == "Idle")
+            .expect("clip Idle");
+
+        for (i, s) in m.vertex_skins.iter().enumerate() {
+            let sum: f32 = s.weights.iter().sum();
+            assert!(
+                (0.99..=1.01).contains(&sum),
+                "sommet {i} : somme des poids {sum} (attendu ≈ 1.0, {:?})",
+                s.weights
+            );
+            for (&j, &w) in s.joints.iter().zip(&s.weights) {
+                assert!(
+                    w <= 0.0 || (j as usize) < n_joints,
+                    "sommet {i} : joint {j} hors palette ({n_joints} joints, poids {w})"
+                );
+            }
+        }
+
+        let center = (aabb_min + aabb_max) * 0.5;
+        let half_diag = (aabb_max - aabb_min).length() * 0.5;
+        for wi in 0..=4 {
+            for ii in 0..=2 {
+                for bi in 0..=5 {
+                    let tw = walk.duration * wi as f32 / 4.0;
+                    let ti = idle.duration * ii as f32 / 2.0;
+                    let b = bi as f32 / 5.0;
+                    let mats =
+                        compute_joint_matrices_blended(skeleton, Some(walk), tw, Some(idle), ti, b);
+                    for (i, (v, s)) in m.data.vertices.iter().zip(&m.vertex_skins).enumerate() {
+                        let p = Vec3::from(v.position);
+                        let mut out = Vec3::ZERO;
+                        for (&j, &w) in s.joints.iter().zip(&s.weights) {
+                            out += (mats[j as usize] * p.extend(1.0)).truncate() * w;
+                        }
+                        let d = out.distance(center);
+                        assert!(
+                            d <= half_diag * 2.0,
+                            "blend Walk@{tw:.2}/Idle@{ti:.2} b={b:.1} : sommet {i} projeté \
+                             à {d:.2} du centre (demi-diag bbox {half_diag:.2}) — skinning aberrant"
+                        );
+                    }
+                }
+            }
         }
     }
 }

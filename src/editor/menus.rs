@@ -407,6 +407,10 @@ pub(super) fn menu_ajouter(
                         scene.objects[i].physics = P::Dynamic;
                         ui.close();
                     }
+                    if ui.button("🚶  Cinématique (déplacé par script)").clicked() {
+                        scene.objects[i].physics = P::Kinematic;
+                        ui.close();
+                    }
                     if ui.button("🎯  Zone de déclenchement (trigger)").clicked() {
                         scene.objects[i].trigger = true;
                         ui.close();
