@@ -188,6 +188,17 @@ fn decompress(compressed: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Verrou partagé entre modules de test pour les rares tests qui doivent
+/// nécessairement exercer le vrai `assets_dir()` (pas de variante `_at`
+/// atteignable à leur point d'entrée — ex. `spawn()` Lua, démo MMORPG) : leur
+/// écriture dans `manifest.json` n'est pas atomique (lecture-modification-écriture,
+/// cf. `register_asset_at`), donc deux de ces tests exécutés en parallèle peuvent se
+/// perdre l'un l'autre une entrée. Ce verrou sérialise seulement *ces* tests entre
+/// eux ; les autres, isolés via `_at(dir)` avec un dossier temporaire, n'en ont pas
+/// besoin.
+#[cfg(test)]
+pub(crate) static REAL_ASSETS_DIR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Dossier des assets de projet (`~/.motor3derust/assets/`).
 pub fn assets_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
@@ -391,7 +402,7 @@ fn sanitize_scene_name(name: &str) -> String {
 
 /// Cœur de `list_prefabs`, paramétré par `dir` (testable sans toucher
 /// `~/.motor3derust/assets/`, même raison que `register_asset_at` et consorts).
-fn list_prefabs_at(dir: &std::path::Path, scope: &PrefabScope) -> Vec<(String, String)> {
+pub(crate) fn list_prefabs_at(dir: &std::path::Path, scope: &PrefabScope) -> Vec<(String, String)> {
     let subdir = scope.subdir();
     let mut out: Vec<(String, String)> = std::fs::read_dir(dir.join(&subdir))
         .into_iter()

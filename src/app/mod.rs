@@ -1172,6 +1172,12 @@ mod tests {
         // Un script peut faire apparaître un ennemi depuis un
         // prefab (`spawn`), et cet ennemi devient trouvable par `find_tag` (au tick
         // suivant : `find_tag` lit un instantané pris avant la boucle des scripts).
+        // Verrou : ce test écrit dans le vrai `assets_dir()` (cf.
+        // `REAL_ASSETS_DIR_TEST_LOCK`), à sérialiser avec les autres tests dans le
+        // même cas (ex. `demos::tests::mmorpg_demo_landmarks_are_prefab_instances...`).
+        let _guard = crate::assets::REAL_ASSETS_DIR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let name = unique_test_prefab_name("ennemi97");
         let template = crate::scene::SceneObject {
             name: "Ennemi".into(),
