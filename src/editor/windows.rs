@@ -992,8 +992,16 @@ pub(super) fn asset_browser_window(
                     Some(_) => "Clique un asset image pour l'appliquer à l'objet sélectionné :",
                     None => "Sélectionne un objet pour assigner une texture.",
                 });
+                // `auto_shrink([false, true])` + `max_height` : la liste ne doit
+                // occuper que l'espace utile à son contenu (jusqu'à 160px, puis
+                // scroll) — avec `[false, false]` (précédent réglage), cette zone
+                // s'étirait pour remplir toute la hauteur de la fenêtre, poussant la
+                // section « 🧩 Prefabs » ci-dessous hors de la zone visible (constaté
+                // par capture d'écran : fenêtre géante et vide malgré des prefabs
+                // bien enregistrés sur disque).
                 egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
+                    .auto_shrink([false, true])
+                    .max_height(160.0)
                     .show(ui, |ui| {
                         for a in assets {
                             let is_img =
@@ -1012,23 +1020,28 @@ pub(super) fn asset_browser_window(
             // Sprint 96 (câblage UI) : prefabs, listés séparément de `list_assets`
             // (qui ne descend pas dans `prefabs/`, cf. `assets::list_prefabs`).
             let prefabs = crate::assets::list_prefabs();
-            ui.collapsing(format!("🧩 Prefabs ({})", prefabs.len()), |ui| {
-                if prefabs.is_empty() {
-                    ui.label(
-                        "Aucun prefab. Sélectionne un objet puis « 🧊 Créer un prefab \
+            // Ouvert par défaut (pas `ui.collapsing` replié) : un prefab qu'on vient
+            // de créer doit être visible immédiatement, pas un clic supplémentaire à
+            // deviner.
+            egui::CollapsingHeader::new(format!("🧩 Prefabs ({})", prefabs.len()))
+                .default_open(true)
+                .show(ui, |ui| {
+                    if prefabs.is_empty() {
+                        ui.label(
+                            "Aucun prefab. Sélectionne un objet puis « 🧊 Créer un prefab \
                          depuis la sélection » dans l'Inspecteur.",
-                    );
-                } else {
-                    for (name, asset_id) in prefabs {
-                        ui.horizontal(|ui| {
-                            ui.label(&name);
-                            if ui.button("➕ Instancier").clicked() {
-                                actions.instantiate_prefab = Some(asset_id);
-                            }
-                        });
+                        );
+                    } else {
+                        for (name, asset_id) in prefabs {
+                            ui.horizontal(|ui| {
+                                ui.label(&name);
+                                if ui.button("➕ Instancier").clicked() {
+                                    actions.instantiate_prefab = Some(asset_id);
+                                }
+                            });
+                        }
                     }
-                }
-            });
+                });
         });
     panels.assets = open;
 }
