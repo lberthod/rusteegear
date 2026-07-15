@@ -2524,6 +2524,32 @@ mod tests {
     }
 
     #[test]
+    fn mmorpg_demo_has_a_visible_wind_zone_with_no_collider() {
+        // Sprint 125, preuve d'implémentation : une zone de vent jouable, pas
+        // seulement testée en isolation dans `runtime::physics`.
+        let s = Scene::mmorpg_demo();
+        let vent = s
+            .objects
+            .iter()
+            .find(|o| o.name == "Zone de vent")
+            .expect("une zone de vent dans la démo MMORPG");
+        assert!(
+            vent.trigger,
+            "sans trigger, la zone de vent n'a aucun volume de détection"
+        );
+        assert!(vent.wind.is_some(), "wind doit être renseigné");
+        assert_eq!(
+            vent.physics,
+            crate::runtime::physics::PhysicsKind::None,
+            "une zone de vent ne doit rien bloquer physiquement"
+        );
+        assert!(
+            vent.visible,
+            "doit être visible à l'écran, pas un objet caché"
+        );
+    }
+
+    #[test]
     fn exactly_one_weapon_profile_uses_the_zone_attack_mode() {
         // Le mode `Zone` (frappe tout un groupe d'un coup) reste une exception délibérée,
         // pas la norme : un seul profil l'assume (le Marteau, via son coût le plus élevé

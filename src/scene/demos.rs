@@ -1153,6 +1153,20 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             objects.push(repere);
         }
 
+        // Zone de vent (Sprint 125, preuve d'implémentation visible dans une démo
+        // jouée réellement plutôt que seulement en test unitaire) : plate-forme basse
+        // et distinctement teintée (cyan) dans un coin de l'arène — traverser son AABB
+        // pousse tout corps dynamique le long de `wind`, tant qu'il y reste. Pas de
+        // collider (`PhysicsKind::None`) : une zone de vent ne doit rien bloquer,
+        // seulement pousser.
+        let mut vent = demo_obj("Zone de vent", MeshKind::Cube, Vec3::new(7.0, 0.3, -7.0));
+        vent.transform = vent.transform.with_scale(Vec3::new(6.0, 0.6, 6.0));
+        vent.physics = PhysicsKind::None;
+        vent.trigger = true;
+        vent.wind = Some(Vec3::new(5.0, 0.0, 0.0));
+        vent.color = [0.25, 0.75, 0.85];
+        objects.push(vent);
+
         Scene {
             objects,
             camera_follow: true,

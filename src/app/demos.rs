@@ -95,6 +95,7 @@ impl AppState {
     pub fn load_mmorpg_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::mmorpg_demo();
+        self.seed_mmorpg_repere_prefab_instances();
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
@@ -102,6 +103,36 @@ impl AppState {
         self.wave = 0;
         self.is_leveled_demo = false;
         self.clear_selection();
+    }
+
+    /// Sprint 96, preuve d'implémentation : convertit les 4 « Repère N » de la démo
+    /// MMORPG (4 objets indépendants, cf. `Scene::mmorpg_demo`) en véritables
+    /// instances d'un même prefab `MmorpgRepere`. Éditer
+    /// `assets_dir()/prefabs/MmorpgRepere.json` à la main (ou changer un repère dans
+    /// l'Inspecteur puis cliquer « 🧊 Créer un prefab depuis la sélection » à nouveau)
+    /// puis « 🔄 Resynchroniser les instances » répercute le changement sur les 4 à
+    /// la fois — sauf sur celle qu'on aurait explicitement surchargée. Sans effet si
+    /// `assets_dir()` est indisponible (pas de `$HOME`) : la démo garde alors ses 4
+    /// repères indépendants, comportement identique à avant ce complément.
+    fn seed_mmorpg_repere_prefab_instances(&mut self) {
+        let Some(template_idx) = self.scene.objects.iter().position(|o| o.name == "Repère 1")
+        else {
+            return;
+        };
+        let template = self.scene.objects[template_idx].clone();
+        let Ok(asset_id) = crate::scene::Scene::save_prefab(&template, "MmorpgRepere") else {
+            return;
+        };
+        for i in 1..=4 {
+            let name = format!("Repère {i}");
+            let Some(idx) = self.scene.objects.iter().position(|o| o.name == name) else {
+                continue;
+            };
+            let pos = self.scene.objects[idx].transform.position;
+            if let Some(instance) = crate::scene::Scene::instantiate_prefab(&asset_id, name, pos) {
+                self.scene.objects[idx] = instance;
+            }
+        }
     }
 
     /// Charge la démo « Donjon » façon roguelike (cf. `Scene::roguelike_demo`) : 3 salles
@@ -456,6 +487,60 @@ mod tests {
         assert!(
             app.has_won(),
             "un ring out doit compter comme une victoire (adversaire unique, wave=1)"
+        );
+    }
+
+    #[test]
+    fn mmorpg_demo_landmarks_are_prefab_instances_sharing_one_template() {
+        // Sprint 96, preuve d'implémentation : les 4 repères ne sont plus 4 objets
+        // indépendants mais 4 instances du même prefab (cf. `seed_mmorpg_repere_
+        // prefab_instances`) — sauf si `assets_dir()` est indisponible (pas de $HOME),
+        // auquel cas ce test n'a rien à vérifier.
+        if crate::assets::assets_dir().is_none() {
+            return;
+        }
+        let mut app = AppState::new();
+        app.load_mmorpg_demo();
+        let asset_ids: Vec<String> = (1..=4)
+            .map(|i| {
+                let name = format!("Repère {i}");
+                let obj = app
+                    .scene
+                    .objects
+                    .iter()
+                    .find(|o| o.name == name)
+                    .unwrap_or_else(|| panic!("{name} attendu dans la démo MMORPG"));
+                obj.prefab
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{name} doit être une instance de prefab"))
+                    .asset_id
+                    .clone()
+            })
+            .collect();
+        assert!(
+            asset_ids.windows(2).all(|w| w[0] == w[1]),
+            "les 4 repères doivent partager la même référence de prefab : {asset_ids:?}"
+        );
+        // Positions distinctes malgré le prefab partagé — `transform` est bien
+        // surchargé par instance (cf. `Scene::instantiate_prefab`).
+        let positions: std::collections::HashSet<_> = (1..=4)
+            .map(|i| {
+                let name = format!("Repère {i}");
+                let p = app
+                    .scene
+                    .objects
+                    .iter()
+                    .find(|o| o.name == name)
+                    .unwrap()
+                    .transform
+                    .position;
+                (p.x.to_bits(), p.z.to_bits())
+            })
+            .collect();
+        assert_eq!(
+            positions.len(),
+            4,
+            "les 4 repères doivent garder des positions distinctes"
         );
     }
 }
