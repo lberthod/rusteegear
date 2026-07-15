@@ -64,26 +64,14 @@ const PITCH_VARIATION: f32 = 0.08;
 const VOLUME_VARIATION: f32 = 0.15;
 
 /// Tire `(variation de hauteur, variation de volume)`, chacune dans
-/// `[1 - VAR, 1 + VAR]` — xorshift64 maison graine sur l'horloge système,
-/// même patron que `scene::demos` (pas de dépendance `rand` pour un tirage
-/// aussi simple, cf. le choix assumé documenté dans `runtime::savegame`).
-/// Une seule graine, deux tirages successifs (pas deux graines indépendantes
-/// tirées de l'horloge à quelques nanosecondes d'écart, qui pourraient
-/// coïncider).
+/// `[1 - VAR, 1 + VAR]` — via `runtime::rng::Rng` (Sprint 131, unifie ce qui était
+/// une copie locale du même xorshift64 maison que `scene::demos`). Une seule
+/// graine, deux tirages successifs (pas deux graines indépendantes tirées de
+/// l'horloge à quelques nanosecondes d'écart, qui pourraient coïncider).
 fn synth_variation() -> (f32, f32) {
-    let mut seed = crate::time_compat::SystemTime::now()
-        .duration_since(crate::time_compat::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9E3779B97F4A7C15)
-        | 1; // xorshift dégénère à 0 si la graine est 0 : jamais nulle.
-    let mut next_unit = || {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        (seed % 100_000) as f32 / 100_000.0 // [0, 1)
-    };
-    let pitch = 1.0 + (next_unit() * 2.0 - 1.0) * PITCH_VARIATION;
-    let volume = 1.0 + (next_unit() * 2.0 - 1.0) * VOLUME_VARIATION;
+    let mut rng = crate::runtime::rng::Rng::from_system_time();
+    let pitch = 1.0 + (rng.next_unit() * 2.0 - 1.0) * PITCH_VARIATION;
+    let volume = 1.0 + (rng.next_unit() * 2.0 - 1.0) * VOLUME_VARIATION;
     (pitch, volume)
 }
 

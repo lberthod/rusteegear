@@ -1204,26 +1204,12 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
 
         // --- Tirage de 3 armes DISTINCTES parmi les 5 profils connus (`WEAPONS`) : une
         // pour l'équipement de départ, les 2 autres cachées en butin plus bas (cf.
-        // `WeaponPickup`). Mélange de Fisher-Yates sur un petit xorshift maison (pas de
-        // dépendance `rand` pour un tirage aussi simple, cf. philosophie du projet —
-        // dépendances choisies pour des besoins délimités, jamais pour la structure du
-        // moteur) : l'horloge système sert de graine.
-        let mut rng_state = crate::time_compat::SystemTime::now()
-            .duration_since(crate::time_compat::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9E3779B97F4A7C15)
-            | 1; // xorshift dégénère à 0 si la graine est 0 : jamais nulle.
-        let mut next_rand = move || {
-            rng_state ^= rng_state << 13;
-            rng_state ^= rng_state >> 7;
-            rng_state ^= rng_state << 17;
-            rng_state
-        };
+        // `WeaponPickup`). Mélange de Fisher-Yates via `runtime::rng::Rng` (Sprint 131,
+        // unifie ce qui était une copie locale du même xorshift64 maison que
+        // `runtime::sfx`) : l'horloge système sert de graine.
+        let mut rng = crate::runtime::rng::Rng::from_system_time();
         let mut order: [usize; WEAPONS.len()] = std::array::from_fn(|i| i);
-        for i in (1..order.len()).rev() {
-            let j = (next_rand() as usize) % (i + 1);
-            order.swap(i, j);
-        }
+        rng.shuffle(&mut order);
         let (starting_idx, found_idx) = (order[0], [order[1], order[2]]);
         let weapon = WEAPONS[starting_idx];
         log::info!(

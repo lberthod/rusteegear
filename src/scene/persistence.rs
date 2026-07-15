@@ -100,7 +100,7 @@ impl Scene {
     }
 
     /// Version courante du schéma JSON de `Scene`.
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 2;
 
     /// Met `self` à jour au schéma courant : applique les migrations manquantes selon
     /// `version`, puis stampe `CURRENT_VERSION`. Idempotente (une scène déjà à jour ne
@@ -108,17 +108,29 @@ impl Scene {
     /// inutile pour une scène construite en mémoire (démos, `Scene::default()`), déjà
     /// valide sans historique à corriger.
     ///
-    /// **Aucune migration réelle n'existe encore** dans ce projet (rien n'a encore
-    /// changé de forme au point de dépasser un simple `#[serde(default)]`) : le seul
-    /// correctif appliqué ici — dédoublonner `groups` — est une vraie correction
-    /// d'hygiène pour un JSON ancien ou modifié à la main (des doublons de groupe ne
-    /// plantent rien mais dupliquent l'entrée dans la hiérarchie de l'éditeur), pas une
-    /// migration de schéma inventée après coup pour la forme. Le prochain vrai
-    /// changement de schéma cassant ajoutera un bras `if self.version < N` ici.
+    /// **Migration v1 → v2 (Sprint 131), la première vraie migration de ce projet** :
+    /// avant que l'inspecteur n'impose un plancher de 0,04 sur `SceneObject::roughness`
+    /// (`ui.add(egui::Slider::new(&mut obj.roughness, 0.04..=1.0))`, `editor/mod.rs`),
+    /// rien n'empêchait une scène d'être sauvée avec `roughness: 0.0` — une valeur
+    /// **présente** dans le JSON, donc `#[serde(default = "default_roughness")]` ne
+    /// s'applique pas (ce mécanisme ne comble que les champs *absents*, pas les valeurs
+    /// hors plage). `roughness: 0.0` cause un artefact de rendu PBR classique (terme
+    /// spéculaire dégénéré) — cette migration relève toute scène `version < 2` au
+    /// plancher, sans toucher aux scènes déjà à jour (une valeur à 0,0 saisie
+    /// délibérément après le Sprint 131 ne serait de toute façon plus possible via
+    /// l'inspecteur, donc rien à corriger côté scènes récentes).
     pub(super) fn migrate(&mut self) {
         if self.version == 0 {
             let mut seen = std::collections::HashSet::new();
             self.groups.retain(|g| seen.insert(g.clone()));
+        }
+        if self.version < 2 {
+            const MIN_ROUGHNESS: f32 = 0.04;
+            for o in &mut self.objects {
+                if o.roughness < MIN_ROUGHNESS {
+                    o.roughness = MIN_ROUGHNESS;
+                }
+            }
         }
         self.version = Self::CURRENT_VERSION;
     }

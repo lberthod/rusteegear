@@ -2697,12 +2697,30 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Fichiers** : `src/app/combat.rs`, `src/assets.rs`.
 - **Livrable** : la démo contrôleur passe en anglais par un réglage ; une nouvelle capacité de combat s'ajoute par des données, sans nouveau code Rust.
 
-#### Sprint 131 — Noyau : versioning de schéma + RNG déterministe global ⬜
+#### Sprint 131 — Noyau : versioning de schéma + RNG déterministe global ✅ FAIT
 **Objectif** : deux chantiers 🟢 « à faire » catalogués dès le premier audit (n° 10, 18), jamais programmés faute de sprint dédié.
-- [ ] **Versioning de schéma des scènes** : champ `version` déjà présent (Sprint 95) — ajouter de vraies migrations testées (au moins une migration réelle, pas juste le champ).
-- [ ] **RNG déterministe global** : `fastrand`/xorshift **seedé par partie**, propagé explicitement (pas de `SystemTime` caché) ; le xorshift audio du Sprint 108 en devient un cas d'usage parmi d'autres plutôt qu'un système isolé.
-- **Fichiers** : `src/scene/persistence.rs` (migrations), nouveau `src/runtime/rng.rs`, `src/runtime/sfx.rs` (rebranché sur le RNG global).
-- **Livrable** : une scène v1 se charge en v2 avec un test de migration réel ; deux parties avec la même seed produisent le même tirage (test de reproductibilité).
+- [x] **Versioning de schéma des scènes** : première vraie migration v1 → v2
+      (`Scene::migrate`) — avant que l'inspecteur n'impose un plancher de 0,04 sur
+      `SceneObject::roughness`, rien n'empêchait une scène d'être sauvée avec
+      `roughness: 0.0` (valeur **présente** dans le JSON, donc hors de portée de
+      `#[serde(default)]`, qui ne comble que les champs absents) — artefact PBR
+      classique (terme spéculaire dégénéré). La migration relève toute scène
+      `version < 2` au plancher ; les scènes déjà à jour ne sont pas retouchées.
+- [x] **RNG déterministe global** (`runtime::rng::Rng`, xorshift64) : unifie deux
+      copies indépendantes du même algorithme graine-sur-horloge
+      (`runtime::sfx::synth_variation`, Sprint 108, et `scene::demos::roguelike_demo`,
+      tirage des armes) en un seul type testé, avec un vrai constructeur à graine
+      explicite (`Rng::new(seed)`) — `Rng::from_system_time()` reste le repli des
+      deux call sites existants (migration progressive, aucun changement de
+      comportement observable pour eux ici) mais tout nouveau code peut désormais
+      obtenir une séquence reproductible.
+- **Fichiers** : `src/scene/persistence.rs` (migration), `src/scene/mod.rs`
+  (tests), nouveau `src/runtime/rng.rs`, `src/runtime/sfx.rs` et
+  `src/scene/demos.rs` (rebranchés sur le RNG partagé, xorshift dédupliqué).
+- **Livrable** : 366 tests verts (8 nouveaux : 2 migration + 6 RNG, dont
+  `the_same_seed_reproduces_exactly_the_same_sequence` et
+  `shuffle_is_a_permutation_and_is_reproducible_with_the_same_seed`), clippy
+  -D warnings et fmt propres, build wasm32 vert.
 
 #### Sprint 132 — Particules CPU + billboards + transparence triée ⬜
 **Objectif** : chantier 🟢 catalogué dès le premier audit (n° 61–62, 64, 74), jamais programmé.

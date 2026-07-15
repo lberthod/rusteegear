@@ -1864,6 +1864,59 @@ mod tests {
         assert_eq!(scene.version, Scene::CURRENT_VERSION);
     }
 
+    /// Sprint 131 : migration v1 → v2, la première migration réelle de ce projet (pas
+    /// juste un champ absent comblé par `#[serde(default)]`) — une scène `version < 2`
+    /// avec `roughness: 0.0` (valeur explicitement présente dans le JSON, possible
+    /// avant que l'inspecteur n'impose un plancher de 0,04) doit être relevée au
+    /// plancher par `migrate()`.
+    #[test]
+    fn migrate_v1_to_v2_raises_zero_roughness_to_the_inspector_floor() {
+        let mut scene = Scene {
+            objects: vec![SceneObject {
+                roughness: 0.0,
+                ..Default::default()
+            }],
+            version: 1,
+            ..Default::default()
+        };
+        scene.migrate();
+        assert_eq!(scene.objects[0].roughness, 0.04);
+        assert_eq!(scene.version, Scene::CURRENT_VERSION);
+    }
+
+    /// La migration ne doit pas toucher une valeur de roughness déjà au-dessus du
+    /// plancher (pas une correction générale, juste un relevage du plancher minimal),
+    /// ni une scène déjà à `CURRENT_VERSION` (même logique que le test de dédoublonnage
+    /// des groupes ci-dessus — les migrations sont gardées par version, pas rejouées).
+    #[test]
+    fn migrate_v1_to_v2_leaves_valid_roughness_and_up_to_date_scenes_untouched() {
+        let mut scene = Scene {
+            objects: vec![SceneObject {
+                roughness: 0.6,
+                ..Default::default()
+            }],
+            version: 1,
+            ..Default::default()
+        };
+        scene.migrate();
+        assert_eq!(scene.objects[0].roughness, 0.6);
+
+        let mut already_current = Scene {
+            objects: vec![SceneObject {
+                roughness: 0.0,
+                ..Default::default()
+            }],
+            version: Scene::CURRENT_VERSION,
+            ..Default::default()
+        };
+        already_current.migrate();
+        assert_eq!(
+            already_current.objects[0].roughness, 0.0,
+            "une scène déjà à jour n'est pas re-corrigée, même avec une valeur \
+             qu'une scène plus ancienne aurait fait migrer"
+        );
+    }
+
     /// Nom de prefab unique par appel (horloge + pid), pour ne pas collisionner avec un
     /// vrai prefab de l'utilisateur qui lancerait ces tests (ils écrivent réellement
     /// dans `~/.motor3derust/assets/prefabs/`, comme le ferait l'éditeur — ce sprint n'a

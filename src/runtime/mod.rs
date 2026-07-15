@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod physics;
+pub mod rng;
 pub mod savegame;
 pub mod sfx;
 
