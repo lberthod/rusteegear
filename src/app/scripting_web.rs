@@ -40,6 +40,22 @@ pub(super) fn script_key(src: &str) -> u64 {
     h.finish()
 }
 
+/// Ancre une fonction compilée dans la table `registry` de `rilua` (`LuaState::
+/// registry`, racine scannée par `mark_roots` — comme les globales) — **sans ça**,
+/// une `Function` gardée uniquement dans le `HashMap<u64, Function>` côté Rust
+/// (`AppState::script_cache_web`) n'est visible d'aucune racine connue du GC : une
+/// collecte complète (`maybe_collect_garbage`) la ramasse, et le prochain
+/// `lua.call_function` sur ce handle périmé échoue avec « invalid function
+/// reference » — constaté en prod juste après le passage aux collectes complètes
+/// périodiques (Sprint 137). La clé (hex du hash) n'entre jamais en collision avec
+/// un nom de champ de script normal, donc partage sans risque la même table que
+/// d'éventuelles autres entrées de registre (mécanismes internes de `rilua`).
+pub(super) fn anchor_compiled_function(lua: &mut Lua, key: u64, func: Function) -> LuaResult<()> {
+    let registry = Table::from_gc_ref(lua.state_mut().registry);
+    let reg_key = lua.create_string(format!("rustee_script_{key:016x}").as_bytes());
+    lua.table_raw_set(&registry, reg_key, Val::Function(func.gc_ref()))
+}
+
 // ---------------------------------------------------------------------------
 // État partagé entre `run_script_web` et les fonctions hôtes
 // ---------------------------------------------------------------------------
@@ -974,6 +990,59 @@ mod tests {
             )
             .unwrap_or_else(|e| panic!("itération {i} : {e}"));
         }
+    }
+
+    /// Régression (constaté en prod juste après le correctif ci-dessus, Sprint 137) :
+    /// un `Function` compilé une fois puis réutilisé d'un tick à l'autre — comme le
+    /// fait `AppState::script_cache_web` côté `simulation.rs` — doit rester appelable
+    /// après une collecte complète, à condition d'avoir été ancré via
+    /// `anchor_compiled_function`. Sans l'ancrage, `lua.call_function` sur ce handle
+    /// échoue avec « invalid function reference » dès la première collecte : le GC de
+    /// `rilua` ne connaît que ses propres racines (globales, pile, `registry`), pas un
+    /// `HashMap<u64, Function>` gardé côté Rust en dehors de tout ça.
+    #[test]
+    fn a_cached_function_survives_a_full_gc_once_anchored_in_the_registry() {
+        let mut lua = Lua::new().unwrap();
+        lua.gc_stop();
+        let src = "obj.x = obj.x + 1";
+        let func = lua.load(src).unwrap();
+        anchor_compiled_function(&mut lua, script_key(src), func).unwrap();
+
+        // Beaucoup d'allocations sans lien avec `func` (comme d'autres scripts qui
+        // tournent en parallèle) pour donner à la collecte complète de quoi ramasser.
+        for _ in 0..1000 {
+            let _ = lua.create_table();
+        }
+        lua.gc_collect().unwrap();
+
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        run_script_web(
+            &mut lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        )
+        .expect("la fonction ancrée doit rester valide après une collecte complète");
+        assert_eq!(t.position.x, 1.0);
     }
 
     #[test]

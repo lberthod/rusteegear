@@ -649,6 +649,16 @@ impl AppState {
                     Some(f) => *f,
                     None => match self.lua_web.load(&obj.script) {
                         Ok(f) => {
+                            // Ancrage dans la table `registry` de `rilua` (racine GC) :
+                            // sans ça, le cache Rust (`script_cache_web`) garde un
+                            // handle invisible du GC, ramassé à la première collecte
+                            // complète — cf. la doc d'`anchor_compiled_function`.
+                            if let Err(e) =
+                                scripting_web::anchor_compiled_function(&mut self.lua_web, key, f)
+                            {
+                                log::error!("Ancrage GC du script '{}' : {e}", obj.name);
+                                continue;
+                            }
                             self.script_cache_web.insert(key, f);
                             f
                         }
