@@ -348,10 +348,52 @@ pub fn list_assets() -> Vec<String> {
     out
 }
 
+/// Portée d'un prefab (complément UI, en plus du délete/de la confirmation de
+/// création) : **général** (`prefabs/`, visible depuis n'importe quelle scène,
+/// comportement historique) ou propre à une **scène/projet** nommé librement par
+/// l'utilisateur (`prefabs/scenes/<nom nettoyé>/`) — ce moteur n'a pas de notion
+/// de « projet » séparée d'une scène, donc pas de troisième niveau : le nom tapé
+/// dans l'éditeur sert à la fois de nom de scène et de nom de projet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrefabScope {
+    General,
+    Scene(String),
+}
+
+impl PrefabScope {
+    /// Sous-dossier de `assets_dir()` où vivent les prefabs de cette portée.
+    pub(crate) fn subdir(&self) -> std::path::PathBuf {
+        match self {
+            PrefabScope::General => std::path::PathBuf::from("prefabs"),
+            PrefabScope::Scene(name) => {
+                std::path::PathBuf::from("prefabs/scenes").join(sanitize_scene_name(name))
+            }
+        }
+    }
+}
+
+/// Nettoyage d'un nom de scène/projet en nom de dossier valide — même règle que
+/// `BuildConfig::safe_name`/`sanitize_prefab_name` (alphanumérique/`-`/`_`).
+fn sanitize_scene_name(name: &str) -> String {
+    let n: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if n.is_empty() { "Scene".into() } else { n }
+}
+
 /// Cœur de `list_prefabs`, paramétré par `dir` (testable sans toucher
 /// `~/.motor3derust/assets/`, même raison que `register_asset_at` et consorts).
-fn list_prefabs_at(dir: &std::path::Path) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = std::fs::read_dir(dir.join("prefabs"))
+fn list_prefabs_at(dir: &std::path::Path, scope: &PrefabScope) -> Vec<(String, String)> {
+    let subdir = scope.subdir();
+    let mut out: Vec<(String, String)> = std::fs::read_dir(dir.join(&subdir))
         .into_iter()
         .flatten()
         .flatten()
@@ -359,7 +401,8 @@ fn list_prefabs_at(dir: &std::path::Path) -> Vec<(String, String)> {
             let file_name = e.file_name();
             let name = file_name.to_str()?;
             let display = name.strip_suffix(".json")?.to_string();
-            let id = register_asset_at(dir, &format!("prefabs/{name}"));
+            let key = subdir.join(name);
+            let id = register_asset_at(dir, &key.to_string_lossy());
             Some((display, id))
         })
         .collect();
@@ -367,14 +410,36 @@ fn list_prefabs_at(dir: &std::path::Path) -> Vec<(String, String)> {
     out
 }
 
-/// Prefabs disponibles (`assets_dir()/prefabs/*.json`, cf. `Scene::save_prefab`) :
+/// Prefabs disponibles pour une portée donnée (cf. `PrefabScope`) :
 /// `(nom affiché, référence stable asset-id://<uuid>)`. `list_assets` ne les liste pas
 /// — lecture non récursive du dossier d'assets, `prefabs/` n'y apparaît que comme un
 /// seul sous-dossier, pas ses fichiers.
-pub fn list_prefabs() -> Vec<(String, String)> {
+pub fn list_prefabs(scope: &PrefabScope) -> Vec<(String, String)> {
     match assets_dir() {
-        Some(dir) => list_prefabs_at(&dir),
+        Some(dir) => list_prefabs_at(&dir, scope),
         None => Vec::new(),
+    }
+}
+
+/// Cœur de `delete_prefab`, paramétré par `dir`.
+fn delete_prefab_at(dir: &std::path::Path, scope: &PrefabScope, name: &str) -> bool {
+    let Some(path) = safe_join(&dir.join(scope.subdir()), &format!("{name}.json")) else {
+        return false;
+    };
+    // L'entrée de manifeste correspondante (uuid → nom) n'est pas nettoyée : un
+    // uuid orphelin se comporte déjà comme un prefab introuvable partout ailleurs
+    // (`resolve_asset_id` renvoie toujours un chemin, mais plus rien à lire au bout —
+    // `sync_prefab_instances`/`instantiate_prefab` tolèrent déjà ce cas, cf. leur doc).
+    std::fs::remove_file(path).is_ok()
+}
+
+/// Supprime le fichier d'un prefab (`false` si absent ou suppression impossible).
+/// N'affecte aucune instance déjà placée dans une scène (elles gardent leurs champs
+/// actuels, `sync_prefab_instances` deviendra simplement un no-op pour elles).
+pub fn delete_prefab(scope: &PrefabScope, name: &str) -> bool {
+    match assets_dir() {
+        Some(dir) => delete_prefab_at(&dir, scope, name),
+        None => false,
     }
 }
 
@@ -449,7 +514,7 @@ mod tests {
         // apparaître comme prefab.
         std::fs::write(prefabs.join("notes.txt"), b"pas un prefab").unwrap();
 
-        let listed = list_prefabs_at(&dir);
+        let listed = list_prefabs_at(&dir, &PrefabScope::General);
         let names: Vec<&str> = listed.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["caisse", "gemme"], "triés, sans notes.txt");
         for (_, id) in &listed {
@@ -458,8 +523,49 @@ mod tests {
 
         // Idempotence : un second appel renvoie les mêmes uuid (pas de doublons dans
         // le manifeste à chaque ouverture du navigateur d'assets).
-        let listed_again = list_prefabs_at(&dir);
+        let listed_again = list_prefabs_at(&dir, &PrefabScope::General);
         assert_eq!(listed, listed_again);
+    }
+
+    #[test]
+    fn list_prefabs_at_keeps_general_and_scene_scopes_separate() {
+        let dir = temp_assets_dir("list_prefabs_scoped");
+        let general = dir.join("prefabs");
+        let scene = dir.join("prefabs/scenes/Mmorpg");
+        std::fs::create_dir_all(&general).unwrap();
+        std::fs::create_dir_all(&scene).unwrap();
+        std::fs::write(general.join("cube.json"), b"{}").unwrap();
+        std::fs::write(scene.join("repere.json"), b"{}").unwrap();
+
+        let general_listed = list_prefabs_at(&dir, &PrefabScope::General);
+        let gen_names: Vec<&str> = general_listed.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(gen_names, vec!["cube"]);
+
+        let scene_listed = list_prefabs_at(&dir, &PrefabScope::Scene("Mmorpg".into()));
+        let scene_names: Vec<&str> = scene_listed.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(scene_names, vec!["repere"]);
+    }
+
+    #[test]
+    fn delete_prefab_at_removes_the_file_and_is_idempotent_on_a_second_call() {
+        let dir = temp_assets_dir("delete_prefab");
+        let prefabs = dir.join("prefabs");
+        std::fs::create_dir_all(&prefabs).unwrap();
+        std::fs::write(prefabs.join("jetable.json"), b"{}").unwrap();
+
+        assert!(delete_prefab_at(&dir, &PrefabScope::General, "jetable"));
+        assert!(!prefabs.join("jetable.json").exists());
+        assert!(
+            !delete_prefab_at(&dir, &PrefabScope::General, "jetable"),
+            "supprimer un prefab déjà absent doit échouer proprement, pas paniquer"
+        );
+    }
+
+    #[test]
+    fn sanitize_scene_name_never_produces_an_empty_folder_name() {
+        assert_eq!(sanitize_scene_name(""), "Scene");
+        assert_eq!(sanitize_scene_name("   "), "Scene");
+        assert_eq!(sanitize_scene_name("Mon Projet !"), "Mon_Projet__");
     }
 
     #[test]

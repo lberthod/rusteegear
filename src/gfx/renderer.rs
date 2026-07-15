@@ -1569,16 +1569,21 @@ impl Renderer {
             if actions.reset_transform {
                 app.reset_transform();
             }
-            if actions.save_as_prefab
-                && let Err(e) = app.save_selected_as_prefab()
-            {
-                log::warn!("Création du prefab impossible : {e}");
+            if let Some(scope) = actions.save_as_prefab {
+                let result = app.save_selected_as_prefab(scope);
+                if let Err(e) = &result {
+                    log::warn!("Création du prefab impossible : {e}");
+                }
+                editor.set_prefab_feedback(result);
             }
             if let Some(asset_id) = actions.instantiate_prefab {
                 app.instantiate_prefab(&asset_id);
             }
             if actions.sync_prefab_instances {
                 app.sync_prefab_instances();
+            }
+            if let Some((scope, name)) = actions.delete_prefab {
+                crate::assets::delete_prefab(&scope, &name);
             }
             if actions.quit {
                 app.request_quit();

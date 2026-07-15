@@ -1154,7 +1154,12 @@ mod tests {
             tag: "ennemi".into(),
             ..Default::default()
         };
-        let asset_id = crate::scene::Scene::save_prefab(&template, &name).unwrap();
+        let asset_id = crate::scene::Scene::save_prefab(
+            &template,
+            &name,
+            &crate::assets::PrefabScope::General,
+        )
+        .unwrap();
 
         let mut app = AppState::new();
         let mut scene = crate::scene::Scene::default();

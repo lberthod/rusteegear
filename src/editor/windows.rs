@@ -1019,31 +1019,149 @@ pub(super) fn asset_browser_window(
             ui.separator();
             // Sprint 96 (câblage UI) : prefabs, listés séparément de `list_assets`
             // (qui ne descend pas dans `prefabs/`, cf. `assets::list_prefabs`).
-            let prefabs = crate::assets::list_prefabs();
-            // Ouvert par défaut (pas `ui.collapsing` replié) : un prefab qu'on vient
-            // de créer doit être visible immédiatement, pas un clic supplémentaire à
-            // deviner.
-            egui::CollapsingHeader::new(format!("🧩 Prefabs ({})", prefabs.len()))
-                .default_open(true)
-                .show(ui, |ui| {
-                    if prefabs.is_empty() {
-                        ui.label(
-                            "Aucun prefab. Sélectionne un objet puis « 🧊 Créer un prefab \
-                         depuis la sélection » dans l'Inspecteur.",
-                        );
-                    } else {
-                        for (name, asset_id) in prefabs {
-                            ui.horizontal(|ui| {
-                                ui.label(&name);
-                                if ui.button("➕ Instancier").clicked() {
-                                    actions.instantiate_prefab = Some(asset_id);
-                                }
-                            });
-                        }
-                    }
-                });
+            ui.horizontal(|ui| {
+                ui.label("Scène/projet");
+                ui.add(
+                    egui::TextEdit::singleline(&mut panels.prefab_scope_name)
+                        .hint_text("nom (même champ que l'Inspecteur)")
+                        .desired_width(160.0),
+                );
+            });
+            prefab_scope_section(
+                ui,
+                "🧩 Prefabs généraux",
+                crate::assets::PrefabScope::General,
+                actions,
+                panels,
+            );
+            if !panels.prefab_scope_name.trim().is_empty() {
+                let scope =
+                    crate::assets::PrefabScope::Scene(panels.prefab_scope_name.trim().to_string());
+                prefab_scope_section(
+                    ui,
+                    &format!("📁 Prefabs de « {} »", panels.prefab_scope_name.trim()),
+                    scope,
+                    actions,
+                    panels,
+                );
+            }
         });
     panels.assets = open;
+}
+
+/// Une section repliable de prefabs pour une portée donnée (général ou scène) :
+/// factorisé pour ne pas dupliquer la même liste + boutons deux fois (cf.
+/// `asset_browser_window`, appelée pour `PrefabScope::General` puis, si un nom de
+/// scène est renseigné, pour `PrefabScope::Scene`).
+fn prefab_scope_section(
+    ui: &mut egui::Ui,
+    title: &str,
+    scope: crate::assets::PrefabScope,
+    actions: &mut UiActions,
+    panels: &mut Panels,
+) {
+    let prefabs = crate::assets::list_prefabs(&scope);
+    // Ouvert par défaut (pas replié) : un prefab qu'on vient de créer doit être
+    // visible immédiatement, pas un clic supplémentaire à deviner.
+    egui::CollapsingHeader::new(format!("{title} ({})", prefabs.len()))
+        .id_salt(title)
+        .default_open(true)
+        .show(ui, |ui| {
+            if prefabs.is_empty() {
+                ui.label(
+                    "Aucun prefab. Sélectionne un objet puis « 🧊 Créer un prefab \
+                     depuis la sélection » dans l'Inspecteur.",
+                );
+            } else {
+                for (name, asset_id) in prefabs {
+                    ui.horizontal(|ui| {
+                        ui.label(&name);
+                        if ui.button("➕ Instancier").clicked() {
+                            actions.instantiate_prefab = Some(asset_id);
+                        }
+                        if ui
+                            .button("🗑")
+                            .on_hover_text("Supprimer ce prefab (confirmation demandée)")
+                            .clicked()
+                        {
+                            panels.prefab_pending_delete = Some((scope.clone(), name.clone()));
+                        }
+                    });
+                }
+            }
+        });
+}
+
+/// Popup de validation après un clic sur « 🧊 Créer un prefab » — succès ou échec,
+/// fermé explicitement par l'utilisateur (« OK »), pas un toast qui disparaît tout
+/// seul : la demande était justement d'avoir une confirmation à valider.
+pub(super) fn prefab_feedback_popup(ctx: &egui::Context, panels: &mut Panels) {
+    let Some(result) = panels.prefab_feedback.clone() else {
+        return;
+    };
+    let mut close = false;
+    egui::Window::new("🧊 Prefab")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            match &result {
+                Ok(name) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(120, 220, 140),
+                        format!("✅ Prefab « {name} » créé."),
+                    );
+                }
+                Err(msg) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 90, 80),
+                        format!("❌ Échec de la création : {msg}"),
+                    );
+                }
+            }
+            if ui.button("OK").clicked() {
+                close = true;
+            }
+        });
+    if close {
+        panels.prefab_feedback = None;
+    }
+}
+
+/// Popup de confirmation avant suppression d'un prefab — action destructive
+/// (supprime le fichier sur disque) : jamais appliquée directement au clic sur 🗑,
+/// toujours un aller-retour explicite « Supprimer » / « Annuler ».
+pub(super) fn prefab_delete_confirm_popup(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    actions: &mut UiActions,
+) {
+    let Some((scope, name)) = panels.prefab_pending_delete.clone() else {
+        return;
+    };
+    let mut close = false;
+    egui::Window::new("🗑 Supprimer le prefab ?")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(format!(
+                "Supprimer « {name} » ? Les instances déjà placées dans une scène ne \
+                 seront plus resynchronisables (elles gardent leurs champs actuels)."
+            ));
+            ui.horizontal(|ui| {
+                if ui.button("Supprimer").clicked() {
+                    actions.delete_prefab = Some((scope.clone(), name.clone()));
+                    close = true;
+                }
+                if ui.button("Annuler").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close {
+        panels.prefab_pending_delete = None;
+    }
 }
 
 /// La scène a-t-elle un joueur pilotable équipé d'une arme à distance

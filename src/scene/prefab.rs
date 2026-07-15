@@ -6,6 +6,7 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use super::{Scene, SceneObject};
+use crate::assets::PrefabScope;
 
 /// Instance d'un prefab : un `SceneObject` sérialisé, partagé par plusieurs
 /// objets de la scène qui y renvoient tous par référence stable (`asset-id://`)
@@ -27,14 +28,18 @@ pub struct PrefabInstance {
 }
 
 impl Scene {
-    /// Sauvegarde `obj` comme prefab dans `assets_dir()/prefabs/<name>.json`, enregistré
+    /// Sauvegarde `obj` comme prefab dans `assets_dir()/<scope>/<name>.json`, enregistré
     /// dans le manifeste d'assets pour une référence stable — c'est ce qui permet de
     /// renommer le fichier prefab sans casser les instances qui le référencent. `Err` si
     /// `assets_dir()` est indisponible (pas de `$HOME`) ou si l'écriture disque échoue.
-    pub fn save_prefab(obj: &SceneObject, name: &str) -> Result<String, String> {
+    pub fn save_prefab(
+        obj: &SceneObject,
+        name: &str,
+        scope: &PrefabScope,
+    ) -> Result<String, String> {
         let dir = crate::assets::assets_dir()
             .ok_or_else(|| "pas de dossier d'assets (HOME absent)".to_string())?;
-        Self::save_prefab_at(&dir, obj, name)
+        Self::save_prefab_at(&dir, obj, name, scope)
     }
 
     /// Cœur de `save_prefab`, paramétré par `dir` (testable sans toucher
@@ -44,15 +49,18 @@ impl Scene {
         dir: &std::path::Path,
         obj: &SceneObject,
         name: &str,
+        scope: &PrefabScope,
     ) -> Result<String, String> {
         let json = serde_json::to_string_pretty(obj).map_err(|e| e.to_string())?;
-        let prefabs_dir = dir.join("prefabs");
+        let subdir = scope.subdir();
+        let prefabs_dir = dir.join(&subdir);
         std::fs::create_dir_all(&prefabs_dir).map_err(|e| e.to_string())?;
         let file_name = format!("{name}.json");
         std::fs::write(prefabs_dir.join(&file_name), json).map_err(|e| e.to_string())?;
+        let manifest_key = subdir.join(&file_name);
         Ok(crate::assets::register_asset_at(
             dir,
-            &format!("prefabs/{file_name}"),
+            &manifest_key.to_string_lossy(),
         ))
     }
 

@@ -107,11 +107,13 @@ impl AppState {
 
     /// Sprint 96, preuve d'implémentation : convertit les 4 « Repère N » de la démo
     /// MMORPG (4 objets indépendants, cf. `Scene::mmorpg_demo`) en véritables
-    /// instances d'un même prefab `MmorpgRepere`. Éditer
-    /// `assets_dir()/prefabs/MmorpgRepere.json` à la main (ou changer un repère dans
-    /// l'Inspecteur puis cliquer « 🧊 Créer un prefab depuis la sélection » à nouveau)
-    /// puis « 🔄 Resynchroniser les instances » répercute le changement sur les 4 à
-    /// la fois — sauf sur celle qu'on aurait explicitement surchargée. Sans effet si
+    /// instances d'un même prefab `MmorpgRepere`, dans la portée **scène** `Mmorpg`
+    /// (`assets_dir()/prefabs/scenes/Mmorpg/MmorpgRepere.json`) plutôt que générale —
+    /// démonstration du deuxième niveau de portée (complément prefabs généraux/par
+    /// scène). Éditer ce fichier à la main (ou changer un repère dans l'Inspecteur
+    /// puis cliquer « 🧊 Créer un prefab » à nouveau, même nom de scène) puis
+    /// « 🔄 Resynchroniser les instances » répercute le changement sur les 4 à la
+    /// fois — sauf sur celle qu'on aurait explicitement surchargée. Sans effet si
     /// `assets_dir()` est indisponible (pas de `$HOME`) : la démo garde alors ses 4
     /// repères indépendants, comportement identique à avant ce complément.
     fn seed_mmorpg_repere_prefab_instances(&mut self) {
@@ -120,7 +122,9 @@ impl AppState {
             return;
         };
         let template = self.scene.objects[template_idx].clone();
-        let Ok(asset_id) = crate::scene::Scene::save_prefab(&template, "MmorpgRepere") else {
+        let scope = crate::assets::PrefabScope::Scene("Mmorpg".into());
+        let Ok(asset_id) = crate::scene::Scene::save_prefab(&template, "MmorpgRepere", &scope)
+        else {
             return;
         };
         for i in 1..=4 {

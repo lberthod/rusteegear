@@ -1805,8 +1805,13 @@ mod tests {
             tap_action: TapAction::Hide,
             ..Default::default()
         };
-        let asset_id = Scene::save_prefab_at(&dir, &gemme_v1, "Gemme")
-            .expect("sauvegarde du prefab impossible");
+        let asset_id = Scene::save_prefab_at(
+            &dir,
+            &gemme_v1,
+            "Gemme",
+            &crate::assets::PrefabScope::General,
+        )
+        .expect("sauvegarde du prefab impossible");
 
         // 20 instances, chacune à sa propre position (transform/name surchargés par
         // défaut par `instantiate_prefab_at`).
@@ -1837,7 +1842,13 @@ mod tests {
             color: [0.0, 1.0, 0.0],
             ..gemme_v1
         };
-        Scene::save_prefab_at(&dir, &gemme_v2, "Gemme").unwrap();
+        Scene::save_prefab_at(
+            &dir,
+            &gemme_v2,
+            "Gemme",
+            &crate::assets::PrefabScope::General,
+        )
+        .unwrap();
         scene.sync_prefab_instances_at(&dir);
 
         for (i, obj) in scene.objects.iter().enumerate() {

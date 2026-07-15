@@ -148,6 +148,22 @@ struct Panels {
     /// pour les actions les plus courantes du menu Ajouter, en avant-plan plutôt
     /// que dans un sous-menu.
     add_object_cards: bool,
+    /// Complément prefabs (validation + portée) : nom de scène/projet tapé par
+    /// l'utilisateur, partagé entre le bouton « Créer un prefab » de l'Inspecteur et
+    /// la section « 📁 Prefabs de cette scène » du navigateur d'assets — vide =
+    /// portée générale. Ce moteur n'a pas de notion de « projet » séparée d'une
+    /// scène : un seul champ sert aux deux usages.
+    prefab_scope_name: String,
+    /// Message à afficher dans le popup de confirmation après un clic sur
+    /// « Créer un prefab » (`Ok(nom)` ou `Err(message)`) — posé par l'appelant
+    /// (`gfx::renderer`) une fois `UiActions::save_as_prefab` traité, lu et effacé
+    /// par le popup lui-même au clic sur OK.
+    prefab_feedback: Option<Result<String, String>>,
+    /// Suppression de prefab en attente de confirmation (portée, nom affiché) —
+    /// posé par le bouton 🗑 de la liste, lu par le popup de confirmation, jamais
+    /// appliqué directement au clic (destructif : toujours un aller-retour de
+    /// validation, cf. demande utilisateur).
+    prefab_pending_delete: Option<(crate::assets::PrefabScope, String)>,
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -241,14 +257,17 @@ pub struct UiActions {
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
     pub reset_transform: bool,
     /// « Créer un prefab depuis la sélection » (Sprint 96, câblage UI) : sauvegarde
-    /// l'objet sélectionné sous `assets_dir()/prefabs/`.
-    pub save_as_prefab: bool,
+    /// l'objet sélectionné, dans la portée choisie (générale ou scène nommée).
+    pub save_as_prefab: Option<crate::assets::PrefabScope>,
     /// Navigateur d'assets, section Prefabs : « Instancier » un prefab (référence
     /// stable `asset-id://<uuid>`).
     pub instantiate_prefab: Option<String>,
     /// « Resynchroniser les instances de prefab » : réapplique chaque template aux
     /// instances liées de la scène (`Scene::sync_prefab_instances`).
     pub sync_prefab_instances: bool,
+    /// Suppression de prefab confirmée (portée, nom sans `.json`) — complément
+    /// validation : posé seulement après confirmation dans le popup dédié.
+    pub delete_prefab: Option<(crate::assets::PrefabScope, String)>,
     /// « Quitter » : ferme l'application.
     pub quit: bool,
     pub play_audio: Option<String>,
@@ -383,6 +402,14 @@ impl Editor {
     /// visible — même logique que `fps_history`, qui ne s'accumule aussi que là.
     pub fn profiler_open(&self) -> bool {
         self.panels.profiler
+    }
+
+    /// Pose le résultat de `AppState::save_selected_as_prefab` (succès ou échec), lu
+    /// la frame suivante par le popup de validation (`windows::prefab_feedback_popup`)
+    /// — posé par l'appelant (`gfx::renderer`) juste après avoir traité
+    /// `UiActions::save_as_prefab`.
+    pub fn set_prefab_feedback(&mut self, result: Result<String, String>) {
+        self.panels.prefab_feedback = Some(result);
     }
 
     /// Mode Player : dessine **uniquement** les contrôles tactiles en surimpression
@@ -796,6 +823,11 @@ fn build_ui(
     optimize_window(root.ctx(), panels, scene, actions);
     asset_browser_window(root.ctx(), panels, scene, *selection, actions);
     scripts_window(root.ctx(), panels, scene, selection, selected);
+    // Complément prefabs : popup de validation après création + confirmation avant
+    // suppression (demande utilisateur — un aller-retour explicite pour les deux,
+    // pas une action silencieuse).
+    windows::prefab_feedback_popup(root.ctx(), panels);
+    windows::prefab_delete_confirm_popup(root.ctx(), panels, actions);
 
     // Fenêtre flottante « Build & Export ».
     export.ui(root.ctx(), scene);
@@ -1247,15 +1279,36 @@ fn build_ui(
                             ui.label(t);
                         });
                         ui.horizontal(|ui| {
+                            ui.label("Portée du prefab");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut panels.prefab_scope_name)
+                                    .hint_text("Général (vide) ou nom de scène/projet")
+                                    .desired_width(160.0),
+                            )
+                            .on_hover_text(
+                                "Vide = prefab général, visible depuis toute scène. Un nom \
+                                 (ex. « Mmorpg ») range le prefab à part, propre à cette \
+                                 scène/ce projet — même champ que la section « Prefabs de \
+                                 cette scène » du navigateur d'assets.",
+                            );
+                        });
+                        ui.horizontal(|ui| {
                             if ui
                                 .button("🧊 Créer un prefab depuis la sélection")
                                 .on_hover_text(
-                                    "Enregistre cet objet comme prefab réutilisable \
-                                     (assets_dir()/prefabs/) — cf. navigateur d'assets.",
+                                    "Enregistre cet objet comme prefab réutilisable, dans la \
+                                     portée ci-dessus — cf. navigateur d'assets.",
                                 )
                                 .clicked()
                             {
-                                actions.save_as_prefab = true;
+                                let scope = if panels.prefab_scope_name.trim().is_empty() {
+                                    crate::assets::PrefabScope::General
+                                } else {
+                                    crate::assets::PrefabScope::Scene(
+                                        panels.prefab_scope_name.trim().to_string(),
+                                    )
+                                };
+                                actions.save_as_prefab = Some(scope);
                             }
                             if obj.prefab.is_some()
                                 && ui

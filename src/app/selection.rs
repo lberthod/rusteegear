@@ -396,15 +396,21 @@ impl AppState {
     /// nom de fichier dérive du nom de l'objet, nettoyé comme `BuildConfig::safe_name`
     /// (alphanumérique/`-`/`_`). L'objet source **n'est pas** transformé en instance
     /// liée : juste un nouvel asset créé depuis son état courant, comme un « enregistrer
-    /// sous » plutôt qu'un « déplacer vers ».
-    pub fn save_selected_as_prefab(&mut self) -> Result<(), String> {
+    /// sous » plutôt qu'un « déplacer vers ». `scope` choisit entre un prefab général
+    /// (visible depuis toute scène) et un prefab propre à une scène/projet nommé —
+    /// complément UI : validation visuelle après création. Renvoie le nom effectif du
+    /// prefab (pour le message de confirmation), pas juste `()`.
+    pub fn save_selected_as_prefab(
+        &mut self,
+        scope: crate::assets::PrefabScope,
+    ) -> Result<String, String> {
         let obj = self
             .selection
             .and_then(|i| self.scene.objects.get(i))
             .ok_or_else(|| "aucun objet sélectionné".to_string())?;
         let name = sanitize_prefab_name(&obj.name);
-        crate::scene::Scene::save_prefab(obj, &name)?;
-        Ok(())
+        crate::scene::Scene::save_prefab(obj, &name, &scope)?;
+        Ok(name)
     }
 
     /// Instancie le prefab `asset_id` (cf. `Scene::instantiate_prefab`) à l'origine —
@@ -493,10 +499,15 @@ mod tests {
         });
         app.select_single(app.scene.objects.len() - 1);
 
-        app.save_selected_as_prefab()
+        let saved_name = app
+            .save_selected_as_prefab(crate::assets::PrefabScope::General)
             .expect("sauvegarde du prefab attendue");
+        assert_eq!(
+            saved_name, tag,
+            "le nom renvoyé doit être celui du fichier créé"
+        );
 
-        let (_, asset_id) = crate::assets::list_prefabs()
+        let (_, asset_id) = crate::assets::list_prefabs(&crate::assets::PrefabScope::General)
             .into_iter()
             .find(|(name, _)| name == &tag)
             .expect("le prefab doit apparaître dans list_prefabs");
@@ -509,6 +520,37 @@ mod tests {
             app.selection,
             Some(app.scene.objects.len() - 1),
             "la nouvelle instance doit être sélectionnée"
+        );
+    }
+
+    #[test]
+    fn save_selected_as_prefab_with_a_scene_scope_does_not_leak_into_general() {
+        // Complément portées (général vs scène) : un prefab créé pour une scène
+        // nommée n'apparaît pas dans la liste générale, et réciproquement.
+        let tag = unique_prefab_name("scoped");
+        let scene_name = unique_prefab_name("MaScene");
+        let mut app = AppState::new();
+        app.scene.objects.push(SceneObject {
+            name: tag.clone(),
+            mesh: MeshKind::Cube,
+            ..Default::default()
+        });
+        app.select_single(app.scene.objects.len() - 1);
+
+        app.save_selected_as_prefab(crate::assets::PrefabScope::Scene(scene_name.clone()))
+            .expect("sauvegarde du prefab attendue");
+
+        assert!(
+            crate::assets::list_prefabs(&crate::assets::PrefabScope::General)
+                .iter()
+                .all(|(name, _)| name != &tag),
+            "un prefab de scène ne doit pas apparaître dans la portée générale"
+        );
+        assert!(
+            crate::assets::list_prefabs(&crate::assets::PrefabScope::Scene(scene_name))
+                .iter()
+                .any(|(name, _)| name == &tag),
+            "le prefab doit apparaître dans la portée de scène où il a été créé"
         );
     }
 
@@ -528,7 +570,10 @@ mod tests {
     fn save_selected_as_prefab_without_selection_fails_gracefully() {
         let mut app = AppState::new();
         app.selection = None;
-        assert!(app.save_selected_as_prefab().is_err());
+        assert!(
+            app.save_selected_as_prefab(crate::assets::PrefabScope::General)
+                .is_err()
+        );
     }
 
     #[test]
