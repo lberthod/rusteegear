@@ -390,6 +390,60 @@ impl AppState {
         self.selected = (start..self.scene.objects.len()).collect();
         self.selection = self.selected.last().copied();
     }
+
+    /// Sprint 96 (câblage UI, mécanisme livré au sprint lui-même) : sauvegarde l'objet
+    /// sélectionné (primaire) comme prefab réutilisable — cf. `Scene::save_prefab`. Le
+    /// nom de fichier dérive du nom de l'objet, nettoyé comme `BuildConfig::safe_name`
+    /// (alphanumérique/`-`/`_`). L'objet source **n'est pas** transformé en instance
+    /// liée : juste un nouvel asset créé depuis son état courant, comme un « enregistrer
+    /// sous » plutôt qu'un « déplacer vers ».
+    pub fn save_selected_as_prefab(&mut self) -> Result<(), String> {
+        let obj = self
+            .selection
+            .and_then(|i| self.scene.objects.get(i))
+            .ok_or_else(|| "aucun objet sélectionné".to_string())?;
+        let name = sanitize_prefab_name(&obj.name);
+        crate::scene::Scene::save_prefab(obj, &name)?;
+        Ok(())
+    }
+
+    /// Instancie le prefab `asset_id` (cf. `Scene::instantiate_prefab`) à l'origine —
+    /// même position de départ que `add_object`, à repositionner ensuite — et sélectionne
+    /// la nouvelle instance. Sans effet si le prefab est introuvable/invalide.
+    pub fn instantiate_prefab(&mut self, asset_id: &str) {
+        let name = format!("Instance {}", self.scene.objects.len());
+        let Some(obj) = crate::scene::Scene::instantiate_prefab(asset_id, name, Vec3::ZERO) else {
+            return;
+        };
+        self.push_undo();
+        self.scene.objects.push(obj);
+        self.select_single(self.scene.objects.len() - 1);
+    }
+
+    /// Resynchronise toutes les instances de prefab de la scène avec leur template
+    /// (cf. `Scene::sync_prefab_instances`) — mécanisme moteur livré au Sprint 96,
+    /// jamais câblé à l'UI jusqu'ici (aucun appelant avant ce sprint).
+    pub fn sync_prefab_instances(&mut self) {
+        self.push_undo();
+        self.scene.sync_prefab_instances();
+    }
+}
+
+/// Nettoyage d'un nom d'objet en nom de fichier prefab valide — même règle que
+/// `BuildConfig::safe_name` (alphanumérique/`-`/`_`, défaut si le résultat est vide).
+fn sanitize_prefab_name(name: &str) -> String {
+    let n: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if n.is_empty() { "Prefab".into() } else { n }
 }
 
 #[cfg(test)]
@@ -411,6 +465,79 @@ mod tests {
                 "selection None mais selected non vide"
             );
         }
+    }
+
+    /// Nom unique par test (même schéma que `scene::mod::tests::unique_prefab_name`) :
+    /// ces tests écrivent dans le vrai `~/.motor3derust/assets/prefabs/` (pas de
+    /// variante `_at` pour `Scene::save_prefab`/`instantiate_prefab`, cf. leur propre
+    /// définition) — un nom unique évite toute collision entre tests parallèles ou
+    /// entre sessions concurrentes sur ce dépôt.
+    fn unique_prefab_name(tag: &str) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("test_{tag}_{}_{}", std::process::id(), nanos)
+    }
+
+    #[test]
+    fn save_selected_as_prefab_then_instantiate_round_trips_through_disk() {
+        let tag = unique_prefab_name("gemme");
+        let mut app = AppState::new();
+        app.scene.objects.push(SceneObject {
+            name: tag.clone(),
+            mesh: MeshKind::Sphere,
+            color: [1.0, 1.0, 0.0],
+            ..Default::default()
+        });
+        app.select_single(app.scene.objects.len() - 1);
+
+        app.save_selected_as_prefab()
+            .expect("sauvegarde du prefab attendue");
+
+        let (_, asset_id) = crate::assets::list_prefabs()
+            .into_iter()
+            .find(|(name, _)| name == &tag)
+            .expect("le prefab doit apparaître dans list_prefabs");
+
+        app.instantiate_prefab(&asset_id);
+        let last = app.scene.objects.last().expect("une instance attendue");
+        assert_eq!(last.color, [1.0, 1.0, 0.0], "couleur héritée du template");
+        assert!(last.prefab.is_some(), "l'instance doit être liée au prefab");
+        assert_eq!(
+            app.selection,
+            Some(app.scene.objects.len() - 1),
+            "la nouvelle instance doit être sélectionnée"
+        );
+    }
+
+    #[test]
+    fn instantiate_prefab_with_an_unknown_id_does_nothing() {
+        let mut app = AppState::new();
+        let before = app.scene.objects.len();
+        app.instantiate_prefab("asset-id://inconnu");
+        assert_eq!(
+            app.scene.objects.len(),
+            before,
+            "un id inconnu ne doit rien ajouter à la scène"
+        );
+    }
+
+    #[test]
+    fn save_selected_as_prefab_without_selection_fails_gracefully() {
+        let mut app = AppState::new();
+        app.selection = None;
+        assert!(app.save_selected_as_prefab().is_err());
+    }
+
+    #[test]
+    fn sync_prefab_instances_is_safe_with_no_prefabs_in_scene() {
+        let mut app = AppState::new();
+        let before = app.scene.objects.len();
+        app.scene.objects.push(SceneObject::default());
+        app.sync_prefab_instances(); // ne doit pas paniquer sans instance de prefab
+        assert_eq!(app.scene.objects.len(), before + 1);
     }
 
     #[test]

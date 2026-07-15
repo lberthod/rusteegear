@@ -240,6 +240,15 @@ pub struct UiActions {
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
     pub reset_transform: bool,
+    /// « Créer un prefab depuis la sélection » (Sprint 96, câblage UI) : sauvegarde
+    /// l'objet sélectionné sous `assets_dir()/prefabs/`.
+    pub save_as_prefab: bool,
+    /// Navigateur d'assets, section Prefabs : « Instancier » un prefab (référence
+    /// stable `asset-id://<uuid>`).
+    pub instantiate_prefab: Option<String>,
+    /// « Resynchroniser les instances de prefab » : réapplique chaque template aux
+    /// instances liées de la scène (`Scene::sync_prefab_instances`).
+    pub sync_prefab_instances: bool,
     /// « Quitter » : ferme l'application.
     pub quit: bool,
     pub play_audio: Option<String>,
@@ -1222,6 +1231,29 @@ fn build_ui(
                                     .unwrap_or_default()
                             };
                             ui.label(t);
+                        });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("🧊 Créer un prefab depuis la sélection")
+                                .on_hover_text(
+                                    "Enregistre cet objet comme prefab réutilisable \
+                                     (assets_dir()/prefabs/) — cf. navigateur d'assets.",
+                                )
+                                .clicked()
+                            {
+                                actions.save_as_prefab = true;
+                            }
+                            if obj.prefab.is_some()
+                                && ui
+                                    .button("🔄 Resynchroniser les instances")
+                                    .on_hover_text(
+                                        "Réapplique le prefab source à toutes ses \
+                                         instances de la scène (sauf leurs surcharges).",
+                                    )
+                                    .clicked()
+                            {
+                                actions.sync_prefab_instances = true;
+                            }
                         });
                         ui.separator();
                         transform_editor(ui, &mut obj.transform);

@@ -1567,6 +1567,17 @@ impl Renderer {
             if actions.reset_transform {
                 app.reset_transform();
             }
+            if actions.save_as_prefab
+                && let Err(e) = app.save_selected_as_prefab()
+            {
+                log::warn!("Création du prefab impossible : {e}");
+            }
+            if let Some(asset_id) = actions.instantiate_prefab {
+                app.instantiate_prefab(&asset_id);
+            }
+            if actions.sync_prefab_instances {
+                app.sync_prefab_instances();
+            }
             if actions.quit {
                 app.request_quit();
             }

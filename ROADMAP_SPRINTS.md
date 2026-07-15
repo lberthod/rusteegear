@@ -1280,7 +1280,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   navigateur d'assets de l'éditeur — `rename_asset` existe et est testé côté moteur,
   reste à câbler un bouton/champ dans `src/editor/mod.rs`.
 
-#### Sprint 96 — Prefabs 🟢 (mécanisme moteur fait, UI éditeur restante)
+#### Sprint 96 — Prefabs ✅ FAIT
 - [x] **`SceneObject::prefab: Option<PrefabInstance>`** (`asset_id` = référence stable
       `asset-id://<uuid>` du Sprint 95, `overrides: Vec<String>` = noms des champs
       JSON explicitement modifiés sur cette instance).
@@ -1307,10 +1307,33 @@ régression client. Une manche décidée ne coupe plus tout le process
       sans prefab inchangé ; prefab introuvable = no-op sans panique). 280 tests lib
       + 4 bin + 8 golden verts.
 - **Fichiers** : `src/scene/mod.rs`.
-- **Livrable restant, hors scope de ce sprint** : pas d'instanciation depuis le
-  navigateur d'assets ni de bouton « créer un prefab depuis la sélection » dans
-  `src/editor/mod.rs` — mécanisme moteur complet et testé, câblage UI à faire dans
-  un sprint dédié (même situation que le renommage d'assets du Sprint 95).
+- [x] **Câblage UI (repris plus tard le même jour)** : le mécanisme moteur restait
+      orphelin — `Scene::sync_prefab_instances` n'avait **aucun appelant** avant ce
+      complément, malgré ses tests.
+  - `assets::list_prefabs`/`list_prefabs_at` (`src/assets.rs`) : `list_assets` ne
+    liste pas les prefabs (lecture non récursive de `assets_dir()`, `prefabs/` y
+    apparaît comme un seul sous-dossier) — nouvelle fonction dédiée, `(nom affiché,
+    asset-id://<uuid>)`, même schéma `_at` paramétré que `register_asset`.
+  - `AppState::save_selected_as_prefab`/`instantiate_prefab`/`sync_prefab_instances`
+    (`src/app/selection.rs`) : enveloppes avec `push_undo()` autour des méthodes
+    `Scene` déjà testées ; le nom de fichier prefab dérive du nom de l'objet
+    (nettoyé comme `BuildConfig::safe_name`) — l'objet source n'est **pas**
+    converti en instance liée (« enregistrer sous », pas « déplacer vers »).
+  - UI : bouton « 🧊 Créer un prefab depuis la sélection » + « 🔄 Resynchroniser les
+    instances » (visible seulement si `obj.prefab.is_some()`) dans l'Inspecteur
+    (`src/editor/mod.rs`) ; section « 🧩 Prefabs » avec bouton « ➕ Instancier » par
+    prefab dans le navigateur d'assets (`src/editor/windows.rs`) — nouveaux champs
+    `UiActions::save_as_prefab`/`instantiate_prefab`/`sync_prefab_instances`,
+    appliqués dans `src/gfx/renderer.rs` comme `duplicate`/`align_ground`.
+  - Tests : `list_prefabs_at` (tri, ignore les fichiers non-JSON, idempotent) +
+    trois tests `AppState` (aller-retour disque sauvegarde→instanciation, id inconnu
+    = no-op, sélection vide = erreur propre, `sync_prefab_instances` sans prefab ne
+    panique pas). 377 tests lib verts (5 nouveaux), clippy `-D warnings` et fmt
+    propres, build wasm32 vert. Non vérifié visuellement (fenêtre éditeur native,
+    cf. limite documentée aux sprints 113d/122/125/126/128) — logique couverte par
+    tests unitaires indépendants du rendu.
+  - **Fichiers** : `src/assets.rs`, `src/app/selection.rs`, `src/editor/mod.rs`,
+    `src/editor/windows.rs`, `src/gfx/renderer.rs`.
 
 #### Sprint 97 — API Lua de scène ✅ FAIT
 > Fait **sans** attendre le Sprint 94 (sauté pour l'instant, refactor à handles

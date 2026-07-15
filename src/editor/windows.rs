@@ -989,6 +989,27 @@ pub(super) fn asset_browser_window(
                         }
                     });
             }
+            ui.separator();
+            // Sprint 96 (câblage UI) : prefabs, listés séparément de `list_assets`
+            // (qui ne descend pas dans `prefabs/`, cf. `assets::list_prefabs`).
+            let prefabs = crate::assets::list_prefabs();
+            ui.collapsing(format!("🧩 Prefabs ({})", prefabs.len()), |ui| {
+                if prefabs.is_empty() {
+                    ui.label(
+                        "Aucun prefab. Sélectionne un objet puis « 🧊 Créer un prefab \
+                         depuis la sélection » dans l'Inspecteur.",
+                    );
+                } else {
+                    for (name, asset_id) in prefabs {
+                        ui.horizontal(|ui| {
+                            ui.label(&name);
+                            if ui.button("➕ Instancier").clicked() {
+                                actions.instantiate_prefab = Some(asset_id);
+                            }
+                        });
+                    }
+                }
+            });
         });
     panels.assets = open;
 }

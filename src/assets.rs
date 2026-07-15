@@ -348,6 +348,36 @@ pub fn list_assets() -> Vec<String> {
     out
 }
 
+/// Cœur de `list_prefabs`, paramétré par `dir` (testable sans toucher
+/// `~/.motor3derust/assets/`, même raison que `register_asset_at` et consorts).
+fn list_prefabs_at(dir: &std::path::Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = std::fs::read_dir(dir.join("prefabs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let file_name = e.file_name();
+            let name = file_name.to_str()?;
+            let display = name.strip_suffix(".json")?.to_string();
+            let id = register_asset_at(dir, &format!("prefabs/{name}"));
+            Some((display, id))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Prefabs disponibles (`assets_dir()/prefabs/*.json`, cf. `Scene::save_prefab`) :
+/// `(nom affiché, référence stable asset-id://<uuid>)`. `list_assets` ne les liste pas
+/// — lecture non récursive du dossier d'assets, `prefabs/` n'y apparaît que comme un
+/// seul sous-dossier, pas ses fichiers.
+pub fn list_prefabs() -> Vec<(String, String)> {
+    match assets_dir() {
+        Some(dir) => list_prefabs_at(&dir),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +436,30 @@ mod tests {
             std::env::temp_dir().join(format!("rusteegear_assets_test_{:x}", hasher.finish()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn list_prefabs_at_lists_json_files_with_stable_ids_and_ignores_non_prefabs() {
+        let dir = temp_assets_dir("list_prefabs");
+        let prefabs = dir.join("prefabs");
+        std::fs::create_dir_all(&prefabs).unwrap();
+        std::fs::write(prefabs.join("gemme.json"), b"{}").unwrap();
+        std::fs::write(prefabs.join("caisse.json"), b"{}").unwrap();
+        // Un fichier non-JSON dans le même dossier (ex. temporaire) ne doit pas
+        // apparaître comme prefab.
+        std::fs::write(prefabs.join("notes.txt"), b"pas un prefab").unwrap();
+
+        let listed = list_prefabs_at(&dir);
+        let names: Vec<&str> = listed.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["caisse", "gemme"], "triés, sans notes.txt");
+        for (_, id) in &listed {
+            assert!(id.starts_with(ASSET_ID_SCHEME));
+        }
+
+        // Idempotence : un second appel renvoie les mêmes uuid (pas de doublons dans
+        // le manifeste à chaque ouverture du navigateur d'assets).
+        let listed_again = list_prefabs_at(&dir);
+        assert_eq!(listed, listed_again);
     }
 
     #[test]
