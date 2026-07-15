@@ -2746,13 +2746,27 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Fichiers** : `src/scene/import.rs` (ou nouveau `src/runtime/ik.rs`), `src/app/simulation.rs`.
 - **Livrable** : un personnage regarde le joueur quand il est proche (look-at pondéré) ; un bras atteint visiblement un point cible via l'IK deux-os, testé sur des angles connus.
 
-#### Sprint 135 — Cycle de vie + handles générationnels (réouverture du Sprint 94) ⬜
+#### Sprint 135 — Cycle de vie + handles générationnels (réouverture du Sprint 94) ⬜ (examiné, sauté à nouveau — raison documentée)
 **Objectif** : le Sprint 94 avait été sciemment sauté (« trop risqué à ce stade »— indices utilisés par le réseau et l'undo). Le découpage en sous-modules des Sprints 103a-1/2/3 réduit la surface de risque (les call-sites sont désormais localisés par sous-système plutôt qu'éparpillés dans un fichier de 7500 lignes), mais **le risque de fond reste le même** : ne pas le sous-estimer une seconde fois.
 - [ ] File de commandes spawn/despawn appliquée en fin de tick fixe (remplace la suppression douce `visible=false` actuelle).
 - [ ] `slotmap` (index + génération) sur `scene.objects` — migration des call-sites réseau (`network_client.rs`, `multiplayer.rs`, `bin/server.rs`) et undo (`selection.rs`) un par un, jamais en bloc.
 - **Fichiers** : `src/scene/mod.rs`, `src/app/persistence.rs` (undo), `src/app/network_client.rs`, `src/app/multiplayer.rs`, `src/bin/server.rs`.
 - **Livrable** : détruire un objet en Play n'invalide aucune référence tenue par le réseau ou l'historique undo (tests dédiés) ; un test de charge réseau (façon Sprint 61) confirme l'absence de régression de latence/débit.
 - **Risque** : **le plus élevé de la phase S**, hérité tel quel du Sprint 94 — à faire **seul**, sans autre sprint gameplay/réseau en parallèle, comme le Sprint 103b/103c l'avait fait pour le character controller.
+- **Ré-examiné le 15 juillet 2026** (tentative de découper en une « partie 1 sûre » +
+  une « partie 2 risquée ») : **les deux items ne se séparent pas proprement**. Le
+  spawn est déjà mis en file et appliqué en fin de tick aujourd'hui
+  (`AppState::sim_step`, `spawn_requests`) ; le despawn actuel
+  (`obj:destroy()` → `visible = false`) est déjà sûr en soi (un simple booléen,
+  aucun index invalidé). Le changement que demande vraiment cet item — remplacer
+  `visible=false` par une **vraie** suppression de `scene.objects` — n'est sûr
+  **qu'avec** le slotmap sous-jacent : le faire avant réintroduirait exactement le
+  risque d'indices invalidés (réseau/undo) que ce sprint existe pour éviter. Un
+  « refactor de forme » qui formaliserait la file actuelle sans changer son
+  comportement a été jugé de trop faible valeur pour justifier le risque de
+  régression d'un refactor touchant `sim_step`. Sauté à nouveau, en connaissance de
+  cause — toujours d'actualité pour une session dédiée, seule, avec du temps pour
+  un vrai test de charge réseau avant/après.
 
 > **Définition de « terminé » S** : quinze chantiers 🟢 (dix « quasi gratuits » du 14
 > juillet + cinq du 15 juillet, dont deux promotions raisonnées de 🟠 et une
