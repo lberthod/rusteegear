@@ -1632,6 +1632,147 @@ mod tests {
         );
     }
 
+    /// Preuve de la demande gameplay « la Créature 1 doit avoir une attaque et la
+    /// faire parfois » (`scene::demos::creature_bite_script`) : un contact
+    /// **continu** de 20 s avec le joueur doit infliger au moins une morsure, mais
+    /// pas à chaque frame — contrairement au pattern des dangers existants
+    /// (`if obj.triggered then damage(dps*dt) end`, dégâts fractionnaires à
+    /// chaque tick), l'attaque se déclenche par salves discrètes (~`BITE_DAMAGE`
+    /// nets), espacées d'au moins `BITE_COOLDOWN`. Le joueur est réaligné sur la
+    /// créature après chaque pas (elle patrouille toujours, cf. `creature_wander_
+    /// script`) pour garantir un contact ininterrompu sans dépendre de la
+    /// trajectoire réelle.
+    #[test]
+    fn creature_1_bites_the_player_sometimes_not_on_every_contact_tick() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        let creature_idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Créature")
+            .expect("la démo MMORPG doit contenir une « Créature »");
+        let player_idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Joueur")
+            .expect("la démo MMORPG doit contenir un « Joueur »");
+
+        let start = app.scene.objects[creature_idx].transform.position;
+        app.scene.objects[player_idx].transform.position = start;
+        app.hud_health = Some(1.0);
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        app.physics
+            .as_mut()
+            .unwrap()
+            .set_position(player_idx, start);
+
+        let dt = 1.0 / 60.0;
+        let mut bites = 0u32;
+        let mut prev_health = app.hud_health.unwrap();
+        for step in 0..(20 * 60) {
+            app.sim_step(dt);
+            let health = app
+                .hud_health
+                .expect("damage() doit faire apparaître la vie du HUD");
+            if health < prev_health - 1e-4 {
+                bites += 1;
+                let drop = prev_health - health;
+                assert!(
+                    (0.08..0.13).contains(&drop),
+                    "step {step} : chute de vie {drop:.3} inattendue (attendu ≈ 0.115, \
+                     une salve nette moins la régénération passive du tick, pas une \
+                     fraction continue par frame)"
+                );
+            }
+            prev_health = health;
+
+            // Contact permanent : replace le joueur exactement sur la créature
+            // (qui a continué de patrouiller ce tick) avant le prochain pas.
+            let pos = app.scene.objects[creature_idx].transform.position;
+            app.physics.as_mut().unwrap().set_position(player_idx, pos);
+            app.scene.objects[player_idx].transform.position = pos;
+        }
+
+        assert!(
+            bites > 0,
+            "20 s de contact continu avec la Créature 1 auraient dû déclencher \
+             au moins une morsure"
+        );
+        assert!(
+            bites < 20,
+            "{bites} morsures en 20 s pour un cooldown de 2,2 s — l'attaque semble \
+             se déclencher en continu plutôt que « parfois »"
+        );
+    }
+
+    /// Contre-épreuve de portée : le contact seul ne suffit pas à mordre — sans
+    /// contact (joueur loin), la vie ne doit jamais baisser malgré 20 s de
+    /// simulation (aucune tolérance de flakiness possible ici, contrairement au
+    /// test précédent : `obj.triggered` est structurellement faux tout du long).
+    #[test]
+    fn creature_1_never_bites_without_contact() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        let player_idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Joueur")
+            .expect("la démo MMORPG doit contenir un « Joueur »");
+        // Loin de toute créature/mur (cf. les spawns `Vec3::new(±3.0, 0.0, ±3.0)`
+        // et le pourtour à `half = 12.0` dans `Scene::mmorpg_demo`).
+        app.scene.objects[player_idx].transform.position = Vec3::new(0.0, 1.0, 9.0);
+        app.hud_health = Some(1.0);
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let dt = 1.0 / 60.0;
+        for _ in 0..(20 * 60) {
+            app.sim_step(dt);
+        }
+        assert_eq!(
+            app.hud_health,
+            Some(1.0),
+            "sans contact, la vie ne doit jamais baisser (aucune créature ne mord à distance)"
+        );
+    }
+
+    /// Verrouille la portée de la demande : seule la Créature 1 mord. Les 4
+    /// autres créatures restent des PNJ pacifiques — vérifié statiquement sur le
+    /// script (pas d'appel `damage(`) plutôt qu'en rejouant une scène de contact
+    /// par créature, plus rapide et tout aussi précis pour cette propriété.
+    #[test]
+    fn only_creature_1_has_a_bite_attack() {
+        let scene = crate::scene::Scene::mmorpg_demo();
+        for name in ["Créature 2", "Créature 3", "Créature 4", "Créature 5"] {
+            let obj = scene
+                .objects
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap_or_else(|| panic!("la démo MMORPG doit contenir « {name} »"));
+            assert!(
+                !obj.script.contains("damage("),
+                "« {name} » ne devrait pas pouvoir attaquer (script : {:?})",
+                obj.script
+            );
+        }
+        let creature1 = scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Créature")
+            .expect("la démo MMORPG doit contenir « Créature »");
+        assert!(
+            creature1.script.contains("damage("),
+            "la Créature 1 devrait avoir une attaque (cf. creature_bite_script)"
+        );
+        assert!(
+            creature1.trigger,
+            "la Créature 1 doit avoir `trigger = true` pour que `obj.triggered` \
+             fonctionne dans son script d'attaque"
+        );
+    }
+
     /// Preuve (bug observé en jeu sur la créature MMORPG : « les bras et la tête
     /// partent en couille dès qu'elle tourne », silhouette dédoublée) : un script qui
     /// ne réécrit que `obj.ry` doit produire un cap **stable** d'un tick à l'autre,

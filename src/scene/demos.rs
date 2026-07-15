@@ -205,6 +205,49 @@ fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> Strin
     )
 }
 
+/// Attaque au contact — réservée à la Créature n°1, ajoutée en plus de
+/// `creature_wander_script` (pas un remplacement). Volontairement distincte du
+/// pattern des dangers existants (`if obj.triggered then damage(dps*dt) end`,
+/// dégâts continus tant que le contact dure — cf. `roguelike_demo`/
+/// `zombies_demo`) : ici l'attaque ne se déclenche qu'au rythme de
+/// `BITE_COOLDOWN` et pas à coup sûr (`BITE_CHANCE`), pour une morsure
+/// occasionnelle plutôt qu'un contact systématiquement punitif — un PNJ qui
+/// erre, pas un danger de zone de combat.
+///
+/// Tirage déterministe (hachage de `time`, même idiome que le bruit de
+/// méandre de `creature_wander_script`) plutôt que `math.random` : ce projet
+/// s'est délibérément débarrassé des graines non reproductibles au profit
+/// d'un RNG déterministe (`runtime::rng`, Sprint 131) — un script Lua non
+/// seedable romprait cette garantie et resterait, de toute façon, impossible
+/// à tester exactement (cf. les tests `creature_1_*` dans
+/// `app::simulation::tests`, qui rejouent le même calcul côté Rust).
+///
+/// Nécessite `SceneObject::trigger = true` sur la créature (sinon
+/// `obj.triggered` reste toujours faux, cf. la détection de contact dans
+/// `AppState::sim_step`) — n'affecte pas son collider physique
+/// (`PhysicsKind::Kinematic`), `trigger` est un indicateur de scène pur, lu
+/// uniquement côté script.
+fn creature_bite_script(prefix: &str) -> String {
+    format!(
+        r#"
+    local BITE_COOLDOWN = 2.2
+    local BITE_CHANCE = 0.4
+    local BITE_DAMAGE = 0.12
+
+    local bite_cd = (save.get("{prefix}bite_cd") or 0.0) - dt
+    if obj.triggered and bite_cd <= 0.0 then
+        bite_cd = BITE_COOLDOWN
+        local roll = math.sin(time * 12.9898) * 43758.5453
+        roll = roll - math.floor(roll)
+        if roll < BITE_CHANCE then
+            damage(BITE_DAMAGE)
+        end
+    end
+    save.set("{prefix}bite_cd", bite_cd)
+"#
+    )
+}
+
 impl Scene {
     /// Démo « contrôleur » **sans script** (niveau 1) : joueur pilotable au joystick,
     /// saut, collisions, pièces à ramasser, lave à éviter.
@@ -1399,7 +1442,16 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 // tous bits) la voit et la bloque normalement.
                 creature.physics = PhysicsKind::Kinematic;
                 creature.collision_layer = 1 << 1;
-                creature.script = creature_wander_script(half, "creature_", !(1_u32 << 1));
+                // Seule la Créature n°1 mord (cf. `creature_bite_script`) — les
+                // 4 autres restent des PNJ purement pacifiques. `trigger = true`
+                // active la détection de contact (`obj.triggered`) nécessaire à
+                // l'attaque, sans changer son collider (toujours solide).
+                creature.trigger = true;
+                creature.script = format!(
+                    "{}\n{}",
+                    creature_wander_script(half, "creature_", !(1_u32 << 1)),
+                    creature_bite_script("creature_")
+                );
                 objects.push(creature);
                 imported.push(mesh);
             }
