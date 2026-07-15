@@ -404,12 +404,24 @@ impl AppState {
         &mut self,
         scope: crate::assets::PrefabScope,
     ) -> Result<String, String> {
+        let dir = crate::assets::assets_dir()
+            .ok_or_else(|| "pas de dossier d'assets (HOME absent)".to_string())?;
+        self.save_selected_as_prefab_at(&dir, scope)
+    }
+
+    /// Cœur de `save_selected_as_prefab`, paramétré par `dir` (testable sans toucher
+    /// `~/.motor3derust/assets/` — même raison que `Scene::save_prefab_at`).
+    pub(crate) fn save_selected_as_prefab_at(
+        &mut self,
+        dir: &std::path::Path,
+        scope: crate::assets::PrefabScope,
+    ) -> Result<String, String> {
         let obj = self
             .selection
             .and_then(|i| self.scene.objects.get(i))
             .ok_or_else(|| "aucun objet sélectionné".to_string())?;
         let name = sanitize_prefab_name(&obj.name);
-        crate::scene::Scene::save_prefab(obj, &name, &scope)?;
+        crate::scene::Scene::save_prefab_at(dir, obj, &name, &scope)?;
         Ok(name)
     }
 
@@ -417,8 +429,18 @@ impl AppState {
     /// même position de départ que `add_object`, à repositionner ensuite — et sélectionne
     /// la nouvelle instance. Sans effet si le prefab est introuvable/invalide.
     pub fn instantiate_prefab(&mut self, asset_id: &str) {
+        let Some(dir) = crate::assets::assets_dir() else {
+            return;
+        };
+        self.instantiate_prefab_at(&dir, asset_id);
+    }
+
+    /// Cœur de `instantiate_prefab`, paramétré par `dir` — même raison que
+    /// `save_selected_as_prefab_at`.
+    pub(crate) fn instantiate_prefab_at(&mut self, dir: &std::path::Path, asset_id: &str) {
         let name = format!("Instance {}", self.scene.objects.len());
-        let Some(obj) = crate::scene::Scene::instantiate_prefab(asset_id, name, Vec3::ZERO) else {
+        let Some(obj) = crate::scene::Scene::instantiate_prefab_at(dir, asset_id, name, Vec3::ZERO)
+        else {
             return;
         };
         self.push_undo();
@@ -473,26 +495,26 @@ mod tests {
         }
     }
 
-    /// Nom unique par test (même schéma que `scene::mod::tests::unique_prefab_name`) :
-    /// ces tests écrivent dans le vrai `~/.motor3derust/assets/prefabs/` (pas de
-    /// variante `_at` pour `Scene::save_prefab`/`instantiate_prefab`, cf. leur propre
-    /// définition) — un nom unique évite toute collision entre tests parallèles ou
-    /// entre sessions concurrentes sur ce dépôt.
-    fn unique_prefab_name(tag: &str) -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        format!("test_{tag}_{}_{}", std::process::id(), nanos)
+    /// Dossier temporaire unique par test — même schéma que
+    /// `assets::tests::temp_assets_dir`/`savegame::tests::temp_save_dir` : aucune
+    /// dépendance au vrai `$HOME`, sûr sous exécution parallèle.
+    fn temp_prefabs_dir(tag: &str) -> std::path::PathBuf {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        tag.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        let dir =
+            std::env::temp_dir().join(format!("rusteegear_selection_test_{:x}", hasher.finish()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
     fn save_selected_as_prefab_then_instantiate_round_trips_through_disk() {
-        let tag = unique_prefab_name("gemme");
+        let dir = temp_prefabs_dir("round_trip");
         let mut app = AppState::new();
         app.scene.objects.push(SceneObject {
-            name: tag.clone(),
+            name: "Gemme".to_string(),
             mesh: MeshKind::Sphere,
             color: [1.0, 1.0, 0.0],
             ..Default::default()
@@ -500,19 +522,20 @@ mod tests {
         app.select_single(app.scene.objects.len() - 1);
 
         let saved_name = app
-            .save_selected_as_prefab(crate::assets::PrefabScope::General)
+            .save_selected_as_prefab_at(&dir, crate::assets::PrefabScope::General)
             .expect("sauvegarde du prefab attendue");
         assert_eq!(
-            saved_name, tag,
+            saved_name, "Gemme",
             "le nom renvoyé doit être celui du fichier créé"
         );
 
-        let (_, asset_id) = crate::assets::list_prefabs(&crate::assets::PrefabScope::General)
-            .into_iter()
-            .find(|(name, _)| name == &tag)
-            .expect("le prefab doit apparaître dans list_prefabs");
+        let (_, asset_id) =
+            crate::assets::list_prefabs_at(&dir, &crate::assets::PrefabScope::General)
+                .into_iter()
+                .find(|(name, _)| name == "Gemme")
+                .expect("le prefab doit apparaître dans list_prefabs");
 
-        app.instantiate_prefab(&asset_id);
+        app.instantiate_prefab_at(&dir, &asset_id);
         let last = app.scene.objects.last().expect("une instance attendue");
         assert_eq!(last.color, [1.0, 1.0, 0.0], "couleur héritée du template");
         assert!(last.prefab.is_some(), "l'instance doit être liée au prefab");
@@ -527,38 +550,39 @@ mod tests {
     fn save_selected_as_prefab_with_a_scene_scope_does_not_leak_into_general() {
         // Complément portées (général vs scène) : un prefab créé pour une scène
         // nommée n'apparaît pas dans la liste générale, et réciproquement.
-        let tag = unique_prefab_name("scoped");
-        let scene_name = unique_prefab_name("MaScene");
+        let dir = temp_prefabs_dir("scoped");
+        let scene_name = "MaScene".to_string();
         let mut app = AppState::new();
         app.scene.objects.push(SceneObject {
-            name: tag.clone(),
+            name: "Scoped".to_string(),
             mesh: MeshKind::Cube,
             ..Default::default()
         });
         app.select_single(app.scene.objects.len() - 1);
 
-        app.save_selected_as_prefab(crate::assets::PrefabScope::Scene(scene_name.clone()))
+        app.save_selected_as_prefab_at(&dir, crate::assets::PrefabScope::Scene(scene_name.clone()))
             .expect("sauvegarde du prefab attendue");
 
         assert!(
-            crate::assets::list_prefabs(&crate::assets::PrefabScope::General)
+            crate::assets::list_prefabs_at(&dir, &crate::assets::PrefabScope::General)
                 .iter()
-                .all(|(name, _)| name != &tag),
+                .all(|(name, _)| name != "Scoped"),
             "un prefab de scène ne doit pas apparaître dans la portée générale"
         );
         assert!(
-            crate::assets::list_prefabs(&crate::assets::PrefabScope::Scene(scene_name))
+            crate::assets::list_prefabs_at(&dir, &crate::assets::PrefabScope::Scene(scene_name))
                 .iter()
-                .any(|(name, _)| name == &tag),
+                .any(|(name, _)| name == "Scoped"),
             "le prefab doit apparaître dans la portée de scène où il a été créé"
         );
     }
 
     #[test]
     fn instantiate_prefab_with_an_unknown_id_does_nothing() {
+        let dir = temp_prefabs_dir("unknown_id");
         let mut app = AppState::new();
         let before = app.scene.objects.len();
-        app.instantiate_prefab("asset-id://inconnu");
+        app.instantiate_prefab_at(&dir, "asset-id://inconnu");
         assert_eq!(
             app.scene.objects.len(),
             before,

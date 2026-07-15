@@ -503,6 +503,12 @@ mod tests {
         if crate::assets::assets_dir().is_none() {
             return;
         }
+        // Verrou : ce test écrit dans le vrai `assets_dir()` (nom de prefab fixe,
+        // `MmorpgRepere`), à sérialiser avec les autres tests dans le même cas (cf.
+        // `REAL_ASSETS_DIR_TEST_LOCK` et `app::tests::a_spawned_enemy_via_lua_...`).
+        let _guard = crate::assets::REAL_ASSETS_DIR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut app = AppState::new();
         app.load_mmorpg_demo();
         let asset_ids: Vec<String> = (1..=4)
