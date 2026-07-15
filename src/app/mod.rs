@@ -36,6 +36,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use glam::{Quat, Vec3};
 #[cfg(not(target_arch = "wasm32"))]
 use mlua::Lua;
+#[cfg(target_arch = "wasm32")]
+use rilua::LuaApiMut;
 
 use crate::gfx::camera::OrbitCamera;
 use crate::gfx::mesh::MeshData;
@@ -637,7 +639,7 @@ impl AppState {
             log::warn!("Breakpoints Lua indisponibles : {e}");
         }
         #[cfg(target_arch = "wasm32")]
-        let lua_web = rilua::Lua::new().unwrap_or_else(|e| {
+        let mut lua_web = rilua::Lua::new().unwrap_or_else(|e| {
             // Jamais observé en pratique (`Lua::new()` échoue seulement si l'allocation
             // initiale du GC échoue) — `expect`-like mais loggé plutôt qu'une panique
             // muette, un état `Lua` par défaut minimal reste préférable à planter tout
@@ -645,6 +647,16 @@ impl AppState {
             log::error!("Initialisation rilua impossible : {e}");
             rilua::Lua::new_empty()
         });
+        // GC incrémental désactivé (Sprint 137, constaté en prod : « string expected,
+        // got collected string ») : `Table::raw_set`/`create_string` (l'API bas niveau
+        // utilisée par `scripting_web`, seule disponible hors bytecode Lua) n'appliquent
+        // aucun write barrier — une valeur fraîchement écrite dans une table déjà
+        // « noire » (déjà scannée par un cycle incrémental précédent) peut donc être
+        // ramassée avant d'être relue. `scripting_web::run_script_web` déclenche des
+        // collectes complètes périodiques à la place (`full_gc`, cf. sa doc) : une
+        // collecte complète repart de zéro et n'a pas cet écueil.
+        #[cfg(target_arch = "wasm32")]
+        lua_web.gc_stop();
         AppState {
             scene: Scene::demo(),
             selection: None,

@@ -74,6 +74,41 @@ thread_local! {
     /// `scripting::run_script` (fermetures scopées empruntant `&Physics`), impossible
     /// ici faute de fermetures capturantes côté `rilua`.
     static PHYSICS_PTR: Cell<*const Physics> = const { Cell::new(std::ptr::null()) };
+    /// Compteur d'appels à `run_script_web`, pour espacer les collectes complètes
+    /// (`GC_PERIOD`) — cf. la doc de `maybe_collect_garbage`.
+    static GC_TICKS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Nombre d'appels à `run_script_web` entre deux collectes complètes du GC `rilua`
+/// (un appel par objet scripté par tick — quelques secondes de marge avec une poignée
+/// d'objets scriptés à 60 Hz). Cf. `maybe_collect_garbage`.
+const GC_PERIOD: u32 = 240;
+
+/// Déclenche une collecte complète (`Lua::gc_collect`) tous les `GC_PERIOD` appels.
+/// Le GC incrémental de `rilua` est désactivé une fois pour toutes à la création de
+/// `Lua` (`AppState::new`, `lua_web.gc_stop()`) : l'API bas niveau utilisée par ce
+/// module (`table_raw_set`/`create_string`) n'applique pas le write barrier qu'exige
+/// un GC incrémental (une valeur fraîchement écrite dans une table déjà scannée peut
+/// être ramassée avant d'être relue — constaté en prod, cf. Sprint 137). Une collecte
+/// **complète** repart de zéro (marquage entier depuis les racines) et n'a pas cet
+/// écueil ; l'appeler périodiquement plutôt qu'à chaque tick borne son coût.
+fn maybe_collect_garbage(lua: &mut Lua) {
+    let n = GC_TICKS.with(|c| {
+        let n = c.get() + 1;
+        c.set(n);
+        n
+    });
+    if n >= GC_PERIOD {
+        GC_TICKS.with(|c| c.set(0));
+        if let Err(e) = lua.gc_collect() {
+            log::warn!("Collecte GC Lua (web) : {e}");
+        }
+        // `gc_collect` (`full_gc`) réinitialise `gc_threshold` en sortie
+        // (`update_threshold`), ce qui réactiverait le pas incrémental (et donc le
+        // bug de write barrier ci-dessus) dès la prochaine allocation — on redésactive
+        // immédiatement, comme à la création de `Lua` (`AppState::new`).
+        lua.gc_stop();
+    }
 }
 
 struct PhysicsGuard;
@@ -513,6 +548,7 @@ pub(super) fn run_script_web(
             state.set_clip(requested);
         }
     }
+    maybe_collect_garbage(lua);
     Ok(())
 }
 
@@ -880,6 +916,64 @@ mod tests {
     fn script_key_stable_and_distinct() {
         assert_eq!(script_key("obj.x = 1"), script_key("obj.x = 1"));
         assert_ne!(script_key("obj.x = 1"), script_key("obj.x = 2"));
+    }
+
+    /// Régression (constaté en prod, Sprint 137) : `Table::raw_set`/`create_string`
+    /// (l'API bas niveau utilisée par ce module) n'appliquent pas le write barrier
+    /// qu'exige le GC incrémental de `rilua` — une valeur fraîchement écrite dans une
+    /// table déjà scannée (ex. `obj.anim = "Walk"`) pouvait être ramassée avant d'être
+    /// relue, dès qu'un cycle incrémental se déclenchait pendant l'exécution d'un
+    /// script (« string expected, got collected string »). Boucle sur bien plus que
+    /// `GC_PERIOD` appels, GC incrémental désactivé comme en production
+    /// (`AppState::new`, `lua_web.gc_stop()`) — sans le correctif (désactivation +
+    /// collectes complètes périodiques qui se redésactivent), ce test échoue en
+    /// quelques dizaines d'itérations sur l'ancien comportement de rilua.
+    #[test]
+    fn many_script_calls_never_hit_a_gc_collected_string() {
+        let mut lua = Lua::new().unwrap();
+        lua.gc_stop();
+        let src = "local t = time % 4.0\n\
+                   if t < 3.0 then obj.anim = 'Walk' else obj.anim = 'Idle' end";
+        let mut anim = Some(crate::scene::AnimationState {
+            clip: "Idle".into(),
+            ..Default::default()
+        });
+        for i in 0..(GC_PERIOD * 3) {
+            let mut t = Transform::from_pos(Vec3::ZERO);
+            let mut col = [1.0; 3];
+            let func = lua.load(src).unwrap();
+            let mut spawn_out = Vec::new();
+            let mut destroy_out = false;
+            let mut vib_out = Vec::new();
+            let mut health_out = None;
+            let mut reverb_out = Vec::new();
+            let mut debug_out = Vec::new();
+            run_script_web(
+                &mut lua,
+                &func,
+                &mut t,
+                &mut col,
+                &mut anim,
+                0.016,
+                i as f32 * 0.016,
+                &PlayerInput::default(),
+                false,
+                false,
+                &[],
+                &mut Vec::new(),
+                &[],
+                &mut spawn_out,
+                &mut destroy_out,
+                &mut HashMap::new(),
+                &mut vib_out,
+                &mut health_out,
+                &mut debug_out,
+                false,
+                None,
+                &mut reverb_out,
+            )
+            .unwrap_or_else(|e| panic!("itération {i} : {e}"));
+        }
     }
 
     #[test]
