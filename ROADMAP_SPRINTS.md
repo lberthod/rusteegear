@@ -2062,7 +2062,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 > exposition réseau réelle ». Insérables n'importe où après leurs prérequis,
 > comme les sprints tampons de la Phase P.
 
-#### Sprint 113a — Découpage des god-modules 🟡 EN COURS
+#### Sprint 113a — Découpage des god-modules ✅ FAIT
 **Objectif** : ramener `app/mod.rs` (4612 l.) et `renderer.rs` (3490 l.) sous ~1500-2000
 lignes chacun, dans l'esprit des extractions déjà faites (103a-1, 105a-1).
 - [x] `renderer.rs` : setup pipeline (~40 pipelines/layouts/samplers/buffers) extrait
@@ -2083,10 +2083,28 @@ lignes chacun, dans l'esprit des extractions déjà faites (103a-1, 105a-1).
       restores_score_position_and_lua_vars` — combat+ai+health ou combat+persistence
       entremêlés) — pas de split mécanique évident sans dupliquer de la logique de
       test, à traiter test par test plutôt qu'en bloc contigu si repris.
-- [ ] `scene/mod.rs` (2789 l.) : pas commencé — si le temps le permet, extraire les
-      types de données (widgets HUD, contrôles mobiles, prefabs) des méthodes d'API scène.
+- [x] `scene/mod.rs` (2921 l. au moment de ce complément, `wind` du Sprint 125
+      inclus) : les types de données purs déplacés vers des modules dédiés — nouveau
+      `scene/hud_widgets.rs` (`HudAnchor`, `HudBinding`, `HudWidgetKind`, `HudWidget`,
+      `HudLayout`), nouveau `scene/mobile.rs` (`MobileControls`), `PrefabInstance`
+      rapatrié dans `scene/prefab.rs` (qui portait déjà ses méthodes `Scene::
+      save_prefab`/`instantiate_prefab`/`sync_prefab_instances` sans porter le type
+      lui-même). Tous re-exportés (`pub use`) depuis `scene/mod.rs` : aucun appelant
+      externe (`app/mod.rs`, `editor/hud.rs`, `editor/windows.rs`, `scene/demos.rs`,
+      `scene/persistence.rs`, `scene/queries.rs`) n'a changé — `crate::scene::
+      HudAnchor` etc. résolvent toujours pareil. 2921 → 2772 lignes (-5 %) ; plus
+      petit gain que `app/mod.rs`/`renderer.rs` (moins de gras à extraire ici : la
+      majorité du fichier est déjà `impl Scene` cohérent, pas des types isolés), mais
+      chaque type déplacé a maintenant un fichier dont le nom dit ce qu'il contient.
+      Sky/GameCamera laissés en place (pas nommés dans l'objectif du sprint, moins de
+      valeur à les isoler seuls).
+      **Vérifié pour activité concurrente avant et après** (une autre session tournait
+      en parallèle ce jour-là, cf. mémoire du dépôt) : mtimes de `scene/mod.rs`
+      contrôlés avant chaque écriture, diff final relu ligne à ligne (déplacements
+      purs, `git diff` sur `prefab.rs` confirmé sans changement de logique).
 - **Fichiers** : `src/app/mod.rs`, `src/gfx/renderer.rs` (+ `gfx/pipelines.rs`,
-  `gfx/passes.rs`), `src/scene/mod.rs`.
+  `gfx/passes.rs`), `src/scene/mod.rs` (+ nouveaux `scene/hud_widgets.rs`,
+  `scene/mobile.rs`), `src/scene/prefab.rs`.
 - **Livrable** : nombre de lignes avant/après documenté par fichier ; 100 % des tests
   existants toujours verts ; `cargo clippy`/`cargo fmt` propres ; aucun changement de
   comportement observable.

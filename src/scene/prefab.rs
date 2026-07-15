@@ -3,8 +3,28 @@
 //! `scene/mod.rs`.
 
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
-use super::{PrefabInstance, Scene, SceneObject};
+use super::{Scene, SceneObject};
+
+/// Instance d'un prefab : un `SceneObject` sérialisé, partagé par plusieurs
+/// objets de la scène qui y renvoient tous par référence stable (`asset-id://`)
+/// plutôt que de dupliquer ses champs — modifier le fichier prefab puis appeler
+/// `Scene::sync_prefab_instances` répercute le changement sur toutes les instances,
+/// sauf les champs que chacune a explicitement surchargés.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PrefabInstance {
+    /// Référence stable vers le JSON du prefab (`asset-id://<uuid>`) — un renommage du
+    /// fichier prefab ne casse donc aucune instance (cf. `assets::rename_asset`).
+    pub asset_id: String,
+    /// Noms des champs de `SceneObject` (clés JSON sérialisées, ex. `"transform"`,
+    /// `"color"`) explicitement modifiés sur **cette** instance : jamais réécrits par
+    /// `sync_prefab_instances`, quoi que le template devienne. `transform` et `name` y
+    /// figurent par défaut dès la création (`Scene::instantiate_prefab`) — deux champs
+    /// qu'une instance a presque toujours besoin de garder propres à elle.
+    #[serde(default)]
+    pub overrides: Vec<String>,
+}
 
 impl Scene {
     /// Sauvegarde `obj` comme prefab dans `assets_dir()/prefabs/<name>.json`, enregistré

@@ -1,7 +1,9 @@
 //! Modèle de scène (sans ECS) : un Vec d'objets, chacun avec un Transform et un type de mesh.
 
 mod demos;
+mod hud_widgets;
 pub mod import;
+mod mobile;
 mod persistence;
 mod prefab;
 mod queries;
@@ -11,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::gfx::mesh::{self, MeshData};
 use crate::runtime::physics::PhysicsKind;
+pub use hud_widgets::{HudAnchor, HudBinding, HudLayout, HudWidget, HudWidgetKind};
+pub use mobile::MobileControls;
+pub use prefab::PrefabInstance;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Transform {
@@ -673,25 +678,6 @@ pub struct SceneObject {
     pub tag: String,
 }
 
-/// Instance d'un prefab : un `SceneObject` sérialisé, partagé par plusieurs
-/// objets de la scène qui y renvoient tous par référence stable (`asset-id://`)
-/// plutôt que de dupliquer ses champs — modifier le fichier prefab puis appeler
-/// `Scene::sync_prefab_instances` répercute le changement sur toutes les instances,
-/// sauf les champs que chacune a explicitement surchargés.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct PrefabInstance {
-    /// Référence stable vers le JSON du prefab (`asset-id://<uuid>`) — un renommage du
-    /// fichier prefab ne casse donc aucune instance (cf. `assets::rename_asset`).
-    pub asset_id: String,
-    /// Noms des champs de `SceneObject` (clés JSON sérialisées, ex. `"transform"`,
-    /// `"color"`) explicitement modifiés sur **cette** instance : jamais réécrits par
-    /// `sync_prefab_instances`, quoi que le template devienne. `transform` et `name` y
-    /// figurent par défaut dès la création (`Scene::instantiate_prefab`) — deux champs
-    /// qu'une instance a presque toujours besoin de garder propres à elle.
-    #[serde(default)]
-    pub overrides: Vec<String>,
-}
-
 /// Composant optionnel : lecture d'un clip d'animation squelettale. `None` =
 /// pose de liaison figée (mesh skinné mais immobile) — même logique que `Controller`/
 /// `Combat` : la plupart des objets, même skinnés, n'ont pas forcément besoin d'un clip
@@ -983,107 +969,6 @@ pub struct Scene {
     pub hud_widgets: Vec<HudWidget>,
 }
 
-/// Point d'ancrage d'un `HudWidget` dans la zone de jeu (`play_rect`) : le widget
-/// est positionné relativement à ce coin, `offset` s'ajoutant dans le sens qui
-/// l'éloigne du bord (ex. `TopRight` + `offset [-10, 10]` reste à l'intérieur).
-#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Debug)]
-pub enum HudAnchor {
-    #[default]
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-    Center,
-}
-
-impl HudAnchor {
-    /// Position du point d'ancrage en fraction de la zone de jeu (0..1 sur x et y).
-    pub fn fraction(self) -> (f32, f32) {
-        match self {
-            HudAnchor::TopLeft => (0.0, 0.0),
-            HudAnchor::TopRight => (1.0, 0.0),
-            HudAnchor::BottomLeft => (0.0, 1.0),
-            HudAnchor::BottomRight => (1.0, 1.0),
-            HudAnchor::Center => (0.5, 0.5),
-        }
-    }
-}
-
-/// Valeur de jeu à laquelle lier le contenu d'un widget (texte formaté, remplissage
-/// d'une jauge). `None` = contenu statique, aucune liaison.
-#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Debug)]
-pub enum HudBinding {
-    #[default]
-    None,
-    Health,
-    Score,
-    Kills,
-    Wave,
-}
-
-/// Contenu d'un `HudWidget`. Les 4 natures couvertes par le Sprint 109 —
-/// texte, image, jauge, bouton — en plus de l'ancrage (`HudAnchor`) commun à tous.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-pub enum HudWidgetKind {
-    /// `content` est affiché tel quel si `binding` vaut `None`, sinon la valeur
-    /// liée est ajoutée après un espace (ex. `content = "Score"`, `binding = Score`
-    /// → « Score 42 »).
-    Text {
-        content: String,
-        binding: HudBinding,
-    },
-    /// Image chargée depuis un chemin d'asset (`assets::read_bytes`), mise en
-    /// cache par le renderer — cf. `editor::hud::hud_widgets`.
-    Image { path: String },
-    /// Barre de progression : `binding.value() / max` (borné à [0, 1]).
-    Gauge {
-        binding: HudBinding,
-        max: f32,
-        color: [f32; 3],
-    },
-    /// Bouton cliquable : pousse l'événement de gameplay `hud:<action>` (lisible
-    /// en Lua via `on_event`), même mécanisme que `emit()` — cf. `AppState::push_hud_event`.
-    Button { label: String, action: String },
-}
-
-impl Default for HudWidgetKind {
-    fn default() -> Self {
-        HudWidgetKind::Text {
-            content: String::new(),
-            binding: HudBinding::None,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
-#[serde(default)]
-pub struct HudWidget {
-    /// Identifiant stable (clé egui + cache image) : à choisir unique dans la scène,
-    /// pas régénéré automatiquement (une scène éditée à la main doit pouvoir en
-    /// fixer un lisible).
-    pub id: String,
-    pub anchor: HudAnchor,
-    /// Décalage en pixels par rapport au point d'ancrage (cf. `HudAnchor::fraction`).
-    pub offset: [f32; 2],
-    /// Taille en pixels (image, jauge, bouton — ignorée pour le texte, qui se
-    /// dimensionne à son contenu).
-    pub size: [f32; 2],
-    pub kind: HudWidgetKind,
-}
-
-/// Cf. `Scene::hud_layout`. Chaque champ est un décalage `[x, y]` en pixels par
-/// rapport à la position par défaut de l'élément — `[0.0, 0.0]` (le défaut) donne
-/// exactement le placement d'origine, donc les scènes existantes ne changent pas.
-#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
-#[serde(default)]
-pub struct HudLayout {
-    pub crosshair: [f32; 2],
-    pub weapon_hud: [f32; 2],
-    pub kills: [f32; 2],
-    pub weapon_inventory: [f32; 2],
-    pub roster: [f32; 2],
-}
-
 /// Fond de scène : dégradé de ciel dessiné derrière toute la géométrie,
 /// et brouillard exponentiel mélangé dans le shader PBR selon la distance à la caméra.
 ///
@@ -1135,40 +1020,6 @@ pub struct GameCamera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
-}
-
-/// Configuration des contrôles tactiles affichés en mode Play / Player.
-/// Le joystick et chaque bouton nommé sont lisibles depuis Lua via `input`.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct MobileControls {
-    /// Affiche un joystick virtuel (coin bas-gauche).
-    pub joystick: bool,
-    /// Affiche un pavé « tank » W/A/S/D (coin bas-gauche) à la place du
-    /// joystick : mêmes contrôles que le clavier desktop — W/S avance/recule le
-    /// long de l'orientation *actuelle* du personnage, A/D le fait pivoter
-    /// (cf. `PlayerInput::thrust`/`turn`). Prioritaire sur `joystick` si les deux sont
-    /// actifs (cf. `mobile_overlay`), pour ne jamais superposer les deux dans le
-    /// même coin de l'écran.
-    #[serde(default)]
-    pub dpad: bool,
-    /// Boutons tactiles nommés (coin bas-droite).
-    pub buttons: Vec<String>,
-    /// Zone tactile plein écran : un tap n'importe où expose `input.btn.touch` au script.
-    #[serde(default)]
-    pub touch_zone: bool,
-    /// Affiche la barre de vie du HUD (pilotée par `set_health` côté script).
-    #[serde(default)]
-    pub health_bar: bool,
-    /// Screen Safe Area : rentre les contrôles/HUD dans une marge sûre (encoche, bords arrondis).
-    #[serde(default)]
-    pub safe_area: bool,
-}
-
-impl MobileControls {
-    /// Au moins un contrôle est-il actif ?
-    pub fn any(&self) -> bool {
-        self.joystick || self.dpad || !self.buttons.is_empty() || self.touch_zone || self.health_bar
-    }
 }
 
 /// Schéma JSON simplifié produit par l'IA pour générer une scène entière.
