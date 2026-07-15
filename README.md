@@ -24,6 +24,29 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 
 ---
 
+## 📚 Table des matières
+
+- [✨ Vision](#vision)
+- [🎯 Quel besoin RusteeGear adresse-t-il ?](#besoin)
+- [🦀 Pourquoi Rust ?](#pourquoi-rust)
+- [⚖️ From scratch sur Rust — et pas sur Bevy ?](#from-scratch-vs-bevy)
+- [🎮 Fonctionnalités (disponibles aujourd'hui)](#fonctionnalites)
+- [🌐 Multijoueur en ligne (chantier en cours)](#multijoueur)
+- [🗓️ Historique & avancement](#historique)
+- [🚀 Démarrage rapide](#demarrage-rapide)
+- [🎨 Créer son premier jeu](#creer-son-jeu)
+- [🧱 Architecture](#architecture)
+- [🧭 La suite — analyse & sprints](#la-suite)
+- [🛠️ Stack technique](#stack-technique)
+- [📄 Licence](#licence)
+
+> Détail sprint par sprint (source de vérité, à jour en continu) :
+> **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**. Reprise du projet par un
+> nouveau développeur : **[HANDOFF.md](HANDOFF.md)**.
+
+---
+
+<a id="vision"></a>
 ## ✨ Vision
 
 RusteeGear est un éditeur de jeu 3D léger et hackable. L'objectif n'est pas de
@@ -34,6 +57,7 @@ grâce à la portabilité de `wgpu`.
 
 ---
 
+<a id="besoin"></a>
 ## 🎯 Quel besoin RusteeGear adresse-t-il ?
 
 Les moteurs grand public (Unity, Unreal, Godot) sont extraordinairement complets,
@@ -63,6 +87,7 @@ apprendre, prototyper et expérimenter le rendu temps réel et l'architecture mo
 
 ---
 
+<a id="pourquoi-rust"></a>
 ## 🦀 Pourquoi Rust ?
 
 Un moteur de jeu cumule les contraintes que Rust adresse le mieux :
@@ -95,6 +120,7 @@ plus haut niveau.
 
 ---
 
+<a id="from-scratch-vs-bevy"></a>
 ## ⚖️ From scratch sur Rust — et pas sur Bevy ?
 
 [Bevy](https://bevyengine.org/) est l'excellent moteur de jeu de l'écosystème Rust :
@@ -132,6 +158,7 @@ moteur — qui, elle, reste l'objet même de l'apprentissage.
 
 ---
 
+<a id="fonctionnalites"></a>
 ## 🎮 Fonctionnalités (disponibles aujourd'hui)
 
 **Rendu**
@@ -205,6 +232,7 @@ set_health(0..1)                       -- barre de vie du HUD
 
 ---
 
+<a id="multijoueur"></a>
 ## 🌐 Multijoueur en ligne (chantier en cours)
 
 RusteeGear commence à devenir jouable **à plusieurs, en ligne**, sur le mode
@@ -368,6 +396,7 @@ le développement). Historique sprint par sprint :
 
 ---
 
+<a id="historique"></a>
 ## 🗓️ Historique & avancement
 
 | Phase | Sprints | État |
@@ -384,14 +413,16 @@ le développement). Historique sprint par sprint :
 | **G** — Éditeur produit orienté Android (menus, Build Panel, menu Ajouter, composants mobiles, outils) | 38 → 42 | 🟢 |
 | **H** — **Jouabilité mobile sans script** (contrôleur joueur, saut, collisions, actions au tap) & **perf rendu** | 43 → 44 | ✅ |
 | **I** — Robustesse & découplage (pas fixe, init sans panic, tests + skip-rebuild) | 45 → 49 | 🟢 (48/49 mobile-only restants) |
-| *(Multijoueur en ligne)* — salons, serveur autoritaire, Firebase annexe, latence, PvE réseau | 50 → 89 | 🟢 voir **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** |
+| *(Multijoueur en ligne)* — salons, serveur autoritaire, Firebase annexe, latence, PvE réseau | 50 → 89 | 🟢 voir **[Multijoueur en ligne](#multijoueur)** |
 | **K** — Filet de sécurité (golden tests rendu, temps maîtrisé — time scale/step, console dev, debug drawing) | 80 → 83 | ✅ |
 | **L** — Animation squelettale (skinning glTF → blending → exposition Lua → réplication réseau) | 84 → 88 | ✅ |
 | **M** — Image (ciel + brouillard, HDR/tone mapping, bloom, mipmaps + tangentes) | 89 → 92 | ✅ |
 | **N** — Chaîne gameplay (événements, GUID d'assets, prefabs, API Lua de scène, sauvegarde, anim notifies) | 93 → 99 | 🟢 (94 cycle de vie/handles reporté ; 96 prefabs : UI éditeur restante) |
 | **O** — Physique & feel (trimesh/convexe, CCD/couches, requêtes, 103a maintenabilité `app`/`editor`/`scene`, 103b character controller, 103c audit prédiction réseau) | 100 → 103c | ✅ |
 | **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, hot-reload, snapping + profiler GPU, crash log + rustdoc | 104 → 113 | ✅ (106/107 non numérotés, tampons non utilisés) |
+| **P2** — Dette, sécurité & accessibilité (découpage god-modules, audit unwrap/panic, rate limiting réseau, wizard éditeur non-dev, doc « créateur de jeu », WSS obligatoire) | 113a → 113f | ✅ |
 | **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | ✅ (117 : reste à activer Pages une fois dans les réglages GitHub — non automatisable) |
+| **S** — Extensions quasi-gratuites (audio confort, forces de vent, pipeline assets, Zstd, outillage éditeur, noyau versioning/RNG) | 121 → 135 | 🟢 (121/125/126/127/131 ✅ ; 128/130 partiels — profilers et abilities reportés ; 94/135 examinés et sciemment sautés, cf. [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md#phase-s)) |
 
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
@@ -412,6 +443,7 @@ orbite, 2 doigts = zoom). iOS/Android ne sont pas signés pour une distribution 
 
 ---
 
+<a id="demarrage-rapide"></a>
 ## 🚀 Démarrage rapide
 
 ```bash
@@ -449,6 +481,7 @@ cargo run -- --player           # mode player (scène plein écran)
 
 ---
 
+<a id="creer-son-jeu"></a>
 ## 🎨 Créer son premier jeu
 
 Vous ne codez pas et voulez juste construire un niveau jouable ? Le guide
@@ -463,6 +496,7 @@ lui-même.)
 
 ---
 
+<a id="architecture"></a>
 ## 🧱 Architecture
 
 ```
@@ -493,6 +527,7 @@ Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (moteur),
 
 ---
 
+<a id="la-suite"></a>
 ## 🧭 La suite — analyse & sprints
 
 Le projet a été construit par **sprints incrémentaux**, un commit par étape validée.
@@ -504,7 +539,7 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 - **[SPRINTS.md](SPRINTS.md)** — récap historique des sprints 0→44 (Phases A→H), figé.
 - **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)** —
   chantier **multijoueur en ligne** en détail, cf.
-  **[Multijoueur en ligne](#-multijoueur-en-ligne-chantier-en-cours)** plus haut.
+  **[Multijoueur en ligne](#multijoueur)** plus haut.
 - **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
 **Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
@@ -526,11 +561,42 @@ s'automatise pas depuis un fichier de workflow). Limitations connues : le
 scripting Lua reste inerte sur wasm32, la musique/ambiance en flux n'est pas
 encore portée sur le web (`kira::sound::streaming` exclut ce target), et les
 meshes à animation squelettale ne s'affichent pas (limite de bind groups
-WebGPU) — détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md). Puis R
-(WebXR).
+WebGPU) — détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
+
+**Terminé — Phase P2, dette/sécurité/accessibilité** (113a→113f) : découpage
+des god-modules `app/mod.rs` et `scene/mod.rs` en sous-modules < 2000 lignes
+(113a), audit complet unwrap/expect/panic en code de production + durcissement
+du mutex réseau (113b), rate limiting + limite de connexions par IP côté
+serveur (113c), wizard « Nouveau projet » + panneau « Ajouter » simplifié pour
+un non-développeur (113d), guide texte « créateur de jeu » (113e), WSS
+obligatoire derrière HTTPS pour le client web via un sous-domaine Caddy dédié
+(113f).
+
+**En cours — Phase S, extensions quasi-gratuites** (121→135, cf.
+[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md#phase-s)) :
+mixeur audio complet — reverb/EQ/limiteur, ducking, musique adaptative deux
+couches (121) ; forces de zone — vent sur les triggers existants, buoyancy
+hors scope (125) ; pipeline assets — presets qualité par plateforme, graphe
+de dépendances, budgets polycount/taille, normalisation loudness à l'import
+(126) ; compression Zstd des packs embarqués, décodeur pur Rust compatible
+wasm32 (127) ; noyau moteur — versioning de schéma des scènes + RNG
+déterministe global unifié (131). Partiels : outillage éditeur — graphe de
+références et breakpoints Lua faits, profilers CPU/mémoire reportés (128,
+non vérifiables visuellement dans cet environnement) ; localisation FR/EN du
+texte runtime faite, abilities généralisées en données reportées (130).
+**Sprint 94/135** (cycle de vie + handles générationnels) ré-examiné le 15
+juillet 2026 avec l'espoir d'en isoler une tranche sûre à livrer sans le
+slotmap complet — conclusion honnête : les deux items ne se séparent pas
+proprement, resauté en connaissance de cause plutôt que de forcer un
+refactor à risque (détail du raisonnement dans
+[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md#sprint-135)).
+Restent ⬜ : post-effets HDR (122), SSAO (123), variants de shaders (124),
+terrain sculpté (129), particules (132), ombres cascadées (133), IK deux-os
+(134). Puis R (WebXR).
 
 ---
 
+<a id="stack-technique"></a>
 ## 🛠️ Stack technique
 
 | Besoin | Crate |
@@ -553,6 +619,7 @@ WebGPU) — détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md). Puis R
 
 ---
 
+<a id="licence"></a>
 ## 📄 Licence
 
 MIT — voir [LICENSE](LICENSE). Fais-en ce que tu veux. 🦀

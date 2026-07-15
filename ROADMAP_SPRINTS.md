@@ -8,8 +8,32 @@
 
 État de départ : **MVP complet**.
 
+Retour : **[README.md](README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap figé 0→44) ·
+**[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)**
+(détail multijoueur) · **[HANDOFF.md](HANDOFF.md)** (reprise du projet).
+
 ---
 
+## 📚 Table des matières
+
+- [🧭 Vue d'ensemble des phases](#vue-ensemble)
+- **Phases A → I** (moteur solo, sprints 7→49) :
+  [A](#phase-a) · [B](#phase-b) · [C](#phase-c) · [D](#phase-d) · [E](#phase-e) ·
+  [F](#phase-f) · [Audit 33-37](#audit-33-37) · [G](#phase-g) · [H](#phase-h) · [I](#phase-i)
+- [🌐 Multijoueur — sprints 50→79 (+80/82)](#multijoueur-sprints) :
+  [M-net](#phase-m-net) · [N-net](#phase-n-net) · [O-net](#phase-o-net) ·
+  [P-net](#phase-p-net) · [Q-net](#phase-q-net)
+- [🚀 Phases K → Q — vers un moteur pertinent (80→117)](#phases-k-q) :
+  [K](#phase-k) · [L](#phase-l) · [M](#phase-m) · [N](#phase-n) · [O](#phase-o) ·
+  [P](#phase-p) · [P2](#phase-p2) · [Q](#phase-q)
+- [🎁 Phase S — extensions quasi-gratuites (121→135)](#phase-s)
+- [🥽 Phase R — WebXR (118→120)](#phase-r)
+- [✅ Définition de « terminé » par phase](#definition-termine)
+- [📌 Conseils d'exécution](#conseils)
+
+---
+
+<a id="vue-ensemble"></a>
 ## 🧭 Vue d'ensemble des phases
 
 | Phase | Sprints | But |
@@ -40,6 +64,7 @@
 
 ---
 
+<a id="phase-a"></a>
 ## PHASE A — Fondations éditeur
 
 ### Sprint 7 — Refactor : séparer `App`, `Renderer` et `Scene` ✅ FAIT
@@ -85,6 +110,7 @@
 
 ---
 
+<a id="phase-b"></a>
 ## PHASE B — Runtime de jeu
 
 ### Sprint 11 — Scripting Lua ✅ FAIT
@@ -125,6 +151,7 @@
 
 ---
 
+<a id="phase-c"></a>
 ## PHASE C — Portage mobile
 
 > Pré-requis : Phase A (au moins Sprint 7, le refactor) terminée — l'abstraction
@@ -170,6 +197,7 @@
 
 ---
 
+<a id="phase-d"></a>
 ## PHASE D — App de dev & exports 1-clic
 
 > **Objectif global.** Faire du `.dmg` macOS l'**atelier central** : on conçoit la
@@ -258,6 +286,7 @@
 
 ---
 
+<a id="phase-e"></a>
 ## PHASE E — Player complet & maturité éditeur
 
 > Issue de l'audit post-Phase D. Objectif : que le **jeu exporté tourne réellement
@@ -314,6 +343,7 @@
 
 ---
 
+<a id="phase-f"></a>
 ## PHASE F — Reprise, finitions & distribution
 
 > **Contexte de reprise.** Projet transmis à un nouveau développeur. Les Phases A→E
@@ -407,6 +437,7 @@ un démonstrateur technique. Barre de menus complète + outils de contrôle qual
 
 ---
 
+<a id="audit-33-37"></a>
 ## 🔭 Audit (2026-06-19) & sprints proposés 33–37
 
 **État.** ~7000 lignes Rust, architecture saine (état métier `app/` sans GPU, rendu `gfx/`,
@@ -499,6 +530,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+<a id="phase-g"></a>
 ## PHASE G — Éditeur produit orienté Android
 
 > **But.** Transformer l'éditeur d'un démonstrateur technique en un **produit lisible
@@ -596,6 +628,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+<a id="phase-h"></a>
 ## PHASE H — Jouabilité mobile sans script & performance
 
 ### Sprint 43 — Contrôleur de personnage sans script ✅
@@ -620,6 +653,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+<a id="phase-i"></a>
 ## PHASE I — Robustesse & découplage (à venir)
 
 > Passer d'un **éditeur-produit jouable** à une **base robuste et distribuable**.
@@ -671,6 +705,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 
 ---
 
+<a id="multijoueur-sprints"></a>
 ## 🌐 Multijoueur en ligne (50 → 79, + 80/82 réseau) — VPS, Firebase, jeu en ligne
 
 > Numérotation **indépendante** du tronc solo ci-dessus (continue à 50 là où le solo
@@ -693,12 +728,14 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 > les documents source plutôt que renuméroté rétroactivement ; ne pas confondre les deux
 > en lisant « Sprint 80 »/« Sprint 82 » sans préciser le tronc.
 
+<a id="phase-m-net"></a>
 ### PHASE M-net — Préparation (50)
 
 #### Sprint 50 — Extraire le gameplay combat de `app/mod.rs` ✅ FAIT
 Isolé attaque/manches/IA dans `src/app/combat.rs`, point d'extension pour le serveur
 réseau, refactor pur (aucun changement de comportement, 83/83 tests verts).
 
+<a id="phase-n-net"></a>
 ### PHASE N-net — Serveur & protocole (51 → 53)
 
 #### Sprint 51 — Serveur de jeu headless ✅ FAIT
@@ -715,6 +752,7 @@ sans fenêtre.
 `NetServer`/`NetClient` exposent des canaux `mpsc` synchrones au reste du programme.
 95/95 tests verts, serveur réel écoutant sur `127.0.0.1:7777`.
 
+<a id="phase-o-net"></a>
 ### PHASE O-net — Client réseau (54 → 55)
 
 #### Sprint 54 — Prédiction client & interpolation 🟢 (cœur livré, câblage réel au Sprint 63)
@@ -726,6 +764,7 @@ court), réconciliation à seuil (`SNAP_THRESHOLD` 0,5 m). 102/102 tests verts.
 `NetworkInput`, routé dans `sim_step` sans changer le comportement solo. Test
 bout-en-bout à travers un vrai socket. 108 tests lib + 1 bin verts.
 
+<a id="phase-p-net"></a>
 ### PHASE P-net — Firebase Realtime Database, backend annexe (56 → 59)
 
 #### Sprint 56 — Comptes & authentification 🟢 (client REST fait, écran câblé plus tard)
@@ -746,6 +785,7 @@ boucle `winit` sans thread dédié supplémentaire, pas justifié à cette éche
 polling public. 126 tests verts. Risque documenté : pas de purge, à corriger avant
 usage soutenu.
 
+<a id="phase-q-net"></a>
 ### PHASE Q-net — Robustesse & mise en production (60 → 62)
 
 #### Sprint 60 — Durcissement réseau & anti-triche de base ✅ FAIT
@@ -871,6 +911,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 
 ---
 
+<a id="phases-k-q"></a>
 ## 🚀 Phases K → Q — Vers un moteur pertinent (sprints 80 → 114)
 
 > Issues de l'**audit comparatif à 200 fonctionnalités** (Godot / Unity / Unreal / RusteeGear,
@@ -889,6 +930,7 @@ régression client. Une manche décidée ne coupe plus tout le process
 > de sprints tampons insérables après K ; **Q ferme la boucle** quand il y a quelque chose à
 > montrer. Les sprints 50 → 78 étant pris par le multijoueur, on démarre à 80 (79 = tampon).
 
+<a id="phase-k"></a>
 ### PHASE K — Filet de sécurité (80 → 83) ✅
 
 > **Phase K — Filet de sécurité : terminée** (Sprints 80→83). Golden tests headless,
@@ -958,6 +1000,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   jaune) ; un script trace sa propre trajectoire avec `debug.line()` ; la toolbar bascule
   entre rendu éclairé, normales et profondeur sur la scène affichée.
 
+<a id="phase-l"></a>
 ### PHASE L — Animation squelettale (84 → 88)
 
 #### Sprint 84 — Données de squelette 🟢
@@ -1075,6 +1118,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   constat que le livrable restant du Sprint 87) ; mécanisme complet et testé,
   contenu de démo à faire dans un sprint dédié.
 
+<a id="phase-m"></a>
 ### PHASE M — Image (89 → 92)
 
 #### Sprint 89 — Ciel + brouillard ✅ FAIT
@@ -1205,6 +1249,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   normal mapping lui-même (consommer `tangents` dans un shader) reste un sprint à
   part, non planifié dans cette section.
 
+<a id="phase-n"></a>
 ### PHASE N — Chaîne gameplay (93 → 99)
 
 #### Sprint 93 — Événements ✅ FAIT
@@ -1435,6 +1480,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   sur des marqueurs — mécanisme complet et testé (marqueurs → événements → scripts),
   contenu skinné/démo à faire séparément (même situation que les Sprints 95-98).
 
+<a id="phase-o"></a>
 ### PHASE O — Physique & feel (100 → 103c)
 
 #### Sprint 100 — Trimesh + convexe ✅ FAIT
@@ -1741,6 +1787,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   `src/net/interpolation.rs` vérifié, non modifié.
 - **Livrable** : tests de réconciliation verts ; aucun rubber-banding à 100 ms simulées.
 
+<a id="phase-p"></a>
 ### PHASE P — Audio, HUD & confort (104 → 113, sprints tampons insérables après K)
 
 #### Sprint 104 — Audio : bus + panning + streaming ✅ FAIT
@@ -2054,6 +2101,7 @@ régression client. Une manche décidée ne coupe plus tout le process
   consultable/copiable au lancement suivant sans jamais partir tout seul ;
   doc API publiable en ligne dès Pages activé côté GitHub.
 
+<a id="phase-p2"></a>
 ### PHASE P2 — Dette, sécurité & accessibilité (113a → 113e)
 
 > Issue de l'audit comparatif du 2026-07-14 (7 axes notés, vérifiés dans le code).
@@ -2295,6 +2343,7 @@ connection may not be initiated from a page loaded over HTTPS »*.
 
 ---
 
+<a id="phase-q"></a>
 ### PHASE Q — Web, la vitrine (114 → 117)
 
 #### Sprint 114 — Build wasm32 ✅ FAIT
@@ -2567,6 +2616,7 @@ connection may not be initiated from a page loaded over HTTPS »*.
 > (événements → prefabs → spawn → save), une physique fidèle, un audio vivant, et il tourne dans
 > un navigateur — sans avoir trahi un seul refus assumé.
 
+<a id="phase-s"></a>
 ### PHASE S — Extensions quasi-gratuites (121 → 135)
 
 > Issue du même **audit comparatif à 200 fonctionnalités** que les phases K→Q
@@ -2883,6 +2933,7 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Fichiers** : `src/scene/import.rs` (ou nouveau `src/runtime/ik.rs`), `src/app/simulation.rs`.
 - **Livrable** : un personnage regarde le joueur quand il est proche (look-at pondéré) ; un bras atteint visiblement un point cible via l'IK deux-os, testé sur des angles connus.
 
+<a id="sprint-135"></a>
 #### Sprint 135 — Cycle de vie + handles générationnels (réouverture du Sprint 94) ⬜ (examiné, sauté à nouveau — raison documentée)
 **Objectif** : le Sprint 94 avait été sciemment sauté (« trop risqué à ce stade »— indices utilisés par le réseau et l'undo). Le découpage en sous-modules des Sprints 103a-1/2/3 réduit la surface de risque (les call-sites sont désormais localisés par sous-système plutôt qu'éparpillés dans un fichier de 7500 lignes), mais **le risque de fond reste le même** : ne pas le sous-estimer une seconde fois.
 - [ ] File de commandes spawn/despawn appliquée en fin de tick fixe (remplace la suppression douce `visible=false` actuelle).
@@ -2916,6 +2967,7 @@ connection may not be initiated from a page loaded over HTTPS »*.
 
 ---
 
+<a id="phase-r"></a>
 ### PHASE R — WebXR, le casque dans le navigateur (118 → 120, dépend de PHASE Q)
 
 > Placée en tout dernier dans ce document, après S, par choix de priorité — la VR/XR
@@ -2957,6 +3009,7 @@ connection may not be initiated from a page loaded over HTTPS »*.
 
 ---
 
+<a id="definition-termine"></a>
 ## ✅ Définition de « terminé » par phase
 
 - **A** : éditeur confortable — gizmos, import glTF, undo, duplication fonctionnent.
@@ -2999,6 +3052,7 @@ connection may not be initiated from a page loaded over HTTPS »*.
   compte, interactions XR de base validées par des scénarios rejouables — traitée
   en tout dernier par choix de priorité (dépend de Q, reste la plus spéculative).
 
+<a id="conseils"></a>
 ## 📌 Conseils d'exécution
 1. **Faire le Sprint 7 en premier** : sans le refactor, chaque portage dupliquerait du code.
 2. **Garder le mode Player (Sprint 14) comme cible de test** mobile — pas l'éditeur complet.
