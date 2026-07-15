@@ -87,13 +87,33 @@ use crate::runtime::physics::PhysicsKind;
 /// leur propre couche (`collision_layer`), chaque sonde toucherait la créature
 /// elle-même à distance 0 et elle se croirait bloquée en permanence.
 ///
+/// `heading0`/`phase` : cap initial et déphasage du bruit de méandre, propres à
+/// chaque créature. Le script est délibérément déterministe (pas de
+/// `math.random`, cf. le tirage de `creature_bite_script`) — mais sans ces deux
+/// paramètres, il était déterministe **et identique** pour toutes les
+/// instances : même cap de départ (0°, plein +Z) et même méandre
+/// (`math.sin(time * 0.35)`, fonction du `time` global, donc identique pour
+/// toutes à chaque tick). Toutes les créatures partaient alors en bloc dans la
+/// même direction, atteignaient le même mur ensemble, et le braquage anti-mur —
+/// lui aussi identique et symétrique en approche frontale — ne les décollait
+/// jamais. Même famille de défaut que celle corrigée par le `salt` de
+/// `creature_bite_script`.
+///
 /// Preuve du mouvement réel (pas juste l'animation qui tourne) :
 /// `scripted_creature_wanders_then_idles_using_the_imported_walk_and_idle_clips`.
 /// Preuve de non-blocage contre un mur + absence de virage brusque, avec la vraie
 /// physique : `mmorpg_creature_never_gets_stuck_walking_into_a_wall`
 /// (`app::simulation::tests`). Preuve des collisions (mur/joueur infranchissables) :
 /// `runtime::physics::tests::a_scripted_kinematic_body_cannot_walk_through_walls_or_the_player`.
-fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> String {
+/// Preuve que deux instances divergent (caps/positions distincts) :
+/// `mmorpg_creatures_do_not_all_walk_in_the_same_direction`.
+fn creature_wander_script(
+    arena_half: f32,
+    prefix: &str,
+    ray_mask: u32,
+    heading0: f32,
+    phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -107,7 +127,7 @@ fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> Strin
 
     local PROBE_EVERY = 4
 
-    local heading = save.get("{prefix}heading") or 0.0
+    local heading = save.get("{prefix}heading") or {heading0}
     local smooth_turn = save.get("{prefix}turn") or 0.0
     local was_stopped = (save.get("{prefix}stopped") or 1.0) > 0.5
 
@@ -152,7 +172,7 @@ fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> Strin
         local side = (right_d >= left_d) and 1.0 or -1.0
         raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5
     end
-    raw_turn = raw_turn + math.sin(time * 0.35) * 0.15
+    raw_turn = raw_turn + math.sin(time * 0.35 + {phase}) * 0.15
 
     if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then
         local to_center = math.deg(math.atan(-obj.x, -obj.z))
@@ -1449,7 +1469,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 creature.trigger = true;
                 creature.script = format!(
                     "{}\n{}",
-                    creature_wander_script(half, "creature_", !(1_u32 << 1)),
+                    creature_wander_script(half, "creature_", !(1_u32 << 1), 0.0, 0.0),
                     creature_bite_script("creature_")
                 );
                 objects.push(creature);
@@ -1490,7 +1510,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 });
                 creature2.physics = PhysicsKind::Kinematic;
                 creature2.collision_layer = 1 << 2;
-                creature2.script = creature_wander_script(half, "creature2_", !(1_u32 << 2));
+                creature2.script =
+                    creature_wander_script(half, "creature2_", !(1_u32 << 2), 72.0, 0.9);
                 objects.push(creature2);
                 imported.push(mesh);
             }
@@ -1528,7 +1549,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 });
                 creature3.physics = PhysicsKind::Kinematic;
                 creature3.collision_layer = 1 << 3;
-                creature3.script = creature_wander_script(half, "creature3_", !(1_u32 << 3));
+                creature3.script =
+                    creature_wander_script(half, "creature3_", !(1_u32 << 3), 144.0, 1.8);
                 objects.push(creature3);
                 imported.push(mesh);
             }
@@ -1566,7 +1588,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 });
                 creature4.physics = PhysicsKind::Kinematic;
                 creature4.collision_layer = 1 << 4;
-                creature4.script = creature_wander_script(half, "creature4_", !(1_u32 << 4));
+                creature4.script =
+                    creature_wander_script(half, "creature4_", !(1_u32 << 4), 216.0, 2.7);
                 objects.push(creature4);
                 imported.push(mesh);
             }
@@ -1604,7 +1627,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 });
                 creature5.physics = PhysicsKind::Kinematic;
                 creature5.collision_layer = 1 << 5;
-                creature5.script = creature_wander_script(half, "creature5_", !(1_u32 << 5));
+                creature5.script =
+                    creature_wander_script(half, "creature5_", !(1_u32 << 5), 288.0, 3.6);
                 objects.push(creature5);
                 imported.push(mesh);
             }
