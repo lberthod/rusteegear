@@ -2607,10 +2607,35 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Livrable** : un objet non skinné et un objet skinné cohabitent dans la même scène sans repli sur un unique pipeline monolithique.
 - **Prérequis livré** : skinning GPU (Sprint 86).
 
-#### Sprint 125 — Forces de zone (vent, buoyancy) ⬜
-- [ ] Force appliquée aux corps rapier dans un trigger.
-- **Fichiers** : `src/runtime/physics.rs`, `src/app/mod.rs`.
-- **Livrable** : un objet dynamique traversant une zone de vent est visiblement poussé ; retrouve son comportement normal en sortant.
+#### Sprint 125 — Forces de zone (vent, buoyancy) ✅ FAIT (vent ; buoyancy hors scope)
+- [x] **`SceneObject::wind: Option<Vec3>`** (`src/scene/mod.rs`) : vecteur monde
+      (accélération, m/s²) porté par une zone `trigger` — cohérent avec les autres
+      zones de cette scène (`obj.triggered`, Sprint 102), pas un composant séparé.
+- [x] **`Physics::apply_wind_zones`** (`src/runtime/physics.rs`, appelée en tête de
+      `step`, avant `pipeline.step` pour que ce pas d'intégration en tienne compte) :
+      pour chaque corps dynamique, cumule le vent de toutes les zones dont l'AABB
+      touche la sienne (`Scene::world_aabb_intersects`, même test que les triggers
+      existants), ajouté à la vitesse linéaire (`v += wind * dt`) — pas de vitesse
+      résiduelle stockée, donc un corps qui sort de la zone n'est plus poussé dès le
+      pas suivant.
+- [x] **Buoyancy** : hors scope — la flottabilité (force dépendante de la profondeur
+      d'immersion, pas juste de l'appartenance à une zone) demande un concept d'eau/
+      niveau de liquide qui n'existe pas encore dans ce moteur ; le vent (force
+      uniforme sur toute la zone) est le sous-ensemble qui se branche directement sur
+      le mécanisme `trigger` existant sans nouveau concept.
+- [x] **Tests** : un corps traversant une zone de vent dérive dans sa direction, un
+      corps hors de la zone ne dérive pas
+      (`a_wind_zone_pushes_a_dynamic_body_only_while_inside_its_aabb`) ; contre-épreuve
+      `trigger: false` = zone sans volume de détection, ne pousse personne
+      (`a_wind_zone_without_trigger_pushes_nobody`). 372 tests lib verts (2 nouveaux),
+      clippy `-D warnings` et fmt propres, build wasm32 vert.
+- **Livrable restant, hors scope de ce sprint** : pas de démo dédiée dans l'éditeur
+  (objet visible qui traverse une zone de vent à l'écran) — mécanisme moteur complet
+  et testé, contenu de démo à faire séparément (même situation que les Sprints 95/96/
+  97 : mécanisme avant contenu/UI, non vérifiable visuellement dans cet
+  environnement, cf. limite documentée aux sprints 113d/122/126/128).
+- **Fichiers** : `src/scene/mod.rs` (`SceneObject::wind`), `src/runtime/physics.rs`
+  (`apply_wind_zones`).
 - **Prérequis livré** : triggers + événement exit (Sprint 102).
 
 #### Sprint 126 — Pipeline assets, extensions ✅ FAIT

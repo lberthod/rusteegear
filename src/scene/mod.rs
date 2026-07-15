@@ -607,6 +607,14 @@ pub struct SceneObject {
     /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
     #[serde(default)]
     pub trigger: bool,
+    /// Force de zone (Sprint 125, vent/buoyancy) : vecteur monde (m/s², type
+    /// accélération — appliqué à la vitesse, pas une impulsion ponctuelle) ajouté
+    /// chaque pas de simulation à tout corps **dynamique** dont l'AABB touche celui
+    /// de cet objet, tant que `trigger` est vrai (sans `trigger`, une zone de vent
+    /// n'a pas de volume de détection — cohérent avec les autres zones de cette
+    /// scène). `None` pour la grande majorité des objets, qui n'ont pas de vent.
+    #[serde(default)]
+    pub wind: Option<Vec3>,
     // --- Composants mobiles Android ---
     /// Fait de cet objet un objet **pilotable** (joystick/gyroscope/saut/attaque) : `None`
     /// pour la grande majorité des objets d'une scène (décor, ennemis, pièces...), qui
@@ -875,6 +883,7 @@ impl Default for SceneObject {
             roughness: default_roughness(),
             emissive: 0.0,
             trigger: false,
+            wind: None,
             controller: None,
             vibrate_on_tap: 0,
             combat: None,

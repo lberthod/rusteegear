@@ -742,8 +742,50 @@ impl Physics {
     /// kinématique vers la translation programmée par `control_kinematic` via
     /// `set_next_kinematic_translation` — la recopie ci-dessous ne fait que
     /// refléter ce résultat dans `transform`, comme pour un corps dynamique.
+    /// Sprint 125 : ajoute la vitesse de chaque zone de vent (`SceneObject::wind`,
+    /// `trigger: true`) aux corps dynamiques dont l'AABB la touche, avant l'intégration
+    /// de ce pas — un corps qui quitte la zone n'est plus poussé dès le pas suivant
+    /// (pas de vitesse résiduelle stockée), et un corps traversé par deux zones cumule
+    /// les deux forces.
+    fn apply_wind_zones(&mut self, dt: f32, scene: &Scene) {
+        let zones: Vec<(Vec3, usize)> = scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.trigger && o.visible)
+            .filter_map(|(i, o)| o.wind.map(|w| (w, i)))
+            .collect();
+        if zones.is_empty() {
+            return;
+        }
+        for &(i, handle) in &self.dynamic {
+            let Some(body_obj) = scene.objects.get(i) else {
+                continue;
+            };
+            let mut push = Vec3::ZERO;
+            for &(wind, zi) in &zones {
+                if zi == i {
+                    continue;
+                }
+                if let Some(zone_obj) = scene.objects.get(zi)
+                    && scene.world_aabb_intersects(body_obj, zone_obj)
+                {
+                    push += wind;
+                }
+            }
+            if push == Vec3::ZERO {
+                continue;
+            }
+            if let Some(body) = self.bodies.get_mut(handle) {
+                let v = body.linvel();
+                body.set_linvel(v + push * dt, true);
+            }
+        }
+    }
+
     pub fn step(&mut self, dt: f32, scene: &mut Scene) {
         self.integration.dt = dt.clamp(1.0 / 240.0, 1.0 / 20.0);
+        self.apply_wind_zones(dt, scene);
         self.pipeline.step(
             self.gravity,
             &self.integration,
@@ -1675,6 +1717,64 @@ mod tests {
             phys.overlap_sphere(Vec3::ZERO, 2.0, 0b101).is_empty(),
             "un masque excluant la couche du capteur ne doit rien détecter"
         );
+    }
+
+    /// Sprint 125 : zone de vent — un corps dynamique dont l'AABB touche celle d'une
+    /// zone `trigger` + `wind` doit dériver dans la direction du vent ; un corps hors
+    /// de la zone garde son comportement normal (chute verticale, pas de dérive
+    /// horizontale) — la preuve que la force est bien **locale** à la zone, pas globale.
+    #[test]
+    fn a_wind_zone_pushes_a_dynamic_body_only_while_inside_its_aabb() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Vent".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(10.0)),
+            physics: PhysicsKind::None,
+            trigger: true,
+            wind: Some(Vec3::new(4.0, 0.0, 0.0)),
+            ..Default::default()
+        });
+        let inside = drop_ball(&mut scene, "Dedans", 0.0, 0.0);
+        let outside = drop_ball(&mut scene, "Dehors", 20.0, 0.0);
+        let mut phys = Physics::build(&scene);
+        for _ in 0..30 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x_inside = scene.objects[inside].transform.position.x;
+        let x_outside = scene.objects[outside].transform.position.x;
+        assert!(
+            x_inside > 0.5,
+            "poussée par le vent attendue en x, x={x_inside}"
+        );
+        assert!(
+            (x_outside - 20.0).abs() < 0.05,
+            "hors de la zone, aucune dérive horizontale attendue, x={x_outside}"
+        );
+    }
+
+    /// Contre-épreuve : sans `trigger`, un `wind` renseigné ne pousse personne — la
+    /// zone n'a alors aucun volume de détection (cohérent avec les autres zones,
+    /// `obj.triggered`).
+    #[test]
+    fn a_wind_zone_without_trigger_pushes_nobody() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Vent sans trigger".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO).with_scale(Vec3::splat(10.0)),
+            physics: PhysicsKind::None,
+            trigger: false,
+            wind: Some(Vec3::new(4.0, 0.0, 0.0)),
+            ..Default::default()
+        });
+        let ball = drop_ball(&mut scene, "Dedans", 0.0, 0.0);
+        let mut phys = Physics::build(&scene);
+        for _ in 0..30 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let x = scene.objects[ball].transform.position.x;
+        assert!(x.abs() < 0.05, "aucune dérive horizontale attendue, x={x}");
     }
 
     /// Sprint 103c : une correction de position réseau (`set_position`) ne
