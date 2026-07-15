@@ -223,6 +223,7 @@ pub(super) fn weapon_hud(
     label: &str,
     offset: &mut [f32; 2],
     draggable: bool,
+    locale: crate::app::locale::Locale,
 ) {
     use egui::{Align2, Color32, FontId};
     let base = egui::pos2(area.center().x, area.bottom() - 24.0);
@@ -241,14 +242,14 @@ pub(super) fn weapon_hud(
     painter.text(
         center + egui::vec2(0.0, -10.0),
         Align2::CENTER_CENTER,
-        format!("Arme : {label}"),
+        crate::app::locale::weapon_label(locale, label),
         FontId::proportional(16.0),
         Color32::from_rgb(255, 170, 80),
     );
     painter.text(
         center + egui::vec2(0.0, 10.0),
         Align2::CENTER_CENTER,
-        "K ou « Feu » : tirer — 1/2/3 ou « Arme » : changer",
+        crate::app::locale::fire_hint(locale),
         FontId::proportional(11.0),
         Color32::from_white_alpha(180),
     );
@@ -273,6 +274,7 @@ pub(super) fn kills_hud(
     kills: u32,
     offset: &mut [f32; 2],
     draggable: bool,
+    locale: crate::app::locale::Locale,
 ) {
     use egui::{Align2, Color32, FontId};
     // Boîte alignée à droite avec une marge fixe (8 px) plutôt que centrée sur un
@@ -291,7 +293,7 @@ pub(super) fn kills_hud(
     painter.text(
         pos,
         Align2::CENTER_CENTER,
-        format!("💀 Frags : {kills}"),
+        crate::app::locale::kills(locale, kills),
         FontId::proportional(18.0),
         Color32::from_rgb(255, 170, 130),
     );
@@ -323,6 +325,7 @@ pub(super) fn weapon_inventory_panel(
     offset: &mut [f32; 2],
     draggable: bool,
     actions: &mut UiActions,
+    locale: crate::app::locale::Locale,
 ) {
     let pos = hud_anchor(
         ctx,
@@ -355,7 +358,7 @@ pub(super) fn weapon_inventory_panel(
                         ),
                     );
                     let text = if equipped {
-                        format!("{label} (équipée)")
+                        crate::app::locale::equipped_suffix(locale, label)
                     } else {
                         label.to_string()
                     };
@@ -399,6 +402,7 @@ pub(super) fn multiplayer_roster_panel(
     roster: &[RosterEntry],
     offset: &mut [f32; 2],
     draggable: bool,
+    locale: crate::app::locale::Locale,
 ) {
     use egui::Color32;
     if roster.is_empty() {
@@ -442,7 +446,7 @@ pub(super) fn multiplayer_roster_panel(
                         ui.painter().rect_filled(fill, 2.0, color);
                     }
                     if *is_self {
-                        ui.strong(format!("{name} (toi)"));
+                        ui.strong(crate::app::locale::you_suffix(locale, name));
                     } else {
                         ui.label(name);
                     }
@@ -471,13 +475,21 @@ pub(super) fn hud_preview_overlays(
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
     actions: &mut UiActions,
+    locale: crate::app::locale::Locale,
 ) {
     let drag = preview.reposition;
     if preview.weapon_hud {
-        weapon_hud(ctx, area, weapon_label, &mut hud_layout.weapon_hud, drag);
+        weapon_hud(
+            ctx,
+            area,
+            weapon_label,
+            &mut hud_layout.weapon_hud,
+            drag,
+            locale,
+        );
     }
     if preview.kills {
-        kills_hud(ctx, area, 3, &mut hud_layout.kills, drag);
+        kills_hud(ctx, area, 3, &mut hud_layout.kills, drag, locale);
     }
     if preview.crosshair {
         crosshair(ctx, area, &mut hud_layout.crosshair, drag);
@@ -491,6 +503,7 @@ pub(super) fn hud_preview_overlays(
             &mut hud_layout.weapon_inventory,
             drag,
             actions,
+            locale,
         );
     }
     if preview.roster {
@@ -499,7 +512,7 @@ pub(super) fn hud_preview_overlays(
             ("Alice".to_string(), Some(0.45), Some(5), false),
             ("Bob".to_string(), Some(1.0), Some(1), false),
         ];
-        multiplayer_roster_panel(ctx, area, &sample, &mut hud_layout.roster, drag);
+        multiplayer_roster_panel(ctx, area, &sample, &mut hud_layout.roster, drag, locale);
     }
 }
 
@@ -557,7 +570,13 @@ pub(super) fn crosshair(
     painter.circle_filled(c, 1.5, Color32::from_white_alpha(230));
 }
 
-pub(super) fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wave: u32) {
+pub(super) fn wave_hud(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    scene: &Scene,
+    wave: u32,
+    locale: crate::app::locale::Locale,
+) {
     if wave == 0 {
         return;
     }
@@ -584,14 +603,14 @@ pub(super) fn wave_hud(ctx: &egui::Context, area: egui::Rect, scene: &Scene, wav
     painter.text(
         egui::pos2(area.center().x, area.top() + 22.0),
         Align2::CENTER_CENTER,
-        format!("🧟 Vague {wave} / {max_wave}"),
+        crate::app::locale::wave(locale, wave, max_wave),
         FontId::proportional(22.0),
         Color32::from_rgb(230, 120, 90),
     );
     painter.text(
         egui::pos2(area.center().x, area.top() + 44.0),
         Align2::CENTER_CENTER,
-        format!("{remaining} restant(s)"),
+        crate::app::locale::remaining(locale, remaining as u32),
         FontId::proportional(14.0),
         Color32::from_white_alpha(200),
     );
@@ -631,6 +650,7 @@ pub(super) fn collectibles_hud(
     total: usize,
     time: Option<f32>,
     score: u32,
+    locale: crate::app::locale::Locale,
 ) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -662,10 +682,7 @@ pub(super) fn collectibles_hud(
         );
     }
     if collected == total && total > 0 {
-        let msg = match time {
-            Some(t) => format!("🎉 Gagné en {t:.1}s !"),
-            None => "🎉 Gagné !".to_string(),
-        };
+        let msg = crate::app::locale::won(locale, time);
         painter.text(
             area.center(),
             Align2::CENTER_CENTER,
@@ -677,7 +694,11 @@ pub(super) fn collectibles_hud(
 }
 
 /// Bannière de défaite « 💀 Perdu ! » au centre de la zone de jeu.
-pub(super) fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
+pub(super) fn lose_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    locale: crate::app::locale::Locale,
+) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -686,7 +707,7 @@ pub(super) fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
     painter.text(
         area.center(),
         Align2::CENTER_CENTER,
-        "💀 Perdu !",
+        crate::app::locale::lost(locale),
         FontId::proportional(44.0),
         Color32::from_rgb(230, 90, 80),
     );
@@ -698,7 +719,11 @@ pub(super) fn lose_banner(ctx: &egui::Context, area: egui::Rect) {
 /// `lose_banner` (`self.lost`, pensé pour un joueur local unique touchant une
 /// zone mortelle) : ici la manche **continue** pour les autres, ce n'est pas
 /// une défaite de salon — pas de bouton Rejouer, juste l'attente.
-pub(super) fn defeated_banner(ctx: &egui::Context, area: egui::Rect) {
+pub(super) fn defeated_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    locale: crate::app::locale::Locale,
+) {
     use egui::{Align2, Color32, FontId};
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -707,14 +732,14 @@ pub(super) fn defeated_banner(ctx: &egui::Context, area: egui::Rect) {
     painter.text(
         area.center(),
         Align2::CENTER_CENTER,
-        "Vaincu — spectateur",
+        crate::app::locale::defeated_spectator(locale),
         FontId::proportional(36.0),
         Color32::from_rgb(230, 90, 80),
     );
     painter.text(
         egui::pos2(area.center().x, area.center().y + 34.0),
         Align2::CENTER_CENTER,
-        "En attente de la prochaine manche…",
+        crate::app::locale::waiting_next_round(locale),
         FontId::proportional(15.0),
         Color32::from_white_alpha(200),
     );
@@ -722,13 +747,14 @@ pub(super) fn defeated_banner(ctx: &egui::Context, area: egui::Rect) {
 
 /// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
 /// Renvoie `true` s'il est cliqué (pour relancer la partie, y compris sur APK).
-pub(super) fn restart_button(ctx: &egui::Context, area: egui::Rect, won: bool) -> bool {
+pub(super) fn restart_button(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    won: bool,
+    locale: crate::app::locale::Locale,
+) -> bool {
     let mut clicked = false;
-    let label = if won {
-        "➡ Niveau suivant"
-    } else {
-        "🔄 Rejouer"
-    };
+    let label = crate::app::locale::restart_button_label(locale, won);
     egui::Area::new("restart_btn".into())
         .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y + 40.0))
         .show(ctx, |ui| {

@@ -432,6 +432,25 @@ pub(super) fn settings_window(
 
             ui.add_space(12.0);
             ui.separator();
+            ui.heading("🌐 Langue (jeu)");
+            ui.small("Texte affiché en Play (HUD) — pas l'éditeur, qui reste en français.");
+            ui.horizontal(|ui| {
+                use crate::app::locale::Locale;
+                let mut changed = false;
+                changed |= ui
+                    .selectable_value(&mut settings.locale, Locale::Fr, "Français")
+                    .changed();
+                changed |= ui
+                    .selectable_value(&mut settings.locale, Locale::En, "English")
+                    .changed();
+                if changed {
+                    settings.save();
+                    actions.locale = Some(settings.locale);
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.separator();
             ui.heading("🎮 Manette");
             ui.small(
                 "Stick gauche : déplacement « tank » (même axes que A/D/W/S). \

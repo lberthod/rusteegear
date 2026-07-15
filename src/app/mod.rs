@@ -11,6 +11,7 @@ mod demos;
 mod fireball;
 mod health;
 pub mod input;
+pub mod locale;
 pub mod multiplayer;
 pub mod network_client;
 mod persistence;
@@ -169,6 +170,9 @@ pub struct AppState {
     pub should_quit: bool,
     /// Mode « player » : pas d'éditeur (panneaux egui), démarre en Play.
     pub player: bool,
+    /// Langue du texte runtime affiché en Play (Sprint 130) — pas l'éditeur, dont l'UI
+    /// reste en français (outil de développement). Persistée dans `Settings::locale`.
+    pub locale: locale::Locale,
     /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
     pub input_state: PlayerInput,
     /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
@@ -629,6 +633,7 @@ impl AppState {
             paused: false,
             should_quit: false,
             player: false,
+            locale: initial_settings.locale,
             input_state: PlayerInput::default(),
             tapped_obj: None,
             sim_accumulator: 0.0,
@@ -848,6 +853,11 @@ impl AppState {
     /// `Settings::sfx_volume`).
     pub fn set_sfx_volume(&mut self, v: f32) {
         self.audio.set_sfx_volume(v);
+    }
+
+    /// Langue du texte runtime (Sprint 130, persistée dans `Settings::locale`).
+    pub fn set_locale(&mut self, l: locale::Locale) {
+        self.locale = l;
     }
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {

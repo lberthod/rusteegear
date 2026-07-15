@@ -1378,6 +1378,7 @@ impl Renderer {
                     &weapon_inventory,
                     selected_weapon,
                     &roster,
+                    app.locale,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -1444,6 +1445,7 @@ impl Renderer {
                 &weapon_inventory,
                 selected_weapon,
                 &roster,
+                app.locale,
             );
             if let Some(i) = actions.select_weapon {
                 app.select_weapon(i);
@@ -1602,6 +1604,9 @@ impl Renderer {
             }
             if let Some(v) = actions.sfx_volume {
                 app.set_sfx_volume(v);
+            }
+            if let Some(l) = actions.locale {
+                app.set_locale(l);
             }
             if let Some(down) = actions.move_in_list {
                 app.move_selected_in_list(down);

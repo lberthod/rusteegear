@@ -256,6 +256,8 @@ pub struct UiActions {
     pub music_volume: Option<f32>,
     /// Fenêtre Paramètres : volume effets sonores changé (Sprint 104).
     pub sfx_volume: Option<f32>,
+    /// Fenêtre Paramètres : langue du texte runtime changée (Sprint 130).
+    pub locale: Option<crate::app::locale::Locale>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
     /// Réordonnancement par glisser-déposer dans la hiérarchie : `(index source, index cible)`.
@@ -413,6 +415,7 @@ impl Editor {
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
         roster: &[RosterEntry],
+        locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
@@ -436,15 +439,22 @@ impl Editor {
             // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
             let mut layout = scene.hud_layout;
-            wave_hud(ctx, area, scene, wave);
-            weapon_hud(ctx, area, weapon_label, &mut layout.weapon_hud, false);
+            wave_hud(ctx, area, scene, wave, locale);
+            weapon_hud(
+                ctx,
+                area,
+                weapon_label,
+                &mut layout.weapon_hud,
+                false,
+                locale,
+            );
             // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
             // affiché en Play, contrairement au score de `collectibles_hud` juste en
             // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
             // multijoueur n'en a pas — cf. docs/audits/editor.md pour l'absence de
             // score en ligne que ce HUD dédié corrige).
-            kills_hud(ctx, area, kills, &mut layout.kills, false);
-            multiplayer_roster_panel(ctx, area, roster, &mut layout.roster, false);
+            kills_hud(ctx, area, kills, &mut layout.kills, false, locale);
+            multiplayer_roster_panel(ctx, area, roster, &mut layout.roster, false, locale);
             if scene_has_ranged_weapon(scene) {
                 crosshair(ctx, area, &mut layout.crosshair, false);
                 weapon_inventory_panel(
@@ -455,18 +465,19 @@ impl Editor {
                     &mut layout.weapon_inventory,
                     false,
                     &mut actions,
+                    locale,
                 );
             }
             if let Some((c, t)) = scene.collectibles() {
-                collectibles_hud(ctx, area, c, t, game_time, score);
+                collectibles_hud(ctx, area, c, t, game_time, score, locale);
             }
             if lost {
-                lose_banner(ctx, area);
+                lose_banner(ctx, area, locale);
             } else if defeated {
-                defeated_banner(ctx, area);
+                defeated_banner(ctx, area, locale);
             }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
-            if (won || lost) && restart_button(ctx, area, won) {
+            if (won || lost) && restart_button(ctx, area, won, locale) {
                 *restart = true;
             }
             if mobile.any() {
@@ -540,6 +551,7 @@ impl Editor {
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
         roster: &[RosterEntry],
+        locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -621,6 +633,7 @@ impl Editor {
                 hud_widget_new_id,
                 crash_log_text,
                 &mut actions,
+                locale,
             );
         });
 
@@ -737,6 +750,7 @@ fn build_ui(
     hud_widget_new_id: &mut String,
     crash_log_text: &mut Option<String>,
     actions: &mut UiActions,
+    locale: crate::app::locale::Locale,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -1674,13 +1688,14 @@ fn build_ui(
         // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
         // partie en cours (`draggable: false`) — le repositionnement se fait via
         // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous.
-        wave_hud(root.ctx(), play_rect, scene, wave);
+        wave_hud(root.ctx(), play_rect, scene, wave, locale);
         weapon_hud(
             root.ctx(),
             play_rect,
             weapon_label,
             &mut scene.hud_layout.weapon_hud,
             false,
+            locale,
         );
         kills_hud(
             root.ctx(),
@@ -1688,6 +1703,7 @@ fn build_ui(
             kills,
             &mut scene.hud_layout.kills,
             false,
+            locale,
         );
         multiplayer_roster_panel(
             root.ctx(),
@@ -1695,6 +1711,7 @@ fn build_ui(
             roster,
             &mut scene.hud_layout.roster,
             false,
+            locale,
         );
         if scene_has_ranged_weapon(scene) {
             crosshair(
@@ -1711,6 +1728,7 @@ fn build_ui(
                 &mut scene.hud_layout.weapon_inventory,
                 false,
                 actions,
+                locale,
             );
         }
     } else if hud_preview.open {
@@ -1723,18 +1741,19 @@ fn build_ui(
             weapon_inventory,
             selected_weapon,
             actions,
+            locale,
         );
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
-        collectibles_hud(root.ctx(), play_rect, c, t, game_time, score);
+        collectibles_hud(root.ctx(), play_rect, c, t, game_time, score, locale);
     }
     if *playing && lost {
-        lose_banner(root.ctx(), play_rect);
+        lose_banner(root.ctx(), play_rect, locale);
     } else if *playing && defeated {
-        defeated_banner(root.ctx(), play_rect);
+        defeated_banner(root.ctx(), play_rect, locale);
     }
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
-    if *playing && (won || lost) && restart_button(root.ctx(), play_rect, won) {
+    if *playing && (won || lost) && restart_button(root.ctx(), play_rect, won, locale) {
         actions.restart = true;
     }
     if *playing && scene.mobile.any() {

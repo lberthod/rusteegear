@@ -37,6 +37,9 @@ pub struct Settings {
     /// Remapping manette (Sprint 110) : quel bouton `gilrs` déclenche chaque action.
     #[serde(default)]
     pub gamepad: GamepadBindings,
+    /// Langue du texte runtime affiché en Play (Sprint 130) — pas l'éditeur.
+    #[serde(default)]
+    pub locale: crate::app::locale::Locale,
 }
 
 /// Table de remapping manette → action, persistée et éditable dans les paramètres
@@ -91,6 +94,7 @@ impl Default for Settings {
             music_volume: default_volume(),
             sfx_volume: default_volume(),
             gamepad: GamepadBindings::default(),
+            locale: crate::app::locale::Locale::default(),
         }
     }
 }

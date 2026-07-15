@@ -2771,11 +2771,50 @@ connection may not be initiated from a page loaded over HTTPS »*.
 - **Livrable** : une brosse en mode édition creuse/soulève le terrain visiblement ; un scatter de rochers tombe et se stabilise au sol sans intervention manuelle.
 - **Prérequis livré** : raycast Lua/éditeur (Sprint 102).
 
-#### Sprint 130 — Localisation + abilities généralisées ⬜
-- [ ] Table de clés FR/EN pour le texte runtime (pas l'éditeur). RTL : hors scope, assumé.
-- [ ] `combat.rs` (homing, knockback, manches) généralisé en données déclaratives (coût, cooldown, effets à durée) — sans viser l'abstraction complète d'un GAS façon Unreal.
-- **Fichiers** : `src/app/combat.rs`, `src/assets.rs`.
-- **Livrable** : la démo contrôleur passe en anglais par un réglage ; une nouvelle capacité de combat s'ajoute par des données, sans nouveau code Rust.
+#### Sprint 130 — Localisation + abilities généralisées 🟢 (localisation faite ; abilities reportées)
+- [x] **Localisation du texte runtime** (pas l'éditeur, qui reste en français — outil
+      de développement, jamais exporté dans le player) : nouveau module
+      `app::locale` (`Locale::{Fr, En}`), fonctions pures testables sans egui, une
+      par chaîne (`weapon_label`, `fire_hint`, `kills`, `equipped_suffix`,
+      `you_suffix`, `wave`, `remaining`, `won`, `lost`, `defeated_spectator`,
+      `waiting_next_round`, `restart_button_label`). RTL hors scope, assumé.
+  - Réglage persisté : `Settings::locale` (`#[serde(default)]`, comme
+    `music_volume`/`sfx_volume`) ; `AppState::locale` initialisé depuis
+    `Settings::load()` au démarrage, `set_locale` pour le changer en direct.
+    Toggle Français/English dans la fenêtre Paramètres (`settings.save()` +
+    `actions.locale`, même mécanisme que le volume).
+  - `locale` propagé en paramètre à travers `editor::hud` (9 fonctions :
+    `weapon_hud`, `kills_hud`, `wave_hud`, `collectibles_hud`, `lose_banner`,
+    `defeated_banner`, `restart_button`, `weapon_inventory_panel`,
+    `multiplayer_roster_panel`) et les deux points d'entrée qui les appellent
+    (`Editor::run`, `Editor::run_player_overlay`, via `build_ui`) — pas de champ
+    global implicite, chaque fonction reste pure vis-à-vis de la langue reçue.
+  - Tests : 5 dans `app::locale` (chaque paire Fr/En diffère, valeurs
+    interpolées préservées, absence de nombre quand `won(_, None)`, libellé
+    Rejouer/Niveau suivant distinct, défaut = Fr). 382 tests lib verts, clippy
+    `-D warnings` et fmt propres, build wasm32 vert. Non vérifié visuellement
+    (fenêtre éditeur native, cf. limite documentée aux sprints 113d/122/125/
+    126/128/96) — logique de traduction couverte par tests indépendants du rendu.
+  - **Fichiers** : nouveau `src/app/locale.rs`, `src/app/mod.rs`,
+    `src/app/settings.rs`, `src/editor/mod.rs`, `src/editor/hud.rs`,
+    `src/editor/windows.rs`, `src/gfx/renderer.rs`.
+- [ ] **Abilities généralisées en données** : reporté — `combat.rs` (homing,
+      knockback, manches) et le système d'armes à distance (`RANGED_WEAPONS`,
+      `app/fireball.rs`, déjà largement déclaratif : label/vitesse/cooldown/
+      portée/dégâts/couleur par profil) sont deux systèmes distincts qui ne
+      partagent pas de représentation commune ; y ajouter un vrai coût
+      (ressource type stamina/mana, qui n'existe encore nulle part dans ce
+      moteur) et des effets à durée (DoT/slow/bouclier) est un chantier de
+      conception à part entière, pas une extension mécanique d'une table
+      existante — risque de régression sur le combat jugé trop élevé pour une
+      session déjà chargée (localisation + Sprints 96/125/127 le même jour).
+      Prochaine étape concrète si repris : généraliser d'abord le recul
+      (`combat::KNOCKBACK_SPEED`, constante globale) en champ par arme sur
+      `scene::Weapon`, plus petit pas isolé avant le reste.
+- **Fichiers** : `src/app/combat.rs`, `src/assets.rs` (non touchés — reporté).
+- **Livrable** : la démo contrôleur passe en anglais par un réglage — fait.
+  Une nouvelle capacité de combat qui s'ajoute par des données seules reste à
+  faire (sprint réouvrable pour ça seul, comme le Sprint 128 pour les profilers).
 
 #### Sprint 131 — Noyau : versioning de schéma + RNG déterministe global ✅ FAIT
 **Objectif** : deux chantiers 🟢 « à faire » catalogués dès le premier audit (n° 10, 18), jamais programmés faute de sprint dédié.
