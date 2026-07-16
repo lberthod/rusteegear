@@ -105,7 +105,7 @@ type Outboxes = Arc<Mutex<HashMap<PlayerId, tokio::sync::mpsc::UnboundedSender<V
 /// Verrouille `outboxes` en récupérant le contenu même si le mutex est empoisonné
 /// (Sprint 113b, durcissement) : `insert`/`remove`/lecture sur une simple `HashMap`
 /// ne laissent rien d'incohérent en mémoire même interrompus par un panic — un seul
-/// client fautif ne doit pas figer `send_to`/`broadcast` pour tous les autres
+/// client fautif ne doit pas figer `send_to`/`broadcast_all_rooms` pour tous les autres
 /// joueurs (et donc tout le thread de jeu principal) derrière un `.unwrap()` qui
 /// re-paniquerait à chaque appel suivant.
 fn lock_outboxes(
@@ -117,7 +117,7 @@ fn lock_outboxes(
 }
 
 /// Serveur réseau : accepte des connexions WebSocket, décode les `ClientMsg` reçus
-/// et les pousse dans `inbox` ; `send_to`/`broadcast` encodent et poussent des
+/// et les pousse dans `inbox` ; `send_to`/`broadcast_all_rooms` encodent et poussent des
 /// `ServerMsg` vers un ou tous les clients connectés.
 pub struct NetServer {
     /// Messages reçus des clients, à consommer par le thread principal (non
@@ -240,8 +240,14 @@ impl NetServer {
         }
     }
 
-    /// Envoie un message à tous les joueurs connectés (ex. un `Snapshot` par tick).
-    pub fn broadcast(&self, msg: &ServerMsg) {
+    /// Envoie un message à **tous les clients du process, tous salons
+    /// confondus** — d'où le nom : `NetServer` ne connaît pas les salons
+    /// (routage applicatif dans `src/bin/server.rs`), un appel naïf ici
+    /// fuiterait l'état d'un salon vers les autres. Le serveur multi-salons
+    /// n'utilise QUE `send_to` en boucle sur les ids du salon concerné (cf.
+    /// `server.rs`, qui documente ce choix) ; cette méthode ne convient qu'aux
+    /// contextes mono-salon garantis (tests, `examples/load_test_client.rs`).
+    pub fn broadcast_all_rooms(&self, msg: &ServerMsg) {
         let Ok(bytes) = protocol::encode(msg) else {
             return;
         };
@@ -347,7 +353,7 @@ async fn handle_connection(
         },
     ));
 
-    // Pompe sortante : relaie les messages poussés par `send_to`/`broadcast`
+    // Pompe sortante : relaie les messages poussés par `send_to`/`broadcast_all_rooms`
     // (thread principal) vers la socket, jusqu'à fermeture du canal ou erreur
     // d'écriture.
     let outbound = async move {
@@ -494,7 +500,7 @@ mod tests {
     /// Deux clients dans le même salon obtiennent des identifiants distincts, et un
     /// `broadcast` atteint les deux (préfigure la Snapshot diffusée à chaque tick).
     #[test]
-    fn broadcast_reaches_every_connected_client() {
+    fn broadcast_all_rooms_reaches_every_connected_client() {
         let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
         let url = format!("ws://{}", server.local_addr);
 
@@ -517,7 +523,7 @@ mod tests {
         }
         assert_eq!(server.connected_count(), 2);
 
-        server.broadcast(&ServerMsg::Event(protocol::GameEvent::WaveStart {
+        server.broadcast_all_rooms(&ServerMsg::Event(protocol::GameEvent::WaveStart {
             wave: 1,
         }));
 

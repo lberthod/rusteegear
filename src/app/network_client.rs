@@ -1373,7 +1373,7 @@ mod tests {
             }
         }
         server_app.advance_play();
-        net.broadcast(&ServerMsg::Snapshot(server_app.network_snapshot(tick)));
+        net.broadcast_all_rooms(&ServerMsg::Snapshot(server_app.network_snapshot(tick)));
     }
 
     /// `poll_firebase` (appelée par `poll_network`) applique le résultat d'une

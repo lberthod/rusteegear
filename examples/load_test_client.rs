@@ -125,7 +125,7 @@ fn main() {
             counters.snapshot_bytes_total += bytes.len() as u64;
             counters.snapshot_count += 1;
         }
-        net.broadcast(&snapshot);
+        net.broadcast_all_rooms(&snapshot);
 
         // Chaque bot envoie son `Input` à sa propre cadence (indépendante du
         // tick serveur, comme un vrai client) : mouvement pseudo-aléatoire

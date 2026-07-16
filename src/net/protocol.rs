@@ -188,7 +188,8 @@ pub enum ServerMsg {
 /// État des joueurs réseau pour un tick donné : **pas** un delta par client
 /// malgré le nom — `AppState::network_snapshot` (`app/multiplayer.rs`)
 /// diffuse l'état complet de tous les joueurs réseau à chaque tick, identique
-/// pour tous les clients (`NetServer::broadcast`, pas de `send_to`
+/// pour tous les clients (`send_to` en boucle sur le salon, cf.
+/// `src/bin/server.rs` — même contenu pour chacun, juste pas de delta
 /// individualisé) — pas l'état complet de *la scène* non plus, seulement les
 /// entités pilotées par un joueur réseau (les monstres/décor ne sont pas
 /// encore diffusés, cf. `network_snapshot`). Un vrai delta par client

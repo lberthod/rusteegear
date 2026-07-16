@@ -145,9 +145,10 @@ impl Room {
     }
 
     /// Joueurs actuellement connectés à ce salon (pour cibler les envois —
-    /// `NetServer` ne connaît pas la notion de salon, cf. sa doc : un
-    /// `broadcast()` atteint TOUS les clients du serveur, pas seulement ceux
-    /// d'un salon donné, donc jamais utilisé ici, uniquement `send_to` en boucle).
+    /// `NetServer` ne connaît pas la notion de salon, cf. sa doc :
+    /// `broadcast_all_rooms()` atteint TOUS les clients du serveur, pas
+    /// seulement ceux d'un salon donné, donc jamais utilisé ici, uniquement
+    /// `send_to` en boucle).
     fn connected_ids(&self) -> Vec<PlayerId> {
         self.lobby.names.keys().copied().collect()
     }

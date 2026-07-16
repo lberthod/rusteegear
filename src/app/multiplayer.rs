@@ -236,6 +236,14 @@ impl AppState {
         // terminerait la manche en défaite en quelques secondes, avant même
         // qu'un joueur ait eu le temps de rejoindre (cf. AUDIT_MMORPG.md).
         self.scene.objects[template_index].visible = false;
+        // Reconstruction physique COMPLÈTE à chaque join (idem despawn) —
+        // décision d'audit : documenté et accepté. `Physics` n'expose pas
+        // d'API incrémentale (`add_body`/`remove_body`), un join/leave est
+        // rare (au pire ~16 par manche), et le seul coût visible est la perte
+        // des vitesses des corps (les positions survivent via les
+        // transforms) : un à-coup d'une frame, jamais observé en jeu réel.
+        // N'implémenter l'API incrémentale que si un test de ressenti à
+        // plusieurs clients le justifie un jour.
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
         Some(index)
     }
@@ -254,6 +262,8 @@ impl AppState {
         self.network_attack_cooldowns.remove(&id);
         self.network_health.remove(&id);
         self.network_kills.remove(&id);
+        // Reconstruction complète documentée et acceptée — cf. le commentaire
+        // du site jumeau dans `spawn_network_player`.
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
     }
 
@@ -368,8 +378,14 @@ impl AppState {
                 continue;
             };
             let defeated = self.scene.attack_at(pos, NETWORK_ATTACK_RANGE);
-            if !defeated.is_empty() {
-                *self.network_kills.entry(id).or_insert(0) += defeated.len() as u32;
+            // `credit_kill`, l'unique chemin de comptage des frags (le même que
+            // les projectiles, cf. `app::fireball`) — avant, ce site incrémentait
+            // `network_kills` directement, deux logiques à garder synchronisées.
+            // Sa garde « id inconnu = ignoré » est sans effet ici : `id` vient de
+            // `network_players.keys()`, son entrée existe depuis
+            // `spawn_network_player`.
+            for _ in &defeated {
+                self.credit_kill(id);
             }
             self.network_attack_cooldowns
                 .insert(id, NETWORK_ATTACK_COOLDOWN);
@@ -377,7 +393,9 @@ impl AppState {
     }
 
     /// Construit un `Snapshot` de tous les joueurs réseau, pour diffusion via
-    /// `ServerMsg::Snapshot` (cf. `net::server_loop::NetServer::broadcast`).
+    /// `ServerMsg::Snapshot` (`send_to` en boucle sur les joueurs du salon,
+    /// cf. `src/bin/server.rs` — pas `broadcast_all_rooms`, qui fuiterait
+    /// l'état entre salons).
     ///
     /// **Vie individualisée (GAMEDESIGN_EN_LIGNE.md §3.1)** : `health` porte
     /// désormais la vie propre de chaque joueur (`app::health`), plus le champ
