@@ -649,7 +649,12 @@ soit la retouche future des valeurs :
 
 1. **La participation domine le frag** (150 vs ~75) : on progresse d'abord
    en *jouant des nuits*, pas en volant des kills — sinon le Soutien et
-   l'Éclaireur sont taxés par leur propre rôle.
+   l'Éclaireur sont taxés par leur propre rôle. **Garde anti-AFK
+   obligatoire** (sinon cette règle crée l'optimum anti-fun que le §15.5
+   interdit : rester immobile et encaisser 150 XP par nuit) : la
+   participation n'est due qu'à un joueur *actif* — au moins un frag, un
+   assist, ou un seuil minimal d'inputs/déplacement sur la manche, vérifié
+   côté serveur comme tout le reste. Un AFK gagne 0, pas 150.
 2. **Le contrat vaut à peu près une nuit** : assez pour être le prétexte du
    lancement quotidien, pas assez pour devenir une corvée obligatoire.
 3. **Le plafond (niv. 10) s'atteint en un mois de jeu plaisir** : après,
@@ -1109,3 +1114,219 @@ Prolonge la parité mobile (§6.3) avec les contraintes physiques :
 | Un joueur neuf comprend-il sa première mort ? | playtest : « qu'est-ce qui vous a tué ? » — réponse correcte attendue dès la 2e mort |
 | Les boutons tactiles sont-ils ratés en combat ? | taux de taps hors cible dans les zones d'action (mesurable côté client) |
 | La reconnexion est-elle vécue comme une pause ? | signalements « j'ai perdu ma partie » après coupure — leur disparition est la mesure |
+
+---
+
+## 17. Catalogue des surfaces d'interface (l'inventaire complet des overlays)
+
+Ce chapitre recense **toutes** les surfaces d'interface du jeu — celles qui
+existent, celles à construire, celles qu'on refuse — chacune mappée sur ses
+fondations réelles dans le code. C'est la spécification de référence : une
+surface qui n'est pas dans ce catalogue ne s'ajoute pas sans y entrer, et
+chaque surface vit dans l'anneau du §16.3 qui correspond à sa fréquence.
+
+Fondations déjà en place, vérifiées : `HudLayout` réserve **six
+emplacements** de widgets (`crosshair`, `weapon_hud`, `kills`,
+`weapon_inventory`, `item_inventory`, `roster` — tous à (0,0) aujourd'hui,
+aucun placé) ; Firebase couvre chat de salon (`list/post_chat_message`),
+classement (`get_top_leaderboard`), **présence en ligne** (`set_presence`,
+`list_online_players`) ; le réseau expose `multiplayer_roster()`,
+`displayed_kill_count()`, `connect_to_lobby`, `JoinRejected` et les
+`GameEvent`.
+
+### 17.1 En jeu — permanents (toujours visibles)
+
+| Surface | Contenu | Anneau | Fondations | État |
+|---|---|---|---|---|
+| **Réticule** | point de visée, direction du regard | corps | `hud_layout.crosshair` | slot prévu, à placer |
+| **Vie propre** | vignette de dégâts (primaire) + jauge (confirmation) ; sur mobile, `health_bar` de la config de scène | corps | `network_health`, config `mobile.health_bar` (à activer) | à construire |
+| **Arme équipée** | icône/nom de l'arme, état de recharge (le cooldown de 0,45-1,8 s doit se *voir*) | corps | `hud_layout.weapon_hud`, `selected_weapon` | slot prévu, à placer |
+| **Sélecteur d'armes** | les 3 armes, l'équipée en avant, les non débloquées grisées avec leur palier (« Niv. 6 ») — la progression s'affiche là où elle manque | corps (bord) | `hud_layout.weapon_inventory`, `RANGED_WEAPONS` | slot prévu, à placer |
+| **Sacoche** (inventaire léger) | objets de manche ramassés (`item_pickup`, 7 posés dans la scène) — jamais plus d'une rangée ; ce jeu n'a pas d'écran d'inventaire, la sacoche EST l'inventaire | corps (bord) | `hud_layout.item_inventory`, `ItemPickup` | slot prévu, à placer |
+| **Roster de groupe** | par allié : couleur, nom, classe, barre de vie, état (vivant/à terre/spectateur) ; « c'est moi » marqué | groupe | `hud_layout.roster`, `multiplayer_roster()` | backend prêt — priorité 1 |
+| **Frags/assists** | compteur personnel discret ; le détail complet attend l'écran de fin | méta | `hud_layout.kills`, `displayed_kill_count()` | backend prêt |
+| **Progression de nuit** | vague N/M, chrono de Survie ou PV du convoi selon le mode — la « fin lisible en permanence » du §4 | méta | `Combat::wave`, `max_wave()` | à construire |
+
+### 17.2 En jeu — contextuels (apparaissent, servent, disparaissent)
+
+| Surface | Déclencheur | Contenu et règles | Fondations |
+|---|---|---|---|
+| **Bannière de vague** | vague vidée / suivante | « Vague 3 — l'aube approche » ; < 2 s, jamais sur le réticule (§16.3) | `GameEvent`, sfx `WaveStart` existant |
+| **Allié à terre** | `PlayerDown` | bannière + **marqueur hors-écran** (flèche de bord vers le corps) — indispensable au Foyer pour trouver qui réanimer ; persiste tant que l'allié est à terre | `GameEvent::PlayerDown` diffusé |
+| **Palier atteint** | niveau franchi en fin de manche | « *La foudre répond* — Éclair débloqué » ; règle de pertinence §15.2 : à l'instant du gain | `PlayerProgress` |
+| **Contrat rempli** | condition du contrat validée | tampon sur l'écran de fin (§9.2), rappel discret en jeu au moment précis où la condition passe au vert | `last_contract_day` (à créer) |
+| **Écran spectateur** | mort du joueur | désaturation, diagnostic de mort (« Encerclé — 2 Traqueuses », §16.5), caméra-allié cyclable, chat ouvert, état de la réanimation (« Foyer à 12 m ») | `network_health` à 0, entrées libérées |
+| **Reconnexion** | coupure réseau | voile « Reconnexion… » par-dessus le jeu figé — jamais un retour au menu (§16.1) | backoff + watchdog existants |
+| **Soin actif** | touche H maintenue à portée | lien visuel soigneur→soigné + tick (vert, §10.2) — le canal doit se voir des *deux* côtés | `update_network_heal` |
+
+### 17.3 Hors combat — la fenêtre Multijoueur et ses onglets
+
+Un seul conteneur (règle « un seul écran », §16.1), quatre onglets — le
+premier est le seul obligatoire :
+
+| Onglet | Contenu | Fondations | État |
+|---|---|---|---|
+| **Jouer** | pseudo/compte, code de salon (un seul champ pilote lobby réseau ET chat Firebase), choix de classe (3 boutons, dernière choisie mémorisée), contrat du jour, bouton Jouer | `connect_to_lobby`, `mp_lobby_code`, auth Firebase | connexion OK, salon/classe à brancher |
+| **Salon** (chat + présence) | messagerie du salon (canal unique — pas de MP au lancement, cf. §17.5) + **joueurs en ligne** : qui est connecté maintenant, dans quel salon — c'est l'écran qui transforme « un code à partager » en « rejoins-moi » | `list/post_chat_message`, `set_presence`, `list_online_players` | backend complet, UI à faire |
+| **Classement** | top global (contribution individuelle, §8.2) + sa propre ligne toujours visible même hors du top — un classement où on ne se trouve pas est un classement pour les autres | `get_top_leaderboard` | backend prêt |
+| **Veilleur** | niveau + XP vers le prochain palier nommé, arme favorite, couleur de braise, options d'accessibilité (§16.6) | `PlayerProgress`, `favorite_weapon` | partiel |
+
+### 17.4 L'écran de fin de manche
+
+Déjà spécifié §9.2 — rappelé ici car c'est une surface à part entière :
+groupe d'abord (victoire/défaite, total), lignes individuelles ensuite
+(assists au rang des frags), contrat, XP animée vers le prochain palier,
+un bouton Rejouer. C'est la seule surface où les chiffres ont le droit de
+prendre toute la place — le combat est fini.
+
+### 17.5 Les surfaces qu'on refuse (et pourquoi)
+
+| Surface refusée | Pourquoi | L'alternative diégétique |
+|---|---|---|
+| **Minimap / carte d'écran** | la carte servie est compacte et le danger est toujours *proche* (éveil 9 m) ; une minimap vole l'anneau corps en permanence pour une info d'anneau méta | le feu communal visible de partout (orientation), les **portes qui s'embrasent** à l'arrivée d'une vague (provenance), les marqueurs hors-écran ponctuels (§17.2) |
+| **Écran d'inventaire** | rien à gérer : pas d'objets à stats (§12) — un écran de gestion sans décisions est une taxe de temps | la sacoche en une rangée (§17.1), le sélecteur d'armes |
+| **Journal de quêtes** | un seul contrat par jour, connu avant de jouer | le contrat affiché sur l'onglet Jouer et rappelé à l'écran de fin |
+| **Messagerie privée / amis** | modération et complexité sociale hors de portée de l'échelle (cf. §12 : pas de persistance sociale au-delà du chat de salon) | la présence en ligne (§17.3) + le code de salon partagé hors du jeu — les amitiés vivent où elles vivent déjà |
+| **Fil de dégâts (combat log)** | culture MMO chiffrée que ce jeu refuse (§8.2 : pas de stats d'objets → rien à théorycrafter) | le diagnostic de mort (§16.5), lisible par un humain |
+| **Notifications push / hors jeu** | le rendez-vous doit rester une envie, pas une sonnerie (anti-FOMO, §15.5) | le contrat du jour se découvre en lançant le jeu |
+
+### 17.6 Règles transverses du catalogue
+
+1. **Chaque surface a un propriétaire de données serveur** : aucun overlay
+   n'affiche un état que le serveur ne valide pas (§5.7) — le roster lit le
+   snapshot, jamais une estimation locale.
+2. **Les six slots de `HudLayout` sont le contrat** : un widget en jeu qui
+   n'a pas de slot n'existe pas ; en créer un septième est une décision de
+   design (ce catalogue), pas un patch d'affichage.
+3. **Toute surface se replie** : le HUD complet doit pouvoir se masquer
+   (captures, spectacle) et chaque panneau egui se ferme d'un geste — une
+   surface qu'on ne peut pas fermer est une publicité.
+4. **Le tactile d'abord, toujours** (§6.3, §16.4) : chaque surface de ce
+   catalogue est conçue au format APK en premier — si elle tient sur un
+   écran de téléphone au pouce, elle tiendra partout.
+
+---
+
+## 18. Public, production et garde-fous (ce qui manquait pour boucler)
+
+Chapitre issu de l'audit du GDD lui-même : les sujets qu'un game design
+« pertinent » doit trancher et que les 17 chapitres précédents laissaient
+implicites.
+
+### 18.1 Pour qui (public et positionnement)
+
+- **Joueur primaire** : un petit groupe d'ami·es (2-4) qui veut une session
+  coop *complète* en 15 minutes, multi-plateformes sans friction (l'un sur
+  APK, l'autre sur navigateur, le troisième sur Mac — même serveur, même
+  partie). Le comparable d'expérience n'est pas un MMO : c'est la partie
+  rapide entre ami·es façon coop à vagues, avec un personnage qui dure en
+  plus.
+- **Joueur secondaire** : le curieux solo (démo web publique, un clic —
+  c'est le canal d'acquisition réel du projet) — d'où le poids mis sur le
+  time-to-fun (§16.1) et la première nuit sans tutoriel (§3.5).
+- **Non-public assumé** : le joueur de MMO à la recherche de profondeur de
+  build, d'économie ou de contenu de guilde — les exclusions du §12 le
+  disent déjà ; le dire *en positif* évite de mal vendre le jeu.
+
+### 18.2 Contrôles (la table de référence)
+
+| Action | Desktop / Web | Mobile (APK/iOS) | Manette (défauts, remappables) | Note |
+|---|---|---|---|---|
+| Déplacement | WASD | joystick virtuel gauche | stick gauche (zone morte 15 %) | |
+| Saut | Espace | bouton « Saut » | A / South | |
+| Attaque mêlée | J | bouton « Attaque » | X / West | windup §5.1 |
+| Tir | (regard) + touche de tir | bouton « Feu » | B / East | direction du regard (`aim_yaw`) |
+| Changer d'arme | K | bouton « Arme » | R1 (bumper droit) | cycle les débloquées |
+| Soin | H (maintenu) | bouton « Soin » (maintenu) | Y / North (maintenu) | canal §5.6 |
+| Caméra | souris | glisser hors joystick | stick droit — **à câbler** | |
+| Menu / fenêtre Multijoueur | Échap | bouton UI | Start — **à câbler** (§17.3) | |
+| Roster / scores | (HUD permanent) | (HUD permanent) | Select = plein écran tenu — **à câbler** | |
+
+La manette (gilrs, disposition Xbox — couvre les Logitech F310/F710 et
+consorts) est **entièrement remappable** dans le panneau « 🎮 Manette » des
+paramètres : les seize boutons standard (façade, L1/L2/R1/R2, Select/Start,
+sticks cliqués, D-pad) sont assignables, un nom stable par bouton persisté
+en JSON. Règle : les *défauts* suivent la disposition Xbox par position
+(pas d'étiquette de fabricant), les gâchettes analogiques sont lues comme
+des boutons (aucune mécanique n'exige de demi-pression, cohérent §5.6).
+
+Cette table est le **contrat de parité** (§6.3) : une colonne vide = une
+mécanique non livrée. (État actuel : la colonne mobile est cassée —
+seul « Saut » subsiste dans la scène exportée, régression bloquante ; la
+colonne manette a trois cases « à câbler ».)
+
+### 18.3 Modèle économique et licence (pourquoi les anti-dark-patterns tiennent)
+
+Le jeu est **gratuit, open source (MIT), sans aucune monétisation** — ni
+achats, ni pub, ni compte payant. Ce n'est pas un détail : c'est ce qui
+rend le §15.5 *structurellement* crédible (aucune pression de revenu ne
+poussera jamais à monétiser l'attente ou la rareté). En contrepartie, le
+budget « contenu » est le temps d'une seule personne : chaque système de ce
+GDD est dimensionné pour être maintenu en solo — c'est la vraie contrainte
+économique du projet, et elle explique chaque exclusion du §12.
+
+### 18.4 Sécurité sociale et anti-abus (un jeu en ligne a des devoirs)
+
+État vérifié : l'écriture du chat exige un compte (`auth != null`), le
+transport a un rate-limit (déconnexion au-delà d'un budget de trames/s),
+pseudo et code de salon sont validés côté serveur. Il manque, par ordre
+d'urgence :
+
+1. **Mute local** : masquer les messages d'un joueur pour soi — côté
+   client, coût minimal, désamorce 90 % des incidents d'un chat de salon
+   entre inconnus. Prérequis avant toute mise en avant publique du chat.
+2. **Longueur et cadence des messages** plafonnées côté serveur (le
+   rate-limit réseau ne couvre pas le spam Firebase).
+3. **Pas de modération de contenu automatisée** (hors de portée solo,
+   assumé) — en compensation : le chat reste *de salon* (on y est entre
+   gens qui ont partagé un code, pas dans un canal mondial), et le pseudo
+   est le seul contenu libre visible hors salon (classement) — il doit
+   donc passer par la même validation de charset que le reste.
+4. **Griefing gameplay** : impossible par construction (pas de dégâts
+   entre joueurs, pas de collision punitive, pas d'objets volables) — le
+   seul vecteur restant est l'AFK, traité au §8.3. À re-vérifier à chaque
+   mécanique nouvelle : « un joueur hostile peut-il s'en servir contre son
+   groupe ? » entre dans la definition of done.
+
+### 18.5 Le cas solo et le sous-effectif (le jeu aux bornes)
+
+Le design vise 3-4 joueurs ; les bornes doivent rester jouables :
+
+- **Seul dans le salon** (le cas réel le plus fréquent aujourd'hui) : pas
+  de réanimation possible → la mort est une défaite immédiate, assumée —
+  le solo est le mode nerveux. Le scaling par le nombre (§5.5) donne à un
+  joueur seul des vagues réduites ; le Foyer en solo est un choix
+  volontairement sous-optimal (pas interdit : l'autonomie prime, §15.1).
+- **À deux** : la première configuration où chaque classe a du sens — le
+  duo Flamme+Foyer est le tutoriel naturel de l'interdépendance.
+- **Départ en cours de nuit** : les vagues déjà lancées ne se réduisent
+  pas (pas de re-scaling à chaud — exploitable et illisible) ; la nuit
+  devient plus dure, c'est la règle connue de tous les coops.
+
+### 18.6 Le jalon « preuve du fun » (vertical slice)
+
+Avant d'étendre quoi que ce soit, une seule build doit prouver le jeu — la
+**Nuit de référence** : la scène servie unifiée (tension n°7 résolue),
+3 vagues + 1 chef `_evolved`, les 3 classes jouables, le roster et la vie
+à l'écran, les boutons tactiles réparés, le feedback de dégâts subis
+(§6.1), l'écran de fin. Critère de réussite unique, hérité du §11 : une
+session VPS à 3-4 joueurs où la composition du groupe change le résultat
+**et** où chacun peut raconter sa nuit sans regarder les chiffres. Tout ce
+qui n'est pas dans cette liste (contrats, paliers, Escorte, couleurs) vient
+*après* la preuve.
+
+### 18.7 Langue et gouvernance du document
+
+- **Langue** : le jeu parle français (noms fiction, UI, ce document) ; la
+  démo web publique visant large, les textes d'UI passent par une table de
+  chaînes dès le premier HUD — traduire plus tard ne doit pas exiger de
+  retoucher du code. Les noms propres (Le Hameau des Braises, les classes)
+  ne se traduisent pas.
+- **Gouvernance** : ce GDD décrit la cible ; il n'est modifié que quand une
+  *décision* change (pas à chaque livraison — l'avancement vit dans
+  SPRINT_MMORPG.md et le tableau §14 n'est qu'une photographie datée).
+  Toute contradiction découverte entre ce document et le code est soit un
+  bug de code, soit une décision à acter ici — jamais un écart qu'on
+  laisse vivre. Les valeurs chiffrées citées (§5.2, §5.1, §8.3) sont des
+  *intentions calibrées* : le code reste la source de vérité de la valeur
+  du jour, ce document celle du *rapport* à préserver.
