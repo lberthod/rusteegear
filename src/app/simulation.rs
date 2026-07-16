@@ -1701,12 +1701,17 @@ mod tests {
     fn mmorpg_creatures_do_not_all_walk_in_the_same_direction() {
         let mut app = AppState::new();
         app.scene = crate::scene::Scene::mmorpg_demo();
+        // Créature 20 (tortue-canon) exclue : tourelle délibérément stationnaire
+        // (`creature_turret_script`, cf. sa doc) — elle pivote sur place mais ne
+        // se déplace jamais, ce qui est le comportement voulu, pas le bug que ce
+        // test traque (des créatures *censées patrouiller* qui restent bloquées
+        // ensemble contre un mur).
         let creature_indices: Vec<usize> = app
             .scene
             .objects
             .iter()
             .enumerate()
-            .filter(|(_, o)| o.name.starts_with("Créature"))
+            .filter(|(_, o)| o.name.starts_with("Créature") && o.name != "Créature 20")
             .map(|(i, _)| i)
             .collect();
         assert!(

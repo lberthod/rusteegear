@@ -286,7 +286,13 @@ fn creature_bite_script(
 /// de son point d'apparition (mémorisé au premier tick dans `save`) plutôt que
 /// d'errer dans toute l'arène. Cohérent avec son attaque en éventail
 /// (`AttackStyle::Fan`) : elle tient une position, le joueur vient à elle.
-fn creature_guard_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_guard_script(
+    _arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     format!(
         r#"
     local SPEED = 0.9
@@ -322,7 +328,13 @@ fn creature_guard_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _headin
 /// (repéré via `find_tag("joueur")`) — approche au-delà de FAR, recule sous
 /// NEAR, et tourne autour de lui entre les deux. Cohérent avec sa rafale
 /// (`AttackStyle::Burst`) : il reste dans sa fourchette de tir idéale.
-fn creature_kite_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_kite_script(
+    arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -370,7 +382,13 @@ fn creature_kite_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0
 /// et fuit si le joueur approche à moins de FLEE — l'inverse d'un chasseur.
 /// Cohérent avec son orbe à tête chercheuse (`AttackStyle::Homing`) : elle
 /// n'a pas besoin d'être près, son tir la venge de loin.
-fn creature_drift_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_drift_script(
+    arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -413,7 +431,13 @@ fn creature_drift_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading
 /// quasi statique, comme une pièce d'artillerie qu'on repositionne à peine.
 /// Cohérent avec son obus en cloche (`AttackStyle::Lob`) : longue portée,
 /// aucune mobilité.
-fn creature_artillery_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_artillery_script(
+    _arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     format!(
         r#"
     local SPEED = 0.35
@@ -447,7 +471,13 @@ fn creature_artillery_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _he
 /// brusquement de biais toutes les ~1,2 s — une trajectoire imprévisible qui
 /// rapproche souvent l'oursin du joueur sans le poursuivre. Cohérent avec sa
 /// nova (`AttackStyle::Nova`) : c'est sa proximité erratique qui est le danger.
-fn creature_zigzag_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_zigzag_script(
+    arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -488,7 +518,13 @@ fn creature_zigzag_script(arena_half: f32, prefix: &str, _ray_mask: u32, _headin
 /// l'orbite de la sentinelle (`creature_guard_script`) — cohérent avec son
 /// éventail de bourrasques (`AttackStyle::Fan`, portée 8 m) : elle couvre du
 /// terrain, pas un poste fixe.
-fn creature_soar_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_soar_script(
+    _arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     format!(
         r#"
     local SPEED = 1.6
@@ -515,7 +551,13 @@ fn creature_soar_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading
 /// point d'apparition — ni fuit ni poursuit, juste une trajectoire hypnotique.
 /// Cohérent avec sa nova resserrée (`AttackStyle::Nova`) : elle n'a besoin
 /// d'aucune tactique d'approche, juste être là quand le joueur passe à portée.
-fn creature_lemniscate_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_lemniscate_script(
+    _arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     format!(
         r#"
     local SPEED = 0.5
@@ -547,7 +589,13 @@ fn creature_lemniscate_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _h
 /// sable ») pendant SUBMERGED, puis fonce en ligne droite pendant RUSH avant
 /// de replonger. Cohérent avec sa rafale rapprochée (`AttackStyle::Burst`,
 /// windup court) : la menace, c'est la charge, pas une poursuite soutenue.
-fn creature_burrow_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_burrow_script(
+    arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -589,7 +637,13 @@ fn creature_burrow_script(arena_half: f32, prefix: &str, _ray_mask: u32, _headin
 /// de très loin (curiosité), mais recule dès qu'il approche à moins de NEAR —
 /// jamais au contact. Cohérent avec son follet à tête chercheuse
 /// (`AttackStyle::Homing`, portée 9 m) : elle punit à distance, jamais de près.
-fn creature_hover_script(arena_half: f32, _prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_hover_script(
+    arena_half: f32,
+    _prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -623,7 +677,13 @@ fn creature_hover_script(arena_half: f32, _prefix: &str, _ray_mask: u32, _headin
 /// juste sur elle-même pour s'orienter vers le joueur (ou lentement sinon).
 /// Cohérent avec son obus rapide et rapproché (`AttackStyle::Lob`, portée
 /// courte) : elle n'a pas besoin de bouger, juste de bien viser.
-fn creature_turret_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
+fn creature_turret_script(
+    _arena_half: f32,
+    prefix: &str,
+    _ray_mask: u32,
+    _heading0: f32,
+    _phase: f32,
+) -> String {
     format!(
         r#"
     local TURN_RATE = 40.0
@@ -1743,6 +1803,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
 
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
         joueur.color = [0.95, 0.6, 0.25];
+        // Tag lu par les scripts de comportement des créatures 12/13/19
+        // (`find_tag("joueur")` — rôdeur qui maintient sa distance, méduse qui
+        // fuit, lanterne qui dérive vers lui) : sans lui, elles retombent sur
+        // leur comportement sans cible (immobiles pour la lanterne).
+        joueur.tag = "joueur".into();
         joueur.controller = Some(Controller {
             input: true,
             move_speed: 4.5,
