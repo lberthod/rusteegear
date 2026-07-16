@@ -1621,6 +1621,18 @@ mod tests {
         // fenêtre de 20 s) d'utiliser une fenêtre large plutôt qu'une poignée
         // de tentatives.
         const BITE_CONTACT_TICKS: u32 = 12 * 60;
+        // Vie **minimale** observée pendant la fenêtre, pas la vie finale : la
+        // régénération passive (`REGEN_PER_S` = 0,05/s) dépasse en moyenne les
+        // dégâts de morsure (0,12 × 40 % / 2,2 s ≈ 0,022/s) — la vie remonte à
+        // 100 % en ~2,4 s après chaque morsure réussie. Une assertion sur la
+        // vie *finale* ne tenait donc que si un tirage (déterministe,
+        // cf. `health::deterministic_roll`) réussissait dans les toutes
+        // dernières secondes : n'importe quel décalage d'horodatage des
+        // contacts (ex. l'audit des déplacements de créatures) suffisait à la
+        // casser sans qu'aucune mécanique ne soit fausse.
+        let mut min_server_health = f32::MAX;
+        let mut min_alice_seen = f32::MAX;
+        let mut min_bob_seen = f32::MAX;
         for tick in 20..(20 + BITE_CONTACT_TICKS) {
             let pos = server_app.scene.objects[creature_idx].transform.position;
             // Recale aussi le corps physique réel, pas seulement `transform`
@@ -1638,16 +1650,36 @@ mod tests {
             server_tick(&mut server_app, &net, tick);
             alice.poll_network();
             bob.poll_network();
+            if let Some(h) = server_app.network_player_health(alice_id) {
+                min_server_health = min_server_health.min(h);
+            }
+            if let Some(h) = alice.net_local_health {
+                min_alice_seen = min_alice_seen.min(h);
+            }
+            if let Some(h) = bob.remote_players.get(&alice_id).and_then(|rp| rp.health) {
+                min_bob_seen = min_bob_seen.min(h);
+            }
         }
         settle(&mut alice, &mut bob);
+        assert!(
+            min_server_health < 1.0,
+            "{BITE_CONTACT_TICKS} ticks de contact avec la Créature 1 (mordeuse) \
+             auraient dû infliger des dégâts à un moment de la fenêtre : {min_server_health}"
+        );
+        // Le creux de vie doit avoir été **vu** par les deux clients (une
+        // morsure dure ~2,4 s avant régénération complète, soit ~144 snapshots
+        // à 60 Hz — largement le temps d'arriver aux deux).
+        assert!(
+            min_alice_seen < 1.0,
+            "Alice doit avoir vu sa vie baisser après une morsure : {min_alice_seen}"
+        );
+        assert!(
+            min_bob_seen < 1.0,
+            "Bob doit avoir vu la vie d'Alice baisser après une morsure : {min_bob_seen}"
+        );
         let server_health = server_app
             .network_player_health(alice_id)
             .expect("Alice doit avoir une vie réseau");
-        assert!(
-            server_health < 1.0,
-            "{BITE_CONTACT_TICKS} ticks de contact avec la Créature 1 (mordeuse) \
-             auraient dû infliger des dégâts : {server_health}"
-        );
         assert_eq!(
             alice.net_local_health,
             Some(server_health),
