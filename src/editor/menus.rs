@@ -22,103 +22,110 @@ pub(super) fn menu_fichier(
             actions.open_new_project_wizard = true;
             ui.close();
         }
-        if ui
-            .button("🎮  Démo mobile (jouable)")
-            .on_hover_text("Charge une scène : joystick + bouton Saut + personnage scripté")
-            .clicked()
-        {
-            actions.load_demo = true;
-            ui.close();
-        }
-        if ui
-            .button("🎯  Démo gameplay (complète)")
-            .on_hover_text("Joystick + gyroscope + saut + zone de danger + barre de vie + tap")
-            .clicked()
-        {
-            actions.load_gameplay = true;
-            ui.close();
-        }
-        if ui
-            .button("🕹  Démo contrôleur (joystick + saut, sans script)")
-            .on_hover_text(
-                "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor",
-            )
-            .clicked()
-        {
-            actions.load_controller = true;
-            ui.close();
-        }
-        if ui
-            .button("🗼  Démo Tour d'ascension (platforming)")
-            .on_hover_text(
-                "Style différent : grimpe la tour en spirale, aucune arme ni combat, éviter le vide",
-            )
-            .clicked()
-        {
-            actions.load_tower = true;
-            ui.close();
-        }
-        if ui
-            .button("🏃  Démo Course infinie (style Temple Run)")
-            .on_hover_text(
-                "Course automatique + changement de voie + saut : esquive les obstacles, ramasse les pièces",
-            )
-            .clicked()
-        {
-            actions.load_temple_run = true;
-            ui.close();
-        }
-        if ui
-            .button("🧩  Scène exemple (composants Controller/Audio/Combat)")
-            .on_hover_text(
-                "Référence minimale : un objet par composant optionnel, pas un niveau de jeu",
-            )
-            .clicked()
-        {
-            actions.load_components_demo = true;
-            ui.close();
-        }
-        if ui
-            .button("🧟  Démo Vagues de zombies (local, sans réseau)")
-            .on_hover_text(
-                "Manches de monstres (Rôdeur/Coureur/Brute) qui poursuivent le joueur, style Call of Zombies",
-            )
-            .clicked()
-        {
-            actions.load_ai_duel = true;
-            ui.close();
-        }
-        if ui
-            .button("🌐  Démo MMORPG (test multijoueur PC ↔ mobile)")
-            .on_hover_text(
-                "Arène minimale sans monstres/manches : joueur pilotable (joystick + saut), \
-                 pensée pour voir un client desktop et un APK se déplacer l'un par rapport à l'autre",
-            )
-            .clicked()
-        {
-            actions.load_mmorpg = true;
-            ui.close();
-        }
-        if ui
-            .button("🗡  Démo Donjon (roguelike, 3 salles)")
-            .on_hover_text(
-                "3 salles à vider une à une (porte fermée jusqu'à la précédente vidée), arme de départ tirée au sort",
-            )
-            .clicked()
-        {
-            actions.load_roguelike = true;
-            ui.close();
-        }
-        if ui
-            .button("🥊  Démo Duel (façon Tekken/Smash Bros)")
-            .on_hover_text(
-                "Arène flottante, un rival à plusieurs coups avant de tomber, ring out possible (le vide sous l'arène est mortel)",
-            )
-            .clicked()
-        {
-            actions.load_brawl = true;
-            ui.close();
-        }
+        // Les démos sont regroupées dans un sous-menu pour ne pas noyer les vraies
+        // actions fichier ; la scène MMORPG (scène centrale du projet, chargée au
+        // démarrage) est en tête pour pouvoir la recharger facilement.
+        ui.menu_button("🎬  Démos", |ui| {
+            if ui
+                .button("🌐  Démo MMORPG (scène centrale, multijoueur PC ↔ mobile)")
+                .on_hover_text(
+                    "La scène chargée au démarrage de l'éditeur : hameau, ménagerie de créatures, \
+                     joueur pilotable (joystick + saut), pensée pour voir un client desktop et un \
+                     APK se déplacer l'un par rapport à l'autre",
+                )
+                .clicked()
+            {
+                actions.load_mmorpg = true;
+                ui.close();
+            }
+            if ui
+                .button("🎮  Démo mobile (jouable)")
+                .on_hover_text("Charge une scène : joystick + bouton Saut + personnage scripté")
+                .clicked()
+            {
+                actions.load_demo = true;
+                ui.close();
+            }
+            if ui
+                .button("🎯  Démo gameplay (complète)")
+                .on_hover_text("Joystick + gyroscope + saut + zone de danger + barre de vie + tap")
+                .clicked()
+            {
+                actions.load_gameplay = true;
+                ui.close();
+            }
+            if ui
+                .button("🕹  Démo contrôleur (joystick + saut, sans script)")
+                .on_hover_text(
+                    "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor",
+                )
+                .clicked()
+            {
+                actions.load_controller = true;
+                ui.close();
+            }
+            if ui
+                .button("🗼  Démo Tour d'ascension (platforming)")
+                .on_hover_text(
+                    "Style différent : grimpe la tour en spirale, aucune arme ni combat, éviter le vide",
+                )
+                .clicked()
+            {
+                actions.load_tower = true;
+                ui.close();
+            }
+            if ui
+                .button("🏃  Démo Course infinie (style Temple Run)")
+                .on_hover_text(
+                    "Course automatique + changement de voie + saut : esquive les obstacles, ramasse les pièces",
+                )
+                .clicked()
+            {
+                actions.load_temple_run = true;
+                ui.close();
+            }
+            if ui
+                .button("🧩  Scène exemple (composants Controller/Audio/Combat)")
+                .on_hover_text(
+                    "Référence minimale : un objet par composant optionnel, pas un niveau de jeu",
+                )
+                .clicked()
+            {
+                actions.load_components_demo = true;
+                ui.close();
+            }
+            if ui
+                .button("🧟  Démo Vagues de zombies (local, sans réseau)")
+                .on_hover_text(
+                    "Manches de monstres (Rôdeur/Coureur/Brute) qui poursuivent le joueur, style Call of Zombies",
+                )
+                .clicked()
+            {
+                actions.load_ai_duel = true;
+                ui.close();
+            }
+            if ui
+                .button("🗡  Démo Donjon (roguelike, 3 salles)")
+                .on_hover_text(
+                    "3 salles à vider une à une (porte fermée jusqu'à la précédente vidée), arme de départ tirée au sort",
+                )
+                .clicked()
+            {
+                actions.load_roguelike = true;
+                ui.close();
+            }
+            if ui
+                .button("🥊  Démo Duel (façon Tekken/Smash Bros)")
+                .on_hover_text(
+                    "Arène flottante, un rival à plusieurs coups avant de tomber, ring out possible (le vide sous l'arène est mortel)",
+                )
+                .clicked()
+            {
+                actions.load_brawl = true;
+                ui.close();
+            }
+        });
+        ui.separator();
         if ui
             .button("✨  Générer une scène (IA)…")
             .on_hover_text("Crée une scène complète depuis une description (DeepSeek)")

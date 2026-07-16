@@ -1512,7 +1512,7 @@ pub(super) fn new_project_wizard_window(
             ui.add_space(4.0);
             ui.small(
                 "D'autres démos (donjon, duel, course, MMORPG…) restent disponibles dans \
-                 le menu Fichier.",
+                 le menu Fichier → Démos.",
             );
         });
     if close_after {

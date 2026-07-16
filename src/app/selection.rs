@@ -263,6 +263,13 @@ impl AppState {
         self.redo_stack.clear();
     }
 
+    /// Vide l'historique undo/redo — utilisé au démarrage de l'éditeur pour que
+    /// la scène d'ouverture ne soit pas « annulable » vers la scène vide interne.
+    pub fn clear_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo_stack.pop_back() {
             self.redo_stack.push(SceneSnapshot::capture(&self.scene));

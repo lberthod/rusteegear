@@ -652,6 +652,12 @@ fn make_app(player: bool) -> App {
             crate::app::network_client::DEFAULT_SERVER_URL,
             &guest_name(),
         );
+    } else {
+        // L'éditeur s'ouvre directement sur la scène centrale du projet (MMORPG),
+        // pas sur la petite démo par défaut. `clear_history` évite qu'un Ctrl+Z
+        // juste après l'ouverture ramène la scène vide interne.
+        app.state.load_mmorpg_demo();
+        app.state.clear_history();
     }
     app
 }
@@ -759,6 +765,32 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_editor_opens_directly_on_the_mmorpg_scene_with_a_clean_history() {
+        // `load_mmorpg_demo` seed des prefabs dans le vrai `assets_dir()` : même
+        // verrou que les autres tests dans ce cas (cf. `app::demos`).
+        if crate::assets::assets_dir().is_none() {
+            return;
+        }
+        let _guard = crate::assets::REAL_ASSETS_DIR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut app = make_app(false);
+        assert!(
+            app.state.scene.objects.iter().any(|o| o.name == "Repère 1"),
+            "l'éditeur doit s'ouvrir sur la scène MMORPG (scène centrale), pas la démo par défaut"
+        );
+        // Ctrl+Z juste après l'ouverture ne doit PAS ramener la scène vide
+        // interne : l'historique est vidé au démarrage (`clear_history`).
+        let n = app.state.scene.objects.len();
+        app.state.undo();
+        assert_eq!(
+            app.state.scene.objects.len(),
+            n,
+            "annuler au démarrage ne doit rien changer (historique vide)"
+        );
+    }
 
     #[test]
     fn axis_from_held_is_neutral_when_neither_key_is_held() {
