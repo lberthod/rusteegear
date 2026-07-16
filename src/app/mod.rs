@@ -138,6 +138,12 @@ pub struct PlayerInput {
     /// Rotation « tank » du stick gauche de la manette — même principe que
     /// `gamepad_thrust`, cumulée via `turn()`.
     pub gamepad_turn: f32,
+    /// Tangage caméra du stick droit de la manette (axe vertical, zone morte
+    /// déjà appliquée) : consommé par la caméra de suivi (`update_effects`),
+    /// stick vers le haut = regarder vers le haut. L'axe horizontal du stick
+    /// droit, lui, est cumulé dans `gamepad_turn` (en contrôles « tank »,
+    /// tourner = viser — cf. `App::recompute_action_buttons`).
+    pub gamepad_pitch: f32,
     /// Saut clavier (Espace) maintenu enfoncé.
     pub jump: bool,
     /// Attaque clavier (J) maintenue enfoncée.

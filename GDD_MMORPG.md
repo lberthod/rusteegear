@@ -1238,9 +1238,9 @@ implicites.
 | Tir | (regard) + touche de tir | bouton « Feu » | B / East | direction du regard (`aim_yaw`) |
 | Changer d'arme | K | bouton « Arme » | R1 (bumper droit) | cycle les débloquées |
 | Soin | H (maintenu) | bouton « Soin » (maintenu) | Y / North (maintenu) | canal §5.6 |
-| Caméra | souris | glisser hors joystick | stick droit — **à câbler** | |
-| Menu / fenêtre Multijoueur | Échap | bouton UI | Start — **à câbler** (§17.3) | |
-| Roster / scores | (HUD permanent) | (HUD permanent) | Select = plein écran tenu — **à câbler** | |
+| Caméra / visée | souris | glisser hors joystick | stick droit : horizontal = visée (cumulé au stick gauche), vertical = tangage caméra | |
+| Menu / fenêtre Multijoueur | Échap | bouton UI | Start (bascule) | |
+| Masquer le HUD | — | — | Select (bascule) — l'alerte vitale reste affichée | |
 
 La manette (gilrs, disposition Xbox — couvre les Logitech F310/F710 et
 consorts) est **entièrement remappable** dans le panneau « 🎮 Manette » des
@@ -1253,7 +1253,7 @@ des boutons (aucune mécanique n'exige de demi-pression, cohérent §5.6).
 Cette table est le **contrat de parité** (§6.3) : une colonne vide = une
 mécanique non livrée. (État actuel : la colonne mobile est cassée —
 seul « Saut » subsiste dans la scène exportée, régression bloquante ; la
-colonne manette a trois cases « à câbler ».)
+colonne manette est complète.)
 
 ### 18.3 Modèle économique et licence (pourquoi les anti-dark-patterns tiennent)
 

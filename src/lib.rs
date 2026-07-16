@@ -62,6 +62,14 @@ struct App {
     gamepad_held: std::collections::HashSet<gilrs::Button>,
     /// Stick gauche brut (avant zone morte, cf. `app::input::apply_deadzone`).
     gamepad_axes: (f32, f32),
+    /// Stick droit brut (avant zone morte) : x = visée/rotation, y = tangage
+    /// caméra (cf. `PlayerInput::gamepad_pitch`).
+    gamepad_axes_right: (f32, f32),
+    /// États tenus au frame précédent des bascules manette (Menu/HUD) : la
+    /// bascule se déclenche sur le front montant seulement — un bouton tenu
+    /// n'ouvre/ferme qu'une fois.
+    gamepad_menu_was_held: bool,
+    gamepad_hud_was_held: bool,
 
     // --- hot-reload des assets de projet (Sprint 111, desktop uniquement) ---
     /// Récepteur des événements du dossier d'assets (`assets::assets_dir()`) —
@@ -206,8 +214,12 @@ impl App {
     fn recompute_action_buttons(&mut self) {
         use winit::keyboard::KeyCode;
         let bindings = self.gamepad_bindings();
-        let gp =
-            app::input::resolve_gamepad_input(&self.gamepad_held, self.gamepad_axes, &bindings);
+        let gp = app::input::resolve_gamepad_input(
+            &self.gamepad_held,
+            self.gamepad_axes,
+            self.gamepad_axes_right,
+            &bindings,
+        );
         let keys = &self.action_keys_held;
         let inp = &mut self.state.input_state;
         inp.jump = keys.contains(&KeyCode::Space) || gp.jump;
@@ -220,8 +232,29 @@ impl App {
             keys.contains(&KeyCode::Space),
         );
         inp.weapon_cycle = gp.weapon;
-        inp.gamepad_turn = gp.turn;
+        // Stick droit horizontal cumulé au stick gauche : en contrôles « tank »,
+        // l'orientation du personnage EST la visée — le stick droit est donc un
+        // second canal de rotation (habitude « stick de visée » des TPS), pas
+        // une caméra libre découplée. Le cumul reste borné par `turn()`.
+        inp.gamepad_turn = (gp.turn + gp.look_x).clamp(-1.0, 1.0);
         inp.gamepad_thrust = gp.thrust;
+        inp.gamepad_pitch = gp.look_y;
+        // Bascules sur front montant (Start = fenêtre Multijoueur, Select =
+        // masquer le HUD) — routées vers l'éditeur via le renderer, seul accès.
+        if gp.menu
+            && !self.gamepad_menu_was_held
+            && let Some(r) = self.renderer.as_mut()
+        {
+            r.toggle_multiplayer_window();
+        }
+        if gp.hud
+            && !self.gamepad_hud_was_held
+            && let Some(r) = self.renderer.as_mut()
+        {
+            r.toggle_play_hud();
+        }
+        self.gamepad_menu_was_held = gp.menu;
+        self.gamepad_hud_was_held = gp.hud;
     }
 
     /// Vide les événements `gilrs` en attente (branchement/débranchement, boutons,
@@ -251,9 +284,18 @@ impl App {
                     self.gamepad_axes.1 = v;
                     changed = true;
                 }
+                gilrs::EventType::AxisChanged(gilrs::Axis::RightStickX, v, _) => {
+                    self.gamepad_axes_right.0 = v;
+                    changed = true;
+                }
+                gilrs::EventType::AxisChanged(gilrs::Axis::RightStickY, v, _) => {
+                    self.gamepad_axes_right.1 = v;
+                    changed = true;
+                }
                 gilrs::EventType::Disconnected => {
                     self.gamepad_held.clear();
                     self.gamepad_axes = (0.0, 0.0);
+                    self.gamepad_axes_right = (0.0, 0.0);
                     changed = true;
                 }
                 _ => {}
@@ -478,6 +520,8 @@ impl ApplicationHandler for App {
                         KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
                         KeyCode::KeyR if !cmd => self.state.set_gizmo_mode(GizmoMode::Scale),
                         KeyCode::KeyQ if !cmd => self.state.set_gizmo_mode(GizmoMode::Pan),
+                        KeyCode::KeyT if !cmd => self.state.set_gizmo_mode(GizmoMode::Orbit),
+                        KeyCode::KeyY if !cmd => self.state.set_gizmo_mode(GizmoMode::Zoom),
                         KeyCode::KeyF if !cmd => self.state.frame_selected(),
                         // Caméra libre (« vol libre »/noclip) de l'éditeur : voir
                         // partout sur la carte hors Play, cf. `AppState::toggle_fly_cam`.

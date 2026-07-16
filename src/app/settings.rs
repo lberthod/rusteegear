@@ -57,6 +57,12 @@ pub struct GamepadBindings {
     /// Changement d'arme (cycle sur front montant, cf. `fireball::cycle_weapon`) —
     /// pendant manette des touches clavier 1/2/3 et du bouton tactile « Arme ».
     pub weapon: String,
+    /// Ouvre/ferme la fenêtre Multijoueur (bascule sur front montant, cf.
+    /// `App::recompute_action_buttons`) — le « menu » de la manette.
+    pub menu: String,
+    /// Masque/affiche les widgets HUD en Play (bascule sur front montant) —
+    /// capture d'écran propre, spectacle, ou simple désencombrement.
+    pub hud: String,
 }
 
 impl Default for GamepadBindings {
@@ -73,6 +79,8 @@ impl Default for GamepadBindings {
             fire: "East".into(),
             heal: "North".into(),
             weapon: "RightTrigger".into(),
+            menu: "Start".into(),
+            hud: "Select".into(),
         }
     }
 }

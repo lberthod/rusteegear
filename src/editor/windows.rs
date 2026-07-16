@@ -454,6 +454,7 @@ pub(super) fn settings_window(
             ui.heading("🎮 Manette");
             ui.small(
                 "Stick gauche : déplacement « tank » (même axes que A/D/W/S). \
+                 Stick droit : visée (horizontal) et tangage caméra (vertical). \
                  Boutons ci-dessous, remappables sur toute manette branchée \
                  (Xbox/PlayStation/Switch Pro — noms génériques par position).",
             );
@@ -463,6 +464,8 @@ pub(super) fn settings_window(
             changed |= gamepad_binding_row(ui, "Tir", &mut settings.gamepad.fire);
             changed |= gamepad_binding_row(ui, "Soin", &mut settings.gamepad.heal);
             changed |= gamepad_binding_row(ui, "Changer d'arme", &mut settings.gamepad.weapon);
+            changed |= gamepad_binding_row(ui, "Fenêtre Multijoueur", &mut settings.gamepad.menu);
+            changed |= gamepad_binding_row(ui, "Masquer le HUD", &mut settings.gamepad.hud);
             if changed {
                 settings.save();
             }

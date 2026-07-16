@@ -134,6 +134,12 @@ struct Panels {
     scripts: bool,
     /// Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer: bool,
+    /// HUD de jeu masqué (bascule Select à la manette, cf.
+    /// `Editor::toggle_play_hud`) : cache les widgets de Play (vague, arme,
+    /// frags, roster) pour une capture propre — le feedback vital (vignette de
+    /// dégâts, barre de vie) reste affiché, on masque l'information, jamais
+    /// l'alerte.
+    hud_hidden: bool,
     /// Fenêtre « 🧩 Widgets HUD » (édition de `Scene::hud_widgets`).
     hud_widgets_editor: bool,
     /// Fenêtre « 🩹 Journal de crash » (Sprint 113) — ouverte automatiquement au
@@ -403,6 +409,19 @@ impl Editor {
     /// à partir de la config sans dupliquer l'état.
     pub fn settings(&self) -> &crate::app::settings::Settings {
         &self.settings
+    }
+
+    /// Ouvre/ferme la fenêtre Multijoueur — bouton Start de la manette
+    /// (`App::recompute_action_buttons`), même fenêtre que le menu Outils.
+    pub fn toggle_multiplayer_window(&mut self) {
+        self.panels.multiplayer = !self.panels.multiplayer;
+    }
+
+    /// Masque/affiche les widgets HUD de Play — bouton Select de la manette.
+    /// Cf. `Panels::hud_hidden` : l'alerte vitale (vignette de dégâts, barre
+    /// de vie) n'est jamais masquée.
+    pub fn toggle_play_hud(&mut self) {
+        self.panels.hud_hidden = !self.panels.hud_hidden;
     }
 
     /// Panneau « 📊 Profiler FPS » ouvert ? Lu par `Renderer::render` (Sprint 112)
@@ -951,21 +970,26 @@ fn build_ui(
                 }
             }
             ui.separator();
-            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔ Déplacer");
-            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻ Tourner");
-            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⤢ Redim.");
-            ui.separator();
-            // Outils de navigation caméra : glisser dans la vue pilote la caméra
-            // (pas de gizmo, pas de sélection). Clic milieu / Maj+glisser = pan
-            // aussi disponible à tout moment, quel que soit l'outil.
-            ui.selectable_value(gizmo_mode, GizmoMode::Pan, "🖐 Main")
+            // Outils en icônes seules (les noms sont au survol et dans le menu
+            // Outils), dans l'ordre des raccourcis Q W E R T Y. Icônes choisies
+            // dans la couverture réelle des polices d'egui — 🖐 et ⤢ n'y sont
+            // pas et rendaient des carrés (tofu).
+            ui.selectable_value(gizmo_mode, GizmoMode::Pan, "✋")
                 .on_hover_text(
-                    "Glisser = déplacer la vue (Q) — aussi : clic milieu ou Maj+glisser",
+                    "Main (Q) : glisser = déplacer la vue — aussi : clic milieu ou Maj+glisser",
                 );
-            ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄 Orbite")
-                .on_hover_text("Glisser = tourner la vue (horizontal et vertical)");
-            ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍 Loupe")
-                .on_hover_text("Glisser haut/bas = zoom avant/arrière");
+            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔")
+                .on_hover_text("Déplacer l'objet (W)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻")
+                .on_hover_text("Tourner l'objet (E)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⛶")
+                .on_hover_text("Redimensionner l'objet (R)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄")
+                .on_hover_text(
+                    "Orbite libre (T) : glisser = tourner la vue (horizontal et vertical)",
+                );
+            ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍")
+                .on_hover_text("Loupe (Y) : glisser haut/bas = zoom avant/arrière");
             if ui
                 .add_enabled(selection.is_some(), egui::Button::new("⌖"))
                 .on_hover_text("Cadrer la sélection (F)")
@@ -1823,10 +1847,12 @@ fn build_ui(
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
         health_bar(root.ctx(), play_rect, h);
     }
-    if *playing {
+    if *playing && !panels.hud_hidden {
         // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
         // partie en cours (`draggable: false`) — le repositionnement se fait via
-        // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous.
+        // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous. Le bloc
+        // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
+        // la vignette de dégâts et la barre de vie, au-dessus, jamais.
         wave_hud(root.ctx(), play_rect, scene, wave, locale);
         weapon_hud(
             root.ctx(),

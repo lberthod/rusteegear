@@ -88,6 +88,12 @@ pub struct GamepadInput {
     /// `thrust`).
     pub turn: f32,
     pub thrust: f32,
+    /// Stick droit, zone morte déjà appliquée : x = visée/rotation (cumulée à
+    /// `turn` par l'appelant — en contrôles « tank », l'orientation du
+    /// personnage EST la visée), y = tangage caméra (cf.
+    /// `PlayerInput::gamepad_pitch`).
+    pub look_x: f32,
+    pub look_y: f32,
     pub jump: bool,
     pub attack: bool,
     pub fire: bool,
@@ -96,27 +102,37 @@ pub struct GamepadInput {
     /// appui) est détecté en aval par `fireball::update_fireballs`, comme pour
     /// le bouton tactile « Arme ».
     pub weapon: bool,
+    /// Fenêtre Multijoueur : état **tenu** ; la bascule (front montant) est
+    /// détectée par `App::recompute_action_buttons`, comme `weapon`.
+    pub menu: bool,
+    /// Masquer/afficher le HUD : état **tenu**, bascule sur front montant.
+    pub hud: bool,
 }
 
-/// Zone morte standard (15 %) appliquée au stick gauche avant résolution.
+/// Zone morte standard (15 %) appliquée aux deux sticks avant résolution.
 pub const STICK_DEADZONE: f32 = 0.15;
 
 /// Résout l'état manette d'une frame à partir des boutons tenus (`gilrs::Button`),
-/// des axes bruts du stick gauche et de la table de remapping — cf. `GamepadInput`.
+/// des axes bruts des deux sticks et de la table de remapping — cf. `GamepadInput`.
 pub fn resolve_gamepad_input(
     held: &std::collections::HashSet<gilrs::Button>,
     raw_axes: (f32, f32),
+    raw_axes_right: (f32, f32),
     bindings: &crate::app::settings::GamepadBindings,
 ) -> GamepadInput {
     let pressed = |name: &str| gamepad_button_from_name(name).is_some_and(|b| held.contains(&b));
     GamepadInput {
         turn: apply_deadzone(raw_axes.0, STICK_DEADZONE),
         thrust: apply_deadzone(raw_axes.1, STICK_DEADZONE),
+        look_x: apply_deadzone(raw_axes_right.0, STICK_DEADZONE),
+        look_y: apply_deadzone(raw_axes_right.1, STICK_DEADZONE),
         jump: pressed(&bindings.jump),
         attack: pressed(&bindings.attack),
         fire: pressed(&bindings.fire),
         heal: pressed(&bindings.heal),
         weapon: pressed(&bindings.weapon),
+        menu: pressed(&bindings.menu),
+        hud: pressed(&bindings.hud),
     }
 }
 
@@ -155,7 +171,7 @@ mod tests {
         held.insert(gilrs::Button::East);
         held.insert(gilrs::Button::RightTrigger);
         let bindings = GamepadBindings::default();
-        let resolved = resolve_gamepad_input(&held, (0.6, -1.2), &bindings);
+        let resolved = resolve_gamepad_input(&held, (0.6, -1.2), (0.0, 0.0), &bindings);
         assert!(resolved.jump, "South est le défaut de Saut");
         assert!(resolved.fire, "East est le défaut de Tir");
         assert!(
@@ -164,6 +180,8 @@ mod tests {
         );
         assert!(!resolved.attack, "West (Attaque) n'est pas tenu");
         assert!(!resolved.heal, "North (Soin) n'est pas tenu");
+        assert!(!resolved.menu, "Start (Menu) n'est pas tenu");
+        assert!(!resolved.hud, "Select (HUD) n'est pas tenu");
         assert_eq!(resolved.turn, 0.6);
         assert_eq!(resolved.thrust, -1.0, "reclampé à 1 en valeur absolue");
     }
@@ -176,10 +194,29 @@ mod tests {
             jump: "DPadUp".into(),
             ..GamepadBindings::default()
         };
-        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), &bindings);
+        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
         assert!(
             resolved.jump,
             "le remapping doit être respecté, pas le défaut South"
+        );
+    }
+
+    #[test]
+    fn resolve_gamepad_input_reads_right_stick_and_menu_hud_defaults() {
+        let mut held = std::collections::HashSet::new();
+        held.insert(gilrs::Button::Start);
+        held.insert(gilrs::Button::Select);
+        let bindings = GamepadBindings::default();
+        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.08, -0.7), &bindings);
+        assert!(resolved.menu, "Start est le défaut de Menu (Multijoueur)");
+        assert!(resolved.hud, "Select est le défaut du masquage HUD");
+        assert_eq!(
+            resolved.look_x, 0.0,
+            "dérive du stick droit sous la zone morte ignorée"
+        );
+        assert_eq!(
+            resolved.look_y, -0.7,
+            "axe vertical du stick droit transmis"
         );
     }
 }

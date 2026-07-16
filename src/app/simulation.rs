@@ -382,6 +382,26 @@ impl AppState {
             self.update_fly_cam(dt);
         }
 
+        // Hors Play : les clips squelettaux continuent de tourner — prévisualisation
+        // d'édition, un GLB riggé « vit » dans la vue sans lancer Play. Seule la
+        // lecture avance (au dt de frame, pas besoin du pas fixe : aucun script ni
+        // physique n'en dépend) ; `dt` est borné pour qu'un retour d'onglet/veille ne
+        // fasse pas sauter les fondus en cours. En Play, c'est `sim_step` qui avance.
+        if !self.playing {
+            let adt = dt.min(0.1);
+            for obj in self.scene.objects.iter_mut() {
+                if let Some(anim) = obj.animation.as_mut() {
+                    anim.time += adt * anim.speed;
+                    if anim.blend < 1.0 {
+                        anim.prev_time += adt * anim.speed;
+                        anim.blend = (anim.blend
+                            + adt / crate::scene::AnimationState::CROSSFADE_SECONDS)
+                            .min(1.0);
+                    }
+                }
+            }
+        }
+
         // En pause : on reste en mode Play (snapshot conservé) mais on gèle la
         // simulation (ni scripts, ni physique, ni avance du temps) — sauf si un pas
         // unique a été demandé (cf. `request_step`) : dans ce cas on laisse
@@ -568,6 +588,17 @@ impl AppState {
                     .map(|o| o.transform.rotation.to_euler(EulerRot::YXZ).0)
             {
                 self.camera.yaw = rotate_towards_smooth(self.camera.yaw, player_yaw, 8.0, dt);
+            }
+            // Tangage caméra au stick droit de la manette (axe vertical) : stick
+            // vers le haut = regarder vers le haut (pitch réduit — la caméra
+            // descend vers l'horizon). Bornes serrées par rapport à l'orbite
+            // libre de l'éditeur : la caméra de jeu ne passe ni sous le sol ni
+            // au zénith. Sans manette, `gamepad_pitch` reste à 0 — aucun effet.
+            let look = self.input_state.gamepad_pitch;
+            if look != 0.0 {
+                const GAMEPAD_PITCH_RATE: f32 = 1.6; // rad/s à plein débattement
+                self.camera.pitch =
+                    (self.camera.pitch - look * GAMEPAD_PITCH_RATE * dt).clamp(0.08, 1.35);
             }
         }
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.

@@ -930,6 +930,21 @@ impl Renderer {
         self.editor.as_ref().map(|e| e.settings())
     }
 
+    /// Bascule la fenêtre Multijoueur (bouton Start de la manette) — simple
+    /// relais vers `Editor`, privé à ce module ; sans effet en headless.
+    pub fn toggle_multiplayer_window(&mut self) {
+        if let Some(e) = self.editor.as_mut() {
+            e.toggle_multiplayer_window();
+        }
+    }
+
+    /// Bascule le HUD de Play (bouton Select de la manette) — même relais.
+    pub fn toggle_play_hud(&mut self) {
+        if let Some(e) = self.editor.as_mut() {
+            e.toggle_play_hud();
+        }
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();
