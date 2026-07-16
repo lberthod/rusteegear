@@ -914,9 +914,13 @@ mod tests {
         let (creature_idx, player_idx) = indices(&app, cfg_name);
         let ci = cfg_index(cfg_name);
         app.hud_health = Some(1.0);
-        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        // Le joueur est placé **avant** de construire la physique : construite
+        // d'abord, elle mémorisait la position de spawn et y ramenait le joueur
+        // au premier `sim_step` — le test croyait viser un joueur à `offset` de
+        // la créature alors qu'il était reparti à l'autre bout de l'arène.
         app.scene.objects[player_idx].transform.position =
             app.scene.objects[creature_idx].transform.position + offset;
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
         let frozen_at = app.scene.objects[creature_idx].transform.position;
         app.creature_ranged[ci].frozen_pos = Some(frozen_at);
         app.creature_ranged[ci].stopped_until = Some(app.time + 1.0 / 60.0);
@@ -953,6 +957,16 @@ mod tests {
             app.creature_ranged[ci].stopped_until.is_some(),
             "la créature doit rester figée entre deux tirs de rafale"
         );
+        // Le joueur s'écarte de la ligne de tir : resté à 5 m, le 1er tir le
+        // toucherait avant l'envol du 3e, et le comptage « 3 en vol » serait
+        // invérifiable.
+        let (_, player_idx) = indices(&app, "Créature 12");
+        let dodge = app.scene.objects[player_idx].transform.position + Vec3::new(0.0, 0.0, 20.0);
+        app.scene.objects[player_idx].transform.position = dodge;
+        app.physics
+            .as_mut()
+            .unwrap()
+            .set_position(player_idx, dodge);
         // Avance jusqu'à épuisement de la rafale : chaque échéance ajoute un tir.
         let dt = 1.0 / 60.0;
         let steps = ((interval * (count - 1) as f32 + 0.15) / dt) as u32;

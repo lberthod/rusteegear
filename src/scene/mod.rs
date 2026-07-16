@@ -3136,10 +3136,25 @@ mod tests {
                 "mesh embarqué « {} » non résolu (clé absente du bundle ?)",
                 m.path
             );
+        }
+        // Seuls les imports référencés par les **créatures** (et le joueur riggé)
+        // doivent être skinnés : depuis le décor village/nature embarqué
+        // (cf. commits « Décor MMORPG »), la scène référence aussi des meshes
+        // statiques (pont, cabane…) légitimement sans squelette.
+        for o in scene
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature") || o.tag == "joueur")
+        {
+            let MeshKind::Imported(i) = o.mesh else {
+                continue;
+            };
+            let m = &scene.imported[i as usize];
             assert!(
                 m.skeleton.is_some(),
-                "mesh embarqué « {} » doit être skinné (créature riggée)",
-                m.path
+                "mesh embarqué « {} » (objet « {} ») doit être skinné (rig requis)",
+                m.path,
+                o.name
             );
         }
     }
