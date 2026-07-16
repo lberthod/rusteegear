@@ -110,3 +110,25 @@ continu sur les mêmes sprints (`SPRINT_MMORPG.md`, `SPRINTNETWORK.md`,
   (`String` plutôt qu'un indice numérique dans `ImportedMesh::clips`) — à
   reconsidérer si le nombre d'entités diffusées grandissait significativement
   (monstres/décor animé, cf. `AUDIT_LATENCE_MULTIJOUEUR.md` §2.1).
+
+## Audit multijoueur (2026-07) — décisions
+
+- **Liveness + reconnexion automatique du client** : `NetClient::is_alive()`
+  (contrat commun natif/web), watchdog applicatif `NET_SILENCE_TIMEOUT` (8 s,
+  hiérarchie 2,5 s filet créatures < 8 s < 60 s timeout serveur), backoff
+  1→15 s plafonné à 5 tentatives (`app::network_client`). Avant : un client
+  dont la connexion mourait se croyait connecté pour toujours.
+- **Versioning du protocole** : `PROTOCOL_VERSION` en premier champ du `Join`
+  (invariant : `Join` reste le variant 0), rejet explicite
+  `ServerMsg::JoinRejected { reason }` — fatal côté client (pas de
+  reconnexion automatique après un rejet).
+- **`aim_yaw` — durcissement écarté, décision documentée** : normalisé dans
+  `(-π, π]` à la réception (`normalize_network_yaw`, un f32 fini énorme type
+  `1e30` passait l'ancien filtre `is_finite` et dégradait l'orientation
+  diffusée à tous), mais **pas** de clamp de vitesse angulaire : état par
+  joueur à entretenir, demi-tours souris légitimes pénalisés, et l'enjeu se
+  limite à un aimbot contre des monstres en coop PvE 2-16 joueurs. Coût >
+  enjeu — à réévaluer seulement si du PvP apparaît.
+- **Progression Firebase** : une lecture échouée ne produit plus jamais
+  d'écriture (`merged_progress`, `src/bin/server.rs`) — avant, une panne
+  réseau transitoire écrasait le cumul du joueur avec `default() + score`.

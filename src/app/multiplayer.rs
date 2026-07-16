@@ -49,11 +49,42 @@ const NETWORK_ATTACK_RANGE: f32 = 1.2;
 /// `Controller::attack_cooldown` pour le joueur local (`app::combat`).
 const NETWORK_ATTACK_COOLDOWN: f32 = 0.4;
 
+/// Ramène un yaw reçu du réseau dans `(-π, π]` (0 si `NaN`/infini) : un f32
+/// **fini** mais énorme (ex. `1e30`, qu'un client modifié peut envoyer — il
+/// passait l'ancien filtre `is_finite`) n'a plus aucune précision utile à
+/// cette échelle — propagé tel quel au quaternion de l'objet puis au snapshot,
+/// il dégradait l'orientation vue par **tous** les clients. Un client honnête
+/// envoie déjà un yaw issu de `to_euler` (donc dans `(-π, π]`) : la
+/// normalisation est neutre pour lui. Côté affichage, l'interpolation des
+/// fantômes passe par `lerp_angle` (chemin angulaire court, wrap ±π géré, cf.
+/// `net::interpolation`) : un passage 3,14 → −3,14 ne fait pas tourner le
+/// fantôme à l'envers.
+fn normalize_network_yaw(yaw: f32) -> f32 {
+    if !yaw.is_finite() {
+        return 0.0;
+    }
+    let wrapped = yaw.rem_euclid(std::f32::consts::TAU); // [0, TAU)
+    if wrapped > std::f32::consts::PI {
+        wrapped - std::f32::consts::TAU
+    } else {
+        wrapped
+    }
+}
+
 /// Nettoie un `NetworkInput` reçu du réseau avant de le mémoriser (cf.
 /// `AppState::set_network_input`) : rejette `NaN`/infini (remplacés par 0, le
 /// neutre pour un axe de déplacement) et borne les axes à `[-1, 1]` — la même
 /// borne que le joueur local (`inp.joy.0.clamp(-1.0, 1.0)`), appliquée ici à
 /// la source plutôt que de faire confiance à `sim_step` pour la répéter.
+///
+/// **Décision d'audit — pas de durcissement supplémentaire d'`aim_yaw`** : ce
+/// champ reste par ailleurs appliqué tel quel (il décide la direction du tir,
+/// cf. `ClientMsg::Input::aim_yaw`) — un clamp de vitesse angulaire a été
+/// évalué et écarté : il exigerait un état par joueur (dernier yaw + date),
+/// pénaliserait les demi-tours souris légitimes (instantanés à 144 Hz), et
+/// l'enjeu — un client modifié qui vise parfaitement — se limite à un aimbot
+/// contre des **monstres** dans un coop PvE 2-16 joueurs, sans victime
+/// humaine. Coût > enjeu ; à réévaluer seulement si du PvP apparaît.
 fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
     let clean = |v: f32| {
         if v.is_finite() {
@@ -65,14 +96,9 @@ fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
     NetworkInput {
         move_x: clean(input.move_x),
         move_y: clean(input.move_y),
-        // Yaw : seul `NaN`/infini est dangereux (il se propagerait au quaternion
-        // de l'objet puis au snapshot de tout le monde) — pas de clamp [-1, 1]
-        // ici, un angle vit naturellement au-delà (sin/cos se moquent du reste).
-        aim_yaw: if input.aim_yaw.is_finite() {
-            input.aim_yaw
-        } else {
-            0.0
-        },
+        // Yaw : pas de clamp [-1, 1] (un angle vit au-delà) mais normalisé
+        // dans (-π, π] — cf. `normalize_network_yaw` pour le pourquoi.
+        aim_yaw: normalize_network_yaw(input.aim_yaw),
         attack: input.attack,
         jump: input.jump,
         fire: input.fire,
@@ -840,6 +866,52 @@ mod tests {
             pos.is_finite(),
             "un NaN reçu du réseau ne doit jamais corrompre la position : {pos:?}"
         );
+    }
+
+    /// `aim_yaw` est normalisé dans `(-π, π]` dès la réception : un f32 fini
+    /// mais énorme (1e30 — il passait l'ancien filtre `is_finite`) n'a plus
+    /// aucune précision utile et dégradait l'orientation diffusée à tous les
+    /// clients ; un yaw honnête (issu de `to_euler`) traverse inchangé.
+    #[test]
+    fn sanitize_normalizes_huge_yaw_values() {
+        use std::f32::consts::{PI, TAU};
+        let sanitized_yaw = |yaw: f32| {
+            sanitize_network_input(NetworkInput {
+                move_x: 0.0,
+                move_y: 0.0,
+                aim_yaw: yaw,
+                attack: false,
+                jump: false,
+                fire: false,
+                weapon: 0,
+                heal: false,
+            })
+            .aim_yaw
+        };
+        for huge in [1e30f32, -400.0, 1e9, f32::MAX] {
+            let y = sanitized_yaw(huge);
+            assert!(
+                y.is_finite() && y > -PI - 1e-4 && y <= PI + 1e-4,
+                "yaw {huge} doit être ramené dans (-π, π], obtenu {y}"
+            );
+        }
+        // Valeur exacte vérifiable : 7,0 rad = un tour complet + 0,717 rad.
+        let y = sanitized_yaw(7.0);
+        assert!(
+            (y - (7.0 - TAU)).abs() < 1e-5,
+            "7,0 rad doit devenir 7,0 − 2π ≈ 0,717, obtenu {y}"
+        );
+        // Un yaw honnête (déjà dans (-π, π]) traverse inchangé.
+        for honest in [0.0f32, 1.57, -3.0, PI] {
+            let y = sanitized_yaw(honest);
+            assert!(
+                (y - honest).abs() < 1e-5,
+                "yaw honnête {honest} ne doit pas être altéré, obtenu {y}"
+            );
+        }
+        // Et l'invariant historique : NaN/infini → 0 (le neutre).
+        assert_eq!(sanitized_yaw(f32::NAN), 0.0);
+        assert_eq!(sanitized_yaw(f32::INFINITY), 0.0);
     }
 
     /// Construit une scène minimale : un joueur pilotable au centre, et deux
