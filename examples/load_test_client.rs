@@ -47,7 +47,12 @@ struct Counters {
 fn main() {
     env_logger::init();
 
-    let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur de test");
+    // Plafond par IP relevé : les 16 bots arrivent tous de 127.0.0.1, le
+    // plafond de production (4, anti-DoS) refuserait tout le monde dès le 5ᵉ —
+    // cf. `NetServer::start_with_ip_cap`. +1 de marge pour un client de
+    // diagnostic ouvert à côté pendant la mesure.
+    let net = NetServer::start_with_ip_cap("127.0.0.1:0", N_CLIENTS + 1)
+        .expect("démarrage du serveur de test");
     let addr = net.local_addr;
     println!(
         "[load_test] serveur démarré sur {addr}, {N_CLIENTS} bots, {TEST_DURATION:?} de mesure (+{WARMUP:?} de chauffe)"

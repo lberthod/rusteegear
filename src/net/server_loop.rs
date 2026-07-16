@@ -131,8 +131,19 @@ pub struct NetServer {
 }
 
 impl NetServer {
-    /// Démarre le serveur sur `addr` (ex. `"127.0.0.1:7777"`).
+    /// Démarre le serveur sur `addr` (ex. `"127.0.0.1:7777"`), avec le
+    /// plafond de connexions par IP de production (`MAX_CONNECTIONS_PER_IP`).
     pub fn start(addr: &str) -> std::io::Result<Self> {
+        Self::start_with_ip_cap(addr, MAX_CONNECTIONS_PER_IP)
+    }
+
+    /// Comme `start`, mais avec un plafond de connexions par IP explicite —
+    /// pour les outils qui concentrent volontairement beaucoup de clients
+    /// légitimes derrière une seule adresse (`examples/load_test_client.rs` :
+    /// 16 bots depuis 127.0.0.1, que le plafond de production refusait dès le
+    /// 5ᵉ). La production (`src/bin/server.rs`) passe toujours par `start` :
+    /// le garde-fou anti-DoS n'y est pas affaibli.
+    pub fn start_with_ip_cap(addr: &str, max_connections_per_ip: usize) -> std::io::Result<Self> {
         let (tx, rx) = channel::<Inbound>();
         let outboxes: Outboxes = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU32::new(1));
@@ -190,9 +201,9 @@ impl NetServer {
                     {
                         let mut counts = lock_ip_counts(&accept_ip_counts);
                         let n = counts.entry(peer.ip()).or_insert(0);
-                        if *n >= MAX_CONNECTIONS_PER_IP {
+                        if *n >= max_connections_per_ip {
                             log::warn!(
-                                "Connexion refusée depuis {} : déjà {n} connexion(s) simultanée(s) (max {MAX_CONNECTIONS_PER_IP})",
+                                "Connexion refusée depuis {} : déjà {n} connexion(s) simultanée(s) (max {max_connections_per_ip})",
                                 peer.ip()
                             );
                             continue;
@@ -533,6 +544,29 @@ mod tests {
                 msg,
                 ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 1 })
             );
+        }
+    }
+
+    /// `start_with_ip_cap` doit accepter plus de clients d'une même IP que le
+    /// plafond de production — c'est ce qui rend `examples/load_test_client.rs`
+    /// (16 bots depuis 127.0.0.1) de nouveau exécutable, sans affaiblir le
+    /// garde-fou de `start` (couvert par
+    /// `per_ip_connection_limit_caps_simultaneous_sockets`).
+    #[test]
+    fn a_custom_ip_cap_allows_more_local_clients_than_production() {
+        let over_default = MAX_CONNECTIONS_PER_IP + 2;
+        let server = NetServer::start_with_ip_cap("127.0.0.1:0", over_default)
+            .expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let mut clients = Vec::new();
+        for i in 0..over_default {
+            let c = NetClient::connect(&url, &format!("Bot{i}"), None)
+                .unwrap_or_else(|e| panic!("connexion {i} attendue sous le plafond élargi : {e}"));
+            c.inbox
+                .recv_timeout(Duration::from_secs(2))
+                .expect("Welcome attendu sous le plafond élargi");
+            clients.push(c);
         }
     }
 
