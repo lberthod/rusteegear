@@ -635,7 +635,22 @@ impl Physics {
     /// plaque l'objet au sol : les scripts de patrouille ne pilotent que x/z, et
     /// sans elle un objet apparu légèrement au-dessus du sol flotterait pour
     /// toujours (un corps kinématique ne subit pas la gravité de rapier).
+    ///
+    /// **Dépénétration bornée** (audit gameplay « gros sauts ») : quand deux
+    /// corps scriptés finissent superposés — chacun résolu contre la position
+    /// *d'avant-pas* de l'autre (`set_next_kinematic_translation` ne s'applique
+    /// qu'au `step`), deux créatures qui se croisent peuvent avancer l'une dans
+    /// l'autre au même tick — le contrôleur les expulsait d'un seul coup au tick
+    /// suivant : un **pop latéral** de plusieurs fois la vitesse de marche,
+    /// visible en jeu comme une téléportation. Le déplacement horizontal résolu
+    /// est donc plafonné au déplacement demandé, plus un petit budget de
+    /// séparation (`DEPEN_SPEED`) : la même expulsion s'étale sur quelques
+    /// ticks — une poussée, pas un bond. Preuve :
+    /// `app::simulation::tests::mmorpg_creatures_never_teleport_nor_snap_turn`.
     pub fn resolve_scripted_moves(&mut self, dt: f32, scene: &mut Scene) {
+        /// Vitesse maximale (m/s) que la dépénétration peut ajouter au
+        /// déplacement demandé par le script.
+        const DEPEN_SPEED: f32 = 0.8;
         for slot in 0..self.scripted.len() {
             let (index, handle) = self.scripted[slot];
             let Some(obj) = scene.objects.get_mut(index) else {
@@ -676,7 +691,18 @@ impl Physics {
                 ..Default::default()
             };
             let movement = controller.move_shape(dt, &queries, shape, &shape_pos, desired, |_| {});
-            let resolved = cur + movement.translation;
+            let mut translation = movement.translation;
+            // Plafond horizontal : jamais plus loin que demandé + le budget de
+            // dépénétration (cf. la doc de cette fonction).
+            let wanted_xz = Vec3::new(desired.x, 0.0, desired.z).length();
+            let got_xz = Vec3::new(translation.x, 0.0, translation.z).length();
+            let cap = wanted_xz + DEPEN_SPEED * dt;
+            if got_xz > cap && got_xz > 1e-9 {
+                let k = cap / got_xz;
+                translation.x *= k;
+                translation.z *= k;
+            }
+            let resolved = cur + translation;
 
             obj.transform.position = resolved;
             let next_rotation = obj.transform.rotation;

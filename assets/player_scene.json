@@ -303,7 +303,7 @@
       "transform": {
         "position": [
           0.0,
-          0.5650898218154907,
+          1.0,
           0.0
         ],
         "rotation": [
@@ -831,7 +831,7 @@
       "transform": {
         "position": [
           7.0,
-          0.29999998211860657,
+          0.30000001192092896,
           -7.0
         ],
         "rotation": [
@@ -842,7 +842,7 @@
         ],
         "scale": [
           6.0,
-          0.5999999642372131,
+          0.6000000238418579,
           6.0
         ]
       },
@@ -860,11 +860,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": {
@@ -914,15 +914,15 @@
       "texture": "",
       "transform": {
         "position": [
-          2.250248908996582,
-          -0.02719867415726185,
-          0.7405760288238525
+          0.0,
+          0.0,
+          -3.0
         ],
         "rotation": [
-          -0.0,
-          0.46182844042778015,
-          -0.0,
-          0.8869692087173462
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -940,11 +940,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -984,15 +984,15 @@
       "texture": "",
       "transform": {
         "position": [
-          8.040946960449219,
-          -0.022877605631947517,
-          5.174546718597412
+          3.0,
+          0.0,
+          3.0
         ],
         "rotation": [
-          -0.0,
-          0.49510958790779114,
-          -0.0,
-          0.8688305020332336
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1010,11 +1010,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1054,15 +1054,15 @@
       "texture": "",
       "transform": {
         "position": [
-          0.21350230276584625,
-          0.03678693249821663,
-          -8.379342079162598
+          -3.0,
+          0.0,
+          3.0
         ],
         "rotation": [
-          1.4756302846308245e-7,
-          0.9608784914016724,
-          1.4756302846308245e-7,
-          0.27696990966796875
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1080,11 +1080,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1124,15 +1124,15 @@
       "texture": "",
       "transform": {
         "position": [
-          -5.456602573394775,
-          -0.027143340557813644,
-          -6.75469970703125
+          -3.0,
+          0.0,
+          -3.0
         ],
         "rotation": [
-          8.436884257889687e-8,
-          0.9660589694976807,
-          8.436884257889687e-8,
-          -0.2583218216896057
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1150,11 +1150,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1194,15 +1194,15 @@
       "texture": "",
       "transform": {
         "position": [
-          -1.3225653171539307,
-          -0.02719867415726185,
-          -3.1897804737091064
+          3.0,
+          0.0,
+          -3.0
         ],
         "rotation": [
-          4.1921264681832326e-8,
-          0.8607272505760193,
-          4.1921264681832326e-8,
-          -0.5090662837028503
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1221,10 +1221,10 @@
       "animation": {
         "blend": 1.0,
         "clip": "Idle",
-        "prev_clip": "Walk",
-        "prev_time": 3.749997138977051,
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 0.28333336114883423
+        "time": 0.0
       },
       "audio": null,
       "bite": {
@@ -1268,15 +1268,15 @@
       "texture": "",
       "transform": {
         "position": [
-          8.467960357666016,
-          -0.14553870260715485,
-          4.630570888519287
+          6.0,
+          0.0,
+          0.0
         ],
         "rotation": [
           0.0,
-          -0.19372351467609406,
           0.0,
-          0.9810560345649719
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1294,11 +1294,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": {
@@ -1342,15 +1342,15 @@
       "texture": "",
       "transform": {
         "position": [
-          -1.5772600173950195,
-          0.0076323505491018295,
-          -8.856040000915527
+          -6.0,
+          0.0,
+          0.0
         ],
         "rotation": [
-          1.6731738128328288e-7,
-          0.7884107232093811,
-          1.6731738128328288e-7,
-          0.6151490807533264
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1368,11 +1368,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1412,15 +1412,15 @@
       "texture": "",
       "transform": {
         "position": [
-          0.2100708782672882,
-          -0.02719867415726185,
-          1.5162792205810547
+          0.0,
+          0.0,
+          6.0
         ],
         "rotation": [
-          8.417883634592727e-8,
-          0.965721845626831,
-          8.417883634592727e-8,
-          -0.2595786452293396
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1438,11 +1438,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1482,15 +1482,15 @@
       "texture": "",
       "transform": {
         "position": [
-          -4.399008274078369,
-          -0.02719867415726185,
-          -7.292830467224121
+          0.0,
+          0.0,
+          -6.0
         ],
         "rotation": [
-          3.77898352610373e-8,
-          0.8476152420043945,
-          3.77898352610373e-8,
-          -0.5306111574172974
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1507,12 +1507,12 @@
     {
       "ai_chaser": null,
       "animation": {
-        "blend": 0.7499999403953552,
+        "blend": 1.0,
         "clip": "Idle",
-        "prev_clip": "Walk",
-        "prev_time": 3.8166637420654297,
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 0.15000000596046448
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1552,15 +1552,15 @@
       "texture": "",
       "transform": {
         "position": [
-          5.606039047241211,
-          -0.03097936138510704,
-          6.861471176147461
+          8.0,
+          0.0,
+          4.0
         ],
         "rotation": [
           0.0,
-          0.6274521350860596,
           0.0,
-          -0.7786551117897034
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1578,11 +1578,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1622,15 +1622,15 @@
       "texture": "",
       "transform": {
         "position": [
-          9.582671165466309,
-          -0.02719867415726185,
-          -0.09434965997934341
+          9.0,
+          0.0,
+          -2.0
         ],
         "rotation": [
           0.0,
-          -0.5835741758346558,
           0.0,
-          0.8120599985122681
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1648,11 +1648,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 1.4499993324279785
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1685,22 +1685,22 @@
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.8\n    local NEAR = 4.0\n    local FAR = 6.0\n    local BOUND = 11\n\n    local players = find_tag(\"joueur\")\n    local moving = false\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.01 then\n            local nx, nz = dx / d, dz / d\n            local vx, vz = 0.0, 0.0\n            if d > FAR then\n                vx, vz = nx, nz\n            elseif d < NEAR then\n                vx, vz = -nx, -nz\n            else\n                -- Dans la fourchette : tourne autour du joueur (perpendiculaire).\n                vx, vz = -nz, nx\n            end\n            obj.x = obj.x + vx * SPEED * dt\n            obj.z = obj.z + vz * SPEED * dt\n            obj.ry = math.deg(math.atan(nx, nz))\n            moving = true\n        end\n    else\n        -- Pas de joueur repéré : petit va-et-vient nerveux sur place.\n        obj.x = obj.x + math.sin(time * 1.7) * 0.4 * dt\n        moving = true\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature12_seen\", #players)\n",
+      "script": "\n    local SPEED = 1.8\n    local NEAR = 4.0\n    local FAR = 6.0\n    local SMOOTH = 4.0\n    local BOUND = 11\n\n    -- Audit gameplay (girouette) : la bascule approche/orbite/recul se faisait\n    -- d'un tick à l'autre, sans transition — pile sur un seuil (d ≈ NEAR/FAR),\n    -- la vitesse ET `obj.ry` claquaient de 90° à chaque frame (tremblement sur\n    -- place, demi-tours illogiques). La vitesse *désirée* reste calculée par\n    -- zone, mais la vitesse *appliquée* la suit par lissage exponentiel (même\n    -- idiome que `smooth_turn` du script d'errance) et `obj.ry` suit le\n    -- mouvement réel, pas le joueur : le passage d'une zone à l'autre est un\n    -- virage, plus un claquement.\n    local svx = save.get(\"creature12_svx\") or 0.0\n    local svz = save.get(\"creature12_svz\") or 0.0\n    local wx, wz = 0.0, 0.0\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.01 then\n            local nx, nz = dx / d, dz / d\n            if d > FAR then\n                wx, wz = nx, nz\n            elseif d < NEAR then\n                wx, wz = -nx, -nz\n            else\n                -- Dans la fourchette : tourne autour du joueur (perpendiculaire).\n                wx, wz = -nz, nx\n            end\n        end\n    else\n        -- Pas de joueur repéré : petit va-et-vient nerveux sur place.\n        wx = math.sin(time * 1.7) * 0.25\n    end\n    local k = 1.0 - math.exp(-SMOOTH * dt)\n    svx = svx + (wx * SPEED - svx) * k\n    svz = svz + (wz * SPEED - svz) * k\n    local sp = math.sqrt(svx * svx + svz * svz)\n    obj.x = obj.x + svx * dt\n    obj.z = obj.z + svz * dt\n    -- Cap borné en vitesse de rotation : quand la vitesse lissée passe près de\n    -- zéro (inversion de sens), sa direction peut sauter de 180° d'un tick à\n    -- l'autre — le corps, lui, pivote au plus à TURN_RATE.\n    local TURN_RATE = 240.0\n    local hry = save.get(\"creature12_ry\") or obj.ry\n    if sp > 0.2 then\n        local want = math.deg(math.atan(svx, svz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    obj.ry = hry\n    obj.anim = sp > 0.2 and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature12_ry\", hry)\n    save.set(\"creature12_svx\", svx)\n    save.set(\"creature12_svz\", svz)\n    save.set(\"creature12_seen\", #players)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
       "texture": "",
       "transform": {
         "position": [
-          -5.023224353790283,
-          -0.02719869650900364,
-          3.2536611557006836
+          -9.0,
+          0.0,
+          2.0
         ],
         "rotation": [
-          1.6179251360881608e-7,
-          0.8773341774940491,
-          1.6179251360881608e-7,
-          0.47987988591194153
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1718,11 +1718,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 0.8166665434837341
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1755,22 +1755,22 @@
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local DRIFT = 0.6\n    local FLEE_SPEED = 1.6\n    local FLEE = 3.0\n    local BOUND = 11\n\n    local heading = (save.get(\"creature13_heading\") or 0.0) + math.sin(time * 0.4) * 25.0 * dt\n    local fleeing = false\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = obj.x - p.x, obj.z - p.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d < FLEE and d > 0.01 then\n            heading = math.deg(math.atan(dx / d, dz / d))\n            fleeing = true\n        end\n    end\n    -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).\n    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then\n        heading = math.deg(math.atan(-obj.x, -obj.z))\n    end\n    local rad = math.rad(heading)\n    local speed = fleeing and FLEE_SPEED or DRIFT\n    obj.x = obj.x + math.sin(rad) * speed * dt\n    obj.z = obj.z + math.cos(rad) * speed * dt\n    obj.ry = heading\n    obj.anim = \"Walk\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature13_heading\", heading)\n",
+      "script": "\n    local DRIFT = 0.6\n    local FLEE_SPEED = 1.6\n    local FLEE = 3.0\n    local BOUND = 11\n\n    -- Audit gameplay : le cap de fuite (et le rappel vers le centre) était posé\n    -- d'un coup (`heading = atan(...)`) — pivot de 180° en une frame quand le\n    -- joueur surgissait. Le cap **cible** reste instantané, mais le cap appliqué\n    -- le rejoint à vitesse bornée (TURN_RATE) : la méduse se détourne vite,\n    -- sans claquer.\n    local TURN_RATE = 240.0\n    local heading = (save.get(\"creature13_heading\") or 0.0) + math.sin(time * 0.4) * 25.0 * dt\n    local target = nil\n    local fleeing = false\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = obj.x - p.x, obj.z - p.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d < FLEE and d > 0.01 then\n            target = math.deg(math.atan(dx / d, dz / d))\n            fleeing = true\n        end\n    end\n    -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).\n    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then\n        target = math.deg(math.atan(-obj.x, -obj.z))\n    end\n    if target ~= nil then\n        local diff = ((target - heading + 180) % 360) - 180\n        heading = heading + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    local rad = math.rad(heading)\n    local speed = fleeing and FLEE_SPEED or DRIFT\n    obj.x = obj.x + math.sin(rad) * speed * dt\n    obj.z = obj.z + math.cos(rad) * speed * dt\n    obj.ry = heading\n    obj.anim = \"Walk\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature13_heading\", heading)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
       "texture": "",
       "transform": {
         "position": [
-          1.1222188472747803,
-          -0.027198756113648415,
-          7.594893932342529
+          2.0,
+          0.0,
+          9.0
         ],
         "rotation": [
-          2.5713539741900604e-8,
-          -0.8066839575767517,
-          2.5713539741900604e-8,
-          0.5909831523895264
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1788,11 +1788,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1825,22 +1825,22 @@
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 0.35\n    local LEG = 2.5\n\n    local sx = save.get(\"creature14_spawn_x\")\n    local sz = save.get(\"creature14_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature14_spawn_x\", sx)\n        save.set(\"creature14_spawn_z\", sz)\n    end\n    local going = (save.get(\"creature14_going\") or 1.0) > 0.5\n    local tx = going and (sx + LEG) or sx\n    local dx = tx - obj.x\n    if math.abs(dx) < 0.05 then\n        save.set(\"creature14_going\", going and 0.0 or 1.0)\n        obj.anim = \"Idle\"\n    else\n        local step = math.min(SPEED * dt, math.abs(dx))\n        obj.x = obj.x + (dx > 0 and step or -step)\n        obj.ry = dx > 0 and 90.0 or -90.0\n        obj.anim = \"Walk\"\n    end\n    obj.z = sz\n",
+      "script": "\n    local SPEED = 0.35\n    local LEG = 2.5\n\n    local sx = save.get(\"creature14_spawn_x\")\n    local sz = save.get(\"creature14_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature14_spawn_x\", sx)\n        save.set(\"creature14_spawn_z\", sz)\n    end\n    local going = (save.get(\"creature14_going\") or 1.0) > 0.5\n    local tx = going and (sx + LEG) or sx\n    local dx = tx - obj.x\n    -- Audit gameplay : le cap claquait de ±180° d'un tick à l'autre à chaque\n    -- bout de navette — pivot limité en vitesse (l'escargot se retourne\n    -- pesamment, cohérent avec son tempérament d'artillerie).\n    local TURN_RATE = 120.0\n    local heading = save.get(\"creature14_heading\") or (dx >= 0 and 90.0 or -90.0)\n    local target_ry = dx >= 0 and 90.0 or -90.0\n    local diff = ((target_ry - heading + 180) % 360) - 180\n    local turn = math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    heading = heading + turn\n    save.set(\"creature14_heading\", heading)\n    obj.ry = heading\n    if math.abs(dx) < 0.05 then\n        save.set(\"creature14_going\", going and 0.0 or 1.0)\n        obj.anim = \"Idle\"\n    elseif math.abs(diff) > 30.0 then\n        -- Encore en train de se retourner : pas d'avance en crabe.\n        obj.anim = \"Idle\"\n    else\n        local step = math.min(SPEED * dt, math.abs(dx))\n        obj.x = obj.x + (dx > 0 and step or -step)\n        obj.anim = \"Walk\"\n    end\n    -- Retour au rail borné en vitesse : une bousculade (créature qui croise la\n    -- navette) peut l'écarter de sa ligne — la re-coller d'un coup (`obj.z = sz`)\n    -- était une téléportation d'autant de mètres que la poussée subie.\n    local RAIL_SPEED = 0.6\n    local dzr = sz - obj.z\n    obj.z = obj.z + math.max(-RAIL_SPEED * dt, math.min(RAIL_SPEED * dt, dzr))\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
       "texture": "",
       "transform": {
         "position": [
-          0.8614253997802734,
-          -0.006860737688839436,
-          -8.998356819152832
+          -2.0,
+          0.0,
+          -9.0
         ],
         "rotation": [
           0.0,
-          -0.7071068286895752,
-          -0.0,
-          0.7071068286895752
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1858,11 +1858,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1902,15 +1902,15 @@
       "texture": "",
       "transform": {
         "position": [
-          4.932657718658447,
-          -0.029866283759474754,
-          7.370739459991455
+          9.0,
+          0.0,
+          9.0
         ],
         "rotation": [
-          -1.4937616299448564e-7,
-          -0.9543418884277344,
-          1.4937616299448564e-7,
-          0.29871630668640137
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1928,11 +1928,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -1965,22 +1965,22 @@
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.6\n    local RADIUS = 4.5\n\n    local sx = save.get(\"creature16_spawn_x\")\n    local sz = save.get(\"creature16_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature16_spawn_x\", sx)\n        save.set(\"creature16_spawn_z\", sz)\n    end\n    local ang = (save.get(\"creature16_ang\") or 0.0) + (SPEED / RADIUS) * dt\n    save.set(\"creature16_ang\", ang)\n    obj.x = sx + math.cos(ang) * RADIUS\n    obj.z = sz + math.sin(ang) * RADIUS\n    obj.ry = math.deg(ang) + 90.0\n    obj.anim = \"Walk\"\n",
+      "script": "\n    local SPEED = 1.6\n    local RADIUS = 3.5\n    local LAG = 1.0\n    local BOUND = 11\n\n    local sx = save.get(\"creature16_spawn_x\")\n    local sz = save.get(\"creature16_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature16_spawn_x\", sx)\n        save.set(\"creature16_spawn_z\", sz)\n    end\n    local ang = save.get(\"creature16_ang\") or 0.0\n    -- Cible bornée à l'arène : un arc de cercle qui mordrait sur un mur reste\n    -- atteignable (la cible glisse le long du mur au lieu d'être derrière).\n    local function target_at(a)\n        local px = math.max(-BOUND, math.min(BOUND, sx + math.cos(a) * RADIUS))\n        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(a) * RADIUS))\n        return px, pz\n    end\n    local tx, tz = target_at(ang)\n    local dx, dz = tx - obj.x, tz - obj.z\n    local d = math.sqrt(dx * dx + dz * dz)\n    if d < LAG then\n        -- À jour : la cible avance, et on la re-mesure après coup — sinon une\n        -- créature pile dessus resterait sous le seuil de marche une frame sur\n        -- deux (flip-flop Walk/Idle, bégaiement d'animation).\n        ang = ang + (SPEED / RADIUS) * dt\n        save.set(\"creature16_ang\", ang)\n        tx, tz = target_at(ang)\n        dx, dz = tx - obj.x, tz - obj.z\n        d = math.sqrt(dx * dx + dz * dz)\n    end\n    -- Cap borné en vitesse de rotation (même garde-fou que les autres\n    -- comportements) : la direction vers une cible toute proche peut tourner\n    -- très vite d'un tick à l'autre — le corps, lui, pivote au plus à TURN_RATE.\n    local TURN_RATE = 300.0\n    local hry = save.get(\"creature16_ry\") or obj.ry\n    if d > 0.01 then\n        local step = math.min(SPEED * 1.4 * dt, d)\n        obj.x = obj.x + dx / d * step\n        obj.z = obj.z + dz / d * step\n        local want = math.deg(math.atan(dx, dz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.ry = hry\n    save.set(\"creature16_ry\", hry)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
       "texture": "",
       "transform": {
         "position": [
-          2.4543416500091553,
-          -0.02902819775044918,
-          11.194991111755371
+          7.0,
+          0.0,
+          -1.0
         ],
         "rotation": [
-          1.31242657630537e-7,
-          0.9942970871925354,
-          1.31242657630537e-7,
-          0.10664612799882889
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -1998,11 +1998,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -2035,22 +2035,22 @@
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 0.5\n    local SCALE = 3.0\n\n    local sx = save.get(\"creature17_spawn_x\")\n    local sz = save.get(\"creature17_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature17_spawn_x\", sx)\n        save.set(\"creature17_spawn_z\", sz)\n    end\n    local t = (save.get(\"creature17_t\") or 0.0) + SPEED * dt\n    save.set(\"creature17_t\", t)\n    -- Courbe de Lissajous (huit couché) : x = sin(t), z = sin(t)*cos(t).\n    local nx = sx + math.sin(t) * SCALE\n    local nz = sz + math.sin(t) * math.cos(t) * SCALE\n    local dx, dz = nx - obj.x, nz - obj.z\n    if math.abs(dx) > 0.001 or math.abs(dz) > 0.001 then\n        obj.ry = math.deg(math.atan(dx, dz))\n    end\n    obj.x, obj.z = nx, nz\n    obj.anim = \"Walk\"\n",
+      "script": "\n    local SPEED = 0.5\n    local SCALE = 3.0\n    local LAG = 1.0\n    local BOUND = 11\n\n    local sx = save.get(\"creature17_spawn_x\")\n    local sz = save.get(\"creature17_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature17_spawn_x\", sx)\n        save.set(\"creature17_spawn_z\", sz)\n    end\n    local t = save.get(\"creature17_t\") or 0.0\n    -- Courbe de Lissajous (huit couché) : x = sin(t), z = sin(t)*cos(t) —\n    -- suivie comme une cible (bornée à l'arène), jamais écrite en absolu.\n    local function target_at(u)\n        local px = math.max(-BOUND, math.min(BOUND, sx + math.sin(u) * SCALE))\n        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(u) * math.cos(u) * SCALE))\n        return px, pz\n    end\n    local tx, tz = target_at(t)\n    local dx, dz = tx - obj.x, tz - obj.z\n    local d = math.sqrt(dx * dx + dz * dz)\n    if d < LAG then\n        -- Cible re-mesurée après l'avance, cf. `creature_soar_script` (évite le\n        -- flip-flop Walk/Idle d'une créature pile sur sa cible).\n        t = t + SPEED * dt\n        save.set(\"creature17_t\", t)\n        tx, tz = target_at(t)\n        dx, dz = tx - obj.x, tz - obj.z\n        d = math.sqrt(dx * dx + dz * dz)\n    end\n    -- Vitesse de croisière ≈ dérivée max de la courbe (SPEED·SCALE·√2), plafonnée.\n    -- Cap borné en vitesse de rotation : la tangente du huit tourne très vite\n    -- aux pointes des lobes — cf. `creature_soar_script`, même garde-fou.\n    local TURN_RATE = 300.0\n    local hry = save.get(\"creature17_ry\") or obj.ry\n    if d > 0.01 then\n        local step = math.min(SPEED * SCALE * 1.5 * dt, d)\n        obj.x = obj.x + dx / d * step\n        obj.z = obj.z + dz / d * step\n        local want = math.deg(math.atan(dx, dz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.ry = hry\n    save.set(\"creature17_ry\", hry)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
       "texture": "",
       "transform": {
         "position": [
-          2.330587387084961,
-          -0.03702289238572121,
-          -11.42164134979248
+          0.0,
+          0.0,
+          -8.0
         ],
         "rotation": [
-          -1.0633645075586173e-7,
-          -0.9947125911712646,
-          -1.0633645075586173e-7,
-          0.10269780457019806
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -2068,11 +2068,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 2.4333317279815674,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 0.4833335280418396
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -2112,15 +2112,15 @@
       "texture": "",
       "transform": {
         "position": [
-          -6.38123083114624,
-          -0.031022876501083374,
-          3.4033586978912354
+          -10.5,
+          0.0,
+          3.5
         ],
         "rotation": [
-          1.4779620016724948e-7,
-          0.2797231376171112,
-          1.4779620016724948e-7,
-          0.9600808024406433
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -2138,11 +2138,11 @@
       "ai_chaser": null,
       "animation": {
         "blend": 1.0,
-        "clip": "Walk",
-        "prev_clip": "Idle",
-        "prev_time": 0.23333333432674408,
+        "clip": "Idle",
+        "prev_clip": "",
+        "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8166637420654297
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -2175,22 +2175,22 @@
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 0.7\n    local NEAR = 4.0\n    local BOUND = 11\n\n    local players = find_tag(\"joueur\")\n    local moving = false\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.05 then\n            local nx, nz = dx / d, dz / d\n            local sign = (d < NEAR) and -1.0 or 1.0\n            obj.x = obj.x + nx * sign * SPEED * dt\n            obj.z = obj.z + nz * sign * SPEED * dt\n            obj.ry = math.deg(math.atan(nx * sign, nz * sign))\n            moving = true\n        end\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n",
+      "script": "\n    local SPEED = 0.7\n    local NEAR = 4.0\n    local DEAD = 1.0\n    local SMOOTH = 3.0\n    local BOUND = 11\n\n    local svx = save.get(\"creature19_svx\") or 0.0\n    local svz = save.get(\"creature19_svz\") or 0.0\n    local wx, wz = 0.0, 0.0\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.05 then\n            local nx, nz = dx / d, dz / d\n            if d < NEAR then\n                wx, wz = -nx, -nz\n            elseif d > NEAR + DEAD then\n                wx, wz = nx, nz\n            end\n            -- Entre NEAR et NEAR + DEAD : vol stationnaire (zone morte).\n        end\n    end\n    local k = 1.0 - math.exp(-SMOOTH * dt)\n    svx = svx + (wx * SPEED - svx) * k\n    svz = svz + (wz * SPEED - svz) * k\n    local sp = math.sqrt(svx * svx + svz * svz)\n    obj.x = obj.x + svx * dt\n    obj.z = obj.z + svz * dt\n    -- Cap borné en vitesse de rotation, cf. `creature_kite_script` (même\n    -- garde-fou contre le pivot de 180° à l'inversion de sens).\n    local TURN_RATE = 240.0\n    local hry = save.get(\"creature19_ry\") or obj.ry\n    if sp > 0.1 then\n        local want = math.deg(math.atan(svx, svz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    obj.ry = hry\n    obj.anim = sp > 0.1 and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature19_ry\", hry)\n    save.set(\"creature19_svx\", svx)\n    save.set(\"creature19_svz\", svz)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
       "texture": "",
       "transform": {
         "position": [
-          6.4777960777282715,
-          -0.03497857227921486,
-          -6.477888107299805
+          7.5,
+          0.0,
+          -7.5
         ],
         "rotation": [
           0.0,
-          -0.382680207490921,
           0.0,
-          0.9238809943199158
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -2212,7 +2212,7 @@
         "prev_clip": "",
         "prev_time": 0.0,
         "speed": 1.0,
-        "time": 3.8333303928375244
+        "time": 0.0
       },
       "audio": null,
       "bite": null,
@@ -2253,14 +2253,14 @@
       "transform": {
         "position": [
           -3.5,
-          -0.02719867415726185,
+          0.0,
           -9.5
         ],
         "rotation": [
-          -0.0,
-          0.17558032274246216,
-          -0.0,
-          0.9844651818275452
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
           0.3499999940395355,
@@ -2308,8 +2308,8 @@
       "texture": "",
       "transform": {
         "position": [
-          -8.749999046325684,
-          0.019999997690320015,
+          -8.75,
+          0.019999999552965164,
           0.0
         ],
         "rotation": [
@@ -2366,7 +2366,7 @@
         "position": [
           0.0,
           0.029999999329447746,
-          7.399999618530273
+          7.400000095367432
         ],
         "rotation": [
           0.0,
@@ -2431,9 +2431,9 @@
           1.0
         ],
         "scale": [
-          3.1999998092651367,
+          3.200000047683716,
           1.0,
-          2.3999998569488525
+          2.4000000953674316
         ]
       },
       "trigger": false,
@@ -2487,9 +2487,9 @@
           1.0
         ],
         "scale": [
-          3.1999998092651367,
+          3.200000047683716,
           1.0,
-          2.3999998569488525
+          2.4000000953674316
         ]
       },
       "trigger": false,
@@ -2536,7 +2536,7 @@
         "position": [
           -8.899999618530273,
           0.0,
-          7.399999618530273
+          7.400000095367432
         ],
         "rotation": [
           0.0,
@@ -2826,7 +2826,7 @@
         "position": [
           -4.599999904632568,
           0.0,
-          11.09999942779541
+          11.100000381469727
         ],
         "rotation": [
           0.0,
@@ -3174,7 +3174,7 @@
         "position": [
           3.4000000953674316,
           0.0,
-          -11.299999237060547
+          -11.300000190734863
         ],
         "rotation": [
           0.0,
@@ -3183,9 +3183,9 @@
           1.0
         ],
         "scale": [
-          0.7999999523162842,
-          0.7999999523162842,
-          0.7999999523162842
+          0.800000011920929,
+          0.800000011920929,
+          0.800000011920929
         ]
       },
       "trigger": false,
@@ -3230,9 +3230,9 @@
       "texture": "",
       "transform": {
         "position": [
-          7.399999618530273,
+          7.400000095367432,
           0.0,
-          7.799999713897705
+          7.800000190734863
         ],
         "rotation": [
           0.0,
@@ -3357,9 +3357,9 @@
           1.0
         ],
         "scale": [
-          1.1999999284744263,
-          1.1999999284744263,
-          1.1999999284744263
+          1.2000000476837158,
+          1.2000000476837158,
+          1.2000000476837158
         ]
       },
       "trigger": false,
@@ -3464,7 +3464,7 @@
         "position": [
           -2.0,
           0.0,
-          9.399998664855957
+          9.399999618530273
         ],
         "rotation": [
           0.0,
@@ -3580,7 +3580,7 @@
         "position": [
           2.5999999046325684,
           0.0,
-          -9.59999942779541
+          -9.600000381469727
         ],
         "rotation": [
           0.0,
@@ -3694,7 +3694,7 @@
       "texture": "",
       "transform": {
         "position": [
-          9.59999942779541,
+          9.600000381469727,
           0.0,
           -3.0
         ],
@@ -3868,7 +3868,7 @@
       "texture": "",
       "transform": {
         "position": [
-          -3.799999713897705,
+          -3.799999952316284,
           0.0,
           -9.300000190734863
         ],
@@ -3928,7 +3928,7 @@
         "position": [
           -1.7999999523162842,
           0.0,
-          -8.09999942779541
+          -8.100000381469727
         ],
         "rotation": [
           0.0,
@@ -3984,7 +3984,7 @@
       "texture": "",
       "transform": {
         "position": [
-          -0.7999999523162842,
+          -0.800000011920929,
           0.0,
           -9.199999809265137
         ],
@@ -4162,7 +4162,7 @@
         "position": [
           -6.800000190734863,
           0.3499999940395355,
-          7.399999618530273
+          7.400000095367432
         ],
         "rotation": [
           0.0,
@@ -4220,7 +4220,7 @@
       "transform": {
         "position": [
           -2.799999952316284,
-          0.29999998211860657,
+          0.30000001192092896,
           -6.800000190734863
         ],
         "rotation": [
@@ -4278,9 +4278,9 @@
       "texture": "",
       "transform": {
         "position": [
-          -4.799999713897705,
-          0.29999998211860657,
-          -4.799999713897705
+          -4.800000190734863,
+          0.30000001192092896,
+          -4.800000190734863
         ],
         "rotation": [
           0.0,
@@ -4338,7 +4338,7 @@
       "transform": {
         "position": [
           10.300000190734863,
-          0.29999998211860657,
+          0.30000001192092896,
           1.5
         ],
         "rotation": [
@@ -4356,118 +4356,6 @@
       "trigger": false,
       "vibrate_on_tap": 0,
       "visible": true,
-      "weapon_pickup": null,
-      "wind": null
-    },
-    {
-      "ai_chaser": null,
-      "animation": null,
-      "audio": null,
-      "bite": null,
-      "ccd": false,
-      "collider_shape": "Auto",
-      "collision_layer": 4294967295,
-      "collision_mask": 4294967295,
-      "color": [
-        0.949999988079071,
-        0.6000000238418579,
-        0.8999999761581421
-      ],
-      "combat": null,
-      "controller": null,
-      "deadly": false,
-      "emissive": 1.600000023841858,
-      "group": "",
-      "item_pickup": null,
-      "mesh": "Sphere",
-      "metallic": 0.0,
-      "name": "Tir de créature 1",
-      "physics": "None",
-      "prefab": null,
-      "respawn_delay": 0.0,
-      "roughness": 0.6000000238418579,
-      "script": "",
-      "tag": "",
-      "tap_action": "None",
-      "tappable": false,
-      "texture": "",
-      "transform": {
-        "position": [
-          0.8255656957626343,
-          0.7454032897949219,
-          4.151107311248779
-        ],
-        "rotation": [
-          -0.3591139018535614,
-          -0.9273834824562073,
-          0.0,
-          0.1048673540353775
-        ],
-        "scale": [
-          0.29999998211860657,
-          0.29999998211860657,
-          0.5999999642372131
-        ]
-      },
-      "trigger": false,
-      "vibrate_on_tap": 0,
-      "visible": true,
-      "weapon_pickup": null,
-      "wind": null
-    },
-    {
-      "ai_chaser": null,
-      "animation": null,
-      "audio": null,
-      "bite": null,
-      "ccd": false,
-      "collider_shape": "Auto",
-      "collision_layer": 4294967295,
-      "collision_mask": 4294967295,
-      "color": [
-        0.6000000238418579,
-        0.30000001192092896,
-        0.8999999761581421
-      ],
-      "combat": null,
-      "controller": null,
-      "deadly": false,
-      "emissive": 1.600000023841858,
-      "group": "",
-      "item_pickup": null,
-      "mesh": "Sphere",
-      "metallic": 0.0,
-      "name": "Tir de créature 2",
-      "physics": "None",
-      "prefab": null,
-      "respawn_delay": 0.0,
-      "roughness": 0.6000000238418579,
-      "script": "",
-      "tag": "",
-      "tap_action": "None",
-      "tappable": false,
-      "texture": "",
-      "transform": {
-        "position": [
-          -3.5681707859039307,
-          0.7221272587776184,
-          0.792926549911499
-        ],
-        "rotation": [
-          -0.07460235804319382,
-          0.776160717010498,
-          0.0,
-          0.6261062622070312
-        ],
-        "scale": [
-          0.25,
-          0.25,
-          0.5
-        ]
-      },
-      "trigger": false,
-      "vibrate_on_tap": 0,
-      "visible": false,
       "weapon_pickup": null,
       "wind": null
     }

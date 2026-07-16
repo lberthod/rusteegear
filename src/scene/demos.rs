@@ -341,38 +341,63 @@ fn creature_kite_script(
     local SPEED = 1.8
     local NEAR = 4.0
     local FAR = 6.0
+    local SMOOTH = 4.0
     local BOUND = {bound}
 
+    -- Audit gameplay (girouette) : la bascule approche/orbite/recul se faisait
+    -- d'un tick à l'autre, sans transition — pile sur un seuil (d ≈ NEAR/FAR),
+    -- la vitesse ET `obj.ry` claquaient de 90° à chaque frame (tremblement sur
+    -- place, demi-tours illogiques). La vitesse *désirée* reste calculée par
+    -- zone, mais la vitesse *appliquée* la suit par lissage exponentiel (même
+    -- idiome que `smooth_turn` du script d'errance) et `obj.ry` suit le
+    -- mouvement réel, pas le joueur : le passage d'une zone à l'autre est un
+    -- virage, plus un claquement.
+    local svx = save.get("{prefix}svx") or 0.0
+    local svz = save.get("{prefix}svz") or 0.0
+    local wx, wz = 0.0, 0.0
     local players = find_tag("joueur")
-    local moving = false
     if #players > 0 then
         local p = players[1]
         local dx, dz = p.x - obj.x, p.z - obj.z
         local d = math.sqrt(dx * dx + dz * dz)
         if d > 0.01 then
             local nx, nz = dx / d, dz / d
-            local vx, vz = 0.0, 0.0
             if d > FAR then
-                vx, vz = nx, nz
+                wx, wz = nx, nz
             elseif d < NEAR then
-                vx, vz = -nx, -nz
+                wx, wz = -nx, -nz
             else
                 -- Dans la fourchette : tourne autour du joueur (perpendiculaire).
-                vx, vz = -nz, nx
+                wx, wz = -nz, nx
             end
-            obj.x = obj.x + vx * SPEED * dt
-            obj.z = obj.z + vz * SPEED * dt
-            obj.ry = math.deg(math.atan(nx, nz))
-            moving = true
         end
     else
         -- Pas de joueur repéré : petit va-et-vient nerveux sur place.
-        obj.x = obj.x + math.sin(time * 1.7) * 0.4 * dt
-        moving = true
+        wx = math.sin(time * 1.7) * 0.25
     end
-    obj.anim = moving and "Walk" or "Idle"
+    local k = 1.0 - math.exp(-SMOOTH * dt)
+    svx = svx + (wx * SPEED - svx) * k
+    svz = svz + (wz * SPEED - svz) * k
+    local sp = math.sqrt(svx * svx + svz * svz)
+    obj.x = obj.x + svx * dt
+    obj.z = obj.z + svz * dt
+    -- Cap borné en vitesse de rotation : quand la vitesse lissée passe près de
+    -- zéro (inversion de sens), sa direction peut sauter de 180° d'un tick à
+    -- l'autre — le corps, lui, pivote au plus à TURN_RATE.
+    local TURN_RATE = 240.0
+    local hry = save.get("{prefix}ry") or obj.ry
+    if sp > 0.2 then
+        local want = math.deg(math.atan(svx, svz))
+        local diff = ((want - hry + 180) % 360) - 180
+        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
+    end
+    obj.ry = hry
+    obj.anim = sp > 0.2 and "Walk" or "Idle"
     obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
     obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+    save.set("{prefix}ry", hry)
+    save.set("{prefix}svx", svx)
+    save.set("{prefix}svz", svz)
     save.set("{prefix}seen", #players)
 "#
     )
@@ -397,7 +422,14 @@ fn creature_drift_script(
     local FLEE = 3.0
     local BOUND = {bound}
 
+    -- Audit gameplay : le cap de fuite (et le rappel vers le centre) était posé
+    -- d'un coup (`heading = atan(...)`) — pivot de 180° en une frame quand le
+    -- joueur surgissait. Le cap **cible** reste instantané, mais le cap appliqué
+    -- le rejoint à vitesse bornée (TURN_RATE) : la méduse se détourne vite,
+    -- sans claquer.
+    local TURN_RATE = 240.0
     local heading = (save.get("{prefix}heading") or 0.0) + math.sin(time * 0.4) * 25.0 * dt
+    local target = nil
     local fleeing = false
     local players = find_tag("joueur")
     if #players > 0 then
@@ -405,13 +437,17 @@ fn creature_drift_script(
         local dx, dz = obj.x - p.x, obj.z - p.z
         local d = math.sqrt(dx * dx + dz * dz)
         if d < FLEE and d > 0.01 then
-            heading = math.deg(math.atan(dx / d, dz / d))
+            target = math.deg(math.atan(dx / d, dz / d))
             fleeing = true
         end
     end
     -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).
     if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then
-        heading = math.deg(math.atan(-obj.x, -obj.z))
+        target = math.deg(math.atan(-obj.x, -obj.z))
+    end
+    if target ~= nil then
+        local diff = ((target - heading + 180) % 360) - 180
+        heading = heading + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
     end
     local rad = math.rad(heading)
     local speed = fleeing and FLEE_SPEED or DRIFT
@@ -453,16 +489,34 @@ fn creature_artillery_script(
     local going = (save.get("{prefix}going") or 1.0) > 0.5
     local tx = going and (sx + LEG) or sx
     local dx = tx - obj.x
+    -- Audit gameplay : le cap claquait de ±180° d'un tick à l'autre à chaque
+    -- bout de navette — pivot limité en vitesse (l'escargot se retourne
+    -- pesamment, cohérent avec son tempérament d'artillerie).
+    local TURN_RATE = 120.0
+    local heading = save.get("{prefix}heading") or (dx >= 0 and 90.0 or -90.0)
+    local target_ry = dx >= 0 and 90.0 or -90.0
+    local diff = ((target_ry - heading + 180) % 360) - 180
+    local turn = math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
+    heading = heading + turn
+    save.set("{prefix}heading", heading)
+    obj.ry = heading
     if math.abs(dx) < 0.05 then
         save.set("{prefix}going", going and 0.0 or 1.0)
+        obj.anim = "Idle"
+    elseif math.abs(diff) > 30.0 then
+        -- Encore en train de se retourner : pas d'avance en crabe.
         obj.anim = "Idle"
     else
         local step = math.min(SPEED * dt, math.abs(dx))
         obj.x = obj.x + (dx > 0 and step or -step)
-        obj.ry = dx > 0 and 90.0 or -90.0
         obj.anim = "Walk"
     end
-    obj.z = sz
+    -- Retour au rail borné en vitesse : une bousculade (créature qui croise la
+    -- navette) peut l'écarter de sa ligne — la re-coller d'un coup (`obj.z = sz`)
+    -- était une téléportation d'autant de mètres que la poussée subie.
+    local RAIL_SPEED = 0.6
+    local dzr = sz - obj.z
+    obj.z = obj.z + math.max(-RAIL_SPEED * dt, math.min(RAIL_SPEED * dt, dzr))
 "#
     )
 }
@@ -518,17 +572,31 @@ fn creature_zigzag_script(
 /// l'orbite de la sentinelle (`creature_guard_script`) — cohérent avec son
 /// éventail de bourrasques (`AttackStyle::Fan`, portée 8 m) : elle couvre du
 /// terrain, pas un poste fixe.
+///
+/// **Audit gameplay (téléportations)** : la 1ʳᵉ version écrivait la position
+/// **en absolu** sur le point paramétrique du cercle — deux « gros sauts »
+/// visibles en jeu. Au premier tick, l'objet sautait instantanément du spawn
+/// au cercle (RADIUS d'un coup) ; et quand un obstacle bloquait le corps
+/// kinématique (`resolve_scripted_moves` ne fait que raboter le déplacement du
+/// tick), `ang` continuait d'avancer pendant le blocage — au dégagement, la
+/// créature **bondissait** de tout le retard accumulé. Désormais le point du
+/// cercle est une **cible** vers laquelle on marche par pas plafonné (comme la
+/// sentinelle), et `ang` n'avance que si la créature suit (retard < LAG) : une
+/// cible qui attend au lieu d'un rendez-vous manqué à rattraper d'un bond.
 fn creature_soar_script(
-    _arena_half: f32,
+    arena_half: f32,
     prefix: &str,
     _ray_mask: u32,
     _heading0: f32,
     _phase: f32,
 ) -> String {
+    let bound = arena_half - 1.0;
     format!(
         r#"
     local SPEED = 1.6
-    local RADIUS = 4.5
+    local RADIUS = 3.5
+    local LAG = 1.0
+    local BOUND = {bound}
 
     local sx = save.get("{prefix}spawn_x")
     local sz = save.get("{prefix}spawn_z")
@@ -537,12 +605,45 @@ fn creature_soar_script(
         save.set("{prefix}spawn_x", sx)
         save.set("{prefix}spawn_z", sz)
     end
-    local ang = (save.get("{prefix}ang") or 0.0) + (SPEED / RADIUS) * dt
-    save.set("{prefix}ang", ang)
-    obj.x = sx + math.cos(ang) * RADIUS
-    obj.z = sz + math.sin(ang) * RADIUS
-    obj.ry = math.deg(ang) + 90.0
-    obj.anim = "Walk"
+    local ang = save.get("{prefix}ang") or 0.0
+    -- Cible bornée à l'arène : un arc de cercle qui mordrait sur un mur reste
+    -- atteignable (la cible glisse le long du mur au lieu d'être derrière).
+    local function target_at(a)
+        local px = math.max(-BOUND, math.min(BOUND, sx + math.cos(a) * RADIUS))
+        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(a) * RADIUS))
+        return px, pz
+    end
+    local tx, tz = target_at(ang)
+    local dx, dz = tx - obj.x, tz - obj.z
+    local d = math.sqrt(dx * dx + dz * dz)
+    if d < LAG then
+        -- À jour : la cible avance, et on la re-mesure après coup — sinon une
+        -- créature pile dessus resterait sous le seuil de marche une frame sur
+        -- deux (flip-flop Walk/Idle, bégaiement d'animation).
+        ang = ang + (SPEED / RADIUS) * dt
+        save.set("{prefix}ang", ang)
+        tx, tz = target_at(ang)
+        dx, dz = tx - obj.x, tz - obj.z
+        d = math.sqrt(dx * dx + dz * dz)
+    end
+    -- Cap borné en vitesse de rotation (même garde-fou que les autres
+    -- comportements) : la direction vers une cible toute proche peut tourner
+    -- très vite d'un tick à l'autre — le corps, lui, pivote au plus à TURN_RATE.
+    local TURN_RATE = 300.0
+    local hry = save.get("{prefix}ry") or obj.ry
+    if d > 0.01 then
+        local step = math.min(SPEED * 1.4 * dt, d)
+        obj.x = obj.x + dx / d * step
+        obj.z = obj.z + dz / d * step
+        local want = math.deg(math.atan(dx, dz))
+        local diff = ((want - hry + 180) % 360) - 180
+        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
+        obj.anim = "Walk"
+    else
+        obj.anim = "Idle"
+    end
+    obj.ry = hry
+    save.set("{prefix}ry", hry)
 "#
     )
 }
@@ -551,17 +652,26 @@ fn creature_soar_script(
 /// point d'apparition — ni fuit ni poursuit, juste une trajectoire hypnotique.
 /// Cohérent avec sa nova resserrée (`AttackStyle::Nova`) : elle n'a besoin
 /// d'aucune tactique d'approche, juste être là quand le joueur passe à portée.
+/// **Audit gameplay (téléportations)** : même défaut et même correction que
+/// `creature_soar_script` — la position était écrite en absolu sur la courbe
+/// (dont l'aile sud mordait sur le mur de l'arène) ; le paramètre `t` avançait
+/// pendant les blocages et la créature bondissait au dégagement. Désormais le
+/// point de la courbe est une cible bornée, atteinte par pas plafonné, et `t`
+/// n'avance que si la créature suit.
 fn creature_lemniscate_script(
-    _arena_half: f32,
+    arena_half: f32,
     prefix: &str,
     _ray_mask: u32,
     _heading0: f32,
     _phase: f32,
 ) -> String {
+    let bound = arena_half - 1.0;
     format!(
         r#"
     local SPEED = 0.5
     local SCALE = 3.0
+    local LAG = 1.0
+    local BOUND = {bound}
 
     local sx = save.get("{prefix}spawn_x")
     local sz = save.get("{prefix}spawn_z")
@@ -570,17 +680,44 @@ fn creature_lemniscate_script(
         save.set("{prefix}spawn_x", sx)
         save.set("{prefix}spawn_z", sz)
     end
-    local t = (save.get("{prefix}t") or 0.0) + SPEED * dt
-    save.set("{prefix}t", t)
-    -- Courbe de Lissajous (huit couché) : x = sin(t), z = sin(t)*cos(t).
-    local nx = sx + math.sin(t) * SCALE
-    local nz = sz + math.sin(t) * math.cos(t) * SCALE
-    local dx, dz = nx - obj.x, nz - obj.z
-    if math.abs(dx) > 0.001 or math.abs(dz) > 0.001 then
-        obj.ry = math.deg(math.atan(dx, dz))
+    local t = save.get("{prefix}t") or 0.0
+    -- Courbe de Lissajous (huit couché) : x = sin(t), z = sin(t)*cos(t) —
+    -- suivie comme une cible (bornée à l'arène), jamais écrite en absolu.
+    local function target_at(u)
+        local px = math.max(-BOUND, math.min(BOUND, sx + math.sin(u) * SCALE))
+        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(u) * math.cos(u) * SCALE))
+        return px, pz
     end
-    obj.x, obj.z = nx, nz
-    obj.anim = "Walk"
+    local tx, tz = target_at(t)
+    local dx, dz = tx - obj.x, tz - obj.z
+    local d = math.sqrt(dx * dx + dz * dz)
+    if d < LAG then
+        -- Cible re-mesurée après l'avance, cf. `creature_soar_script` (évite le
+        -- flip-flop Walk/Idle d'une créature pile sur sa cible).
+        t = t + SPEED * dt
+        save.set("{prefix}t", t)
+        tx, tz = target_at(t)
+        dx, dz = tx - obj.x, tz - obj.z
+        d = math.sqrt(dx * dx + dz * dz)
+    end
+    -- Vitesse de croisière ≈ dérivée max de la courbe (SPEED·SCALE·√2), plafonnée.
+    -- Cap borné en vitesse de rotation : la tangente du huit tourne très vite
+    -- aux pointes des lobes — cf. `creature_soar_script`, même garde-fou.
+    local TURN_RATE = 300.0
+    local hry = save.get("{prefix}ry") or obj.ry
+    if d > 0.01 then
+        local step = math.min(SPEED * SCALE * 1.5 * dt, d)
+        obj.x = obj.x + dx / d * step
+        obj.z = obj.z + dz / d * step
+        local want = math.deg(math.atan(dx, dz))
+        local diff = ((want - hry + 180) % 360) - 180
+        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
+        obj.anim = "Walk"
+    else
+        obj.anim = "Idle"
+    end
+    obj.ry = hry
+    save.set("{prefix}ry", hry)
 "#
     )
 }
@@ -637,9 +774,15 @@ fn creature_burrow_script(
 /// de très loin (curiosité), mais recule dès qu'il approche à moins de NEAR —
 /// jamais au contact. Cohérent avec son follet à tête chercheuse
 /// (`AttackStyle::Homing`, portée 9 m) : elle punit à distance, jamais de près.
+/// **Audit gameplay (girouette)** : le sens avance/recul basculait sur un seuil
+/// unique (`d < NEAR`), sans zone morte ni lissage — pile à la frontière, la
+/// lanterne oscillait sur place en pivotant de 180° à chaque frame. Désormais
+/// une **zone morte** ([NEAR, NEAR + 1]) où elle reste en vol stationnaire,
+/// et une vitesse lissée exponentiellement (cf. `creature_kite_script`) : les
+/// inversions deviennent des demi-tours progressifs.
 fn creature_hover_script(
     arena_half: f32,
-    _prefix: &str,
+    prefix: &str,
     _ray_mask: u32,
     _heading0: f32,
     _phase: f32,
@@ -649,26 +792,50 @@ fn creature_hover_script(
         r#"
     local SPEED = 0.7
     local NEAR = 4.0
+    local DEAD = 1.0
+    local SMOOTH = 3.0
     local BOUND = {bound}
 
+    local svx = save.get("{prefix}svx") or 0.0
+    local svz = save.get("{prefix}svz") or 0.0
+    local wx, wz = 0.0, 0.0
     local players = find_tag("joueur")
-    local moving = false
     if #players > 0 then
         local p = players[1]
         local dx, dz = p.x - obj.x, p.z - obj.z
         local d = math.sqrt(dx * dx + dz * dz)
         if d > 0.05 then
             local nx, nz = dx / d, dz / d
-            local sign = (d < NEAR) and -1.0 or 1.0
-            obj.x = obj.x + nx * sign * SPEED * dt
-            obj.z = obj.z + nz * sign * SPEED * dt
-            obj.ry = math.deg(math.atan(nx * sign, nz * sign))
-            moving = true
+            if d < NEAR then
+                wx, wz = -nx, -nz
+            elseif d > NEAR + DEAD then
+                wx, wz = nx, nz
+            end
+            -- Entre NEAR et NEAR + DEAD : vol stationnaire (zone morte).
         end
     end
-    obj.anim = moving and "Walk" or "Idle"
+    local k = 1.0 - math.exp(-SMOOTH * dt)
+    svx = svx + (wx * SPEED - svx) * k
+    svz = svz + (wz * SPEED - svz) * k
+    local sp = math.sqrt(svx * svx + svz * svz)
+    obj.x = obj.x + svx * dt
+    obj.z = obj.z + svz * dt
+    -- Cap borné en vitesse de rotation, cf. `creature_kite_script` (même
+    -- garde-fou contre le pivot de 180° à l'inversion de sens).
+    local TURN_RATE = 240.0
+    local hry = save.get("{prefix}ry") or obj.ry
+    if sp > 0.1 then
+        local want = math.deg(math.atan(svx, svz))
+        local diff = ((want - hry + 180) % 360) - 180
+        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
+    end
+    obj.ry = hry
+    obj.anim = sp > 0.1 and "Walk" or "Idle"
     obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
     obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+    save.set("{prefix}ry", hry)
+    save.set("{prefix}svx", svx)
+    save.set("{prefix}svz", svz)
 "#
     )
 }
@@ -2100,7 +2267,13 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             DemoCreature {
                 name: "Créature 16",
                 file: "creature16.glb",
-                spawn: Vec3::new(1.5, 0.0, 7.5),
+                // Audit gameplay : l'ancien spawn (1.5, 7.5) mettait le cercle de
+                // patrouille (R 3,5) à cheval sur la cabane et le mur nord —
+                // blocages permanents. Est de l'arène, dégagé : rochers, arbres,
+                // repères et murs tous à > 1,5 m du cercle, et hors de la zone
+                // d'errance des créatures 1-5 (un premier essai au centre faisait
+                // s'arrêter la n°1 à chaque passage du griffon devant ses sondes).
+                spawn: Vec3::new(7.0, 0.0, -1.0),
                 layer_bit: 16,
                 prefix: "creature16_",
                 heading0: 12.0,
@@ -2111,7 +2284,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             DemoCreature {
                 name: "Créature 17",
                 file: "creature17.glb",
-                spawn: Vec3::new(-0.5, 0.0, -10.5),
+                // Audit gameplay : l'ancien spawn (-0.5, -10.5) faisait mordre
+                // l'aile sud du huit (± 1,5 en z) sur le mur — remonté pour que
+                // toute la courbe reste dans l'arène, loin des rochers 2/3.
+                spawn: Vec3::new(0.0, 0.0, -8.0),
                 layer_bit: 17,
                 prefix: "creature17_",
                 heading0: 84.0,

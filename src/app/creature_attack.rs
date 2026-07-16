@@ -389,6 +389,26 @@ impl AppState {
     /// annulé ce tick-ci pour une créature arrêtée) et **avant**
     /// `Physics::resolve_scripted_moves`/`step` — la position gelée doit être
     /// celle que la physique et le rendu voient ce tick.
+    /// Ré-ancre la position gelée de chaque créature en pleine visée sur la
+    /// position **réellement atteinte** ce tick — à appeler après
+    /// `Physics::resolve_scripted_moves`. Sans ça, une créature bousculée
+    /// pendant sa visée (dépénétration : une autre lui marche dessus) gardait
+    /// son ancrage d'origine et y était **catapultée** dès que le passage se
+    /// libérait — un « gros saut » observé en jeu (cf. la preuve
+    /// `mmorpg_creatures_never_teleport_nor_snap_turn`). Geler veut dire « ne
+    /// marche pas pendant la visée », pas « élastique vers le point de capture ».
+    pub(super) fn refresh_frozen_anchors(&mut self) {
+        for (ci, cfg) in RANGED_CREATURE_ATTACKS.iter().enumerate() {
+            let state = &mut self.creature_ranged[ci];
+            if state.stopped_until.is_none() || state.frozen_pos.is_none() {
+                continue;
+            }
+            if let Some(obj) = self.scene.objects.iter().find(|o| o.name == cfg.creature) {
+                state.frozen_pos = Some(obj.transform.position);
+            }
+        }
+    }
+
     pub(super) fn update_creature_ranged_attacks(&mut self, dt: f32, time: f32) {
         if self.is_online_client() {
             // Autorité serveur (même pattern que `fireball::update_fireballs`) :

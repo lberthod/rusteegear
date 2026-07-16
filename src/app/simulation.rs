@@ -1072,6 +1072,9 @@ impl AppState {
             // la position réellement atteinte est réécrite dans la scène.
             phys.resolve_scripted_moves(dt, &mut self.scene);
             phys.step(dt, &mut self.scene);
+            // Les créatures en pleine visée suivent la position réellement
+            // atteinte (bousculades comprises), cf. `refresh_frozen_anchors`.
+            self.refresh_frozen_anchors();
             // Cf. la note plus haut : appliqué après `step` pour ne jamais passer par
             // le corps rigide, qui écraserait sinon (et déstabiliserait) cette valeur.
             for (idx, yaw) in player_facing {
@@ -1685,6 +1688,81 @@ mod tests {
              trop d'arrêts pour une patrouille censée avancer en continu",
             idle_ratio * 100.0
         );
+    }
+
+    /// Audit gameplay « gros sauts / déplacements illogiques » : preuve que les
+    /// **20** créatures de la démo MMORPG bougent continûment, sans téléportation
+    /// ni pivot brutal, avec la vraie physique. Bugs observés en jeu (corrigés
+    /// après cette preuve) : le griffon (n°16) et le kraken (n°17) écrivaient
+    /// leur position **en absolu** sur une courbe paramétrique — saut initial de
+    /// tout le rayon au premier tick, et bond de rattrapage après chaque blocage
+    /// (l'angle continuait d'avancer pendant que `resolve_scripted_moves`
+    /// rabotait le déplacement) ; le félin (n°12) et la lanterne (n°19)
+    /// claquaient vitesse et cap de 90-180° pile sur leurs seuils de distance ;
+    /// l'escargot (n°14) se retournait de 180° en une frame en bout de navette.
+    /// Chaque frame, pour chaque créature : déplacement horizontal ≤ vitesse max
+    /// (3,2 m/s, la charge du ver) × dt × marge, et pivot ≤ 25° (sauf le ver n°18,
+    /// dont le cap de charge « sous le sable » est un surgissement assumé).
+    #[test]
+    fn mmorpg_creatures_never_teleport_nor_snap_turn() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let creatures: Vec<usize> = app
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.name.starts_with("Créature"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(creatures.len(), 20, "la démo doit garder ses 20 créatures");
+
+        let dt = 1.0 / 60.0;
+        // 3,2 m/s (charge du ver, la plus rapide) + marge : au-delà en une frame,
+        // c'est une téléportation, pas un déplacement.
+        let max_step = 3.2 * dt * 1.7;
+        let mut prev: Vec<(glam::Vec3, Option<f32>)> = creatures
+            .iter()
+            .map(|&i| (app.scene.objects[i].transform.position, None))
+            .collect();
+
+        for step in 0..(20 * 60) {
+            app.sim_step(dt);
+            for (k, &i) in creatures.iter().enumerate() {
+                let obj = &app.scene.objects[i];
+                let pos = obj.transform.position;
+                let (prev_pos, prev_yaw) = prev[k];
+                let d_xz = (glam::Vec2::new(pos.x, pos.z)
+                    - glam::Vec2::new(prev_pos.x, prev_pos.z))
+                .length();
+                assert!(
+                    d_xz <= max_step,
+                    "step {step} : « {} » a sauté de {d_xz:.3} m en une frame \
+                     (max {max_step:.3}) — téléportation ({prev_pos:?} → {pos:?})",
+                    obj.name
+                );
+                let (_, yaw, _) = obj.transform.rotation.to_euler(glam::EulerRot::XYZ);
+                // Les 5 premières frames absorbent l'orientation initiale (un
+                // script qui démarre pose son premier cap d'un coup, sans
+                // historique — pas un défaut visible en jeu).
+                if step >= 5
+                    && obj.name != "Créature 18"
+                    && let Some(py) = prev_yaw
+                {
+                    let mut delta = (yaw - py).to_degrees();
+                    delta = ((delta + 180.0).rem_euclid(360.0)) - 180.0;
+                    assert!(
+                        delta.abs() < 25.0,
+                        "step {step} : « {} » a pivoté de {delta:.1}° en une frame — \
+                         demi-tour brutal",
+                        obj.name
+                    );
+                }
+                prev[k] = (pos, Some(yaw));
+            }
+        }
     }
 
     /// Preuve du correctif « les créatures partent toutes dans la même direction
