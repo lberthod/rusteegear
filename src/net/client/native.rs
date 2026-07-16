@@ -62,6 +62,7 @@ impl NetClient {
         let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
         let join = protocol::encode(&ClientMsg::Join {
+            protocol: protocol::PROTOCOL_VERSION,
             name: name.to_string(),
             firebase_uid: firebase_uid.map(str::to_string),
             lobby: lobby.to_string(),

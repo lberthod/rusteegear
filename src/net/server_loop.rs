@@ -291,6 +291,7 @@ async fn handle_connection(
         _ => return Err("première trame non binaire".into()),
     };
     let ClientMsg::Join {
+        protocol: client_protocol,
         name,
         firebase_uid,
         lobby,
@@ -298,6 +299,29 @@ async fn handle_connection(
     else {
         return Err("première trame n'est pas un Join".into());
     };
+
+    // Version de protocole vérifiée avant toute autre chose (attribution d'id,
+    // outbox, Welcome) : un client incompatible reçoit la raison en clair puis
+    // la connexion se ferme — avant ce contrôle, il mourait dans un `decode`
+    // silencieux sans aucun diagnostic. Limite assumée : un client d'avant le
+    // versioning (sans champ `protocol`) échoue toujours au `decode` ci-dessus,
+    // on ne peut rien lui répondre d'utile — le bénéfice vaut pour tous les
+    // bumps futurs (cf. l'invariant documenté sur `ClientMsg`).
+    if client_protocol != protocol::PROTOCOL_VERSION {
+        let rejected = protocol::encode(&ServerMsg::JoinRejected {
+            reason: format!(
+                "version de protocole {client_protocol} incompatible (serveur : {}) — mettez \
+                 le jeu à jour",
+                protocol::PROTOCOL_VERSION
+            ),
+        })?;
+        sink.send(Message::Binary(rejected.into())).await?;
+        return Err(format!(
+            "version de protocole incompatible ({client_protocol} ≠ {})",
+            protocol::PROTOCOL_VERSION
+        )
+        .into());
+    }
 
     let id = next_id.fetch_add(1, Ordering::Relaxed);
     log::info!("Joueur {id} ({name}) connecté depuis {peer}");
@@ -316,6 +340,7 @@ async fn handle_connection(
     let _ = tx.send((
         id,
         ClientMsg::Join {
+            protocol: client_protocol,
             name,
             firebase_uid,
             lobby,
@@ -428,6 +453,7 @@ mod tests {
         assert_eq!(
             join_msg,
             ClientMsg::Join {
+                protocol: protocol::PROTOCOL_VERSION,
                 name: "Testeur".to_string(),
                 firebase_uid: None,
                 lobby: protocol::DEFAULT_LOBBY.to_string(),
@@ -502,6 +528,59 @@ mod tests {
                 ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 1 })
             );
         }
+    }
+
+    /// Un client d'une autre version de protocole doit recevoir un
+    /// `JoinRejected` avec une raison intelligible (« mettez le jeu à jour »)
+    /// puis voir sa connexion fermée — pas l'ancien silence radio. Forge le
+    /// `Join` à la main via une connexion tungstenite brute : `NetClient`
+    /// envoie toujours la bonne version, il ne peut pas simuler ce cas. Le
+    /// contre-test (version correcte → `Welcome`) est déjà couvert par
+    /// `client_joins_and_server_receives_its_input`.
+    #[test]
+    fn an_outdated_client_is_rejected_with_a_clear_reason() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime de test");
+        let reason = rt.block_on(async {
+            let (ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("connexion brute");
+            let (mut sink, mut stream) = ws.split();
+            let join = protocol::encode(&ClientMsg::Join {
+                protocol: 999,
+                name: "TropVieux".to_string(),
+                firebase_uid: None,
+                lobby: String::new(),
+            })
+            .expect("encodage");
+            sink.send(Message::Binary(join.into()))
+                .await
+                .expect("envoi du Join forgé");
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Message::Binary(bytes) = msg {
+                    let decoded: ServerMsg = protocol::decode(&bytes).expect("ServerMsg");
+                    let ServerMsg::JoinRejected { reason } = decoded else {
+                        panic!("JoinRejected attendu, reçu {decoded:?}");
+                    };
+                    return reason;
+                }
+            }
+            panic!("connexion fermée sans JoinRejected");
+        });
+        assert!(
+            reason.contains("incompatible"),
+            "la raison doit être intelligible : {reason}"
+        );
+        assert_eq!(
+            server.connected_count(),
+            0,
+            "un client rejeté ne doit jamais être compté comme connecté"
+        );
     }
 
     /// Une coupure décidée côté serveur (`NetServer::disconnect`, même chemin

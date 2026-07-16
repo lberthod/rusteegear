@@ -91,6 +91,7 @@ impl NetClient {
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let join = protocol::encode(&ClientMsg::Join {
+            protocol: protocol::PROTOCOL_VERSION,
             name: name.to_string(),
             firebase_uid: firebase_uid.map(str::to_string),
             lobby: lobby.to_string(),

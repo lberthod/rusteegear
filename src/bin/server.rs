@@ -170,6 +170,9 @@ fn handle_message(
 ) {
     match msg {
         ClientMsg::Join {
+            // Déjà vérifiée par `server_loop::handle_connection` (un client
+            // incompatible reçoit `JoinRejected` et n'arrive jamais ici).
+            protocol: _,
             name,
             firebase_uid,
             lobby,

@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 /// Identifiant de joueur, attribué par le serveur à la connexion (`ServerMsg::Welcome`).
 pub type PlayerId = u32;
 
+/// Version du protocole réseau, négociée au `Join` : le serveur rejette
+/// proprement (`ServerMsg::JoinRejected`, avec un message clair) tout client
+/// d'une autre version, au lieu de l'ancien comportement — un `decode` qui
+/// échoue et une connexion fermée sans le moindre diagnostic. À incrémenter à
+/// **chaque** changement incompatible de `ClientMsg`/`ServerMsg`/leurs types
+/// imbriqués (champ ajouté sans `#[serde(default)]`, variant réordonné…).
+/// ⚠️ Déploiement : un bump casse le format — client et serveur (VPS) doivent
+/// être redéployés ensemble (vérifier ensuite avec `examples/smoke_vps.rs`).
+pub const PROTOCOL_VERSION: u32 = 1;
+
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
 /// retrouvent donc ensemble : le serveur route par code de salon, mais rien
@@ -89,10 +99,21 @@ pub fn valid_join_fields(
 }
 
 /// Message envoyé par un client au serveur.
+///
+/// **Invariant de compatibilité** (à préserver pour toujours) : `Join` reste
+/// le variant 0 de cet enum et `protocol` son **premier** champ — bincode
+/// sérialise l'indice du variant puis les champs dans l'ordre, c'est ce qui
+/// permet à un serveur futur de lire au moins la version d'un vieux client
+/// (et inversement) avant que le reste de la trame ne diverge, et donc de
+/// répondre un `JoinRejected` intelligible plutôt qu'une erreur de décodage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
     /// Première trame envoyée à la connexion : demande à rejoindre un salon.
     Join {
+        /// Version du protocole parlée par ce client (cf. `PROTOCOL_VERSION`
+        /// et l'invariant de l'enum) : vérifiée par le serveur avant toute
+        /// autre chose, `JoinRejected` si elle ne correspond pas.
+        protocol: u32,
         name: String,
         /// `uid` Firebase (cf. `net::firebase::AuthSession`), si le joueur s'est
         /// connecté avant de rejoindre — sert au serveur pour créditer la
@@ -154,6 +175,14 @@ pub enum ServerMsg {
     Snapshot(Snapshot),
     /// Évènement ponctuel (pas un état continu) : manche suivante, victoire, défaite...
     Event(GameEvent),
+    /// Le serveur refuse le `Join` (version de protocole incompatible…) : envoyé
+    /// juste avant de fermer la connexion, pour que le client puisse afficher la
+    /// raison au lieu d'un échec silencieux. Ajouté en **fin** d'enum pour ne
+    /// décaler aucun variant existant (même logique d'ordre bincode que
+    /// l'invariant documenté sur `ClientMsg`). Rejet **fatal** côté client : ne
+    /// jamais enchaîner sur une reconnexion automatique (le serveur nous
+    /// refuserait en boucle), cf. `app::network_client::handle_server_msg`.
+    JoinRejected { reason: String },
 }
 
 /// État des joueurs réseau pour un tick donné : **pas** un delta par client
@@ -320,15 +349,56 @@ mod tests {
     #[test]
     fn client_msg_join_round_trips() {
         round_trip(ClientMsg::Join {
+            protocol: PROTOCOL_VERSION,
             name: "Loïc".to_string(),
             firebase_uid: None,
             lobby: DEFAULT_LOBBY.to_string(),
         });
         round_trip(ClientMsg::Join {
+            protocol: PROTOCOL_VERSION,
             name: "Loïc".to_string(),
             firebase_uid: Some("uid-1234".to_string()),
             lobby: "salon-prive".to_string(),
         });
+    }
+
+    #[test]
+    fn server_msg_join_rejected_round_trips() {
+        round_trip(ServerMsg::JoinRejected {
+            reason: "version de protocole 999 incompatible (serveur : 1)".to_string(),
+        });
+    }
+
+    /// Un `Join` au **vieux** format (d'avant le champ `protocol`, octets
+    /// forgés à la main : variant 0 puis directement le pseudo) ne doit pas
+    /// décoder silencieusement en un `Join` valide de la version courante —
+    /// c'est la garantie que le versioning ne crée pas de faux positifs où un
+    /// vieux client serait accepté avec des champs décalés.
+    #[test]
+    fn a_pre_versioning_join_does_not_decode_as_a_valid_join() {
+        // Vieux format : [variant u32][len name u64]["A"][Option None u8][len lobby u64][]
+        let mut old_join = Vec::new();
+        old_join.extend_from_slice(&0u32.to_le_bytes()); // variant 0 = Join
+        old_join.extend_from_slice(&1u64.to_le_bytes()); // name : 1 octet
+        old_join.push(b'A');
+        old_join.push(0); // firebase_uid : None
+        old_join.extend_from_slice(&0u64.to_le_bytes()); // lobby : vide
+        let decoded: Result<ClientMsg, _> = decode(&old_join);
+        match decoded {
+            // Refusé au décodage : parfait, la connexion se ferme comme avant.
+            Err(_) => {}
+            // Décodé malgré tout (les octets du pseudo ont été lus comme la
+            // version) : la version ne doit alors JAMAIS être la courante,
+            // sinon un vieux client passerait le contrôle avec des champs
+            // corrompus.
+            Ok(ClientMsg::Join { protocol, .. }) => {
+                assert_ne!(
+                    protocol, PROTOCOL_VERSION,
+                    "un Join du vieux format ne doit pas se faire passer pour la version courante"
+                );
+            }
+            Ok(other) => panic!("décodage inattendu d'un vieux Join : {other:?}"),
+        }
     }
 
     #[test]

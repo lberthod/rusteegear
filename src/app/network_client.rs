@@ -848,6 +848,18 @@ impl AppState {
                 }
             }
             ServerMsg::Event(_) => {}
+            // Rejet **fatal** (version de protocole incompatible…) : on affiche
+            // la raison et on n'insiste JAMAIS — désarmer la reconnexion
+            // automatique est essentiel, sinon le client re-tenterait en boucle
+            // contre un serveur qui le refusera à chaque fois.
+            ServerMsg::JoinRejected { reason } => {
+                log::warn!("Multijoueur : connexion refusée par le serveur : {reason}");
+                self.reset_network_session();
+                self.net_reconnect = None;
+                self.net_last_connect = None;
+                self.net_last_server_msg = None;
+                self.net_status = reason;
+            }
         }
     }
 
@@ -1408,6 +1420,7 @@ mod tests {
         assert_eq!(
             msg,
             ClientMsg::Join {
+                protocol: crate::net::protocol::PROTOCOL_VERSION,
                 name: "Alice".to_string(),
                 firebase_uid: Some("uid-alice".to_string()),
                 lobby: crate::net::protocol::DEFAULT_LOBBY.to_string(),
