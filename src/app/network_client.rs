@@ -484,6 +484,7 @@ impl AppState {
                             && o.controller.is_none()
                             && o.combat.as_ref().is_some_and(|c| c.attackable)
                         {
+                            self.net_creature_last_snapshot.insert(i, now);
                             o.transform.position = glam::Vec3::from_array(e.position);
                             o.transform.rotation = glam::Quat::from_rotation_y(e.yaw);
                             o.visible = e.visible;

@@ -168,6 +168,19 @@ pub(super) fn fixed_substeps(
     (steps, acc)
 }
 
+/// Une créature `attackable` ne doit sauter son script local que si le serveur
+/// diffuse *réellement* ses positions récemment : sans ça, une room jointe sans
+/// succès (gabarit introuvable côté serveur) ou une désynchronisation d'index de
+/// scène ne délivre jamais de `Snapshot` la concernant, et elle resterait figée
+/// pour toujours (aucun autre filet ne rétablit la simulation locale).
+pub(super) fn creature_is_server_synced(
+    last_snapshot: Option<Instant>,
+    now: Instant,
+    timeout: std::time::Duration,
+) -> bool {
+    last_snapshot.is_some_and(|t| now.duration_since(t) < timeout)
+}
+
 impl AppState {
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
@@ -629,6 +642,18 @@ impl AppState {
         // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
         // n'y serait pas appelable.
         let online_client = self.is_online_client();
+        // Filet de secours : une créature `attackable` ne doit sauter son script
+        // local que si le serveur diffuse *réellement* ses positions pour elle.
+        // Si la room n'a jamais été rejointe avec succès (gabarit introuvable côté
+        // serveur, cf. `spawn_network_player`) ou si la scène serveur diverge
+        // (index qui ne correspond à rien côté client), aucun `Snapshot` ne la
+        // couvre jamais et elle resterait figée pour toujours sans ce filet — de
+        // même si le serveur cesse de diffuser en cours de partie (déconnexion
+        // silencieuse, redémarrage). Nom distinct de la variable `now` réutilisée
+        // (ombrée) plus haut dans cette fonction pour `self.time`.
+        const CREATURE_SNAPSHOT_TIMEOUT: std::time::Duration =
+            std::time::Duration::from_millis(2500);
+        let net_check_now = Instant::now();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             let just_tapped = self.tapped_obj == Some(idx);
             // Vibration Feedback : retour haptique quand l'objet est tapé.
@@ -657,6 +682,11 @@ impl AppState {
             if online_client
                 && obj.controller.is_none()
                 && obj.combat.as_ref().is_some_and(|c| c.attackable)
+                && creature_is_server_synced(
+                    self.net_creature_last_snapshot.get(&idx).copied(),
+                    net_check_now,
+                    CREATURE_SNAPSHOT_TIMEOUT,
+                )
             {
                 continue;
             }
@@ -1404,6 +1434,47 @@ mod tests {
         let (wx, wz) = camera_relative_move(0.0, 1.0, std::f32::consts::FRAC_PI_2);
         assert!((wx - -1.0).abs() < 1e-4, "wx={wx}");
         assert!(wz.abs() < 1e-4, "wz={wz}");
+    }
+
+    #[test]
+    fn creature_is_server_synced_stays_false_without_any_snapshot_ever_received() {
+        // Room jointe sans succès côté serveur (gabarit introuvable) ou scène
+        // désynchronisée : la créature n'a jamais reçu le moindre `Snapshot`. Sans
+        // filet, elle resterait figée pour toujours — la synchro doit rester
+        // fausse (et donc le script local continuer de tourner) tant qu'aucune
+        // mise à jour n'est jamais arrivée, peu importe le timeout.
+        let now = Instant::now();
+        let timeout = std::time::Duration::from_millis(2500);
+        assert!(!creature_is_server_synced(None, now, timeout));
+    }
+
+    #[test]
+    fn creature_is_server_synced_true_right_after_a_fresh_snapshot() {
+        let now = Instant::now();
+        let timeout = std::time::Duration::from_millis(2500);
+        assert!(creature_is_server_synced(Some(now), now, timeout));
+    }
+
+    #[test]
+    fn creature_is_server_synced_resumes_local_simulation_once_snapshots_go_stale() {
+        // Le serveur diffusait, puis s'arrête (déconnexion silencieuse,
+        // redémarrage) : passé le délai de grâce, on ne doit plus considérer la
+        // créature comme synchronisée — sinon elle resterait figée à sa dernière
+        // position serveur pour toujours au lieu de reprendre son script local.
+        let last_snapshot = Instant::now();
+        let timeout = std::time::Duration::from_millis(2500);
+        let still_fresh = last_snapshot + std::time::Duration::from_millis(2400);
+        let now_stale = last_snapshot + std::time::Duration::from_millis(2600);
+        assert!(creature_is_server_synced(
+            Some(last_snapshot),
+            still_fresh,
+            timeout
+        ));
+        assert!(!creature_is_server_synced(
+            Some(last_snapshot),
+            now_stale,
+            timeout
+        ));
     }
 
     #[test]

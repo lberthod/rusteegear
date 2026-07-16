@@ -398,6 +398,13 @@ pub struct AppState {
     /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
     /// localement (le serveur est autoritaire sur eux).
     remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
+    /// Horodatage du dernier `Snapshot` reçu couvrant chaque créature autoritaire
+    /// (indexée par `SceneObject`, cf. `network_client::handle_server_msg`). Sert
+    /// de filet de secours (`simulation::advance_play`) : si le serveur ne
+    /// diffuse jamais (room jointe sans succès, scène désynchronisée) ou cesse
+    /// de diffuser une créature donnée, on reprend sa simulation locale plutôt
+    /// que de la laisser figée pour toujours — cf. `[[creature-freeze-...]]`.
+    net_creature_last_snapshot: HashMap<usize, Instant>,
     /// Historique (2 derniers points) de la position du joueur **local** telle
     /// que rapportée par le serveur — même mécanisme d'interpolation que les
     /// fantômes des autres joueurs (`RemoteEntity`). Sert de référence
@@ -750,6 +757,7 @@ impl AppState {
             net_player_id: None,
             net_status: String::new(),
             remote_players: HashMap::new(),
+            net_creature_last_snapshot: HashMap::new(),
             #[cfg(not(target_os = "ios"))]
             net_local_interp: crate::net::interpolation::RemoteEntity::default(),
             #[cfg(not(target_os = "ios"))]
