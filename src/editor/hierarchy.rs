@@ -139,29 +139,33 @@ pub(super) fn hierarchy_panel(
                                         obj.name,
                                         object_badges(obj)
                                     );
+                                    // Ligne cliquable ET glissable via un seul widget aux deux
+                                    // sens : egui attend alors un vrai mouvement du pointeur
+                                    // avant de trancher clic vs glisser. Surtout ne pas revenir
+                                    // à `dnd_drag_source` : son enveloppe ne capte que le
+                                    // glisser, et un widget « drag seul » est marqué dragged dès
+                                    // l'appui (sans seuil) — la ligne partait sur une couche
+                                    // Tooltip aux réponses vides et le clic de sélection se
+                                    // perdait, sauf tap tenant dans une seule frame (d'où la
+                                    // sélection aléatoire : « ça fait juste du drag and drop »).
                                     let resp = ui
-                                        .dnd_drag_source(egui::Id::new(("obj", i)), i, |ui| {
-                                            let _ = ui.selectable_label(is_sel, label);
-                                        })
-                                        .response;
-                                    // Dépôt d'un autre objet *sur* cette ligne → réordonner avant elle.
+                                        .selectable_label(is_sel, label)
+                                        .interact(egui::Sense::drag());
+                                    // Un glisser avéré emporte l'index comme payload…
+                                    resp.dnd_set_drag_payload(i);
+                                    // …déposé sur une autre ligne : réordonner avant elle.
                                     if let Some(src) = resp.dnd_release_payload::<usize>()
                                         && *src != i
                                     {
                                         actions.reorder = Some((*src, i));
                                     }
-                                    // La ligne est enveloppée dans `dnd_drag_source` (glisser pour
-                                    // réordonner) : un clic *gauche* à peine mouvementé (souris,
-                                    // trackpad) y est alors souvent lu comme un début de glisser
-                                    // plutôt qu'un clic simple, ce qui rend la sélection au clic
-                                    // gauche peu fiable (remonté par l'utilisateur : « ça fait
-                                    // juste du drag and drop »). Le glisser-déposer n'utilise que
-                                    // le bouton gauche, donc le clic *droit* n'est jamais capturé
-                                    // par cette détection : on l'utilise pour la sélection fiable
-                                    // + recentrage caméra, et on garde le clic gauche pour ouvrir
-                                    // le menu d'options (renommer/dupliquer/supprimer).
+                                    // Clic gauche : sélectionne + recentre la caméra (comportement
+                                    // standard d'une hiérarchie) ; clic droit : menu d'options.
                                     if resp.clicked() {
                                         let m = ui.input(|inp| inp.modifiers);
+                                        // La sélection d'un objet exclut celle d'une lumière :
+                                        // l'inspecteur et le gizmo suivent une seule entité.
+                                        *selected_light = None;
                                         if m.command || m.shift {
                                             // toggle dans l'ensemble (sélection multiple)
                                             if let Some(p) = selected.iter().position(|&x| x == i) {
@@ -171,21 +175,19 @@ pub(super) fn hierarchy_panel(
                                                 selected.push(i);
                                                 *selection = Some(i);
                                             }
+                                        } else {
+                                            *selection = Some(i);
+                                            *selected = vec![i];
+                                            actions.focus_selection = true;
                                         }
-                                        // Clic gauche simple (sans modificateur) : n'affecte pas
-                                        // la sélection, ouvre seulement le menu d'options ci-dessous.
                                     }
                                     if resp.double_clicked() {
                                         *rename = Some((i, obj.name.clone()));
                                     }
-                                    if resp.secondary_clicked() {
-                                        *selection = Some(i);
-                                        *selected = vec![i];
-                                        actions.focus_selection = true;
-                                    }
-                                    egui::Popup::menu(&resp).show(|ui| {
+                                    egui::Popup::context_menu(&resp).show(|ui| {
                                         ui.set_min_width(180.0);
                                         if ui.button("🎯 Sélectionner et centrer").clicked() {
+                                            *selected_light = None;
                                             *selection = Some(i);
                                             *selected = vec![i];
                                             actions.focus_selection = true;
@@ -194,6 +196,7 @@ pub(super) fn hierarchy_panel(
                                             *rename = Some((i, obj.name.clone()));
                                         }
                                         if ui.button("📄 Dupliquer").clicked() {
+                                            *selected_light = None;
                                             *selection = Some(i);
                                             *selected = vec![i];
                                             actions.duplicate = true;
@@ -295,5 +298,174 @@ pub(super) fn hierarchy_panel(
                     }
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Rejoue un clic réaliste (appui à une frame, relâchement à la suivante,
+    /// pointeur immobile) sur un widget construit par `build`, et rapporte
+    /// `clicked()` observé à la frame du relâchement.
+    // `Context::run`/`CentralPanel::show` sont dépréciés mais restent le harnais
+    // headless le plus simple pour rejouer des frames dans un test.
+    #[allow(deprecated)]
+    fn clicked_after_two_frame_press(
+        build: impl Fn(&mut egui::Ui) -> egui::Response + Copy,
+    ) -> bool {
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(20.0, 15.0); // dans la ligne, marges du panneau incluses
+        let mut clicked = false;
+        let run = |events: Vec<egui::Event>, record: &mut bool| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    *record = build(ui).clicked();
+                });
+            });
+        };
+        // Frame de mise en place (les hit-tests d'egui lisent les rects de la
+        // frame précédente), puis appui, puis relâchement — sans mouvement.
+        run(vec![egui::Event::PointerMoved(pos)], &mut clicked);
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(vec![press(true)], &mut clicked);
+        assert!(!clicked, "pas de clic tant que le bouton est enfoncé");
+        run(vec![press(false)], &mut clicked);
+        clicked
+    }
+
+    /// Bout en bout sur le *vrai* panneau : un clic deux-frames quelque part sur
+    /// la ligne du seul objet de la scène doit le sélectionner ET demander le
+    /// recentrage caméra. Comme la position exacte de la ligne dépend du style,
+    /// on balaye verticalement : au moins une ordonnée doit toucher la ligne, et
+    /// chaque fois que la sélection se déclenche, le recentrage doit suivre.
+    #[test]
+    #[allow(deprecated)] // même harnais headless que `clicked_after_two_frame_press`
+    fn clicking_a_row_of_the_real_hierarchy_panel_selects_and_focuses() {
+        let mut any_hit = false;
+        for y in (60..280).step_by(4) {
+            let ctx = egui::Context::default();
+            let pos = egui::pos2(60.0, y as f32);
+            let mut scene = crate::scene::Scene::default();
+            scene.objects.push(crate::scene::SceneObject {
+                name: "Cible".into(),
+                mesh: crate::scene::MeshKind::Cube,
+                ..Default::default()
+            });
+            let mut selection = None;
+            let mut selected = Vec::new();
+            let mut selected_light = None;
+            let (mut filter, mut new_group, mut rename) = (String::new(), String::new(), None);
+            let mut actions = super::super::UiActions::default();
+            let mut run = |events: Vec<egui::Event>,
+                           scene: &mut crate::scene::Scene,
+                           selection: &mut Option<usize>,
+                           selected: &mut Vec<usize>,
+                           selected_light: &mut Option<usize>,
+                           actions: &mut super::super::UiActions| {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                };
+                let _ = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        super::hierarchy_panel(
+                            ui,
+                            scene,
+                            selection,
+                            selected,
+                            selected_light,
+                            &mut filter,
+                            &mut new_group,
+                            &mut rename,
+                            actions,
+                        );
+                    });
+                });
+            };
+            let press = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            run(
+                vec![egui::Event::PointerMoved(pos)],
+                &mut scene,
+                &mut selection,
+                &mut selected,
+                &mut selected_light,
+                &mut actions,
+            );
+            run(
+                vec![press(true)],
+                &mut scene,
+                &mut selection,
+                &mut selected,
+                &mut selected_light,
+                &mut actions,
+            );
+            run(
+                vec![press(false)],
+                &mut scene,
+                &mut selection,
+                &mut selected,
+                &mut selected_light,
+                &mut actions,
+            );
+            if selection == Some(0) {
+                any_hit = true;
+                assert_eq!(selected, vec![0], "l'ensemble sélectionné doit suivre");
+                assert!(
+                    actions.focus_selection,
+                    "sélectionner depuis la hiérarchie doit demander le recentrage caméra"
+                );
+            }
+        }
+        assert!(
+            any_hit,
+            "aucune ordonnée du balayage n'a sélectionné l'objet : le clic de \
+             sélection est perdu dans le vrai panneau"
+        );
+    }
+
+    /// Preuve du correctif : une ligne de hiérarchie = un seul widget qui capte
+    /// clic ET glisser. Le clic immobile est alors fiable, là où l'ancienne
+    /// enveloppe `dnd_drag_source` (drag seul, marquée « dragged » dès l'appui)
+    /// le perdait dès que appui et relâchement tombaient sur deux frames.
+    #[test]
+    fn hierarchy_row_click_survives_a_press_spanning_two_frames() {
+        assert!(
+            clicked_after_two_frame_press(|ui| {
+                ui.selectable_label(false, "Sphère")
+                    .interact(egui::Sense::drag())
+            }),
+            "le clic immobile doit sélectionner la ligne (pattern clic + glisser)"
+        );
+        assert!(
+            !clicked_after_two_frame_press(|ui| {
+                ui.dnd_drag_source(egui::Id::new("row"), 0usize, |ui| {
+                    ui.selectable_label(false, "Sphère")
+                })
+                .inner
+            }),
+            "témoin : l'enveloppe dnd_drag_source perd bien ce même clic — si ce \
+             témoin casse un jour (egui corrigé), le pattern simple reste valable"
+        );
     }
 }

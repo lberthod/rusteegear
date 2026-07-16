@@ -315,18 +315,28 @@ impl AppState {
     }
 
     /// Recentre la caméra sur l'objet (ou la lumière) sélectionné (« frame selected », touche F).
+    /// La distance s'adapte à la taille de l'objet (AABB × échelle) : un petit cube
+    /// comme un grand modèle importé remplissent la vue de façon comparable.
     pub fn frame_selected(&mut self) {
         let target = self
             .selection
             .and_then(|i| self.scene.objects.get(i))
-            .map(|o| o.transform.position)
+            .map(|o| {
+                let (lmin, lmax) = self.scene.local_aabb(o.mesh);
+                let half = (lmax - lmin) * 0.5 * o.transform.scale;
+                (o.transform.position, half.length().max(0.5))
+            })
             .or_else(|| {
                 self.selected_light
                     .and_then(|i| self.scene.point_lights.get(i))
-                    .map(|pl| Vec3::from_array(pl.position))
+                    .map(|pl| (Vec3::from_array(pl.position), 1.0))
             });
-        if let Some(t) = target {
+        if let Some((t, radius)) = target {
             self.camera.target = t;
+            // Distance pour que la sphère englobante tienne dans le champ vertical,
+            // avec une marge ; bornée pour rester entre le near (0.1) et le far (100).
+            let fit = radius / (self.camera.fovy * 0.5).tan();
+            self.camera.distance = (fit * 1.6).clamp(2.0, 80.0);
         }
     }
 
@@ -702,5 +712,48 @@ mod tests {
         assert!((xs[0] - 0.0).abs() < 1e-5);
         assert!((xs[1] - 4.5).abs() < 1e-5);
         assert!((xs[2] - 9.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn frame_selected_centers_the_camera_and_adapts_distance_to_object_size() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        for (name, pos, scale) in [
+            ("petit", Vec3::new(5.0, 1.0, -3.0), Vec3::ONE),
+            ("grand", Vec3::new(-8.0, 0.0, 2.0), Vec3::splat(20.0)),
+        ] {
+            app.scene.objects.push(SceneObject {
+                name: name.into(),
+                transform: Transform {
+                    position: pos,
+                    scale,
+                    ..Default::default()
+                },
+                mesh: MeshKind::Cube,
+                ..Default::default()
+            });
+        }
+
+        app.select_single(0);
+        app.frame_selected();
+        assert_eq!(
+            app.camera.target,
+            Vec3::new(5.0, 1.0, -3.0),
+            "la caméra doit orbiter autour de l'objet sélectionné"
+        );
+        let d_petit = app.camera.distance;
+
+        app.select_single(1);
+        app.frame_selected();
+        let d_grand = app.camera.distance;
+        assert!(
+            d_grand > d_petit,
+            "un objet 20× plus grand doit être cadré de plus loin \
+             (petit : {d_petit}, grand : {d_grand})"
+        );
+        assert!(
+            d_grand <= 80.0,
+            "la distance reste sous le plan far de la caméra (100)"
+        );
     }
 }
