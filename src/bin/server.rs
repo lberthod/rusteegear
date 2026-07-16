@@ -321,25 +321,50 @@ fn connect_firebase_server() -> Option<(FirebaseConfig, AuthSession)> {
     }
 }
 
+/// Progression mise à jour après une manche à `score` XP, ou `None` si la
+/// lecture de la progression a échoué — **on ne réécrit JAMAIS par-dessus une
+/// progression qu'on n'a pas pu lire**. Avant cette règle, une simple panne
+/// réseau transitoire à la lecture faisait repartir le calcul de
+/// `PlayerProgress::default()` (0 XP) puis l'écrivait : le cumul réel du
+/// joueur était écrasé, potentiellement des heures de progression perdues
+/// pour un incident d'infrastructure. Le cas « joueur sans progression
+/// enregistrée » n'emprunte pas ce chemin : RTDB renvoie `null` pour un nœud
+/// absent, que `parse_progress_response` transforme déjà en
+/// `Ok(PlayerProgress::default())` (cf. `net::firebase`) — un `Err` ici est
+/// donc toujours une vraie erreur, jamais un premier lancement. Fonction
+/// pure, séparée des appels réseau pour être testable sans Firebase.
+fn merged_progress(previous: Result<PlayerProgress, String>, score: u32) -> Option<PlayerProgress> {
+    let previous = previous.ok()?;
+    let xp = previous.xp + score;
+    Some(PlayerProgress {
+        level: 1 + xp / XP_PER_LEVEL,
+        xp,
+    })
+}
+
 /// Crédite le score de la manche en XP à chaque joueur réseau connu de
 /// Firebase. Les échecs (réseau, règles RTDB non configurées...) sont logués
 /// mais ne font pas planter le serveur — la progression est un bonus, pas une
-/// condition de fonctionnement du jeu.
+/// condition de fonctionnement du jeu. Pas de retry sur une lecture échouée :
+/// `get_progress`/`set_progress` sont des appels bloquants dans la boucle de
+/// tick — au pire, le joueur perd le bonus d'une manche (logué), jamais son
+/// cumul (cf. `merged_progress`).
 fn award_progress(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobby, score: u32) {
     let Some((config, session)) = firebase else {
         return;
     };
     for (id, uid) in &lobby.firebase_uids {
-        let previous = match firebase::get_progress(config, uid) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("Firebase : lecture progression du joueur {id} échouée ({e})");
-                PlayerProgress::default()
-            }
+        let previous = firebase::get_progress(config, uid);
+        if let Err(e) = &previous {
+            log::warn!(
+                "Firebase : lecture progression du joueur {id} échouée ({e}) — score de {score} \
+                 XP NON crédité pour ne pas écraser sa progression réelle"
+            );
+        }
+        let Some(updated) = merged_progress(previous, score) else {
+            continue;
         };
-        let xp = previous.xp + score;
-        let level = 1 + xp / XP_PER_LEVEL;
-        let updated = PlayerProgress { level, xp };
+        let PlayerProgress { level, xp } = updated;
         match firebase::set_progress(config, uid, updated, &session.id_token) {
             Ok(()) => {
                 log::info!("Firebase : joueur {id} ({uid}) → niveau {level}, {xp} XP (+{score})")
@@ -504,6 +529,47 @@ fn main() {
         if elapsed < SERVER_TICK {
             std::thread::sleep(SERVER_TICK - elapsed);
         }
+    }
+}
+
+/// Tests **purs** de la progression (aucun socket, aucun Firebase) — hors du
+/// gate `net_tests` du module voisin exprès : la règle « ne jamais écraser une
+/// progression illisible » doit être vérifiée par le `cargo test` de tous les
+/// jours, pas seulement par la couverture réseau complète.
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    /// Le cœur du correctif : une lecture échouée (panne réseau, règles RTDB)
+    /// ne produit **aucune** écriture — avant, on repartait de
+    /// `PlayerProgress::default()` et on écrasait le cumul réel du joueur.
+    #[test]
+    fn a_failed_progress_read_never_writes() {
+        assert_eq!(
+            merged_progress(Err("timeout réseau simulé".to_string()), 500),
+            None
+        );
+    }
+
+    /// Le premier lancement d'un joueur ne passe PAS par le chemin d'erreur :
+    /// un nœud RTDB absent renvoie `null`, que `parse_progress_response`
+    /// transforme en `Ok(default)` (cf. `net::firebase`) — le score de la
+    /// première manche est donc bien crédité depuis zéro.
+    #[test]
+    fn an_absent_progress_node_still_credits_from_default() {
+        let updated = merged_progress(Ok(PlayerProgress::default()), 500)
+            .expect("une lecture réussie doit produire une écriture");
+        assert_eq!(updated.xp, 500);
+        assert_eq!(updated.level, 1);
+    }
+
+    /// L'XP s'accumule par-dessus l'existant et le niveau suit `XP_PER_LEVEL`.
+    #[test]
+    fn xp_accumulates_on_top_of_previous() {
+        let previous = PlayerProgress { level: 1, xp: 900 };
+        let updated = merged_progress(Ok(previous), 200).expect("écriture attendue");
+        assert_eq!(updated.xp, 1100);
+        assert_eq!(updated.level, 2, "1100 XP à {XP_PER_LEVEL} XP/niveau");
     }
 }
 
