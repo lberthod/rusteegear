@@ -285,6 +285,10 @@ pub struct UiActions {
     pub move_in_list: Option<bool>,
     /// Réordonnancement par glisser-déposer dans la hiérarchie : `(index source, index cible)`.
     pub reorder: Option<(usize, usize)>,
+    /// Clic sur un objet/une lumière dans la hiérarchie : recentrer la caméra
+    /// dessus (même effet que la touche F), pour voir immédiatement ce qu'on
+    /// vient de sélectionner sans chercher à l'écran.
+    pub focus_selection: bool,
     /// Toolbar « Run Device » : ouvrir le panneau de build et installer sur l'appareil.
     pub run_device: bool,
     /// Menu « Paramètres projet » : ouvrir aussi la fenêtre Paramètres (clé IA…).

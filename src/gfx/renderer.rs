@@ -18,6 +18,7 @@ use super::pipelines::{
 use crate::app::{AppState, GIZMO_LEN, GizmoMode, RING_SEGMENTS, axis_basis, axis_dir};
 use crate::editor::Editor;
 use crate::scene::{MeshKind, Scene};
+use crate::time_compat::Instant;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -1746,6 +1747,9 @@ impl Renderer {
             if let Some((from, to)) = actions.reorder {
                 app.reorder_object(from, to);
             }
+            if actions.focus_selection {
+                app.frame_selected();
+            }
             if let Some((idx, req)) = actions.ai_generate {
                 app.request_ai_script(idx, req);
             }
@@ -1846,7 +1850,7 @@ impl Renderer {
         // Chronométré pour le bilan de perf périodique (cf. `log_perf_window`) :
         // départage les à-coups côté simulation (scripts/physique/réseau) des
         // à-coups côté rendu/présentation (le reste de la frame).
-        let sim_start = std::time::Instant::now();
+        let sim_start = Instant::now();
         app.advance_play();
         app.note_sim_duration(sim_start.elapsed());
         // Une scène chargée en fond vient peut-être de remplacer l'actuelle :

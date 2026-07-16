@@ -5953,6 +5953,7 @@ mod tests {
         let coude: (f32, f32, f32, f32) = (-28.0, -8.0, -16.0, -4.0);
         let lac: (f32, f32, f32, f32) = (-26.0, -2.0, -12.0, 10.0);
         let rivière_sud: (f32, f32, f32, f32) = (-18.0, 10.0, -14.0, 36.0);
+        #[allow(clippy::type_complexity)]
         let cases: &[((f32, f32, f32, f32), &[(f32, f32)])] = &[
             (
                 rivière_nord,
@@ -6020,11 +6021,7 @@ mod tests {
                 scene.objects[idx].transform.position = Vec3::new(sx, 1.0, sz);
                 let mut phys = crate::runtime::physics::Physics::build(&scene);
                 let dt = 1.0 / 60.0;
-                let target = Vec3::new(
-                    (rect.0 + rect.2) / 2.0,
-                    0.0,
-                    (rect.1 + rect.3) / 2.0,
-                );
+                let target = Vec3::new((rect.0 + rect.2) / 2.0, 0.0, (rect.1 + rect.3) / 2.0);
                 for _ in 0..900 {
                     let pos = scene.objects[idx].transform.position;
                     let dir = Vec3::new(target.x - pos.x, 0.0, target.z - pos.z);
@@ -6054,14 +6051,16 @@ mod tests {
     /// nord) dans les deux sens.
     #[test]
     fn mmorpg_player_can_still_cross_the_bridges() {
-        // (nom, rive de départ (x,z), direction (vx,vz), x/z à dépasser côté arrivée).
-        let cases: &[(&str, (f32, f32), (f32, f32), &str)] = &[
-            ("Pont 1 est→ouest", (-12.0, 14.0), (-4.5, 0.0), "x<-18"),
-            ("Pont 1 ouest→est", (-20.0, 14.0), (4.5, 0.0), "x>-14"),
-            ("Pont 2 est→ouest", (-22.0, -10.0), (-4.5, 0.0), "x<-28"),
-            ("Pont 2 ouest→est", (-30.0, -10.0), (4.5, 0.0), "x>-24"),
+        // (nom, rive de départ (x,z), direction (vx,vz), seuil x d'arrivée,
+        // arrivée à l'ouest (true) ou à l'est (false) du seuil).
+        #[allow(clippy::type_complexity)]
+        let cases: &[(&str, (f32, f32), (f32, f32), f32, bool)] = &[
+            ("Pont 1 est→ouest", (-12.0, 14.0), (-4.5, 0.0), -18.0, true),
+            ("Pont 1 ouest→est", (-20.0, 14.0), (4.5, 0.0), -14.0, false),
+            ("Pont 2 est→ouest", (-22.0, -10.0), (-4.5, 0.0), -28.0, true),
+            ("Pont 2 ouest→est", (-30.0, -10.0), (4.5, 0.0), -24.0, false),
         ];
-        for &(name, (sx, sz), (vx, vz), expect) in cases {
+        for &(name, (sx, sz), (vx, vz), threshold, arrives_west) in cases {
             let mut scene = Scene::mmorpg_demo();
             let idx = scene
                 .objects
@@ -6076,12 +6075,15 @@ mod tests {
                 phys.step(dt, &mut scene);
             }
             let p = scene.objects[idx].transform.position;
-            let crossed = if expect.starts_with("x<") {
-                p.x < expect[2..].parse::<f32>().unwrap()
+            let crossed = if arrives_west {
+                p.x < threshold
             } else {
-                p.x > expect[2..].parse::<f32>().unwrap()
+                p.x > threshold
             };
-            assert!(crossed, "« {name} » : le joueur n'a pas traversé (pos={p:?})");
+            assert!(
+                crossed,
+                "« {name} » : le joueur n'a pas traversé (pos={p:?})"
+            );
         }
     }
 

@@ -150,10 +150,20 @@ pub(super) fn hierarchy_panel(
                                     {
                                         actions.reorder = Some((*src, i));
                                     }
+                                    // La ligne est enveloppée dans `dnd_drag_source` (glisser pour
+                                    // réordonner) : un clic *gauche* à peine mouvementé (souris,
+                                    // trackpad) y est alors souvent lu comme un début de glisser
+                                    // plutôt qu'un clic simple, ce qui rend la sélection au clic
+                                    // gauche peu fiable (remonté par l'utilisateur : « ça fait
+                                    // juste du drag and drop »). Le glisser-déposer n'utilise que
+                                    // le bouton gauche, donc le clic *droit* n'est jamais capturé
+                                    // par cette détection : on l'utilise pour la sélection fiable
+                                    // + recentrage caméra, et on garde le clic gauche pour ouvrir
+                                    // le menu d'options (renommer/dupliquer/supprimer).
                                     if resp.clicked() {
                                         let m = ui.input(|inp| inp.modifiers);
                                         if m.command || m.shift {
-                                            // toggle dans l'ensemble
+                                            // toggle dans l'ensemble (sélection multiple)
                                             if let Some(p) = selected.iter().position(|&x| x == i) {
                                                 selected.remove(p);
                                                 *selection = selected.last().copied();
@@ -161,14 +171,38 @@ pub(super) fn hierarchy_panel(
                                                 selected.push(i);
                                                 *selection = Some(i);
                                             }
-                                        } else {
-                                            *selection = Some(i);
-                                            *selected = vec![i];
                                         }
+                                        // Clic gauche simple (sans modificateur) : n'affecte pas
+                                        // la sélection, ouvre seulement le menu d'options ci-dessous.
                                     }
                                     if resp.double_clicked() {
                                         *rename = Some((i, obj.name.clone()));
                                     }
+                                    if resp.secondary_clicked() {
+                                        *selection = Some(i);
+                                        *selected = vec![i];
+                                        actions.focus_selection = true;
+                                    }
+                                    egui::Popup::menu(&resp).show(|ui| {
+                                        ui.set_min_width(180.0);
+                                        if ui.button("🎯 Sélectionner et centrer").clicked() {
+                                            *selection = Some(i);
+                                            *selected = vec![i];
+                                            actions.focus_selection = true;
+                                        }
+                                        if ui.button("✏ Renommer").clicked() {
+                                            *rename = Some((i, obj.name.clone()));
+                                        }
+                                        if ui.button("📄 Dupliquer").clicked() {
+                                            *selection = Some(i);
+                                            *selected = vec![i];
+                                            actions.duplicate = true;
+                                        }
+                                        ui.separator();
+                                        if ui.button("🗑 Supprimer").clicked() {
+                                            actions.delete = Some(i);
+                                        }
+                                    });
                                 }
                                 if items.is_empty() {
                                     ui.weak("  (déposer ici)");
@@ -226,14 +260,29 @@ pub(super) fn hierarchy_panel(
                         format!("💡 Point {i}")
                     };
                     ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(*selected_light == Some(i), label)
-                            .clicked()
-                        {
+                        let resp = ui.selectable_label(*selected_light == Some(i), label);
+                        if resp.clicked() {
                             *selected_light = Some(i);
                             *selection = None;
                             selected.clear();
+                            actions.focus_selection = true;
                         }
+                        if resp.secondary_clicked() && *selected_light != Some(i) {
+                            *selected_light = Some(i);
+                            *selection = None;
+                            selected.clear();
+                            actions.focus_selection = true;
+                        }
+                        resp.context_menu(|ui| {
+                            if ui.button("🎯 Centrer la vue").clicked() {
+                                actions.focus_selection = true;
+                                ui.close();
+                            }
+                            if ui.button("🗑 Supprimer").clicked() {
+                                remove = Some(i);
+                                ui.close();
+                            }
+                        });
                         if ui.small_button("🗑").clicked() {
                             remove = Some(i);
                         }

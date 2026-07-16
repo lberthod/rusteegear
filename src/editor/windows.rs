@@ -973,79 +973,90 @@ pub(super) fn asset_browser_window(
     egui::Window::new("📁  Gestionnaire d'assets")
         .open(&mut open)
         .default_size([360.0, 320.0])
+        .resizable(true)
         .show(ctx, |ui| {
-            if ui
-                .button("📦 Rassembler les assets du projet")
-                .on_hover_text(
-                    "Copie les fichiers externes dans ~/.motor3derust/assets et utilise asset://",
-                )
-                .clicked()
-            {
-                actions.collect_assets = true;
-            }
-            ui.separator();
-            let assets = crate::assets::list_assets();
-            if assets.is_empty() {
-                ui.label("Aucun asset. Importe une texture/un modèle, puis « Rassembler ».");
-            } else {
-                let sel_obj = selection.filter(|&i| i < scene.objects.len());
-                ui.label(match sel_obj {
-                    Some(_) => "Clique un asset image pour l'appliquer à l'objet sélectionné :",
-                    None => "Sélectionne un objet pour assigner une texture.",
-                });
-                // `auto_shrink([false, true])` + `max_height` : la liste ne doit
-                // occuper que l'espace utile à son contenu (jusqu'à 160px, puis
-                // scroll) — avec `[false, false]` (précédent réglage), cette zone
-                // s'étirait pour remplir toute la hauteur de la fenêtre, poussant la
-                // section « 🧩 Prefabs » ci-dessous hors de la zone visible (constaté
-                // par capture d'écran : fenêtre géante et vide malgré des prefabs
-                // bien enregistrés sur disque).
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, true])
-                    .max_height(160.0)
-                    .show(ui, |ui| {
-                        for a in assets {
-                            let is_img =
-                                a.ends_with(".png") || a.ends_with(".jpg") || a.ends_with(".jpeg");
-                            let resp = ui.selectable_label(false, &a);
-                            if resp.clicked()
-                                && is_img
-                                && let Some(i) = sel_obj
-                            {
-                                scene.objects[i].texture = a.clone();
-                            }
-                        }
+            // Toute la fenêtre défile désormais en un seul ScrollArea externe :
+            // avec seule la liste d'assets scrollable (réglage précédent), le
+            // contenu total (assets + sections prefabs) pouvait dépasser la
+            // hauteur de la fenêtre sans aucun moyen d'atteindre le bas —
+            // la section « 🧩 Prefabs » restait coupée et inaccessible
+            // (remonté comme problème d'ergonomie : impossible de scroller
+            // jusqu'en bas de la fenêtre).
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if ui
+                        .button("📦 Rassembler les assets du projet")
+                        .on_hover_text(
+                            "Copie les fichiers externes dans ~/.motor3derust/assets et utilise asset://",
+                        )
+                        .clicked()
+                    {
+                        actions.collect_assets = true;
+                    }
+                    ui.separator();
+                    let assets = crate::assets::list_assets();
+                    if assets.is_empty() {
+                        ui.label("Aucun asset. Importe une texture/un modèle, puis « Rassembler ».");
+                    } else {
+                        let sel_obj = selection.filter(|&i| i < scene.objects.len());
+                        ui.label(match sel_obj {
+                            Some(_) => "Clique un asset image pour l'appliquer à l'objet sélectionné :",
+                            None => "Sélectionne un objet pour assigner une texture.",
+                        });
+                        // Liste d'assets bornée à 160px avec son propre scroll
+                        // interne (utile quand elle est longue), imbriquée dans
+                        // le ScrollArea externe qui couvre toute la fenêtre.
+                        egui::ScrollArea::vertical()
+                            .id_salt("asset_list")
+                            .auto_shrink([false, true])
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                for a in assets {
+                                    let is_img = a.ends_with(".png")
+                                        || a.ends_with(".jpg")
+                                        || a.ends_with(".jpeg");
+                                    let resp = ui.selectable_label(false, &a);
+                                    if resp.clicked()
+                                        && is_img
+                                        && let Some(i) = sel_obj
+                                    {
+                                        scene.objects[i].texture = a.clone();
+                                    }
+                                }
+                            });
+                    }
+                    ui.separator();
+                    // Sprint 96 (câblage UI) : prefabs, listés séparément de `list_assets`
+                    // (qui ne descend pas dans `prefabs/`, cf. `assets::list_prefabs`).
+                    ui.horizontal(|ui| {
+                        ui.label("Scène/projet");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut panels.prefab_scope_name)
+                                .hint_text("nom (même champ que l'Inspecteur)")
+                                .desired_width(160.0),
+                        );
                     });
-            }
-            ui.separator();
-            // Sprint 96 (câblage UI) : prefabs, listés séparément de `list_assets`
-            // (qui ne descend pas dans `prefabs/`, cf. `assets::list_prefabs`).
-            ui.horizontal(|ui| {
-                ui.label("Scène/projet");
-                ui.add(
-                    egui::TextEdit::singleline(&mut panels.prefab_scope_name)
-                        .hint_text("nom (même champ que l'Inspecteur)")
-                        .desired_width(160.0),
-                );
-            });
-            prefab_scope_section(
-                ui,
-                "🧩 Prefabs généraux",
-                crate::assets::PrefabScope::General,
-                actions,
-                panels,
-            );
-            if !panels.prefab_scope_name.trim().is_empty() {
-                let scope =
-                    crate::assets::PrefabScope::Scene(panels.prefab_scope_name.trim().to_string());
-                prefab_scope_section(
-                    ui,
-                    &format!("📁 Prefabs de « {} »", panels.prefab_scope_name.trim()),
-                    scope,
-                    actions,
-                    panels,
-                );
-            }
+                    prefab_scope_section(
+                        ui,
+                        "🧩 Prefabs généraux",
+                        crate::assets::PrefabScope::General,
+                        actions,
+                        panels,
+                    );
+                    if !panels.prefab_scope_name.trim().is_empty() {
+                        let scope = crate::assets::PrefabScope::Scene(
+                            panels.prefab_scope_name.trim().to_string(),
+                        );
+                        prefab_scope_section(
+                            ui,
+                            &format!("📁 Prefabs de « {} »", panels.prefab_scope_name.trim()),
+                            scope,
+                            actions,
+                            panels,
+                        );
+                    }
+                });
         });
     panels.assets = open;
 }

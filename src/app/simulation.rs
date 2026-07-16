@@ -370,8 +370,17 @@ impl AppState {
             let cfg = crate::app::build_config::BuildConfig::load();
             self.render_quality = cfg.render_quality;
             self.bloom_enabled = cfg.bloom;
+            // La caméra libre est un outil d'édition : la caméra de jeu prend le
+            // relais en Play, cf. `toggle_fly_cam`.
+            self.fly_cam = false;
         }
         self.was_playing = self.playing;
+
+        // Caméra libre de l'éditeur (hors Play) : survole la carte aux flèches +
+        // Espace/C, indépendamment de la simulation ci-dessous (gelée hors Play).
+        if !self.playing && self.fly_cam {
+            self.update_fly_cam(dt);
+        }
 
         // En pause : on reste en mode Play (snapshot conservé) mais on gèle la
         // simulation (ni scripts, ni physique, ni avance du temps) — sauf si un pas
@@ -579,6 +588,20 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Déplace la caméra d'orbite comme une caméra libre (« vol libre »/noclip) :
+    /// flèches = avance/recul/strafe relatifs à la vue (même mapping que
+    /// `camera_relative_move`, réutilisé pour le joueur), Espace/C = monte/descend.
+    /// Translate `target` (donc `eye()`, qui en dérive à distance/angle constants) :
+    /// aucune collision, aucune limite — but assumé (« aller où on veut », survoler
+    /// toute la carte pour repérer un décor sans passer par Play). Cf. `fly_cam`.
+    fn update_fly_cam(&mut self, dt: f32) {
+        const FLY_SPEED: f32 = 12.0;
+        let (mx, my) = clamp_move_vector(self.input_state.key_move.0, self.input_state.key_move.1);
+        let (wx, wz) = camera_relative_move(mx, my, self.camera.yaw);
+        let wy = self.input_state.fly_vertical.clamp(-1.0, 1.0);
+        self.camera.target += Vec3::new(wx, wy, wz) * FLY_SPEED * dt;
     }
 
     /// Un pas de simulation à **dt fixe** : scripts Lua, actions au tap, pilotage des
@@ -1303,6 +1326,51 @@ mod tests {
         assert!(
             (one_step - two_steps).abs() < 1e-4,
             "1 pas de dt ({one_step}) doit égaler 2 pas de dt/2 ({two_steps})"
+        );
+    }
+
+    #[test]
+    fn fly_cam_moves_the_orbit_target_forward_and_up_while_editing() {
+        // Caméra libre : flèche haut + Espace doivent avancer ET monter, sans
+        // toucher à rien hors Play (`update_fly_cam` n'est appelé que si
+        // `!playing && fly_cam`, cf. `advance_play`).
+        let mut app = AppState::new();
+        app.fly_cam = true;
+        app.camera.yaw = 0.0;
+        let before = app.camera.target;
+        app.input_state.key_move = (0.0, 1.0);
+        app.input_state.fly_vertical = 1.0;
+        app.update_fly_cam(1.0 / 60.0);
+        let after = app.camera.target;
+        assert!(
+            after.z < before.z,
+            "flèche haut doit avancer (yaw=0 pointe vers -Z)"
+        );
+        assert!(after.y > before.y, "Espace doit faire monter la caméra");
+    }
+
+    #[test]
+    fn toggle_fly_cam_is_a_no_op_while_playing() {
+        // La caméra libre est un outil d'édition : `G` ne doit rien faire en Play,
+        // sinon la caméra de jeu et la caméra libre se battraient pour `camera.target`.
+        let mut app = AppState::new();
+        app.playing = true;
+        app.toggle_fly_cam();
+        assert!(!app.fly_cam, "toggle_fly_cam doit être un no-op en Play");
+    }
+
+    #[test]
+    fn entering_play_turns_off_fly_cam() {
+        // Repasser en Play doit désactiver la caméra libre laissée active en
+        // éditeur, sinon `update_fly_cam` et la caméra de suivi du joueur se
+        // disputeraient `camera.target` (cf. `advance_play`).
+        let mut app = AppState::new();
+        app.fly_cam = true;
+        app.playing = true;
+        app.advance_play();
+        assert!(
+            !app.fly_cam,
+            "advance_play doit désactiver fly_cam à l'entrée en Play"
         );
     }
 

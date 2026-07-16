@@ -3008,6 +3008,47 @@ scriptés restaient inertes sur le web.
   `wasm32-unknown-unknown --lib --release` vérifiée ; `cargo clippy --all-targets`
   et `cargo fmt` propres.
 
+<a id="sprint-138"></a>
+#### Sprint 138 — Spike : décodeur meshopt pour alléger les assets embarqués ⬜
+**Objectif** : le `.wasm` du player web est passé de 15,8 Mo à ~13,6 Mo grâce à
+`wasm-opt -Oz` + un profil `wasm-release` dédié (Cargo.toml, `packaging/
+build_web.sh`), mais l'essentiel du poids restant vient des modèles glTF
+embarqués (`assets/bundle/`, via `include_dir!`) — mesuré sur `creature2.glb` :
+**99,4 % du fichier est du maillage** (positions/normales/UV/squelette), 0,6 %
+seulement de l'animation. Réduire l'échantillonnage d'animation (`export_
+force_sampling`, mode `NLA_TRACKS` vs `ACTIONS`) a été testé et **infirmé** :
+gain nul à ~1 %, le mode `NLA_TRACKS` de l'exporteur Blender ré-échantillonne
+de toute façon densément quel que soit ce réglage. Le seul levier restant à
+poids réel est la **compression de géométrie** (`EXT_meshopt_compression` ou
+Draco), qui compresse les sommets eux-mêmes.
+- [ ] **Spike isolé (hors moteur)** : `cargo build --target wasm32-unknown-unknown`
+  sur la crate `meshopt` seule (bindings FFI vers la bibliothèque C++
+  `meshoptimizer`, **pas** une réimplémentation pure Rust — vérifié). Aucune
+  intégration connue de ce couple (crate FFI + `wasm32-unknown-unknown` nu,
+  sans Emscripten) n'a été trouvée en ligne ; les usages documentés (three.js,
+  Babylon.js) passent par un module wasm distinct compilé via Emscripten et
+  appelé depuis JS, pas par du FFI dans un binaire Rust wasm-bindgen comme
+  ici. Si la compilation échoue, cette piste tombe sans autre investissement.
+- [ ] Si le spike compile : concevoir la détection de l'extension
+  `EXT_meshopt_compression` sur les `bufferView` du document glTF — la crate
+  `gltf` (gltf-rs) ne la décode pas nativement, c'est un wrapper JSON/accesseurs
+  bas niveau. Décodage à brancher avant la lecture normale des accesseurs dans
+  le loader d'assets.
+- [ ] Activer `export_meshopt_compression_enable` (confirmé disponible dans
+  Blender 5.2, `bpy.ops.export_scene.gltf`) sur un ou deux scripts de test
+  (`scripts/blender/gen_creature2.py` par ex.) pour mesurer le gain réel avant
+  de généraliser à tout le pack.
+- **Écarté sans spike** : Draco — mêmes contraintes FFI/wasm32 que meshopt,
+  mais bibliothèque plus lourde et écosystème Rust encore plus pauvre pour le
+  décodage ; pas de piste crédible identifiée pour ce moteur multi-cible
+  (macOS/Android/iOS/Web) sans un chantier bien plus large.
+- **Fichiers pressentis** : nouveau crate de test isolé (`examples/` ou
+  scratch, hors moteur, pour le spike de compilation) ; si concluant,
+  `src/assets.rs` ou le loader glTF, `Cargo.toml`, `scripts/blender/*.py`.
+- **Risque** : si le spike échoue (FFI incompatible `wasm32-unknown-unknown`
+  sans Emscripten), cette piste est fermée pour le web sans réécrire
+  `meshoptimizer` en Rust pur — chantier hors de portée d'un sprint.
+
 > **Définition de « terminé » S** : quinze chantiers 🟢 (dix « quasi gratuits » du 14
 > juillet + cinq du 15 juillet, dont deux promotions raisonnées de 🟠 et une
 > réouverture assumée du Sprint 94) sont livrés, sans qu'aucun refus assumé (🔴)

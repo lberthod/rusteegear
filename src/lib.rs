@@ -213,6 +213,11 @@ impl App {
         inp.attack = keys.contains(&KeyCode::KeyJ) || gp.attack;
         inp.fire = keys.contains(&KeyCode::KeyK) || gp.fire;
         inp.heal = keys.contains(&KeyCode::KeyH) || gp.heal;
+        // Élévation caméra libre (Espace = monte, C = descend) — cf. `AppState::fly_cam`.
+        inp.fly_vertical = axis_from_held(
+            keys.contains(&KeyCode::KeyC),
+            keys.contains(&KeyCode::Space),
+        );
         inp.weapon_cycle = gp.weapon;
         inp.gamepad_turn = gp.turn;
         inp.gamepad_thrust = gp.thrust;
@@ -468,6 +473,9 @@ impl ApplicationHandler for App {
                         KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
                         KeyCode::KeyR if !cmd => self.state.set_gizmo_mode(GizmoMode::Scale),
                         KeyCode::KeyF if !cmd => self.state.frame_selected(),
+                        // Caméra libre (« vol libre »/noclip) de l'éditeur : voir
+                        // partout sur la carte hors Play, cf. `AppState::toggle_fly_cam`.
+                        KeyCode::KeyG if !cmd => self.state.toggle_fly_cam(),
                         KeyCode::KeyZ if cmd && st.shift_key() => self.state.redo(),
                         KeyCode::KeyZ if cmd => self.state.undo(),
                         KeyCode::KeyD if cmd => self.state.duplicate_selected(),
@@ -506,13 +514,18 @@ impl ApplicationHandler for App {
                             self.keys_held.remove(&code);
                         }
                     }
-                    // Espace/J/K/H : tenus dans un ensemble séparé (plutôt qu'assignés
+                    // Espace/J/K/H/C : tenus dans un ensemble séparé (plutôt qu'assignés
                     // directement à `inp.jump`/etc.) pour pouvoir les combiner avec la
                     // manette (cf. `recompute_action_buttons`) sans que l'une des deux
-                    // sources n'écrase l'état de l'autre au relâchement.
+                    // sources n'écrase l'état de l'autre au relâchement. C ne sert qu'à
+                    // descendre en caméra libre (`fly_vertical`), sans binding manette.
                     let is_action_key = matches!(
                         code,
-                        KeyCode::Space | KeyCode::KeyJ | KeyCode::KeyK | KeyCode::KeyH
+                        KeyCode::Space
+                            | KeyCode::KeyJ
+                            | KeyCode::KeyK
+                            | KeyCode::KeyH
+                            | KeyCode::KeyC
                     );
                     if is_action_key {
                         if pressed {

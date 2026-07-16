@@ -9,3 +9,8 @@ packaging/ios-xcode/build/
 # Golden tests de rendu (Sprint 80) : image obtenue écrite pour inspection en cas
 # d'échec — jamais la référence elle-même (tests/golden/*.png, versionnée).
 tests/golden/*.actual.png
+
+# Config locale des sessions Claude Code (permissions, worktrees d'agents
+# concurrents) : jamais partagée, propre à chaque poste/session.
+/.claude/
+__pycache__/

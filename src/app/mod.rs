@@ -114,6 +114,9 @@ pub struct PlayerInput {
     /// (WASD pilote désormais des contrôles « tank », cf. `key_turn`) ; chaque
     /// composante dans [-1, 1].
     pub key_move: (f32, f32),
+    /// Élévation caméra libre (Espace = monte, C = descend), cf. `AppState::fly_cam`
+    /// et `AppState::update_fly_cam` — sans effet ailleurs.
+    pub fly_vertical: f32,
     /// Rotation clavier « tank » (A/D) : -1 = tourne à droite (A), +1 = tourne à
     /// gauche (D) — indépendante de la caméra, contrairement à `key_move`. Cf.
     /// `AppState::advance_play`.
@@ -178,6 +181,10 @@ pub struct AppState {
     /// Presse-papiers d'objets (copier/coller).
     clipboard: Vec<SceneObject>,
     pub playing: bool,
+    /// Caméra libre (« vol libre »/noclip) de l'éditeur, hors Play : bascule au clavier
+    /// (G), déplacement aux flèches + Espace/C, cf. `update_fly_cam`. Sans effet en Play
+    /// (remis à `false` à l'entrée en Play, la caméra de jeu prenant le relais).
+    pub fly_cam: bool,
     /// En pause : reste en mode Play mais gèle la simulation (scripts, physique, temps).
     pub paused: bool,
     /// Demande de fermeture de l'application (menu Fichier → Quitter).
@@ -731,6 +738,7 @@ impl AppState {
             selected: Vec::new(),
             clipboard: Vec::new(),
             playing: false,
+            fly_cam: false,
             paused: false,
             should_quit: false,
             player: false,
@@ -1006,6 +1014,23 @@ impl AppState {
     /// Demande la fermeture de l'application (traitée par la boucle d'événements).
     pub fn request_quit(&mut self) {
         self.should_quit = true;
+    }
+
+    /// Bascule la caméra libre de l'éditeur (touche G) : permet de survoler toute la
+    /// carte sans contrainte, hors Play — cf. `fly_cam`/`update_fly_cam`. Sans effet en
+    /// Play (la caméra suit alors le joueur/la caméra de jeu).
+    pub fn toggle_fly_cam(&mut self) {
+        if !self.playing {
+            self.fly_cam = !self.fly_cam;
+            log::info!(
+                "Caméra libre : {}",
+                if self.fly_cam {
+                    "activée"
+                } else {
+                    "désactivée"
+                }
+            );
+        }
     }
 
     /// Définit la caméra de jeu depuis le point de vue actuel (orbite éditeur).
