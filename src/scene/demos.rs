@@ -88,13 +88,33 @@ use crate::runtime::physics::PhysicsKind;
 /// leur propre couche (`collision_layer`), chaque sonde toucherait la créature
 /// elle-même à distance 0 et elle se croirait bloquée en permanence.
 ///
+/// `heading0`/`phase` : cap initial et déphasage du bruit de méandre, propres à
+/// chaque créature. Le script est délibérément déterministe (pas de
+/// `math.random`, cf. le tirage de `creature_bite_script`) — mais sans ces deux
+/// paramètres, il était déterministe **et identique** pour toutes les
+/// instances : même cap de départ (0°, plein +Z) et même méandre
+/// (`math.sin(time * 0.35)`, fonction du `time` global, donc identique pour
+/// toutes à chaque tick). Toutes les créatures partaient alors en bloc dans la
+/// même direction, atteignaient le même mur ensemble, et le braquage anti-mur —
+/// lui aussi identique et symétrique en approche frontale — ne les décollait
+/// jamais. Même famille de défaut que celle corrigée par le `salt` de
+/// `creature_bite_script`.
+///
 /// Preuve du mouvement réel (pas juste l'animation qui tourne) :
 /// `scripted_creature_wanders_then_idles_using_the_imported_walk_and_idle_clips`.
 /// Preuve de non-blocage contre un mur + absence de virage brusque, avec la vraie
 /// physique : `mmorpg_creature_never_gets_stuck_walking_into_a_wall`
 /// (`app::simulation::tests`). Preuve des collisions (mur/joueur infranchissables) :
 /// `runtime::physics::tests::a_scripted_kinematic_body_cannot_walk_through_walls_or_the_player`.
-fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> String {
+/// Preuve que deux instances divergent (caps/positions distincts) :
+/// `mmorpg_creatures_do_not_all_walk_in_the_same_direction`.
+fn creature_wander_script(
+    arena_half: f32,
+    prefix: &str,
+    ray_mask: u32,
+    heading0: f32,
+    phase: f32,
+) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -108,7 +128,7 @@ fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> Strin
 
     local PROBE_EVERY = 4
 
-    local heading = save.get("{prefix}heading") or 0.0
+    local heading = save.get("{prefix}heading") or {heading0}
     local smooth_turn = save.get("{prefix}turn") or 0.0
     local was_stopped = (save.get("{prefix}stopped") or 1.0) > 0.5
 
@@ -153,7 +173,7 @@ fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> Strin
         local side = (right_d >= left_d) and 1.0 or -1.0
         raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5
     end
-    raw_turn = raw_turn + math.sin(time * 0.35) * 0.15
+    raw_turn = raw_turn + math.sin(time * 0.35 + {phase}) * 0.15
 
     if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then
         local to_center = math.deg(math.atan(-obj.x, -obj.z))
@@ -266,7 +286,7 @@ fn creature_bite_script(
 /// de son point d'apparition (mémorisé au premier tick dans `save`) plutôt que
 /// d'errer dans toute l'arène. Cohérent avec son attaque en éventail
 /// (`AttackStyle::Fan`) : elle tient une position, le joueur vient à elle.
-fn creature_guard_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_guard_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     format!(
         r#"
     local SPEED = 0.9
@@ -302,7 +322,7 @@ fn creature_guard_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> Stri
 /// (repéré via `find_tag("joueur")`) — approche au-delà de FAR, recule sous
 /// NEAR, et tourne autour de lui entre les deux. Cohérent avec sa rafale
 /// (`AttackStyle::Burst`) : il reste dans sa fourchette de tir idéale.
-fn creature_kite_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_kite_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -350,7 +370,7 @@ fn creature_kite_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String
 /// et fuit si le joueur approche à moins de FLEE — l'inverse d'un chasseur.
 /// Cohérent avec son orbe à tête chercheuse (`AttackStyle::Homing`) : elle
 /// n'a pas besoin d'être près, son tir la venge de loin.
-fn creature_drift_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_drift_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -393,7 +413,7 @@ fn creature_drift_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> Strin
 /// quasi statique, comme une pièce d'artillerie qu'on repositionne à peine.
 /// Cohérent avec son obus en cloche (`AttackStyle::Lob`) : longue portée,
 /// aucune mobilité.
-fn creature_artillery_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_artillery_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     format!(
         r#"
     local SPEED = 0.35
@@ -427,7 +447,7 @@ fn creature_artillery_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> 
 /// brusquement de biais toutes les ~1,2 s — une trajectoire imprévisible qui
 /// rapproche souvent l'oursin du joueur sans le poursuivre. Cohérent avec sa
 /// nova (`AttackStyle::Nova`) : c'est sa proximité erratique qui est le danger.
-fn creature_zigzag_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_zigzag_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -468,7 +488,7 @@ fn creature_zigzag_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> Stri
 /// l'orbite de la sentinelle (`creature_guard_script`) — cohérent avec son
 /// éventail de bourrasques (`AttackStyle::Fan`, portée 8 m) : elle couvre du
 /// terrain, pas un poste fixe.
-fn creature_soar_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_soar_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     format!(
         r#"
     local SPEED = 1.6
@@ -495,7 +515,7 @@ fn creature_soar_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> Strin
 /// point d'apparition — ni fuit ni poursuit, juste une trajectoire hypnotique.
 /// Cohérent avec sa nova resserrée (`AttackStyle::Nova`) : elle n'a besoin
 /// d'aucune tactique d'approche, juste être là quand le joueur passe à portée.
-fn creature_lemniscate_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_lemniscate_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     format!(
         r#"
     local SPEED = 0.5
@@ -527,7 +547,7 @@ fn creature_lemniscate_script(_arena_half: f32, prefix: &str, _ray_mask: u32) ->
 /// sable ») pendant SUBMERGED, puis fonce en ligne droite pendant RUSH avant
 /// de replonger. Cohérent avec sa rafale rapprochée (`AttackStyle::Burst`,
 /// windup court) : la menace, c'est la charge, pas une poursuite soutenue.
-fn creature_burrow_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_burrow_script(arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -569,7 +589,7 @@ fn creature_burrow_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> Stri
 /// de très loin (curiosité), mais recule dès qu'il approche à moins de NEAR —
 /// jamais au contact. Cohérent avec son follet à tête chercheuse
 /// (`AttackStyle::Homing`, portée 9 m) : elle punit à distance, jamais de près.
-fn creature_hover_script(arena_half: f32, _prefix: &str, _ray_mask: u32) -> String {
+fn creature_hover_script(arena_half: f32, _prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     let bound = arena_half - 1.0;
     format!(
         r#"
@@ -603,7 +623,7 @@ fn creature_hover_script(arena_half: f32, _prefix: &str, _ray_mask: u32) -> Stri
 /// juste sur elle-même pour s'orienter vers le joueur (ou lentement sinon).
 /// Cohérent avec son obus rapide et rapproché (`AttackStyle::Lob`, portée
 /// courte) : elle n'a pas besoin de bouger, juste de bien viser.
-fn creature_turret_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+fn creature_turret_script(_arena_half: f32, prefix: &str, _ray_mask: u32, _heading0: f32, _phase: f32) -> String {
     format!(
         r#"
     local TURN_RATE = 40.0
@@ -1823,11 +1843,20 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             prefix: &'static str,
             /// `Some((cooldown, chance, dégâts, salt))` : attaque au contact.
             bite: Option<(f32, f32, f32, f32)>,
+            /// Cap initial (degrés) et déphasage du bruit de méandre — cf. la
+            /// doc de `creature_wander_script` sur le bug qu'ils corrigent
+            /// (créatures qui partaient toutes dans la même direction, en bloc
+            /// contre le même mur). Passés à **tous** les générateurs pour un
+            /// type de pointeur de fonction uniforme ; ceux qui n'en ont pas
+            /// l'usage (sentinelle, rôdeur…) les ignorent (`_heading0`/`_phase`).
+            heading0: f32,
+            phase: f32,
             /// Générateur du script de comportement (patrouille à sondes,
             /// sentinelle, rôdeur, dérive, artillerie, zigzag…) — signature
-            /// commune (demi-arène, préfixe `save`, masque de sonde), chaque
-            /// générateur ignore ce dont il n'a pas besoin.
-            script: fn(f32, &str, u32) -> String,
+            /// commune (demi-arène, préfixe `save`, masque de sonde, cap
+            /// initial, déphasage), chaque générateur ignore ce dont il n'a
+            /// pas besoin.
+            script: fn(f32, &str, u32, f32, f32) -> String,
         }
         const MMORPG_CREATURES: &[DemoCreature] = &[
             DemoCreature {
@@ -1836,6 +1865,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(0.0, 0.0, -3.0),
                 layer_bit: 1,
                 prefix: "creature_",
+                heading0: 0.0,
+                phase: 0.0,
                 bite: Some((2.2, 0.4, 0.12, 12.9898)),
                 script: creature_wander_script,
             },
@@ -1845,6 +1876,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(3.0, 0.0, 3.0),
                 layer_bit: 2,
                 prefix: "creature2_",
+                heading0: 72.0,
+                phase: 0.9,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1854,6 +1887,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-3.0, 0.0, 3.0),
                 layer_bit: 3,
                 prefix: "creature3_",
+                heading0: 144.0,
+                phase: 1.8,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1863,6 +1898,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-3.0, 0.0, -3.0),
                 layer_bit: 4,
                 prefix: "creature4_",
+                heading0: 216.0,
+                phase: 2.7,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1872,6 +1909,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(3.0, 0.0, -3.0),
                 layer_bit: 5,
                 prefix: "creature5_",
+                heading0: 288.0,
+                phase: 3.6,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1883,6 +1922,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(6.0, 0.0, 0.0),
                 layer_bit: 6,
                 prefix: "creature6_",
+                heading0: 24.0,
+                phase: 4.5,
                 bite: Some((1.6, 0.5, 0.08, 19.4142)),
                 script: creature_wander_script,
             },
@@ -1893,6 +1934,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-6.0, 0.0, 0.0),
                 layer_bit: 7,
                 prefix: "creature7_",
+                heading0: 96.0,
+                phase: 5.4,
                 bite: Some((3.5, 0.6, 0.18, 27.1828)),
                 script: creature_wander_script,
             },
@@ -1902,6 +1945,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(0.0, 0.0, 6.0),
                 layer_bit: 8,
                 prefix: "creature8_",
+                heading0: 168.0,
+                phase: 6.3,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1911,6 +1956,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(0.0, 0.0, -6.0),
                 layer_bit: 9,
                 prefix: "creature9_",
+                heading0: 240.0,
+                phase: 7.2,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1920,6 +1967,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(8.0, 0.0, 4.0),
                 layer_bit: 10,
                 prefix: "creature10_",
+                heading0: 312.0,
+                phase: 8.1,
                 bite: None,
                 script: creature_wander_script,
             },
@@ -1932,6 +1981,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(9.0, 0.0, -2.0),
                 layer_bit: 11,
                 prefix: "creature11_",
+                heading0: 48.0,
+                phase: 9.0,
                 bite: None,
                 script: creature_guard_script,
             },
@@ -1941,6 +1992,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-9.0, 0.0, 2.0),
                 layer_bit: 12,
                 prefix: "creature12_",
+                heading0: 120.0,
+                phase: 9.9,
                 bite: None,
                 script: creature_kite_script,
             },
@@ -1950,6 +2003,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(2.0, 0.0, 9.0),
                 layer_bit: 13,
                 prefix: "creature13_",
+                heading0: 192.0,
+                phase: 10.8,
                 bite: None,
                 script: creature_drift_script,
             },
@@ -1959,6 +2014,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-2.0, 0.0, -9.0),
                 layer_bit: 14,
                 prefix: "creature14_",
+                heading0: 264.0,
+                phase: 11.7,
                 bite: None,
                 script: creature_artillery_script,
             },
@@ -1968,6 +2025,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(9.0, 0.0, 9.0),
                 layer_bit: 15,
                 prefix: "creature15_",
+                heading0: 336.0,
+                phase: 12.6,
                 bite: None,
                 script: creature_zigzag_script,
             },
@@ -1979,6 +2038,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(1.5, 0.0, 7.5),
                 layer_bit: 16,
                 prefix: "creature16_",
+                heading0: 12.0,
+                phase: 13.5,
                 bite: None,
                 script: creature_soar_script,
             },
@@ -1988,6 +2049,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-0.5, 0.0, -10.5),
                 layer_bit: 17,
                 prefix: "creature17_",
+                heading0: 84.0,
+                phase: 14.4,
                 bite: None,
                 script: creature_lemniscate_script,
             },
@@ -1997,6 +2060,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-10.5, 0.0, 3.5),
                 layer_bit: 18,
                 prefix: "creature18_",
+                heading0: 156.0,
+                phase: 15.3,
                 bite: None,
                 script: creature_burrow_script,
             },
@@ -2006,6 +2071,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(7.5, 0.0, -7.5),
                 layer_bit: 19,
                 prefix: "creature19_",
+                heading0: 228.0,
+                phase: 16.2,
                 bite: None,
                 script: creature_hover_script,
             },
@@ -2015,6 +2082,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 spawn: Vec3::new(-3.5, 0.0, -9.5),
                 layer_bit: 20,
                 prefix: "creature20_",
+                heading0: 300.0,
+                phase: 17.1,
                 bite: None,
                 script: creature_turret_script,
             },
@@ -2052,7 +2121,13 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                         attackable: true,
                         ..Default::default()
                     });
-                    let wander = (spec.script)(half, spec.prefix, !(1_u32 << spec.layer_bit));
+                    let wander = (spec.script)(
+                        half,
+                        spec.prefix,
+                        !(1_u32 << spec.layer_bit),
+                        spec.heading0,
+                        spec.phase,
+                    );
                     creature.script = match spec.bite {
                         Some((cooldown, chance, damage, salt)) => {
                             // `trigger = true` active la détection de contact

@@ -1687,6 +1687,74 @@ mod tests {
         );
     }
 
+    /// Preuve du correctif « les créatures partent toutes dans la même direction
+    /// et restent collées au mur » : le script de patrouille était déterministe
+    /// **et identique** pour toutes les instances (cap initial 0° pour toutes,
+    /// bruit de méandre fonction du seul `time` global — cf. la doc de
+    /// `creature_wander_script`, paramètres `heading0`/`phase`). Les 5 créatures
+    /// avançaient en bloc vers +Z jusqu'au mur, où le braquage anti-mur, lui
+    /// aussi identique, ne les décollait pas. Ce test rejoue 2 s du vrai script
+    /// de production avec la vraie physique et échoue si les directions de
+    /// déplacement des créatures restent groupées (écart angulaire maximal
+    /// entre deux déplacements < 60°).
+    #[test]
+    fn mmorpg_creatures_do_not_all_walk_in_the_same_direction() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        let creature_indices: Vec<usize> = app
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.name.starts_with("Créature"))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            creature_indices.len() >= 2,
+            "la démo MMORPG doit contenir plusieurs créatures (trouvé {})",
+            creature_indices.len()
+        );
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let spawns: Vec<Vec3> = creature_indices
+            .iter()
+            .map(|&i| app.scene.objects[i].transform.position)
+            .collect();
+
+        let dt = 1.0 / 60.0;
+        for _ in 0..(2 * 60) {
+            app.sim_step(dt);
+        }
+
+        // Direction de déplacement (XZ) de chaque créature depuis son spawn.
+        let headings: Vec<glam::Vec2> = creature_indices
+            .iter()
+            .zip(&spawns)
+            .map(|(&i, spawn)| {
+                let pos = app.scene.objects[i].transform.position;
+                let d = glam::Vec2::new(pos.x - spawn.x, pos.z - spawn.z);
+                assert!(
+                    d.length() > 0.3,
+                    "après 2 s, « {} » doit s'être déplacée (déplacement={d:?})",
+                    app.scene.objects[i].name
+                );
+                d.normalize()
+            })
+            .collect();
+
+        let max_angle = headings
+            .iter()
+            .enumerate()
+            .flat_map(|(a, ha)| headings[a + 1..].iter().map(move |hb| ha.angle_to(*hb)))
+            .fold(0.0_f32, |acc, angle| acc.max(angle.abs()));
+        assert!(
+            max_angle.to_degrees() > 60.0,
+            "les créatures partent toutes dans la même direction (écart angulaire \
+             maximal entre deux déplacements : {:.1}°, attendu > 60°)",
+            max_angle.to_degrees()
+        );
+    }
+
     /// Preuve de la demande gameplay « la Créature 1 doit avoir une attaque et la
     /// faire parfois » (`scene::demos::creature_bite_script`) : un contact
     /// **continu** de 20 s avec le joueur doit infliger au moins une morsure, mais
