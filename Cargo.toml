@@ -2,6 +2,9 @@
 name = "motor3derust"
 version = "0.1.0"
 edition = "2024"
+# Deux binaires (éditeur + serveur multijoueur) : `cargo run` sans `--bin`
+# doit lancer l'éditeur, comme documenté dans le README.
+default-run = "motor3derust"
 description = "Moteur de jeu 3D minimaliste (style Unity) en Rust"
 
 [package.metadata.bundle]

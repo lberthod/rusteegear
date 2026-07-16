@@ -2525,6 +2525,84 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             objects.push(deco);
         }
 
+        // Objets d'inventaire (cf. `ItemPickup`) à trouver en explorant, posés
+        // aux endroits que le décor raconte déjà : potions près de la cabane et
+        // du pont, buisson à baies qui repousse au bord des rizières, clé et
+        // gemme au pied d'un repère et d'un rocher. Non solides (`demo_obj` =
+        // `PhysicsKind::None`) : invisibles aux sondes raycast des créatures,
+        // donc sans effet sur les patrouilles (cf. le test « never gets stuck »).
+        struct DemoItem {
+            name: &'static str,
+            kind: ItemKind,
+            count: u32,
+            pos: (f32, f32, f32),
+            /// > 0 ⇒ l'objet repousse (buisson à baies) ; 0 ⇒ trouvaille unique.
+            respawn: f32,
+        }
+        const MMORPG_ITEMS: &[DemoItem] = &[
+            // Devant la porte de la cabane (-1.5, 10.4), côté route.
+            DemoItem {
+                name: "Potion de soin",
+                kind: ItemKind::Potion,
+                count: 1,
+                pos: (-1.5, 0.35, 8.6),
+                respawn: 0.0,
+            },
+            // Sortie est du pont (-8.9, 7.4).
+            DemoItem {
+                name: "Potion de soin 2",
+                kind: ItemKind::Potion,
+                count: 1,
+                pos: (-6.8, 0.35, 7.4),
+                respawn: 0.0,
+            },
+            // Bord nord des rizières : 2 baies par cueillette, repousse en 20 s.
+            DemoItem {
+                name: "Buisson à baies",
+                kind: ItemKind::Baie,
+                count: 2,
+                pos: (-2.8, 0.3, -6.8),
+                respawn: 20.0,
+            },
+            // Au pied du Repère 1 (-6, -6).
+            DemoItem {
+                name: "Clé du village",
+                kind: ItemKind::Cle,
+                count: 1,
+                pos: (-4.8, 0.3, -4.8),
+                respawn: 0.0,
+            },
+            // Au pied du Rocher 1 (11.4, 1.5).
+            DemoItem {
+                name: "Gemme",
+                kind: ItemKind::Gemme,
+                count: 1,
+                pos: (10.3, 0.3, 1.5),
+                respawn: 0.0,
+            },
+        ];
+        for spec in MMORPG_ITEMS {
+            let mesh = if spec.kind == ItemKind::Potion {
+                MeshKind::Capsule
+            } else {
+                MeshKind::Sphere
+            };
+            let mut item = demo_obj(
+                spec.name,
+                mesh,
+                Vec3::new(spec.pos.0, spec.pos.1, spec.pos.2),
+            );
+            item.transform = item.transform.with_scale(Vec3::splat(0.35));
+            item.color = spec.kind.color();
+            item.emissive = 0.8;
+            item.respawn_delay = spec.respawn;
+            item.item_pickup = Some(ItemPickup {
+                kind: spec.kind,
+                count: spec.count,
+            });
+            objects.push(item);
+        }
+
         Scene {
             objects,
             imported,
@@ -3289,6 +3367,58 @@ mod tests {
                     creature.name
                 );
             }
+        }
+    }
+
+    /// Preuve de la demande gameplay « des objets à trouver dans la scène
+    /// MMORPG » : la démo contient des `ItemPickup` d'au moins 3 sortes
+    /// différentes, tous traversables (un objet à ramasser ne bloque ni le
+    /// joueur ni les sondes des créatures) et dans l'arène ; le buisson à
+    /// baies repousse (`respawn_delay > 0`), la clé et la gemme sont uniques.
+    #[test]
+    fn mmorpg_demo_contains_item_pickups_to_find() {
+        let scene = Scene::mmorpg_demo();
+        let items: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.item_pickup.is_some())
+            .collect();
+        let kinds: std::collections::HashSet<_> =
+            items.iter().map(|o| o.item_pickup.unwrap().kind).collect();
+        assert!(
+            kinds.len() >= 3,
+            "au moins 3 sortes d'objets à trouver (trouvé : {kinds:?})"
+        );
+        for o in &items {
+            assert_eq!(
+                o.physics,
+                PhysicsKind::None,
+                "« {} » : un objet à ramasser ne doit rien bloquer",
+                o.name
+            );
+            let p = o.transform.position;
+            assert!(
+                p.x.abs() < 12.0 && p.z.abs() < 12.0,
+                "« {} » ({p:?}) doit être dans l'arène",
+                o.name
+            );
+        }
+        let by_name = |name: &str| {
+            items
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap_or_else(|| panic!("la démo MMORPG doit contenir « {name} »"))
+        };
+        assert!(
+            by_name("Buisson à baies").respawn_delay > 0.0,
+            "le buisson à baies doit repousser"
+        );
+        for name in ["Clé du village", "Gemme"] {
+            assert_eq!(
+                by_name(name).respawn_delay,
+                0.0,
+                "« {name} » est une trouvaille unique, sans réapparition"
+            );
         }
     }
 }
