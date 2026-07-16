@@ -107,7 +107,7 @@ struct BloomUniform {
     intensity: [f32; 4], // x = intensité, yzw inutilisés (alignement std140)
 }
 
-pub(super) const SHADOW_SIZE: u32 = 1024;
+pub(super) const SHADOW_SIZE: u32 = 2048;
 
 pub(super) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -130,8 +130,27 @@ pub(super) const BLOOM_MIP_LEVELS: u32 = 4;
 pub(super) const JOINT_CAPACITY: usize = 128;
 /// Nombre d'objets skinnés distincts dessinables dans une même frame : un
 /// créneau par instance dans `Renderer::joint_buf`, sélectionné au dessin par offset
-/// dynamique. Augmenter est un changement d'une ligne si besoin.
-pub(super) const MAX_SKINNED_INSTANCES: usize = 8;
+/// dynamique. Augmenter est un changement d'une ligne si besoin (le buffer,
+/// `pipelines.rs`, est déjà dimensionné à partir de cette constante).
+///
+/// Remonté de 8 à 32 (audit du 16 juillet 2026) : la démo MMORPG a 20 créatures
+/// skinnées + le joueur (`assets/models/fairy_hero.glb`) visibles simultanément,
+/// soit 21 instances — au-delà de l'ancienne capacité de 8, celles en trop étaient
+/// dessinées avec la palette de joints d'un *autre* objet skinné (offset de repli
+/// ambigu, cf. `write_joint_matrices`), pas simplement invisibles : le joueur (mesh
+/// importé le plus loin dans l'ordre de tri par mesh/texture, donc le plus
+/// susceptible de dépasser la capacité) apparaissait éclaté, transformé par le
+/// squelette d'une créature au hasard.
+///
+/// Remonté de 32 à 96 (16 juillet 2026) : l'ajout des 40 assets animés du pack
+/// « menagerie » (`gen_menagerie_pack.py`/`gen_menagerie_pack2.py` — petite
+/// faune + mécanismes de décor, tous riggés avec un clip `Idle`) porte le total
+/// skinné de la démo MMORPG à 20 créatures + 45 décors animés + le joueur, soit
+/// 66 instances potentiellement visibles ensemble (vue quasi zénithale du test
+/// `the_embedded_mmorpg_scene_gives_the_player_its_own_joint_offset`) — au-delà
+/// de 66, le joueur ressortait du plan de dessin skinné (même symptôme qu'à 8).
+/// 96 laisse de la marge pour du décor animé futur sans reproduire l'audit.
+pub(super) const MAX_SKINNED_INSTANCES: usize = 96;
 /// Taille en octets d'un créneau de la palette de joints — un objet skinné à la fois.
 pub(super) const JOINT_SLOT_BYTES: wgpu::BufferAddress =
     (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress;
@@ -226,6 +245,17 @@ pub struct Renderer {
     /// dans `resize()`, comme `depth_view`. Les chemins headless/test créent la leur en
     /// local (taille demandée par l'appelant, indépendante de la fenêtre).
     hdr_view: wgpu::TextureView,
+    /// Cible multi-échantillonnée de la passe principale, résolue vers `hdr_view` en fin
+    /// de passe (`resolve_target`) — `None` si le MSAA est désactivé (qualité « Basse »,
+    /// rendu headless, ou adaptateur GPU sans support à `msaa_samples` échantillons),
+    /// auquel cas la passe dessine directement dans `hdr_view` comme avant. Redimensionnée
+    /// dans `resize()` avec `hdr_view`.
+    msaa_color_view: Option<wgpu::TextureView>,
+    /// Nombre d'échantillons MSAA de la passe principale (1 = désactivé). Fixé une
+    /// fois à la création du renderer (`RenderQuality::msaa_samples`, cf. `new_impl`) —
+    /// change de qualité en cours de partie ne reconstruit pas les pipelines/cibles,
+    /// comme la plupart des moteurs qui exigent un redémarrage pour ce réglage.
+    msaa_samples: u32,
     /// Chaîne de bloom, cf. `render_bloom` — trois pipelines partageant
     /// `bloom_sample_layout` (seuil, downsample, upsample) et une petite texture à
     /// plusieurs mips en mode fenêtré (`bloom_mip_views`, redimensionnée dans
@@ -439,7 +469,38 @@ impl Renderer {
             s.configure(&device, &config);
         }
 
-        let bundle = pipelines::build(&device, &queue, &config, size, window.as_ref());
+        // MSAA : uniquement en mode fenêtré (le rendu headless doit rester déterministe
+        // pixel pour pixel pour les golden tests, cf. `render_scene_headless`), au niveau
+        // visé par `RenderQuality` (`msaa_samples`, opt-out mobile sur « Basse » — même
+        // logique que `bloom_enabled`), et seulement si l'adaptateur supporte réellement
+        // ce nombre d'échantillons pour les deux formats de la passe principale (repli
+        // silencieux à 1 sinon, ex. certains backends GLES/WebGL).
+        let msaa_samples = if window.is_some() {
+            let wanted = crate::app::build_config::BuildConfig::load()
+                .render_quality
+                .msaa_samples();
+            let supported = wanted <= 1
+                || (adapter
+                    .get_texture_format_features(HDR_FORMAT)
+                    .flags
+                    .sample_count_supported(wanted)
+                    && adapter
+                        .get_texture_format_features(DEPTH_FORMAT)
+                        .flags
+                        .sample_count_supported(wanted));
+            if supported { wanted } else { 1 }
+        } else {
+            1
+        };
+
+        let bundle = pipelines::build(
+            &device,
+            &queue,
+            &config,
+            size,
+            window.as_ref(),
+            msaa_samples,
+        );
         let PipelineBundle {
             pipeline,
             sky_pipeline,
@@ -447,6 +508,7 @@ impl Renderer {
             tonemap_layout,
             tonemap_sampler,
             hdr_view,
+            msaa_color_view,
             bloom_threshold_pipeline,
             bloom_downsample_pipeline,
             bloom_upsample_pipeline,
@@ -498,6 +560,8 @@ impl Renderer {
             tonemap_layout,
             tonemap_sampler,
             hdr_view,
+            msaa_color_view,
+            msaa_samples,
             bloom_threshold_pipeline,
             bloom_downsample_pipeline,
             bloom_upsample_pipeline,
@@ -561,8 +625,13 @@ impl Renderer {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         surface.configure(&self.device, &self.config);
-        self.depth_view = create_depth_view(&self.device, &self.config);
-        self.hdr_view = create_hdr_view(&self.device, new_size.width, new_size.height);
+        self.depth_view = create_depth_view(&self.device, &self.config, self.msaa_samples);
+        (self.hdr_view, self.msaa_color_view) = create_hdr_view(
+            &self.device,
+            new_size.width,
+            new_size.height,
+            self.msaa_samples,
+        );
         self.bloom_mip_views =
             create_bloom_mip_views(&self.device, new_size.width, new_size.height);
     }
@@ -588,15 +657,23 @@ impl Renderer {
     /// sur `JOINT_SLOT_BYTES`). Tronque silencieusement (`log::warn!`) au-delà de
     /// `joint_capacity` plutôt que de paniquer ou d'écrire hors créneau — un rig
     /// anormalement gros dégraderait l'anim plutôt que de planter le rendu. `slot` au-delà
-    /// de `MAX_SKINNED_INSTANCES` est ignoré (même logique).
+    /// de `MAX_SKINNED_INSTANCES` renvoie `None` : **aucune écriture** n'a lieu, l'offset
+    /// `0` resterait sinon un offset valide (celui du véritable occupant du slot 0) —
+    /// le renvoyer ici aurait fait dessiner cet objet avec la palette de joints d'un
+    /// *autre* objet skinné (squelette différent) au lieu de rester simplement invisible.
+    /// Bug observé en pratique : le joueur (mesh importé le plus loin dans l'ordre de tri
+    /// par mesh/texture) dépassait la capacité dès que ≥ `MAX_SKINNED_INSTANCES` créatures
+    /// skinnées étaient aussi visibles, et se faisait dessiner éclaté/scindé avec le
+    /// squelette d'une créature quelconque.
     ///
-    /// Renvoie l'offset dynamique (octets) à passer à `set_bind_group(1, &skinned_models_bind_group, &[offset])`.
-    fn write_joint_matrices(&mut self, slot: usize, matrices: &[glam::Mat4]) -> u32 {
+    /// Renvoie l'offset dynamique (octets) à passer à `set_bind_group(1, &skinned_models_bind_group, &[offset])`,
+    /// ou `None` si l'instance doit être sautée (pas de créneau disponible).
+    fn write_joint_matrices(&mut self, slot: usize, matrices: &[glam::Mat4]) -> Option<u32> {
         if slot >= MAX_SKINNED_INSTANCES {
             log::warn!(
                 "skinning : créneau {slot} au-delà de la capacité ({MAX_SKINNED_INSTANCES}) — objet ignoré"
             );
-            return 0;
+            return None;
         }
         let n = matrices.len().min(self.joint_capacity);
         if matrices.len() > self.joint_capacity {
@@ -610,7 +687,7 @@ impl Renderer {
         let offset = slot as wgpu::BufferAddress * JOINT_SLOT_BYTES;
         self.queue
             .write_buffer(&self.joint_buf, offset, bytemuck::cast_slice(&raw));
-        offset as u32
+        Some(offset as u32)
     }
 
     /// Calcule et envoie au GPU la palette de joints de chaque objet skinné visible de la
@@ -618,21 +695,25 @@ impl Renderer {
     /// **avant** toute passe de rendu (cf. commentaire aux sites d'appel : `write_buffer`
     /// n'est pas ordonné avec les draw calls d'un encoder pas encore soumis). Renvoie les
     /// offsets dynamiques, dans l'ordre de `draw_plan_skinned`, à passer à
-    /// `set_bind_group(1, &skinned_models_bind_group, &[offset])` lors du dessin réel dans la passe.
-    fn prepare_skinned_draws(&mut self, scene: &Scene) -> Vec<u32> {
+    /// `set_bind_group(1, &skinned_models_bind_group, &[offset])` lors du dessin réel dans la
+    /// passe — `None` (mesh non importé/introuvable, pas de squelette, ou capacité de
+    /// créneaux dépassée dans `write_joint_matrices`) signifie que `draw_skinned_objects`
+    /// doit sauter l'objet plutôt que de le dessiner avec l'offset ambigu `0`, qui est
+    /// *aussi* un offset valide pour l'objet réellement au slot 0.
+    fn prepare_skinned_draws(&mut self, scene: &Scene) -> Vec<Option<u32>> {
         let mut offsets = Vec::with_capacity(self.draw_plan_skinned.len());
         for (slot, &(obj_idx, _instance)) in self.draw_plan_skinned.clone().iter().enumerate() {
             let obj = &scene.objects[obj_idx];
             let MeshKind::Imported(mesh_idx) = obj.mesh else {
-                offsets.push(0);
+                offsets.push(None);
                 continue;
             };
             let Some(imported) = scene.imported.get(mesh_idx as usize) else {
-                offsets.push(0);
+                offsets.push(None);
                 continue;
             };
             let Some(skeleton) = &imported.skeleton else {
-                offsets.push(0);
+                offsets.push(None);
                 continue;
             };
             // Sans `AnimationState` (ou clip introuvable/vide) : pose de liaison figée,
@@ -665,14 +746,21 @@ impl Renderer {
     /// Dessine les objets skinnés de `self.draw_plan_skinned`, un draw individuel par
     /// objet (chacun avec sa propre palette de joints — pas de batching possible ici,
     /// contrairement aux objets statiques). `offsets` doit venir de
-    /// `prepare_skinned_draws` sur la même frame, dans le même ordre.
+    /// `prepare_skinned_draws` sur la même frame, dans le même ordre — un `None` (mesh
+    /// non importé/introuvable, pas de squelette, ou capacité de créneaux dépassée)
+    /// **saute** l'objet plutôt que de le dessiner avec l'offset `0`, qui appartient à un
+    /// autre objet skinné (cf. la doc de `write_joint_matrices` : le bug qui scindait le
+    /// mesh du joueur venait exactement de dessiner malgré un `None`/absence de créneau).
     fn draw_skinned_objects<'p>(
         &'p self,
         pass: &mut wgpu::RenderPass<'p>,
         scene: &Scene,
-        offsets: &[u32],
+        offsets: &[Option<u32>],
     ) {
         for (&(obj_idx, instance_index), &offset) in self.draw_plan_skinned.iter().zip(offsets) {
+            let Some(offset) = offset else {
+                continue;
+            };
             let obj = &scene.objects[obj_idx];
             let MeshKind::Imported(mesh_idx) = obj.mesh else {
                 continue;
@@ -713,7 +801,9 @@ impl Renderer {
     ) -> Vec<u8> {
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
         self.write_uniforms(app);
-        let joint_offset = self.write_joint_matrices(0, joint_matrices);
+        let joint_offset = self
+            .write_joint_matrices(0, joint_matrices)
+            .expect("slot 0 < MAX_SKINNED_INSTANCES, toujours valide");
 
         let gpu_mesh = crate::gfx::mesh::GpuMesh::new_skinned(&self.device, mesh);
 
@@ -760,7 +850,9 @@ impl Renderer {
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
         // Cible HDR, locale à cet appel — cf. `hdr_view` de `render()`.
-        let hdr_view = create_hdr_view(&self.device, width, height);
+        // Chemin headless : toujours mono-échantillon (`self.msaa_samples == 1`,
+        // cf. `new_impl`), donc pas de cible multisample à gérer ici.
+        let (hdr_view, _) = create_hdr_view(&self.device, width, height, self.msaa_samples);
 
         let mut encoder = self
             .device
@@ -2014,12 +2106,14 @@ impl Renderer {
         {
             // La passe principale dessine dans `hdr_view` (HDR_FORMAT),
             // pas directement dans `view` — `self.tonemap()` fait le dernier maillon
-            // vers le format d'affichage, après cette passe.
+            // vers le format d'affichage, après cette passe. Si le MSAA est actif
+            // (`msaa_color_view`), la passe dessine dans la cible multi-échantillonnée et
+            // se résout vers `hdr_view` (`resolve_target`) — sinon comportement inchangé.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_view,
-                    resolve_target: None,
+                    view: self.msaa_color_view.as_ref().unwrap_or(&self.hdr_view),
+                    resolve_target: self.msaa_color_view.as_ref().map(|_| &self.hdr_view),
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -2244,7 +2338,9 @@ impl Renderer {
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
         // Cible HDR, locale à cet appel — cf. `hdr_view` de `render()`.
-        let hdr_view = create_hdr_view(&self.device, width, height);
+        // Chemin headless : toujours mono-échantillon (`self.msaa_samples == 1`,
+        // cf. `new_impl`), donc pas de cible multisample à gérer ici.
+        let (hdr_view, _) = create_hdr_view(&self.device, width, height, self.msaa_samples);
         // Chaîne de bloom, locale à cet appel — cf. `bloom_mip_views` de
         // `render()`.
         let bloom_mip_views = create_bloom_mip_views(&self.device, width, height);
@@ -2601,5 +2697,146 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Audit du 16 juillet 2026 : le héros féérique (`assets/models/fairy_hero.glb`),
+    /// intégré comme joueur dans une scène MMORPG à 20 créatures skinnées, s'affichait
+    /// éclaté en morceaux disjoints — chaque partie du mesh transformée par le squelette
+    /// d'une *autre* créature. Cause : au-delà de `MAX_SKINNED_INSTANCES`,
+    /// `write_joint_matrices` renvoyait l'offset `0` sans rien écrire, et
+    /// `draw_skinned_objects` dessinait quand même l'objet avec cet offset — qui est
+    /// *aussi* l'offset légitime de l'objet réellement au slot 0. Ce test construit une
+    /// scène avec plus d'objets skinnés que `MAX_SKINNED_INSTANCES` et vérifie que
+    /// `prepare_skinned_draws` renvoie `None` (pas un offset aliasé) pour ceux en trop.
+    #[test]
+    fn skinned_instances_beyond_capacity_get_no_offset_instead_of_aliasing_slot_zero() {
+        use crate::scene::import::{Joint, Skeleton};
+        use crate::scene::{ImportedMesh, SceneObject};
+
+        let mut renderer = match pollster::block_on(Renderer::new_headless(64, 64)) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "skinned_instances_beyond_capacity_get_no_offset_instead_of_aliasing_slot_zero : \
+                     pas de GPU headless ({e}) — test sauté."
+                );
+                return;
+            }
+        };
+
+        // Un squelette minimal (une racine) suffit : seul le nombre d'instances
+        // skinnées visibles compte pour ce bug, pas la richesse du rig.
+        let skeleton = Skeleton {
+            joints: vec![Joint {
+                name: "Root".into(),
+                parent: None,
+                bind_local: glam::Mat4::IDENTITY,
+                inverse_bind: glam::Mat4::IDENTITY,
+            }],
+        };
+        let imported = ImportedMesh {
+            skeleton: Some(skeleton),
+            ..Default::default()
+        };
+
+        // Un objet skinné visible de plus que la capacité — avant le correctif, les
+        // instances au-delà de `MAX_SKINNED_INSTANCES` dessinaient avec l'offset 0.
+        let n = MAX_SKINNED_INSTANCES + 3;
+        let scene = crate::scene::Scene {
+            imported: vec![imported],
+            objects: (0..n)
+                .map(|_| SceneObject {
+                    mesh: MeshKind::Imported(0),
+                    visible: true,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        renderer.draw_plan_skinned = (0..n).map(|i| (i, i as u32)).collect();
+        let offsets = renderer.prepare_skinned_draws(&scene);
+
+        assert_eq!(offsets.len(), n);
+        let valid = MAX_SKINNED_INSTANCES;
+        for (slot, offset) in offsets.iter().enumerate() {
+            if slot < valid {
+                assert!(
+                    offset.is_some(),
+                    "le slot {slot} (dans la capacité de {valid}) doit avoir un offset"
+                );
+            } else {
+                assert!(
+                    offset.is_none(),
+                    "le slot {slot} dépasse la capacité de {valid} : doit être `None` \
+                     (sauté), pas un offset qui aliaserait la palette de joints d'un \
+                     autre objet skinné"
+                );
+            }
+        }
+        // Les offsets valides doivent tous être distincts (un créneau par objet) —
+        // sinon deux objets partageraient la même palette de joints sans même
+        // dépasser la capacité, même bug sous une autre forme.
+        let mut valid_offsets: Vec<u32> = offsets[..valid].iter().filter_map(|o| *o).collect();
+        valid_offsets.sort_unstable();
+        valid_offsets.dedup();
+        assert_eq!(
+            valid_offsets.len(),
+            valid,
+            "les offsets des objets dans la capacité doivent être tous distincts"
+        );
+    }
+
+    /// Même correctif que le test précédent, mais sur la scène embarquée **réelle**
+    /// (`assets/player_scene.json`) : 20 créatures skinnées + le joueur
+    /// (`fairy_hero.glb`) visibles ensemble, exactement le scénario qui produisait le
+    /// héros éclaté en jeu avant le correctif de `MAX_SKINNED_INSTANCES`/
+    /// `write_joint_matrices`.
+    #[test]
+    fn the_embedded_mmorpg_scene_gives_the_player_its_own_joint_offset() {
+        let mut renderer = match pollster::block_on(Renderer::new_headless(64, 64)) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "the_embedded_mmorpg_scene_gives_the_player_its_own_joint_offset : \
+                     pas de GPU headless ({e}) — test sauté."
+                );
+                return;
+            }
+        };
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::embedded_player();
+        // Vue quasi zénithale englobant toute l'arène (BOUND ±11 dans les scripts de
+        // créature) : sans ça, le culling frustum par défaut ne laisserait qu'une
+        // poignée de créatures visibles et ce test ne dépasserait jamais l'ancienne
+        // capacité de 8, passant même sans le correctif.
+        app.camera.target = glam::Vec3::ZERO;
+        app.camera.distance = 40.0;
+        app.camera.pitch = 1.5;
+        app.camera.yaw = 0.0;
+
+        renderer.sync_objects(&app.scene);
+        renderer.write_uniforms(&app);
+        let offsets = renderer.prepare_skinned_draws(&app.scene);
+
+        let player_obj_idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.tag == "joueur")
+            .expect("objet joueur introuvable dans la scène embarquée");
+        let slot = renderer
+            .draw_plan_skinned
+            .iter()
+            .position(|&(obj_idx, _)| obj_idx == player_obj_idx)
+            .expect("le joueur doit être un objet skinné visible du plan de dessin");
+
+        assert!(
+            offsets[slot].is_some(),
+            "le joueur (slot {slot} sur {} objets skinnés visibles) n'a pas de créneau \
+             de joints propre — il se ferait dessiner avec la palette d'une créature",
+            renderer.draw_plan_skinned.len()
+        );
     }
 }

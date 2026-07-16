@@ -526,6 +526,10 @@ pub struct AppState {
     /// `simulation.rs`) : début de la fenêtre courante et pire `dt` observé dedans.
     perf_window_start: Instant,
     perf_window_worst_dt: f32,
+    /// Pire durée d'`advance_play` (simulation seule) sur la fenêtre courante —
+    /// pas forcément la même frame que `perf_window_worst_dt`, c'est un
+    /// indicateur de *quel côté* (sim vs rendu/présentation) chercher un à-coup.
+    perf_window_worst_sim: f32,
 
     // --- état d'interaction pointeur ---
     dragging: bool,
@@ -825,6 +829,7 @@ impl AppState {
             fps: 0.0,
             perf_window_start: Instant::now(),
             perf_window_worst_dt: 0.0,
+            perf_window_worst_sim: 0.0,
             dragging: false,
             last_cursor: None,
             press_cursor: None,

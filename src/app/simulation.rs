@@ -24,6 +24,16 @@ pub(super) const DEFAULT_CHASE_PITCH: f32 = 0.75;
 /// pour un cadrage plus serré façon caméra d'épaule.
 pub(super) const DEFAULT_CHASE_DISTANCE: f32 = 7.0;
 
+/// Décalage (mètres, axe Y) entre `player_position()` et la cible de la caméra de
+/// suivi. `player_position()` renvoie `transform.position`, qui repère le CENTRE
+/// pour la primitive `Capsule` (d'où l'ancien 0.8 ≈ mi-hauteur d'une capsule de 1 m
+/// centrée à y=1.0, visant near le sommet) mais les PIEDS pour un mesh importé
+/// (convention `physics.rs` : « un personnage a les pieds à l'origine »). Le héros
+/// féérique (`assets/models/fairy_hero.glb`, ~1,95 m, pieds à l'origine) est monté
+/// à `transform.position.y = 0.0` : viser la tête demande donc un décalage bien
+/// plus grand qu'avec l'ancienne capsule centrée.
+pub(super) const PLAYER_CAMERA_HEIGHT_OFFSET: f32 = 1.6;
+
 /// Vitesse (rad/s) de la rotation « tank » manuelle (A/D tenus). Constante dédiée,
 /// distincte de `Controller::turn_speed` : ce dernier (10 rad/s) est un taux de
 /// *rattrapage* de l'orientation automatique (amorti exponentiel, la vitesse retombe
@@ -298,7 +308,7 @@ impl AppState {
             if self.scene.camera_follow
                 && let Some(p) = self.player_position()
             {
-                self.camera.target = p + Vec3::new(0.0, 0.8, 0.0);
+                self.camera.target = p + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0);
                 if self.scene.game_camera.is_none() {
                     self.camera.pitch = DEFAULT_CHASE_PITCH;
                     self.camera.distance = DEFAULT_CHASE_DISTANCE;
@@ -527,7 +537,10 @@ impl AppState {
             // exactement comme une à 60 Hz), là où la forme linéaire sur-amortissait à
             // bas FPS et créait de micro-à-coups de caméra sous gigue de frame.
             let t = 1.0 - (-dt * 6.0).exp();
-            self.camera.target = self.camera.target.lerp(p + Vec3::new(0.0, 0.8, 0.0), t);
+            self.camera.target = self
+                .camera
+                .target
+                .lerp(p + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0), t);
             // Caméra qui pivote derrière l'orientation du joueur, **seulement** pour
             // un personnage équipé d'une arme à distance (`fire_button`, cf. le
             // réticule central de `editor::crosshair`) : sans ce suivi, le réticule
@@ -1786,9 +1799,9 @@ mod tests {
         }
         app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
 
-        // Bornes réelles de l'arène (`half = 12.0` dans `Scene::mmorpg_demo`) moins une
-        // petite marge : au-delà, la créature est effectivement pressée contre un mur.
-        let arena_limit = 12.0 - 0.6;
+        // Bornes réelles de l'arène (cf. `Scene::MMORPG_HALF`) moins une petite
+        // marge : au-delà, la créature est effectivement pressée contre un mur.
+        let arena_limit = crate::scene::Scene::MMORPG_HALF - 0.6;
         let dt = 1.0 / 60.0;
         let mut pinned_frames = 0u32;
         let max_pinned_frames = 60; // 1 s d'affilée collée à un bord = bug

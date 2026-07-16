@@ -95,17 +95,17 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
         proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z <= 1.0;
     let uv = vec2<f32>(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
     let bias = 0.003;
-    // PCF 3x3 pour adoucir le bord — toujours exécuté, même hors carte d'ombre
+    // PCF 5x5 pour adoucir le bord — toujours exécuté, même hors carte d'ombre
     // (le résultat est alors ignoré par le `select` final, cf. ci-dessus).
     var sum = 0.0;
-    let texel = 1.0 / 1024.0;
-    for (var dx = -1; dx <= 1; dx = dx + 1) {
-        for (var dy = -1; dy <= 1; dy = dy + 1) {
+    let texel = 1.0 / 2048.0;
+    for (var dx = -2; dx <= 2; dx = dx + 1) {
+        for (var dy = -2; dy <= 2; dy = dy + 1) {
             let o = vec2<f32>(f32(dx), f32(dy)) * texel;
             sum = sum + textureSampleCompare(shadow_map, shadow_samp, uv + o, proj.z - bias);
         }
     }
-    return select(sum / 9.0, 1.0, !in_bounds);
+    return select(sum / 25.0, 1.0, !in_bounds);
 }
 
 @fragment
@@ -148,8 +148,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Diffuse : atténuée pour les métaux (qui réfléchissent au lieu de diffuser).
     let kd = 1.0 - metallic;
-    let lit = light.ambient.x + diffuse * (1.0 - light.ambient.x) * shadow;
-    var color = albedo * kd * light.color.rgb * lit;
+    // Ambiante hémisphérique : teintée par le ciel (horizon/zénith) plutôt qu'un
+    // lavage gris uniforme — une surface qui regarde vers le haut capte la teinte du
+    // zénith, une surface qui regarde vers le bas celle de l'horizon. `light.ambient.x`
+    // reste l'intensité globale (réglage scène), seule la couleur change.
+    let hemi = clamp(dot(n, vec3<f32>(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+    let ambient_color = mix(light.sky_horizon.rgb, light.sky_zenith.rgb, hemi);
+    let ambient_term = albedo * kd * ambient_color * light.ambient.x;
+    let direct_term = albedo * kd * light.color.rgb * diffuse * (1.0 - light.ambient.x) * shadow;
+    var color = ambient_term + direct_term;
 
     // Spéculaire Blinn-Phong (puissance pilotée par la rugosité ; teinte = blanc
     // pour un diélectrique, albédo pour un métal). Approximation PBR légère, mobile-friendly.

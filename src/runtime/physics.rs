@@ -152,6 +152,12 @@ pub struct Physics {
     /// ce qui doit être recopié/piloté chaque frame) — nécessaire pour retrouver
     /// quel objet une requête spatiale (`raycast`/`overlap_sphere`) a touché.
     collider_owner: std::collections::HashMap<ColliderHandle, usize>,
+    /// Broad-phase de requête mémoïsée entre deux mutations du monde (cf.
+    /// `with_query_broad_phase`) : les sondes des créatures lancent jusqu'à
+    /// 60 rayons par tick sur une scène dense — reconstruire la BVH jetable à
+    /// chaque appel redevenait O(rayons × colliders). `RefCell` car les requêtes
+    /// prennent `&self` ; `Physics` vit dans `AppState`, mono-thread.
+    query_cache: std::cell::RefCell<Option<DefaultBroadPhase>>,
 }
 
 /// Résultat d'un `Physics::raycast` : point d'impact (monde), distance parcourue
@@ -407,6 +413,7 @@ impl Physics {
             kinematic,
             scripted,
             collider_owner,
+            query_cache: std::cell::RefCell::new(None),
         }
     }
 
@@ -433,6 +440,7 @@ impl Physics {
         accel: f32,
         dt: f32,
     ) -> bool {
+        self.invalidate_query_cache();
         if let Some(slot) = self.kinematic.iter().position(|&(i, _, _)| i == index) {
             return self.control_kinematic(slot, vx, vz, jump, jump_speed, accel, dt);
         }
@@ -648,6 +656,7 @@ impl Physics {
     /// ticks — une poussée, pas un bond. Preuve :
     /// `app::simulation::tests::mmorpg_creatures_never_teleport_nor_snap_turn`.
     pub fn resolve_scripted_moves(&mut self, dt: f32, scene: &mut Scene) {
+        self.invalidate_query_cache();
         /// Vitesse maximale (m/s) que la dépénétration peut ajouter au
         /// déplacement demandé par le script.
         const DEPEN_SPEED: f32 = 0.8;
@@ -767,6 +776,7 @@ impl Physics {
     /// à l'état mis en cache (la correction est trop petite pour avoir pu
     /// faire décoller le joueur) ; au-dessus, on force une vraie détection.
     pub fn set_position(&mut self, index: usize, pos: Vec3) {
+        self.invalidate_query_cache();
         if let Some(slot) = self.kinematic.iter().position(|&(i, _, _)| i == index) {
             let handle = self.kinematic[slot].1;
             if let Some(body) = self.bodies.get_mut(handle) {
@@ -804,6 +814,7 @@ impl Physics {
     /// doit partir à une vitesse connue dès sa création, plutôt que de l'accélérer
     /// progressivement comme le ferait `control` pour un joueur piloté.
     pub fn set_velocity(&mut self, index: usize, v: Vec3) {
+        self.invalidate_query_cache();
         if let Some(&(_, handle)) = self.dynamic.iter().find(|&&(i, _)| i == index)
             && let Some(body) = self.bodies.get_mut(handle)
         {
@@ -811,26 +822,39 @@ impl Physics {
         }
     }
 
-    /// Broad-phase **jetable**, reconstruite à la volée pour une requête spatiale
-    /// ponctuelle (`raycast`/`overlap_sphere`) — délibérément distincte de
-    /// `self.broad` (la BVH incrémentale que `step` fait vivre d'un pas à l'autre) :
-    /// la peupler nous-mêmes ici évite de perturber son état interne (compteurs de
+    /// Broad-phase **jetable** pour les requêtes spatiales ponctuelles
+    /// (`raycast`/`overlap_sphere`) — délibérément distincte de `self.broad`
+    /// (la BVH incrémentale que `step` fait vivre d'un pas à l'autre) : la
+    /// peupler nous-mêmes ici évite de perturber son état interne (compteurs de
     /// changement, détection de première passe) entre deux pas de simulation (cf.
     /// docs/audits/physics.md — la réutiliser a fait dérailler la physique réelle en
-    /// test). Reconstruire à chaque appel coûte O(nombre de colliders) — acceptable à
-    /// l'échelle d'un script par tick, pas d'un appel par frame et par pixel.
-    fn query_broad_phase(&self) -> DefaultBroadPhase {
-        let mut broad = DefaultBroadPhase::new();
-        let handles: Vec<ColliderHandle> = self.collider_owner.keys().copied().collect();
-        broad.update(
-            &self.integration,
-            &self.colliders,
-            &self.bodies,
-            &handles,
-            &[],
-            &mut Vec::new(),
-        );
-        broad
+    /// test). Construite O(nombre de colliders) au premier appel puis **mémoïsée
+    /// dans `query_cache`** jusqu'à la prochaine mutation du monde
+    /// (`invalidate_query_cache`) : toutes les sondes d'un même tick partagent
+    /// une seule construction.
+    fn with_query_broad_phase<R>(&self, f: impl FnOnce(&DefaultBroadPhase) -> R) -> R {
+        let mut cache = self.query_cache.borrow_mut();
+        let broad = cache.get_or_insert_with(|| {
+            let mut broad = DefaultBroadPhase::new();
+            let handles: Vec<ColliderHandle> = self.collider_owner.keys().copied().collect();
+            broad.update(
+                &self.integration,
+                &self.colliders,
+                &self.bodies,
+                &handles,
+                &[],
+                &mut Vec::new(),
+            );
+            broad
+        });
+        f(broad)
+    }
+
+    /// À appeler en tête de **toute** méthode qui peut déplacer un corps ou un
+    /// collider : la broad-phase de requête mémoïsée décrirait sinon des
+    /// positions périmées. `take()` d'un cache déjà vide est gratuit.
+    fn invalidate_query_cache(&mut self) {
+        self.query_cache.get_mut().take();
     }
 
     /// Lance un rayon dans le monde physique, via le `QueryPipeline` de rapier —
@@ -842,23 +866,24 @@ impl Physics {
     /// zéro (`Vec3::try_normalize`).
     pub fn raycast(&self, origin: Vec3, dir: Vec3, max_toi: f32, mask: u32) -> Option<RaycastHit> {
         let dir = dir.try_normalize()?;
-        let broad = self.query_broad_phase();
-        let query = broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
-            &self.bodies,
-            &self.colliders,
-            QueryFilter::new().groups(InteractionGroups::new(
-                Group::ALL,
-                Group::from_bits_truncate(mask),
-                InteractionTestMode::And,
-            )),
-        );
-        let ray = Ray::new(origin, dir);
-        let (handle, toi) = query.cast_ray(&ray, max_toi.max(0.0), true)?;
-        Some(RaycastHit {
-            point: origin + dir * toi,
-            distance: toi,
-            index: self.collider_owner.get(&handle).copied(),
+        self.with_query_broad_phase(|broad| {
+            let query = broad.as_query_pipeline(
+                self.narrow.query_dispatcher(),
+                &self.bodies,
+                &self.colliders,
+                QueryFilter::new().groups(InteractionGroups::new(
+                    Group::ALL,
+                    Group::from_bits_truncate(mask),
+                    InteractionTestMode::And,
+                )),
+            );
+            let ray = Ray::new(origin, dir);
+            let (handle, toi) = query.cast_ray(&ray, max_toi.max(0.0), true)?;
+            Some(RaycastHit {
+                point: origin + dir * toi,
+                distance: toi,
+                index: self.collider_owner.get(&handle).copied(),
+            })
         })
     }
 
@@ -868,22 +893,23 @@ impl Physics {
     /// zone d'effet), sans avoir à lancer un rayon par direction possible. Même
     /// filtrage par couche que `raycast`.
     pub fn overlap_sphere(&self, center: Vec3, radius: f32, mask: u32) -> Vec<usize> {
-        let broad = self.query_broad_phase();
-        let query = broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
-            &self.bodies,
-            &self.colliders,
-            QueryFilter::new().groups(InteractionGroups::new(
-                Group::ALL,
-                Group::from_bits_truncate(mask),
-                InteractionTestMode::And,
-            )),
-        );
-        let ball = Ball::new(radius.max(0.0));
-        query
-            .intersect_shape(Pose::from_translation(center), &ball)
-            .filter_map(|(handle, _)| self.collider_owner.get(&handle).copied())
-            .collect()
+        self.with_query_broad_phase(|broad| {
+            let query = broad.as_query_pipeline(
+                self.narrow.query_dispatcher(),
+                &self.bodies,
+                &self.colliders,
+                QueryFilter::new().groups(InteractionGroups::new(
+                    Group::ALL,
+                    Group::from_bits_truncate(mask),
+                    InteractionTestMode::And,
+                )),
+            );
+            let ball = Ball::new(radius.max(0.0));
+            query
+                .intersect_shape(Pose::from_translation(center), &ball)
+                .filter_map(|(handle, _)| self.collider_owner.get(&handle).copied())
+                .collect()
+        })
     }
 
     /// Avance la simulation de `dt` et recopie les poses des corps dynamiques
@@ -933,6 +959,7 @@ impl Physics {
     }
 
     pub fn step(&mut self, dt: f32, scene: &mut Scene) {
+        self.invalidate_query_cache();
         self.integration.dt = dt.clamp(1.0 / 240.0, 1.0 / 20.0);
         self.apply_wind_zones(dt, scene);
         self.pipeline.step(
@@ -1879,6 +1906,46 @@ mod tests {
             phys.raycast(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 100.0, u32::MAX)
                 .is_none(),
             "un rayon vers le ciel ne doit rien toucher"
+        );
+    }
+
+    /// La broad-phase de requête est mémoïsée entre deux mutations
+    /// (`with_query_broad_phase`/`invalidate_query_cache`) : un corps qui
+    /// **entre** dans la trajectoire du rayon pendant `step()` doit être vu par
+    /// le rayon suivant — un cache jamais invalidé garderait son AABB à
+    /// l'ancienne position et le rayon le raterait (faux « rien devant » pour
+    /// les sondes des créatures).
+    #[test]
+    fn raycast_sees_a_body_that_fell_into_the_ray_path_despite_the_query_cache() {
+        let mut scene = ground_and_wall_scene();
+        scene.objects.push(SceneObject {
+            name: "Caisse".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(2.0, 5.0, 0.0)),
+            physics: PhysicsKind::Dynamic,
+            ..Default::default()
+        });
+        let mut phys = Physics::build(&scene);
+        // Premier rayon (remplit le cache) : la caisse est en l'air, le rayon
+        // horizontal à y=0 atteint le mur derrière elle.
+        let first = phys
+            .raycast(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 100.0, u32::MAX)
+            .expect("le rayon doit toucher le mur");
+        assert_eq!(first.index, Some(1), "caisse en l'air : le mur est touché");
+        // 2 s de chute : la caisse se pose sur le sol (centre ≈ y=0), en travers
+        // du rayon. Le rayon suivant doit la toucher, pas re-servir le monde
+        // d'avant la chute.
+        for _ in 0..120 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let second = phys
+            .raycast(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 100.0, u32::MAX)
+            .expect("le rayon doit toucher la caisse posée");
+        assert_eq!(
+            second.index,
+            Some(2),
+            "après step, la requête doit décrire le monde à jour (dist={})",
+            second.distance
         );
     }
 

@@ -71,6 +71,20 @@ impl RenderQuality {
     pub fn bloom_enabled(self) -> bool {
         !matches!(self, RenderQuality::Low)
     }
+
+    /// Nombre d'échantillons MSAA visé pour ce niveau de qualité (anti-aliasing des
+    /// bords de la géométrie principale) : opt-out sur « Basse » — un doublement de
+    /// mémoire/bande passante des cibles de rendu qu'un appareil visant ce palier n'a
+    /// pas à payer, comme `bloom_enabled` ci-dessus. La valeur réelle appliquée par le
+    /// renderer peut redescendre à 1 si l'adaptateur GPU ne supporte pas ce nombre
+    /// d'échantillons pour les formats utilisés (cf. `Renderer::new_impl`).
+    pub fn msaa_samples(self) -> u32 {
+        if matches!(self, RenderQuality::Low) {
+            1
+        } else {
+            4
+        }
+    }
 }
 
 #[cfg(test)]
@@ -96,6 +110,14 @@ mod tests {
         // Ordre croissant strict : plus de qualité = plus de lumières.
         assert!(RenderQuality::Low.light_budget() < RenderQuality::Medium.light_budget());
         assert!(RenderQuality::Medium.light_budget() < RenderQuality::High.light_budget());
+    }
+
+    #[test]
+    fn msaa_is_only_disabled_on_low_quality() {
+        // Même opt-out mobile que le bloom : seule « Basse » désactive le MSAA.
+        assert_eq!(RenderQuality::Low.msaa_samples(), 1);
+        assert_eq!(RenderQuality::Medium.msaa_samples(), 4);
+        assert_eq!(RenderQuality::High.msaa_samples(), 4);
     }
 
     #[test]

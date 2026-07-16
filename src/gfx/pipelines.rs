@@ -245,6 +245,7 @@ pub(super) fn create_uniform(device: &wgpu::Device, label: &str, size: usize) ->
 pub(super) fn create_depth_view(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
+    sample_count: u32,
 ) -> wgpu::TextureView {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth"),
@@ -254,7 +255,7 @@ pub(super) fn create_depth_view(
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -267,14 +268,26 @@ pub(super) fn create_depth_view(
 /// mapping. `width`/`height` explicites plutôt qu'une `SurfaceConfiguration` : réutilisée
 /// aussi bien par le chemin fenêtré (taille de la fenêtre) que par les rendus headless
 /// (taille demandée par l'appelant, indépendante de toute fenêtre).
-pub(super) fn create_hdr_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+///
+/// Retourne `(resolve_view, msaa_view)` : `resolve_view` est la texture mono-échantillon
+/// habituelle (lue ensuite par le bloom/tone mapping/lecture headless — jamais
+/// multi-échantillonnée, WebGPU ne permet pas `COPY_SRC`/`TEXTURE_BINDING` dessus).
+/// `msaa_view` n'est `Some` que si `sample_count > 1` : c'est la véritable cible de la
+/// passe principale, résolue vers `resolve_view` en fin de passe (`resolve_target`).
+pub(super) fn create_hdr_view(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    sample_count: u32,
+) -> (wgpu::TextureView, Option<wgpu::TextureView>) {
+    let size = wgpu::Extent3d {
+        width: width.max(1),
+        height: height.max(1),
+        depth_or_array_layers: 1,
+    };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("hdr_color"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
+        size,
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -282,7 +295,21 @@ pub(super) fn create_hdr_view(device: &wgpu::Device, width: u32, height: u32) ->
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    let resolve_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let msaa_view = (sample_count > 1).then(|| {
+        let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hdr_color_msaa"),
+            size,
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        msaa_texture.create_view(&wgpu::TextureViewDescriptor::default())
+    });
+    (resolve_view, msaa_view)
 }
 
 /// Chaîne de mips du bloom : une texture à `BLOOM_MIP_LEVELS` niveaux,
@@ -338,6 +365,7 @@ pub(super) struct PipelineBundle {
     pub(super) tonemap_layout: wgpu::BindGroupLayout,
     pub(super) tonemap_sampler: wgpu::Sampler,
     pub(super) hdr_view: wgpu::TextureView,
+    pub(super) msaa_color_view: Option<wgpu::TextureView>,
     pub(super) bloom_threshold_pipeline: wgpu::RenderPipeline,
     pub(super) bloom_downsample_pipeline: wgpu::RenderPipeline,
     pub(super) bloom_upsample_pipeline: wgpu::RenderPipeline,
@@ -386,7 +414,12 @@ pub(super) fn build(
     config: &wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     window: Option<&Arc<Window>>,
+    sample_count: u32,
 ) -> PipelineBundle {
+    let multisample = wgpu::MultisampleState {
+        count: sample_count,
+        ..Default::default()
+    };
     // --- Caméra + lumière (bind group 0) ---
     let camera_buf = create_uniform(device, "camera", std::mem::size_of::<CameraUniform>());
     let light_buf = create_uniform(device, "light", std::mem::size_of::<SceneUniform>());
@@ -662,7 +695,7 @@ pub(super) fn build(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample,
         multiview_mask: None,
         cache: None,
     });
@@ -716,7 +749,7 @@ pub(super) fn build(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample,
         multiview_mask: None,
         cache: None,
     });
@@ -842,7 +875,8 @@ pub(super) fn build(
         multiview_mask: None,
         cache: None,
     });
-    let hdr_view = create_hdr_view(device, size.width, size.height);
+    let (hdr_view, msaa_color_view) =
+        create_hdr_view(device, size.width, size.height, sample_count);
 
     // --- Bloom : seuil + chaîne de mips down/upsample, cf.
     // `Renderer::render_bloom`. Les 3 passes partagent `bloom_sample_layout` (texture
@@ -1037,7 +1071,7 @@ pub(super) fn build(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample,
         multiview_mask: None,
         cache: None,
     });
@@ -1135,7 +1169,7 @@ pub(super) fn build(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample,
         multiview_mask: None,
         cache: None,
     });
@@ -1195,7 +1229,7 @@ pub(super) fn build(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample,
         multiview_mask: None,
         cache: None,
     });
@@ -1216,7 +1250,7 @@ pub(super) fn build(
         meshes.insert(kind, GpuMesh::new(device, &kind.mesh_data()));
     }
 
-    let depth_view = create_depth_view(device, config);
+    let depth_view = create_depth_view(device, config, sample_count);
     let editor = window.map(|w| Editor::new(device, config.format, w));
 
     PipelineBundle {
@@ -1226,6 +1260,7 @@ pub(super) fn build(
         tonemap_layout,
         tonemap_sampler,
         hdr_view,
+        msaa_color_view,
         bloom_threshold_pipeline,
         bloom_downsample_pipeline,
         bloom_upsample_pipeline,

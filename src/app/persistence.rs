@@ -4,7 +4,7 @@
 
 use glam::{Quat, Vec3};
 
-use super::simulation::{DEFAULT_CHASE_DISTANCE, DEFAULT_CHASE_PITCH};
+use super::simulation::{DEFAULT_CHASE_DISTANCE, DEFAULT_CHASE_PITCH, PLAYER_CAMERA_HEIGHT_OFFSET};
 use super::{AppState, scene_path};
 use crate::gfx::mesh::MeshData;
 use crate::scene::{ImportedMesh, MeshKind, Scene, SceneObject, Transform};
@@ -57,7 +57,7 @@ impl AppState {
         if self.scene.camera_follow
             && let Some(p) = self.player_position()
         {
-            self.camera.target = p + Vec3::new(0.0, 0.8, 0.0);
+            self.camera.target = p + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0);
             if self.scene.game_camera.is_none() {
                 self.camera.pitch = DEFAULT_CHASE_PITCH;
                 self.camera.distance = DEFAULT_CHASE_DISTANCE;
