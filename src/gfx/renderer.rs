@@ -150,7 +150,13 @@ pub(super) const JOINT_CAPACITY: usize = 128;
 /// `the_embedded_mmorpg_scene_gives_the_player_its_own_joint_offset`) — au-delà
 /// de 66, le joueur ressortait du plan de dessin skinné (même symptôme qu'à 8).
 /// 96 laisse de la marge pour du décor animé futur sans reproduire l'audit.
-pub(super) const MAX_SKINNED_INSTANCES: usize = 96;
+///
+/// Remonté de 96 à 160 (menagerie de monstres, Ultimate Monsters Bundle) :
+/// 45 nouveaux décors animés (`import_monster_pack.py`, riggés, clip `Idle`)
+/// portent le total à 20 créatures + 90 décors animés + le joueur, soit 111
+/// instances skinnées potentiellement visibles ensemble — 160 laisse à
+/// nouveau de la marge (~49) sans reproduire l'audit ci-dessus.
+pub(super) const MAX_SKINNED_INSTANCES: usize = 160;
 /// Taille en octets d'un créneau de la palette de joints — un objet skinné à la fois.
 pub(super) const JOINT_SLOT_BYTES: wgpu::BufferAddress =
     (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress;

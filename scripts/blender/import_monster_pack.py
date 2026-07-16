@@ -1,30 +1,37 @@
 # Retraite le « Ultimate Monsters Bundle » (Quaternius, CC0, via Poly Pizza)
-# en décor STATIQUE pour le moteur. Blender headless :
+# en décor ANIMÉ pour le moteur. Blender headless :
 #
 #   /Applications/Blender.app/Contents/MacOS/Blender --background \
 #       --python scripts/blender/import_monster_pack.py
 #
 # Source : les .glb du pack (export FBX2glTF, riggés — squelette + jusqu'à 14
-# clips par fichier). Sortie : assets/models/monster_*.glb, un mesh STATIQUE
-# joint par asset, SANS squelette ni animation.
+# clips par fichier). Sortie : assets/models/monster_*.glb, squelette +
+# animations conservés (`MAX_SKINNED_INSTANCES` relevé à 160 dans
+# src/gfx/renderer.rs pour leur faire de la place).
 #
-# Pourquoi statique et pas animé (même moteur que import_village_pack.py) :
-# - `MAX_SKINNED_INSTANCES` (src/gfx/renderer.rs) borne à 96 le nombre total
-#   d'objets SKINNÉS visibles à la fois (créatures MMORPG + décor nature
-#   animé + joueurs réseau) — un mesh est skinné dès qu'il a un squelette,
-#   même sans `AnimationState` (pose de liaison figée, mais toujours un
-#   créneau consommé). Le budget est déjà à ~66/96 avant ce pack ; 45
-#   nouveaux monstres skinnés le ferait exploser (au-delà de 96, l'excédent
-#   est simplement invisible, en silence — cf. commentaire de
-#   `write_joint_matrices`). On exporte donc en statique : aucun coût sur ce
-#   budget, tous les 45 assets restent posables sans limite.
-# - Comme pour le village : le .glb source porte transform (rotation -90° X,
-#   scale ×100) sur le NŒUD du mesh (`load_gltf` du moteur ignore les
-#   transforms de nœuds et concatène les sommets bruts) → on joint les
-#   parties (corps + arme séparée sur certains monstres), on applique le
-#   transform, on supprime l'armature (inutile sans skin), on ré-exporte
-#   Y-up. La géométrie exportée est la pose de repos (= pose de liaison),
-#   identique au premier repère de l'animation « Idle » du pack d'origine.
+# Piège (même diagnostic que import_village_pack.py, en pire) : le .glb
+# source porte son rotation -90°/scale ×100 (conversion FBX2glTF) sur l'objet
+# ARMATURE, pas sur le mesh — glTF réinitialise le TRS d'un nœud de mesh
+# SKINNÉ à l'identité (la déformation vient entièrement des joints), et le
+# mesh est en plus PARENTÉ (Object parenting) à l'armature. Le squelette lu
+# par le moteur (`load_gltf_skeleton`/`build_skeleton`) ne remonte que
+# jusqu'au premier joint du **skin** (`skin.joints()`) — l'objet Armature qui
+# le porte n'en fait pas partie, donc son transform serait perdu si on le
+# laissait au niveau de l'objet : il faut le rapatrier DANS le joint racine
+# avant export.
+#
+# Fix : figer la pose de repos, puis `transform_apply` sur l'objet ARMATURE
+# lui-même (pas sur le mesh) — Blender bake alors le rotation/scale dans les
+# matrices de repos des os (le joint racine récupère un vrai facteur d'échelle
+# réel, exprimé via des translations d'os désormais à taille réelle plutôt que
+# via un scale explicite) sans toucher aux animations (les canaux de pose
+# sont relatifs à chaque os, donc invariants à ce rebasement). Le mesh reste
+# parenté/skinné (on ne le touche pas) ; l'export réévalue tout (position des
+# sommets, matrices de bind inverses) de façon cohérente. Les parties
+# multiples d'un même personnage (corps + arme séparée) sont jointes en un
+# seul mesh, gardant le premier skin/squelette rencontré — cas rare de
+# squelettes multiples par fichier (armes montées sur un second squelette) :
+# seule la partie liée au premier reste animée, le reste englobé au join.
 
 import os
 
@@ -98,51 +105,36 @@ def process(src_name, out_name):
     armatures = [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]
     # Certains fichiers du pack embarquent un mesh générique parasite (ex.
     # "Icosphere") sans parent ni skin, sans rapport avec le personnage — on
-    # ne garde que les meshes réellement riggés (parentés à l'armature).
+    # ne garde que les meshes réellement riggés (parentés à une armature).
     meshes = [m for m in all_meshes if m.parent in armatures] or all_meshes
-    if not meshes:
-        print(f"[monsters] AUCUN MESH dans {src_name}, ignoré")
+    if not meshes or not armatures:
+        print(f"[monsters] structure inattendue dans {src_name}, ignoré")
         return
 
-    # Piège : un mesh skinné de ce pack est PARENTÉ (Object parenting, pas
-    # seulement modifier Armature) à l'objet Armature, qui seul porte le
-    # rotation -90°/scale ×100 du pipeline FBX2glTF (le nœud du mesh, lui,
-    # est réinitialisé à l'identité par l'import glTF, comme pour tout mesh
-    # skinné). Supprimer l'armature ferait donc perdre ce facteur ×100 avec
-    # elle. On le récupère en détachant chaque mesh AVANT suppression avec
-    # « Clear Parent Keep Transform » (bake le parent dans matrix_basis),
-    # après avoir figé la pose de repos et appliqué le modifier Armature
-    # (déformation osseuse propre).
     for a in armatures:
         a.data.pose_position = "REST"
-    for m in meshes:
-        bpy.context.view_layer.objects.active = m
-        for mod in list(m.modifiers):
-            if mod.type == "ARMATURE":
-                bpy.ops.object.modifier_apply(modifier=mod.name)
-        if m.parent is not None:
-            bpy.ops.object.select_all(action="DESELECT")
-            m.select_set(True)
-            bpy.context.view_layer.objects.active = m
-            bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
+        bpy.ops.object.select_all(action="DESELECT")
+        a.select_set(True)
+        bpy.context.view_layer.objects.active = a
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+        # Pas d'action active pointée par erreur au moment de l'export (les 14
+        # clips existent déjà comme actions indépendantes, réexportées telles
+        # quelles par le mode par défaut de l'exporter).
+        if a.animation_data:
+            a.animation_data.action = None
 
     bpy.ops.object.select_all(action="DESELECT")
-    for a in armatures:
-        a.select_set(True)
-    if armatures:
-        bpy.ops.object.delete()
-
-    for o in bpy.context.scene.objects:
-        o.select_set(o in meshes)
+    for m in meshes:
+        m.select_set(True)
     bpy.context.view_layer.objects.active = meshes[0]
     if len(meshes) > 1:
         bpy.ops.object.join()
-    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
     bpy.ops.export_scene.gltf(
         filepath=OUT_DIR + out_name,
         export_format="GLB",
-        export_animations=False,
-        export_skins=False,
+        export_animations=True,
+        export_skins=True,
         export_apply=True,
         export_yup=True,
     )

@@ -654,6 +654,11 @@
       "name": "",
       "notifies": {},
       "path": "bundle://m124_nature_rice.glb"
+    },
+    {
+      "name": "",
+      "notifies": {},
+      "path": "bundle://m125_village_chair.glb"
     }
   ],
   "light": {
@@ -1055,7 +1060,7 @@
       "item_pickup": null,
       "mesh": "Cylinder",
       "metallic": 0.0,
-      "name": "Repère 1",
+      "name": "Rep\u00e8re 1",
       "physics": "Static",
       "prefab": {
         "asset_id": "asset-id://901b375fb80bd963",
@@ -1117,7 +1122,7 @@
       "item_pickup": null,
       "mesh": "Cylinder",
       "metallic": 0.0,
-      "name": "Repère 2",
+      "name": "Rep\u00e8re 2",
       "physics": "Static",
       "prefab": {
         "asset_id": "asset-id://901b375fb80bd963",
@@ -1179,7 +1184,7 @@
       "item_pickup": null,
       "mesh": "Cylinder",
       "metallic": 0.0,
-      "name": "Repère 3",
+      "name": "Rep\u00e8re 3",
       "physics": "Static",
       "prefab": {
         "asset_id": "asset-id://901b375fb80bd963",
@@ -1241,7 +1246,7 @@
       "item_pickup": null,
       "mesh": "Cylinder",
       "metallic": 0.0,
-      "name": "Repère 4",
+      "name": "Rep\u00e8re 4",
       "physics": "Static",
       "prefab": {
         "asset_id": "asset-id://901b375fb80bd963",
@@ -1381,7 +1386,7 @@
         "Imported": 0
       },
       "metallic": 0.0,
-      "name": "Créature",
+      "name": "Cr\u00e9ature",
       "physics": "Kinematic",
       "prefab": {
         "asset_id": "asset-id://6d48c2a5a3710756",
@@ -1392,7 +1397,7 @@
       },
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature_heading\") or 0\n    local smooth_turn = save.get(\"creature_turn\") or 0.0\n    local was_stopped = (save.get(\"creature_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature_center_d\")\n    local left_d = save.get(\"creature_left_d\")\n    local right_d = save.get(\"creature_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967293)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature_center_d\", center_d)\n        save.set(\"creature_left_d\", left_d)\n        save.set(\"creature_right_d\", right_d)\n    end\n    save.set(\"creature_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + -1.5707964) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature_heading\", heading)\n    save.set(\"creature_turn\", smooth_turn)\n    save.set(\"creature_stopped\", stop_now and 1.0 or 0.0)\n\n\n    local BITE_COOLDOWN = 2.2\n    local BITE_CHANCE = 0.4\n    local BITE_DAMAGE = 0.12\n\n    local bite_cd = (save.get(\"creature_bite_cd\") or 0.0) - dt\n    if obj.triggered and bite_cd <= 0.0 then\n        bite_cd = BITE_COOLDOWN\n        local roll = math.sin(time * 12.9898) * 43758.5453\n        roll = roll - math.floor(roll)\n        if roll < BITE_CHANCE then\n            damage(BITE_DAMAGE)\n        end\n    end\n    save.set(\"creature_bite_cd\", bite_cd)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature_heading\") or 0\n    local smooth_turn = save.get(\"creature_turn\") or 0.0\n    local was_stopped = (save.get(\"creature_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature_center_d\")\n    local left_d = save.get(\"creature_left_d\")\n    local right_d = save.get(\"creature_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967293)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature_center_d\", center_d)\n        save.set(\"creature_left_d\", left_d)\n        save.set(\"creature_right_d\", right_d)\n    end\n    save.set(\"creature_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + -1.5707964) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature_heading\", heading)\n    save.set(\"creature_turn\", smooth_turn)\n    save.set(\"creature_stopped\", stop_now and 1.0 or 0.0)\n\n\n    local BITE_COOLDOWN = 2.2\n    local BITE_CHANCE = 0.4\n    local BITE_DAMAGE = 0.12\n\n    local bite_cd = (save.get(\"creature_bite_cd\") or 0.0) - dt\n    if obj.triggered and bite_cd <= 0.0 then\n        bite_cd = BITE_COOLDOWN\n        local roll = math.sin(time * 12.9898) * 43758.5453\n        roll = roll - math.floor(roll)\n        if roll < BITE_CHANCE then\n            damage(BITE_DAMAGE)\n        end\n    end\n    save.set(\"creature_bite_cd\", bite_cd)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1457,12 +1462,12 @@
         "Imported": 1
       },
       "metallic": 0.0,
-      "name": "Créature 2",
+      "name": "Cr\u00e9ature 2",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature2_heading\") or 72\n    local smooth_turn = save.get(\"creature2_turn\") or 0.0\n    local was_stopped = (save.get(\"creature2_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature2_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature2_center_d\")\n    local left_d = save.get(\"creature2_left_d\")\n    local right_d = save.get(\"creature2_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967291)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature2_center_d\", center_d)\n        save.set(\"creature2_left_d\", left_d)\n        save.set(\"creature2_right_d\", right_d)\n    end\n    save.set(\"creature2_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 0.9) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature2_heading\", heading)\n    save.set(\"creature2_turn\", smooth_turn)\n    save.set(\"creature2_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature2_heading\") or 72\n    local smooth_turn = save.get(\"creature2_turn\") or 0.0\n    local was_stopped = (save.get(\"creature2_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature2_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature2_center_d\")\n    local left_d = save.get(\"creature2_left_d\")\n    local right_d = save.get(\"creature2_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967291)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature2_center_d\", center_d)\n        save.set(\"creature2_left_d\", left_d)\n        save.set(\"creature2_right_d\", right_d)\n    end\n    save.set(\"creature2_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 0.9) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature2_heading\", heading)\n    save.set(\"creature2_turn\", smooth_turn)\n    save.set(\"creature2_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1527,12 +1532,12 @@
         "Imported": 2
       },
       "metallic": 0.0,
-      "name": "Créature 3",
+      "name": "Cr\u00e9ature 3",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature3_heading\") or 144\n    local smooth_turn = save.get(\"creature3_turn\") or 0.0\n    local was_stopped = (save.get(\"creature3_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature3_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature3_center_d\")\n    local left_d = save.get(\"creature3_left_d\")\n    local right_d = save.get(\"creature3_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967287)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature3_center_d\", center_d)\n        save.set(\"creature3_left_d\", left_d)\n        save.set(\"creature3_right_d\", right_d)\n    end\n    save.set(\"creature3_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 1.8) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature3_heading\", heading)\n    save.set(\"creature3_turn\", smooth_turn)\n    save.set(\"creature3_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature3_heading\") or 144\n    local smooth_turn = save.get(\"creature3_turn\") or 0.0\n    local was_stopped = (save.get(\"creature3_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature3_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature3_center_d\")\n    local left_d = save.get(\"creature3_left_d\")\n    local right_d = save.get(\"creature3_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967287)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature3_center_d\", center_d)\n        save.set(\"creature3_left_d\", left_d)\n        save.set(\"creature3_right_d\", right_d)\n    end\n    save.set(\"creature3_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 1.8) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature3_heading\", heading)\n    save.set(\"creature3_turn\", smooth_turn)\n    save.set(\"creature3_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1597,12 +1602,12 @@
         "Imported": 3
       },
       "metallic": 0.0,
-      "name": "Créature 4",
+      "name": "Cr\u00e9ature 4",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature4_heading\") or 216\n    local smooth_turn = save.get(\"creature4_turn\") or 0.0\n    local was_stopped = (save.get(\"creature4_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature4_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature4_center_d\")\n    local left_d = save.get(\"creature4_left_d\")\n    local right_d = save.get(\"creature4_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967279)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature4_center_d\", center_d)\n        save.set(\"creature4_left_d\", left_d)\n        save.set(\"creature4_right_d\", right_d)\n    end\n    save.set(\"creature4_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 2.7) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature4_heading\", heading)\n    save.set(\"creature4_turn\", smooth_turn)\n    save.set(\"creature4_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature4_heading\") or 216\n    local smooth_turn = save.get(\"creature4_turn\") or 0.0\n    local was_stopped = (save.get(\"creature4_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature4_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature4_center_d\")\n    local left_d = save.get(\"creature4_left_d\")\n    local right_d = save.get(\"creature4_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967279)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature4_center_d\", center_d)\n        save.set(\"creature4_left_d\", left_d)\n        save.set(\"creature4_right_d\", right_d)\n    end\n    save.set(\"creature4_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 2.7) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature4_heading\", heading)\n    save.set(\"creature4_turn\", smooth_turn)\n    save.set(\"creature4_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1667,12 +1672,12 @@
         "Imported": 4
       },
       "metallic": 0.0,
-      "name": "Créature 5",
+      "name": "Cr\u00e9ature 5",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature5_heading\") or 288\n    local smooth_turn = save.get(\"creature5_turn\") or 0.0\n    local was_stopped = (save.get(\"creature5_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature5_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature5_center_d\")\n    local left_d = save.get(\"creature5_left_d\")\n    local right_d = save.get(\"creature5_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967263)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature5_center_d\", center_d)\n        save.set(\"creature5_left_d\", left_d)\n        save.set(\"creature5_right_d\", right_d)\n    end\n    save.set(\"creature5_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 3.6) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature5_heading\", heading)\n    save.set(\"creature5_turn\", smooth_turn)\n    save.set(\"creature5_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature5_heading\") or 288\n    local smooth_turn = save.get(\"creature5_turn\") or 0.0\n    local was_stopped = (save.get(\"creature5_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature5_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature5_center_d\")\n    local left_d = save.get(\"creature5_left_d\")\n    local right_d = save.get(\"creature5_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967263)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature5_center_d\", center_d)\n        save.set(\"creature5_left_d\", left_d)\n        save.set(\"creature5_right_d\", right_d)\n    end\n    save.set(\"creature5_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 3.6) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature5_heading\", heading)\n    save.set(\"creature5_turn\", smooth_turn)\n    save.set(\"creature5_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1741,12 +1746,12 @@
         "Imported": 5
       },
       "metallic": 0.0,
-      "name": "Créature 6",
+      "name": "Cr\u00e9ature 6",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature6_heading\") or 24\n    local smooth_turn = save.get(\"creature6_turn\") or 0.0\n    local was_stopped = (save.get(\"creature6_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature6_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature6_center_d\")\n    local left_d = save.get(\"creature6_left_d\")\n    local right_d = save.get(\"creature6_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967231)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature6_center_d\", center_d)\n        save.set(\"creature6_left_d\", left_d)\n        save.set(\"creature6_right_d\", right_d)\n    end\n    save.set(\"creature6_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 4.5) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature6_heading\", heading)\n    save.set(\"creature6_turn\", smooth_turn)\n    save.set(\"creature6_stopped\", stop_now and 1.0 or 0.0)\n\n\n    local BITE_COOLDOWN = 1.6\n    local BITE_CHANCE = 0.5\n    local BITE_DAMAGE = 0.08\n\n    local bite_cd = (save.get(\"creature6_bite_cd\") or 0.0) - dt\n    if obj.triggered and bite_cd <= 0.0 then\n        bite_cd = BITE_COOLDOWN\n        local roll = math.sin(time * 19.4142) * 43758.5453\n        roll = roll - math.floor(roll)\n        if roll < BITE_CHANCE then\n            damage(BITE_DAMAGE)\n        end\n    end\n    save.set(\"creature6_bite_cd\", bite_cd)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature6_heading\") or 24\n    local smooth_turn = save.get(\"creature6_turn\") or 0.0\n    local was_stopped = (save.get(\"creature6_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature6_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature6_center_d\")\n    local left_d = save.get(\"creature6_left_d\")\n    local right_d = save.get(\"creature6_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967231)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature6_center_d\", center_d)\n        save.set(\"creature6_left_d\", left_d)\n        save.set(\"creature6_right_d\", right_d)\n    end\n    save.set(\"creature6_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 4.5) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature6_heading\", heading)\n    save.set(\"creature6_turn\", smooth_turn)\n    save.set(\"creature6_stopped\", stop_now and 1.0 or 0.0)\n\n\n    local BITE_COOLDOWN = 1.6\n    local BITE_CHANCE = 0.5\n    local BITE_DAMAGE = 0.08\n\n    local bite_cd = (save.get(\"creature6_bite_cd\") or 0.0) - dt\n    if obj.triggered and bite_cd <= 0.0 then\n        bite_cd = BITE_COOLDOWN\n        local roll = math.sin(time * 19.4142) * 43758.5453\n        roll = roll - math.floor(roll)\n        if roll < BITE_CHANCE then\n            damage(BITE_DAMAGE)\n        end\n    end\n    save.set(\"creature6_bite_cd\", bite_cd)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1815,12 +1820,12 @@
         "Imported": 6
       },
       "metallic": 0.0,
-      "name": "Créature 7",
+      "name": "Cr\u00e9ature 7",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature7_heading\") or 96\n    local smooth_turn = save.get(\"creature7_turn\") or 0.0\n    local was_stopped = (save.get(\"creature7_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature7_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature7_center_d\")\n    local left_d = save.get(\"creature7_left_d\")\n    local right_d = save.get(\"creature7_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967167)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature7_center_d\", center_d)\n        save.set(\"creature7_left_d\", left_d)\n        save.set(\"creature7_right_d\", right_d)\n    end\n    save.set(\"creature7_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 5.4) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature7_heading\", heading)\n    save.set(\"creature7_turn\", smooth_turn)\n    save.set(\"creature7_stopped\", stop_now and 1.0 or 0.0)\n\n\n    local BITE_COOLDOWN = 3.5\n    local BITE_CHANCE = 0.6\n    local BITE_DAMAGE = 0.18\n\n    local bite_cd = (save.get(\"creature7_bite_cd\") or 0.0) - dt\n    if obj.triggered and bite_cd <= 0.0 then\n        bite_cd = BITE_COOLDOWN\n        local roll = math.sin(time * 27.1828) * 43758.5453\n        roll = roll - math.floor(roll)\n        if roll < BITE_CHANCE then\n            damage(BITE_DAMAGE)\n        end\n    end\n    save.set(\"creature7_bite_cd\", bite_cd)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature7_heading\") or 96\n    local smooth_turn = save.get(\"creature7_turn\") or 0.0\n    local was_stopped = (save.get(\"creature7_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature7_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature7_center_d\")\n    local left_d = save.get(\"creature7_left_d\")\n    local right_d = save.get(\"creature7_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967167)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature7_center_d\", center_d)\n        save.set(\"creature7_left_d\", left_d)\n        save.set(\"creature7_right_d\", right_d)\n    end\n    save.set(\"creature7_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 5.4) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature7_heading\", heading)\n    save.set(\"creature7_turn\", smooth_turn)\n    save.set(\"creature7_stopped\", stop_now and 1.0 or 0.0)\n\n\n    local BITE_COOLDOWN = 3.5\n    local BITE_CHANCE = 0.6\n    local BITE_DAMAGE = 0.18\n\n    local bite_cd = (save.get(\"creature7_bite_cd\") or 0.0) - dt\n    if obj.triggered and bite_cd <= 0.0 then\n        bite_cd = BITE_COOLDOWN\n        local roll = math.sin(time * 27.1828) * 43758.5453\n        roll = roll - math.floor(roll)\n        if roll < BITE_CHANCE then\n            damage(BITE_DAMAGE)\n        end\n    end\n    save.set(\"creature7_bite_cd\", bite_cd)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1885,12 +1890,12 @@
         "Imported": 7
       },
       "metallic": 0.0,
-      "name": "Créature 8",
+      "name": "Cr\u00e9ature 8",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature8_heading\") or 168\n    local smooth_turn = save.get(\"creature8_turn\") or 0.0\n    local was_stopped = (save.get(\"creature8_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature8_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature8_center_d\")\n    local left_d = save.get(\"creature8_left_d\")\n    local right_d = save.get(\"creature8_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967039)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature8_center_d\", center_d)\n        save.set(\"creature8_left_d\", left_d)\n        save.set(\"creature8_right_d\", right_d)\n    end\n    save.set(\"creature8_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 6.3) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature8_heading\", heading)\n    save.set(\"creature8_turn\", smooth_turn)\n    save.set(\"creature8_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature8_heading\") or 168\n    local smooth_turn = save.get(\"creature8_turn\") or 0.0\n    local was_stopped = (save.get(\"creature8_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature8_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature8_center_d\")\n    local left_d = save.get(\"creature8_left_d\")\n    local right_d = save.get(\"creature8_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294967039)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature8_center_d\", center_d)\n        save.set(\"creature8_left_d\", left_d)\n        save.set(\"creature8_right_d\", right_d)\n    end\n    save.set(\"creature8_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 6.3) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature8_heading\", heading)\n    save.set(\"creature8_turn\", smooth_turn)\n    save.set(\"creature8_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -1955,12 +1960,12 @@
         "Imported": 8
       },
       "metallic": 0.0,
-      "name": "Créature 9",
+      "name": "Cr\u00e9ature 9",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature9_heading\") or 240\n    local smooth_turn = save.get(\"creature9_turn\") or 0.0\n    local was_stopped = (save.get(\"creature9_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature9_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature9_center_d\")\n    local left_d = save.get(\"creature9_left_d\")\n    local right_d = save.get(\"creature9_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294966783)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature9_center_d\", center_d)\n        save.set(\"creature9_left_d\", left_d)\n        save.set(\"creature9_right_d\", right_d)\n    end\n    save.set(\"creature9_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 7.2) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature9_heading\", heading)\n    save.set(\"creature9_turn\", smooth_turn)\n    save.set(\"creature9_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature9_heading\") or 240\n    local smooth_turn = save.get(\"creature9_turn\") or 0.0\n    local was_stopped = (save.get(\"creature9_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature9_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature9_center_d\")\n    local left_d = save.get(\"creature9_left_d\")\n    local right_d = save.get(\"creature9_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294966783)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature9_center_d\", center_d)\n        save.set(\"creature9_left_d\", left_d)\n        save.set(\"creature9_right_d\", right_d)\n    end\n    save.set(\"creature9_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 7.2) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature9_heading\", heading)\n    save.set(\"creature9_turn\", smooth_turn)\n    save.set(\"creature9_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2025,12 +2030,12 @@
         "Imported": 9
       },
       "metallic": 0.0,
-      "name": "Créature 10",
+      "name": "Cr\u00e9ature 10",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature10_heading\") or 312\n    local smooth_turn = save.get(\"creature10_turn\") or 0.0\n    local was_stopped = (save.get(\"creature10_stopped\") or 1.0) > 0.5\n\n    -- Rafraîchit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz à 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase à chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` —\n    -- « acceptable à l'échelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel »). 3 rayons/frame en continu, exactement l'usage déconseillé, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgré la\n    -- lecture moins fréquente : `smooth_turn` le lisse déjà sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relevés), et la créature n'avance que\n    -- de quelques centimètres dans cet intervalle.\n    local tick = (save.get(\"creature10_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature10_center_d\")\n    local left_d = save.get(\"creature10_left_d\")\n    local right_d = save.get(\"creature10_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294966271)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature10_center_d\", center_d)\n        save.set(\"creature10_left_d\", left_d)\n        save.set(\"creature10_right_d\", right_d)\n    end\n    save.set(\"creature10_probe_tick\", tick)\n\n    -- Virage proportionnel « brut » : penche vers le côté le plus dégagé (loin),\n    -- s'écarte du plus bloqué (proche) — lissé juste après, pas appliqué tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 8.1) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliquée suit `raw_turn` progressivement, pas instantanément.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hystérésis arrêt/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arrêt (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire — pas de rampe lissée comme pour `smooth_turn` :\n    -- le clip `Walk` joue à vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip joué), donc une avance à vitesse\n    -- *progressive* désynchronise le cycle des jambes de la vitesse réelle au sol —\n    -- glissement des pieds pendant toute la rampe. Un arrêt/départ net évite le\n    -- problème à la source plutôt que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'arène.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature10_heading\", heading)\n    save.set(\"creature10_turn\", smooth_turn)\n    save.set(\"creature10_stopped\", stop_now and 1.0 or 0.0)\n",
+      "script": "\n    local SPEED = 1.3\n    local TURN_RATE = 70.0\n    local RAY_DIST = 3.5\n    local PROBE_ANGLE = 30.0\n    local BOUND = 35\n    local SOFT_BOUND = BOUND - 3.0\n    local SMOOTH = 3.0\n\n    local PROBE_EVERY = 4\n\n    local heading = save.get(\"creature10_heading\") or 312\n    local smooth_turn = save.get(\"creature10_turn\") or 0.0\n    local was_stopped = (save.get(\"creature10_stopped\") or 1.0) > 0.5\n\n    -- Rafra\u00eechit les 3 rayons 1 frame sur `PROBE_EVERY` (~15 Hz \u00e0 60 FPS), pas\n    -- chaque frame : `Physics::raycast` reconstruit toute la broad-phase \u00e0 chaque\n    -- appel (cf. sa doc, `runtime::physics::Physics::query_broad_phase` \u2014\n    -- \u00ab acceptable \u00e0 l'\u00e9chelle d'un script par tick, pas d'un appel par frame et par\n    -- pixel \u00bb). 3 rayons/frame en continu, exactement l'usage d\u00e9conseill\u00e9, causait\n    -- un ralentissement perceptible pendant les virages (justement quand les rayons\n    -- touchent le plus souvent un obstacle). Le virage reste fluide malgr\u00e9 la\n    -- lecture moins fr\u00e9quente : `smooth_turn` le lisse d\u00e9j\u00e0 sur ~0,33 s (bien plus\n    -- lent que les 4 frames/~67 ms entre deux relev\u00e9s), et la cr\u00e9ature n'avance que\n    -- de quelques centim\u00e8tres dans cet intervalle.\n    local tick = (save.get(\"creature10_probe_tick\") or 0) + 1\n    local center_d = save.get(\"creature10_center_d\")\n    local left_d = save.get(\"creature10_left_d\")\n    local right_d = save.get(\"creature10_right_d\")\n    if tick >= PROBE_EVERY or center_d == nil then\n        tick = 0\n        local function probe_dist(deg)\n            local rad = math.rad(heading + deg)\n            local dx, dz = math.sin(rad), math.cos(rad)\n            local hit = raycast(obj.x, obj.y + 0.6, obj.z, dx, 0, dz, RAY_DIST, 4294966271)\n            if hit then\n                return hit.dist\n            end\n            return RAY_DIST\n        end\n        center_d = probe_dist(0)\n        left_d = probe_dist(-PROBE_ANGLE)\n        right_d = probe_dist(PROBE_ANGLE)\n        save.set(\"creature10_center_d\", center_d)\n        save.set(\"creature10_left_d\", left_d)\n        save.set(\"creature10_right_d\", right_d)\n    end\n    save.set(\"creature10_probe_tick\", tick)\n\n    -- Virage proportionnel \u00ab brut \u00bb : penche vers le c\u00f4t\u00e9 le plus d\u00e9gag\u00e9 (loin),\n    -- s'\u00e9carte du plus bloqu\u00e9 (proche) \u2014 liss\u00e9 juste apr\u00e8s, pas appliqu\u00e9 tel quel.\n    local raw_turn = (right_d - left_d) / RAY_DIST\n    if center_d < RAY_DIST * 0.85 then\n        local side = (right_d >= left_d) and 1.0 or -1.0\n        raw_turn = raw_turn + side * (1.0 - center_d / RAY_DIST) * 2.5\n    end\n    raw_turn = raw_turn + math.sin(time * 0.35 + 8.1) * 0.15\n\n    if math.abs(obj.x) > SOFT_BOUND or math.abs(obj.z) > SOFT_BOUND then\n        local to_center = math.deg(math.atan(-obj.x, -obj.z))\n        local diff = ((to_center - heading + 180) % 360) - 180\n        raw_turn = raw_turn + (diff > 0 and 1.0 or -1.0) * 1.5\n    end\n    raw_turn = math.max(-2.5, math.min(2.5, raw_turn))\n\n    -- Lissage exponentiel du virage (cf. la doc de cette fonction) : la valeur\n    -- appliqu\u00e9e suit `raw_turn` progressivement, pas instantan\u00e9ment.\n    local smoothing = 1.0 - math.exp(-SMOOTH * dt)\n    smooth_turn = smooth_turn + (raw_turn - smooth_turn) * smoothing\n    heading = heading + smooth_turn * TURN_RATE * dt\n\n    local rad = math.rad(heading)\n    local fwd_x, fwd_z = math.sin(rad), math.cos(rad)\n\n    -- Hyst\u00e9r\u00e9sis arr\u00eat/reprise (cf. la doc de cette fonction) : le seuil de reprise\n    -- (0.9) est plus large que celui d'arr\u00eat (0.5) pour ne pas flip-flopper pile au\n    -- bord d'un obstacle. Binaire \u2014 pas de rampe liss\u00e9e comme pour `smooth_turn` :\n    -- le clip `Walk` joue \u00e0 vitesse de lecture fixe (le script n'a pas de prise sur\n    -- `AnimationState.speed`, seulement sur le clip jou\u00e9), donc une avance \u00e0 vitesse\n    -- *progressive* d\u00e9synchronise le cycle des jambes de la vitesse r\u00e9elle au sol \u2014\n    -- glissement des pieds pendant toute la rampe. Un arr\u00eat/d\u00e9part net \u00e9vite le\n    -- probl\u00e8me \u00e0 la source plut\u00f4t que de le masquer.\n    local stop_now\n    if was_stopped then\n        stop_now = center_d < 0.9\n    else\n        stop_now = center_d < 0.5\n    end\n    local moving = not stop_now\n\n    if moving then\n        obj.x = obj.x + fwd_x * SPEED * dt\n        obj.z = obj.z + fwd_z * SPEED * dt\n    end\n    obj.anim = moving and \"Walk\" or \"Idle\"\n\n    -- Garde-fou final, cf. la doc de ce script : quoi qu'il arrive, ne jamais\n    -- sortir de l'ar\u00e8ne.\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n\n    obj.ry = heading\n    save.set(\"creature10_heading\", heading)\n    save.set(\"creature10_turn\", smooth_turn)\n    save.set(\"creature10_stopped\", stop_now and 1.0 or 0.0)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2095,7 +2100,7 @@
         "Imported": 10
       },
       "metallic": 0.0,
-      "name": "Créature 11",
+      "name": "Cr\u00e9ature 11",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -2165,12 +2170,12 @@
         "Imported": 11
       },
       "metallic": 0.0,
-      "name": "Créature 12",
+      "name": "Cr\u00e9ature 12",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.8\n    local NEAR = 4.0\n    local FAR = 6.0\n    local SMOOTH = 4.0\n    local BOUND = 35\n\n    -- Audit gameplay (girouette) : la bascule approche/orbite/recul se faisait\n    -- d'un tick à l'autre, sans transition — pile sur un seuil (d ≈ NEAR/FAR),\n    -- la vitesse ET `obj.ry` claquaient de 90° à chaque frame (tremblement sur\n    -- place, demi-tours illogiques). La vitesse *désirée* reste calculée par\n    -- zone, mais la vitesse *appliquée* la suit par lissage exponentiel (même\n    -- idiome que `smooth_turn` du script d'errance) et `obj.ry` suit le\n    -- mouvement réel, pas le joueur : le passage d'une zone à l'autre est un\n    -- virage, plus un claquement.\n    local svx = save.get(\"creature12_svx\") or 0.0\n    local svz = save.get(\"creature12_svz\") or 0.0\n    local wx, wz = 0.0, 0.0\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.01 then\n            local nx, nz = dx / d, dz / d\n            if d > FAR then\n                wx, wz = nx, nz\n            elseif d < NEAR then\n                wx, wz = -nx, -nz\n            else\n                -- Dans la fourchette : tourne autour du joueur (perpendiculaire).\n                wx, wz = -nz, nx\n            end\n        end\n    else\n        -- Pas de joueur repéré : petit va-et-vient nerveux sur place.\n        wx = math.sin(time * 1.7) * 0.25\n    end\n    local k = 1.0 - math.exp(-SMOOTH * dt)\n    svx = svx + (wx * SPEED - svx) * k\n    svz = svz + (wz * SPEED - svz) * k\n    local sp = math.sqrt(svx * svx + svz * svz)\n    obj.x = obj.x + svx * dt\n    obj.z = obj.z + svz * dt\n    -- Cap borné en vitesse de rotation : quand la vitesse lissée passe près de\n    -- zéro (inversion de sens), sa direction peut sauter de 180° d'un tick à\n    -- l'autre — le corps, lui, pivote au plus à TURN_RATE.\n    local TURN_RATE = 240.0\n    local hry = save.get(\"creature12_ry\") or obj.ry\n    if sp > 0.2 then\n        local want = math.deg(math.atan(svx, svz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    obj.ry = hry\n    obj.anim = sp > 0.2 and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature12_ry\", hry)\n    save.set(\"creature12_svx\", svx)\n    save.set(\"creature12_svz\", svz)\n    save.set(\"creature12_seen\", #players)\n",
+      "script": "\n    local SPEED = 1.8\n    local NEAR = 4.0\n    local FAR = 6.0\n    local SMOOTH = 4.0\n    local BOUND = 35\n\n    -- Audit gameplay (girouette) : la bascule approche/orbite/recul se faisait\n    -- d'un tick \u00e0 l'autre, sans transition \u2014 pile sur un seuil (d \u2248 NEAR/FAR),\n    -- la vitesse ET `obj.ry` claquaient de 90\u00b0 \u00e0 chaque frame (tremblement sur\n    -- place, demi-tours illogiques). La vitesse *d\u00e9sir\u00e9e* reste calcul\u00e9e par\n    -- zone, mais la vitesse *appliqu\u00e9e* la suit par lissage exponentiel (m\u00eame\n    -- idiome que `smooth_turn` du script d'errance) et `obj.ry` suit le\n    -- mouvement r\u00e9el, pas le joueur : le passage d'une zone \u00e0 l'autre est un\n    -- virage, plus un claquement.\n    local svx = save.get(\"creature12_svx\") or 0.0\n    local svz = save.get(\"creature12_svz\") or 0.0\n    local wx, wz = 0.0, 0.0\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.01 then\n            local nx, nz = dx / d, dz / d\n            if d > FAR then\n                wx, wz = nx, nz\n            elseif d < NEAR then\n                wx, wz = -nx, -nz\n            else\n                -- Dans la fourchette : tourne autour du joueur (perpendiculaire).\n                wx, wz = -nz, nx\n            end\n        end\n    else\n        -- Pas de joueur rep\u00e9r\u00e9 : petit va-et-vient nerveux sur place.\n        wx = math.sin(time * 1.7) * 0.25\n    end\n    local k = 1.0 - math.exp(-SMOOTH * dt)\n    svx = svx + (wx * SPEED - svx) * k\n    svz = svz + (wz * SPEED - svz) * k\n    local sp = math.sqrt(svx * svx + svz * svz)\n    obj.x = obj.x + svx * dt\n    obj.z = obj.z + svz * dt\n    -- Cap born\u00e9 en vitesse de rotation : quand la vitesse liss\u00e9e passe pr\u00e8s de\n    -- z\u00e9ro (inversion de sens), sa direction peut sauter de 180\u00b0 d'un tick \u00e0\n    -- l'autre \u2014 le corps, lui, pivote au plus \u00e0 TURN_RATE.\n    local TURN_RATE = 240.0\n    local hry = save.get(\"creature12_ry\") or obj.ry\n    if sp > 0.2 then\n        local want = math.deg(math.atan(svx, svz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    obj.ry = hry\n    obj.anim = sp > 0.2 and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature12_ry\", hry)\n    save.set(\"creature12_svx\", svx)\n    save.set(\"creature12_svz\", svz)\n    save.set(\"creature12_seen\", #players)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2235,12 +2240,12 @@
         "Imported": 12
       },
       "metallic": 0.0,
-      "name": "Créature 13",
+      "name": "Cr\u00e9ature 13",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local DRIFT = 0.6\n    local FLEE_SPEED = 1.6\n    local FLEE = 3.0\n    local BOUND = 35\n\n    -- Audit gameplay : le cap de fuite (et le rappel vers le centre) était posé\n    -- d'un coup (`heading = atan(...)`) — pivot de 180° en une frame quand le\n    -- joueur surgissait. Le cap **cible** reste instantané, mais le cap appliqué\n    -- le rejoint à vitesse bornée (TURN_RATE) : la méduse se détourne vite,\n    -- sans claquer.\n    local TURN_RATE = 240.0\n    local heading = (save.get(\"creature13_heading\") or 0.0) + math.sin(time * 0.4) * 25.0 * dt\n    local target = nil\n    local fleeing = false\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = obj.x - p.x, obj.z - p.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d < FLEE and d > 0.01 then\n            target = math.deg(math.atan(dx / d, dz / d))\n            fleeing = true\n        end\n    end\n    -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).\n    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then\n        target = math.deg(math.atan(-obj.x, -obj.z))\n    end\n    if target ~= nil then\n        local diff = ((target - heading + 180) % 360) - 180\n        heading = heading + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    local rad = math.rad(heading)\n    local speed = fleeing and FLEE_SPEED or DRIFT\n    obj.x = obj.x + math.sin(rad) * speed * dt\n    obj.z = obj.z + math.cos(rad) * speed * dt\n    obj.ry = heading\n    obj.anim = \"Walk\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature13_heading\", heading)\n",
+      "script": "\n    local DRIFT = 0.6\n    local FLEE_SPEED = 1.6\n    local FLEE = 3.0\n    local BOUND = 35\n\n    -- Audit gameplay : le cap de fuite (et le rappel vers le centre) \u00e9tait pos\u00e9\n    -- d'un coup (`heading = atan(...)`) \u2014 pivot de 180\u00b0 en une frame quand le\n    -- joueur surgissait. Le cap **cible** reste instantan\u00e9, mais le cap appliqu\u00e9\n    -- le rejoint \u00e0 vitesse born\u00e9e (TURN_RATE) : la m\u00e9duse se d\u00e9tourne vite,\n    -- sans claquer.\n    local TURN_RATE = 240.0\n    local heading = (save.get(\"creature13_heading\") or 0.0) + math.sin(time * 0.4) * 25.0 * dt\n    local target = nil\n    local fleeing = false\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = obj.x - p.x, obj.z - p.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d < FLEE and d > 0.01 then\n            target = math.deg(math.atan(dx / d, dz / d))\n            fleeing = true\n        end\n    end\n    -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).\n    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then\n        target = math.deg(math.atan(-obj.x, -obj.z))\n    end\n    if target ~= nil then\n        local diff = ((target - heading + 180) % 360) - 180\n        heading = heading + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    local rad = math.rad(heading)\n    local speed = fleeing and FLEE_SPEED or DRIFT\n    obj.x = obj.x + math.sin(rad) * speed * dt\n    obj.z = obj.z + math.cos(rad) * speed * dt\n    obj.ry = heading\n    obj.anim = \"Walk\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature13_heading\", heading)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2305,12 +2310,12 @@
         "Imported": 13
       },
       "metallic": 0.0,
-      "name": "Créature 14",
+      "name": "Cr\u00e9ature 14",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 0.35\n    local LEG = 4.0\n\n    local sx = save.get(\"creature14_spawn_x\")\n    local sz = save.get(\"creature14_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature14_spawn_x\", sx)\n        save.set(\"creature14_spawn_z\", sz)\n    end\n    local going = (save.get(\"creature14_going\") or 1.0) > 0.5\n    local tx = going and (sx + LEG) or sx\n    local dx = tx - obj.x\n    -- Audit gameplay : le cap claquait de ±180° d'un tick à l'autre à chaque\n    -- bout de navette — pivot limité en vitesse (l'escargot se retourne\n    -- pesamment, cohérent avec son tempérament d'artillerie).\n    local TURN_RATE = 120.0\n    local heading = save.get(\"creature14_heading\") or (dx >= 0 and 90.0 or -90.0)\n    local target_ry = dx >= 0 and 90.0 or -90.0\n    local diff = ((target_ry - heading + 180) % 360) - 180\n    local turn = math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    heading = heading + turn\n    save.set(\"creature14_heading\", heading)\n    obj.ry = heading\n    if math.abs(dx) < 0.05 then\n        save.set(\"creature14_going\", going and 0.0 or 1.0)\n        obj.anim = \"Idle\"\n    elseif math.abs(diff) > 30.0 then\n        -- Encore en train de se retourner : pas d'avance en crabe.\n        obj.anim = \"Idle\"\n    else\n        local step = math.min(SPEED * dt, math.abs(dx))\n        obj.x = obj.x + (dx > 0 and step or -step)\n        obj.anim = \"Walk\"\n    end\n    -- Retour au rail borné en vitesse : une bousculade (créature qui croise la\n    -- navette) peut l'écarter de sa ligne — la re-coller d'un coup (`obj.z = sz`)\n    -- était une téléportation d'autant de mètres que la poussée subie.\n    local RAIL_SPEED = 0.6\n    local dzr = sz - obj.z\n    obj.z = obj.z + math.max(-RAIL_SPEED * dt, math.min(RAIL_SPEED * dt, dzr))\n",
+      "script": "\n    local SPEED = 0.35\n    local LEG = 4.0\n\n    local sx = save.get(\"creature14_spawn_x\")\n    local sz = save.get(\"creature14_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature14_spawn_x\", sx)\n        save.set(\"creature14_spawn_z\", sz)\n    end\n    local going = (save.get(\"creature14_going\") or 1.0) > 0.5\n    local tx = going and (sx + LEG) or sx\n    local dx = tx - obj.x\n    -- Audit gameplay : le cap claquait de \u00b1180\u00b0 d'un tick \u00e0 l'autre \u00e0 chaque\n    -- bout de navette \u2014 pivot limit\u00e9 en vitesse (l'escargot se retourne\n    -- pesamment, coh\u00e9rent avec son temp\u00e9rament d'artillerie).\n    local TURN_RATE = 120.0\n    local heading = save.get(\"creature14_heading\") or (dx >= 0 and 90.0 or -90.0)\n    local target_ry = dx >= 0 and 90.0 or -90.0\n    local diff = ((target_ry - heading + 180) % 360) - 180\n    local turn = math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    heading = heading + turn\n    save.set(\"creature14_heading\", heading)\n    obj.ry = heading\n    if math.abs(dx) < 0.05 then\n        save.set(\"creature14_going\", going and 0.0 or 1.0)\n        obj.anim = \"Idle\"\n    elseif math.abs(diff) > 30.0 then\n        -- Encore en train de se retourner : pas d'avance en crabe.\n        obj.anim = \"Idle\"\n    else\n        local step = math.min(SPEED * dt, math.abs(dx))\n        obj.x = obj.x + (dx > 0 and step or -step)\n        obj.anim = \"Walk\"\n    end\n    -- Retour au rail born\u00e9 en vitesse : une bousculade (cr\u00e9ature qui croise la\n    -- navette) peut l'\u00e9carter de sa ligne \u2014 la re-coller d'un coup (`obj.z = sz`)\n    -- \u00e9tait une t\u00e9l\u00e9portation d'autant de m\u00e8tres que la pouss\u00e9e subie.\n    local RAIL_SPEED = 0.6\n    local dzr = sz - obj.z\n    obj.z = obj.z + math.max(-RAIL_SPEED * dt, math.min(RAIL_SPEED * dt, dzr))\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2375,7 +2380,7 @@
         "Imported": 14
       },
       "metallic": 0.0,
-      "name": "Créature 15",
+      "name": "Cr\u00e9ature 15",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -2445,12 +2450,12 @@
         "Imported": 15
       },
       "metallic": 0.0,
-      "name": "Créature 16",
+      "name": "Cr\u00e9ature 16",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 1.6\n    local RADIUS = 6.0\n    local LAG = 1.0\n    local BOUND = 35\n\n    local sx = save.get(\"creature16_spawn_x\")\n    local sz = save.get(\"creature16_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature16_spawn_x\", sx)\n        save.set(\"creature16_spawn_z\", sz)\n    end\n    local ang = save.get(\"creature16_ang\") or 0.0\n    -- Cible bornée à l'arène : un arc de cercle qui mordrait sur un mur reste\n    -- atteignable (la cible glisse le long du mur au lieu d'être derrière).\n    local function target_at(a)\n        local px = math.max(-BOUND, math.min(BOUND, sx + math.cos(a) * RADIUS))\n        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(a) * RADIUS))\n        return px, pz\n    end\n    local tx, tz = target_at(ang)\n    local dx, dz = tx - obj.x, tz - obj.z\n    local d = math.sqrt(dx * dx + dz * dz)\n    if d < LAG then\n        -- À jour : la cible avance, et on la re-mesure après coup — sinon une\n        -- créature pile dessus resterait sous le seuil de marche une frame sur\n        -- deux (flip-flop Walk/Idle, bégaiement d'animation).\n        ang = ang + (SPEED / RADIUS) * dt\n        save.set(\"creature16_ang\", ang)\n        tx, tz = target_at(ang)\n        dx, dz = tx - obj.x, tz - obj.z\n        d = math.sqrt(dx * dx + dz * dz)\n    end\n    -- Cap borné en vitesse de rotation (même garde-fou que les autres\n    -- comportements) : la direction vers une cible toute proche peut tourner\n    -- très vite d'un tick à l'autre — le corps, lui, pivote au plus à TURN_RATE.\n    local TURN_RATE = 300.0\n    local hry = save.get(\"creature16_ry\") or obj.ry\n    if d > 0.01 then\n        local step = math.min(SPEED * 1.4 * dt, d)\n        obj.x = obj.x + dx / d * step\n        obj.z = obj.z + dz / d * step\n        local want = math.deg(math.atan(dx, dz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.ry = hry\n    save.set(\"creature16_ry\", hry)\n",
+      "script": "\n    local SPEED = 1.6\n    local RADIUS = 6.0\n    local LAG = 1.0\n    local BOUND = 35\n\n    local sx = save.get(\"creature16_spawn_x\")\n    local sz = save.get(\"creature16_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature16_spawn_x\", sx)\n        save.set(\"creature16_spawn_z\", sz)\n    end\n    local ang = save.get(\"creature16_ang\") or 0.0\n    -- Cible born\u00e9e \u00e0 l'ar\u00e8ne : un arc de cercle qui mordrait sur un mur reste\n    -- atteignable (la cible glisse le long du mur au lieu d'\u00eatre derri\u00e8re).\n    local function target_at(a)\n        local px = math.max(-BOUND, math.min(BOUND, sx + math.cos(a) * RADIUS))\n        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(a) * RADIUS))\n        return px, pz\n    end\n    local tx, tz = target_at(ang)\n    local dx, dz = tx - obj.x, tz - obj.z\n    local d = math.sqrt(dx * dx + dz * dz)\n    if d < LAG then\n        -- \u00c0 jour : la cible avance, et on la re-mesure apr\u00e8s coup \u2014 sinon une\n        -- cr\u00e9ature pile dessus resterait sous le seuil de marche une frame sur\n        -- deux (flip-flop Walk/Idle, b\u00e9gaiement d'animation).\n        ang = ang + (SPEED / RADIUS) * dt\n        save.set(\"creature16_ang\", ang)\n        tx, tz = target_at(ang)\n        dx, dz = tx - obj.x, tz - obj.z\n        d = math.sqrt(dx * dx + dz * dz)\n    end\n    -- Cap born\u00e9 en vitesse de rotation (m\u00eame garde-fou que les autres\n    -- comportements) : la direction vers une cible toute proche peut tourner\n    -- tr\u00e8s vite d'un tick \u00e0 l'autre \u2014 le corps, lui, pivote au plus \u00e0 TURN_RATE.\n    local TURN_RATE = 300.0\n    local hry = save.get(\"creature16_ry\") or obj.ry\n    if d > 0.01 then\n        local step = math.min(SPEED * 1.4 * dt, d)\n        obj.x = obj.x + dx / d * step\n        obj.z = obj.z + dz / d * step\n        local want = math.deg(math.atan(dx, dz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.ry = hry\n    save.set(\"creature16_ry\", hry)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2515,12 +2520,12 @@
         "Imported": 16
       },
       "metallic": 0.0,
-      "name": "Créature 17",
+      "name": "Cr\u00e9ature 17",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 0.5\n    local SCALE = 4.5\n    local LAG = 1.0\n    local BOUND = 35\n\n    local sx = save.get(\"creature17_spawn_x\")\n    local sz = save.get(\"creature17_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature17_spawn_x\", sx)\n        save.set(\"creature17_spawn_z\", sz)\n    end\n    local t = save.get(\"creature17_t\") or 0.0\n    -- Courbe de Lissajous (huit couché) : x = sin(t), z = sin(t)*cos(t) —\n    -- suivie comme une cible (bornée à l'arène), jamais écrite en absolu.\n    local function target_at(u)\n        local px = math.max(-BOUND, math.min(BOUND, sx + math.sin(u) * SCALE))\n        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(u) * math.cos(u) * SCALE))\n        return px, pz\n    end\n    local tx, tz = target_at(t)\n    local dx, dz = tx - obj.x, tz - obj.z\n    local d = math.sqrt(dx * dx + dz * dz)\n    if d < LAG then\n        -- Cible re-mesurée après l'avance, cf. `creature_soar_script` (évite le\n        -- flip-flop Walk/Idle d'une créature pile sur sa cible).\n        t = t + SPEED * dt\n        save.set(\"creature17_t\", t)\n        tx, tz = target_at(t)\n        dx, dz = tx - obj.x, tz - obj.z\n        d = math.sqrt(dx * dx + dz * dz)\n    end\n    -- Vitesse de croisière ≈ dérivée max de la courbe (SPEED·SCALE·√2), plafonnée.\n    -- Cap borné en vitesse de rotation : la tangente du huit tourne très vite\n    -- aux pointes des lobes — cf. `creature_soar_script`, même garde-fou.\n    local TURN_RATE = 300.0\n    local hry = save.get(\"creature17_ry\") or obj.ry\n    if d > 0.01 then\n        local step = math.min(SPEED * SCALE * 1.5 * dt, d)\n        obj.x = obj.x + dx / d * step\n        obj.z = obj.z + dz / d * step\n        local want = math.deg(math.atan(dx, dz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.ry = hry\n    save.set(\"creature17_ry\", hry)\n",
+      "script": "\n    local SPEED = 0.5\n    local SCALE = 4.5\n    local LAG = 1.0\n    local BOUND = 35\n\n    local sx = save.get(\"creature17_spawn_x\")\n    local sz = save.get(\"creature17_spawn_z\")\n    if sx == nil then\n        sx = obj.x; sz = obj.z\n        save.set(\"creature17_spawn_x\", sx)\n        save.set(\"creature17_spawn_z\", sz)\n    end\n    local t = save.get(\"creature17_t\") or 0.0\n    -- Courbe de Lissajous (huit couch\u00e9) : x = sin(t), z = sin(t)*cos(t) \u2014\n    -- suivie comme une cible (born\u00e9e \u00e0 l'ar\u00e8ne), jamais \u00e9crite en absolu.\n    local function target_at(u)\n        local px = math.max(-BOUND, math.min(BOUND, sx + math.sin(u) * SCALE))\n        local pz = math.max(-BOUND, math.min(BOUND, sz + math.sin(u) * math.cos(u) * SCALE))\n        return px, pz\n    end\n    local tx, tz = target_at(t)\n    local dx, dz = tx - obj.x, tz - obj.z\n    local d = math.sqrt(dx * dx + dz * dz)\n    if d < LAG then\n        -- Cible re-mesur\u00e9e apr\u00e8s l'avance, cf. `creature_soar_script` (\u00e9vite le\n        -- flip-flop Walk/Idle d'une cr\u00e9ature pile sur sa cible).\n        t = t + SPEED * dt\n        save.set(\"creature17_t\", t)\n        tx, tz = target_at(t)\n        dx, dz = tx - obj.x, tz - obj.z\n        d = math.sqrt(dx * dx + dz * dz)\n    end\n    -- Vitesse de croisi\u00e8re \u2248 d\u00e9riv\u00e9e max de la courbe (SPEED\u00b7SCALE\u00b7\u221a2), plafonn\u00e9e.\n    -- Cap born\u00e9 en vitesse de rotation : la tangente du huit tourne tr\u00e8s vite\n    -- aux pointes des lobes \u2014 cf. `creature_soar_script`, m\u00eame garde-fou.\n    local TURN_RATE = 300.0\n    local hry = save.get(\"creature17_ry\") or obj.ry\n    if d > 0.01 then\n        local step = math.min(SPEED * SCALE * 1.5 * dt, d)\n        obj.x = obj.x + dx / d * step\n        obj.z = obj.z + dz / d * step\n        local want = math.deg(math.atan(dx, dz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.ry = hry\n    save.set(\"creature17_ry\", hry)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2585,12 +2590,12 @@
         "Imported": 17
       },
       "metallic": 0.0,
-      "name": "Créature 18",
+      "name": "Cr\u00e9ature 18",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SUBMERGED = 2.2\n    local RUSH = 1.1\n    local SPEED = 3.2\n    local BOUND = 35\n\n    local phase_end = save.get(\"creature18_phase_end\") or 0.0\n    local rushing = (save.get(\"creature18_rushing\") or 0.0) > 0.5\n    if time >= phase_end then\n        rushing = not rushing\n        save.set(\"creature18_rushing\", rushing and 1.0 or 0.0)\n        phase_end = time + (rushing and RUSH or SUBMERGED)\n        save.set(\"creature18_phase_end\", phase_end)\n        if rushing then\n            -- Nouvelle direction de charge à chaque surgissement.\n            local heading = math.deg(math.atan(-obj.x, -obj.z)) + (math.sin(time * 3.1) * 90.0)\n            save.set(\"creature18_heading\", heading)\n        end\n    end\n    if rushing then\n        local heading = save.get(\"creature18_heading\") or 0.0\n        local rad = math.rad(heading)\n        obj.x = obj.x + math.sin(rad) * SPEED * dt\n        obj.z = obj.z + math.cos(rad) * SPEED * dt\n        obj.ry = heading\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n",
+      "script": "\n    local SUBMERGED = 2.2\n    local RUSH = 1.1\n    local SPEED = 3.2\n    local BOUND = 35\n\n    local phase_end = save.get(\"creature18_phase_end\") or 0.0\n    local rushing = (save.get(\"creature18_rushing\") or 0.0) > 0.5\n    if time >= phase_end then\n        rushing = not rushing\n        save.set(\"creature18_rushing\", rushing and 1.0 or 0.0)\n        phase_end = time + (rushing and RUSH or SUBMERGED)\n        save.set(\"creature18_phase_end\", phase_end)\n        if rushing then\n            -- Nouvelle direction de charge \u00e0 chaque surgissement.\n            local heading = math.deg(math.atan(-obj.x, -obj.z)) + (math.sin(time * 3.1) * 90.0)\n            save.set(\"creature18_heading\", heading)\n        end\n    end\n    if rushing then\n        local heading = save.get(\"creature18_heading\") or 0.0\n        local rad = math.rad(heading)\n        obj.x = obj.x + math.sin(rad) * SPEED * dt\n        obj.z = obj.z + math.cos(rad) * SPEED * dt\n        obj.ry = heading\n        obj.anim = \"Walk\"\n    else\n        obj.anim = \"Idle\"\n    end\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2655,12 +2660,12 @@
         "Imported": 18
       },
       "metallic": 0.0,
-      "name": "Créature 19",
+      "name": "Cr\u00e9ature 19",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
       "roughness": 0.6000000238418579,
-      "script": "\n    local SPEED = 0.7\n    local NEAR = 4.0\n    local DEAD = 1.0\n    local SMOOTH = 3.0\n    local BOUND = 35\n\n    local svx = save.get(\"creature19_svx\") or 0.0\n    local svz = save.get(\"creature19_svz\") or 0.0\n    local wx, wz = 0.0, 0.0\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.05 then\n            local nx, nz = dx / d, dz / d\n            if d < NEAR then\n                wx, wz = -nx, -nz\n            elseif d > NEAR + DEAD then\n                wx, wz = nx, nz\n            end\n            -- Entre NEAR et NEAR + DEAD : vol stationnaire (zone morte).\n        end\n    end\n    local k = 1.0 - math.exp(-SMOOTH * dt)\n    svx = svx + (wx * SPEED - svx) * k\n    svz = svz + (wz * SPEED - svz) * k\n    local sp = math.sqrt(svx * svx + svz * svz)\n    obj.x = obj.x + svx * dt\n    obj.z = obj.z + svz * dt\n    -- Cap borné en vitesse de rotation, cf. `creature_kite_script` (même\n    -- garde-fou contre le pivot de 180° à l'inversion de sens).\n    local TURN_RATE = 240.0\n    local hry = save.get(\"creature19_ry\") or obj.ry\n    if sp > 0.1 then\n        local want = math.deg(math.atan(svx, svz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    obj.ry = hry\n    obj.anim = sp > 0.1 and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature19_ry\", hry)\n    save.set(\"creature19_svx\", svx)\n    save.set(\"creature19_svz\", svz)\n",
+      "script": "\n    local SPEED = 0.7\n    local NEAR = 4.0\n    local DEAD = 1.0\n    local SMOOTH = 3.0\n    local BOUND = 35\n\n    local svx = save.get(\"creature19_svx\") or 0.0\n    local svz = save.get(\"creature19_svz\") or 0.0\n    local wx, wz = 0.0, 0.0\n    local players = find_tag(\"joueur\")\n    if #players > 0 then\n        local p = players[1]\n        local dx, dz = p.x - obj.x, p.z - obj.z\n        local d = math.sqrt(dx * dx + dz * dz)\n        if d > 0.05 then\n            local nx, nz = dx / d, dz / d\n            if d < NEAR then\n                wx, wz = -nx, -nz\n            elseif d > NEAR + DEAD then\n                wx, wz = nx, nz\n            end\n            -- Entre NEAR et NEAR + DEAD : vol stationnaire (zone morte).\n        end\n    end\n    local k = 1.0 - math.exp(-SMOOTH * dt)\n    svx = svx + (wx * SPEED - svx) * k\n    svz = svz + (wz * SPEED - svz) * k\n    local sp = math.sqrt(svx * svx + svz * svz)\n    obj.x = obj.x + svx * dt\n    obj.z = obj.z + svz * dt\n    -- Cap born\u00e9 en vitesse de rotation, cf. `creature_kite_script` (m\u00eame\n    -- garde-fou contre le pivot de 180\u00b0 \u00e0 l'inversion de sens).\n    local TURN_RATE = 240.0\n    local hry = save.get(\"creature19_ry\") or obj.ry\n    if sp > 0.1 then\n        local want = math.deg(math.atan(svx, svz))\n        local diff = ((want - hry + 180) % 360) - 180\n        hry = hry + math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))\n    end\n    obj.ry = hry\n    obj.anim = sp > 0.1 and \"Walk\" or \"Idle\"\n    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))\n    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))\n    save.set(\"creature19_ry\", hry)\n    save.set(\"creature19_svx\", svx)\n    save.set(\"creature19_svz\", svz)\n",
       "tag": "",
       "tap_action": "None",
       "tappable": false,
@@ -2725,7 +2730,7 @@
         "Imported": 19
       },
       "metallic": 0.0,
-      "name": "Créature 20",
+      "name": "Cr\u00e9ature 20",
       "physics": "Kinematic",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -2781,7 +2786,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.15000000596046448,
-      "name": "Rivière nord",
+      "name": "Rivi\u00e8re nord",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -2837,7 +2842,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.15000000596046448,
-      "name": "Coude de rivière",
+      "name": "Coude de rivi\u00e8re",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -2949,7 +2954,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.15000000596046448,
-      "name": "Rivière sud",
+      "name": "Rivi\u00e8re sud",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -3229,7 +3234,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.0,
-      "name": "Rizière 1",
+      "name": "Rizi\u00e8re 1",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -3285,7 +3290,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.0,
-      "name": "Rizière 2",
+      "name": "Rizi\u00e8re 2",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -3341,7 +3346,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.0,
-      "name": "Rizière 3",
+      "name": "Rizi\u00e8re 3",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -3397,7 +3402,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.0,
-      "name": "Rizière 4",
+      "name": "Rizi\u00e8re 4",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -3453,7 +3458,7 @@
       "item_pickup": null,
       "mesh": "Plane",
       "metallic": 0.0,
-      "name": "Rizière 5",
+      "name": "Rizi\u00e8re 5",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -7119,7 +7124,7 @@
           0.0,
           1.0,
           0.0,
-          -4.371138828673793e-8
+          -4.371138828673793e-08
         ],
         "scale": [
           1.0,
@@ -7177,7 +7182,7 @@
           0.0,
           1.0,
           0.0,
-          -4.371138828673793e-8
+          -4.371138828673793e-08
         ],
         "scale": [
           1.0,
@@ -7512,7 +7517,7 @@
         "Imported": 27
       },
       "metallic": 0.0,
-      "name": "Bannière",
+      "name": "Banni\u00e8re",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -7686,7 +7691,7 @@
         "Imported": 29
       },
       "metallic": 0.0,
-      "name": "Clôture 1",
+      "name": "Cl\u00f4ture 1",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -7744,7 +7749,7 @@
         "Imported": 29
       },
       "metallic": 0.0,
-      "name": "Clôture 2",
+      "name": "Cl\u00f4ture 2",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -7802,7 +7807,7 @@
         "Imported": 29
       },
       "metallic": 0.0,
-      "name": "Clôture 3",
+      "name": "Cl\u00f4ture 3",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -7860,7 +7865,7 @@
         "Imported": 29
       },
       "metallic": 0.0,
-      "name": "Clôture 4",
+      "name": "Cl\u00f4ture 4",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -8273,7 +8278,7 @@
         "Imported": 32
       },
       "metallic": 0.0,
-      "name": "Moulin à eau",
+      "name": "Moulin \u00e0 eau",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -8293,7 +8298,7 @@
           0.0,
           1.0,
           0.0,
-          -4.371138828673793e-8
+          -4.371138828673793e-08
         ],
         "scale": [
           1.0,
@@ -8338,7 +8343,7 @@
         "Imported": 33
       },
       "metallic": 0.0,
-      "name": "Moulin à vent",
+      "name": "Moulin \u00e0 vent",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -8468,7 +8473,7 @@
         "Imported": 35
       },
       "metallic": 0.0,
-      "name": "Épouvantail",
+      "name": "\u00c9pouvantail",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -8662,7 +8667,7 @@
           0.0,
           1.0,
           0.0,
-          -4.371138828673793e-8
+          -4.371138828673793e-08
         ],
         "scale": [
           1.0,
@@ -8700,7 +8705,7 @@
         "Imported": 38
       },
       "metallic": 0.0,
-      "name": "Nénuphars 1",
+      "name": "N\u00e9nuphars 1",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -8758,7 +8763,7 @@
         "Imported": 38
       },
       "metallic": 0.0,
-      "name": "Nénuphars 2",
+      "name": "N\u00e9nuphars 2",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -8816,7 +8821,7 @@
         "Imported": 38
       },
       "metallic": 0.0,
-      "name": "Nénuphars 3",
+      "name": "N\u00e9nuphars 3",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -9698,7 +9703,7 @@
         "Imported": 49
       },
       "metallic": 0.0,
-      "name": "Écureuil",
+      "name": "\u00c9cureuil",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -10088,7 +10093,7 @@
         "Imported": 55
       },
       "metallic": 0.0,
-      "name": "Hérisson",
+      "name": "H\u00e9risson",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -10543,7 +10548,7 @@
         "Imported": 62
       },
       "metallic": 0.0,
-      "name": "Barrière de péage",
+      "name": "Barri\u00e8re de p\u00e9age",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -10608,7 +10613,7 @@
         "Imported": 63
       },
       "metallic": 0.0,
-      "name": "Puits à manivelle",
+      "name": "Puits \u00e0 manivelle",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -10738,7 +10743,7 @@
         "Imported": 65
       },
       "metallic": 0.0,
-      "name": "Métier à tisser",
+      "name": "M\u00e9tier \u00e0 tisser",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -10933,7 +10938,7 @@
         "Imported": 68
       },
       "metallic": 0.0,
-      "name": "Pompe à eau",
+      "name": "Pompe \u00e0 eau",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -10998,7 +11003,7 @@
         "Imported": 69
       },
       "metallic": 0.0,
-      "name": "Auvent de marché",
+      "name": "Auvent de march\u00e9",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -11063,7 +11068,7 @@
         "Imported": 70
       },
       "metallic": 0.0,
-      "name": "Moulin à prières",
+      "name": "Moulin \u00e0 pri\u00e8res",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -11128,7 +11133,7 @@
         "Imported": 71
       },
       "metallic": 0.0,
-      "name": "Bascule à balancier",
+      "name": "Bascule \u00e0 balancier",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -11193,7 +11198,7 @@
         "Imported": 72
       },
       "metallic": 0.0,
-      "name": "Manège",
+      "name": "Man\u00e8ge",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -11453,7 +11458,7 @@
         "Imported": 76
       },
       "metallic": 0.0,
-      "name": "Balançoire à corde",
+      "name": "Balan\u00e7oire \u00e0 corde",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -11518,7 +11523,7 @@
         "Imported": 77
       },
       "metallic": 0.0,
-      "name": "Carillon à vent",
+      "name": "Carillon \u00e0 vent",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -11583,7 +11588,7 @@
         "Imported": 78
       },
       "metallic": 0.0,
-      "name": "Chaise à bascule",
+      "name": "Chaise \u00e0 bascule",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12248,7 +12253,7 @@
           0.0,
           1.0,
           0.0,
-          -4.371138828673793e-8
+          -4.371138828673793e-08
         ],
         "scale": [
           1.0,
@@ -12286,7 +12291,7 @@
         "Imported": 90
       },
       "metallic": 0.0,
-      "name": "Écurie",
+      "name": "\u00c9curie",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12402,7 +12407,7 @@
         "Imported": 92
       },
       "metallic": 0.0,
-      "name": "Étal du marché 1",
+      "name": "\u00c9tal du march\u00e9 1",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12460,7 +12465,7 @@
         "Imported": 93
       },
       "metallic": 0.0,
-      "name": "Étal du marché 2",
+      "name": "\u00c9tal du march\u00e9 2",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12518,7 +12523,7 @@
         "Imported": 94
       },
       "metallic": 0.0,
-      "name": "Clôture du hameau 1",
+      "name": "Cl\u00f4ture du hameau 1",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12576,7 +12581,7 @@
         "Imported": 94
       },
       "metallic": 0.0,
-      "name": "Clôture du hameau 2",
+      "name": "Cl\u00f4ture du hameau 2",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12634,7 +12639,7 @@
         "Imported": 94
       },
       "metallic": 0.0,
-      "name": "Clôture du hameau 3",
+      "name": "Cl\u00f4ture du hameau 3",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12692,7 +12697,7 @@
         "Imported": 94
       },
       "metallic": 0.0,
-      "name": "Clôture du hameau 4",
+      "name": "Cl\u00f4ture du hameau 4",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -12750,7 +12755,7 @@
         "Imported": 94
       },
       "metallic": 0.0,
-      "name": "Clôture du hameau 5",
+      "name": "Cl\u00f4ture du hameau 5",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -13234,7 +13239,7 @@
           0.0,
           1.0,
           0.0,
-          -4.371138828673793e-8
+          -4.371138828673793e-08
         ],
         "scale": [
           3.0,
@@ -14316,7 +14321,7 @@
         "Imported": 108
       },
       "metallic": 0.0,
-      "name": "Fumée de la forge",
+      "name": "Fum\u00e9e de la forge",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14374,7 +14379,7 @@
         "Imported": 108
       },
       "metallic": 0.0,
-      "name": "Fumée de la scierie",
+      "name": "Fum\u00e9e de la scierie",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14606,7 +14611,7 @@
         "Imported": 112
       },
       "metallic": 0.0,
-      "name": "Fenêtre ronde 1",
+      "name": "Fen\u00eatre ronde 1",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14664,7 +14669,7 @@
         "Imported": 112
       },
       "metallic": 0.0,
-      "name": "Fenêtre ronde 2",
+      "name": "Fen\u00eatre ronde 2",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14722,7 +14727,7 @@
         "Imported": 113
       },
       "metallic": 0.0,
-      "name": "Fenêtre du hameau 1",
+      "name": "Fen\u00eatre du hameau 1",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14780,7 +14785,7 @@
         "Imported": 113
       },
       "metallic": 0.0,
-      "name": "Fenêtre du hameau 2",
+      "name": "Fen\u00eatre du hameau 2",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14838,7 +14843,7 @@
         "Imported": 114
       },
       "metallic": 0.0,
-      "name": "Fenêtre du hameau 3",
+      "name": "Fen\u00eatre du hameau 3",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -14896,7 +14901,7 @@
         "Imported": 114
       },
       "metallic": 0.0,
-      "name": "Fenêtre du hameau 4",
+      "name": "Fen\u00eatre du hameau 4",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -17680,7 +17685,7 @@
         "Imported": 122
       },
       "metallic": 0.0,
-      "name": "Arbre de lisière 1",
+      "name": "Arbre de lisi\u00e8re 1",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -17738,7 +17743,7 @@
         "Imported": 118
       },
       "metallic": 0.0,
-      "name": "Arbre de lisière 2",
+      "name": "Arbre de lisi\u00e8re 2",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -17796,7 +17801,7 @@
         "Imported": 122
       },
       "metallic": 0.0,
-      "name": "Arbre de lisière 3",
+      "name": "Arbre de lisi\u00e8re 3",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -17854,7 +17859,7 @@
         "Imported": 122
       },
       "metallic": 0.0,
-      "name": "Arbre de lisière 4",
+      "name": "Arbre de lisi\u00e8re 4",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -17912,7 +17917,7 @@
         "Imported": 122
       },
       "metallic": 0.0,
-      "name": "Arbre de lisière 5",
+      "name": "Arbre de lisi\u00e8re 5",
       "physics": "Static",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -20352,7 +20357,7 @@
       },
       "mesh": "Sphere",
       "metallic": 0.0,
-      "name": "Buisson à baies",
+      "name": "Buisson \u00e0 baies",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 20.0,
@@ -20411,7 +20416,7 @@
       },
       "mesh": "Sphere",
       "metallic": 0.0,
-      "name": "Clé du village",
+      "name": "Cl\u00e9 du village",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -20529,7 +20534,7 @@
       },
       "mesh": "Sphere",
       "metallic": 0.0,
-      "name": "Gemme de la forêt",
+      "name": "Gemme de la for\u00eat",
       "physics": "None",
       "prefab": null,
       "respawn_delay": 0.0,
@@ -20555,6 +20560,64 @@
           0.3499999940395355,
           0.3499999940395355,
           0.3499999940395355
+        ]
+      },
+      "trigger": false,
+      "vibrate_on_tap": 0,
+      "visible": true,
+      "weapon_pickup": null,
+      "wind": null
+    },
+    {
+      "ai_chaser": null,
+      "animation": null,
+      "audio": null,
+      "bite": null,
+      "ccd": false,
+      "collider_shape": "TriMesh",
+      "collision_layer": 4294967295,
+      "collision_mask": 4294967295,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "combat": null,
+      "controller": null,
+      "deadly": false,
+      "emissive": 0.0,
+      "group": "",
+      "item_pickup": null,
+      "mesh": {
+        "Imported": 125
+      },
+      "metallic": 0.0,
+      "name": "Chaise",
+      "physics": "Static",
+      "prefab": null,
+      "respawn_delay": 0.0,
+      "roughness": 0.6000000238418579,
+      "script": "",
+      "tag": "",
+      "tap_action": "None",
+      "tappable": false,
+      "texture": "bundle://m125_village_chair.jpg",
+      "transform": {
+        "position": [
+          34.6,
+          0.5,
+          -21.6
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
         ]
       },
       "trigger": false,

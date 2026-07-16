@@ -2568,20 +2568,30 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         //    contour est alors dérivée automatiquement, pas raisonnée à la
         //    main. `GRID` = 3 m (assez fin pour suivre les angles à ~1,5 m
         //    près, largement sous la marge de 3,5 m des sondes créatures).
+        //    `GRID` = 1 m (pas 3 m comme au premier jet) : au grain plus
+        //    large, l'ouverture minimale au droit d'un pont devait couvrir 2
+        //    cellules pour ne pas rogner le tablier (~1,84 m de large), ce qui
+        //    ouvrait ~6 m de berge — largement plus que le pont, le joueur
+        //    pouvait entrer dans l'eau en longeant la rive à côté du tablier
+        //    sans jamais poser le pied dessus. À 1 m, l'ouverture se resserre
+        //    à ~3 m (tablier + ~0,6 m de marge de chaque côté), et le mur
+        //    repousse immédiatement quiconque s'écarte du pont.
         {
-            const GRID: f32 = 3.0;
+            const GRID: f32 = 1.0;
             let water_rects: [(f32, f32, f32, f32); 4] = [
                 (-28.0, -36.0, -24.0, -6.0), // rivière nord
                 (-28.0, -8.0, -16.0, -4.0),  // coude
                 (-26.0, -2.0, -12.0, 10.0),  // lac
                 (-18.0, 10.0, -14.0, 36.0),  // rivière sud
             ];
-            // Rectangles où aucun mur ne doit être posé, quelle que soit
-            // l'orientation du segment : les deux ponts. Assez larges pour
-            // couvrir le tablier + les rampes d'accès des deux côtés.
+            // Rectangles où aucun mur ne doit être posé : juste assez larges
+            // pour couvrir le tablier du pont (largeur réelle ~1,84 m,
+            // `gen_bridge()` × échelle 1.15) sans plus — un gap trop large
+            // laisserait le joueur entrer dans l'eau à côté du pont sans
+            // jamais l'emprunter.
             let bridge_gaps: [(f32, f32, f32, f32); 2] = [
-                (-28.5, -12.5, -23.5, -7.5), // Pont 2 (rivière nord, z≈-10)
-                (-18.5, 11.5, -13.5, 16.5),  // Pont 1 (rivière sud, z≈14)
+                (-29.0, -11.5, -23.0, -8.5), // Pont 2 (rivière nord, z≈-10)
+                (-19.0, 12.5, -13.0, 15.5),  // Pont 1 (rivière sud, z≈14)
             ];
             let is_water = |x: f32, z: f32| {
                 water_rects
@@ -3990,7 +4000,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 0.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Alien 2",
@@ -3999,7 +4009,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 45.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Alpaking",
@@ -4008,7 +4018,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 90.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Alpaking évolué",
@@ -4017,7 +4027,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 135.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Armabee",
@@ -4026,7 +4036,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 180.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Armabee évolué",
@@ -4035,7 +4045,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 225.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Birb",
@@ -4044,7 +4054,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 270.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Démon bleu",
@@ -4053,7 +4063,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 315.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Lapin monstre",
@@ -4062,7 +4072,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 0.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Cactoro",
@@ -4071,7 +4081,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 45.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Cactoro 2",
@@ -4080,7 +4090,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 90.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Chat monstre",
@@ -4089,7 +4099,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.3,
                 yaw_deg: 135.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Poule monstre",
@@ -4098,7 +4108,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.3,
                 yaw_deg: 180.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Démon",
@@ -4107,7 +4117,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 225.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Démon 2",
@@ -4116,7 +4126,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 270.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Dino",
@@ -4125,7 +4135,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 315.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Dragon",
@@ -4134,7 +4144,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 0.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Dragon évolué",
@@ -4143,7 +4153,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 45.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Poisson monstre",
@@ -4152,7 +4162,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 90.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Poisson monstre 2",
@@ -4161,7 +4171,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 135.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Grenouille monstre",
@@ -4170,7 +4180,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 180.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Fantôme",
@@ -4179,7 +4189,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 225.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Crâne fantôme",
@@ -4188,7 +4198,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 270.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Glub",
@@ -4197,7 +4207,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 315.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Glub évolué",
@@ -4206,7 +4216,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 0.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Goleling",
@@ -4215,7 +4225,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 45.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Goleling évolué",
@@ -4224,7 +4234,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 90.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Blob vert",
@@ -4233,7 +4243,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.3,
                 yaw_deg: 135.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Blob épineux",
@@ -4242,7 +4252,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 180.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Hywirl",
@@ -4251,7 +4261,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 225.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Monkroose",
@@ -4260,7 +4270,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 270.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Mushnub",
@@ -4269,7 +4279,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 315.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Mushnub évolué",
@@ -4278,7 +4288,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 0.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Roi champignon",
@@ -4287,7 +4297,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 45.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Ninja",
@@ -4296,7 +4306,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 90.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Ninja 2",
@@ -4305,7 +4315,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 135.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Orc",
@@ -4314,7 +4324,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 180.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Orc ennemi",
@@ -4323,7 +4333,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 225.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Pigeon monstre",
@@ -4332,7 +4342,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.3,
                 yaw_deg: 270.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Blob rose",
@@ -4341,7 +4351,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.3,
                 yaw_deg: 315.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Squidle",
@@ -4350,7 +4360,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 0.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Tribal",
@@ -4359,7 +4369,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.75,
                 yaw_deg: 45.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Sorcier",
@@ -4368,7 +4378,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 90.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Yeti",
@@ -4377,7 +4387,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 1.0,
                 yaw_deg: 135.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
             DemoDecor {
                 name: "Monstre Yeti 2",
@@ -4386,7 +4396,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 scale: 0.9,
                 yaw_deg: 180.0,
                 solide: false,
-                anim: None,
+                anim: Some("Idle"),
             },
         ];
 
@@ -5926,31 +5936,153 @@ mod tests {
         );
     }
 
-    /// Contre-épreuve de la précédente : les deux ponts restent bien les
-    /// passages laissés dans les murs d'eau — un joueur parti de la rive est
-    /// de la rivière sud, piloté vers l'ouest, doit traverser via `Pont 1`
-    /// et atteindre la rive ouest.
+    /// Preuve exhaustive de l'étanchéité de l'eau : essaie d'entrer dans
+    /// chacun des 4 plans d'eau depuis une trentaine de points répartis sur
+    /// tout leur périmètre (y compris juste à côté des deux ponts, l'endroit
+    /// le plus probable d'une brèche — un premier jet laissait ~6 m de berge
+    /// ouverte de chaque côté du tablier, largement plus large que lui) —
+    /// aucun de ces essais ne doit atteindre l'intérieur du rectangle d'eau
+    /// visé, sauf s'il s'agit du couloir du pont lui-même (exclu des points
+    /// testés, couvert par `mmorpg_player_can_still_cross_the_bridges`).
+    #[test]
+    fn mmorpg_water_is_sealed_all_the_way_around_including_next_to_bridges() {
+        // (rect d'eau, points de départ (x,z) hors de l'eau tout autour,
+        // y compris à ±1,5 m du couloir de chaque pont — juste à côté, pas
+        // dedans).
+        let rivière_nord: (f32, f32, f32, f32) = (-28.0, -36.0, -24.0, -6.0);
+        let coude: (f32, f32, f32, f32) = (-28.0, -8.0, -16.0, -4.0);
+        let lac: (f32, f32, f32, f32) = (-26.0, -2.0, -12.0, 10.0);
+        let rivière_sud: (f32, f32, f32, f32) = (-18.0, 10.0, -14.0, 36.0);
+        let cases: &[((f32, f32, f32, f32), &[(f32, f32)])] = &[
+            (
+                rivière_nord,
+                &[
+                    (-31.0, -30.0),
+                    (-31.0, -20.0),
+                    (-21.0, -30.0),
+                    (-21.0, -20.0),
+                    // Juste au nord et au sud de l'ouverture du Pont 2 (z≈-10) :
+                    // exactement le point faible corrigé (mur resserré à 1 m).
+                    (-31.0, -14.0),
+                    (-21.0, -14.0),
+                    (-31.0, -6.5),
+                    // (-21.0, -6.5) exclu : ce point tombe DANS le rect du
+                    // coude (x:[-28,-16] z:[-8,-4]), donc déjà dans l'eau —
+                    // pas un point de terre valide pour ce test.
+                ],
+            ),
+            (
+                coude,
+                &[
+                    // (-22, -3) : le mince interstice de terre entre le coude
+                    // et le lac (z:[-4,-2], ni l'un ni l'autre rect) — le
+                    // point le plus susceptible d'une brèche par pincement.
+                    (-22.0, -3.0),
+                    (-22.0, -11.0),
+                    (-14.5, -6.0),
+                ],
+            ),
+            (
+                lac,
+                &[
+                    (-29.0, 0.0),
+                    (-29.0, 8.0),
+                    (-9.0, 0.0),
+                    (-9.0, 8.0),
+                    // (-19, -3) : même interstice de terre coude/lac que
+                    // ci-dessus, approché cette fois vers le lac.
+                    (-19.0, -3.0),
+                ],
+            ),
+            (
+                rivière_sud,
+                &[
+                    (-21.0, 20.0),
+                    (-21.0, 30.0),
+                    (-11.0, 20.0),
+                    (-11.0, 30.0),
+                    // Juste au nord et au sud de l'ouverture du Pont 1 (z≈14).
+                    (-21.0, 10.5),
+                    (-11.0, 10.5),
+                    (-21.0, 18.5),
+                    (-11.0, 18.5),
+                ],
+            ),
+        ];
+        for &(rect, points) in cases {
+            for &(sx, sz) in points {
+                let mut scene = Scene::mmorpg_demo();
+                let idx = scene
+                    .objects
+                    .iter()
+                    .position(|o| o.name == "Joueur")
+                    .unwrap();
+                scene.objects[idx].transform.position = Vec3::new(sx, 1.0, sz);
+                let mut phys = crate::runtime::physics::Physics::build(&scene);
+                let dt = 1.0 / 60.0;
+                let target = Vec3::new(
+                    (rect.0 + rect.2) / 2.0,
+                    0.0,
+                    (rect.1 + rect.3) / 2.0,
+                );
+                for _ in 0..900 {
+                    let pos = scene.objects[idx].transform.position;
+                    let dir = Vec3::new(target.x - pos.x, 0.0, target.z - pos.z);
+                    let d = (dir.x * dir.x + dir.z * dir.z).sqrt();
+                    let (vx, vz) = if d > 0.05 {
+                        (dir.x / d * 4.5, dir.z / d * 4.5)
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+                    phys.step(dt, &mut scene);
+                }
+                let p = scene.objects[idx].transform.position;
+                assert!(
+                    !(p.x >= rect.0 && p.x <= rect.2 && p.z >= rect.1 && p.z <= rect.3),
+                    "depuis ({sx},{sz}), le joueur est entré dans l'eau {rect:?} \
+                     (position finale={p:?}) — brèche dans le mur"
+                );
+            }
+        }
+    }
+
+    /// Contre-épreuve des précédentes : les deux ponts restent bien les
+    /// passages laissés dans les murs d'eau resserrés (ouverture ~3 m, cf.
+    /// `GRID`/`bridge_gaps`) — un joueur parti de chaque rive, piloté vers
+    /// l'autre, doit traverser `Pont 1` (rivière sud) et `Pont 2` (rivière
+    /// nord) dans les deux sens.
     #[test]
     fn mmorpg_player_can_still_cross_the_bridges() {
-        let mut scene = Scene::mmorpg_demo();
-        let idx = scene
-            .objects
-            .iter()
-            .position(|o| o.name == "Joueur")
-            .expect("la démo doit avoir un « Joueur »");
-        // Rive est de la rivière sud (x:[-18,-14]), dans l'axe du Pont 1 (z=14).
-        scene.objects[idx].transform.position = Vec3::new(-12.0, 1.0, 14.0);
-        let mut phys = crate::runtime::physics::Physics::build(&scene);
-        let dt = 1.0 / 60.0;
-        for _ in 0..600 {
-            phys.control(idx, -4.5, 0.0, false, 0.0, 0.0, dt);
-            phys.step(dt, &mut scene);
+        // (nom, rive de départ (x,z), direction (vx,vz), x/z à dépasser côté arrivée).
+        let cases: &[(&str, (f32, f32), (f32, f32), &str)] = &[
+            ("Pont 1 est→ouest", (-12.0, 14.0), (-4.5, 0.0), "x<-18"),
+            ("Pont 1 ouest→est", (-20.0, 14.0), (4.5, 0.0), "x>-14"),
+            ("Pont 2 est→ouest", (-22.0, -10.0), (-4.5, 0.0), "x<-28"),
+            ("Pont 2 ouest→est", (-30.0, -10.0), (4.5, 0.0), "x>-24"),
+        ];
+        for &(name, (sx, sz), (vx, vz), expect) in cases {
+            let mut scene = Scene::mmorpg_demo();
+            let idx = scene
+                .objects
+                .iter()
+                .position(|o| o.name == "Joueur")
+                .expect("la démo doit avoir un « Joueur »");
+            scene.objects[idx].transform.position = Vec3::new(sx, 1.0, sz);
+            let mut phys = crate::runtime::physics::Physics::build(&scene);
+            let dt = 1.0 / 60.0;
+            for _ in 0..600 {
+                phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+                phys.step(dt, &mut scene);
+            }
+            let p = scene.objects[idx].transform.position;
+            let crossed = if expect.starts_with("x<") {
+                p.x < expect[2..].parse::<f32>().unwrap()
+            } else {
+                p.x > expect[2..].parse::<f32>().unwrap()
+            };
+            assert!(crossed, "« {name} » : le joueur n'a pas traversé (pos={p:?})");
         }
-        let p = scene.objects[idx].transform.position;
-        assert!(
-            p.x < -18.0,
-            "le joueur doit avoir traversé le Pont 1 jusqu'à la rive ouest (pos={p:?})"
-        );
     }
 
     /// Preuve que le scatter procédural (graine fixe) peuple vraiment la forêt
