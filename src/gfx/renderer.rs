@@ -1374,6 +1374,7 @@ impl Renderer {
                 let kills = app.displayed_kill_count();
                 let weapon_inventory = app.ranged_weapon_display_info();
                 let selected_weapon = app.selected_weapon();
+                let item_inventory = app.inventory_items().to_vec();
                 let roster = app.multiplayer_roster();
                 let (output, actions) = editor.run_player_overlay(
                     &window,
@@ -1396,11 +1397,15 @@ impl Renderer {
                     kills,
                     &weapon_inventory,
                     selected_weapon,
+                    &item_inventory,
                     &roster,
                     app.locale,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
+                }
+                if let Some(kind) = actions.use_item {
+                    app.use_item(kind);
                 }
                 for action in &actions.hud_clicks {
                     app.push_hud_event(action);
@@ -1430,6 +1435,7 @@ impl Renderer {
             let kills = app.displayed_kill_count();
             let weapon_inventory = app.ranged_weapon_display_info();
             let selected_weapon = app.selected_weapon();
+            let item_inventory = app.inventory_items().to_vec();
             let roster = app.multiplayer_roster();
             let (full_output, actions) = editor.run(
                 &window,
@@ -1463,9 +1469,13 @@ impl Renderer {
                 kills,
                 &weapon_inventory,
                 selected_weapon,
+                &item_inventory,
                 &roster,
                 app.locale,
             );
+            if let Some(kind) = actions.use_item {
+                app.use_item(kind);
+            }
             if let Some(i) = actions.select_weapon {
                 app.select_weapon(i);
             }

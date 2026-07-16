@@ -6,8 +6,9 @@ use glam::Vec3;
 
 use super::{
     AiChaser, AnimationState, AudioSource, Combat, Controller, GameCamera, HudAnchor, HudBinding,
-    HudLayout, HudWidget, HudWidgetKind, ImportedMesh, Light, MeshKind, MobileControls, PointLight,
-    Scene, SceneObject, Sky, TapAction, Transform, WEAPONS, WeaponPickup, demo_obj,
+    HudLayout, HudWidget, HudWidgetKind, ImportedMesh, ItemKind, ItemPickup, Light, MeshKind,
+    MobileControls, PointLight, Scene, SceneObject, Sky, TapAction, Transform, WEAPONS,
+    WeaponPickup, demo_obj,
 };
 use crate::runtime::physics::PhysicsKind;
 
@@ -227,23 +228,404 @@ fn creature_wander_script(arena_half: f32, prefix: &str, ray_mask: u32) -> Strin
 /// `AppState::sim_step`) — n'affecte pas son collider physique
 /// (`PhysicsKind::Kinematic`), `trigger` est un indicateur de scène pur, lu
 /// uniquement côté script.
-fn creature_bite_script(prefix: &str) -> String {
+/// `cooldown`/`chance`/`damage` paramètrent le tempérament : la Créature 1
+/// (morsure, 2.2 s/0.4/0.12) a servi de gabarit, la chauve-souris (n°6) mord
+/// plus vite mais plus faible, le crabe (n°7) pince rarement mais fort — cf.
+/// `MMORPG_CREATURES`. `salt` décale la phase du tirage pseudo-aléatoire :
+/// sans lui, toutes les créatures au contact du joueur au même tick
+/// réussiraient/rateraient leur attaque exactement ensemble (même hachage du
+/// même `time`).
+fn creature_bite_script(
+    prefix: &str,
+    cooldown: f32,
+    chance: f32,
+    damage: f32,
+    salt: f32,
+) -> String {
     format!(
         r#"
-    local BITE_COOLDOWN = 2.2
-    local BITE_CHANCE = 0.4
-    local BITE_DAMAGE = 0.12
+    local BITE_COOLDOWN = {cooldown}
+    local BITE_CHANCE = {chance}
+    local BITE_DAMAGE = {damage}
 
     local bite_cd = (save.get("{prefix}bite_cd") or 0.0) - dt
     if obj.triggered and bite_cd <= 0.0 then
         bite_cd = BITE_COOLDOWN
-        local roll = math.sin(time * 12.9898) * 43758.5453
+        local roll = math.sin(time * {salt}) * 43758.5453
         roll = roll - math.floor(roll)
         if roll < BITE_CHANCE then
             damage(BITE_DAMAGE)
         end
     end
     save.set("{prefix}bite_cd", bite_cd)
+"#
+    )
+}
+
+/// Sentinelle (Créature 11, golem) : garde son poste — orbite lentement autour
+/// de son point d'apparition (mémorisé au premier tick dans `save`) plutôt que
+/// d'errer dans toute l'arène. Cohérent avec son attaque en éventail
+/// (`AttackStyle::Fan`) : elle tient une position, le joueur vient à elle.
+fn creature_guard_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    format!(
+        r#"
+    local SPEED = 0.9
+    local ORBIT = 2.0
+
+    local sx = save.get("{prefix}spawn_x")
+    local sz = save.get("{prefix}spawn_z")
+    if sx == nil then
+        sx = obj.x; sz = obj.z
+        save.set("{prefix}spawn_x", sx)
+        save.set("{prefix}spawn_z", sz)
+    end
+    local ang = (save.get("{prefix}ang") or 0.0) + 0.35 * dt
+    save.set("{prefix}ang", ang)
+    local tx = sx + math.cos(ang) * ORBIT
+    local tz = sz + math.sin(ang) * ORBIT
+    local dx, dz = tx - obj.x, tz - obj.z
+    local d = math.sqrt(dx * dx + dz * dz)
+    if d > 0.08 then
+        local step = math.min(SPEED * dt, d)
+        obj.x = obj.x + dx / d * step
+        obj.z = obj.z + dz / d * step
+        obj.ry = math.deg(math.atan(dx, dz))
+        obj.anim = "Walk"
+    else
+        obj.anim = "Idle"
+    end
+"#
+    )
+}
+
+/// Rôdeur (Créature 12, félin d'ombre) : maintient sa distance au joueur
+/// (repéré via `find_tag("joueur")`) — approche au-delà de FAR, recule sous
+/// NEAR, et tourne autour de lui entre les deux. Cohérent avec sa rafale
+/// (`AttackStyle::Burst`) : il reste dans sa fourchette de tir idéale.
+fn creature_kite_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    let bound = arena_half - 1.0;
+    format!(
+        r#"
+    local SPEED = 1.8
+    local NEAR = 4.0
+    local FAR = 6.0
+    local BOUND = {bound}
+
+    local players = find_tag("joueur")
+    local moving = false
+    if #players > 0 then
+        local p = players[1]
+        local dx, dz = p.x - obj.x, p.z - obj.z
+        local d = math.sqrt(dx * dx + dz * dz)
+        if d > 0.01 then
+            local nx, nz = dx / d, dz / d
+            local vx, vz = 0.0, 0.0
+            if d > FAR then
+                vx, vz = nx, nz
+            elseif d < NEAR then
+                vx, vz = -nx, -nz
+            else
+                -- Dans la fourchette : tourne autour du joueur (perpendiculaire).
+                vx, vz = -nz, nx
+            end
+            obj.x = obj.x + vx * SPEED * dt
+            obj.z = obj.z + vz * SPEED * dt
+            obj.ry = math.deg(math.atan(nx, nz))
+            moving = true
+        end
+    else
+        -- Pas de joueur repéré : petit va-et-vient nerveux sur place.
+        obj.x = obj.x + math.sin(time * 1.7) * 0.4 * dt
+        moving = true
+    end
+    obj.anim = moving and "Walk" or "Idle"
+    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
+    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+    save.set("{prefix}seen", #players)
+"#
+    )
+}
+
+/// Dérive fuyante (Créature 13, méduse) : flotte en dérive sinusoïdale lente,
+/// et fuit si le joueur approche à moins de FLEE — l'inverse d'un chasseur.
+/// Cohérent avec son orbe à tête chercheuse (`AttackStyle::Homing`) : elle
+/// n'a pas besoin d'être près, son tir la venge de loin.
+fn creature_drift_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    let bound = arena_half - 1.0;
+    format!(
+        r#"
+    local DRIFT = 0.6
+    local FLEE_SPEED = 1.6
+    local FLEE = 3.0
+    local BOUND = {bound}
+
+    local heading = (save.get("{prefix}heading") or 0.0) + math.sin(time * 0.4) * 25.0 * dt
+    local fleeing = false
+    local players = find_tag("joueur")
+    if #players > 0 then
+        local p = players[1]
+        local dx, dz = obj.x - p.x, obj.z - p.z
+        local d = math.sqrt(dx * dx + dz * dz)
+        if d < FLEE and d > 0.01 then
+            heading = math.deg(math.atan(dx / d, dz / d))
+            fleeing = true
+        end
+    end
+    -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).
+    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then
+        heading = math.deg(math.atan(-obj.x, -obj.z))
+    end
+    local rad = math.rad(heading)
+    local speed = fleeing and FLEE_SPEED or DRIFT
+    obj.x = obj.x + math.sin(rad) * speed * dt
+    obj.z = obj.z + math.cos(rad) * speed * dt
+    obj.ry = heading
+    obj.anim = "Walk"
+    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
+    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+    save.set("{prefix}heading", heading)
+"#
+    )
+}
+
+/// Patrouille d'artillerie (Créature 14, escargot-mortier) : fait la navette
+/// très lentement entre son point d'apparition et un second point proche —
+/// quasi statique, comme une pièce d'artillerie qu'on repositionne à peine.
+/// Cohérent avec son obus en cloche (`AttackStyle::Lob`) : longue portée,
+/// aucune mobilité.
+fn creature_artillery_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    format!(
+        r#"
+    local SPEED = 0.35
+    local LEG = 2.5
+
+    local sx = save.get("{prefix}spawn_x")
+    local sz = save.get("{prefix}spawn_z")
+    if sx == nil then
+        sx = obj.x; sz = obj.z
+        save.set("{prefix}spawn_x", sx)
+        save.set("{prefix}spawn_z", sz)
+    end
+    local going = (save.get("{prefix}going") or 1.0) > 0.5
+    local tx = going and (sx + LEG) or sx
+    local dx = tx - obj.x
+    if math.abs(dx) < 0.05 then
+        save.set("{prefix}going", going and 0.0 or 1.0)
+        obj.anim = "Idle"
+    else
+        local step = math.min(SPEED * dt, math.abs(dx))
+        obj.x = obj.x + (dx > 0 and step or -step)
+        obj.ry = dx > 0 and 90.0 or -90.0
+        obj.anim = "Walk"
+    end
+    obj.z = sz
+"#
+    )
+}
+
+/// Zigzag erratique (Créature 15, oursin-étoile) : cap qui alterne
+/// brusquement de biais toutes les ~1,2 s — une trajectoire imprévisible qui
+/// rapproche souvent l'oursin du joueur sans le poursuivre. Cohérent avec sa
+/// nova (`AttackStyle::Nova`) : c'est sa proximité erratique qui est le danger.
+fn creature_zigzag_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    let bound = arena_half - 1.0;
+    format!(
+        r#"
+    local SPEED = 1.5
+    local FLIP_EVERY = 1.2
+    local TURN = 65.0
+    local BOUND = {bound}
+
+    local heading = save.get("{prefix}heading") or 45.0
+    local flip_at = save.get("{prefix}flip_at") or 0.0
+    local side = save.get("{prefix}side") or 1.0
+    if time >= flip_at then
+        side = -side
+        save.set("{prefix}side", side)
+        save.set("{prefix}flip_at", time + FLIP_EVERY)
+    end
+    heading = heading + side * TURN * dt
+    -- Rappel vers le centre en approche de bord, comme les autres patrouilles.
+    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then
+        local to_center = math.deg(math.atan(-obj.x, -obj.z))
+        local diff = ((to_center - heading + 180) % 360) - 180
+        heading = heading + (diff > 0 and 1.0 or -1.0) * 120.0 * dt
+    end
+    local rad = math.rad(heading)
+    obj.x = obj.x + math.sin(rad) * SPEED * dt
+    obj.z = obj.z + math.cos(rad) * SPEED * dt
+    obj.ry = heading
+    obj.anim = "Walk"
+    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
+    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+    save.set("{prefix}heading", heading)
+"#
+    )
+}
+
+/// Patrouille aérienne (Créature 16, griffon) : grand cercle horizontal à
+/// rayon fixe autour du point d'apparition, plus large et plus rapide que
+/// l'orbite de la sentinelle (`creature_guard_script`) — cohérent avec son
+/// éventail de bourrasques (`AttackStyle::Fan`, portée 8 m) : elle couvre du
+/// terrain, pas un poste fixe.
+fn creature_soar_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    format!(
+        r#"
+    local SPEED = 1.6
+    local RADIUS = 4.5
+
+    local sx = save.get("{prefix}spawn_x")
+    local sz = save.get("{prefix}spawn_z")
+    if sx == nil then
+        sx = obj.x; sz = obj.z
+        save.set("{prefix}spawn_x", sx)
+        save.set("{prefix}spawn_z", sz)
+    end
+    local ang = (save.get("{prefix}ang") or 0.0) + (SPEED / RADIUS) * dt
+    save.set("{prefix}ang", ang)
+    obj.x = sx + math.cos(ang) * RADIUS
+    obj.z = sz + math.sin(ang) * RADIUS
+    obj.ry = math.deg(ang) + 90.0
+    obj.anim = "Walk"
+"#
+    )
+}
+
+/// Lemniscate (Créature 17, kraken-mini) : dérive en huit couché autour de son
+/// point d'apparition — ni fuit ni poursuit, juste une trajectoire hypnotique.
+/// Cohérent avec sa nova resserrée (`AttackStyle::Nova`) : elle n'a besoin
+/// d'aucune tactique d'approche, juste être là quand le joueur passe à portée.
+fn creature_lemniscate_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    format!(
+        r#"
+    local SPEED = 0.5
+    local SCALE = 3.0
+
+    local sx = save.get("{prefix}spawn_x")
+    local sz = save.get("{prefix}spawn_z")
+    if sx == nil then
+        sx = obj.x; sz = obj.z
+        save.set("{prefix}spawn_x", sx)
+        save.set("{prefix}spawn_z", sz)
+    end
+    local t = (save.get("{prefix}t") or 0.0) + SPEED * dt
+    save.set("{prefix}t", t)
+    -- Courbe de Lissajous (huit couché) : x = sin(t), z = sin(t)*cos(t).
+    local nx = sx + math.sin(t) * SCALE
+    local nz = sz + math.sin(t) * math.cos(t) * SCALE
+    local dx, dz = nx - obj.x, nz - obj.z
+    if math.abs(dx) > 0.001 or math.abs(dz) > 0.001 then
+        obj.ry = math.deg(math.atan(dx, dz))
+    end
+    obj.x, obj.z = nx, nz
+    obj.anim = "Walk"
+"#
+    )
+}
+
+/// Surgit puis plonge (Créature 18, ver des sables) : immobile (« sous le
+/// sable ») pendant SUBMERGED, puis fonce en ligne droite pendant RUSH avant
+/// de replonger. Cohérent avec sa rafale rapprochée (`AttackStyle::Burst`,
+/// windup court) : la menace, c'est la charge, pas une poursuite soutenue.
+fn creature_burrow_script(arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    let bound = arena_half - 1.0;
+    format!(
+        r#"
+    local SUBMERGED = 2.2
+    local RUSH = 1.1
+    local SPEED = 3.2
+    local BOUND = {bound}
+
+    local phase_end = save.get("{prefix}phase_end") or 0.0
+    local rushing = (save.get("{prefix}rushing") or 0.0) > 0.5
+    if time >= phase_end then
+        rushing = not rushing
+        save.set("{prefix}rushing", rushing and 1.0 or 0.0)
+        phase_end = time + (rushing and RUSH or SUBMERGED)
+        save.set("{prefix}phase_end", phase_end)
+        if rushing then
+            -- Nouvelle direction de charge à chaque surgissement.
+            local heading = math.deg(math.atan(-obj.x, -obj.z)) + (math.sin(time * 3.1) * 90.0)
+            save.set("{prefix}heading", heading)
+        end
+    end
+    if rushing then
+        local heading = save.get("{prefix}heading") or 0.0
+        local rad = math.rad(heading)
+        obj.x = obj.x + math.sin(rad) * SPEED * dt
+        obj.z = obj.z + math.cos(rad) * SPEED * dt
+        obj.ry = heading
+        obj.anim = "Walk"
+    else
+        obj.anim = "Idle"
+    end
+    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
+    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+"#
+    )
+}
+
+/// Flotte et recule (Créature 19, lanterne-fantôme) : dérive vers le joueur
+/// de très loin (curiosité), mais recule dès qu'il approche à moins de NEAR —
+/// jamais au contact. Cohérent avec son follet à tête chercheuse
+/// (`AttackStyle::Homing`, portée 9 m) : elle punit à distance, jamais de près.
+fn creature_hover_script(arena_half: f32, _prefix: &str, _ray_mask: u32) -> String {
+    let bound = arena_half - 1.0;
+    format!(
+        r#"
+    local SPEED = 0.7
+    local NEAR = 4.0
+    local BOUND = {bound}
+
+    local players = find_tag("joueur")
+    local moving = false
+    if #players > 0 then
+        local p = players[1]
+        local dx, dz = p.x - obj.x, p.z - obj.z
+        local d = math.sqrt(dx * dx + dz * dz)
+        if d > 0.05 then
+            local nx, nz = dx / d, dz / d
+            local sign = (d < NEAR) and -1.0 or 1.0
+            obj.x = obj.x + nx * sign * SPEED * dt
+            obj.z = obj.z + nz * sign * SPEED * dt
+            obj.ry = math.deg(math.atan(nx * sign, nz * sign))
+            moving = true
+        end
+    end
+    obj.anim = moving and "Walk" or "Idle"
+    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
+    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+"#
+    )
+}
+
+/// Tourelle qui pivote (Créature 20, tortue-canon) : quasi immobile, tourne
+/// juste sur elle-même pour s'orienter vers le joueur (ou lentement sinon).
+/// Cohérent avec son obus rapide et rapproché (`AttackStyle::Lob`, portée
+/// courte) : elle n'a pas besoin de bouger, juste de bien viser.
+fn creature_turret_script(_arena_half: f32, prefix: &str, _ray_mask: u32) -> String {
+    format!(
+        r#"
+    local TURN_RATE = 40.0
+
+    local heading = save.get("{prefix}heading") or obj.ry
+    local target = heading
+    local players = find_tag("joueur")
+    if #players > 0 then
+        local p = players[1]
+        local dx, dz = p.x - obj.x, p.z - obj.z
+        if math.abs(dx) > 0.01 or math.abs(dz) > 0.01 then
+            target = math.deg(math.atan(dx, dz))
+        end
+    else
+        target = heading + 15.0 * dt
+    end
+    local diff = ((target - heading + 180) % 360) - 180
+    local step = math.max(-TURN_RATE * dt, math.min(TURN_RATE * dt, diff))
+    heading = heading + step
+    obj.ry = heading
+    obj.anim = "Idle"
+    save.set("{prefix}heading", heading)
 "#
     )
 }
@@ -724,6 +1106,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // mais ici la précision de saut est ce qui compte, pas le combat.
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
         joueur.color = [0.95, 0.6, 0.25];
+        // Tag lu par les scripts de comportement des créatures 12/13
+        // (`find_tag("joueur")` — rôdeur qui maintient sa distance, méduse qui
+        // fuit) : sans lui, elles retombent sur leur comportement sans cible.
+        joueur.tag = "joueur".into();
         joueur.controller = Some(Controller {
             input: true,
             move_speed: 4.0,
@@ -1331,7 +1717,9 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             .transform
             .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
         sol.physics = PhysicsKind::Static;
-        sol.color = [0.2, 0.28, 0.24];
+        // Vert prairie (l'arène est habillée en coin de campagne, cf. le décor
+        // nature plus bas) — l'ancien gris-vert sombre jurait avec les aplats.
+        sol.color = [0.26, 0.38, 0.21];
 
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
         joueur.color = [0.95, 0.6, 0.25];
@@ -1404,211 +1792,597 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         vent.color = [0.25, 0.75, 0.85];
         objects.push(vent);
 
-        // Créature qui erre (glb rigué/animé, cf. la doc de `creature_wander_script`) :
-        // seule différence avec les repères ci-dessus, un mesh importé skinné plutôt
-        // qu'une primitive — chemin disque du dépôt (pas `bundle://`) car cette démo
-        // tourne depuis les sources, jamais depuis un export packagé.
+        // Créatures qui errent (glb rigués/animés, cf. la doc de
+        // `creature_wander_script`) : seule différence avec les repères ci-dessus,
+        // des meshes importés skinnés plutôt que des primitives — chemins disque du
+        // dépôt (pas `bundle://`) car cette démo tourne depuis les sources, jamais
+        // depuis un export packagé. Table data-driven plutôt que dix blocs
+        // copiés-collés (l'historique en comptait cinq avant les créatures 6-10) :
+        // chaque entrée = (nom, fichier, spawn, bit de couche, préfixe de clés
+        // `save`, attaque au contact éventuelle).
+        //
+        // Communs à toutes : échelle 0.35 (les meshes bruts font ~2-3 m de haut,
+        // bbox locale non affectée par l'échelle Blender de l'objet, ignorée par
+        // `import::load_gltf` qui ne lit que les sommets des primitives) ; corps
+        // physique `Kinematic` (ne traversent ni joueur ni murs/objets fixes, cf.
+        // `Physics::resolve_scripted_moves`) ; couche de collision dédiée (bit
+        // propre) pour que leurs sondes raycast s'ignorent elles-mêmes tout en
+        // voyant les autres ; spawns espacés, à bonne distance des murs/repères
+        // (RAY_DIST 3,5 m devant chaque créature doit démarrer dégagé).
+        //
+        // Attaques : au contact (`bite`, cf. `creature_bite_script` — morsure de
+        // la n°1, morsure rapide de la chauve-souris n°6, pincement lourd du crabe
+        // n°7, chacun son tempérament et son `salt` de tirage) ; les attaques à
+        // distance des n°3/8/9/10 sont natives, déclenchées par **nom d'objet**
+        // (cf. `app::creature_attack::RANGED_CREATURE_ATTACKS`), rien à câbler ici.
+        struct DemoCreature {
+            name: &'static str,
+            file: &'static str,
+            spawn: Vec3,
+            layer_bit: u32,
+            prefix: &'static str,
+            /// `Some((cooldown, chance, dégâts, salt))` : attaque au contact.
+            bite: Option<(f32, f32, f32, f32)>,
+            /// Générateur du script de comportement (patrouille à sondes,
+            /// sentinelle, rôdeur, dérive, artillerie, zigzag…) — signature
+            /// commune (demi-arène, préfixe `save`, masque de sonde), chaque
+            /// générateur ignore ce dont il n'a pas besoin.
+            script: fn(f32, &str, u32) -> String,
+        }
+        const MMORPG_CREATURES: &[DemoCreature] = &[
+            DemoCreature {
+                name: "Créature",
+                file: "creature.glb",
+                spawn: Vec3::new(0.0, 0.0, -3.0),
+                layer_bit: 1,
+                prefix: "creature_",
+                bite: Some((2.2, 0.4, 0.12, 12.9898)),
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 2",
+                file: "creature2.glb",
+                spawn: Vec3::new(3.0, 0.0, 3.0),
+                layer_bit: 2,
+                prefix: "creature2_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 3",
+                file: "creature3.glb",
+                spawn: Vec3::new(-3.0, 0.0, 3.0),
+                layer_bit: 3,
+                prefix: "creature3_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 4",
+                file: "creature4.glb",
+                spawn: Vec3::new(-3.0, 0.0, -3.0),
+                layer_bit: 4,
+                prefix: "creature4_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 5",
+                file: "creature5.glb",
+                spawn: Vec3::new(3.0, 0.0, -3.0),
+                layer_bit: 5,
+                prefix: "creature5_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            // Chauve-souris : morsure rapide mais faible — harcèle plus qu'elle
+            // ne punit.
+            DemoCreature {
+                name: "Créature 6",
+                file: "creature6.glb",
+                spawn: Vec3::new(6.0, 0.0, 0.0),
+                layer_bit: 6,
+                prefix: "creature6_",
+                bite: Some((1.6, 0.5, 0.08, 19.4142)),
+                script: creature_wander_script,
+            },
+            // Crabe : pincement rare mais lourd — l'inverse de la chauve-souris.
+            DemoCreature {
+                name: "Créature 7",
+                file: "creature7.glb",
+                spawn: Vec3::new(-6.0, 0.0, 0.0),
+                layer_bit: 7,
+                prefix: "creature7_",
+                bite: Some((3.5, 0.6, 0.18, 27.1828)),
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 8",
+                file: "creature8.glb",
+                spawn: Vec3::new(0.0, 0.0, 6.0),
+                layer_bit: 8,
+                prefix: "creature8_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 9",
+                file: "creature9.glb",
+                spawn: Vec3::new(0.0, 0.0, -6.0),
+                layer_bit: 9,
+                prefix: "creature9_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 10",
+                file: "creature10.glb",
+                spawn: Vec3::new(8.0, 0.0, 4.0),
+                layer_bit: 10,
+                prefix: "creature10_",
+                bite: None,
+                script: creature_wander_script,
+            },
+            // 11-15 : la génération « qualité supérieure » — attaques à
+            // distance toutes différentes (cf. `creature_attack::AttackStyle`)
+            // et comportements dédiés, cohérents avec leur attaque.
+            DemoCreature {
+                name: "Créature 11",
+                file: "creature11.glb",
+                spawn: Vec3::new(9.0, 0.0, -2.0),
+                layer_bit: 11,
+                prefix: "creature11_",
+                bite: None,
+                script: creature_guard_script,
+            },
+            DemoCreature {
+                name: "Créature 12",
+                file: "creature12.glb",
+                spawn: Vec3::new(-9.0, 0.0, 2.0),
+                layer_bit: 12,
+                prefix: "creature12_",
+                bite: None,
+                script: creature_kite_script,
+            },
+            DemoCreature {
+                name: "Créature 13",
+                file: "creature13.glb",
+                spawn: Vec3::new(2.0, 0.0, 9.0),
+                layer_bit: 13,
+                prefix: "creature13_",
+                bite: None,
+                script: creature_drift_script,
+            },
+            DemoCreature {
+                name: "Créature 14",
+                file: "creature14.glb",
+                spawn: Vec3::new(-2.0, 0.0, -9.0),
+                layer_bit: 14,
+                prefix: "creature14_",
+                bite: None,
+                script: creature_artillery_script,
+            },
+            DemoCreature {
+                name: "Créature 15",
+                file: "creature15.glb",
+                spawn: Vec3::new(9.0, 0.0, 9.0),
+                layer_bit: 15,
+                prefix: "creature15_",
+                bite: None,
+                script: creature_zigzag_script,
+            },
+            // 16-20 : même palier de qualité que 11-15 — attaques et
+            // comportements tout aussi variés, cf. `creature_attack.rs`.
+            DemoCreature {
+                name: "Créature 16",
+                file: "creature16.glb",
+                spawn: Vec3::new(1.5, 0.0, 7.5),
+                layer_bit: 16,
+                prefix: "creature16_",
+                bite: None,
+                script: creature_soar_script,
+            },
+            DemoCreature {
+                name: "Créature 17",
+                file: "creature17.glb",
+                spawn: Vec3::new(-0.5, 0.0, -10.5),
+                layer_bit: 17,
+                prefix: "creature17_",
+                bite: None,
+                script: creature_lemniscate_script,
+            },
+            DemoCreature {
+                name: "Créature 18",
+                file: "creature18.glb",
+                spawn: Vec3::new(-10.5, 0.0, 3.5),
+                layer_bit: 18,
+                prefix: "creature18_",
+                bite: None,
+                script: creature_burrow_script,
+            },
+            DemoCreature {
+                name: "Créature 19",
+                file: "creature19.glb",
+                spawn: Vec3::new(7.5, 0.0, -7.5),
+                layer_bit: 19,
+                prefix: "creature19_",
+                bite: None,
+                script: creature_hover_script,
+            },
+            DemoCreature {
+                name: "Créature 20",
+                file: "creature20.glb",
+                spawn: Vec3::new(-3.5, 0.0, -9.5),
+                layer_bit: 20,
+                prefix: "creature20_",
+                bite: None,
+                script: creature_turret_script,
+            },
+        ];
+
         let mut imported = Vec::new();
-        let creature_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature.glb");
-        match crate::scene::import::load_gltf(creature_path) {
-            Ok((data, aabb_min, aabb_max)) => {
-                let mut mesh = ImportedMesh {
-                    path: creature_path.to_string(),
-                    data,
-                    aabb_min,
-                    aabb_max,
-                    ..Default::default()
-                };
-                mesh.load_skinning();
-                // Position de spawn à bonne distance des murs/repères (cf.
-                // `creature_wander_script` — RAY_DIST 3 m devant elle doit démarrer
-                // dégagé). Échelle 0.35 : le mesh brut mesure ~2.85 m de haut (bbox
-                // locale non affectée par l'échelle Blender de l'objet, ignorée par
-                // `import::load_gltf` qui ne lit que les sommets des primitives, pas
-                // la hiérarchie de nœuds) — beaucoup trop grand à côté du joueur
-                // (capsule d'1 m) sans ce facteur.
-                let mut creature =
-                    demo_obj("Créature", MeshKind::Imported(0), Vec3::new(0.0, 0.0, -3.0));
-                creature.transform = creature.transform.with_scale(Vec3::splat(0.35));
-                creature.animation = Some(AnimationState {
-                    clip: "Idle".into(),
-                    ..Default::default()
-                });
-                // Corps physique (cf. `PhysicsKind::Kinematic`) : la créature ne
-                // traverse plus le joueur ni les murs/objets fixes — le script
-                // écrit sa position, `Physics::resolve_scripted_moves` la résout.
-                // Couche dédiée (bit 1) : ses sondes raycast l'excluent (cf.
-                // `creature_wander_script`), tout le reste (couche par défaut =
-                // tous bits) la voit et la bloque normalement.
-                creature.physics = PhysicsKind::Kinematic;
-                creature.collision_layer = 1 << 1;
-                // Seule la Créature n°1 mord (cf. `creature_bite_script`) — les
-                // 4 autres restent des PNJ purement pacifiques. `trigger = true`
-                // active la détection de contact (`obj.triggered`) nécessaire à
-                // l'attaque, sans changer son collider (toujours solide).
-                creature.trigger = true;
-                creature.script = format!(
-                    "{}\n{}",
-                    creature_wander_script(half, "creature_", !(1_u32 << 1)),
-                    creature_bite_script("creature_")
-                );
-                objects.push(creature);
-                imported.push(mesh);
+        for spec in MMORPG_CREATURES {
+            let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), spec.file);
+            match crate::scene::import::load_gltf(&path) {
+                Ok((data, aabb_min, aabb_max)) => {
+                    let mut mesh = ImportedMesh {
+                        path: path.clone(),
+                        data,
+                        aabb_min,
+                        aabb_max,
+                        ..Default::default()
+                    };
+                    mesh.load_skinning();
+                    let mesh_index = imported.len() as u32;
+                    let mut creature =
+                        demo_obj(spec.name, MeshKind::Imported(mesh_index), spec.spawn);
+                    creature.transform = creature.transform.with_scale(Vec3::splat(0.35));
+                    creature.animation = Some(AnimationState {
+                        clip: "Idle".into(),
+                        ..Default::default()
+                    });
+                    creature.physics = PhysicsKind::Kinematic;
+                    creature.collision_layer = 1 << spec.layer_bit;
+                    // Tuable (boule de feu/mêlée) et synchronisée en réseau — même
+                    // pipeline générique que les autres monstres `Combat::attackable`
+                    // (`fireball_impact`/`attack_at`, `AppState::network_snapshot`) :
+                    // rien de spécifique aux créatures scriptées à ajouter côté mise à
+                    // mort, cf. GAMEDESIGN_EN_LIGNE.md et ROADMAP (synchro réseau).
+                    creature.combat = Some(Combat {
+                        attackable: true,
+                        ..Default::default()
+                    });
+                    let wander = (spec.script)(half, spec.prefix, !(1_u32 << spec.layer_bit));
+                    creature.script = match spec.bite {
+                        Some((cooldown, chance, damage, salt)) => {
+                            // `trigger = true` active la détection de contact
+                            // (`obj.triggered`) nécessaire à l'attaque, sans
+                            // changer son collider (toujours solide).
+                            creature.trigger = true;
+                            // Persisté aussi nativement (`SceneObject::bite`), en plus
+                            // du script Lua ci-dessous : le script pilote la version
+                            // solo, ce champ permet à `app::health` de retrouver
+                            // « quelles créatures mordent » côté réseau sans
+                            // redécouvrir chaque nom en dur (cf. sa doc).
+                            creature.bite = Some(crate::scene::BiteAttack {
+                                cooldown,
+                                chance,
+                                damage,
+                            });
+                            format!(
+                                "{wander}\n{}",
+                                creature_bite_script(spec.prefix, cooldown, chance, damage, salt)
+                            )
+                        }
+                        None => wander,
+                    };
+                    objects.push(creature);
+                    imported.push(mesh);
+                }
+                Err(e) => log::error!("{} MMORPG ({path}) : {e}", spec.name),
             }
-            Err(e) => log::error!("Créature MMORPG (assets/models/creature.glb) : {e}"),
         }
 
-        // Créature n°2 (Sprint MMORPG, deuxième style) : quadrupède roux façon
-        // renardeau (`creature2.glb`, généré sous Blender comme le n°1 — rig
-        // Root/Body/Head/Tail/LegFL/LegFR/LegBL/LegBR, clips `Idle`/`Walk`).
-        // Même script de patrouille, mais clés `save` préfixées (l'espace `save`
-        // est partagé entre scripts) et couche de collision distincte (bit 2)
-        // pour que chaque créature ignore son propre collider dans ses sondes
-        // tout en voyant l'autre.
-        let creature2_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature2.glb");
-        match crate::scene::import::load_gltf(creature2_path) {
-            Ok((data, aabb_min, aabb_max)) => {
-                let mut mesh = ImportedMesh {
-                    path: creature2_path.to_string(),
-                    data,
-                    aabb_min,
-                    aabb_max,
-                    ..Default::default()
-                };
-                mesh.load_skinning();
-                let mesh_index = imported.len() as u32;
-                // Spawn à l'opposé du n°1, lui aussi dégagé des murs/repères.
-                let mut creature2 = demo_obj(
-                    "Créature 2",
-                    MeshKind::Imported(mesh_index),
-                    Vec3::new(3.0, 0.0, 3.0),
-                );
-                creature2.transform = creature2.transform.with_scale(Vec3::splat(0.35));
-                creature2.animation = Some(AnimationState {
-                    clip: "Idle".into(),
-                    ..Default::default()
-                });
-                creature2.physics = PhysicsKind::Kinematic;
-                creature2.collision_layer = 1 << 2;
-                creature2.script = creature_wander_script(half, "creature2_", !(1_u32 << 2));
-                objects.push(creature2);
-                imported.push(mesh);
-            }
-            Err(e) => log::error!("Créature 2 MMORPG (assets/models/creature2.glb) : {e}"),
-        }
+        // --- Décor « nature » : l'arène devient un coin de campagne -------------
+        // Prairie (sol reteinté plus haut), rivière nord-sud à l'ouest franchie
+        // par un pont de bois, route de terre est-ouest menant à une cabane en
+        // rondins, rizières au sud, lisière d'arbres/sapins, buissons, fleurs et
+        // rochers. Deux couches :
+        //
+        // 1) Aplats de terrain : primitives `Plane` sans collider, décalées de
+        //    quelques centimètres en Y (rivière < route) pour éviter le
+        //    z-fighting avec le sol et entre elles.
+        let mut aplat = |name: &str, pos: Vec3, scale: Vec3, color: [f32; 3]| {
+            let mut p = demo_obj(name, MeshKind::Plane, pos);
+            p.transform = p.transform.with_scale(scale);
+            p.color = color;
+            objects.push(p);
+        };
+        aplat(
+            "Rivière",
+            Vec3::new(-8.75, 0.02, 0.0),
+            Vec3::new(2.5, 1.0, 2.0 * half),
+            [0.18, 0.42, 0.65],
+        );
+        aplat(
+            "Route",
+            Vec3::new(0.0, 0.03, 7.4),
+            Vec3::new(2.0 * half, 1.0, 1.8),
+            [0.42, 0.36, 0.26],
+        );
+        aplat(
+            "Rizière ouest",
+            Vec3::new(-4.6, 0.015, -8.6),
+            Vec3::new(3.2, 1.0, 2.4),
+            [0.24, 0.44, 0.38],
+        );
+        aplat(
+            "Rizière est",
+            Vec3::new(-1.0, 0.015, -8.6),
+            Vec3::new(3.2, 1.0, 2.4),
+            [0.24, 0.44, 0.38],
+        );
 
-        // Créature n°3 (troisième style) : bipède trapu bleu-sarcelle à
-        // pousse-feuille sur la tête (`creature3.glb`, généré sous Blender comme
-        // les deux précédentes — rig Root/Body/Head/Crest/ArmL/ArmR/LegL/LegR,
-        // clips `Idle`/`Walk`). Même principe que la n°2 : clés `save`
-        // préfixées, couche de collision propre (bit 3) pour s'ignorer soi-même
-        // au raycast tout en voyant les deux autres créatures.
-        let creature3_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature3.glb");
-        match crate::scene::import::load_gltf(creature3_path) {
-            Ok((data, aabb_min, aabb_max)) => {
-                let mut mesh = ImportedMesh {
-                    path: creature3_path.to_string(),
-                    data,
-                    aabb_min,
-                    aabb_max,
-                    ..Default::default()
-                };
-                mesh.load_skinning();
-                let mesh_index = imported.len() as u32;
-                // Spawn au 3ᵉ coin de l'arène, dégagé des deux autres créatures.
-                let mut creature3 = demo_obj(
-                    "Créature 3",
-                    MeshKind::Imported(mesh_index),
-                    Vec3::new(-3.0, 0.0, 3.0),
-                );
-                creature3.transform = creature3.transform.with_scale(Vec3::splat(0.35));
-                creature3.animation = Some(AnimationState {
-                    clip: "Idle".into(),
-                    ..Default::default()
-                });
-                creature3.physics = PhysicsKind::Kinematic;
-                creature3.collision_layer = 1 << 3;
-                creature3.script = creature_wander_script(half, "creature3_", !(1_u32 << 3));
-                objects.push(creature3);
-                imported.push(mesh);
-            }
-            Err(e) => log::error!("Créature 3 MMORPG (assets/models/creature3.glb) : {e}"),
+        // 2) Meshes glb générés par Blender headless
+        //    (`scripts/blender/gen_nature_pack.py`), même logique data-driven que
+        //    les créatures. `solide` → corps statique avec collider `TriMesh`
+        //    (silhouette exacte : le pont se traverse à pied entre ses
+        //    garde-corps, la cabane bloque, on se faufile entre les troncs) ;
+        //    sinon pur décor traversable (fleurs, buissons, riz). Un même
+        //    fichier n'est chargé qu'une fois, les instances partagent l'entrée
+        //    `imported` (aucun état par objet : pas d'animation sur du décor).
+        //    Les emplacements solides respectent ≥ 3,5 m (RAY_DIST) de dégagement
+        //    autour des spawns de créatures, comme les repères, et restent
+        //    plaqués contre les murs de pourtour : un obstacle solide avancé
+        //    dans l'arène élargit la bande où les sondes des créatures
+        //    déclenchent un virage (arrêts pendant le virage — le test
+        //    `mmorpg_creature_never_gets_stuck_walking_into_a_wall` borne le
+        //    temps passé immobile à < 15 %).
+        struct DemoDecor {
+            name: &'static str,
+            file: &'static str,
+            pos: (f32, f32),
+            scale: f32,
+            solide: bool,
         }
-
-        // Créature n°4 (quatrième style) : quadrupède façon tortue/roche, grosse
-        // carapace en dôme sur le dos (`creature4.glb`, généré sous Blender comme
-        // les précédentes — rig Root/Body/Head/Shell/LegFL/LegFR/LegBL/LegBR,
-        // clips `Idle`/`Walk`). Même principe que les n°2/3 : clés `save`
-        // préfixées, couche de collision propre (bit 4) pour s'ignorer soi-même
-        // au raycast tout en voyant les trois autres créatures.
-        let creature4_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature4.glb");
-        match crate::scene::import::load_gltf(creature4_path) {
-            Ok((data, aabb_min, aabb_max)) => {
-                let mut mesh = ImportedMesh {
-                    path: creature4_path.to_string(),
-                    data,
-                    aabb_min,
-                    aabb_max,
-                    ..Default::default()
-                };
-                mesh.load_skinning();
-                let mesh_index = imported.len() as u32;
-                // Spawn au 4ᵉ coin de l'arène, dégagé des trois autres créatures.
-                let mut creature4 = demo_obj(
-                    "Créature 4",
-                    MeshKind::Imported(mesh_index),
-                    Vec3::new(-3.0, 0.0, -3.0),
-                );
-                creature4.transform = creature4.transform.with_scale(Vec3::splat(0.35));
-                creature4.animation = Some(AnimationState {
-                    clip: "Idle".into(),
-                    ..Default::default()
-                });
-                creature4.physics = PhysicsKind::Kinematic;
-                creature4.collision_layer = 1 << 4;
-                creature4.script = creature_wander_script(half, "creature4_", !(1_u32 << 4));
-                objects.push(creature4);
-                imported.push(mesh);
+        const NATURE_DECOR: &[DemoDecor] = &[
+            // Pont sur la rivière, dans l'axe de la route (z = 7,4).
+            DemoDecor {
+                name: "Pont",
+                file: "nature_bridge.glb",
+                pos: (-8.9, 7.4),
+                scale: 1.0,
+                solide: true,
+            },
+            // Cabane adossée au mur nord, porte vers la route (-Z).
+            DemoDecor {
+                name: "Cabane",
+                file: "nature_cabin.glb",
+                pos: (-1.5, 10.4),
+                scale: 1.0,
+                solide: true,
+            },
+            // Feuillus.
+            DemoDecor {
+                name: "Arbre 1",
+                file: "nature_tree.glb",
+                pos: (-11.0, -10.2),
+                scale: 1.0,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Arbre 2",
+                file: "nature_tree.glb",
+                pos: (11.4, -5.5),
+                scale: 1.1,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Arbre 3",
+                file: "nature_tree.glb",
+                pos: (5.6, 11.2),
+                scale: 1.0,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Arbre 4",
+                file: "nature_tree.glb",
+                pos: (-4.6, 11.1),
+                scale: 0.9,
+                solide: true,
+            },
+            // Sapins.
+            DemoDecor {
+                name: "Sapin 1",
+                file: "nature_pine.glb",
+                pos: (-11.2, 10.6),
+                scale: 1.0,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Sapin 2",
+                file: "nature_pine.glb",
+                pos: (11.2, -11.2),
+                scale: 1.1,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Sapin 3",
+                file: "nature_pine.glb",
+                pos: (-11.2, -4.2),
+                scale: 0.9,
+                solide: true,
+            },
+            // Rochers.
+            DemoDecor {
+                name: "Rocher 1",
+                file: "nature_rock.glb",
+                pos: (11.4, 1.5),
+                scale: 1.0,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Rocher 2",
+                file: "nature_rock.glb",
+                pos: (-6.8, -11.2),
+                scale: 1.3,
+                solide: true,
+            },
+            DemoDecor {
+                name: "Rocher 3",
+                file: "nature_rock.glb",
+                pos: (3.4, -11.3),
+                scale: 0.8,
+                solide: true,
+            },
+            // Buissons (traversables).
+            DemoDecor {
+                name: "Buisson 1",
+                file: "nature_bush.glb",
+                pos: (7.4, 7.8),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Buisson 2",
+                file: "nature_bush.glb",
+                pos: (-11.0, 2.5),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Buisson 3",
+                file: "nature_bush.glb",
+                pos: (2.0, -10.8),
+                scale: 1.2,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Buisson 4",
+                file: "nature_bush.glb",
+                pos: (11.0, 6.8),
+                scale: 0.9,
+                solide: false,
+            },
+            // Parterres de fleurs (traversables).
+            DemoDecor {
+                name: "Fleurs 1",
+                file: "nature_flowers.glb",
+                pos: (-2.0, 9.4),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Fleurs 2",
+                file: "nature_flowers.glb",
+                pos: (5.2, 8.6),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Fleurs 3",
+                file: "nature_flowers.glb",
+                pos: (2.6, -9.6),
+                scale: 1.1,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Fleurs 4",
+                file: "nature_flowers.glb",
+                pos: (-5.2, -5.6),
+                scale: 0.9,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Fleurs 5",
+                file: "nature_flowers.glb",
+                pos: (9.6, -3.0),
+                scale: 1.0,
+                solide: false,
+            },
+            // Touffes de riz dans les deux bassins.
+            DemoDecor {
+                name: "Riz 1",
+                file: "nature_rice.glb",
+                pos: (-5.4, -9.2),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Riz 2",
+                file: "nature_rice.glb",
+                pos: (-4.4, -8.0),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Riz 3",
+                file: "nature_rice.glb",
+                pos: (-3.8, -9.3),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Riz 4",
+                file: "nature_rice.glb",
+                pos: (-1.8, -8.1),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Riz 5",
+                file: "nature_rice.glb",
+                pos: (-0.8, -9.2),
+                scale: 1.0,
+                solide: false,
+            },
+            DemoDecor {
+                name: "Riz 6",
+                file: "nature_rice.glb",
+                pos: (0.0, -8.2),
+                scale: 1.0,
+                solide: false,
+            },
+        ];
+        for spec in NATURE_DECOR {
+            let mesh_index = match imported.iter().position(|m| m.path.ends_with(spec.file)) {
+                Some(i) => i as u32,
+                None => {
+                    let path =
+                        format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), spec.file);
+                    match crate::scene::import::load_gltf(&path) {
+                        Ok((data, aabb_min, aabb_max)) => {
+                            let mut mesh = ImportedMesh {
+                                path,
+                                data,
+                                aabb_min,
+                                aabb_max,
+                                ..Default::default()
+                            };
+                            // Pas de squelette dans le pack nature : l'appel ne
+                            // sert qu'à peupler les tangentes du rendu.
+                            mesh.load_skinning();
+                            imported.push(mesh);
+                            (imported.len() - 1) as u32
+                        }
+                        Err(e) => {
+                            log::error!("{} MMORPG ({}) : {e}", spec.name, spec.file);
+                            continue;
+                        }
+                    }
+                }
+            };
+            let mut deco = demo_obj(
+                spec.name,
+                MeshKind::Imported(mesh_index),
+                Vec3::new(spec.pos.0, 0.0, spec.pos.1),
+            );
+            deco.transform = deco.transform.with_scale(Vec3::splat(spec.scale));
+            if spec.solide {
+                deco.physics = PhysicsKind::Static;
+                deco.collider_shape = crate::runtime::physics::ColliderShape::TriMesh;
             }
-            Err(e) => log::error!("Créature 4 MMORPG (assets/models/creature4.glb) : {e}"),
-        }
-
-        // Créature n°5 (cinquième style) : bipède oisillon jaune-orangé, bec et
-        // courtes ailes (`creature5.glb`, généré sous Blender comme les
-        // précédentes — rig Root/Body/Head/WingL/WingR/LegL/LegR/Tail, clips
-        // `Idle`/`Walk`). Même principe que les n°2/3/4 : clés `save`
-        // préfixées, couche de collision propre (bit 5) pour s'ignorer
-        // soi-même au raycast tout en voyant les quatre autres créatures.
-        let creature5_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models/creature5.glb");
-        match crate::scene::import::load_gltf(creature5_path) {
-            Ok((data, aabb_min, aabb_max)) => {
-                let mut mesh = ImportedMesh {
-                    path: creature5_path.to_string(),
-                    data,
-                    aabb_min,
-                    aabb_max,
-                    ..Default::default()
-                };
-                mesh.load_skinning();
-                let mesh_index = imported.len() as u32;
-                // Spawn au 5ᵉ point de l'arène, dégagé des quatre autres créatures.
-                let mut creature5 = demo_obj(
-                    "Créature 5",
-                    MeshKind::Imported(mesh_index),
-                    Vec3::new(3.0, 0.0, -3.0),
-                );
-                creature5.transform = creature5.transform.with_scale(Vec3::splat(0.35));
-                creature5.animation = Some(AnimationState {
-                    clip: "Idle".into(),
-                    ..Default::default()
-                });
-                creature5.physics = PhysicsKind::Kinematic;
-                creature5.collision_layer = 1 << 5;
-                creature5.script = creature_wander_script(half, "creature5_", !(1_u32 << 5));
-                objects.push(creature5);
-                imported.push(mesh);
-            }
-            Err(e) => log::error!("Créature 5 MMORPG (assets/models/creature5.glb) : {e}"),
+            objects.push(deco);
         }
 
         Scene {
@@ -1850,6 +2624,53 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             loot.emissive = 1.2;
             loot.weapon_pickup = Some(WeaponPickup { weapon: weapon_idx });
             objects.push(loot);
+        }
+
+        // Objets d'inventaire (cf. `ItemPickup`) : de quoi remplir le sac en
+        // explorant — une potion par salle 1/2 (soin de secours avant l'Ogre,
+        // coin opposé au butin d'arme pour inciter à fouiller toute la salle),
+        // un buisson à baies qui se régénère dans le couloir, et le trésor de
+        // l'Ogre (clé + gemme) au fond de la salle 3.
+        for (n, &z) in room_z.iter().take(2).enumerate() {
+            let side = if n == 0 { -1.0 } else { 1.0 };
+            let mut potion = demo_obj(
+                "Potion de soin",
+                MeshKind::Capsule,
+                Vec3::new(side * 3.0, 0.35, z - side * 3.0),
+            );
+            potion.transform = potion.transform.with_scale(Vec3::splat(0.35));
+            potion.color = ItemKind::Potion.color();
+            potion.emissive = 0.8;
+            potion.item_pickup = Some(ItemPickup {
+                kind: ItemKind::Potion,
+                count: 1,
+            });
+            objects.push(potion);
+        }
+        let mut baies = demo_obj(
+            "Buisson à baies",
+            MeshKind::Sphere,
+            Vec3::new(1.5, 0.3, (room_z[0] + room_z[1]) * 0.5),
+        );
+        baies.transform = baies.transform.with_scale(Vec3::splat(0.5));
+        baies.color = ItemKind::Baie.color();
+        baies.emissive = 0.4;
+        baies.respawn_delay = 20.0;
+        baies.item_pickup = Some(ItemPickup {
+            kind: ItemKind::Baie,
+            count: 2,
+        });
+        objects.push(baies);
+        for (name, kind, dx) in [
+            ("Clé du donjon", ItemKind::Cle, -1.0),
+            ("Gemme de l'Ogre", ItemKind::Gemme, 1.0),
+        ] {
+            let mut tresor = demo_obj(name, MeshKind::Cube, Vec3::new(dx, 0.3, room_z[2] - 3.5));
+            tresor.transform = tresor.transform.with_scale(Vec3::splat(0.3));
+            tresor.color = kind.color();
+            tresor.emissive = 1.0;
+            tresor.item_pickup = Some(ItemPickup { kind, count: 1 });
+            objects.push(tresor);
         }
 
         Scene {
@@ -2236,6 +3057,98 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
                     ..Default::default()
                 },
             ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Preuve du décor nature de la démo MMORPG (Sprint en cours) : les glb du
+    /// pack (`scripts/blender/gen_nature_pack.py`) se chargent réellement (un
+    /// objet n'est poussé que si `load_gltf` réussit), le décor solide a bien un
+    /// collider `TriMesh` statique, le végétal léger reste traversable, et les
+    /// instances d'un même fichier partagent leur entrée `imported`.
+    #[test]
+    fn mmorpg_demo_contains_walkable_nature_decor() {
+        let scene = Scene::mmorpg_demo();
+        let by_name = |name: &str| {
+            scene
+                .objects
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap_or_else(|| panic!("la démo MMORPG doit contenir « {name} »"))
+        };
+
+        // Aplats de terrain : purement visuels, jamais de collider.
+        for name in ["Rivière", "Route", "Rizière ouest", "Rizière est"] {
+            assert_eq!(
+                by_name(name).physics,
+                PhysicsKind::None,
+                "« {name} » est un aplat visuel, il ne doit rien bloquer"
+            );
+        }
+
+        // Décor solide : statique + TriMesh (le pont se traverse à pied sur son
+        // tablier, silhouette exacte pour arbres/cabane/rochers).
+        for name in ["Pont", "Cabane", "Arbre 1", "Sapin 1", "Rocher 1"] {
+            let obj = by_name(name);
+            assert_eq!(obj.physics, PhysicsKind::Static, "« {name} » doit bloquer");
+            assert_eq!(
+                obj.collider_shape,
+                crate::runtime::physics::ColliderShape::TriMesh,
+                "« {name} » doit utiliser sa silhouette exacte, pas une boîte"
+            );
+        }
+
+        // Végétal léger : traversable.
+        for name in ["Buisson 1", "Fleurs 1", "Riz 1"] {
+            assert_eq!(
+                by_name(name).physics,
+                PhysicsKind::None,
+                "« {name} » ne doit pas gêner les déplacements"
+            );
+        }
+
+        // Instanciation : deux arbres partagent le même mesh importé (aucun état
+        // par objet sur du décor statique, inutile de recharger le fichier).
+        let mesh_of = |name: &str| match by_name(name).mesh {
+            MeshKind::Imported(i) => i,
+            _ => panic!("« {name} » devrait être un mesh importé"),
+        };
+        assert_eq!(
+            mesh_of("Arbre 1"),
+            mesh_of("Arbre 2"),
+            "les instances d'un même glb doivent partager leur entrée `imported`"
+        );
+
+        // Dégagement des spawns : les créatures démarrent avec RAY_DIST (3,5 m)
+        // de sonde devant elles — aucun décor solide à moins de 3,5 m d'un spawn
+        // (même règle que les repères, cf. le commentaire de MMORPG_CREATURES).
+        let creatures: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+            .collect();
+        assert!(!creatures.is_empty(), "la démo doit garder ses créatures");
+        for deco in scene
+            .objects
+            .iter()
+            .filter(|o| o.physics == PhysicsKind::Static && matches!(o.mesh, MeshKind::Imported(_)))
+        {
+            for creature in &creatures {
+                let delta = deco.transform.position - creature.transform.position;
+                let d = (delta.x * delta.x + delta.z * delta.z).sqrt();
+                assert!(
+                    d >= 3.5,
+                    "« {} » ({:?}) est à {d:.2} m du spawn de « {} » — il faut \
+                     ≥ 3,5 m (RAY_DIST) de dégagement",
+                    deco.name,
+                    deco.transform.position,
+                    creature.name
+                );
+            }
         }
     }
 }

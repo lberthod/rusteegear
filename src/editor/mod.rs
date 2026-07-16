@@ -15,9 +15,9 @@ use winit::window::Window;
 use hierarchy::hierarchy_panel;
 use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, collectibles_hud, crosshair, damage_vignette,
-    defeated_banner, health_bar, hud_preview_overlays, hud_widgets, kills_hud, lose_banner,
-    mobile_overlay, multiplayer_roster_panel, restart_button, scene_has_ranged_weapon,
-    touch_feedback, wave_hud, weapon_hud, weapon_inventory_panel,
+    defeated_banner, health_bar, hud_preview_overlays, hud_widgets, item_inventory_panel,
+    kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel, restart_button,
+    scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -96,6 +96,7 @@ struct HudPreview {
     open: bool,
     crosshair: bool,
     weapon_inventory: bool,
+    item_inventory: bool,
     weapon_hud: bool,
     kills: bool,
     roster: bool,
@@ -235,6 +236,9 @@ pub struct UiActions {
     /// Inventaire d'armes (cf. `weapon_inventory_panel`) : arme choisie par le
     /// joueur, à appliquer via `AppState::select_weapon`.
     pub select_weapon: Option<usize>,
+    /// « Utiliser » cliqué dans le panneau 👜 Sac : sorte d'objet à consommer,
+    /// à appliquer via `AppState::use_item`.
+    pub use_item: Option<crate::scene::ItemKind>,
     /// Fenêtre Multijoueur : « Se connecter » demandé (adresse, pseudo).
     pub connect_to_server: Option<(String, String)>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
@@ -441,6 +445,7 @@ impl Editor {
         kills: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
+        item_inventory: &[(crate::scene::ItemKind, u32)],
         roster: &[RosterEntry],
         locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
@@ -495,6 +500,14 @@ impl Editor {
                     locale,
                 );
             }
+            item_inventory_panel(
+                ctx,
+                area,
+                item_inventory,
+                &mut layout.item_inventory,
+                false,
+                &mut actions,
+            );
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score, locale);
             }
@@ -577,6 +590,7 @@ impl Editor {
         kills: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
+        item_inventory: &[(crate::scene::ItemKind, u32)],
         roster: &[RosterEntry],
         locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
@@ -654,6 +668,7 @@ impl Editor {
                 kills,
                 weapon_inventory,
                 selected_weapon,
+                item_inventory,
                 roster,
                 hud_preview,
                 hud_image_cache,
@@ -771,6 +786,7 @@ fn build_ui(
     kills: u32,
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
+    item_inventory: &[(crate::scene::ItemKind, u32)],
     roster: &[RosterEntry],
     hud_preview: &mut HudPreview,
     hud_image_cache: &mut HudImageCache,
@@ -1423,6 +1439,37 @@ fn build_ui(
                             .response
                             .on_hover_text("Comportement sans script quand on tape l'objet");
                         }
+                        // Objet d'inventaire (cf. `ItemPickup`) : la case pose/retire le
+                        // composant, la sorte et la quantité ne s'affichent que posé —
+                        // même esprit que « Action au tap » juste au-dessus.
+                        let mut is_item = obj.item_pickup.is_some();
+                        ui.checkbox(&mut is_item, "🧺 Objet à ramasser")
+                            .on_hover_text(
+                                "En Play, marcher dessus l'ajoute au sac du joueur (panneau 👜)",
+                            );
+                        if is_item && obj.item_pickup.is_none() {
+                            obj.item_pickup = Some(crate::scene::ItemPickup {
+                                kind: crate::scene::ItemKind::Potion,
+                                count: 1,
+                            });
+                        } else if !is_item {
+                            obj.item_pickup = None;
+                        }
+                        if let Some(item) = &mut obj.item_pickup {
+                            ui.horizontal(|ui| {
+                                ui.label("Sorte");
+                                egui::ComboBox::from_id_salt(("item_kind", i))
+                                    .selected_text(item.kind.label())
+                                    .show_ui(ui, |ui| {
+                                        for k in crate::scene::ItemKind::ALL {
+                                            ui.selectable_value(&mut item.kind, k, k.label());
+                                        }
+                                    });
+                                ui.label("×");
+                                ui.add(egui::DragValue::new(&mut item.count).range(1..=99))
+                                    .on_hover_text("Quantité ajoutée au sac par ramassage");
+                            });
+                        }
                         ui.checkbox(&mut obj.deadly, "💀 Zone mortelle")
                             .on_hover_text(
                                 "En Play, la partie est perdue si le joueur entre dans son AABB",
@@ -1794,6 +1841,14 @@ fn build_ui(
                 locale,
             );
         }
+        item_inventory_panel(
+            root.ctx(),
+            play_rect,
+            item_inventory,
+            &mut scene.hud_layout.item_inventory,
+            false,
+            actions,
+        );
     } else if hud_preview.open {
         hud_preview_overlays(
             root.ctx(),

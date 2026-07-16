@@ -27,6 +27,7 @@ impl AppState {
         // `scene.objects`, ajouté en cours de partie — indices obsolètes après
         // restauration (cf. `clear_fireballs`).
         self.clear_fireballs();
+        self.clear_creature_shots();
         self.time = 0.0;
         self.sim_accumulator = 0.0;
         self.sim_prev_poses.clear();
@@ -39,6 +40,7 @@ impl AppState {
         self.trigger_prev.clear();
         self.lua_vars.clear();
         self.respawn_queue.clear();
+        self.inventory.clear();
         self.hud_health = None;
         self.damage_flash = 0.0;
         self.attack_flash = 0.0;

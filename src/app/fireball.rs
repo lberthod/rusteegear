@@ -139,12 +139,14 @@ impl AppState {
         // Bouton tactile « Arme » : cycle sur le **front montant** uniquement —
         // l'overlay réécrit `buttons` à chaque frame (état maintenu), sans cette
         // détection le moindre appui ferait défiler toutes les armes en rafale.
-        let weapon_down = self
-            .player_object()
-            .and_then(|o| o.controller.as_ref())
-            .is_some_and(|c| {
-                !c.weapon_button.is_empty() && self.input_state.buttons.contains(&c.weapon_button)
-            });
+        let weapon_down = self.input_state.weapon_cycle
+            || self
+                .player_object()
+                .and_then(|o| o.controller.as_ref())
+                .is_some_and(|c| {
+                    !c.weapon_button.is_empty()
+                        && self.input_state.buttons.contains(&c.weapon_button)
+                });
         if weapon_down && !self.weapon_button_was_down {
             self.cycle_weapon();
         }
@@ -401,8 +403,10 @@ impl AppState {
 
     /// `true` si cette instance est un **client** connecté à un serveur (jamais le
     /// cas du serveur headless, qui n'a pas de `NetClient`) : la simulation locale
-    /// des projectiles s'efface alors devant l'autorité du serveur.
-    fn is_online_client(&self) -> bool {
+    /// des projectiles s'efface alors devant l'autorité du serveur. `pub(super)` :
+    /// aussi utilisé par `simulation.rs`/`creature_attack.rs`/`health.rs` pour la
+    /// même raison côté créatures scriptées (synchro réseau).
+    pub(super) fn is_online_client(&self) -> bool {
         #[cfg(not(target_os = "ios"))]
         {
             self.net_client.is_some()
@@ -839,6 +843,29 @@ mod tests {
             0,
             "le cycle doit boucler sur la table"
         );
+    }
+
+    /// Le bouton manette « Changer d'arme » (Sprint 110, `PlayerInput::
+    /// weapon_cycle`) suit la même règle de front montant que le bouton tactile :
+    /// maintenu, il ne cycle qu'une fois.
+    #[test]
+    fn the_gamepad_weapon_button_cycles_once_per_press() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        assert_eq!(app.selected_weapon(), 0);
+
+        app.input_state.weapon_cycle = true;
+        advance(&mut app, 5, 0.02);
+        assert_eq!(
+            app.selected_weapon(),
+            1,
+            "maintenir le bouton manette ne doit cycler qu'une fois"
+        );
+
+        app.input_state.weapon_cycle = false;
+        advance(&mut app, 2, 0.02);
+        app.input_state.weapon_cycle = true;
+        advance(&mut app, 2, 0.02);
+        assert_eq!(app.selected_weapon(), 2, "relâcher puis rappuyer recycle");
     }
 
     #[test]

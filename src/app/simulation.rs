@@ -262,6 +262,7 @@ impl AppState {
             // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
             self.clear_network_players();
             self.clear_fireballs();
+            self.clear_creature_shots();
             self.physics = None;
             self.paused = false;
             self.hud_health = None;
@@ -296,6 +297,7 @@ impl AppState {
             self.trigger_prev.clear();
             self.lua_vars.clear();
             self.respawn_queue.clear();
+            self.inventory.clear();
             self.time = 0.0;
             // Relit la qualité visée (modifiable dans le panneau Export sans redémarrer
             // l'app) : s'applique dès ce lancement de Play, pas seulement au build exporté.
@@ -396,6 +398,9 @@ impl AppState {
                     );
                 }
             }
+            // Ramassage d'objets d'inventaire par contact (cf. `app::inventory`) :
+            // potions, clés… rejoignent le sac au lieu d'équiper ou de scorer.
+            self.update_item_pickups();
             self.update_attack(dt);
             self.update_network_attacks(dt);
             self.update_fireballs(dt);
@@ -404,6 +409,7 @@ impl AppState {
             // qu'un soin ne soit pas aussitôt annulé par un contact déjà résolu
             // (cf. GAMEDESIGN_EN_LIGNE.md §3.1/§3.6).
             self.update_network_health(dt);
+            self.update_creature_bite(dt);
             self.update_network_heal(dt);
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
@@ -619,6 +625,10 @@ impl AppState {
         // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
         // mutable par l'itération ci-dessous.
         let mut spawn_requests: Vec<(String, Vec3)> = Vec::new();
+        // Calculé une fois : `self.scene.objects` est emprunté mutable par
+        // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
+        // n'y serait pas appelable.
+        let online_client = self.is_online_client();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             let just_tapped = self.tapped_obj == Some(idx);
             // Vibration Feedback : retour haptique quand l'objet est tapé.
@@ -636,6 +646,18 @@ impl AppState {
             // Game feel : les collectibles encore visibles tournent sur eux-mêmes.
             crate::scene::animate_collectible(obj, time);
             if obj.script.trim().is_empty() {
+                continue;
+            }
+            // Créature synchronisée par le serveur (`Combat::attackable`, cf.
+            // `AppState::network_snapshot`/`scene::demos::MMORPG_CREATURES`) : un
+            // client connecté ne doit pas dupliquer sa simulation localement (sa
+            // patrouille/morsure tourne réellement côté serveur, cf. `is_online_
+            // client`), seulement se fier aux `EntityDelta` reçus. En solo et côté
+            // serveur (jamais de `net_client`), rien ne change.
+            if online_client
+                && obj.controller.is_none()
+                && obj.combat.as_ref().is_some_and(|c| c.attackable)
+            {
                 continue;
             }
             // `mlua`/`lua-src` ne ciblent pas `wasm32-unknown-unknown` (cf. Cargo.toml,
@@ -796,6 +818,14 @@ impl AppState {
         if let Some(&mix) = reverb_requests.last() {
             self.audio.set_reverb_mix(mix, 0.5);
         }
+
+        // Attaques à distance des créatures (cf. `creature_attack.rs`) : gèle
+        // position/animation de celles en train de viser (annule le déplacement
+        // que leur script de patrouille vient de calculer ci-dessus), et fait
+        // voler/impacter leurs projectiles — doit tourner avant la physique
+        // ci-dessous pour que les positions gelées soient celles réellement
+        // vues par `Physics::resolve_scripted_moves`/le rendu ce tick.
+        self.update_creature_ranged_attacks(dt, time);
 
         // 2. physique (écrase les poses des corps dynamiques)
         // Cibles de poursuite pour l'IA (`AiChaser`, cf. plus bas) : en solo, le
@@ -1574,6 +1604,21 @@ mod tests {
             ("Créature 3", "creature3.glb"),
             ("Créature 4", "creature4.glb"),
             ("Créature 5", "creature5.glb"),
+            ("Créature 6", "creature6.glb"),
+            ("Créature 7", "creature7.glb"),
+            ("Créature 8", "creature8.glb"),
+            ("Créature 9", "creature9.glb"),
+            ("Créature 10", "creature10.glb"),
+            ("Créature 11", "creature11.glb"),
+            ("Créature 12", "creature12.glb"),
+            ("Créature 13", "creature13.glb"),
+            ("Créature 14", "creature14.glb"),
+            ("Créature 15", "creature15.glb"),
+            ("Créature 16", "creature16.glb"),
+            ("Créature 17", "creature17.glb"),
+            ("Créature 18", "creature18.glb"),
+            ("Créature 19", "creature19.glb"),
+            ("Créature 20", "creature20.glb"),
         ] {
             assert!(
                 app.scene.objects.iter().any(|o| o.name == name),
@@ -1669,6 +1714,19 @@ mod tests {
             .position(|o| o.name == "Joueur")
             .expect("la démo MMORPG doit contenir un « Joueur »");
 
+        // Isole la Créature 1 : depuis les créatures 6-10, d'autres attaques
+        // (morsures 6/7, tirs 3/8/9/10) peuvent toucher le joueur pendant les
+        // 20 s de contact — leurs chutes de vie se cumuleraient à la morsure
+        // mesurée ici et fausseraient l'assertion « une salve ≈ 0.115 ». Les
+        // masquer suffit : un objet invisible n'est jamais `triggered` (cf. le
+        // filtre `visible` de `sim_step`) et les attaques à distance ignorent
+        // les créatures masquées (cf. `update_creature_ranged_attacks`).
+        for obj in app.scene.objects.iter_mut() {
+            if obj.name.starts_with("Créature ") {
+                obj.visible = false;
+            }
+        }
+
         let start = app.scene.objects[creature_idx].transform.position;
         app.scene.objects[player_idx].transform.position = start;
         app.hud_health = Some(1.0);
@@ -1748,39 +1806,67 @@ mod tests {
         );
     }
 
-    /// Verrouille la portée de la demande : seule la Créature 1 mord. Les 4
-    /// autres créatures restent des PNJ pacifiques — vérifié statiquement sur le
-    /// script (pas d'appel `damage(`) plutôt qu'en rejouant une scène de contact
-    /// par créature, plus rapide et tout aussi précis pour cette propriété.
+    /// Verrouille la répartition des attaques par créature : au contact
+    /// (`creature_bite_script`, script Lua + `trigger`) pour les n°1 (morsure),
+    /// 6 (chauve-souris) et 7 (crabe) ; à distance (natif, par nom — cf.
+    /// `creature_attack::RANGED_CREATURE_ATTACKS`) pour les n°3, 8, 9 et 10 ;
+    /// et rien du tout pour les pacifiques n°2, 4 et 5. Vérifié statiquement
+    /// sur les scripts (pas d'appel `damage(`) plutôt qu'en rejouant une scène
+    /// de contact par créature — plus rapide, tout aussi précis.
     #[test]
-    fn only_creature_1_has_a_bite_attack() {
+    fn creature_attacks_are_scoped_to_the_intended_creatures() {
         let scene = crate::scene::Scene::mmorpg_demo();
-        for name in ["Créature 2", "Créature 3", "Créature 4", "Créature 5"] {
-            let obj = scene
+        let by_name = |name: &str| {
+            scene
                 .objects
                 .iter()
                 .find(|o| o.name == name)
-                .unwrap_or_else(|| panic!("la démo MMORPG doit contenir « {name} »"));
+                .unwrap_or_else(|| panic!("la démo MMORPG doit contenir « {name} »"))
+        };
+        for name in ["Créature", "Créature 6", "Créature 7"] {
+            let obj = by_name(name);
+            assert!(
+                obj.script.contains("damage("),
+                "« {name} » devrait avoir une attaque au contact (cf. creature_bite_script)"
+            );
+            assert!(
+                obj.trigger,
+                "« {name} » doit avoir `trigger = true` pour que `obj.triggered` \
+                 fonctionne dans son script d'attaque"
+            );
+        }
+        for name in [
+            "Créature 2",
+            "Créature 3",
+            "Créature 4",
+            "Créature 5",
+            "Créature 8",
+            "Créature 9",
+            "Créature 10",
+            "Créature 11",
+            "Créature 12",
+            "Créature 13",
+            "Créature 14",
+            "Créature 15",
+            "Créature 16",
+            "Créature 17",
+            "Créature 18",
+            "Créature 19",
+            "Créature 20",
+        ] {
+            let obj = by_name(name);
             assert!(
                 !obj.script.contains("damage("),
-                "« {name} » ne devrait pas pouvoir attaquer (script : {:?})",
+                "« {name} » ne devrait pas attaquer via son script (script : {:?})",
                 obj.script
             );
         }
-        let creature1 = scene
-            .objects
-            .iter()
-            .find(|o| o.name == "Créature")
-            .expect("la démo MMORPG doit contenir « Créature »");
-        assert!(
-            creature1.script.contains("damage("),
-            "la Créature 1 devrait avoir une attaque (cf. creature_bite_script)"
-        );
-        assert!(
-            creature1.trigger,
-            "la Créature 1 doit avoir `trigger = true` pour que `obj.triggered` \
-             fonctionne dans son script d'attaque"
-        );
+        // Les attaques à distance sont natives, déclenchées par nom : chaque
+        // créature de la table doit exister dans la démo (une entrée orpheline
+        // serait une attaque silencieusement morte).
+        for cfg_name in ["Créature 3", "Créature 8", "Créature 9", "Créature 10"] {
+            by_name(cfg_name);
+        }
     }
 
     /// Preuve (bug observé en jeu sur la créature MMORPG : « les bras et la tête

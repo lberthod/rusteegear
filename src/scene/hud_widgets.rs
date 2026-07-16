@@ -103,5 +103,6 @@ pub struct HudLayout {
     pub weapon_hud: [f32; 2],
     pub kills: [f32; 2],
     pub weapon_inventory: [f32; 2],
+    pub item_inventory: [f32; 2],
     pub roster: [f32; 2],
 }

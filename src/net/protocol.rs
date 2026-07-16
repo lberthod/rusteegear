@@ -179,6 +179,23 @@ pub struct Snapshot {
     /// sphères (cf. `AppState::sync_fireball_pool`), sans identité persistante
     /// à suivre d'un tick à l'autre.
     pub projectiles: Vec<ProjectileState>,
+    /// Projectiles de créature en vol (morsure exceptée, purement au contact —
+    /// cf. `app::creature_attack`) : même non-identité qu'un `ProjectileState` de
+    /// joueur, `cfg` en plus (indice dans `creature_attack::RANGED_CREATURE_ATTACKS`,
+    /// une table Rust compilée identique des deux côtés — sûr à référencer par
+    /// indice comme `ProjectileState::weapon` le fait déjà pour les armes du joueur).
+    #[serde(default)]
+    pub creature_shots: Vec<CreatureShotState>,
+}
+
+/// Projectile de créature en vol pour un tick donné (cf. `Snapshot::creature_shots`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CreatureShotState {
+    pub position: [f32; 3],
+    pub dir: [f32; 3],
+    /// Indice dans `app::creature_attack::RANGED_CREATURE_ATTACKS` — détermine
+    /// vitesse/couleur/rayon à l'affichage côté client, cf. sa doc.
+    pub cfg: u8,
 }
 
 /// Projectile en vol pour un tick donné : position + arme d'origine (l'aspect —
@@ -355,6 +372,11 @@ mod tests {
     fn server_msg_snapshot_round_trips() {
         round_trip(ServerMsg::Snapshot(Snapshot {
             tick: 12345,
+            creature_shots: vec![CreatureShotState {
+                position: [2.0, 0.5, -1.0],
+                dir: [0.0, 0.0, 1.0],
+                cfg: 1,
+            }],
             projectiles: vec![
                 ProjectileState {
                     position: [1.0, 1.4, -3.0],
@@ -430,6 +452,7 @@ mod tests {
             .collect();
         let snapshot = ServerMsg::Snapshot(Snapshot {
             tick: 999_999,
+            creature_shots: Vec::new(),
             entities,
             // Quelques boules de feu en vol : le cas réaliste d'une manche animée.
             projectiles: vec![

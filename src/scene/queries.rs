@@ -4,7 +4,7 @@
 
 use glam::Vec3;
 
-use super::{HudWidgetKind, MeshKind, Scene, SceneObject, TapAction, WEAPONS, Weapon};
+use super::{HudWidgetKind, ItemPickup, MeshKind, Scene, SceneObject, TapAction, WEAPONS, Weapon};
 
 impl Scene {
     /// Estimation grossière de l'occupation mémoire (octets) : `(objets, meshes importés,
@@ -119,6 +119,27 @@ impl Scene {
             }
         }
         None
+    }
+
+    /// Ramassage d'objets d'inventaire au contact (cf. `ItemPickup`) : masque les
+    /// objets touchés et renvoie `(indice, pickup)` de chacun — plusieurs par appel,
+    /// comme `collect_at` (empocher deux baies d'un coup a du sens), contrairement à
+    /// `weapon_pickup_at` (une seule arme équipable). L'indice sert à la file de
+    /// réapparition (`respawn_delay`, même mécanisme que les pièces bonus).
+    pub fn item_pickups_at(&mut self, p: Vec3, radius: f32) -> Vec<(usize, ItemPickup)> {
+        let mut hit = Vec::new();
+        for (i, o) in self.objects.iter_mut().enumerate() {
+            if let Some(item) = o.item_pickup
+                && o.visible
+            {
+                let piece_r = o.transform.scale.max_element() * 0.5;
+                if (o.transform.position - p).length() <= radius + piece_r {
+                    o.visible = false;
+                    hit.push((i, item));
+                }
+            }
+        }
+        hit
     }
 
     /// Résout une attaque du joueur en `p` (portée `radius`) : vainc (masque) les ennemis

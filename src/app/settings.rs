@@ -54,19 +54,25 @@ pub struct GamepadBindings {
     pub attack: String,
     pub fire: String,
     pub heal: String,
+    /// Changement d'arme (cycle sur front montant, cf. `fireball::cycle_weapon`) —
+    /// pendant manette des touches clavier 1/2/3 et du bouton tactile « Arme ».
+    pub weapon: String,
 }
 
 impl Default for GamepadBindings {
     /// South/West/East/North : disposition Xbox par défaut (A = Saut, X = Attaque,
     /// B = Tir, Y = Soin) — cohérente avec les voisins clavier J/K/H (Attaque/Tir/
     /// Soin groupés), sans obliger à une manette précise (les noms `gilrs`
-    /// sont génériques par position, pas par étiquette de fabricant).
+    /// sont génériques par position, pas par étiquette de fabricant). Changer
+    /// d'arme sur RightTrigger (bumper droit RB) : les quatre boutons de façade
+    /// sont pris, et un bumper se presse sans lâcher le stick.
     fn default() -> Self {
         Self {
             jump: "South".into(),
             attack: "West".into(),
             fire: "East".into(),
             heal: "North".into(),
+            weapon: "RightTrigger".into(),
         }
     }
 }

@@ -91,6 +91,10 @@ pub struct GamepadInput {
     pub attack: bool,
     pub fire: bool,
     pub heal: bool,
+    /// Changement d'arme : état **tenu** ici ; le front montant (un cycle par
+    /// appui) est détecté en aval par `fireball::update_fireballs`, comme pour
+    /// le bouton tactile « Arme ».
+    pub weapon: bool,
 }
 
 /// Zone morte standard (15 %) appliquée au stick gauche avant résolution.
@@ -111,6 +115,7 @@ pub fn resolve_gamepad_input(
         attack: pressed(&bindings.attack),
         fire: pressed(&bindings.fire),
         heal: pressed(&bindings.heal),
+        weapon: pressed(&bindings.weapon),
     }
 }
 
@@ -147,10 +152,15 @@ mod tests {
         let mut held = std::collections::HashSet::new();
         held.insert(gilrs::Button::South);
         held.insert(gilrs::Button::East);
+        held.insert(gilrs::Button::RightTrigger);
         let bindings = GamepadBindings::default();
         let resolved = resolve_gamepad_input(&held, (0.6, -1.2), &bindings);
         assert!(resolved.jump, "South est le défaut de Saut");
         assert!(resolved.fire, "East est le défaut de Tir");
+        assert!(
+            resolved.weapon,
+            "RightTrigger (RB) est le défaut de Changer d'arme"
+        );
         assert!(!resolved.attack, "West (Attaque) n'est pas tenu");
         assert!(!resolved.heal, "North (Soin) n'est pas tenu");
         assert_eq!(resolved.turn, 0.6);

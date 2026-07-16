@@ -757,6 +757,20 @@ impl Physics {
             && let Some(body) = self.bodies.get_mut(handle)
         {
             body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
+            return;
+        }
+        // Corps scripté (`PhysicsKind::Kinematic`, cf. `scripted` et
+        // `resolve_scripted_moves`) : sans ce cas, un appelant qui téléporte un
+        // objet scripté (tests, réconciliation future) ne ferait bouger que
+        // `scene.objects[index].transform` — `resolve_scripted_moves` lirait
+        // ensuite une position physique périmée au tick suivant (`cur =
+        // body.translation()`), et calculerait un déplacement `desired` aberrant
+        // à partir de l'ancien emplacement jamais mis à jour ici.
+        if let Some(&(_, handle)) = self.scripted.iter().find(|&&(i, _)| i == index)
+            && let Some(body) = self.bodies.get_mut(handle)
+        {
+            body.set_next_kinematic_translation(Vector::new(pos.x, pos.y, pos.z));
+            body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
         }
     }
 

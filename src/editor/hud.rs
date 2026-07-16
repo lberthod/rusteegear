@@ -1,7 +1,7 @@
 //! HUD de jeu (mode Play) : vie, arme équipée, manches, classement multijoueur,
 //! réticule, overlay tactile mobile. Extrait de `editor/mod.rs`.
 
-use crate::scene::{HudAnchor, HudBinding, HudLayout, HudWidgetKind, Scene};
+use crate::scene::{HudAnchor, HudBinding, HudLayout, HudWidgetKind, ItemKind, Scene};
 
 use super::{HudPreview, UiActions};
 
@@ -370,6 +370,70 @@ pub(super) fn weapon_inventory_panel(
         });
 }
 
+/// Sac du joueur (fenêtre repliable, même mécanisme et même positionnement
+/// relatif à `area` que `weapon_inventory_panel`, juste en dessous) : une ligne
+/// par sorte d'objet ramassée (pastille de couleur + nom + quantité), avec un
+/// bouton « Utiliser » pour les consommables (`ItemKind::heal() > 0` — boire la
+/// potion soigne, cf. `AppState::use_item`). N'apparaît que si le sac contient
+/// quelque chose : contrairement à l'inventaire d'armes (fixe, connu d'avance),
+/// le sac vide n'a rien à montrer.
+pub(super) fn item_inventory_panel(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    items: &[(ItemKind, u32)],
+    offset: &mut [f32; 2],
+    draggable: bool,
+    actions: &mut UiActions,
+) {
+    if items.is_empty() && !draggable {
+        return;
+    }
+    let pos = hud_anchor(
+        ctx,
+        "hud_item_inventory",
+        area.min + egui::vec2(8.0, 44.0),
+        offset,
+        egui::vec2(24.0, 24.0),
+        draggable,
+    );
+    egui::Window::new("👜 Sac")
+        .id(egui::Id::new("item_inventory"))
+        .collapsible(true)
+        .default_open(false)
+        .resizable(false)
+        .fixed_pos(pos)
+        .default_width(200.0)
+        .show(ctx, |ui| {
+            if items.is_empty() {
+                ui.weak("(vide)");
+            }
+            for &(kind, count) in items {
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    let color = kind.color();
+                    ui.painter().rect_filled(
+                        rect,
+                        3.0,
+                        egui::Color32::from_rgb(
+                            (color[0] * 255.0) as u8,
+                            (color[1] * 255.0) as u8,
+                            (color[2] * 255.0) as u8,
+                        ),
+                    );
+                    ui.label(format!("{} ×{}", kind.label(), count));
+                    if kind.heal() > 0.0 {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Utiliser").clicked() {
+                                actions.use_item = Some(kind);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+}
+
 /// Entrée du tableau des joueurs en ligne, telle que produite par
 /// `network_client::multiplayer_roster` : `(nom, vie 0..1 ou None avant le
 /// premier snapshot, frags, soi-même ?)`.
@@ -504,6 +568,19 @@ pub(super) fn hud_preview_overlays(
             drag,
             actions,
             locale,
+        );
+    }
+    if preview.item_inventory {
+        // Sac d'exemple (hors Play, le vrai sac est toujours vide — cf. la doc
+        // de la fonction : mêmes valeurs factices que le roster ci-dessous).
+        let sample = [(ItemKind::Potion, 2), (ItemKind::Cle, 1)];
+        item_inventory_panel(
+            ctx,
+            area,
+            &sample,
+            &mut hud_layout.item_inventory,
+            drag,
+            actions,
         );
     }
     if preview.roster {

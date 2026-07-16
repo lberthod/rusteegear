@@ -1468,6 +1468,20 @@ pub(crate) mod tests {
         ));
     }
 
+    /// Même preuve pour les créatures n°6 à 10 (chauve-souris, crabe,
+    /// salamandre, souris électrique, limace-champignon) — une seule boucle
+    /// plutôt que cinq tests copiés-collés, le chemin en échec est dans le
+    /// message d'assertion de `assert_creature_glb_sane`.
+    #[test]
+    fn creatures_6_to_10_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        for n in 6..=20 {
+            assert_creature_glb_sane(&format!(
+                "{}/assets/models/creature{n}.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ));
+        }
+    }
+
     fn assert_creature_glb_sane(path: &str) {
         let (data, aabb_min, aabb_max) = load_gltf(path).expect("glb de créature lisible");
         let mut m = crate::scene::ImportedMesh {

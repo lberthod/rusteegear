@@ -458,6 +458,19 @@ impl AppState {
                     .iter()
                     .map(|p| (glam::Vec3::from_array(p.position), p.weapon as usize))
                     .collect();
+                // Projectiles de créature (jet d'eau, crachat de feu...) — même
+                // principe, affichés par `creature_attack::sync_creature_shot_pool`.
+                self.net_creature_shots = snap
+                    .creature_shots
+                    .iter()
+                    .map(|s| {
+                        (
+                            glam::Vec3::from_array(s.position),
+                            glam::Vec3::from_array(s.dir),
+                            s.cfg as usize,
+                        )
+                    })
+                    .collect();
                 for e in snap.entities {
                     let Some(pid) = e.player_id else {
                         // Entité sans propriétaire = monstre diffusé par le
@@ -1196,6 +1209,155 @@ mod tests {
                 .remote_players
                 .contains_key(&alice.net_player_id.expect("vérifié ci-dessus")),
             "Alice ne doit jamais avoir un fantôme d'elle-même"
+        );
+    }
+
+    /// Bout-en-bout (vrai socket, scène MMORPG) : les créatures scriptées
+    /// (`Combat::attackable` posé par `scene::demos::MMORPG_CREATURES`, cf.
+    /// Sprint « créatures réseau ») doivent être **identiques** — pas
+    /// seulement proches — sur le serveur et sur deux clients distincts,
+    /// preuve qu'aucun des deux clients ne fait tourner sa propre copie de la
+    /// patrouille en plus de celle du serveur (`is_online_client()` dans la
+    /// boucle de scripts, `simulation.rs`). Couvre aussi la mise à mort
+    /// (`visible:false` diffusé identiquement) et les dégâts de morsure
+    /// (`network_health`, `health::update_creature_bite`, générique à
+    /// **toute** créature qui pose `SceneObject::bite` — testé ici sur la
+    /// Créature 1, mais rien dans le code de la boucle ne la nomme).
+    #[cfg(feature = "net_tests")]
+    #[test]
+    fn two_connected_clients_see_the_same_creature_position_kill_and_bite_damage() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+
+        let mut server_app = AppState::new();
+        server_app.scene = crate::scene::Scene::mmorpg_demo();
+        server_app.hide_local_player_template();
+        server_app.playing = true;
+
+        let mut alice = AppState::new();
+        alice.scene = crate::scene::Scene::mmorpg_demo();
+        alice.connect_to_server(&url, "Alice");
+        assert!(alice.is_connected());
+
+        let mut bob = AppState::new();
+        bob.scene = crate::scene::Scene::mmorpg_demo();
+        bob.connect_to_server(&url, "Bob");
+        assert!(bob.is_connected());
+
+        for tick in 0..20 {
+            std::thread::sleep(Duration::from_millis(20));
+            server_tick(&mut server_app, &net, tick);
+            alice.poll_network();
+            bob.poll_network();
+        }
+        // Laisse le **dernier** `Snapshot` déjà envoyé finir d'arriver (socket
+        // asynchrone : `poll_network()` juste après `server_tick` peut courir
+        // plus vite que la trame réseau) — sans figer la position serveur
+        // elle-même (aucun `server_tick` ici), quelques passages suffisent à
+        // vider la file sans introduire de nouvel état à rattraper.
+        let settle = |alice: &mut AppState, bob: &mut AppState| {
+            for _ in 0..10 {
+                std::thread::sleep(Duration::from_millis(15));
+                alice.poll_network();
+                bob.poll_network();
+            }
+        };
+        settle(&mut alice, &mut bob);
+
+        let creature_idx = server_app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Créature")
+            .expect("la démo MMORPG doit contenir « Créature »");
+
+        // --- Position : identique des deux côtés, pas juste proche (sinon
+        // c'est encore une double simulation résiduelle).
+        let server_pos = server_app.scene.objects[creature_idx].transform.position;
+        assert_eq!(
+            alice.scene.objects[creature_idx].transform.position, server_pos,
+            "Alice doit voir exactement la position serveur de la Créature"
+        );
+        assert_eq!(
+            bob.scene.objects[creature_idx].transform.position, server_pos,
+            "Bob doit voir exactement la position serveur de la Créature"
+        );
+
+        // --- Morsure : place un joueur réseau au contact de la Créature 1
+        // (mordeuse, cf. `MMORPG_CREATURES`) côté serveur, avance, vérifie que
+        // `network_health` baisse et se propage identiquement aux deux clients.
+        let alice_id = alice.net_player_id.expect("Alice doit être connectée");
+        let alice_idx = *server_app
+            .network_players
+            .get(&alice_id)
+            .expect("Alice doit avoir un objet serveur");
+        // Cooldown 2,2 s / chance 0,4 (cf. `MMORPG_CREATURES`, Créature 1) : une
+        // fenêtre courte laisserait une réelle chance qu'aucun tirage ne
+        // réussisse — même raison que le test solo équivalent
+        // (`creature_1_bites_the_player_sometimes_not_on_every_contact_tick`,
+        // fenêtre de 20 s) d'utiliser une fenêtre large plutôt qu'une poignée
+        // de tentatives.
+        const BITE_CONTACT_TICKS: u32 = 12 * 60;
+        for tick in 20..(20 + BITE_CONTACT_TICKS) {
+            let pos = server_app.scene.objects[creature_idx].transform.position;
+            // Recale aussi le corps physique réel, pas seulement `transform`
+            // (même piège documenté par
+            // `creature_1_bites_the_player_sometimes_not_on_every_contact_tick`,
+            // `app::simulation::tests`) : sans ça, le pas de physique du
+            // prochain `advance_play` réécrit `transform.position` depuis le
+            // corps rigide resté à son ancienne position, avant même que
+            // `update_creature_bite` ne teste le contact.
+            if let Some(phys) = server_app.physics.as_mut() {
+                phys.set_position(alice_idx, pos);
+            }
+            server_app.scene.objects[alice_idx].transform.position = pos;
+            std::thread::sleep(Duration::from_millis(16));
+            server_tick(&mut server_app, &net, tick);
+            alice.poll_network();
+            bob.poll_network();
+        }
+        settle(&mut alice, &mut bob);
+        let server_health = server_app
+            .network_player_health(alice_id)
+            .expect("Alice doit avoir une vie réseau");
+        assert!(
+            server_health < 1.0,
+            "{BITE_CONTACT_TICKS} ticks de contact avec la Créature 1 (mordeuse) \
+             auraient dû infliger des dégâts : {server_health}"
+        );
+        assert_eq!(
+            alice.net_local_health,
+            Some(server_health),
+            "Alice doit voir sa propre vie exactement comme le serveur la connaît"
+        );
+        assert_eq!(
+            bob.remote_players.get(&alice_id).and_then(|rp| rp.health),
+            Some(server_health),
+            "Bob doit voir la vie d'Alice exactement comme le serveur la connaît"
+        );
+
+        // --- Mise à mort : `Combat::attackable` (posé par `MMORPG_CREATURES`)
+        // suffit à rendre la créature tuable via le pipeline générique
+        // (`Scene::damage_attackable_by`, le même que `fireball::resolve_
+        // fireball_hit`) — `visible:false` doit se propager identiquement.
+        assert!(
+            server_app.scene.damage_attackable_by(creature_idx, 999),
+            "avec Combat::attackable + hp par défaut (1), un coup doit suffire à vaincre la créature"
+        );
+        for tick in (20 + BITE_CONTACT_TICKS)..(20 + BITE_CONTACT_TICKS + 20) {
+            std::thread::sleep(Duration::from_millis(20));
+            server_tick(&mut server_app, &net, tick);
+            alice.poll_network();
+            bob.poll_network();
+        }
+        settle(&mut alice, &mut bob);
+        assert!(
+            !alice.scene.objects[creature_idx].visible,
+            "Alice doit voir la Créature vaincue disparaître"
+        );
+        assert!(
+            !bob.scene.objects[creature_idx].visible,
+            "Bob doit voir la Créature vaincue disparaître"
         );
     }
 

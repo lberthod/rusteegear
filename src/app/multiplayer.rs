@@ -424,6 +424,17 @@ impl AppState {
                     weapon: fb.weapon as u8,
                 })
                 .collect(),
+            // Projectiles de créature (jet d'eau, crachat de feu...) — même non-
+            // identité que les `projectiles` ci-dessus, cf. leur doc respective.
+            creature_shots: self
+                .creature_shots
+                .iter()
+                .map(|s| crate::net::protocol::CreatureShotState {
+                    position: s.pos.to_array(),
+                    dir: s.dir.to_array(),
+                    cfg: s.cfg as u8,
+                })
+                .collect(),
         }
     }
 }

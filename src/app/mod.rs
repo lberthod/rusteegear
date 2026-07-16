@@ -11,6 +11,7 @@ mod demos;
 mod fireball;
 mod health;
 pub mod input;
+mod inventory;
 pub mod locale;
 pub mod multiplayer;
 pub mod network_client;
@@ -21,6 +22,7 @@ pub mod scripting;
 // Backend Lua du player web (Sprint 137) : symétrique de `scripting` (mlua, natif),
 // sur `rilua` (pur Rust, compile aussi nativement — `cfg(test)` en plus de wasm32
 // permet les tests différentiels contre `mlua`, cf. `scripting_web::tests`).
+mod creature_attack;
 #[cfg(any(target_arch = "wasm32", test))]
 mod scripting_web;
 mod selection;
@@ -144,6 +146,11 @@ pub struct PlayerInput {
     /// tactile est le bouton nommé `Controller::heal_button`. Sans effet en
     /// solo (pas d'allié) : n'a d'effet réel qu'en ligne, résolu côté serveur.
     pub heal: bool,
+    /// Changement d'arme manette (Sprint 110) maintenu enfoncé — le cycle se
+    /// déclenche sur le front montant dans `update_fireballs`, comme le bouton
+    /// tactile `Controller::weapon_button` ; les pendants clavier (1/2/3)
+    /// sélectionnent directement sans passer par cet état.
+    pub weapon_cycle: bool,
 }
 
 impl PlayerInput {
@@ -243,6 +250,9 @@ pub struct AppState {
     pub(crate) lua_vars: std::collections::HashMap<String, f64>,
     /// File de réapparition : (index de pièce, temps de jeu auquel la rendre visible).
     respawn_queue: Vec<(usize, f32)>,
+    /// Sac du joueur : (sorte, quantité) par ordre de première découverte —
+    /// cf. `app::inventory` (ramassage, empilement, utilisation des consommables).
+    inventory: Vec<(crate::scene::ItemKind, u32)>,
     /// Niveau courant de la démo contrôleur (1-based).
     level: u32,
     /// « Aperçu mobile » : restreint la vue 3D à un écran de téléphone (letterbox).
@@ -321,6 +331,12 @@ pub struct AppState {
     /// partagé). Diffusé à tous via `EntityDelta::kills`, pas seulement au
     /// joueur concerné.
     network_kills: HashMap<crate::net::protocol::PlayerId, u32>,
+    /// Cooldown restant (s) par paire (indice de créature mordeuse, joueur réseau)
+    /// — cf. `health::update_creature_bite`. Clé composite plutôt qu'un cooldown
+    /// par créature seule : deux joueurs au contact de la même créature ne
+    /// doivent pas partager un seul temporisateur (l'un mordu ne doit pas
+    /// « protéger » l'autre).
+    bite_cooldowns: HashMap<(usize, crate::net::protocol::PlayerId), f32>,
     /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
     /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
     /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
@@ -337,6 +353,19 @@ pub struct AppState {
     /// Projectiles (position + arme) reçus du dernier `Snapshot` serveur (client
     /// connecté uniquement) : affichés tels quels via le pool.
     net_projectiles: Vec<(Vec3, usize)>,
+    /// États des attaques à distance des créatures PNJ (pistolet à eau de la
+    /// n°3, feu de la n°8, étincelle de la n°9, spore de la n°10) — un état
+    /// par entrée de `creature_attack::RANGED_CREATURE_ATTACKS`, même indice.
+    creature_ranged: Vec<creature_attack::RangedState>,
+    /// Projectiles de créatures en vol (cf. `creature_attack::CreatureShot`).
+    creature_shots: Vec<creature_attack::CreatureShot>,
+    /// Pool d'affichage des projectiles de créatures, même principe que
+    /// `fireball_pool`.
+    creature_shot_pool: Vec<usize>,
+    /// Projectiles de créature (position, direction, config) reçus du dernier
+    /// `Snapshot` serveur (client connecté uniquement) — même principe que
+    /// `net_projectiles`, affichés tels quels via le pool.
+    net_creature_shots: Vec<(Vec3, Vec3, usize)>,
     /// Arme à distance équipée par le joueur local (indice dans
     /// `fireball::RANGED_WEAPONS`) : clavier 1/2/3, ou bouton tactile « Arme »
     /// qui cycle (cf. `Controller::weapon_button`). Envoyée au serveur à chaque
@@ -683,6 +712,7 @@ impl AppState {
             trigger_prev: std::collections::HashSet::new(),
             lua_vars: std::collections::HashMap::new(),
             respawn_queue: Vec::new(),
+            inventory: Vec::new(),
             level: 1,
             device_preview: false,
             device_portrait: true,
@@ -703,10 +733,15 @@ impl AppState {
             network_attack_cooldowns: HashMap::new(),
             network_health: HashMap::new(),
             network_kills: HashMap::new(),
+            bite_cooldowns: HashMap::new(),
             fireballs: Vec::new(),
             fireball_cooldowns: HashMap::new(),
             fireball_pool: Vec::new(),
             net_projectiles: Vec::new(),
+            creature_ranged: creature_attack::default_states(),
+            creature_shots: Vec::new(),
+            creature_shot_pool: Vec::new(),
+            net_creature_shots: Vec::new(),
             selected_weapon: 0,
             weapon_button_was_down: false,
             pending_net_events: Vec::new(),

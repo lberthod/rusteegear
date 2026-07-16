@@ -213,6 +213,7 @@ impl App {
         inp.attack = keys.contains(&KeyCode::KeyJ) || gp.attack;
         inp.fire = keys.contains(&KeyCode::KeyK) || gp.fire;
         inp.heal = keys.contains(&KeyCode::KeyH) || gp.heal;
+        inp.weapon_cycle = gp.weapon;
         inp.gamepad_turn = gp.turn;
         inp.gamepad_thrust = gp.thrust;
     }

@@ -486,6 +486,19 @@ fn default_combat_hp() -> u32 {
     1
 }
 
+/// Attaque au contact d'une créature scriptée — cf. `SceneObject::bite`. Mêmes
+/// paramètres que ceux passés à `scene::demos::creature_bite_script` (moins `salt`,
+/// un détail du tirage Lua sans équivalent nécessaire côté natif).
+#[derive(Clone, Copy, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct BiteAttack {
+    /// Temps minimal (s) entre deux tentatives, réussies ou non.
+    pub cooldown: f32,
+    /// Probabilité qu'une tentative au contact se concrétise réellement.
+    pub chance: f32,
+    /// Vie retirée par morsure réussie.
+    pub damage: f32,
+}
+
 /// Composant optionnel : IA qui **poursuit activement le joueur** (contrairement aux
 /// patrouilles scriptées à trajectoire fixe/sinusoïdale, prévisibles) — se déplace en
 /// ligne droite vers la position courante du joueur chaque frame, via le moteur physique
@@ -580,6 +593,81 @@ pub struct WeaponPickup {
     pub weapon: usize,
 }
 
+/// Nature d'un objet d'inventaire (cf. `ItemPickup`). Enum fermé plutôt qu'un
+/// nom libre : le gameplay natif (soin à l'utilisation, couleur HUD) a besoin
+/// de connaître chaque sorte — même choix que `WEAPONS` (table fixe) contre
+/// une donnée ouverte que rien ne saurait interpréter.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub enum ItemKind {
+    /// Potion de soin : consommable, rend une bonne part de la vie.
+    Potion,
+    /// Baie : petit consommable de soin, plus courant que la potion.
+    Baie,
+    /// Clé : non consommable — sert d'objectif/collection (portes futures).
+    Cle,
+    /// Gemme : trésor à collectionner, non consommable.
+    Gemme,
+}
+
+impl ItemKind {
+    /// Toutes les sortes, pour les listes déroulantes de l'éditeur.
+    pub const ALL: [ItemKind; 4] = [
+        ItemKind::Potion,
+        ItemKind::Baie,
+        ItemKind::Cle,
+        ItemKind::Gemme,
+    ];
+
+    /// Nom affiché dans le HUD et les journaux (projet en français).
+    pub fn label(self) -> &'static str {
+        match self {
+            ItemKind::Potion => "Potion de soin",
+            ItemKind::Baie => "Baie",
+            ItemKind::Cle => "Clé",
+            ItemKind::Gemme => "Gemme",
+        }
+    }
+
+    /// Couleur de la pastille HUD — et teinte conseillée pour l'objet posé en
+    /// scène (cf. `demos`), pour que le sac reflète ce qu'on a vu au sol.
+    pub fn color(self) -> [f32; 3] {
+        match self {
+            ItemKind::Potion => [0.9, 0.2, 0.35],
+            ItemKind::Baie => [0.95, 0.55, 0.2],
+            ItemKind::Cle => [0.95, 0.85, 0.25],
+            ItemKind::Gemme => [0.35, 0.55, 0.95],
+        }
+    }
+
+    /// Vie rendue quand l'objet est **utilisé** depuis le sac (0 = pas
+    /// consommable : l'objet reste dans l'inventaire, aucun bouton Utiliser).
+    pub fn heal(self) -> f32 {
+        match self {
+            ItemKind::Potion => 0.35,
+            ItemKind::Baie => 0.15,
+            ItemKind::Cle | ItemKind::Gemme => 0.0,
+        }
+    }
+}
+
+/// Composant optionnel : objet d'**inventaire** à ramasser au contact (cf.
+/// `Scene::item_pickups_at`) — il rejoint le sac du joueur (`AppState::inventory`)
+/// au lieu d'équiper une arme (`WeaponPickup`) ou de compter comme pièce-objectif
+/// (`collect_at`). Comme le butin d'arme, il ne participe **pas** à la condition
+/// de victoire des collectibles.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct ItemPickup {
+    /// Sorte d'objet ramassé.
+    pub kind: ItemKind,
+    /// Quantité ajoutée au sac (ex. un buisson qui donne 3 baies d'un coup).
+    #[serde(default = "default_item_count")]
+    pub count: u32,
+}
+
+fn default_item_count() -> u32 {
+    1
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SceneObject {
     pub name: String,
@@ -671,10 +759,25 @@ pub struct SceneObject {
     /// majorité des objets — seuls les ennemis « chasseurs » (jeu local vs IA) en ont.
     #[serde(default)]
     pub ai_chaser: Option<AiChaser>,
+    /// Attaque au contact d'une créature scriptée (morsure, pincement...) — cf.
+    /// `BiteAttack`. `None` pour la grande majorité des objets. Redondant avec le
+    /// script Lua de contact (`scene::demos::creature_bite_script`) qui pilote déjà
+    /// cette attaque en solo : ce champ **persiste la même intention** dans la scène
+    /// sérialisée (le script Lua, lui, ne l'est qu'en texte opaque), pour qu'un code
+    /// natif — la résolution de dégâts réseau (`app::health`) — puisse retrouver
+    /// « quelles créatures mordent » sans redécouvrir chaque nom en dur : générique à
+    /// toute créature future qui poserait ce champ, pas câblé sur une créature précise.
+    #[serde(default)]
+    pub bite: Option<BiteAttack>,
     /// Butin d'arme à ramasser au contact (cf. `WeaponPickup`) : `None` pour la grande
     /// majorité des objets — seuls les butins du donjon roguelike en ont.
     #[serde(default)]
     pub weapon_pickup: Option<WeaponPickup>,
+    /// Objet d'inventaire à ramasser au contact (cf. `ItemPickup`) : `None` pour la
+    /// grande majorité des objets — seuls les objets « trouvables » (potions, clés…)
+    /// en ont.
+    #[serde(default)]
+    pub item_pickup: Option<ItemPickup>,
     /// Action déclenchée sans script quand l'objet est tapé (Touch Area requise).
     #[serde(default)]
     pub tap_action: TapAction,
@@ -904,7 +1007,9 @@ impl Default for SceneObject {
             vibrate_on_tap: 0,
             combat: None,
             ai_chaser: None,
+            bite: None,
             weapon_pickup: None,
+            item_pickup: None,
             tap_action: TapAction::None,
             visible: true,
             deadly: false,
@@ -2847,6 +2952,169 @@ mod tests {
     /// la compilation) — les deux créatures Blender comprises, squelette inclus. Une
     /// clé manquante ne serait sinon qu'un `log::error!` silencieux au chargement :
     /// la créature apparaîtrait comme un mesh vide invisible dans le jeu exporté.
+    /// OUTIL, pas une preuve (lancé explicitement :
+    /// `cargo test sync_embedded_scene_creatures_from_the_demo -- --ignored --nocapture`) :
+    /// resynchronise les créatures de `assets/player_scene.json` (la scène
+    /// embarquée) depuis `Scene::mmorpg_demo()`, la source de vérité — objets
+    /// « Créature* » remplacés, imports réécrits en `bundle://m{i}_<fichier>`
+    /// (même ordre d'indices), tag « joueur » posé. Remplace les fusions JSON
+    /// à la main qui ont déjà perdu 3 fois le contenu multijoueur de cette
+    /// scène (cf. le garde-fou `the_embedded_scene_creatures_match_the_demo`).
+    /// Tout le reste du fichier (monstres, tour, boutons) est préservé tel quel.
+    #[test]
+    #[ignore = "outil : réécrit assets/player_scene.json, à lancer explicitement"]
+    fn sync_embedded_scene_creatures_from_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let mut embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::mmorpg_demo();
+
+        embedded.objects.retain(|o| !o.name.starts_with("Créature"));
+        for obj in demo
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+        {
+            embedded.objects.push(obj.clone());
+        }
+        // Seuls les imports des **créatures** relèvent de cet outil : elles sont
+        // ajoutées en premier dans `Scene::mmorpg_demo` (avant le décor nature,
+        // Sprint parallèle), donc contiguës en tête de `demo.imported` — ne
+        // reconstruit que ces N premières entrées (bundle://m{i}_<fichier>,
+        // même convention que `editor::export::bundle_scene_json`), et
+        // préserve tel quel le reste d'`embedded.imported` (décor déjà
+        // embarqué séparément, hors du périmètre de cet outil).
+        let n_creatures = demo
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+            .count();
+        let mut imported: Vec<ImportedMesh> = demo
+            .imported
+            .iter()
+            .take(n_creatures)
+            .enumerate()
+            .map(|(i, m)| {
+                let file = std::path::Path::new(&m.path)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .expect("nom de fichier d'import");
+                ImportedMesh {
+                    path: format!("{}m{i}_{file}", crate::assets::SCHEME),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        imported.extend(embedded.imported.into_iter().skip(n_creatures));
+        embedded.imported = imported;
+        if let Some(joueur) = embedded.objects.iter_mut().find(|o| o.name == "Joueur") {
+            joueur.tag = "joueur".into();
+        }
+
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&embedded).expect("sérialisation"),
+        )
+        .expect("écriture de player_scene.json");
+        println!(
+            "player_scene.json resynchronisé : {} créatures, {} imports",
+            embedded
+                .objects
+                .iter()
+                .filter(|o| o.name.starts_with("Créature"))
+                .count(),
+            embedded.imported.len()
+        );
+    }
+
+    /// Garde-fou compagnon de l'outil ci-dessus : les créatures de la scène
+    /// embarquée doivent rester **identiques** à celles de `Scene::mmorpg_demo`
+    /// (script, collisions, trigger, mesh, physique) — c'est la démo qui est la
+    /// source de vérité, la scène embarquée n'en est qu'une copie avec des
+    /// chemins `bundle://`. Une divergence = quelqu'un a modifié une créature
+    /// d'un seul côté : relancer l'outil de synchronisation.
+    #[test]
+    fn the_embedded_scene_creatures_match_the_demo() {
+        let embedded = Scene::embedded_player();
+        let demo = Scene::mmorpg_demo();
+        let demo_creatures: Vec<&SceneObject> = demo
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+            .collect();
+        assert!(!demo_creatures.is_empty());
+        for d in demo_creatures {
+            let e = embedded
+                .objects
+                .iter()
+                .find(|o| o.name == d.name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "« {} » absente de la scène embarquée — lancer `cargo test \
+                         sync_embedded_scene_creatures_from_the_demo -- --ignored`",
+                        d.name
+                    )
+                });
+            let sync_hint = "désynchronisé de la démo — lancer `cargo test \
+                 sync_embedded_scene_creatures_from_the_demo -- --ignored`";
+            assert_eq!(e.script, d.script, "script de « {} » {sync_hint}", d.name);
+            assert_eq!(
+                e.trigger, d.trigger,
+                "trigger de « {} » {sync_hint}",
+                d.name
+            );
+            assert_eq!(
+                e.collision_layer, d.collision_layer,
+                "couche de « {} » {sync_hint}",
+                d.name
+            );
+            assert!(e.mesh == d.mesh, "mesh de « {} » {sync_hint}", d.name);
+            assert!(
+                e.physics == d.physics,
+                "physique de « {} » {sync_hint}",
+                d.name
+            );
+        }
+        // Imports : seuls ceux référencés par les créatures doivent correspondre
+        // (même indice, même fichier — juste `bundle://` au lieu du chemin
+        // disque). La démo peut porter d'autres imports (décor nature ajouté
+        // par le chantier MMORPG) sans que la scène embarquée n'y soit tenue.
+        for d in demo
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+        {
+            let MeshKind::Imported(i) = d.mesh else {
+                panic!("« {} » devrait être un mesh importé", d.name);
+            };
+            let demo_file = std::path::Path::new(&demo.imported[i as usize].path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .expect("nom de fichier d'import démo");
+            let embedded_path = &embedded
+                .imported
+                .get(i as usize)
+                .unwrap_or_else(|| {
+                    panic!("import {i} absent de la scène embarquée — lancer l'outil de sync")
+                })
+                .path;
+            assert!(
+                embedded_path.ends_with(demo_file),
+                "import {i} : « {embedded_path} » devrait pointer le même fichier que la \
+                 démo (« {demo_file} ») — lancer l'outil de synchronisation"
+            );
+        }
+        assert_eq!(
+            embedded
+                .objects
+                .iter()
+                .find(|o| o.name == "Joueur")
+                .map(|o| o.tag.as_str()),
+            Some("joueur"),
+            "le joueur embarqué doit porter le tag « joueur » (scripts des créatures 12/13)"
+        );
+    }
+
     #[test]
     fn the_embedded_scene_resolves_its_bundle_creatures() {
         let scene = Scene::embedded_player();

@@ -51,6 +51,15 @@ fn aabbs_overlap(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
     a.0.cmple(b.1).all() && b.0.cmple(a.1).all()
 }
 
+/// Hachage déterministe de `time` en [0, 1) — même idiome que
+/// `creature_attack::deterministic_roll`/le script Lua `creature_bite_script`
+/// (pas partagé : trois occurrences courtes, chacune dans son propre module,
+/// plutôt qu'une abstraction commune pour une seule ligne de calcul).
+fn deterministic_roll(time: f32, salt: f32) -> f32 {
+    let x = (time * salt).sin() * 43_758.547;
+    x - x.floor()
+}
+
 impl AppState {
     /// Dégâts de contact monstre + régénération passive, pour chaque joueur
     /// réseau — appelée une fois par frame (dt réel) depuis `advance_play`,
@@ -110,6 +119,89 @@ impl AppState {
                 self.pending_net_events
                     .push(GameEvent::PlayerDown { player_id: id });
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+            }
+        }
+    }
+
+    /// Dégâts de contact des créatures scriptées mordeuses (`SceneObject::bite`,
+    /// ex. Créature 1/6/7 — cf. sa doc), pour chaque joueur réseau — pendant de
+    /// `update_network_health` (monstres `AiChaser`) mais **générique à toute
+    /// créature future** posant ce champ, pas câblée sur un nom précis. En solo,
+    /// la version Lua (`creature_bite_script`, `damage()`/`hud_health`) reste seule
+    /// responsable — inchangée, cette fonction ne s'exécute jamais dans ce cas.
+    /// Appelée depuis `advance_play`, au même endroit que `update_network_health`
+    /// (avant `update_network_heal` : le contact de ce tick doit être à jour avant
+    /// que le soin ne s'applique).
+    pub(super) fn update_creature_bite(&mut self, dt: f32) {
+        if self.network_players.is_empty() {
+            return;
+        }
+        // Créatures mordeuses visibles ce tick, avec leur AABB — calculé une fois,
+        // réutilisé pour chaque joueur (même idiome que `monster_aabbs` ci-dessus).
+        let biters: Vec<(usize, crate::scene::BiteAttack, (Vec3, Vec3))> = self
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.visible)
+            .filter_map(|(i, o)| o.bite.map(|b| (i, b, self.scene.world_aabb(o))))
+            .collect();
+        if biters.is_empty() {
+            return;
+        }
+        for cd in self.bite_cooldowns.values_mut() {
+            *cd = (*cd - dt).max(0.0);
+        }
+
+        let ids: Vec<PlayerId> = self.network_players.keys().copied().collect();
+        for id in ids {
+            let Some(&index) = self.network_players.get(&id) else {
+                continue;
+            };
+            let Some((visible, player_aabb)) = self
+                .scene
+                .objects
+                .get(index)
+                .map(|o| (o.visible, self.scene.world_aabb(o)))
+            else {
+                continue;
+            };
+            if !visible {
+                continue;
+            }
+            for &(creature_idx, bite, creature_aabb) in &biters {
+                if !aabbs_overlap(creature_aabb, player_aabb) {
+                    continue;
+                }
+                let cd = self.bite_cooldowns.entry((creature_idx, id)).or_insert(0.0);
+                if *cd > 0.0 {
+                    continue;
+                }
+                // Tentative consommée qu'elle réussisse ou non — même garde-fou
+                // que `creature_bite_script`/`creature_attack` (sans ça, un
+                // cooldown à 0 au contact permanent referait le tirage chaque
+                // tick, rendant `chance` illusoire).
+                *cd = bite.cooldown;
+                // Salt dérivé de la paire (créature, joueur) : deux morsures au
+                // même tick ne roulent pas en lockstep, comme `creature_attack`.
+                let salt = 11.0 + creature_idx as f32 * 7.0 + id as f32 * 3.0;
+                if deterministic_roll(self.time, salt) >= bite.chance {
+                    continue;
+                }
+                let was_alive = self.network_health.get(&id).copied().unwrap_or(MAX_HEALTH) > 0.0;
+                let hp = self.network_health.entry(id).or_insert(MAX_HEALTH);
+                *hp = (*hp - bite.damage).max(0.0);
+                let just_died = was_alive && *hp <= 0.0;
+                if just_died {
+                    if let Some(o) = self.scene.objects.get_mut(index) {
+                        o.visible = false;
+                    }
+                    self.pending_net_events
+                        .push(GameEvent::PlayerDown { player_id: id });
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+                } else {
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+                }
             }
         }
     }

@@ -462,6 +462,7 @@ pub(super) fn settings_window(
             changed |= gamepad_binding_row(ui, "Attaque", &mut settings.gamepad.attack);
             changed |= gamepad_binding_row(ui, "Tir", &mut settings.gamepad.fire);
             changed |= gamepad_binding_row(ui, "Soin", &mut settings.gamepad.heal);
+            changed |= gamepad_binding_row(ui, "Changer d'arme", &mut settings.gamepad.weapon);
             if changed {
                 settings.save();
             }
@@ -1189,6 +1190,7 @@ pub(super) fn hud_preview_window(ctx: &egui::Context, preview: &mut HudPreview) 
             ui.small("Affiche ces éléments en Édition, comme en Play :");
             ui.checkbox(&mut preview.crosshair, "🎯 Réticule");
             ui.checkbox(&mut preview.weapon_inventory, "🎒 Inventaire d'armes");
+            ui.checkbox(&mut preview.item_inventory, "👜 Sac (objets trouvés)");
             ui.checkbox(&mut preview.weapon_hud, "Libellé de l'arme équipée");
             ui.checkbox(&mut preview.kills, "💀 Frags");
             ui.checkbox(&mut preview.roster, "👥 Joueurs (données d'exemple)");
