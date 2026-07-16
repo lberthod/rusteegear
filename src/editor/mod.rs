@@ -955,6 +955,25 @@ fn build_ui(
             ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻ Tourner");
             ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⤢ Redim.");
             ui.separator();
+            // Outils de navigation caméra : glisser dans la vue pilote la caméra
+            // (pas de gizmo, pas de sélection). Clic milieu / Maj+glisser = pan
+            // aussi disponible à tout moment, quel que soit l'outil.
+            ui.selectable_value(gizmo_mode, GizmoMode::Pan, "🖐 Main")
+                .on_hover_text(
+                    "Glisser = déplacer la vue (Q) — aussi : clic milieu ou Maj+glisser",
+                );
+            ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄 Orbite")
+                .on_hover_text("Glisser = tourner la vue (horizontal et vertical)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍 Loupe")
+                .on_hover_text("Glisser haut/bas = zoom avant/arrière");
+            if ui
+                .add_enabled(selection.is_some(), egui::Button::new("⌖"))
+                .on_hover_text("Cadrer la sélection (F)")
+                .clicked()
+            {
+                actions.focus_selection = true;
+            }
+            ui.separator();
             if ui.button("↩").on_hover_text("Annuler (Cmd+Z)").clicked() {
                 actions.undo = true;
             }
@@ -1121,6 +1140,11 @@ fn build_ui(
             .show_inside(root, |ui| {
                 ui.heading("Inspecteur");
                 ui.separator();
+                // Le contenu (scripts, matériau, audio, composants…) dépasse vite la
+                // hauteur de la fenêtre : tout sauf le titre défile verticalement.
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
                 ui.collapsing("🔆 Éclairage (scène)", |ui| {
                     let l = &mut scene.light;
                     ui.label("Direction");
@@ -1773,6 +1797,7 @@ fn build_ui(
                         ui.label("Aucun objet sélectionné.");
                     }
                 }
+                    });
             });
     }
 

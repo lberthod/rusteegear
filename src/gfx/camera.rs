@@ -31,6 +31,31 @@ impl OrbitCamera {
         self.target + Vec3::new(x, y, z)
     }
 
+    /// Pan « outil Main » : glisse `target` dans le plan écran de la caméra.
+    /// `dx`/`dy` en pixels ; le contenu suit le curseur (glisser à droite =
+    /// la scène part à droite). Échelle proportionnelle à `distance` pour un
+    /// déplacement perçu constant quel que soit le zoom.
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        let forward = (self.target - self.eye()).normalize();
+        let right = forward.cross(Vec3::Y).normalize();
+        let up = right.cross(forward);
+        let s = self.distance * 0.0015;
+        self.target += (up * dy - right * dx) * s;
+    }
+
+    /// Orbite libre (outil 🔄) : yaw **et** pitch, pitch borné pour ne jamais
+    /// passer la verticale (le repère haut/bas resterait sinon instable).
+    pub fn orbit(&mut self, dx: f32, dy: f32) {
+        self.yaw -= dx * 0.005;
+        self.pitch = (self.pitch + dy * 0.005).clamp(-1.5, 1.5);
+    }
+
+    /// Zoom au glisser (outil 🔍) : vers le haut = avant, vers le bas = arrière.
+    /// Mêmes bornes de distance que la molette (cf. `InputEvent::Scroll`).
+    pub fn zoom_drag(&mut self, dy: f32) {
+        self.distance = (self.distance + dy * 0.05).clamp(1.5, 50.0);
+    }
+
     pub fn view_proj(&self) -> Mat4 {
         let view = Mat4::look_at_rh(self.eye(), self.target, Vec3::Y);
         let proj = Mat4::perspective_rh(self.fovy, self.aspect, 0.1, 100.0);

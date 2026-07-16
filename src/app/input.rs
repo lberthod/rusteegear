@@ -5,8 +5,9 @@
 
 #[derive(Debug, Clone, Copy)]
 pub enum InputEvent {
-    /// Début d'un appui (clic gauche / doigt posé).
-    PointerDown,
+    /// Début d'un appui (clic gauche/milieu / doigt posé). `pan` = pan caméra
+    /// forcé (clic milieu ou Maj+glisser), quel que soit l'outil actif.
+    PointerDown { pan: bool },
     /// Fin d'un appui (relâchement).
     PointerUp,
     /// Déplacement du pointeur, en pixels physiques.

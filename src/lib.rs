@@ -154,7 +154,8 @@ impl App {
                 } else {
                     self.state
                         .handle_input(InputEvent::PointerMove { x: px, y: py });
-                    self.state.handle_input(InputEvent::PointerDown);
+                    self.state
+                        .handle_input(InputEvent::PointerDown { pan: false });
                     self.orbiting = true;
                 }
                 self.pinch = None;
@@ -411,7 +412,7 @@ impl ApplicationHandler for App {
             _ if consumed => {}
             WindowEvent::MouseInput {
                 state: btn_state,
-                button: MouseButton::Left,
+                button: button @ (MouseButton::Left | MouseButton::Middle),
                 ..
             } => {
                 let ev = if btn_state == ElementState::Pressed {
@@ -419,7 +420,11 @@ impl ApplicationHandler for App {
                     let st = self.modifiers.state();
                     self.state
                         .set_additive(st.control_key() || st.super_key() || st.shift_key());
-                    InputEvent::PointerDown
+                    // Clic milieu ou Maj+glisser = pan caméra, quel que soit l'outil
+                    // (un simple Maj+clic sans glisser reste une sélection additive).
+                    InputEvent::PointerDown {
+                        pan: button == MouseButton::Middle || st.shift_key(),
+                    }
                 } else {
                     InputEvent::PointerUp
                 };
@@ -472,6 +477,7 @@ impl ApplicationHandler for App {
                         KeyCode::KeyW => self.state.set_gizmo_mode(GizmoMode::Translate),
                         KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
                         KeyCode::KeyR if !cmd => self.state.set_gizmo_mode(GizmoMode::Scale),
+                        KeyCode::KeyQ if !cmd => self.state.set_gizmo_mode(GizmoMode::Pan),
                         KeyCode::KeyF if !cmd => self.state.frame_selected(),
                         // Caméra libre (« vol libre »/noclip) de l'éditeur : voir
                         // partout sur la carte hors Play, cf. `AppState::toggle_fly_cam`.

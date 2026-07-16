@@ -20,10 +20,22 @@ impl AppState {
     /// Traite un événement d'entrée agnostique (gizmo, orbit, zoom, sélection).
     pub fn handle_input(&mut self, event: InputEvent) {
         match event {
-            InputEvent::PointerDown => {
+            InputEvent::PointerDown { pan } => {
                 self.press_cursor = self.last_cursor;
                 // Aperçu mobile : on joue au tactile, pas d'édition (ni gizmo, ni sélection).
                 if self.device_preview {
+                    self.dragging = true;
+                    return;
+                }
+                // Pan forcé (clic milieu / Maj+glisser) : navigation immédiate,
+                // sans passer par le gizmo — quel que soit l'outil actif.
+                if pan {
+                    self.pan_dragging = true;
+                    return;
+                }
+                // Outil de navigation (Main/Orbite/Loupe) : le glissé pilote la
+                // caméra, jamais le gizmo (même patron que l'aperçu mobile).
+                if self.gizmo_mode.is_nav() {
                     self.dragging = true;
                     return;
                 }
@@ -101,6 +113,10 @@ impl AppState {
                     return;
                 }
                 self.dragging = false;
+                // Fin d'un pan forcé : un tap milieu ne sélectionne pas, mais un
+                // Maj+clic sans glisser reste une sélection additive (`additive`).
+                let was_pan = self.pan_dragging;
+                self.pan_dragging = false;
                 // Tap (appui sans déplacement notable) ?
                 let tap = matches!(
                     (self.press_cursor, self.last_cursor),
@@ -121,9 +137,12 @@ impl AppState {
                     self.press_cursor = None;
                     return;
                 }
-                // appui sans déplacement notable = sélection éditeur
+                // appui sans déplacement notable = sélection éditeur — sauf en
+                // outil de navigation, ou après un pan forcé non additif.
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
+                    && !self.gizmo_mode.is_nav()
+                    && (!was_pan || self.additive)
                 {
                     // Debug drawing : visualise le rayon de picking envoyé.
                     let (ray_origin, ray_dir) = self.ray(cx, cy);
@@ -214,19 +233,33 @@ impl AppState {
                                 }
                             }
                         }
+                        // Outils de navigation : jamais de poignée active (le
+                        // `PointerDown` navigation ne pose pas d'`active_axis`).
+                        GizmoMode::Pan | GizmoMode::Orbit | GizmoMode::Zoom => {}
                     }
                     self.last_cursor = Some((x, y));
                     return;
-                } else if self.dragging
+                } else if (self.dragging || self.pan_dragging)
                     && !self.device_preview // en aperçu mobile : pas d'orbite souris (simule le tactile)
-                    && let Some((lx, _ly)) = self.last_cursor
+                    && let Some((lx, ly)) = self.last_cursor
                 {
-                    // Rotation horizontale seulement (le zoom vient du pinch/molette,
-                    // cf. `InputEvent::Scroll`) : l'angle de plongée (`pitch`) reste fixe,
-                    // façon caméra de suivi à la Zelda — un angle vertical libre rend
-                    // le repère visuel instable (le sol/l'horizon basculent au moindre
-                    // geste).
-                    self.camera.yaw -= (x - lx) as f32 * 0.005;
+                    let (dx, dy) = ((x - lx) as f32, (y - ly) as f32);
+                    if self.pan_dragging {
+                        // Pan forcé (clic milieu / Maj+glisser), quel que soit l'outil.
+                        self.camera.pan(dx, dy);
+                    } else {
+                        match self.gizmo_mode {
+                            GizmoMode::Pan => self.camera.pan(dx, dy),
+                            GizmoMode::Orbit => self.camera.orbit(dx, dy),
+                            GizmoMode::Zoom => self.camera.zoom_drag(dy),
+                            // Rotation horizontale seulement (le zoom vient du pinch/molette,
+                            // cf. `InputEvent::Scroll`) : l'angle de plongée (`pitch`) reste fixe,
+                            // façon caméra de suivi à la Zelda — un angle vertical libre rend
+                            // le repère visuel instable (le sol/l'horizon basculent au moindre
+                            // geste). L'outil 🔄 Orbite ci-dessus débloque le pitch sur demande.
+                            _ => self.camera.yaw -= dx * 0.005,
+                        }
+                    }
                 }
                 self.last_cursor = Some((x, y));
             }
@@ -570,6 +603,145 @@ mod tests {
         let exact_30deg = 30.0_f32.to_radians();
         let snapped = maybe_snap_angle(exact_30deg, true);
         assert!((snapped - exact_30deg).abs() < 1e-5);
+    }
+
+    /// Outil 🖐 Main : le glissé déplace le point visé par la caméra (pan) et un
+    /// tap ne sélectionne jamais — contrairement au mode Déplacer, où le même
+    /// tap au centre sélectionne l'objet sous le curseur.
+    #[test]
+    fn hand_tool_drag_pans_the_camera_and_never_selects() {
+        use crate::scene::{MeshKind, SceneObject};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            ..Default::default()
+        });
+        app.clear_selection();
+
+        // Sanité : en mode Déplacer, un tap au centre sélectionne le cube.
+        app.set_gizmo_mode(GizmoMode::Translate);
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(app.selection, Some(0), "tap centre = sélection en édition");
+
+        // Outil Main : le même tap ne sélectionne rien…
+        app.clear_selection();
+        app.set_gizmo_mode(GizmoMode::Pan);
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(app.selection, None, "l'outil Main ne sélectionne jamais");
+
+        // … et un glissé déplace le point visé (pan), sans toucher au zoom.
+        let (target0, dist0) = (app.camera.target, app.camera.distance);
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerMove { x: 460.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerUp);
+        assert!(
+            app.camera.target.distance(target0) > 1e-4,
+            "le glissé Main doit déplacer la cible caméra"
+        );
+        assert_eq!(app.camera.distance, dist0, "pan sans zoom");
+    }
+
+    /// Clic milieu / Maj+glisser (`pan: true`) : pan disponible dans n'importe
+    /// quel outil, sans sélectionner au relâchement — sauf Maj+clic immobile,
+    /// qui reste la sélection additive historique.
+    #[test]
+    fn forced_pan_works_in_edit_mode_and_shift_tap_keeps_additive_selection() {
+        use crate::scene::{MeshKind, SceneObject};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            ..Default::default()
+        });
+        app.clear_selection();
+        app.set_gizmo_mode(GizmoMode::Translate);
+
+        // Glissé milieu en mode Déplacer : pan, et pas de sélection au relâché.
+        let target0 = app.camera.target;
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: true });
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 360.0 });
+        app.handle_input(InputEvent::PointerUp);
+        assert!(app.camera.target.distance(target0) > 1e-4);
+        assert_eq!(app.selection, None, "un glissé de pan ne sélectionne pas");
+
+        // Tap milieu immobile (non additif) : pas de sélection non plus.
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: true });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(
+            app.selection, None,
+            "tap milieu = navigation, pas sélection"
+        );
+
+        // Maj+clic immobile (additif, traduit `pan: true` côté plateforme) :
+        // la sélection additive doit continuer de fonctionner. On recentre la
+        // caméra d'abord (le pan ci-dessus a décalé la cible, donc le rayon).
+        app.camera.target = Vec3::ZERO;
+        app.set_additive(true);
+        app.handle_input(InputEvent::PointerDown { pan: true });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(
+            app.selection,
+            Some(0),
+            "Maj+clic immobile doit rester une sélection additive"
+        );
+    }
+
+    /// Outil 🔄 Orbite : débloque le pitch (borné), là où le glissé par défaut
+    /// ne fait varier que le yaw. Outil 🔍 Loupe : le glissé vertical zoome,
+    /// dans les mêmes bornes que la molette.
+    #[test]
+    fn orbit_tool_unlocks_pitch_and_zoom_tool_changes_distance_within_bounds() {
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+
+        // Glissé vertical par défaut (Déplacer) : pitch inchangé.
+        let pitch0 = app.camera.pitch;
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 500.0 });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(
+            app.camera.pitch, pitch0,
+            "l'orbite par défaut fige le pitch"
+        );
+
+        // Outil Orbite : le même glissé fait varier le pitch, borné à ±1.5.
+        app.set_gizmo_mode(GizmoMode::Orbit);
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerMove {
+            x: 400.0,
+            y: 30000.0,
+        });
+        app.handle_input(InputEvent::PointerUp);
+        assert!(
+            app.camera.pitch > pitch0,
+            "l'outil Orbite débloque le pitch"
+        );
+        assert!(app.camera.pitch <= 1.5, "pitch borné (jamais la verticale)");
+
+        // Outil Loupe : glissé vers le bas = recul, distance bornée à 50.
+        app.set_gizmo_mode(GizmoMode::Zoom);
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerMove {
+            x: 400.0,
+            y: 30000.0,
+        });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(
+            app.camera.distance, 50.0,
+            "la Loupe recule jusqu'à la borne molette (50)"
+        );
     }
 
     /// Sprint 112 : la touche modificatrice (Ctrl) doit **inverser** `snap`, pas le

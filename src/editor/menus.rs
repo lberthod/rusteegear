@@ -543,6 +543,10 @@ pub(super) fn menu_outils(
         ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻  Tourner (E)");
         ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⤢  Redimensionner (R)");
         ui.separator();
+        ui.selectable_value(gizmo_mode, GizmoMode::Pan, "🖐  Main — pan caméra (Q)");
+        ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄  Orbite libre");
+        ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍  Loupe (zoom)");
+        ui.separator();
         if ui.button("🖥  Console").clicked() {
             panels.console = true;
             ui.close();

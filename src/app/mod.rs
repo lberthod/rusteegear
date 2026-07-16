@@ -540,6 +540,9 @@ pub struct AppState {
 
     // --- état d'interaction pointeur ---
     dragging: bool,
+    /// Pan forcé en cours (clic milieu / Maj+glisser) : déplace la caméra quel
+    /// que soit l'outil actif, sans passer par le gizmo ni la sélection.
+    pan_dragging: bool,
     last_cursor: Option<(f64, f64)>,
     press_cursor: Option<(f64, f64)>,
 
@@ -617,12 +620,28 @@ pub struct AppState {
     ai_scene_replace: bool,
 }
 
-/// Mode de manipulation du gizmo (touches W / E / R).
+/// Mode de manipulation du gizmo (touches W / E / R) ou outil de navigation
+/// caméra (Main / Orbite / Loupe) — un seul outil actif à la fois, choisi dans
+/// la barre d'outils.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GizmoMode {
     Translate,
     Rotate,
     Scale,
+    /// 🖐 Main (touche Q) : glisser = pan de la caméra.
+    Pan,
+    /// 🔄 Orbite libre : glisser = yaw **et** pitch (contrairement à l'orbite
+    /// par défaut, volontairement limitée au yaw).
+    Orbit,
+    /// 🔍 Loupe : glisser verticalement = zoom avant/arrière.
+    Zoom,
+}
+
+impl GizmoMode {
+    /// Outil de navigation caméra : pas de gizmo dessiné, pas de sélection au clic.
+    pub fn is_nav(self) -> bool {
+        matches!(self, GizmoMode::Pan | GizmoMode::Orbit | GizmoMode::Zoom)
+    }
 }
 
 /// Vue de debug du rendu principal : remplace l'éclairage par une
@@ -839,6 +858,7 @@ impl AppState {
             perf_window_worst_dt: 0.0,
             perf_window_worst_sim: 0.0,
             dragging: false,
+            pan_dragging: false,
             last_cursor: None,
             press_cursor: None,
             gizmo_mode: GizmoMode::Translate,

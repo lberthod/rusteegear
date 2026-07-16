@@ -1953,6 +1953,7 @@ impl Renderer {
             }
             // Gizmo de translation d'une lumière sélectionnée (3 axes colorés).
             if let Some(li) = app.selected_light
+                && !app.gizmo_mode.is_nav()
                 && let Some(pl) = app.scene.point_lights.get(li)
             {
                 let o = glam::Vec3::from_array(pl.position);
@@ -1969,8 +1970,11 @@ impl Renderer {
                     });
                 }
             }
-            // Gizmo de manipulation de l'objet sélectionné.
-            if let Some(sel) = app.selection {
+            // Gizmo de manipulation de l'objet sélectionné (aucun en outil de
+            // navigation : Main/Orbite/Loupe n'éditent pas).
+            if let Some(sel) = app.selection
+                && !app.gizmo_mode.is_nav()
+            {
                 let o = app.scene.objects[sel].transform.position;
                 let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
                 match app.gizmo_mode {
@@ -2009,6 +2013,9 @@ impl Renderer {
                             }
                         }
                     }
+                    // Navigation (Main/Orbite/Loupe) : filtrée par le garde
+                    // `is_nav()` ci-dessus, rien à dessiner.
+                    GizmoMode::Pan | GizmoMode::Orbit | GizmoMode::Zoom => {}
                 }
             }
             self.queue
