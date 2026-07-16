@@ -250,6 +250,17 @@ impl NetServer {
         }
     }
 
+    /// Coupe la connexion du joueur `id` côté serveur ; sans effet s'il n'est
+    /// plus connecté. Retirer son outbox droppe la dernière extrémité émettrice
+    /// de son canal sortant : la pompe sortante de `handle_connection` se
+    /// termine, le `select!` ferme la connexion, et le `Leave` synthétique de
+    /// fin de connexion prévient le thread principal — exactement le même
+    /// chemin qu'une perte de connexion réelle, ce qui en fait aussi l'outil
+    /// des tests de reconnexion client (cf. `app::network_client`).
+    pub fn disconnect(&self, id: PlayerId) {
+        lock_outboxes(&self.outboxes).remove(&id);
+    }
+
     /// Nombre de clients actuellement connectés.
     pub fn connected_count(&self) -> usize {
         lock_outboxes(&self.outboxes).len()
@@ -491,6 +502,73 @@ mod tests {
                 ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 1 })
             );
         }
+    }
+
+    /// Une coupure décidée côté serveur (`NetServer::disconnect`, même chemin
+    /// interne qu'une perte de connexion réelle) doit être **détectable** par
+    /// le client via `is_alive()` — c'est la brique sur laquelle repose la
+    /// reconnexion automatique (`app::network_client`). Avant `is_alive()`, le
+    /// client n'avait aucun moyen de savoir que sa connexion était morte.
+    #[test]
+    fn a_server_side_disconnect_is_detected_by_the_client() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let client = NetClient::connect(&url, "Testeur", None).expect("connexion du client");
+        let welcome = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu");
+        let ServerMsg::Welcome { player_id } = welcome else {
+            panic!("premier message attendu : Welcome, reçu {welcome:?}");
+        };
+        assert!(client.is_alive(), "transport vivant après le Welcome");
+
+        server.disconnect(player_id);
+
+        let mut waited = Duration::ZERO;
+        while client.is_alive() && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert!(
+            !client.is_alive(),
+            "le client doit détecter la fermeture de sa connexion"
+        );
+    }
+
+    /// Une socket qui se ferme (client droppé, perte réseau) doit prévenir le
+    /// thread principal par un `Leave` synthétique **immédiat** — sans lui,
+    /// l'avatar du joueur resterait dans la partie jusqu'au timeout applicatif
+    /// (60 s, cf. `src/bin/server.rs::CLIENT_TIMEOUT`).
+    #[test]
+    fn a_closed_socket_sends_a_synthetic_leave_to_the_main_thread() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let client = NetClient::connect(&url, "Éphémère", None).expect("connexion du client");
+        let welcome = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu");
+        let ServerMsg::Welcome { player_id } = welcome else {
+            panic!("premier message attendu : Welcome, reçu {welcome:?}");
+        };
+        // Le Join relayé arrive en premier dans l'inbox serveur.
+        let (join_id, _) = server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        assert_eq!(join_id, player_id);
+
+        drop(client); // fermeture abrupte de la socket, sans Leave volontaire
+
+        let (id, msg) = server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Leave synthétique attendu à la fermeture de la socket");
+        assert_eq!(id, player_id);
+        assert_eq!(msg, ClientMsg::Leave);
     }
 
     /// Sprint 113c : un client qui enchaîne les messages au-delà de

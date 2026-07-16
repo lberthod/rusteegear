@@ -112,6 +112,68 @@ const IDLE_SETTLE_PULL: f32 = 0.05;
 /// binaire séparé (pas une dépendance de la lib), cf. `net/mod.rs`.
 const INPUT_SEND_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
+/// Silence serveur maximal avant de déclarer la connexion morte (watchdog
+/// applicatif, cf. `AppState::net_last_server_msg`) : `NetClient::is_alive()`
+/// ne voit pas une connexion TCP à moitié morte (half-open, façade Caddy qui
+/// gèle) — un serveur sain diffuse un `Snapshot` par tick (~60 Hz), 8 s sans
+/// **aucun** message est donc pathologique sans ambiguïté. Hiérarchie des
+/// timeouts, volontaire : `CREATURE_SNAPSHOT_TIMEOUT` (2,5 s,
+/// `app::simulation`) < **8 s** < `CLIENT_TIMEOUT` serveur (60 s,
+/// `src/bin/server.rs`) — le filet créatures reprend la simulation locale
+/// *avant* que la coupure ne soit déclarée ici (rien ne se fige à l'écran
+/// pendant le diagnostic), et le serveur garde le joueur assez longtemps
+/// pour couvrir toute la fenêtre de reconnexion.
+const NET_SILENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Tentatives de reconnexion automatique avant d'abandonner (cf.
+/// `reconnect_delay` pour la cadence) : au-delà, le serveur est
+/// vraisemblablement hors service — on rend la main au joueur (`net_status`
+/// explicite) plutôt que de marteler un serveur mort indéfiniment.
+const MAX_RECONNECT_ATTEMPTS: u32 = 5;
+
+/// Délai avant la tentative de reconnexion `attempt` (1-indexée) : backoff
+/// exponentiel 1 s, 2 s, 4 s, 8 s, plafonné à 15 s — assez réactif pour
+/// qu'une micro-coupure (Wi-Fi qui bascule, serveur redémarré) se répare en
+/// quelques secondes, assez espacé pour ne pas inonder un serveur en
+/// difficulté. Fonction pure, séparée de l'état pour être testable sans
+/// socket ni horloge.
+pub(crate) fn reconnect_delay(attempt: u32) -> std::time::Duration {
+    let exp = attempt.saturating_sub(1).min(4);
+    std::time::Duration::from_secs((1u64 << exp).min(15))
+}
+
+/// État d'une reconnexion automatique en cours (cf. `AppState::net_reconnect`
+/// et la logique dans `poll_network`).
+pub(super) struct ReconnectState {
+    /// Tentative courante (1-indexée, plafonnée à `MAX_RECONNECT_ATTEMPTS`).
+    attempt: u32,
+    /// Prochain essai au plus tôt (backoff, cf. `reconnect_delay`).
+    next_try: crate::time_compat::Instant,
+    /// Tentative de fond en vol, s'il y en a une : la connexion native est
+    /// **bloquante** (poignée de main TCP/WebSocket complète), elle vit donc
+    /// dans un thread éphémère qui pousse son résultat ici — même patron
+    /// canal + `try_recv` que les imports glTF ou les requêtes IA (cf.
+    /// `net::client::native`). Inutile sur wasm : `connect` n'y bloque
+    /// jamais, l'échec différé arrive par `is_alive()`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending: Option<std::sync::mpsc::Receiver<Result<crate::net::client::NetClient, String>>>,
+}
+
+/// État de la connexion multijoueur, pour le HUD et les décisions internes
+/// (cf. `AppState::net_connection_state`) — `net_status` reste le texte
+/// affiché, cet enum donne la forme exploitable par du code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetConnState {
+    /// Aucune connexion (jamais connecté, ou déconnexion volontaire/définitive).
+    Offline,
+    /// Connexion établie côté transport, `Welcome` pas encore reçu.
+    Connecting,
+    /// Connecté et vivant (transport sain + serveur entendu récemment).
+    Connected,
+    /// Connexion perdue, reconnexion automatique en cours.
+    Reconnecting { attempt: u32 },
+}
+
 /// Message de chat affichable — représentation universelle (contrairement à
 /// `net::firebase::ChatMessage`, absent des cibles mobiles) : permet à
 /// `AppState::chat_messages` de rester un champ normal, sans avoir besoin
@@ -144,6 +206,18 @@ impl AppState {
                 log::info!("Multijoueur : connecté à {url} sous « {name} »");
                 self.net_client = Some(client);
                 self.net_status = format!("Connexion à {url}…");
+                // Arme le watchdog dès maintenant (pas au premier message) : un
+                // serveur qui accepte la socket mais ne répond jamais doit finir
+                // par déclencher la reconnexion, pas rester « Connexion… » à vie.
+                self.net_last_server_msg = Some(crate::time_compat::Instant::now());
+                // Mémorisé pour la reconnexion automatique (cf. `poll_network`) —
+                // seulement au succès : un échec immédiat reste une erreur
+                // affichée au joueur, pas une boucle de reconnexion.
+                self.net_last_connect = Some((
+                    url.to_string(),
+                    name.to_string(),
+                    crate::net::protocol::DEFAULT_LOBBY.to_string(),
+                ));
             }
             Err(e) => {
                 log::warn!("Multijoueur : connexion à {url} échouée : {e}");
@@ -153,11 +227,26 @@ impl AppState {
     }
 
     /// Quitte la partie en ligne (sans effet si non connecté) : prévient le
-    /// serveur, masque les fantômes des autres joueurs.
+    /// serveur, masque les fantômes des autres joueurs. Déconnexion
+    /// **volontaire** : annule aussi toute reconnexion automatique (en cours ou
+    /// à venir) — quitter la partie ne doit jamais voir le client se
+    /// reconnecter tout seul dans le dos du joueur.
     pub fn disconnect_from_server(&mut self) {
         if let Some(client) = &self.net_client {
             client.send(&crate::net::protocol::ClientMsg::Leave);
         }
+        self.reset_network_session();
+        self.net_last_connect = None;
+        self.net_reconnect = None;
+        self.net_last_server_msg = None;
+        self.net_status = "Déconnecté".to_string();
+    }
+
+    /// Nettoyage commun à toute fin de session réseau : déconnexion volontaire
+    /// (`disconnect_from_server`) comme perte de connexion détectée
+    /// (`poll_network`) — sans toucher à la politique de reconnexion ni au
+    /// `net_status`, qui diffèrent entre les deux.
+    fn reset_network_session(&mut self) {
         self.net_client = None;
         self.net_player_id = None;
         for rp in self.remote_players.values() {
@@ -175,12 +264,34 @@ impl AppState {
         // pool, sinon les dernières boules reçues resteraient figées à l'écran.
         self.net_projectiles.clear();
         self.sync_fireball_pool(&[]);
-        self.net_status = "Déconnecté".to_string();
     }
 
-    /// `true` si une connexion au serveur est active.
+    /// `true` si une connexion au serveur est active **et vivante** : transport
+    /// sain (`NetClient::is_alive`) et serveur entendu récemment
+    /// (`NET_SILENCE_TIMEOUT`). L'ancien test (`net_client.is_some()`) déclarait
+    /// « connecté » un client dont la connexion était morte depuis des minutes —
+    /// roster figé, envois dans un canal fermé, aucun message d'erreur.
     pub fn is_connected(&self) -> bool {
-        self.net_client.is_some()
+        self.net_client.as_ref().is_some_and(|c| c.is_alive())
+            && self
+                .net_last_server_msg
+                .is_none_or(|t| t.elapsed() < NET_SILENCE_TIMEOUT)
+    }
+
+    /// État de la connexion multijoueur (cf. `NetConnState`) — la forme
+    /// exploitable par du code, là où `net_status` reste le texte du HUD.
+    pub fn net_connection_state(&self) -> NetConnState {
+        if let Some(r) = &self.net_reconnect {
+            return NetConnState::Reconnecting { attempt: r.attempt };
+        }
+        if !self.is_connected() {
+            return NetConnState::Offline;
+        }
+        if self.net_player_id.is_some() {
+            NetConnState::Connected
+        } else {
+            NetConnState::Connecting
+        }
     }
 
     /// `true` si ce joueur réseau est vaincu (0 PV, GAMEDESIGN_EN_LIGNE.md §3.1)
@@ -239,6 +350,11 @@ impl AppState {
             self.poll_chat();
             self.poll_leaderboard();
         }
+        // Reconnexion automatique en cours : fait avancer la machine à états
+        // (résultat d'une tentative en vol, lancement de la suivante au terme
+        // du backoff) — **avant** le early-return ci-dessous, qui masquait
+        // jusqu'ici toute vie réseau dès que `net_client` était `None`.
+        self.advance_reconnection();
         if self.net_client.is_none() {
             return;
         }
@@ -279,8 +395,38 @@ impl AppState {
             Some(client) => client.inbox.try_iter().collect(),
             None => Vec::new(),
         };
+        if !messages.is_empty() {
+            // Preuve de vie du serveur, quel que soit le message — mise à jour
+            // **après** le drain (pas message par message) et avant le
+            // diagnostic ci-dessous : si la boucle de jeu a été suspendue
+            // (pause, App Nap), les messages accumulés pendant la suspension
+            // comptent comme vie récente, sinon la reprise déclencherait une
+            // fausse reconnexion.
+            self.net_last_server_msg = Some(crate::time_compat::Instant::now());
+        }
         for msg in messages {
             self.handle_server_msg(msg);
+        }
+
+        // Diagnostic de coupure, après le drain : transport mort
+        // (`is_alive()`) ou silence serveur prolongé (`NET_SILENCE_TIMEOUT`,
+        // cf. sa doc pour la hiérarchie des timeouts). Détectée ⇒ session
+        // nettoyée et reconnexion automatique armée — le joueur voit
+        // « Connexion perdue… » au lieu d'un monde figé sans explication.
+        let transport_dead = self.net_client.as_ref().is_some_and(|c| !c.is_alive());
+        let server_silent = self
+            .net_last_server_msg
+            .is_some_and(|t| t.elapsed() >= NET_SILENCE_TIMEOUT);
+        if transport_dead || server_silent {
+            let cause = if transport_dead {
+                "connexion fermée"
+            } else {
+                "serveur silencieux"
+            };
+            log::warn!("Multijoueur : connexion perdue ({cause})");
+            self.reset_network_session();
+            self.schedule_reconnect_attempt();
+            return;
         }
 
         // `sample_delayed` (cf. `SPRINTNETWORK.md`) plutôt que `sample`
@@ -315,6 +461,164 @@ impl AppState {
         // ici (avant `sim_step`) serait aussitôt écrasé par la simulation locale
         // du même objet, produisant un aller-retour visible entre les deux
         // positions à chaque frame.
+    }
+
+    /// Arme (ou fait progresser d'une tentative) la reconnexion automatique
+    /// après une coupure détectée : tentative suivante planifiée avec backoff
+    /// (cf. `reconnect_delay`), abandon définitif après
+    /// `MAX_RECONNECT_ATTEMPTS` — dans tous les cas, `net_status` dit au
+    /// joueur ce qui se passe.
+    fn schedule_reconnect_attempt(&mut self) {
+        if self.net_last_connect.is_none() {
+            // Rien à rejouer : jamais connecté avec succès, ou déconnexion
+            // volontaire entre-temps.
+            self.net_reconnect = None;
+            self.net_status = "Déconnecté".to_string();
+            return;
+        }
+        let attempt = self.net_reconnect.as_ref().map_or(1, |r| r.attempt + 1);
+        if attempt > MAX_RECONNECT_ATTEMPTS {
+            log::warn!(
+                "Multijoueur : reconnexion abandonnée après {MAX_RECONNECT_ATTEMPTS} tentatives"
+            );
+            self.net_reconnect = None;
+            self.net_last_connect = None;
+            self.net_status = format!(
+                "Déconnecté (reconnexion échouée après {MAX_RECONNECT_ATTEMPTS} tentatives)"
+            );
+            return;
+        }
+        self.net_status = format!(
+            "Connexion perdue — reconnexion (tentative {attempt}/{MAX_RECONNECT_ATTEMPTS})…"
+        );
+        self.net_reconnect = Some(ReconnectState {
+            attempt,
+            next_try: crate::time_compat::Instant::now() + reconnect_delay(attempt),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending: None,
+        });
+        // Watchdog désarmé le temps de l'attente : il ne surveille qu'une
+        // connexion active, pas un backoff.
+        self.net_last_server_msg = None;
+    }
+
+    /// Fait avancer la reconnexion automatique (appelée à chaque frame par
+    /// `poll_network`, avant son early-return « pas de client ») : récolte le
+    /// résultat d'une tentative en vol, ou en lance une nouvelle au terme du
+    /// backoff. Sans effet si connecté ou si aucune reconnexion n'est armée.
+    fn advance_reconnection(&mut self) {
+        if self.net_client.is_some() || self.net_reconnect.is_none() {
+            return;
+        }
+        // 1. Résultat d'une tentative en vol (natif uniquement : la connexion
+        //    bloquante vit dans un thread éphémère, cf. `ReconnectState::pending`).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let outcome = self.net_reconnect.as_ref().and_then(|s| {
+                let rx = s.pending.as_ref()?;
+                match rx.try_recv() {
+                    Ok(res) => Some(res),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
+                        "le thread de reconnexion s'est arrêté sans répondre".to_string(),
+                    )),
+                }
+            });
+            match outcome {
+                Some(Ok(client)) => {
+                    self.install_reconnected_client(client);
+                    return;
+                }
+                Some(Err(e)) => {
+                    log::warn!("Multijoueur : tentative de reconnexion échouée : {e}");
+                    self.schedule_reconnect_attempt();
+                    return;
+                }
+                None => {
+                    // Tentative toujours en vol : attendre son verdict avant
+                    // d'en lancer une autre.
+                    if self
+                        .net_reconnect
+                        .as_ref()
+                        .is_some_and(|s| s.pending.is_some())
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+        // 2. Backoff écoulé ? → lancer la tentative suivante.
+        let now = crate::time_compat::Instant::now();
+        if self
+            .net_reconnect
+            .as_ref()
+            .is_some_and(|s| now < s.next_try)
+        {
+            return;
+        }
+        let Some((url, name, lobby)) = self.net_last_connect.clone() else {
+            self.net_reconnect = None;
+            return;
+        };
+        let uid = self.firebase_uid.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Connexion bloquante (poignée de main TCP/WebSocket complète) :
+            // jamais sur le thread de rendu — même patron thread éphémère +
+            // canal que les imports glTF ou les requêtes IA.
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let res = crate::net::client::NetClient::connect_to_lobby(
+                    &url,
+                    &name,
+                    uid.as_deref(),
+                    &lobby,
+                )
+                .map_err(|e| e.to_string());
+                let _ = tx.send(res);
+            });
+            if let Some(s) = self.net_reconnect.as_mut() {
+                s.pending = Some(rx);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // `connect` ne bloque jamais sur cette cible (cf. `net::client::web`) :
+            // appel direct, l'échec réel arrivera par `is_alive()` — la boucle de
+            // détection de `poll_network` enchaînera alors sur la tentative suivante.
+            match crate::net::client::NetClient::connect_to_lobby(
+                &url,
+                &name,
+                uid.as_deref(),
+                &lobby,
+            ) {
+                Ok(client) => self.install_reconnected_client(client),
+                Err(e) => {
+                    log::warn!("Multijoueur : tentative de reconnexion échouée : {e}");
+                    self.schedule_reconnect_attempt();
+                }
+            }
+        }
+    }
+
+    /// Installe le transport d'une reconnexion réussie. `net_reconnect` reste
+    /// armé jusqu'au `Welcome` (cf. `handle_server_msg`) : si cette connexion
+    /// meurt avant, la tentative suivante reprend le compte là où il en était
+    /// au lieu de repartir de 1 en boucle contre un serveur mort. Le `Join` est
+    /// déjà parti (encodé par `connect_to_lobby`) ; le `Welcome` attribuera un
+    /// **nouveau** `player_id` — côté serveur, c'est un nouveau joueur, l'ancien
+    /// avatar a été retiré à la fermeture de l'ancienne socket (`Leave`
+    /// synthétique de `server_loop::handle_connection`).
+    fn install_reconnected_client(&mut self, client: crate::net::client::NetClient) {
+        self.net_client = Some(client);
+        // Ré-arme le watchdog : cette connexion neuve a droit à sa pleine
+        // fenêtre de silence avant d'être déclarée morte à son tour.
+        self.net_last_server_msg = Some(crate::time_compat::Instant::now());
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(s) = self.net_reconnect.as_mut() {
+            s.pending = None;
+        }
+        self.net_status = "Reconnexion : transport rétabli, en attente du serveur…".to_string();
     }
 
     /// Réconcilie le joueur local avec la position renvoyée par le serveur : à
@@ -431,6 +735,11 @@ impl AppState {
                 log::info!("Multijoueur : bienvenue, joueur {player_id}");
                 self.net_player_id = Some(player_id);
                 self.net_status = format!("Connecté (joueur {player_id})");
+                // Solde une éventuelle reconnexion automatique : le serveur nous
+                // a réadmis (sous un **nouveau** `player_id` — l'ancien avatar a
+                // été retiré à la fermeture de l'ancienne socket), le compteur
+                // de tentatives repart de zéro pour la prochaine coupure.
+                self.net_reconnect = None;
             }
             ServerMsg::PlayerJoined { player_id, name } => {
                 if Some(player_id) != self.net_player_id {
@@ -2156,5 +2465,135 @@ mod tests {
         };
         let (mx, my) = network_move_axes(&inp, 0.0, None);
         assert_eq!((mx, my), (0.0, 0.0));
+    }
+
+    /// Backoff de reconnexion : croît en 1 s → 2 s → 4 s → 8 s puis plafonne à
+    /// 15 s, sans jamais paniquer sur une entrée dégénérée (tentative 0).
+    #[test]
+    fn reconnect_delay_grows_and_caps() {
+        use std::time::Duration as D;
+        assert_eq!(reconnect_delay(1), D::from_secs(1));
+        assert_eq!(reconnect_delay(2), D::from_secs(2));
+        assert_eq!(reconnect_delay(3), D::from_secs(4));
+        assert_eq!(reconnect_delay(4), D::from_secs(8));
+        assert_eq!(reconnect_delay(5), D::from_secs(15));
+        assert_eq!(reconnect_delay(50), D::from_secs(15));
+        // Défensif : `attempt` est 1-indexée, mais un 0 accidentel ne doit ni
+        // paniquer ni produire un délai nul.
+        assert_eq!(reconnect_delay(0), D::from_secs(1));
+    }
+
+    /// La machine à états de reconnexion compte ses tentatives puis abandonne
+    /// après `MAX_RECONNECT_ATTEMPTS`, avec un `net_status` qui l'explique —
+    /// jamais de martèlement infini contre un serveur mort.
+    #[test]
+    fn reconnection_gives_up_after_max_attempts_and_says_so() {
+        let mut app = AppState::new();
+        app.net_last_connect = Some((
+            "ws://127.0.0.1:9".to_string(),
+            "Testeur".to_string(),
+            crate::net::protocol::DEFAULT_LOBBY.to_string(),
+        ));
+        for expected in 1..=MAX_RECONNECT_ATTEMPTS {
+            app.schedule_reconnect_attempt();
+            assert_eq!(
+                app.net_reconnect.as_ref().map(|r| r.attempt),
+                Some(expected),
+                "tentative {expected} attendue"
+            );
+            assert_eq!(
+                app.net_connection_state(),
+                NetConnState::Reconnecting { attempt: expected }
+            );
+        }
+        app.schedule_reconnect_attempt();
+        assert!(app.net_reconnect.is_none(), "abandon attendu après le max");
+        assert!(
+            app.net_status.contains("échouée"),
+            "le statut doit expliquer l'abandon : {}",
+            app.net_status
+        );
+        assert!(
+            app.net_last_connect.is_none(),
+            "plus rien à rejouer après l'abandon"
+        );
+    }
+
+    /// Une déconnexion **volontaire** annule toute reconnexion automatique :
+    /// quitter la partie ne doit jamais voir le client se reconnecter tout seul.
+    #[test]
+    fn voluntary_disconnect_cancels_any_pending_reconnection() {
+        let mut app = AppState::new();
+        app.net_last_connect = Some((
+            "ws://127.0.0.1:9".to_string(),
+            "Testeur".to_string(),
+            crate::net::protocol::DEFAULT_LOBBY.to_string(),
+        ));
+        app.schedule_reconnect_attempt();
+        assert!(app.net_reconnect.is_some());
+
+        app.disconnect_from_server();
+        assert!(app.net_reconnect.is_none());
+        assert!(app.net_last_connect.is_none());
+        assert_eq!(app.net_connection_state(), NetConnState::Offline);
+
+        // Et `poll_network` ne relance rien dans le dos du joueur.
+        app.poll_network();
+        assert!(app.net_client.is_none() && app.net_reconnect.is_none());
+    }
+
+    /// Bout-en-bout de la reconnexion automatique : le serveur coupe la
+    /// connexion (`NetServer::disconnect`, même chemin qu'une perte réseau
+    /// réelle), le client doit le détecter, se reconnecter au terme du backoff
+    /// (1 s pour la première tentative) et recevoir un **nouveau** `Welcome`
+    /// avec un nouvel identifiant — preuve que `is_connected()` redevient vrai
+    /// sans aucune action du joueur.
+    #[cfg(feature = "net_tests")]
+    #[test]
+    fn the_client_reconnects_and_rejoins_after_a_lost_connection() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+
+        let mut app = AppState::new();
+        app.connect_to_server(&url, "Testeur");
+
+        // Welcome initial (le `NetServer` l'envoie lui-même au Join).
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let first_id = loop {
+            app.poll_network();
+            if let Some(id) = app.net_player_id {
+                break id;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Welcome initial attendu sous 2 s"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(app.is_connected());
+
+        net.disconnect(first_id);
+
+        // Détection + backoff (1 s) + nouvelle poignée de main + nouveau Welcome.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            app.poll_network();
+            if let Some(id) = app.net_player_id
+                && id != first_id
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reconnexion attendue sous 5 s (statut : {})",
+                app.net_status
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(app.is_connected(), "la connexion doit être redevenue saine");
+        assert!(
+            app.net_reconnect.is_none(),
+            "le Welcome doit solder la reconnexion"
+        );
     }
 }

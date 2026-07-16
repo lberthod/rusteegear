@@ -158,6 +158,18 @@ impl NetClient {
             let _ = self.outbox.send(bytes);
         }
     }
+
+    /// `true` tant que le transport est vivant — contrat commun natif/web (cf.
+    /// `super`). Ici : le thread de fond `block_on` la connexion entière et ne
+    /// se termine qu'à sa fermeture (volontaire, perte réseau, serveur coupé) ;
+    /// sa fin droppe `out_rx`, seule autre extrémité de `outbox` — `is_closed()`
+    /// devient alors vrai sans aucun état supplémentaire à entretenir. Sans ce
+    /// test, un client dont la connexion est morte continuait de `send()` dans
+    /// un canal fermé en se croyant connecté pour toujours (cf.
+    /// `AppState::is_connected`).
+    pub fn is_alive(&self) -> bool {
+        !self.outbox.is_closed()
+    }
 }
 
 /// Tests-preuves du support TLS natif (`wss://`, feature `rustls-tls-webpki-roots`

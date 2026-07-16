@@ -444,6 +444,30 @@ pub struct AppState {
     /// frame affichée.
     #[cfg(not(target_os = "ios"))]
     net_last_input_sent: Option<crate::time_compat::Instant>,
+    /// Horodatage du dernier `ServerMsg` reçu, **quel qu'il soit** (`Welcome`,
+    /// `Snapshot`, évènement… — tout message prouve que le serveur est vivant).
+    /// Watchdog applicatif (`network_client::NET_SILENCE_TIMEOUT`) : le
+    /// transport peut être à moitié mort (TCP half-open, façade Caddy qui gèle)
+    /// sans que `NetClient::is_alive()` ne bascule — un silence prolongé est
+    /// alors le seul symptôme. Armé dès la connexion (pas seulement au premier
+    /// message), pour couvrir aussi un serveur qui accepte la socket mais ne
+    /// répond jamais.
+    #[cfg(not(target_os = "ios"))]
+    net_last_server_msg: Option<crate::time_compat::Instant>,
+    /// Paramètres `(url, nom, salon)` de la dernière connexion **réussie** —
+    /// ce que la reconnexion automatique rejoue à l'identique après une
+    /// coupure (cf. `network_client::poll_network`). `None` tant qu'on ne
+    /// s'est jamais connecté, et remis à `None` par une déconnexion
+    /// **volontaire** (`disconnect_from_server`) : quitter la partie ne doit
+    /// jamais déclencher une reconnexion dans le dos du joueur.
+    #[cfg(not(target_os = "ios"))]
+    net_last_connect: Option<(String, String, String)>,
+    /// Reconnexion automatique en cours, s'il y en a une (cf.
+    /// `network_client::ReconnectState` : numéro de tentative, prochain essai,
+    /// tentative de fond éventuellement en vol). `None` = connexion saine ou
+    /// définitivement abandonnée.
+    #[cfg(not(target_os = "ios"))]
+    net_reconnect: Option<network_client::ReconnectState>,
     /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
     /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
     /// créditer la progression au bon compte. `None` = partie anonyme, sans
@@ -768,6 +792,12 @@ impl AppState {
             net_local_history: std::collections::VecDeque::new(),
             #[cfg(not(target_os = "ios"))]
             net_last_input_sent: None,
+            #[cfg(not(target_os = "ios"))]
+            net_last_server_msg: None,
+            #[cfg(not(target_os = "ios"))]
+            net_last_connect: None,
+            #[cfg(not(target_os = "ios"))]
+            net_reconnect: None,
             firebase_uid: None,
             firebase_busy: false,
             firebase_tx,

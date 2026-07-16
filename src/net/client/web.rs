@@ -28,6 +28,15 @@ pub struct NetClient {
     /// Vrai dès l'événement `open` du navigateur — avant ça, `send` mettrait en
     /// échec silencieusement côté navigateur (WebSocket pas encore `OPEN`).
     open: Rc<RefCell<bool>>,
+    /// Vrai dès `onclose`/`onerror` — support du contrat `is_alive()` commun aux
+    /// deux transports (cf. `super`). Indispensable ici : contrairement au natif
+    /// (où la fin du thread de fond ferme `outbox`), le clone d'`in_tx` capturé
+    /// par `onmessage` vit aussi longtemps que `NetClient` lui-même — `inbox` ne
+    /// passera donc **jamais** `Disconnected`, seul ce drapeau permet de savoir
+    /// que la connexion est morte. Couvre aussi l'échec de connexion initiale :
+    /// `connect` ne bloque jamais sur cette cible (cf. doc de `connect`), un
+    /// serveur injoignable se manifeste par un `onerror`/`onclose` différé.
+    closed: Rc<RefCell<bool>>,
     /// `Join` encodé, envoyé dès l'ouverture (posé avant que la connexion ne soit
     /// établie, comme côté natif — `outbox` y jouait ce rôle là-bas).
     _on_open: Closure<dyn FnMut()>,
@@ -89,6 +98,7 @@ impl NetClient {
 
         let (in_tx, in_rx) = channel::<ServerMsg>();
         let open = Rc::new(RefCell::new(false));
+        let closed = Rc::new(RefCell::new(false));
 
         // `onopen` : le navigateur n'autorise `send` qu'une fois la poignée de main
         // WebSocket terminée — `Join` est donc envoyé ici, pas avant (contrairement
@@ -124,17 +134,21 @@ impl NetClient {
         });
         ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
+        let closed_on_error = closed.clone();
         let on_error = Closure::<dyn FnMut(ErrorEvent)>::new(move |e: ErrorEvent| {
             log::warn!("Multijoueur (web) : erreur WebSocket : {}", e.message());
+            *closed_on_error.borrow_mut() = true;
         });
         ws.set_onerror(Some(on_error.as_ref().unchecked_ref()));
 
+        let closed_on_close = closed.clone();
         let on_close = Closure::<dyn FnMut(CloseEvent)>::new(move |e: CloseEvent| {
             log::info!(
                 "Multijoueur (web) : connexion fermée (code {}, « {} »)",
                 e.code(),
                 e.reason()
             );
+            *closed_on_close.borrow_mut() = true;
         });
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
@@ -142,6 +156,7 @@ impl NetClient {
             inbox: in_rx,
             ws,
             open,
+            closed,
             _on_open: on_open,
             _on_message: on_message,
             _on_error: on_error,
@@ -165,6 +180,12 @@ impl NetClient {
                 js_error_to_string(&e)
             );
         }
+    }
+
+    /// `true` tant que le transport est vivant — contrat commun natif/web (cf.
+    /// `super` et le champ `closed` pour le pourquoi de ce drapeau côté web).
+    pub fn is_alive(&self) -> bool {
+        !*self.closed.borrow()
     }
 }
 
