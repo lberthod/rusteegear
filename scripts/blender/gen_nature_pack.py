@@ -526,6 +526,40 @@ def gen_reeds():
     export("nature_reeds.glb")
 
 
+def gen_grass_tuft():
+    """Touffe d'herbe basse (non solide) : 5 brins fins ~0.25-0.4 m — couvre
+    prairie et sous-bois pour casser l'uniformité de l'aplat de sol vert."""
+    blade_a = mat("herbe_a", LEAF_DARK)
+    blade_b = mat("herbe_b", LEAF_LIGHT)
+    for i in range(5):
+        a = i * math.tau / 5 + rng.uniform(-0.3, 0.3)
+        r = rng.uniform(0.02, 0.18)
+        x, y = r * math.cos(a), r * math.sin(a)
+        h = rng.uniform(0.22, 0.4)
+        cone(
+            f"Brin{i}",
+            blade_a if i % 2 == 0 else blade_b,
+            (x, y, h / 2),
+            radius=0.02,
+            depth=h,
+            vertices=4,
+        )
+    export("nature_grass_tuft.glb")
+
+
+def gen_fern():
+    """Fougère de sous-bois (non solide) : 4 frondes courtes et sombres,
+    ~0.3 m — tapis du sol forestier, distinct de l'herbe de prairie."""
+    frond = mat("fronde", (0.14, 0.34, 0.14))
+    for i in range(4):
+        a = i * math.tau / 4 + rng.uniform(-0.2, 0.2)
+        r = rng.uniform(0.03, 0.12)
+        x, y = r * math.cos(a), r * math.sin(a)
+        h = rng.uniform(0.25, 0.35)
+        blob(f"Fronde{i}", frond, (x * 1.5, y * 1.5, h), radius=0.14, squash=0.35, jitter=0.05)
+    export("nature_fern.glb")
+
+
 ASSETS = [
     gen_tree,
     gen_pine,
@@ -550,6 +584,8 @@ ASSETS = [
     gen_boat,
     gen_lily,
     gen_reeds,
+    gen_grass_tuft,
+    gen_fern,
 ]
 
 for gen in ASSETS:

@@ -27,6 +27,13 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Release web (wasm32) : même base que `release`, mais optimisée pour la taille
+# du binaire plutôt que la vitesse — le coût d'un `.wasm` trop gros se paie au
+# premier chargement dans le navigateur. Utilisé par packaging/build_web.sh.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+
 # Itération rapide : compile bien plus vite que `release` tout en restant utilisable
 # (le profil `dev` non optimisé rend le rendu/physique trop lents pour tester).
 #   cargo run --profile dev-fast

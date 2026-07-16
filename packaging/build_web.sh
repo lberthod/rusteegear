@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Construit la cible wasm32 et génère les bindings JS (Phase Q, Sprints 114-117).
 # Pré-requis : rustup target add wasm32-unknown-unknown ; cargo install wasm-bindgen-cli
-# (version EXACTE de la crate `wasm-bindgen` du lockfile — cf. Cargo.lock).
+# (version EXACTE de la crate `wasm-bindgen` du lockfile — cf. Cargo.lock) ;
+# wasm-opt (paquet binaryen, `brew install binaryen`) pour la passe de réduction
+# de taille post wasm-bindgen — sans lui le .wasm final est ~20-35 % plus gros.
 #
 # État connu : rendu (114), audio SFX (115) et multijoueur (116, WebSocket natif
 # du navigateur) fonctionnels dans Chrome via WebGPU — jouable au clavier,
@@ -27,15 +29,30 @@ if [ "${PLAYER_BUILD:-0}" = "1" ]; then
     echo "▶ Build PLAYER web « $OUTPUT_NAME » (mode joueur, scène embarquée)…"
 fi
 
-echo "▶ cargo build --lib --target wasm32-unknown-unknown (release)…"
-cargo build --lib --release --target wasm32-unknown-unknown $FEATURES
+echo "▶ cargo build --lib --target wasm32-unknown-unknown (profil wasm-release)…"
+cargo build --lib --profile wasm-release --target wasm32-unknown-unknown $FEATURES
 
 echo "▶ wasm-bindgen…"
 mkdir -p packaging/web/pkg
 wasm-bindgen --target web \
     --out-dir packaging/web/pkg \
     --out-name motor3derust \
-    target/wasm32-unknown-unknown/release/motor3derust.wasm
+    target/wasm32-unknown-unknown/wasm-release/motor3derust.wasm
+
+if command -v wasm-opt >/dev/null 2>&1; then
+    echo "▶ wasm-opt -Oz…"
+    # --all-features (plutôt qu'un --enable-* choisi à la main) : le binaire
+    # émis par rustc utilise déjà bulk-memory/nontrapping-float-to-int/etc.,
+    # et un jeu de features incomplet fait planter wasm-opt à la validation.
+    # --all-features fait correspondre exactement les capacités activées par
+    # rustc pour wasm32-unknown-unknown, sans devoir les lister à la main à
+    # chaque montée de version de rustc/wasm-bindgen.
+    wasm-opt -Oz --all-features \
+        -o packaging/web/pkg/motor3derust_bg.wasm \
+        packaging/web/pkg/motor3derust_bg.wasm
+else
+    echo "⚠ wasm-opt introuvable (brew install binaryen) — .wasm non compacté, ~20-35 % plus gros que nécessaire."
+fi
 
 if [ "${PLAYER_BUILD:-0}" = "1" ]; then
     STAGE="target/export/web_stage/${OUTPUT_NAME}"

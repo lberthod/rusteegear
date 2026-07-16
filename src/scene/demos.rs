@@ -408,19 +408,34 @@ fn creature_kite_script(
 /// Cohérent avec son orbe à tête chercheuse (`AttackStyle::Homing`) : elle
 /// n'a pas besoin d'être près, son tir la venge de loin.
 fn creature_drift_script(
-    arena_half: f32,
+    _arena_half: f32,
     prefix: &str,
     _ray_mask: u32,
     _heading0: f32,
     _phase: f32,
 ) -> String {
-    let bound = arena_half - 1.0;
     format!(
         r#"
     local DRIFT = 0.6
     local FLEE_SPEED = 1.6
     local FLEE = 3.0
-    local BOUND = {bound}
+    -- Rayon de dérive autour du point d'apparition (spawn), pas de l'arène :
+    -- la méduse dérive dans SON lac, un petit plan d'eau borné par des murs
+    -- invisibles à ~6-7 m du spawn (`Créature 13`, cf. `mmorpg_demo`). L'ancien
+    -- rappel relatif à l'origine du monde (`atan(-obj.x, -obj.z)`) visait le
+    -- centre de l'ARÈNE, pas celui du lac : dès que le lac a été muré, la
+    -- méduse dérivait tout droit dans un mur et s'y frottait en boucle (jamais
+    -- assez proche du centre de l'arène pour déclencher le rappel). `BOUND`
+    -- reste un rayon local, pas une position absolue.
+    local BOUND = 5.0
+
+    local sx = save.get("{prefix}spawn_x")
+    local sz = save.get("{prefix}spawn_z")
+    if sx == nil then
+        sx = obj.x; sz = obj.z
+        save.set("{prefix}spawn_x", sx)
+        save.set("{prefix}spawn_z", sz)
+    end
 
     -- Audit gameplay : le cap de fuite (et le rappel vers le centre) était posé
     -- d'un coup (`heading = atan(...)`) — pivot de 180° en une frame quand le
@@ -441,9 +456,11 @@ fn creature_drift_script(
             fleeing = true
         end
     end
-    -- Rappel doux vers le centre en approche de bord (fuir dans un mur n'a pas de sens).
-    if math.abs(obj.x) > BOUND - 2.0 or math.abs(obj.z) > BOUND - 2.0 then
-        target = math.deg(math.atan(-obj.x, -obj.z))
+    -- Rappel doux vers le spawn en approche du bord de la zone de dérive
+    -- (fuir dans un mur n'a pas de sens).
+    local ox, oz = obj.x - sx, obj.z - sz
+    if math.abs(ox) > BOUND - 1.5 or math.abs(oz) > BOUND - 1.5 then
+        target = math.deg(math.atan(-ox, -oz))
     end
     if target ~= nil then
         local diff = ((target - heading + 180) % 360) - 180
@@ -455,8 +472,8 @@ fn creature_drift_script(
     obj.z = obj.z + math.cos(rad) * speed * dt
     obj.ry = heading
     obj.anim = "Walk"
-    obj.x = math.max(-BOUND, math.min(BOUND, obj.x))
-    obj.z = math.max(-BOUND, math.min(BOUND, obj.z))
+    obj.x = math.max(sx - BOUND, math.min(sx + BOUND, obj.x))
+    obj.z = math.max(sz - BOUND, math.min(sz + BOUND, obj.z))
     save.set("{prefix}heading", heading)
 "#
     )
@@ -2190,7 +2207,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             DemoCreature {
                 name: "Créature 7",
                 file: "creature7.glb",
-                spawn: Vec3::new(-13.0, 0.0, 10.0),
+                // Berge est du lac, à l'écart du nouveau mur d'eau (le crabe
+                // spawnait auparavant quasi sur le bord du Lac, l:[-26,-12]
+                // z:[-2,10], désormais bordé de murs invisibles).
+                spawn: Vec3::new(-9.0, 0.0, 14.0),
                 layer_bit: 7,
                 prefix: "creature7_",
                 heading0: 96.0,
@@ -2435,45 +2455,58 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // créatures ne suivent aucun relief — le « promontoire » est un anneau
         // de rochers au sol, pas une élévation. Trois couches :
         //
-        // 1) Aplats de terrain : primitives `Plane` sans collider, décalées de
-        //    quelques centimètres en Y (eau < sable < chemins < route) pour
-        //    éviter le z-fighting avec le sol et entre elles. L'eau n'a pas de
-        //    collider : rivières et lac se traversent à gué, les ponts sont
-        //    narratifs (et plus rapides que patauger entre deux berges).
+        // 1) Aplats de terrain : primitives `Plane`, décalées de quelques
+        //    centimètres en Y (eau < sable < chemins < route) pour éviter le
+        //    z-fighting avec le sol et entre elles. L'eau reste un `Plane`
+        //    (pas de heightmap dans ce moteur), mais désormais bordée de murs
+        //    invisibles (étape 2 ci-dessous) : rivières et lac ne se
+        //    traversent plus à gué, seuls les deux ponts passent.
         let eau = [0.18, 0.42, 0.65];
         let eau_sombre = [0.14, 0.34, 0.55];
         let terre = [0.42, 0.36, 0.26];
         let vert_riziere = [0.24, 0.44, 0.38];
+        // Surface plus lisse/brillante que le sol : sans reflet d'environnement
+        // réel (le moteur n'a ni alpha ni uniforme de temps, cf. la doc de
+        // `mmorpg_demo`), un `roughness` bas donne un reflet spéculaire net qui
+        // suffit à distinguer l'eau d'un simple aplat de peinture bleue.
+        let mut aplat_eau = |name: &str, pos: Vec3, scale: Vec3, color: [f32; 3]| {
+            let mut p = demo_obj(name, MeshKind::Plane, pos);
+            p.transform = p.transform.with_scale(scale);
+            p.color = color;
+            p.roughness = 0.08;
+            p.metallic = 0.15;
+            objects.push(p);
+        };
+        aplat_eau(
+            "Rivière nord",
+            Vec3::new(-26.0, 0.02, -21.0),
+            Vec3::new(4.0, 1.0, 30.0),
+            eau,
+        );
+        aplat_eau(
+            "Coude de rivière",
+            Vec3::new(-22.0, 0.02, -6.0),
+            Vec3::new(12.0, 1.0, 4.0),
+            eau,
+        );
+        aplat_eau(
+            "Lac",
+            Vec3::new(-19.0, 0.015, 4.0),
+            Vec3::new(14.0, 1.0, 12.0),
+            eau_sombre,
+        );
+        aplat_eau(
+            "Rivière sud",
+            Vec3::new(-16.0, 0.02, 23.0),
+            Vec3::new(4.0, 1.0, 26.0),
+            eau,
+        );
         let mut aplat = |name: &str, pos: Vec3, scale: Vec3, color: [f32; 3]| {
             let mut p = demo_obj(name, MeshKind::Plane, pos);
             p.transform = p.transform.with_scale(scale);
             p.color = color;
             objects.push(p);
         };
-        aplat(
-            "Rivière nord",
-            Vec3::new(-26.0, 0.02, -21.0),
-            Vec3::new(4.0, 1.0, 30.0),
-            eau,
-        );
-        aplat(
-            "Coude de rivière",
-            Vec3::new(-22.0, 0.02, -6.0),
-            Vec3::new(12.0, 1.0, 4.0),
-            eau,
-        );
-        aplat(
-            "Lac",
-            Vec3::new(-19.0, 0.015, 4.0),
-            Vec3::new(14.0, 1.0, 12.0),
-            eau_sombre,
-        );
-        aplat(
-            "Rivière sud",
-            Vec3::new(-16.0, 0.02, 23.0),
-            Vec3::new(4.0, 1.0, 26.0),
-            eau,
-        );
         aplat(
             "Berge du lac",
             Vec3::new(-19.0, 0.012, 12.0),
@@ -2514,6 +2547,106 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 Vec3::new(6.0, 1.0, 5.0),
                 vert_riziere,
             );
+        }
+
+        // 2) Murs d'eau invisibles : bordent les 4 plans d'eau ci-dessus pour
+        //    les rendre réellement infranchissables (collider `Static` seul,
+        //    `visible = false` — l'eau garde son aspect, elle bloque juste le
+        //    passage comme une vraie rivière). Seules ouvertures : les deux
+        //    ponts existants (`Pont 1` sur la rivière sud, `Pont 2` sur la
+        //    rivière nord), qui redeviennent ainsi les seuls passages — le
+        //    commentaire historique « les ponts sont narratifs » ne l'est
+        //    plus.
+        //
+        //    Les 4 rects d'eau (rivière nord, coude, lac, rivière sud) se
+        //    chevauchent/se touchent de façon irrégulière (le coude et le lac
+        //    ont même un interstice de 2 m entre eux) : les murer à la main
+        //    côté par côté s'est révélé source d'erreurs de continuité (essayé
+        //    puis abandonné — un bord mal raccordé laisse une brèche). Plus
+        //    fiable : rasteriser l'UNION des 4 rects sur une grille et poser
+        //    un segment de mur à chaque frontière eau→terre — la topologie du
+        //    contour est alors dérivée automatiquement, pas raisonnée à la
+        //    main. `GRID` = 3 m (assez fin pour suivre les angles à ~1,5 m
+        //    près, largement sous la marge de 3,5 m des sondes créatures).
+        {
+            const GRID: f32 = 3.0;
+            let water_rects: [(f32, f32, f32, f32); 4] = [
+                (-28.0, -36.0, -24.0, -6.0), // rivière nord
+                (-28.0, -8.0, -16.0, -4.0),  // coude
+                (-26.0, -2.0, -12.0, 10.0),  // lac
+                (-18.0, 10.0, -14.0, 36.0),  // rivière sud
+            ];
+            // Rectangles où aucun mur ne doit être posé, quelle que soit
+            // l'orientation du segment : les deux ponts. Assez larges pour
+            // couvrir le tablier + les rampes d'accès des deux côtés.
+            let bridge_gaps: [(f32, f32, f32, f32); 2] = [
+                (-28.5, -12.5, -23.5, -7.5), // Pont 2 (rivière nord, z≈-10)
+                (-18.5, 11.5, -13.5, 16.5),  // Pont 1 (rivière sud, z≈14)
+            ];
+            let is_water = |x: f32, z: f32| {
+                water_rects
+                    .iter()
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+            };
+            let in_gap = |x: f32, z: f32| {
+                bridge_gaps
+                    .iter()
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+            };
+            // Bornes de balayage : englobent les 4 rects avec une marge d'une
+            // cellule pour détecter la frontière extérieure.
+            let (mut gx0, mut gz0, mut gx1, mut gz1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for &(x0, z0, x1, z1) in &water_rects {
+                gx0 = gx0.min(x0);
+                gz0 = gz0.min(z0);
+                gx1 = gx1.max(x1);
+                gz1 = gz1.max(z1);
+            }
+            let mut mur_n = 0u32;
+            let mut cx = gx0 - GRID;
+            while cx <= gx1 + GRID {
+                let mut cz = gz0 - GRID;
+                while cz <= gz1 + GRID {
+                    if is_water(cx, cz) {
+                        // Frontière est/ouest (mur vertical le long de X constant).
+                        for &(nx, wall_x) in
+                            &[(cx + GRID, cx + GRID / 2.0), (cx - GRID, cx - GRID / 2.0)]
+                        {
+                            if !is_water(nx, cz) && !in_gap(wall_x, cz) {
+                                mur_n += 1;
+                                let mut w = demo_obj(
+                                    &format!("Mur d'eau {mur_n}"),
+                                    MeshKind::Cube,
+                                    Vec3::new(wall_x, 0.9, cz),
+                                );
+                                w.transform = w.transform.with_scale(Vec3::new(0.4, 1.8, GRID));
+                                w.physics = PhysicsKind::Static;
+                                w.visible = false;
+                                objects.push(w);
+                            }
+                        }
+                        // Frontière nord/sud (mur horizontal le long de Z constant).
+                        for &(nz, wall_z) in
+                            &[(cz + GRID, cz + GRID / 2.0), (cz - GRID, cz - GRID / 2.0)]
+                        {
+                            if !is_water(cx, nz) && !in_gap(cx, wall_z) {
+                                mur_n += 1;
+                                let mut w = demo_obj(
+                                    &format!("Mur d'eau {mur_n}"),
+                                    MeshKind::Cube,
+                                    Vec3::new(cx, 0.9, wall_z),
+                                );
+                                w.transform = w.transform.with_scale(Vec3::new(GRID, 1.8, 0.4));
+                                w.physics = PhysicsKind::Static;
+                                w.visible = false;
+                                objects.push(w);
+                            }
+                        }
+                    }
+                    cz += GRID;
+                }
+                cx += GRID;
+            }
         }
 
         // 2) Meshes glb générés par Blender headless (gen_nature_pack.py pour
@@ -3257,6 +3390,1006 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
         ];
 
+        // Hameau fortifié (Medieval Village Pack, Quaternius/CC0, retraité par
+        // scripts/blender/import_village_pack.py — join + transform_apply,
+        // cf. ce script pour le pourquoi). Posé dans le coin sud-est de la
+        // carte (x∈[22,36], z∈[-36,-20]), à l'écart du hameau existant et à
+        // ≥ 4 m du spawn le plus proche (créature 5, (20,-20)) — la règle des
+        // 3,5 m (RAY_DIST) ne s'applique qu'au décor solide, testée plus bas.
+        const VILLAGE_PROPS: &[DemoDecor] = &[
+            // --- Bâtiments (grille 3×4, colonnes x=25/29/33, lignes
+            //     z=-23/-27/-30.5/-34) ---
+            DemoDecor {
+                name: "Caserne du hameau",
+                file: "village_barracks.glb",
+                pos: (25.0, -23.0),
+                scale: 1.0,
+                yaw_deg: 200.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tour du hameau",
+                file: "village_bell_tower.glb",
+                pos: (29.0, -23.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Auberge",
+                file: "village_inn.glb",
+                pos: (33.0, -23.0),
+                scale: 1.0,
+                yaw_deg: 160.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Forge",
+                file: "village_blacksmith.glb",
+                pos: (25.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Puits du hameau",
+                file: "village_well.glb",
+                pos: (29.0, -27.0),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Scierie",
+                file: "village_sawmill.glb",
+                pos: (33.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 270.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Maison du hameau 1",
+                file: "village_house_a.glb",
+                pos: (25.0, -30.5),
+                scale: 1.0,
+                yaw_deg: 190.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Gazebo du hameau",
+                file: "village_gazebo.glb",
+                pos: (29.0, -30.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Moulin du hameau",
+                file: "village_mill.glb",
+                pos: (33.0, -30.5),
+                scale: 1.0,
+                yaw_deg: 250.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Maison du hameau 2",
+                file: "village_house_b.glb",
+                pos: (25.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Écurie",
+                file: "village_stable.glb",
+                pos: (29.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Maison du hameau 3",
+                file: "village_house_c.glb",
+                pos: (33.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 220.0,
+                solide: true,
+                anim: None,
+            },
+            // --- Étals et clôtures (solides) ---
+            DemoDecor {
+                name: "Étal du marché 1",
+                file: "village_market_stand_a.glb",
+                pos: (27.0, -24.5),
+                scale: 2.2,
+                yaw_deg: 45.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Étal du marché 2",
+                file: "village_market_stand_b.glb",
+                pos: (31.0, -24.5),
+                scale: 2.2,
+                yaw_deg: 315.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 1",
+                file: "village_fence.glb",
+                pos: (26.0, -19.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 2",
+                file: "village_fence.glb",
+                pos: (29.0, -19.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 3",
+                file: "village_fence.glb",
+                pos: (32.0, -19.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 4",
+                file: "village_fence.glb",
+                pos: (27.0, -35.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 5",
+                file: "village_fence.glb",
+                pos: (31.0, -35.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // --- Petit décor solide (tonneaux, caisses, bancs, rochers) ---
+            DemoDecor {
+                name: "Tonneau du hameau 1",
+                file: "village_barrel.glb",
+                pos: (23.0, -24.0),
+                scale: 3.0,
+                yaw_deg: 15.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tonneau du hameau 2",
+                file: "village_barrel.glb",
+                pos: (34.7, -25.0),
+                scale: 3.0,
+                yaw_deg: 80.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tonneau du hameau 3",
+                file: "village_barrel.glb",
+                pos: (27.5, -21.5),
+                scale: 3.0,
+                yaw_deg: 200.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Caisse du hameau 1",
+                file: "village_crate.glb",
+                pos: (23.0, -28.0),
+                scale: 3.0,
+                yaw_deg: 25.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Caisse du hameau 2",
+                file: "village_crate.glb",
+                pos: (34.7, -29.0),
+                scale: 3.0,
+                yaw_deg: 140.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Caisse du hameau 3",
+                file: "village_crate.glb",
+                pos: (30.5, -21.5),
+                scale: 3.0,
+                yaw_deg: 300.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 1",
+                file: "village_bench_a.glb",
+                pos: (27.0, -28.75),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 2",
+                file: "village_bench_a.glb",
+                pos: (31.0, -28.75),
+                scale: 3.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 3",
+                file: "village_bench_b.glb",
+                pos: (27.0, -32.25),
+                scale: 3.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 4",
+                file: "village_bench_b.glb",
+                pos: (31.0, -32.25),
+                scale: 3.0,
+                yaw_deg: 270.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher du hameau 1",
+                file: "village_rocks.glb",
+                pos: (23.0, -32.0),
+                scale: 2.5,
+                yaw_deg: 10.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher du hameau 2",
+                file: "village_rocks.glb",
+                pos: (34.7, -32.5),
+                scale: 2.2,
+                yaw_deg: 80.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher du hameau 3",
+                file: "village_rocks.glb",
+                pos: (24.0, -20.5),
+                scale: 2.0,
+                yaw_deg: 140.0,
+                solide: true,
+                anim: None,
+            },
+            // --- Décor traversable (sacs, foin, paquets, portes/fenêtres
+            //     posées, fumée…) : aucune contrainte de dégagement. ---
+            DemoDecor {
+                name: "Sac du hameau 1",
+                file: "village_bag.glb",
+                pos: (28.0, -24.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Sac du hameau 2",
+                file: "village_bag.glb",
+                pos: (32.0, -31.0),
+                scale: 3.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Sac ouvert du hameau",
+                file: "village_bag_open.glb",
+                pos: (26.0, -24.5),
+                scale: 3.0,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Sacs du hameau",
+                file: "village_bags.glb",
+                pos: (34.0, -31.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Foin du hameau 1",
+                file: "village_hay.glb",
+                pos: (24.0, -22.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Foin du hameau 2",
+                file: "village_hay.glb",
+                pos: (34.0, -24.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Foin du hameau 3",
+                file: "village_hay.glb",
+                pos: (28.0, -32.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 1",
+                file: "village_package_a.glb",
+                pos: (30.0, -24.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 2",
+                file: "village_package_a.glb",
+                pos: (24.0, -31.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 3",
+                file: "village_package_b.glb",
+                pos: (32.0, -28.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 4",
+                file: "village_package_b.glb",
+                pos: (26.0, -29.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chaudron de la forge",
+                file: "village_cauldron.glb",
+                pos: (24.5, -27.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Feu du hameau",
+                file: "village_bonfire.glb",
+                pos: (28.0, -29.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fumée de la forge",
+                file: "village_smoke.glb",
+                pos: (24.5, -27.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fumée de la scierie",
+                file: "village_smoke.glb",
+                pos: (33.0, -27.3),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lame de la scierie",
+                file: "village_sawmill_saw.glb",
+                pos: (33.0, -27.6),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Porte ronde du hameau",
+                file: "village_door_round.glb",
+                pos: (27.0, -22.5),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Porte droite du hameau",
+                file: "village_door_straight.glb",
+                pos: (31.0, -23.5),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre ronde 1",
+                file: "village_round_window.glb",
+                pos: (24.3, -23.5),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre ronde 2",
+                file: "village_round_window.glb",
+                pos: (33.7, -31.0),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 1",
+                file: "village_window_a.glb",
+                pos: (25.5, -26.0),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 2",
+                file: "village_window_a.glb",
+                pos: (32.5, -31.5),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 3",
+                file: "village_window_b.glb",
+                pos: (28.5, -31.0),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 4",
+                file: "village_window_b.glb",
+                pos: (30.5, -27.0),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cloche du hameau",
+                file: "village_bell.glb",
+                pos: (29.0, -22.3),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Marches du hameau 1",
+                file: "village_stairs.glb",
+                pos: (29.0, -21.7),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Marches du hameau 2",
+                file: "village_stairs.glb",
+                pos: (33.0, -29.3),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 1",
+                file: "village_path_straight.glb",
+                pos: (29.0, -21.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 2",
+                file: "village_path_straight.glb",
+                pos: (29.0, -24.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 3",
+                file: "village_path_straight.glb",
+                pos: (29.0, -27.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 4",
+                file: "village_path_straight.glb",
+                pos: (29.0, -30.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+        ];
+
+        // Ménagerie de monstres (Ultimate Monsters Bundle, Quaternius/CC0,
+        // retraité par scripts/blender/import_monster_pack.py — armature/
+        // skin retirés à l'export, ce ne sont que des silhouettes figées en
+        // pose de repos). Non solides à dessein : ce pack est riggé dans le
+        // fichier source, et `MAX_SKINNED_INSTANCES` (src/gfx/renderer.rs,
+        // partagé avec les créatures MMORPG et le décor nature animé, déjà
+        // ~66/96 utilisés) aurait explosé si ces 45 assets gardaient leur
+        // squelette — cf. le script pour le détail. Posés en grille dans la
+        // bande nord jusque-là vide (x∈[-16,16], z∈[-34,-20]), à l'écart de
+        // toute zone déjà aménagée.
+        const MONSTER_DECOR: &[DemoDecor] = &[
+            DemoDecor {
+                name: "Monstre Alien",
+                file: "monster_alien.glb",
+                pos: (-16.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Alien 2",
+                file: "monster_alien_b.glb",
+                pos: (-12.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Alpaking",
+                file: "monster_alpaking.glb",
+                pos: (-8.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Alpaking évolué",
+                file: "monster_alpaking_evolved.glb",
+                pos: (-4.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Armabee",
+                file: "monster_armabee.glb",
+                pos: (0.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Armabee évolué",
+                file: "monster_armabee_evolved.glb",
+                pos: (4.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Birb",
+                file: "monster_birb.glb",
+                pos: (8.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Démon bleu",
+                file: "monster_blue_demon.glb",
+                pos: (12.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Lapin monstre",
+                file: "monster_bunny.glb",
+                pos: (16.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Cactoro",
+                file: "monster_cactoro.glb",
+                pos: (-16.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Cactoro 2",
+                file: "monster_cactoro_b.glb",
+                pos: (-12.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Chat monstre",
+                file: "monster_cat.glb",
+                pos: (-8.0, -30.5),
+                scale: 1.3,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Poule monstre",
+                file: "monster_chicken.glb",
+                pos: (-4.0, -30.5),
+                scale: 1.3,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Démon",
+                file: "monster_demon.glb",
+                pos: (0.0, -30.5),
+                scale: 0.75,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Démon 2",
+                file: "monster_demon_b.glb",
+                pos: (4.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Dino",
+                file: "monster_dino.glb",
+                pos: (8.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Dragon",
+                file: "monster_dragon.glb",
+                pos: (12.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Dragon évolué",
+                file: "monster_dragon_evolved.glb",
+                pos: (16.0, -30.5),
+                scale: 0.75,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Poisson monstre",
+                file: "monster_fish.glb",
+                pos: (-16.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Poisson monstre 2",
+                file: "monster_fish_b.glb",
+                pos: (-12.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Grenouille monstre",
+                file: "monster_frog.glb",
+                pos: (-8.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Fantôme",
+                file: "monster_ghost.glb",
+                pos: (-4.0, -27.0),
+                scale: 0.75,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Crâne fantôme",
+                file: "monster_ghost_skull.glb",
+                pos: (0.0, -27.0),
+                scale: 0.75,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Glub",
+                file: "monster_glub.glb",
+                pos: (4.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Glub évolué",
+                file: "monster_glub_evolved.glb",
+                pos: (8.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Goleling",
+                file: "monster_goleling.glb",
+                pos: (12.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Goleling évolué",
+                file: "monster_goleling_evolved.glb",
+                pos: (16.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Blob vert",
+                file: "monster_green_blob.glb",
+                pos: (-16.0, -23.5),
+                scale: 1.3,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Blob épineux",
+                file: "monster_green_spiky_blob.glb",
+                pos: (-12.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Hywirl",
+                file: "monster_hywirl.glb",
+                pos: (-8.0, -23.5),
+                scale: 0.75,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Monkroose",
+                file: "monster_monkroose.glb",
+                pos: (-4.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Mushnub",
+                file: "monster_mushnub.glb",
+                pos: (0.0, -23.5),
+                scale: 1.0,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Mushnub évolué",
+                file: "monster_mushnub_evolved.glb",
+                pos: (4.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Roi champignon",
+                file: "monster_mushroom_king.glb",
+                pos: (8.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Ninja",
+                file: "monster_ninja.glb",
+                pos: (12.0, -23.5),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Ninja 2",
+                file: "monster_ninja_b.glb",
+                pos: (16.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Orc",
+                file: "monster_orc.glb",
+                pos: (-16.0, -20.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Orc ennemi",
+                file: "monster_orc_enemy.glb",
+                pos: (-12.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Pigeon monstre",
+                file: "monster_pigeon.glb",
+                pos: (-8.0, -20.0),
+                scale: 1.3,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Blob rose",
+                file: "monster_pink_blob.glb",
+                pos: (-4.0, -20.0),
+                scale: 1.3,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Squidle",
+                file: "monster_squidle.glb",
+                pos: (0.0, -20.0),
+                scale: 0.75,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Tribal",
+                file: "monster_tribal.glb",
+                pos: (4.0, -20.0),
+                scale: 0.75,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Sorcier",
+                file: "monster_wizard.glb",
+                pos: (8.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Yeti",
+                file: "monster_yeti.glb",
+                pos: (12.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Monstre Yeti 2",
+                file: "monster_yeti_b.glb",
+                pos: (16.0, -20.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+        ];
+
         // Chargeur commun aux landmarks et au scatter : un même fichier n'est
         // chargé qu'une fois, les instances partagent l'entrée `imported`.
         let mut anim_count = 0usize;
@@ -3315,7 +4448,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             }
             objects.push(deco);
         };
-        for spec in NATURE_DECOR {
+        for spec in NATURE_DECOR
+            .iter()
+            .chain(VILLAGE_PROPS.iter())
+            .chain(MONSTER_DECOR.iter())
+        {
             poser(
                 spec.name,
                 spec.file,
@@ -3370,6 +4507,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             .collect();
         let mut solid_spots: Vec<(f32, f32)> = NATURE_DECOR
             .iter()
+            .chain(VILLAGE_PROPS.iter())
             .filter(|d| d.solide)
             .map(|d| d.pos)
             .collect();
@@ -3430,6 +4568,103 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             }
         }
 
+        // Variante « en bosquets » de `scatter` : au lieu d'un tirage uniforme
+        // dans tout le rectangle (visuellement un peu quadrillé malgré le
+        // RNG), tire d'abord `n_clusters` centres, puis disperse
+        // `per_cluster.0..per_cluster.1` instances autour de chacun dans un
+        // disque de rayon `cluster_radius` — tirage en AIRE uniforme
+        // (`r = radius * sqrt(u)`, pas `r = radius * u` qui sur-représenterait
+        // le centre) pour un semis de bosquet crédible, façon sous-bois réel.
+        // Mêmes règles de rejet que `scatter` (exclusions, spawns, solides).
+        #[allow(clippy::too_many_arguments)]
+        fn scatter_clustered(
+            rng: &mut crate::runtime::rng::Rng,
+            poser: &mut Poser<'_>,
+            solid_spots: &mut Vec<(f32, f32)>,
+            spawns: &[(f32, f32)],
+            exclusions: &[&[Rect]],
+            files: &[&'static str],
+            prefix: &str,
+            rect: Rect,
+            n_clusters: usize,
+            per_cluster: (usize, usize),
+            cluster_radius: f32,
+            scale: (f32, f32),
+            solide: bool,
+        ) {
+            let mut poses = 0usize;
+            for c in 0..n_clusters {
+                // Centre du bosquet : rejeté s'il tombe dans une exclusion (le
+                // bosquet entier resterait alors coincé contre une zone
+                // aménagée) — pas de contrainte spawn/solide ici, seules les
+                // instances individuelles comptent pour ces règles.
+                let mut center = None;
+                for _ in 0..20 {
+                    let cx = rng.next_range(rect.0, rect.2);
+                    let cz = rng.next_range(rect.1, rect.3);
+                    if !exclusions
+                        .iter()
+                        .flat_map(|g| g.iter())
+                        .any(|&(x0, z0, x1, z1)| cx >= x0 && cx <= x1 && cz >= z0 && cz <= z1)
+                    {
+                        center = Some((cx, cz));
+                        break;
+                    }
+                }
+                let Some((cx, cz)) = center else { continue };
+                let n = per_cluster.0
+                    + if per_cluster.1 > per_cluster.0 {
+                        rng.next_below(per_cluster.1 - per_cluster.0 + 1)
+                    } else {
+                        0
+                    };
+                let mut placed_in_cluster = 0usize;
+                let mut essais = 0usize;
+                while placed_in_cluster < n && essais < n * 40 {
+                    essais += 1;
+                    let r = cluster_radius * rng.next_range(0.0, 1.0).sqrt();
+                    let a = rng.next_range(0.0, std::f32::consts::TAU);
+                    let x = cx + r * a.cos();
+                    let z = cz + r * a.sin();
+                    if x < rect.0 || x > rect.2 || z < rect.1 || z > rect.3 {
+                        continue;
+                    }
+                    if exclusions
+                        .iter()
+                        .flat_map(|g| g.iter())
+                        .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                    {
+                        continue;
+                    }
+                    let d2 = |(sx, sz): (f32, f32)| (sx - x) * (sx - x) + (sz - z) * (sz - z);
+                    if spawns.iter().any(|&s| d2(s) < 16.0) {
+                        continue;
+                    }
+                    if solide && solid_spots.iter().any(|&s| d2(s) < 6.25) {
+                        continue;
+                    }
+                    placed_in_cluster += 1;
+                    poses += 1;
+                    let file = files[rng.next_below(files.len())];
+                    let s = rng.next_range(scale.0, scale.1);
+                    let yaw = rng.next_range(0.0, 360.0);
+                    poser(
+                        &format!("{prefix} {c}-{poses}"),
+                        file,
+                        x,
+                        z,
+                        s,
+                        yaw,
+                        solide,
+                        None,
+                    );
+                    if solide {
+                        solid_spots.push((x, z));
+                    }
+                }
+            }
+        }
+
         // Forêt dense du nord-est (évite les deux clairières) : feuillus mêlés
         // aux sapins, souches, sous-bois traversable.
         let foret: Rect = (8.0, -34.0, 34.0, -8.0);
@@ -3444,7 +4679,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &["nature_tree.glb", "nature_tree2.glb"],
             "Arbre",
             foret,
-            22,
+            // 22 → 28 : le hameau fortifié (Medieval Village Pack) mord sur ce
+            // rectangle et son décor solide fait échouer plus de tirages
+            // (rejection sampling à ≥ 2,5 m d'un autre solide) — on compense
+            // pour garder ≥ 30 arbres/sapins (cf. test de densité).
+            28,
             (0.9, 1.3),
             true,
         );
@@ -3457,7 +4696,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &["nature_pine.glb", "nature_pine2.glb"],
             "Sapin",
             foret,
-            12,
+            15,
             (0.9, 1.25),
             true,
         );
@@ -3474,7 +4713,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             (0.9, 1.2),
             true,
         );
-        scatter(
+        scatter_clustered(
             &mut rng,
             &mut poser,
             &mut solid_spots,
@@ -3483,8 +4722,28 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &["nature_bush.glb"],
             "Buisson",
             foret,
-            8,
+            4,
+            (2, 4),
+            2.5,
             (0.9, 1.4),
+            false,
+        );
+        // Couverture d'herbe/fougères du sous-bois : non solide, coût nul sur
+        // le budget physique (aucun collider), rendu batché — la densité
+        // vient de là plutôt que de multiplier les solides.
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &["nature_grass_tuft.glb", "nature_fern.glb"],
+            "Sous-bois",
+            foret,
+            18,
+            (4, 8),
+            1.8,
+            (0.85, 1.3),
             false,
         );
         // Lisières : quelques arbres épars le long du mur ouest (au-delà de la
@@ -3531,7 +4790,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             (0.9, 1.4),
             false,
         );
-        scatter(
+        scatter_clustered(
             &mut rng,
             &mut poser,
             &mut solid_spots,
@@ -3540,8 +4799,28 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &["nature_bush.glb"],
             "Buisson fleuri",
             prairie,
-            6,
+            3,
+            (2, 3),
+            2.2,
             (0.9, 1.3),
+            false,
+        );
+        // Herbe basse de la prairie centrale : même logique de bosquets que
+        // le sous-bois, teinte plus claire (grass_tuft seul, pas de fougère
+        // sombre de forêt).
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &["nature_grass_tuft.glb"],
+            "Herbe",
+            prairie,
+            10,
+            (6, 10),
+            2.0,
+            (0.85, 1.3),
             false,
         );
         // Plants de riz dans chaque bassin (traversables) : le scatter vise
@@ -3561,6 +4840,61 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 (0.9, 1.3),
                 false,
             );
+        }
+
+        // Roseaux/nénuphars systématiques le long des 4 berges (en plus des
+        // quelques instances posées à la main dans `NATURE_DECOR`, gardées
+        // telles quelles) : un point tiré sur le PÉRIMÈTRE de chaque rect
+        // d'eau (`EXCL_EAU_ROUTES[..4]`, les 4 vrais plans d'eau — pas la
+        // berge de sable ni les routes), décalé perpendiculairement côté
+        // terre pour les roseaux, côté eau pour les nénuphars (flottent, non
+        // solides dans les deux cas). Bien plus systématique que les 7
+        // instances isolées d'origine.
+        for &(x0, z0, x1, z1) in &EXCL_EAU_ROUTES[..4] {
+            for i in 0..7 {
+                let side = rng.next_below(4);
+                let along = rng.next_range(0.0, 1.0);
+                let (bx, bz, nx, nz): (f32, f32, f32, f32) = match side {
+                    0 => (x0 + along * (x1 - x0), z0, 0.0, -1.0), // nord
+                    1 => (x0 + along * (x1 - x0), z1, 0.0, 1.0),  // sud
+                    2 => (x0, z0 + along * (z1 - z0), -1.0, 0.0), // ouest
+                    _ => (x1, z0 + along * (z1 - z0), 1.0, 0.0),  // est
+                };
+                let is_reed = i % 2 == 0;
+                let offset = rng.next_range(0.3, 0.8);
+                let (px, pz) = if is_reed {
+                    (bx + nx * offset, bz + nz * offset)
+                } else {
+                    (bx - nx * offset, bz - nz * offset)
+                };
+                if spawns.iter().any(|&(sx, sz)| {
+                    let dx = sx - px;
+                    let dz = sz - pz;
+                    dx * dx + dz * dz < 16.0
+                }) {
+                    continue;
+                }
+                let file = if is_reed {
+                    "nature_reeds.glb"
+                } else {
+                    "nature_lily.glb"
+                };
+                let scale = rng.next_range(0.85, 1.15);
+                let yaw = rng.next_range(0.0, 360.0);
+                poser(
+                    &format!(
+                        "Berge {} {i}",
+                        if is_reed { "Roseaux" } else { "Nénuphars" }
+                    ),
+                    file,
+                    px,
+                    pz,
+                    scale,
+                    yaw,
+                    false,
+                    None,
+                );
+            }
         }
 
         // Objets d'inventaire (cf. `ItemPickup`) à trouver en explorant, posés
@@ -4557,6 +5891,68 @@ mod tests {
         }
     }
 
+    /// Preuve de l'infranchissabilité de l'eau (murs invisibles générés par
+    /// grille, cf. le commentaire au-dessus de `NATURE_DECOR` dans
+    /// `mmorpg_demo`) : un joueur piloté droit vers le centre du lac pendant
+    /// 10 s simulées ne doit jamais entrer dans son rectangle — bloqué par un
+    /// mur qu'il ne voit pas, exactement comme une vraie rive.
+    #[test]
+    fn mmorpg_water_blocks_the_player_from_swimming_in_the_lake() {
+        let mut scene = Scene::mmorpg_demo();
+        let idx = scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Joueur")
+            .expect("la démo doit avoir un « Joueur »");
+        let mut phys = crate::runtime::physics::Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        let target = Vec3::new(-19.0, 0.0, 4.0); // centre du lac
+        for _ in 0..600 {
+            let pos = scene.objects[idx].transform.position;
+            let dir = Vec3::new(target.x - pos.x, 0.0, target.z - pos.z);
+            let d = (dir.x * dir.x + dir.z * dir.z).sqrt();
+            let (vx, vz) = if d > 0.05 {
+                (dir.x / d * 4.5, dir.z / d * 4.5)
+            } else {
+                (0.0, 0.0)
+            };
+            phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        let p = scene.objects[idx].transform.position;
+        assert!(
+            !(p.x >= -26.0 && p.x <= -12.0 && p.z >= -2.0 && p.z <= 10.0),
+            "le joueur ne doit jamais entrer dans le lac à la nage (pos={p:?})"
+        );
+    }
+
+    /// Contre-épreuve de la précédente : les deux ponts restent bien les
+    /// passages laissés dans les murs d'eau — un joueur parti de la rive est
+    /// de la rivière sud, piloté vers l'ouest, doit traverser via `Pont 1`
+    /// et atteindre la rive ouest.
+    #[test]
+    fn mmorpg_player_can_still_cross_the_bridges() {
+        let mut scene = Scene::mmorpg_demo();
+        let idx = scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Joueur")
+            .expect("la démo doit avoir un « Joueur »");
+        // Rive est de la rivière sud (x:[-18,-14]), dans l'axe du Pont 1 (z=14).
+        scene.objects[idx].transform.position = Vec3::new(-12.0, 1.0, 14.0);
+        let mut phys = crate::runtime::physics::Physics::build(&scene);
+        let dt = 1.0 / 60.0;
+        for _ in 0..600 {
+            phys.control(idx, -4.5, 0.0, false, 0.0, 0.0, dt);
+            phys.step(dt, &mut scene);
+        }
+        let p = scene.objects[idx].transform.position;
+        assert!(
+            p.x < -18.0,
+            "le joueur doit avoir traversé le Pont 1 jusqu'à la rive ouest (pos={p:?})"
+        );
+    }
+
     /// Preuve que le scatter procédural (graine fixe) peuple vraiment la forêt
     /// du nord-est et le hameau/promontoire, plutôt que de tout rejeter en
     /// silence (rejection sampling contre les zones d'exclusion).
@@ -4626,6 +6022,50 @@ mod tests {
                     "« {} » et « {} » sont à {d:.2} m l'un de l'autre (< 2 m, risque de fusion visuelle)",
                     solids[i].name,
                     solids[j].name
+                );
+            }
+        }
+    }
+
+    /// Preuve de la couverture d'herbe/fougères (Étape « végétation plus
+    /// naturelle ») : au moins une touffe d'herbe et une fougère existent
+    /// réellement dans la scène (glb chargé, pas juste déclaré), non solides
+    /// — la sonde des créatures et le joueur passent au travers, seule la
+    /// silhouette compte pour l'aspect visuel.
+    #[test]
+    fn mmorpg_demo_has_grass_and_ferns_underfoot() {
+        let scene = Scene::mmorpg_demo();
+        for file in ["nature_grass_tuft.glb", "nature_fern.glb"] {
+            let loaded = scene.imported.iter().any(|m| m.path.ends_with(file));
+            assert!(loaded, "la démo doit charger « {file} »");
+            let instantiated = scene.imported.iter().enumerate().any(|(i, m)| {
+                m.path.ends_with(file)
+                    && scene
+                        .objects
+                        .iter()
+                        .any(|o| matches!(o.mesh, MeshKind::Imported(idx) if idx as usize == i))
+            });
+            assert!(
+                instantiated,
+                "« {file} » doit être instancié au moins une fois dans la scène"
+            );
+        }
+        for name_prefix in ["Herbe ", "Sous-bois "] {
+            let matches: Vec<&SceneObject> = scene
+                .objects
+                .iter()
+                .filter(|o| o.name.starts_with(name_prefix))
+                .collect();
+            assert!(
+                !matches.is_empty(),
+                "aucune instance nommée « {name_prefix}… » trouvée"
+            );
+            for o in matches {
+                assert_eq!(
+                    o.physics,
+                    PhysicsKind::None,
+                    "« {} » (herbe/fougère) ne doit rien bloquer",
+                    o.name
                 );
             }
         }

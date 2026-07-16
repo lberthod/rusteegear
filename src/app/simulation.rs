@@ -1858,6 +1858,46 @@ mod tests {
         );
     }
 
+    /// Preuve dédiée à la Créature 13 (méduse, `creature_drift_script`) : une
+    /// fois le Lac muré (murs d'eau invisibles, cf. `mmorpg_demo`), elle dérive
+    /// dans un rayon local autour de son spawn plutôt que de viser le centre de
+    /// l'arène — bug corrigé après une trace de 60 s qui la montrait plaquée
+    /// contre le mur est du lac (`x≈-12`, jamais assez proche du centre de
+    /// l'arène pour déclencher l'ancien rappel absolu). Même critère
+    /// d'immobilité que le test générique ci-dessus, sur 60 s pour laisser le
+    /// temps à plusieurs allers-retours dans le lac.
+    #[test]
+    fn mmorpg_creature_13_drifts_in_its_lake_without_getting_stuck() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        let idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Créature 13")
+            .expect("la démo MMORPG doit contenir la « Créature 13 »");
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        let dt = 1.0 / 60.0;
+        let mut idle_frames = 0u32;
+        let mut prev_pos = app.scene.objects[idx].transform.position;
+        const STEPS: u32 = 60 * 60;
+        for _ in 0..STEPS {
+            app.sim_step(dt);
+            let pos = app.scene.objects[idx].transform.position;
+            if (pos - prev_pos).length() < 1e-4 {
+                idle_frames += 1;
+            }
+            prev_pos = pos;
+        }
+        let idle_ratio = idle_frames as f32 / STEPS as f32;
+        assert!(
+            idle_ratio < 0.15,
+            "la Créature 13 est restée immobile {:.0}% du temps (attendu < 15%) — \
+             probablement plaquée contre un mur d'eau",
+            idle_ratio * 100.0
+        );
+    }
+
     /// Audit gameplay « gros sauts / déplacements illogiques » : preuve que les
     /// **20** créatures de la démo MMORPG bougent continûment, sans téléportation
     /// ni pivot brutal, avec la vraie physique. Bugs observés en jeu (corrigés

@@ -47,7 +47,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libx11-dev libxkbcommon-dev libwayland-dev \
-            libasound2-dev libudev-dev pkg-config
+            libasound2-dev libudev-dev pkg-config binaryen
 
       # Version EXACTE de la crate `wasm-bindgen` du lockfile — le CLI doit
       # matcher, cf. packaging/build_web.sh.
