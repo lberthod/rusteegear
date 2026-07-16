@@ -522,6 +522,10 @@ pub struct AppState {
     last_frame: Instant,
     /// Images par seconde lissées (moyenne mobile exponentielle), pour le bandeau d'état.
     fps: f32,
+    /// Fenêtre du bilan de perf périodique (cf. `log_perf_window` dans
+    /// `simulation.rs`) : début de la fenêtre courante et pire `dt` observé dedans.
+    perf_window_start: Instant,
+    perf_window_worst_dt: f32,
 
     // --- état d'interaction pointeur ---
     dragging: bool,
@@ -819,6 +823,8 @@ impl AppState {
             viewport: (1.0, 1.0),
             last_frame: Instant::now(),
             fps: 0.0,
+            perf_window_start: Instant::now(),
+            perf_window_worst_dt: 0.0,
             dragging: false,
             last_cursor: None,
             press_cursor: None,

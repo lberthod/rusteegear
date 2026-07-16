@@ -1745,7 +1745,12 @@ impl Renderer {
         }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
+        // Chronométré pour le bilan de perf périodique (cf. `log_perf_window`) :
+        // départage les à-coups côté simulation (scripts/physique/réseau) des
+        // à-coups côté rendu/présentation (le reste de la frame).
+        let sim_start = std::time::Instant::now();
         app.advance_play();
+        app.note_sim_duration(sim_start.elapsed());
         // Une scène chargée en fond vient peut-être de remplacer l'actuelle :
         // reconstruire les meshes GPU importés depuis les nouvelles données.
         if app.take_imported_dirty() {

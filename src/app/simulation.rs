@@ -182,6 +182,48 @@ pub(super) fn creature_is_server_synced(
 }
 
 impl AppState {
+    /// Bilan de perf périodique (audit du 16 juillet 2026) : toutes les
+    /// `PERF_WINDOW` en mode Play actif, logue en `info` le FPS lissé et la
+    /// **pire** frame de la fenêtre — c'est elle qui fait sentir les à-coups,
+    /// pas la moyenne. Diagnostic lisible dans les logs d'un build joueur
+    /// déployé (VPS, testeurs) sans ouvrir le panneau Profiler de l'éditeur.
+    /// Les `dt` aberrants (> 0,5 s : throttle au repos, mise en veille) sont
+    /// ignorés comme pour le FPS lissé ci-dessous.
+    fn log_perf_window(&mut self, now: Instant, dt: f32) {
+        const PERF_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+        if !self.playing || self.paused {
+            // Hors Play la boucle throttle volontairement : une fenêtre en cours
+            // mélangerait des frames throttlées — on repart de zéro.
+            self.perf_window_start = now;
+            self.perf_window_worst_dt = 0.0;
+            return;
+        }
+        if dt > 1e-4 && dt < 0.5 {
+            self.perf_window_worst_dt = self.perf_window_worst_dt.max(dt);
+        }
+        if now.duration_since(self.perf_window_start) >= PERF_WINDOW {
+            if self.perf_window_worst_dt > 0.0 {
+                log::info!(
+                    "Perf : {:.0} FPS lissés, pire frame {:.1} ms (pire sim {:.1} ms) \
+                     sur les 10 dernières s",
+                    self.fps,
+                    self.perf_window_worst_dt * 1000.0,
+                    self.perf_window_worst_sim * 1000.0
+                );
+            }
+            self.perf_window_start = now;
+            self.perf_window_worst_dt = 0.0;
+            self.perf_window_worst_sim = 0.0;
+        }
+    }
+
+    /// Enregistre la durée d'`advance_play` de la frame courante pour le bilan de
+    /// perf (cf. `log_perf_window`) — appelé par `Renderer::render`, seul endroit
+    /// qui voit la frame entière.
+    pub fn note_sim_duration(&mut self, d: std::time::Duration) {
+        self.perf_window_worst_sim = self.perf_window_worst_sim.max(d.as_secs_f32());
+    }
+
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
@@ -204,6 +246,7 @@ impl AppState {
                 self.fps * 0.9 + inst * 0.1
             };
         }
+        self.log_perf_window(now, dt);
 
         // transitions Edit <-> Play
         if self.playing && !self.was_playing {
@@ -1330,6 +1373,47 @@ mod tests {
             (p.x - 0.05).abs() < 1e-6,
             "à mi-accumulateur, le rendu doit afficher la pose à mi-chemin (x={})",
             p.x
+        );
+    }
+
+    /// Audit du 16 juillet 2026 : le bilan de perf périodique doit retenir la
+    /// **pire** frame de la fenêtre (c'est elle qui fait les à-coups), ignorer
+    /// les `dt` aberrants (throttle/veille), repartir de zéro à chaque fenêtre
+    /// écoulée, et ne rien accumuler hors Play (frames volontairement throttlées).
+    #[test]
+    fn the_perf_log_window_tracks_the_worst_frame_and_resets_each_window() {
+        let mut app = AppState::new();
+        app.playing = true;
+        let t0 = Instant::now();
+        app.perf_window_start = t0;
+
+        let d = std::time::Duration::from_secs;
+        app.log_perf_window(t0 + d(1), 1.0 / 60.0);
+        app.log_perf_window(t0 + d(2), 0.050); // à-coup réel : doit être retenu
+        app.log_perf_window(t0 + d(3), 1.0 / 60.0);
+        assert!(
+            (app.perf_window_worst_dt - 0.050).abs() < 1e-6,
+            "la pire frame de la fenêtre doit être retenue (worst={})",
+            app.perf_window_worst_dt
+        );
+        // dt aberrant (> 0,5 s : throttle, mise en veille) : ignoré.
+        app.log_perf_window(t0 + d(4), 2.0);
+        assert!(
+            (app.perf_window_worst_dt - 0.050).abs() < 1e-6,
+            "un dt aberrant ne doit pas polluer la pire frame"
+        );
+        // Fenêtre écoulée : bilan flushé, la suivante repart de zéro.
+        app.log_perf_window(t0 + d(11), 1.0 / 60.0);
+        assert_eq!(
+            app.perf_window_worst_dt, 0.0,
+            "la fenêtre doit repartir de zéro après le bilan"
+        );
+        // Hors Play : rien n'est accumulé (les frames sont throttlées exprès).
+        app.playing = false;
+        app.log_perf_window(t0 + d(12), 0.2);
+        assert_eq!(
+            app.perf_window_worst_dt, 0.0,
+            "hors Play, aucune frame ne doit être comptée"
         );
     }
 
