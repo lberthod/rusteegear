@@ -34,6 +34,15 @@ strip = true
 inherits = "dev"
 opt-level = 1
 
+# Le gros du coût par frame (rapier, wgpu, glam, décodage glTF) vit dans les
+# dépendances : les compiler optimisées même en profil `dev` rend `cargo run`
+# jouable (~coût d'une seule recompilation des deps, ensuite cachées), sans
+# ralentir la compilation incrémentale de notre propre crate (qui reste en -O0).
+# Audit du 16 juillet 2026 : la scène MMORPG (20 créatures skinnées + physique)
+# tournait injouable en debug pur, un cœur CPU saturé à 100 %.
+[profile.dev.package."*"]
+opt-level = 3
+
 # Packaging APK (cargo-apk).
 [package.metadata.android]
 package = "com.berthod.motor3derust"
