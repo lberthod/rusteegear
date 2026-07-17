@@ -21,6 +21,10 @@ import glob
 # même justification en commentaire dans le code.
 WHITELIST = {
     ("src/gfx/renderer.rs", "unwrap"): 1,
+    # render_skinned_test : `slot 0 < MAX_SKINNED_INSTANCES, toujours valide`
+    # (helper de test public — utilisé par tests/golden_skinning.rs, donc
+    # impossible à mettre sous #[cfg(test)]).
+    ("src/gfx/renderer.rs", "expect"): 1,
     ("src/net/interpolation.rs", "expect"): 1,
     ("src/app/combat.rs", "expect"): 1,
     ("src/app/simulation.rs", "expect"): 2,
@@ -35,7 +39,13 @@ def find_test_ranges(lines):
     i = 0
     n = len(lines)
     while i < n:
-        if re.match(r"^\s*(pub(\(\w+\))?\s+)?mod\s+tests?\s*\{", lines[i]):
+        m = re.match(r"^\s*(pub(\(\w+\))?\s+)?mod\s+(\w+)\s*\{", lines[i])
+        if m:
+            # Module de test si son nom est `tests`/`test` OU si un attribut
+            # au-dessus contient `cfg(...test...)` — les modules nommés
+            # librement (`progress_tests`, `tls_proof`…) sont couverts par la
+            # seconde condition (régression constatée le 18 juillet 2026).
+            mod_name = m.group(3)
             start = i
             j = i - 1
             while j >= 0 and (lines[j].strip() == "" or lines[j].strip().startswith("//")):
@@ -54,6 +64,13 @@ def find_test_ranges(lines):
                     k -= 1
                     continue
                 break
+            attr_text = "\n".join(lines[attr_start:start])
+            is_test_module = bool(re.fullmatch(r"tests?", mod_name)) or (
+                "cfg" in attr_text and "test" in attr_text
+            )
+            if not is_test_module:
+                i += 1
+                continue
             depth = 0
             k2 = start
             started = False
