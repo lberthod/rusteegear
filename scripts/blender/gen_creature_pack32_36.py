@@ -23,177 +23,13 @@ Exécution : /Applications/Blender.app/Contents/MacOS/Blender --background \
 
 import math
 import os
+import sys
 
-import bpy
-from mathutils import Vector
-
-OUT_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../assets/models")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from creature_kit import (  # noqa: E402
+    LEGS4, build_creature, cone, cylinder, fresh_scene, material,
+    quad_bones, quad_walk_keys, sphere,
 )
-
-PARTS = []
-
-
-def material(name, rgb, roughness=0.75):
-    m = bpy.data.materials.new(name)
-    m.use_nodes = True
-    bsdf = m.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
-    bsdf.inputs["Roughness"].default_value = roughness
-    return m
-
-
-def add_part(bone, mat, create_op, location, scale=(1, 1, 1), rotation=(0, 0, 0)):
-    create_op(location=location)
-    ob = bpy.context.active_object
-    ob.scale = scale
-    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    ob.rotation_euler = rotation
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
-    ob.data.materials.append(mat)
-    vg = ob.vertex_groups.new(name=bone)
-    vg.add(range(len(ob.data.vertices)), 1.0, "REPLACE")
-    PARTS.append(ob)
-    return ob
-
-
-def sphere(bone, mat, location, scale, segments=24, rings=16):
-    def op(location):
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=segments, ring_count=rings, radius=1.0, location=location
-        )
-
-    return add_part(bone, mat, op, location, scale)
-
-
-def cone(bone, mat, location, scale, rotation=(0, 0, 0)):
-    def op(location):
-        bpy.ops.mesh.primitive_cone_add(
-            vertices=16, radius1=1.0, radius2=0.0, depth=2.0, location=location
-        )
-
-    return add_part(bone, mat, op, location, scale, rotation)
-
-
-def cylinder(bone, mat, location, scale, rotation=(0, 0, 0)):
-    def op(location):
-        bpy.ops.mesh.primitive_cylinder_add(
-            vertices=16, radius=1.0, depth=1.0, location=location
-        )
-
-    return add_part(bone, mat, op, location, scale, rotation)
-
-
-def build_creature(name, bones, idle_keys, walk_keys, cam=1.0):
-    """Fusionne PARTS, pose l'armature `bones`, bake Idle/Walk, exporte + vignette."""
-    bpy.ops.object.select_all(action="DESELECT")
-    for ob in PARTS:
-        ob.select_set(True)
-    bpy.context.view_layer.objects.active = PARTS[0]
-    bpy.ops.object.join()
-    creature = bpy.context.active_object
-    creature.name = name.capitalize()
-
-    bpy.ops.object.armature_add(location=(0, 0, 0))
-    arm = bpy.context.active_object
-    arm.name = f"{creature.name}Rig"
-    bpy.ops.object.mode_set(mode="EDIT")
-    eb = arm.data.edit_bones
-    root = eb[0]
-    root.name = "Root"
-    root.head, root.tail = Vector((0, 0, 0)), Vector((0, 0, 0.35))
-    for bname, (parent, head, tail) in bones.items():
-        b = eb.new(bname)
-        b.head, b.tail = Vector(head), Vector(tail)
-        b.parent = eb[parent]
-    bpy.ops.object.mode_set(mode="OBJECT")
-
-    creature.parent = arm
-    creature.modifiers.new("Armature", "ARMATURE").object = arm
-
-    bpy.ops.object.select_all(action="DESELECT")
-    arm.select_set(True)
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.object.mode_set(mode="POSE")
-    for pb in arm.pose.bones:
-        pb.rotation_mode = "XYZ"
-
-    def key_rot(bone, frame, xyz):
-        pb = arm.pose.bones[bone]
-        pb.rotation_euler = xyz
-        pb.keyframe_insert("rotation_euler", frame=frame)
-
-    def key_loc(bone, frame, xyz):
-        pb = arm.pose.bones[bone]
-        pb.location = xyz
-        pb.keyframe_insert("location", frame=frame)
-
-    def bake_clip(clip, keyer):
-        ad = arm.animation_data_create()
-        ad.action = None
-        keyer(key_rot, key_loc)
-        act = ad.action
-        act.name = clip
-        track = ad.nla_tracks.new()
-        track.name = clip
-        track.strips.new(clip, 1, act)
-        ad.action = None
-
-    bake_clip("Idle", idle_keys)
-    bake_clip("Walk", walk_keys)
-    for pb in arm.pose.bones:
-        pb.location = (0, 0, 0)
-        pb.rotation_euler = (0, 0, 0)
-    bpy.ops.object.mode_set(mode="OBJECT")
-
-    out = os.path.join(OUT_DIR, f"{name}.glb")
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.export_scene.gltf(
-        filepath=out,
-        export_format="GLB",
-        export_skins=True,
-        export_animations=True,
-        export_animation_mode="NLA_TRACKS",
-        export_force_sampling=True,
-        export_yup=True,
-    )
-    print("EXPORTED", out)
-
-    # Vignette de contrôle : pistes NLA purgées + pose neutre (piège connu :
-    # l'exporteur laisse l'armature posée au dernier frame évalué).
-    ad = arm.animation_data
-    ad.action = None
-    for t in list(ad.nla_tracks):
-        ad.nla_tracks.remove(t)
-    for pb in arm.pose.bones:
-        pb.location = (0, 0, 0)
-        pb.rotation_euler = (0, 0, 0)
-    scene = bpy.context.scene
-    scene.frame_set(1)
-    bpy.context.view_layer.update()
-    bpy.ops.object.camera_add(
-        location=(5.2 * cam, -7.0 * cam, 3.6 * cam),
-        rotation=(math.radians(74), 0, math.radians(37)),
-    )
-    scene.camera = bpy.context.active_object
-    bpy.ops.object.light_add(
-        type="SUN", location=(2, -3, 6),
-        rotation=(math.radians(35), math.radians(20), 0),
-    )
-    bpy.context.active_object.data.energy = 3.0
-    scene.render.engine = "BLENDER_EEVEE"
-    scene.render.resolution_x = 640
-    scene.render.resolution_y = 480
-    scene.render.filepath = out.replace(".glb", "_preview.png")
-    bpy.ops.render.render(write_still=True)
-    print("RENDERED", scene.render.filepath)
-
-
-def fresh_scene():
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.context.scene.render.fps = 24
-    PARTS.clear()
-
 
 # =============================================================================
 # Créature 32 — Poulpe : dôme mauve, 8 tentacules qui ondulent (4 os, 2 chacun).
@@ -487,7 +323,7 @@ def baudroie():
     fresh_scene()
     brown = material("Baudroie36Brown", (0.30, 0.22, 0.20))
     brown_d = material("Baudroie36BrownD", (0.20, 0.14, 0.13))
-    glow = material("Baudroie36Glow", (0.98, 0.85, 0.30), roughness=0.3)
+    glow = material("Baudroie36Glow", (0.98, 0.85, 0.30), roughness=0.3, emission=3.0)
     ivory = material("Baudroie36Ivory", (0.92, 0.90, 0.82))
     dark = material("Baudroie36Dark", (0.05, 0.04, 0.04))
 
