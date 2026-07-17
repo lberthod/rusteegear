@@ -2375,6 +2375,17 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 bite: None,
                 script: creature_turret_script,
             },
+            DemoCreature {
+                name: "Créature 21",
+                file: "creature21.glb",
+                spawn: Vec3::new(4.0, 0.0, 26.0),
+                layer_bit: 21,
+                prefix: "creature21_",
+                heading0: 12.0,
+                phase: 18.0,
+                bite: None,
+                script: creature_wander_script,
+            },
         ];
 
         let mut imported = Vec::new();
@@ -6205,7 +6216,7 @@ mod tests {
         }
     }
 
-    /// Preuve du placement logique des 20 créatures : chaque spawn tombe dans
+    /// Preuve du placement logique des 21 créatures : chaque spawn tombe dans
     /// le rectangle de son biome annoncé (forêt, lac, rizières, hameau,
     /// promontoire…), pas éparpillé au hasard sur la carte.
     #[test]

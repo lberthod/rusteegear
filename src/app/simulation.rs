@@ -1917,6 +1917,7 @@ mod tests {
             ("Créature 18", "creature18.glb"),
             ("Créature 19", "creature19.glb"),
             ("Créature 20", "creature20.glb"),
+            ("Créature 21", "creature21.glb"),
         ] {
             assert!(
                 app.scene.objects.iter().any(|o| o.name == name),
@@ -2052,7 +2053,7 @@ mod tests {
             .filter(|(_, o)| o.name.starts_with("Créature"))
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(creatures.len(), 20, "la démo doit garder ses 20 créatures");
+        assert_eq!(creatures.len(), 21, "la démo doit garder ses 21 créatures");
 
         let dt = 1.0 / 60.0;
         // 3,2 m/s (charge du ver, la plus rapide) + marge : au-delà en une frame,
