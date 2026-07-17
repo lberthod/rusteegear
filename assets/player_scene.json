@@ -34083,7 +34083,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 1,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34157,7 +34157,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 1,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34227,7 +34227,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 1,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34297,7 +34297,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 1,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34367,7 +34367,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 1,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34437,7 +34437,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 2,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34511,8 +34511,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 2,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": {
@@ -34585,7 +34585,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 3,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34655,7 +34655,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 3,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34725,7 +34725,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 3,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34795,8 +34795,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 3,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": null,
@@ -34865,7 +34865,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 3,
         "hp": 1
       },
       "ai_chaser": null,
@@ -34935,7 +34935,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 3,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35005,8 +35005,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 4,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": null,
@@ -35075,7 +35075,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 4,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35145,8 +35145,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 4,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": null,
@@ -35215,7 +35215,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 4,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35285,8 +35285,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 4,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": null,
@@ -35355,7 +35355,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 4,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35425,8 +35425,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 3,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": null,
@@ -35495,7 +35495,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 2,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35565,7 +35565,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 2,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35635,7 +35635,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 2,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35705,7 +35705,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 2,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35775,7 +35775,7 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
+        "wave": 4,
         "hp": 1
       },
       "ai_chaser": null,
@@ -35845,8 +35845,8 @@
       "combat": {
         "attackable": true,
         "is_attack_fx": false,
-        "wave": 0,
-        "hp": 1
+        "wave": 4,
+        "hp": 3
       },
       "ai_chaser": null,
       "bite": null,

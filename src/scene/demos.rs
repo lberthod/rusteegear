@@ -2122,6 +2122,19 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             /// initial, déphasage), chaque générateur ignore ce dont il n'a
             /// pas besoin.
             script: fn(f32, &str, u32, f32, f32) -> String,
+            /// Manche d'apparition (`Combat::wave`, GDD_MMORPG.md §5.5 — la
+            /// dent de scie de « La Horde ») : la vague 1 est l'échauffement
+            /// (errantes inoffensives), les suivantes montent en intensité.
+            /// Règles d'authoring verrouillées par le test
+            /// `mmorpg_demo_waves_follow_the_gdd_authoring_rules` : budget de
+            /// PV strictement croissant par vague, au moins un chef à 3 PV
+            /// dès la vague 2, dernière vague ≥ 4/3 de l'avant-dernière.
+            wave: u32,
+            /// PV (`Combat::hp`) : 1 pour la troupe, 3 pour un « chef » — la
+            /// cible qui justifie le Boulet (GDD §5.5 : « un chef à 3 PV
+            /// tombe d'un coup », sans elle l'arme lourde est objectivement
+            /// inférieure).
+            hp: u32,
         }
         const MMORPG_CREATURES: &[DemoCreature] = &[
             DemoCreature {
@@ -2145,6 +2158,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: -std::f32::consts::FRAC_PI_2,
                 bite: Some((2.2, 0.4, 0.12, 12.9898)),
                 script: creature_wander_script,
+                wave: 1,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 2",
@@ -2156,6 +2171,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 0.9,
                 bite: None,
                 script: creature_wander_script,
+                wave: 1,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 3",
@@ -2167,6 +2184,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 1.8,
                 bite: None,
                 script: creature_wander_script,
+                wave: 1,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 4",
@@ -2178,6 +2197,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 2.7,
                 bite: None,
                 script: creature_wander_script,
+                wave: 1,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 5",
@@ -2189,6 +2210,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 3.6,
                 bite: None,
                 script: creature_wander_script,
+                wave: 1,
+                hp: 1,
             },
             // Chauve-souris : morsure rapide mais faible — harcèle plus qu'elle
             // ne punit.
@@ -2202,6 +2225,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 4.5,
                 bite: Some((1.6, 0.5, 0.08, 19.4142)),
                 script: creature_wander_script,
+                wave: 2,
+                hp: 1,
             },
             // Crabe : pincement rare mais lourd — l'inverse de la chauve-souris.
             DemoCreature {
@@ -2217,6 +2242,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 5.4,
                 bite: Some((3.5, 0.6, 0.18, 27.1828)),
                 script: creature_wander_script,
+                wave: 2,
+                hp: 3,
             },
             DemoCreature {
                 name: "Créature 8",
@@ -2228,6 +2255,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 6.3,
                 bite: None,
                 script: creature_wander_script,
+                wave: 3,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 9",
@@ -2239,6 +2268,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 7.2,
                 bite: None,
                 script: creature_wander_script,
+                wave: 3,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 10",
@@ -2250,6 +2281,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 8.1,
                 bite: None,
                 script: creature_wander_script,
+                wave: 3,
+                hp: 1,
             },
             // 11-15 : la génération « qualité supérieure » — attaques à
             // distance toutes différentes (cf. `creature_attack::AttackStyle`)
@@ -2264,6 +2297,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 9.0,
                 bite: None,
                 script: creature_guard_script,
+                wave: 3,
+                hp: 3,
             },
             DemoCreature {
                 name: "Créature 12",
@@ -2275,6 +2310,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 9.9,
                 bite: None,
                 script: creature_kite_script,
+                wave: 3,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 13",
@@ -2286,6 +2323,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 10.8,
                 bite: None,
                 script: creature_drift_script,
+                wave: 3,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 14",
@@ -2297,6 +2336,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 11.7,
                 bite: None,
                 script: creature_artillery_script,
+                wave: 4,
+                hp: 3,
             },
             DemoCreature {
                 name: "Créature 15",
@@ -2308,6 +2349,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 12.6,
                 bite: None,
                 script: creature_zigzag_script,
+                wave: 4,
+                hp: 1,
             },
             // 16-20 : même palier de qualité que 11-15 — attaques et
             // comportements tout aussi variés, cf. `creature_attack.rs`.
@@ -2327,6 +2370,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 13.5,
                 bite: None,
                 script: creature_soar_script,
+                wave: 4,
+                hp: 3,
             },
             DemoCreature {
                 name: "Créature 17",
@@ -2341,6 +2386,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 14.4,
                 bite: None,
                 script: creature_lemniscate_script,
+                wave: 4,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 18",
@@ -2352,6 +2399,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 15.3,
                 bite: None,
                 script: creature_burrow_script,
+                wave: 4,
+                hp: 3,
             },
             DemoCreature {
                 name: "Créature 19",
@@ -2363,6 +2412,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 16.2,
                 bite: None,
                 script: creature_hover_script,
+                wave: 4,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 20",
@@ -2374,6 +2425,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 17.1,
                 bite: None,
                 script: creature_turret_script,
+                wave: 3,
+                hp: 3,
             },
             DemoCreature {
                 name: "Créature 21",
@@ -2385,6 +2438,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 18.0,
                 bite: None,
                 script: creature_wander_script,
+                wave: 2,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 22",
@@ -2396,6 +2451,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 18.9,
                 bite: None,
                 script: creature_wander_script,
+                wave: 2,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 23",
@@ -2407,6 +2464,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 19.8,
                 bite: None,
                 script: creature_wander_script,
+                wave: 2,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 24",
@@ -2425,6 +2484,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 // ce mesh. Le méandre de wander varie son cap à chaque frame et
                 // se décoince naturellement.
                 script: creature_wander_script,
+                wave: 2,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 25",
@@ -2436,6 +2497,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 21.6,
                 bite: None,
                 script: creature_zigzag_script,
+                wave: 4,
+                hp: 1,
             },
             DemoCreature {
                 name: "Créature 26",
@@ -2447,6 +2510,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 phase: 22.5,
                 bite: None,
                 script: creature_lemniscate_script,
+                wave: 4,
+                hp: 3,
             },
         ];
 
@@ -2478,8 +2543,12 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                     // (`fireball_impact`/`attack_at`, `AppState::network_snapshot`) :
                     // rien de spécifique aux créatures scriptées à ajouter côté mise à
                     // mort, cf. GAMEDESIGN_EN_LIGNE.md et ROADMAP (synchro réseau).
+                    // `wave`/`hp` : la dent de scie de « La Horde » (GDD §5.5),
+                    // cf. les docs de `DemoCreature::wave`/`hp`.
                     creature.combat = Some(Combat {
                         attackable: true,
+                        wave: spec.wave,
+                        hp: spec.hp,
                         ..Default::default()
                     });
                     let wander = (spec.script)(
@@ -2621,6 +2690,33 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 vert_riziere,
             );
         }
+        // Trois liaisons de voirie qui recousent les biomes entre eux (les
+        // biomes existaient mais on n'y « allait » que hors piste) : un chemin
+        // route → rizières dans l'interstice entre les damiers 1 et 2, le
+        // prolongement du chemin du pont nord vers le promontoire (le chemin
+        // s'arrêtait à x=6, la tour de guet restait hors réseau), et une place
+        // de terre battue autour du puits du hameau. Y : la place (0.031)
+        // au-dessus du chemin du hameau (0.028) qu'elle chevauche ; les deux
+        // chemins sous la route (0.03), même logique anti z-fighting que les
+        // aplats existants.
+        aplat(
+            "Chemin des rizières",
+            Vec3::new(-4.5, 0.026, 20.0),
+            Vec3::new(1.8, 1.0, 12.0),
+            terre,
+        );
+        aplat(
+            "Sentier du promontoire",
+            Vec3::new(20.0, 0.027, -10.0),
+            Vec3::new(28.0, 1.0, 1.6),
+            terre,
+        );
+        aplat(
+            "Place du hameau",
+            Vec3::new(10.0, 0.031, 7.0),
+            Vec3::new(7.0, 1.0, 6.0),
+            terre,
+        );
 
         // 2) Murs d'eau invisibles : bordent les 4 plans d'eau ci-dessus pour
         //    les rendre réellement infranchissables (collider `Static` seul,
@@ -3470,6 +3566,187 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 yaw_deg: 0.0,
                 solide: false,
                 anim: Some("Idle"),
+            },
+            // Habillage des trois liaisons de voirie ajoutées aux aplats
+            // (chemin des rizières, sentier du promontoire, place du hameau) :
+            // pierres au carrefour route/chemin, pierre levée qui balise le
+            // sentier est, panneaux aux embranchements, lanternes aux étapes.
+            // Tout est posé en bord de voie, jamais sur la bande roulante.
+            // IMPORTANT : dans NATURE_DECOR (pas MONSTER_DECOR) — seuls
+            // NATURE_DECOR et VILLAGE_PROPS alimentent `solid_spots`, la
+            // liste que le scatter procédural évite à ≥ 2,5 m.
+            DemoDecor {
+                name: "Pierre du carrefour 1",
+                file: "nature_rock.glb",
+                pos: (14.5, 17.6),
+                scale: 0.45,
+                yaw_deg: 25.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Pierre du carrefour 2",
+                file: "nature_rock.glb",
+                pos: (16.8, 19.2),
+                scale: 0.3,
+                yaw_deg: 130.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Pierre levée du sentier",
+                file: "nature_rock.glb",
+                // Bord sud du sentier, hors du rectangle de la forêt NE.
+                pos: (30.0, -7.6),
+                scale: 0.7,
+                yaw_deg: 30.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Panneau des rizières",
+                file: "nature_signpost.glb",
+                pos: (-6.2, 15.8),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Panneau du promontoire",
+                file: "nature_signpost.glb",
+                pos: (7.0, -11.8),
+                scale: 1.0,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne du carrefour",
+                file: "nature_lantern.glb",
+                pos: (8.4, 15.7),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne du sentier est",
+                file: "nature_lantern.glb",
+                pos: (24.0, -8.4),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            // --- Pack « pierre & mystique » (gen_stone_pack.py) : landmarks
+            //     minéraux et sacrés qui étoffent les zones encore vides —
+            //     landes de l'est, ruines du sud, clairières. Tous solides
+            //     (TriMesh silhouette : on se faufile entre les pierres du
+            //     cromlech ou sous l'arche), tous à ≥ 4 m des spawns. ---
+            DemoDecor {
+                name: "Menhir",
+                file: "nature_menhir.glb",
+                pos: (32.0, -2.0),
+                scale: 1.0,
+                yaw_deg: 30.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cairn du sentier",
+                file: "nature_cairn.glb",
+                pos: (27.0, -8.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cromlech",
+                file: "nature_stone_circle.glb",
+                pos: (33.0, 18.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // Ruines du sud : l'arche et sa colonne racontent le domaine
+            // disparu, entre le clocheton et la balançoire.
+            DemoDecor {
+                name: "Arche en ruine",
+                file: "nature_ruin_arch.glb",
+                pos: (7.0, -26.0),
+                scale: 1.0,
+                yaw_deg: 20.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Colonne brisée",
+                file: "nature_ruin_column.glb",
+                pos: (10.0, -28.0),
+                scale: 1.0,
+                yaw_deg: 70.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cristaux",
+                file: "nature_crystal_cluster.glb",
+                pos: (18.0, -28.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // Bord du chemin des rizières, tourné vers les marcheurs (est).
+            DemoDecor {
+                name: "Autel du chemin",
+                file: "nature_shrine.glb",
+                pos: (-7.5, 20.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne de pierre",
+                file: "nature_stone_lantern.glb",
+                pos: (17.8, 13.2),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Ruche",
+                file: "nature_beehive.glb",
+                pos: (19.5, 21.5),
+                scale: 1.0,
+                yaw_deg: 210.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Totem",
+                file: "nature_totem.glb",
+                pos: (-24.0, -18.0),
+                scale: 1.0,
+                yaw_deg: 150.0,
+                solide: true,
+                anim: None,
+            },
+            // Kiosque du hameau : l'entrée (face -Z du glb) regarde le chemin
+            // au sud, l'intérieur reste traversable entre les poteaux.
+            DemoDecor {
+                name: "Kiosque",
+                file: "nature_gazebo.glb",
+                pos: (3.5, 19.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
             },
         ];
 
@@ -4568,7 +4845,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             (-26.0, 10.5, -12.0, 13.5),  // berge de sable
             (-36.0, 12.3, 36.0, 15.7),   // route principale
             (8.8, -10.0, 11.2, 14.0),    // chemin du hameau
-            (-26.0, -10.9, 6.0, -9.1),   // chemin du pont nord
+            // Chemin du pont nord + son prolongement « sentier du
+            // promontoire » (même bande z, x poussé de 6 à 34).
+            (-26.0, -10.9, 34.0, -9.1),
+            (-5.6, 14.0, -3.4, 26.0), // chemin des rizières
         ];
         const EXCL_ZONES_AMENAGEES: &[Rect] = &[
             (-11.0, 23.5, -5.0, 28.5), // rizière 1
@@ -7615,6 +7895,81 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verrouille les règles d'authoring des vagues du GDD (§5.5) sur la
+    /// ménagerie de `mmorpg_demo` — c'est cette donnée qui, resynchronisée
+    /// dans `assets/player_scene.json`, fait exister « La Horde » en ligne :
+    /// 1. la vague 1 est l'échauffement (la plus petite, aucune créature à
+    ///    plus de 1 PV) ;
+    /// 2. chaque vague à partir de la n°2 compte au moins un chef à 3 PV
+    ///    (la cible qui justifie le Boulet) ;
+    /// 3. le budget de PV croît strictement de vague en vague ;
+    /// 4. la dernière vague dépasse d'au moins un tiers l'avant-dernière
+    ///    (« c'est elle qui doit coûter »).
+    #[test]
+    fn mmorpg_demo_waves_follow_the_gdd_authoring_rules() {
+        let scene = Scene::mmorpg_demo();
+        let creatures: Vec<&Combat> = scene
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+            .map(|o| o.combat.as_ref().expect("toute créature a un Combat"))
+            .collect();
+        assert!(!creatures.is_empty());
+        assert!(
+            creatures.iter().all(|c| c.wave >= 1),
+            "aucune créature hors système de vagues (wave 0) : la carte servie doit jouer \
+             « La Horde », pas une chasse plate (GDD §5.5)"
+        );
+
+        let max_wave = creatures.iter().map(|c| c.wave).max().unwrap();
+        assert!(
+            max_wave >= 3,
+            "au moins 3 vagues pour une dent de scie (trouvé : {max_wave})"
+        );
+
+        let budget =
+            |w: u32| -> u32 { creatures.iter().filter(|c| c.wave == w).map(|c| c.hp).sum() };
+        let count = |w: u32| creatures.iter().filter(|c| c.wave == w).count();
+
+        // Règle 1 : échauffement.
+        assert!(
+            creatures.iter().filter(|c| c.wave == 1).all(|c| c.hp == 1),
+            "la vague 1 est un échauffement : aucun chef (GDD §5.5/§3.5)"
+        );
+        assert!(
+            (2..=max_wave).all(|w| count(1) <= count(w)),
+            "la vague 1 doit être la plus petite en effectif"
+        );
+
+        // Règle 2 : un chef à 3 PV dès la vague 2.
+        for w in 2..=max_wave {
+            assert!(
+                creatures.iter().any(|c| c.wave == w && c.hp >= 3),
+                "la vague {w} doit compter au moins un chef à 3 PV (GDD §5.5 : c'est la \
+                 cible qui fait exister le Boulet)"
+            );
+        }
+
+        // Règle 3 : budget strictement croissant.
+        for w in 2..=max_wave {
+            assert!(
+                budget(w) > budget(w - 1),
+                "budget de PV non croissant : vague {w} = {} ≤ vague {} = {}",
+                budget(w),
+                w - 1,
+                budget(w - 1)
+            );
+        }
+
+        // Règle 4 : la dernière vague coûte (≥ 4/3 de l'avant-dernière).
+        assert!(
+            3 * budget(max_wave) >= 4 * budget(max_wave - 1),
+            "la dernière vague ({}) doit dépasser d'un tiers l'avant-dernière ({})",
+            budget(max_wave),
+            budget(max_wave - 1)
+        );
+    }
 
     /// Preuve du décor nature de la démo MMORPG (Sprint en cours) : les glb du
     /// pack (`scripts/blender/gen_nature_pack.py`) se chargent réellement (un

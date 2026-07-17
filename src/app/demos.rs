@@ -90,6 +90,21 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Ouvre dans l'éditeur la scène de base du MMORPG (`assets/player_scene.json`,
+    /// embarquée via `Scene::embedded_player`) : la même scène que jouent le site
+    /// web et les builds Player, avec historique pour pouvoir annuler.
+    pub fn load_embedded_player_scene(&mut self) {
+        self.push_undo();
+        self.scene = Scene::embedded_player();
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
     /// Charge la démo « MMORPG » (cf. `Scene::mmorpg_demo`) : arène minimale sans
     /// monstres/manches, dédiée au test multijoueur PC ↔ mobile.
     pub fn load_mmorpg_demo(&mut self) {
