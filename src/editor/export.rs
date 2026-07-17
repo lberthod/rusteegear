@@ -1023,4 +1023,56 @@ mod tests {
             .expect_err("fichier absent attendu");
         assert!(err.contains("introuvable"));
     }
+
+    /// Outil : complète `assets/bundle/` (compressé zstd) pour chaque clé
+    /// `bundle://mNN_<fichier>` référencée par `assets/player_scene.json` mais
+    /// absente du dossier — sans passer par `bundle_scene_json` (qui *vide*
+    /// tout le dossier avant de le repeupler depuis la scène ouverte dans
+    /// l'éditeur, donc inutilisable ici sans un éditeur lancé). Retrouve le
+    /// fichier source dans `assets/models/<fichier>` (en retirant le préfixe
+    /// `mNN_` de la clé, cf. `sync_embedded_scene_hameau_from_the_demo`) et le
+    /// copie compressé sous la clé exacte attendue. N'écrase jamais une
+    /// entrée déjà présente.
+    #[test]
+    #[ignore = "outil : complète assets/bundle/, à lancer explicitement"]
+    fn bundle_missing_assets_referenced_by_the_embedded_scene() {
+        let scene_path = std::path::Path::new(PROJECT_ROOT).join("assets/player_scene.json");
+        let json = std::fs::read_to_string(&scene_path).expect("player_scene.json lisible");
+        let scene: crate::scene::Scene = serde_json::from_str(&json).expect("scène valide");
+        let bundle_dir = std::path::Path::new(PROJECT_ROOT).join("assets/bundle");
+        let models_dir = std::path::Path::new(PROJECT_ROOT).join("assets/models");
+
+        let mut added = Vec::new();
+        let mut missing_source = Vec::new();
+        for m in &scene.imported {
+            let Some(key) = m.path.strip_prefix(crate::assets::SCHEME) else {
+                continue;
+            };
+            let dest = bundle_dir.join(key);
+            if dest.exists() {
+                continue;
+            }
+            // Retire le préfixe numérique `mNN_` pour retrouver le nom de
+            // fichier d'origine dans assets/models/.
+            let file = key
+                .strip_prefix('m')
+                .and_then(|rest| rest.find('_').map(|us| &rest[us + 1..]))
+                .unwrap_or(key);
+            let src = models_dir.join(file);
+            if !src.is_file() {
+                missing_source.push(key.to_string());
+                continue;
+            }
+            let data = std::fs::read(&src).expect("lecture du modèle source");
+            let compressed = compress(&data).expect("compression zstd");
+            std::fs::write(&dest, compressed).expect("écriture dans assets/bundle/");
+            added.push(key.to_string());
+        }
+
+        println!("Ajoutés au bundle : {added:?}");
+        assert!(
+            missing_source.is_empty(),
+            "sources introuvables dans assets/models/ pour : {missing_source:?}"
+        );
+    }
 }

@@ -539,13 +539,13 @@ pub(super) fn menu_outils(
     panels: &mut Panels,
 ) {
     ui.menu_button("Outils", |ui| {
+        // Même ordre que la barre d'outils : raccourcis Q W E R T Y.
+        ui.selectable_value(gizmo_mode, GizmoMode::Pan, "✋  Main — pan caméra (Q)");
         ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔  Déplacer (W)");
         ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻  Tourner (E)");
-        ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⤢  Redimensionner (R)");
-        ui.separator();
-        ui.selectable_value(gizmo_mode, GizmoMode::Pan, "🖐  Main — pan caméra (Q)");
-        ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄  Orbite libre");
-        ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍  Loupe (zoom)");
+        ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⛶  Redimensionner (R)");
+        ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄  Orbite libre (T)");
+        ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍  Loupe — zoom (Y)");
         ui.separator();
         if ui.button("🖥  Console").clicked() {
             panels.console = true;

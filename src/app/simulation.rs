@@ -350,6 +350,11 @@ impl AppState {
             self.audio.stop_all();
         }
         if self.playing && !self.was_playing {
+            // Une sélection/gizmo laissé actif depuis l'éditeur resterait cliquable et
+            // modifierait `transform` en concurrence directe avec la physique qui pilote
+            // désormais le même objet — symétrique au `clear_selection()` de la sortie
+            // de Play ci-dessus.
+            self.clear_selection();
             // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale)
             // et sans poses d'interpolation héritées d'une partie précédente.
             self.sim_accumulator = 0.0;
@@ -558,7 +563,12 @@ impl AppState {
 
         // Caméra qui suit le joueur — au niveau frame (lissage visuel), avec le dt réel.
         // Cible légèrement au-dessus du joueur (regarde le buste, voit plus loin devant).
+        // Suspendu pendant qu'un outil de navigation caméra (🖐 Main, 🔄 Orbite, 🔍 Loupe)
+        // est actif : sinon ce rattrapage écraserait chaque frame le pan/orbite/zoom que
+        // `camera.pan`/`orbit`/`zoom_drag` viennent d'appliquer, et la caméra resterait
+        // rivée au joueur malgré le glisser de souris.
         if self.scene.camera_follow
+            && !self.gizmo_mode.is_nav()
             && let Some(p) = self.player_position()
         {
             // Forme exponentielle `1 - e^(-k·dt)` plutôt que `k·dt` borné : le taux de
@@ -1406,6 +1416,98 @@ mod tests {
     }
 
     #[test]
+    fn hand_tool_pan_is_not_snapped_back_by_the_player_follow_cam() {
+        // Sprint : sans la garde `!self.gizmo_mode.is_nav()`, `advance_play`
+        // écrasait chaque frame le pan appliqué par l'outil 🖐 Main (Q), rendant
+        // la caméra impossible à déplacer en mode Play (cf. le rattrapage
+        // exponentiel de `camera.target` sur le joueur ci-dessus).
+        let mut app = AppState::new();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        app.scene.camera_follow = true;
+        app.playing = true;
+        // Première frame de Play : consomme le cadrage initial sur le joueur
+        // (cf. plus haut, hors de la garde testée ici) avant de simuler le pan.
+        app.advance_play();
+        app.gizmo_mode = crate::app::GizmoMode::Pan;
+        // Simule le pan que `PickingController::handle_input` applique en glissant
+        // avec l'outil Main actif.
+        app.camera.pan(50.0, 0.0);
+        let panned_target = app.camera.target;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(
+            app.camera.target, panned_target,
+            "la caméra de suivi ne doit pas re-cibler le joueur pendant un pan à l'outil Main"
+        );
+    }
+
+    #[test]
+    fn orbit_tool_yaw_is_not_pulled_back_towards_a_ranged_players_facing() {
+        // Même classe de bug que le pan (cf. le test ci-dessus), pour l'outil 🔄
+        // Orbite : un personnage équipé d'une arme à distance fait pivoter la
+        // caméra vers son orientation de tir chaque frame (`rotate_towards_smooth`
+        // ci-dessus) — sans la garde `!self.gizmo_mode.is_nav()`, ce rattrapage
+        // écraserait l'orbite manuelle de l'utilisateur.
+        let mut app = AppState::new();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                fire_button: "Feu".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        app.scene.camera_follow = true;
+        app.playing = true;
+        app.advance_play();
+        app.gizmo_mode = crate::app::GizmoMode::Orbit;
+        // Simule l'orbite manuelle que `PickingController::handle_input` applique
+        // en glissant avec l'outil Orbite actif.
+        app.camera.orbit(300.0, 0.0);
+        let orbited_yaw = app.camera.yaw;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(
+            app.camera.yaw, orbited_yaw,
+            "la caméra de suivi ne doit pas re-pivoter vers le joueur pendant une orbite manuelle"
+        );
+    }
+
+    #[test]
+    fn entering_play_clears_a_selection_left_over_from_the_editor() {
+        // Une sélection/gizmo laissé actif depuis l'éditeur resterait cliquable en
+        // Play et modifierait `transform` en concurrence avec la physique qui
+        // pilote désormais le même objet (cf. `clear_selection` à la sortie de
+        // Play, symétrique).
+        let mut app = AppState::new();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Caisse".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            ..Default::default()
+        });
+        app.select_single(0);
+        assert!(app.selection.is_some());
+        app.playing = true;
+        app.advance_play();
+        assert!(
+            app.selection.is_none(),
+            "advance_play doit vider la sélection éditeur à l'entrée en Play"
+        );
+    }
+
+    #[test]
     fn player_input_combines_keyboard_and_touch_tank_axes() {
         // Le pavé tactile W/A/S/D et le clavier alimentent les mêmes axes « tank »
         // sans s'écraser : cumulés, bornés à [-1, 1].
@@ -1918,6 +2020,11 @@ mod tests {
             ("Créature 19", "creature19.glb"),
             ("Créature 20", "creature20.glb"),
             ("Créature 21", "creature21.glb"),
+            ("Créature 22", "creature22.glb"),
+            ("Créature 23", "creature23.glb"),
+            ("Créature 24", "creature24.glb"),
+            ("Créature 25", "creature25.glb"),
+            ("Créature 26", "creature26.glb"),
         ] {
             assert!(
                 app.scene.objects.iter().any(|o| o.name == name),
@@ -2053,7 +2160,7 @@ mod tests {
             .filter(|(_, o)| o.name.starts_with("Créature"))
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(creatures.len(), 21, "la démo doit garder ses 21 créatures");
+        assert_eq!(creatures.len(), 26, "la démo doit garder ses 26 créatures");
 
         let dt = 1.0 / 60.0;
         // 3,2 m/s (charge du ver, la plus rapide) + marge : au-delà en une frame,

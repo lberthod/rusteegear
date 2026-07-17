@@ -3089,8 +3089,120 @@ mod tests {
         );
     }
 
-    /// Garde-fou compagnon de l'outil ci-dessus : les créatures de la scène
-    /// embarquée doivent rester **identiques** à celles de `Scene::mmorpg_demo`
+    /// Outil (portée plus large que `sync_embedded_scene_creatures_from_the_demo`
+    /// ci-dessus) : remplace tout l'environnement de la scène embarquée
+    /// (`assets/player_scene.json`) par `Scene::hameau_gdd_demo()` (le nouveau
+    /// hameau fortifié, cf. la doc de cette fonction) sans jamais toucher les
+    /// champs listés dans la consigne d'intégration : `mobile`, `hud_layout`,
+    /// `hud_widgets`, `point_lights`, `camera_follow`, `game_camera`, `sky`,
+    /// `version`, et l'objet « Joueur » (mesh riggé `fairy_hero` +
+    /// `fire_button`/`weapon_button`/`heal_button`). Les imports sont réécrits
+    /// en `bundle://m{i}_<fichier>` (même convention que
+    /// `editor::export::bundle_scene_json`) — ne compresse rien lui-même, ne
+    /// fait que réécrire des chemins ; chaque fichier référencé doit déjà
+    /// exister dans `assets/bundle/` (vrai pour tous les modèles cités par la
+    /// spec du hameau au moment de l'intégration).
+    #[test]
+    #[ignore = "outil : réécrit assets/player_scene.json, à lancer explicitement"]
+    fn sync_embedded_scene_hameau_from_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::hameau_gdd_demo();
+
+        let mut joueur = embedded
+            .objects
+            .iter()
+            .find(|o| o.name == "Joueur")
+            .cloned()
+            .expect("« Joueur » doit exister dans la scène embarquée actuelle");
+        let joueur_mesh_key = match joueur.mesh {
+            MeshKind::Imported(i) => embedded.imported.get(i as usize).map(|m| m.path.clone()),
+            _ => None,
+        };
+
+        let mut objects: Vec<SceneObject> = demo
+            .objects
+            .into_iter()
+            .filter(|o| o.name != "Joueur")
+            .collect();
+        let mut imported = demo.imported;
+        if let Some(key) = joueur_mesh_key {
+            let idx = match imported.iter().position(|m: &ImportedMesh| m.path == key) {
+                Some(i) => i,
+                None => {
+                    imported.push(ImportedMesh {
+                        path: key,
+                        ..Default::default()
+                    });
+                    imported.len() - 1
+                }
+            };
+            joueur.mesh = MeshKind::Imported(idx as u32);
+        }
+        objects.push(joueur);
+
+        // Un chemin déjà `bundle://mNN_<fichier>` (cas du mesh du joueur,
+        // repris tel quel de la scène embarquée actuelle) doit perdre son
+        // ancien préfixe numérique avant d'en recevoir un nouveau — sinon la
+        // clé réécrite (`mNN_m126_fairy_hero.glb`) ne correspondrait plus au
+        // fichier réellement présent dans `assets/bundle/`.
+        fn clean_file_name(path: &str) -> String {
+            let file = std::path::Path::new(path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .expect("nom de fichier d'import")
+                .to_string();
+            if let Some(rest) = file.strip_prefix('m')
+                && let Some(us) = rest.find('_')
+                && rest[..us].chars().all(|c| c.is_ascii_digit())
+            {
+                return rest[us + 1..].to_string();
+            }
+            file
+        }
+        let imported: Vec<ImportedMesh> = imported
+            .into_iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let file = clean_file_name(&m.path);
+                ImportedMesh {
+                    path: format!("{}m{i}_{file}", crate::assets::SCHEME),
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let merged = Scene {
+            objects,
+            imported,
+            groups: embedded.groups,
+            light: demo.light,
+            point_lights: embedded.point_lights,
+            mobile: embedded.mobile,
+            camera_follow: embedded.camera_follow,
+            game_camera: embedded.game_camera,
+            sky: embedded.sky,
+            version: embedded.version,
+            hud_layout: embedded.hud_layout,
+            hud_widgets: embedded.hud_widgets,
+        };
+
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&merged).expect("sérialisation"),
+        )
+        .expect("écriture de player_scene.json");
+        println!(
+            "player_scene.json remplacé par le hameau fortifié : {} objets, {} imports",
+            merged.objects.len(),
+            merged.imported.len()
+        );
+    }
+
+    /// Garde-fou compagnon de `sync_embedded_scene_creatures_from_the_demo` :
+    /// les créatures de la scène embarquée doivent rester **identiques** à
+    /// celles de `Scene::mmorpg_demo`
     /// (script, collisions, trigger, mesh, physique) — c'est la démo qui est la
     /// source de vérité, la scène embarquée n'en est qu'une copie avec des
     /// chemins `bundle://`. Une divergence = quelqu'un a modifié une créature

@@ -516,9 +516,22 @@ impl ApplicationHandler for App {
                     let st = self.modifiers.state();
                     let cmd = st.control_key() || st.super_key();
                     match code {
-                        KeyCode::KeyW => self.state.set_gizmo_mode(GizmoMode::Translate),
-                        KeyCode::KeyE => self.state.set_gizmo_mode(GizmoMode::Rotate),
-                        KeyCode::KeyR if !cmd => self.state.set_gizmo_mode(GizmoMode::Scale),
+                        // Gizmos de manipulation d'objet (W/E/R) : réservés à l'éditeur — en
+                        // Play, W est aussi la touche d'avance (cf. `is_move_key` plus bas) ;
+                        // sans cette garde, avancer repasserait silencieusement `gizmo_mode`
+                        // à Translate et désactiverait la garde anti-rattrapage de la caméra
+                        // de suivi sur l'outil Main/Orbite/Loupe (cf. `advance_play`).
+                        KeyCode::KeyW if !self.state.playing => {
+                            self.state.set_gizmo_mode(GizmoMode::Translate)
+                        }
+                        KeyCode::KeyE if !self.state.playing => {
+                            self.state.set_gizmo_mode(GizmoMode::Rotate)
+                        }
+                        KeyCode::KeyR if !cmd && !self.state.playing => {
+                            self.state.set_gizmo_mode(GizmoMode::Scale)
+                        }
+                        // Outils de navigation caméra (Main/Orbite/Loupe) : utiles en Play
+                        // comme en éditeur, donc jamais gardés par `!self.state.playing`.
                         KeyCode::KeyQ if !cmd => self.state.set_gizmo_mode(GizmoMode::Pan),
                         KeyCode::KeyT if !cmd => self.state.set_gizmo_mode(GizmoMode::Orbit),
                         KeyCode::KeyY if !cmd => self.state.set_gizmo_mode(GizmoMode::Zoom),

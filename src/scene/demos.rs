@@ -2386,6 +2386,68 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 bite: None,
                 script: creature_wander_script,
             },
+            DemoCreature {
+                name: "Créature 22",
+                file: "creature22.glb",
+                spawn: Vec3::new(24.0, 0.0, -4.0),
+                layer_bit: 22,
+                prefix: "creature22_",
+                heading0: 84.0,
+                phase: 18.9,
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 23",
+                file: "creature23.glb",
+                spawn: Vec3::new(-2.0, 0.0, 22.0),
+                layer_bit: 23,
+                prefix: "creature23_",
+                heading0: 156.0,
+                phase: 19.8,
+                bite: None,
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 24",
+                file: "creature24.glb",
+                spawn: Vec3::new(-14.0, 0.0, -22.0),
+                layer_bit: 24,
+                prefix: "creature24_",
+                heading0: 228.0,
+                phase: 20.7,
+                bite: None,
+                // Pas `creature_burrow_script` : la charge garde un cap constant
+                // pendant 1,1 s, et un corps scripté dont le TriMesh s'est
+                // incrusté dans le sol (chute du 1er tick non arrêtée,
+                // trimesh-vs-trimesh) peut se coincer sur un cap « malchanceux »
+                // (normales de contact des triangles) — gel complet observé sur
+                // ce mesh. Le méandre de wander varie son cap à chaque frame et
+                // se décoince naturellement.
+                script: creature_wander_script,
+            },
+            DemoCreature {
+                name: "Créature 25",
+                file: "creature25.glb",
+                spawn: Vec3::new(14.0, 0.0, 26.0),
+                layer_bit: 25,
+                prefix: "creature25_",
+                heading0: 300.0,
+                phase: 21.6,
+                bite: None,
+                script: creature_zigzag_script,
+            },
+            DemoCreature {
+                name: "Créature 26",
+                file: "creature26.glb",
+                spawn: Vec3::new(28.0, 0.0, 26.0),
+                layer_bit: 26,
+                prefix: "creature26_",
+                heading0: 12.0,
+                phase: 22.5,
+                bite: None,
+                script: creature_lemniscate_script,
+            },
         ];
 
         let mut imported = Vec::new();
@@ -4704,7 +4766,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             // rectangle et son décor solide fait échouer plus de tirages
             // (rejection sampling à ≥ 2,5 m d'un autre solide) — on compense
             // pour garder ≥ 30 arbres/sapins (cf. test de densité).
-            28,
+            // 28 → 31 : les spawns des créatures 21-26 (éléphanteau + pack
+            // savane & terreurs) décalent le flux RNG du scatter — marge pour
+            // garder l'invariant ≥ 30 sans rejouer cette compensation à chaque
+            // nouveau spawn.
+            31,
             (0.9, 1.3),
             true,
         );
@@ -5059,6 +5125,1408 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             // cf. gen_nature_pack.py) + brume légère : donne la profondeur
             // atmosphérique sur 72 m, adoucit les murs d'enceinte au loin, et
             // masque le pop de détail — à coût GPU nul (déjà dans le shader).
+            sky: Sky {
+                horizon_color: [0.85, 0.78, 0.62],
+                zenith_color: [0.30, 0.52, 0.78],
+                fog_color: [0.78, 0.74, 0.62],
+                fog_density: 0.012,
+                ..Sky::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Démo « Hameau fortifié » (GDD §7 « le hameau est du gameplay », §7.3
+    /// « la vie du hameau », §5.4 archétypes de créatures, §10 direction
+    /// artistique) — prototypée visuellement dans Blender avant intégration
+    /// ici, patron identique à `mmorpg_demo` (tables de données + closures/fn
+    /// locales de pose, pas de JSON écrit à la main) mais géométrie
+    /// entièrement différente : fort carré 48×48 (remparts, 4 portes + 2
+    /// brèches diagonales, chemin de ronde), place centrale, anneau de 16
+    /// spawns joueur, 4 îlots bâtis, artisanat, marché, lanternes/bannières,
+    /// rivière/lac hors les murs, forêt en anneau avec couloirs dégagés dans
+    /// l'axe des 6 lisières de spawn de vagues, faune variée.
+    ///
+    /// Créatures : reprises telles quelles de `mmorpg_demo()` (mêmes
+    /// composants — mesh/physics/script/trigger/collision_layer — c'est ce
+    /// que compare le garde-fou `the_embedded_scene_creatures_match_the_demo`,
+    /// **par nom**, pas par position), spawns conservés à l'identique : aucune
+    /// vague/créature existante ne disparaît silencieusement (cf. la consigne
+    /// d'intégration). Comme le nouveau fort occupe globalement le même ordre
+    /// de grandeur que l'ancienne arène (le rayon de la forêt va jusqu'à 70 m,
+    /// l'ancienne carte faisait 72 m de côté), les spawns d'origine restent
+    /// dans une zone plausible (forêt/berge) plutôt que dans un mur neuf.
+    ///
+    /// Écarts assumés par rapport au prototype Blender (documentés dans le
+    /// rapport d'intégration, pas de garde-fou automatisé ne les couvre) :
+    /// - Les « marqueurs, pas des meshes » (lisières de vague, anneau de spawn
+    ///   joueur) sont de minuscules cylindres non solides : le moteur n'a pas
+    ///   de type « Empty » distinct d'un mesh (cf. `MeshKind`), c'est
+    ///   l'équivalent le plus proche.
+    /// - Chaque cour est fermée par exactement 3 panneaux `village_fence.glb`
+    ///   à l'échelle native (~3 m), un par côté bâti — pas une rangée de
+    ///   panneaux jointifs : au sens strict ça laisse un jour entre panneau et
+    ///   coin de cour plutôt qu'un mur continu, mais respecte la spec « 3
+    ///   pans, une ouverture côté place ».
+    /// - Pas de collision d'eau dédiée (pas de « Mur d'eau » invisible comme
+    ///   dans `mmorpg_demo`) : la rivière/le lac ne sont que des aplats
+    ///   visuels non solides. Aucun garde-fou de cette nouvelle démo n'exige
+    ///   un blocage de baignade (contrairement à `mmorpg_demo`) ; à ajouter
+    ///   si un jour cette carte a ses propres tests d'étanchéité.
+    pub fn hameau_gdd_demo() -> Self {
+        const HALF: f32 = 24.0; // fort 48×48, centré à l'origine
+
+        fn at(radius: f32, az_deg: f32) -> (f32, f32) {
+            // Convention du fichier : -Z = Nord, +X = Est (cf. « Mur Nord » de
+            // `mmorpg_demo`, posé à z = -half). az_deg = 0 ⇒ Nord, sens horaire.
+            let r = az_deg.to_radians();
+            (radius * r.sin(), -radius * r.cos())
+        }
+
+        fn in_corridor(az_deg: f32) -> bool {
+            // Couloirs dégagés (±13°) dans l'axe des 6 lisières de spawn de
+            // vagues (4 portes cardinales + 2 brèches diagonales) : l'arrivée
+            // d'une vague doit rester visible depuis le fort, pas masquée par
+            // un mur d'arbres semé juste devant.
+            const AZIMUTHS: [f32; 6] = [0.0, 45.0, 90.0, 180.0, 225.0, 270.0];
+            AZIMUTHS.iter().any(|&a| {
+                let d = (az_deg - a + 180.0).rem_euclid(360.0) - 180.0;
+                d.abs() < 13.0
+            })
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn poser(
+            objects: &mut Vec<SceneObject>,
+            imported: &mut Vec<ImportedMesh>,
+            name: &str,
+            file: &'static str,
+            x: f32,
+            z: f32,
+            scale: f32,
+            yaw_deg: f32,
+            solide: bool,
+        ) {
+            let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), file);
+            let mesh_index = match imported.iter().position(|m| m.path == path) {
+                Some(i) => i as u32,
+                None => match crate::scene::import::load_gltf(&path) {
+                    Ok((data, aabb_min, aabb_max)) => {
+                        let mut mesh = ImportedMesh {
+                            path,
+                            data,
+                            aabb_min,
+                            aabb_max,
+                            ..Default::default()
+                        };
+                        mesh.load_skinning();
+                        imported.push(mesh);
+                        (imported.len() - 1) as u32
+                    }
+                    Err(e) => {
+                        log::error!("{name} ({file}) : {e}");
+                        return;
+                    }
+                },
+            };
+            let mut deco = demo_obj(name, MeshKind::Imported(mesh_index), Vec3::new(x, 0.0, z));
+            deco.transform = deco.transform.with_scale(Vec3::splat(scale));
+            if yaw_deg != 0.0 {
+                deco.transform.rotation = glam::Quat::from_rotation_y(yaw_deg.to_radians());
+            }
+            if solide {
+                deco.physics = PhysicsKind::Static;
+                deco.collider_shape = crate::runtime::physics::ColliderShape::TriMesh;
+            }
+            objects.push(deco);
+        }
+
+        fn marker(objects: &mut Vec<SceneObject>, name: &str, x: f32, z: f32, color: [f32; 3]) {
+            // Cf. la doc de fonction : substitut d'« Empty » (le moteur n'a
+            // que des meshes) — petit disque non solide, ne bloque ni ne
+            // gêne rien, juste un repère visuel/de conception.
+            let mut m = demo_obj(name, MeshKind::Cylinder, Vec3::new(x, 0.05, z));
+            m.transform = m.transform.with_scale(Vec3::new(0.4, 0.1, 0.4));
+            m.physics = PhysicsKind::None;
+            m.color = color;
+            objects.push(m);
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn box_seg(
+            objects: &mut Vec<SceneObject>,
+            name: &str,
+            x0: f32,
+            x1: f32,
+            z0: f32,
+            z1: f32,
+            y: f32,
+            height: f32,
+            min_thick: f32,
+            color: [f32; 3],
+        ) {
+            let cx = (x0 + x1) * 0.5;
+            let cz = (z0 + z1) * 0.5;
+            let sx = (x1 - x0).abs().max(min_thick);
+            let sz = (z1 - z0).abs().max(min_thick);
+            let mut w = demo_obj(name, MeshKind::Cube, Vec3::new(cx, y, cz));
+            w.transform = w.transform.with_scale(Vec3::new(sx, height, sz));
+            w.physics = PhysicsKind::Static;
+            w.color = color;
+            objects.push(w);
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn aplat(
+            objects: &mut Vec<SceneObject>,
+            name: &str,
+            cx: f32,
+            cz: f32,
+            sx: f32,
+            sz: f32,
+            y: f32,
+            color: [f32; 3],
+        ) {
+            let mut o = demo_obj(name, MeshKind::Plane, Vec3::new(cx, y, cz));
+            o.transform = o.transform.with_scale(Vec3::new(sx, 1.0, sz));
+            o.physics = PhysicsKind::None;
+            o.color = color;
+            objects.push(o);
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn foret_scatter(
+            objects: &mut Vec<SceneObject>,
+            imported: &mut Vec<ImportedMesh>,
+            rng: &mut crate::runtime::rng::Rng,
+            r_in: f32,
+            r_out: f32,
+            excl: &[(f32, f32, f32, f32)],
+            n: usize,
+        ) {
+            const FILES: [&str; 4] = [
+                "nature_tree.glb",
+                "nature_tree2.glb",
+                "nature_pine.glb",
+                "nature_pine2.glb",
+            ];
+            let mut poses = 0usize;
+            let mut essais = 0usize;
+            while poses < n && essais < n * 30 {
+                essais += 1;
+                let x = rng.next_range(-r_out, r_out);
+                let z = rng.next_range(-r_out, r_out);
+                let r = (x * x + z * z).sqrt();
+                if r < r_in || r > r_out {
+                    continue;
+                }
+                let az = x.atan2(-z).to_degrees().rem_euclid(360.0);
+                if in_corridor(az) {
+                    continue;
+                }
+                if excl
+                    .iter()
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                {
+                    continue;
+                }
+                poses += 1;
+                let bush = rng.next_range(0.0, 1.0) < 0.15;
+                let file = if bush {
+                    "nature_bush.glb"
+                } else {
+                    FILES[rng.next_below(FILES.len())]
+                };
+                let scale = rng.next_range(0.9, 1.4);
+                let yaw = rng.next_range(0.0, 360.0);
+                poser(
+                    objects,
+                    imported,
+                    &format!(
+                        "{} {poses}",
+                        if bush {
+                            "Buisson de forêt"
+                        } else {
+                            "Arbre de forêt"
+                        }
+                    ),
+                    file,
+                    x,
+                    z,
+                    scale,
+                    yaw,
+                    true,
+                );
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn faune_scatter(
+            objects: &mut Vec<SceneObject>,
+            imported: &mut Vec<ImportedMesh>,
+            rng: &mut crate::runtime::rng::Rng,
+            r_in: f32,
+            r_out: f32,
+            excl: &[(f32, f32, f32, f32)],
+            file: &'static str,
+            prefix: &str,
+            n: usize,
+        ) {
+            let mut poses = 0usize;
+            let mut essais = 0usize;
+            while poses < n && essais < n * 40 {
+                essais += 1;
+                let x = rng.next_range(-r_out, r_out);
+                let z = rng.next_range(-r_out, r_out);
+                let r = (x * x + z * z).sqrt();
+                if r < r_in || r > r_out {
+                    continue;
+                }
+                if excl
+                    .iter()
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                {
+                    continue;
+                }
+                poses += 1;
+                let scale = rng.next_range(0.85, 1.2);
+                let yaw = rng.next_range(0.0, 360.0);
+                poser(
+                    objects,
+                    imported,
+                    &format!("{prefix} {poses}"),
+                    file,
+                    x,
+                    z,
+                    scale,
+                    yaw,
+                    false,
+                );
+            }
+        }
+
+        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol.transform.with_scale(Vec3::new(90.0, 1.0, 90.0));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.30, 0.40, 0.22];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        joueur.color = [0.95, 0.6, 0.25];
+        joueur.tag = "joueur".into();
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.5,
+            fire_button: "Feu".into(),
+            weapon_button: "Arme".into(),
+            heal_button: "Soin".into(),
+            ..Default::default()
+        });
+
+        let mut objects = vec![sol, joueur];
+        let mut imported: Vec<ImportedMesh> = Vec::new();
+
+        // --- Créatures : reprises de `mmorpg_demo()`, cf. la doc de fonction.
+        let base = Scene::mmorpg_demo();
+        for c in base
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Créature"))
+        {
+            let mut c = c.clone();
+            if let MeshKind::Imported(old_idx) = c.mesh {
+                let path = base.imported[old_idx as usize].path.clone();
+                let new_idx = match imported.iter().position(|m| m.path == path) {
+                    Some(i) => i,
+                    None => match crate::scene::import::load_gltf(&path) {
+                        Ok((data, aabb_min, aabb_max)) => {
+                            let mut mesh = ImportedMesh {
+                                path,
+                                data,
+                                aabb_min,
+                                aabb_max,
+                                ..Default::default()
+                            };
+                            mesh.load_skinning();
+                            imported.push(mesh);
+                            imported.len() - 1
+                        }
+                        Err(e) => {
+                            log::error!("Créature « {} » : {e}", c.name);
+                            continue;
+                        }
+                    },
+                };
+                c.mesh = MeshKind::Imported(new_idx as u32);
+            }
+            objects.push(c);
+        }
+
+        // --- Remparts : 4 pans, porte principale (brèche 5 m) au milieu de
+        // chacun, 2 brèches diagonales secondaires (coins Nord-Est/Sud-Ouest,
+        // en ne construisant pas les 5 derniers mètres des deux pans qui s'y
+        // rejoignent).
+        const WALL_H: f32 = 3.0;
+        const WALL_T: f32 = 0.6;
+        const GATE_HALF: f32 = 2.5;
+        const TRIM: f32 = 5.0;
+        const WALL_COLOR: [f32; 3] = [0.34, 0.33, 0.36];
+        box_seg(
+            &mut objects,
+            "Rempart Nord Ouest",
+            -HALF,
+            -GATE_HALF,
+            -HALF,
+            -HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Nord Est",
+            GATE_HALF,
+            HALF - TRIM,
+            -HALF,
+            -HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Est Nord",
+            HALF,
+            HALF,
+            -HALF + TRIM,
+            -GATE_HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Est Sud",
+            HALF,
+            HALF,
+            GATE_HALF,
+            HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Sud Ouest",
+            -HALF + TRIM,
+            -GATE_HALF,
+            HALF,
+            HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Sud Est",
+            GATE_HALF,
+            HALF,
+            HALF,
+            HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Ouest Nord",
+            -HALF,
+            -HALF,
+            -HALF,
+            -GATE_HALF,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Rempart Ouest Sud",
+            -HALF,
+            -HALF,
+            GATE_HALF,
+            HALF - TRIM,
+            1.5,
+            WALL_H,
+            WALL_T,
+            WALL_COLOR,
+        );
+
+        // --- Chemin de ronde (hauteur ~2,2 m), longe l'intérieur des 4 murs,
+        // mêmes brèches diagonales que les remparts (pas de coupure au droit
+        // des portes : les défenseurs peuvent longer au-dessus de l'entrée).
+        const RAMPART_R: f32 = HALF - 1.0;
+        const RAMPART_COLOR: [f32; 3] = [0.4, 0.38, 0.4];
+        box_seg(
+            &mut objects,
+            "Chemin de ronde Nord",
+            -RAMPART_R,
+            RAMPART_R - TRIM,
+            -RAMPART_R,
+            -RAMPART_R,
+            2.2,
+            0.3,
+            1.5,
+            RAMPART_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Chemin de ronde Est",
+            RAMPART_R,
+            RAMPART_R,
+            -RAMPART_R + TRIM,
+            RAMPART_R,
+            2.2,
+            0.3,
+            1.5,
+            RAMPART_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Chemin de ronde Sud",
+            -RAMPART_R + TRIM,
+            RAMPART_R,
+            RAMPART_R,
+            RAMPART_R,
+            2.2,
+            0.3,
+            1.5,
+            RAMPART_COLOR,
+        );
+        box_seg(
+            &mut objects,
+            "Chemin de ronde Ouest",
+            -RAMPART_R,
+            -RAMPART_R,
+            -RAMPART_R,
+            RAMPART_R - TRIM,
+            2.2,
+            0.3,
+            1.5,
+            RAMPART_COLOR,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Marches du rempart Nord-Ouest",
+            "village_stairs.glb",
+            -HALF + 2.0,
+            -HALF + 4.0,
+            1.1,
+            45.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Marches du rempart Sud-Est",
+            "village_stairs.glb",
+            HALF - 2.0,
+            HALF - 4.0,
+            1.1,
+            225.0,
+            true,
+        );
+
+        // --- Place centrale : feu communal, chaudron, gazebo, beffroi +
+        // girouette, lucioles en cercle.
+        poser(
+            &mut objects,
+            &mut imported,
+            "Feu communal",
+            "village_bonfire.glb",
+            0.0,
+            0.0,
+            1.2,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Chaudron de la place",
+            "village_cauldron.glb",
+            1.3,
+            0.8,
+            1.0,
+            20.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Gazebo de la place",
+            "village_gazebo.glb",
+            4.5,
+            -3.0,
+            1.1,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Beffroi",
+            "village_bell_tower.glb",
+            -4.5,
+            -3.0,
+            1.1,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Girouette du beffroi",
+            "nature_weathervane.glb",
+            -4.5,
+            -3.0,
+            1.0,
+            0.0,
+            false,
+        );
+        for i in 0..6 {
+            let az = i as f32 * 60.0;
+            let (x, z) = at(2.2, az);
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Luciole de la place {}", i + 1),
+                "fauna_firefly.glb",
+                x,
+                z,
+                1.0,
+                az,
+                false,
+            );
+        }
+
+        // --- Anneau de 16 spawns joueur (repères, pas des meshes — cf. la
+        // doc de fonction) + 6 lisières de spawn de vagues, une par porte/
+        // brèche, à 27 m du centre.
+        for i in 0..16 {
+            let az = i as f32 * 22.5;
+            let (x, z) = at(6.5, az);
+            marker(
+                &mut objects,
+                &format!("Point de spawn joueur {}", i + 1),
+                x,
+                z,
+                [0.3, 0.8, 0.4],
+            );
+        }
+        const WAVE_EDGES: [(&str, f32); 6] = [
+            ("Nord", 0.0),
+            ("Nord-Est", 45.0),
+            ("Est", 90.0),
+            ("Sud", 180.0),
+            ("Sud-Ouest", 225.0),
+            ("Ouest", 270.0),
+        ];
+        for (label, az) in WAVE_EDGES {
+            let (x, z) = at(27.0, az);
+            marker(
+                &mut objects,
+                &format!("Lisière de vague {label}"),
+                x,
+                z,
+                [0.85, 0.25, 0.2],
+            );
+        }
+
+        // --- 4 îlots bâtis aux diagonales (maison + cour clôturée) : la
+        // faune paisible (moutons/poules) vit dans deux des quatre cours, la
+        // 4ᵉ héberge l'épouvantail + les parterres de fleurs.
+        struct Islet {
+            label: &'static str,
+            house_file: &'static str,
+            az: f32,
+            fauna: Option<(&'static str, &'static str)>,
+            extra: Option<&'static str>,
+        }
+        const ISLETS: &[Islet] = &[
+            Islet {
+                label: "Nord-Est",
+                house_file: "village_house_a.glb",
+                az: 45.0,
+                fauna: Some(("Mouton", "fauna_sheep.glb")),
+                extra: None,
+            },
+            Islet {
+                label: "Sud-Est",
+                house_file: "village_inn.glb",
+                az: 135.0,
+                fauna: Some(("Poule", "fauna_chicken.glb")),
+                extra: None,
+            },
+            Islet {
+                label: "Sud-Ouest",
+                house_file: "village_house_b.glb",
+                az: 225.0,
+                fauna: None,
+                extra: None,
+            },
+            Islet {
+                label: "Nord-Ouest",
+                house_file: "village_house_c.glb",
+                az: 315.0,
+                fauna: None,
+                extra: Some("nature_scarecrow.glb"),
+            },
+        ];
+        for isl in ISLETS {
+            let (hx, hz) = at(13.0, isl.az);
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Maison {}", isl.label),
+                isl.house_file,
+                hx,
+                hz,
+                1.0,
+                isl.az + 180.0,
+                true,
+            );
+            let (yx, yz) = at(17.5, isl.az);
+            let yh = 3.0;
+            let sides = [
+                ("Nord", 0.0_f32, -1.0_f32),
+                ("Sud", 0.0, 1.0),
+                ("Est", 1.0, 0.0),
+                ("Ouest", -1.0, 0.0),
+            ];
+            let mut best = 0usize;
+            let mut best_d = f32::MAX;
+            for (i, &(_, nx, nz)) in sides.iter().enumerate() {
+                let mx = yx + nx * yh;
+                let mz = yz + nz * yh;
+                let d = mx * mx + mz * mz;
+                if d < best_d {
+                    best_d = d;
+                    best = i;
+                }
+            }
+            for (i, &(slabel, nx, nz)) in sides.iter().enumerate() {
+                if i == best {
+                    continue; // ouverture côté place
+                }
+                let mx = yx + nx * yh;
+                let mz = yz + nz * yh;
+                let yaw = if nz != 0.0 { 0.0 } else { 90.0 };
+                poser(
+                    &mut objects,
+                    &mut imported,
+                    &format!("Clôture {} {slabel}", isl.label),
+                    "village_fence.glb",
+                    mx,
+                    mz,
+                    3.0,
+                    yaw,
+                    true,
+                );
+            }
+            if let Some((name, file)) = isl.fauna {
+                poser(
+                    &mut objects,
+                    &mut imported,
+                    &format!("{name} {}", isl.label),
+                    file,
+                    yx - 1.0,
+                    yz - 1.0,
+                    0.9,
+                    0.0,
+                    false,
+                );
+                poser(
+                    &mut objects,
+                    &mut imported,
+                    &format!("{name} {} 2", isl.label),
+                    file,
+                    yx + 1.0,
+                    yz + 1.0,
+                    0.9,
+                    90.0,
+                    false,
+                );
+            }
+            if let Some(file) = isl.extra {
+                poser(
+                    &mut objects,
+                    &mut imported,
+                    "Épouvantail",
+                    file,
+                    yx,
+                    yz,
+                    1.0,
+                    0.0,
+                    true,
+                );
+                poser(
+                    &mut objects,
+                    &mut imported,
+                    "Parterre de fleurs",
+                    "nature_flowers.glb",
+                    yx + 1.5,
+                    yz,
+                    1.0,
+                    0.0,
+                    false,
+                );
+            }
+        }
+
+        // --- Bâtiments d'artisanat, entre les îlots et les murs (flancs des
+        // 4 portes cardinales).
+        poser(
+            &mut objects,
+            &mut imported,
+            "Forge",
+            "village_blacksmith.glb",
+            8.0,
+            -19.0,
+            1.1,
+            180.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Soufflet de la forge",
+            "nature_bellows.glb",
+            9.4,
+            -18.0,
+            1.0,
+            180.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Marteau-pilon",
+            "nature_forge_hammer.glb",
+            6.6,
+            -18.0,
+            1.0,
+            180.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Métier à tisser",
+            "nature_weaving_loom.glb",
+            -8.0,
+            -19.0,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Écurie",
+            "village_stable.glb",
+            19.0,
+            -8.0,
+            1.1,
+            270.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Foin de l'écurie",
+            "village_hay.glb",
+            19.0,
+            -5.8,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Rouet",
+            "nature_spinning_wheel.glb",
+            19.0,
+            8.0,
+            1.0,
+            90.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Scierie",
+            "village_sawmill.glb",
+            8.0,
+            19.0,
+            1.1,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Lame de la scierie",
+            "village_sawmill_saw.glb",
+            9.4,
+            19.6,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Pompe à eau",
+            "nature_water_pump.glb",
+            -8.0,
+            19.0,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Puits",
+            "village_well.glb",
+            -19.0,
+            -8.0,
+            1.0,
+            90.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Treuil du puits",
+            "nature_well_windlass.glb",
+            -19.0,
+            -6.0,
+            1.0,
+            90.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Moulin",
+            "village_mill.glb",
+            -19.0,
+            8.0,
+            1.1,
+            90.0,
+            true,
+        );
+
+        // --- Mobilier de place/marché.
+        poser(
+            &mut objects,
+            &mut imported,
+            "Étal du marché 1",
+            "village_market_stand_a.glb",
+            6.0,
+            3.5,
+            1.0,
+            200.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Étal du marché 2",
+            "village_market_stand_b.glb",
+            -6.0,
+            3.5,
+            1.0,
+            340.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Banc du marché 1",
+            "village_bench_a.glb",
+            3.0,
+            6.5,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Banc du marché 2",
+            "village_bench_b.glb",
+            -3.0,
+            6.5,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Tonneau du marché 1",
+            "village_barrel.glb",
+            6.5,
+            -0.5,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Tonneau du marché 2",
+            "village_barrel.glb",
+            6.9,
+            1.0,
+            1.0,
+            30.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Tonneau du marché 3",
+            "village_barrel.glb",
+            -6.5,
+            -0.5,
+            1.0,
+            60.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Caisse du marché 1",
+            "village_crate.glb",
+            7.5,
+            0.5,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Caisse du marché 2",
+            "village_crate.glb",
+            -7.5,
+            0.5,
+            1.0,
+            45.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Caisse du marché 3",
+            "village_crate.glb",
+            -7.2,
+            -1.5,
+            1.0,
+            90.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Sac du marché",
+            "village_bag.glb",
+            5.0,
+            5.0,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Sac ouvert du marché",
+            "village_bag_open.glb",
+            5.5,
+            5.4,
+            1.0,
+            20.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Sacs du marché",
+            "village_bags.glb",
+            -5.0,
+            5.0,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Paquet du marché 1",
+            "village_package_a.glb",
+            -5.5,
+            -5.5,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Paquet du marché 2",
+            "village_package_b.glb",
+            5.5,
+            -5.5,
+            1.0,
+            30.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Chaise du marché 1",
+            "village_chair.glb",
+            2.0,
+            6.0,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Chaise du marché 2",
+            "village_chair.glb",
+            -2.0,
+            6.0,
+            1.0,
+            180.0,
+            false,
+        );
+
+        // --- Lanternes (2/porte) + bannière (1/porte) aux 4 portes
+        // principales : télégraphe visuel de l'arrivée des vagues (GDD §10).
+        const GATES: [(&str, f32, f32, f32); 4] = [
+            ("Nord", 0.0, -HALF, 0.0),
+            ("Sud", 0.0, HALF, 180.0),
+            ("Est", HALF, 0.0, 90.0),
+            ("Ouest", -HALF, 0.0, 270.0),
+        ];
+        for (label, gx, gz, yaw) in GATES {
+            let (dx, dz) = if gz.abs() > gx.abs() {
+                (1.0, 0.0)
+            } else {
+                (0.0, 1.0)
+            };
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Lanterne {label} 1"),
+                "nature_lantern.glb",
+                gx - dx * 3.0,
+                gz - dz * 3.0,
+                1.0,
+                0.0,
+                false,
+            );
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Lanterne {label} 2"),
+                "nature_lantern.glb",
+                gx + dx * 3.0,
+                gz + dz * 3.0,
+                1.0,
+                0.0,
+                false,
+            );
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Bannière {label}"),
+                "nature_banner.glb",
+                gx,
+                gz,
+                1.0,
+                yaw,
+                false,
+            );
+        }
+
+        // --- Hors les murs : rivière (deux bras, ouest et sud) rejoignant un
+        // lac au coin sud-ouest, pont, moulin à eau, berges, petite rizière.
+        const EAU: [f32; 3] = [0.18, 0.42, 0.65];
+        const EAU_LAC: [f32; 3] = [0.14, 0.34, 0.55];
+        const SABLE: [f32; 3] = [0.72, 0.64, 0.44];
+        aplat(
+            &mut objects,
+            "Rivière ouest",
+            -31.5,
+            0.0,
+            5.0,
+            58.0,
+            0.02,
+            EAU,
+        );
+        aplat(&mut objects, "Rivière sud", 0.0, 31.5, 58.0, 5.0, 0.02, EAU);
+        aplat(
+            &mut objects,
+            "Berge du lac",
+            -42.5,
+            42.5,
+            29.0,
+            29.0,
+            0.012,
+            SABLE,
+        );
+        aplat(&mut objects, "Lac", -42.0, 42.0, 24.0, 24.0, 0.015, EAU_LAC);
+        aplat(
+            &mut objects,
+            "Rizière du sud",
+            -42.0,
+            60.0,
+            8.0,
+            6.0,
+            0.03,
+            [0.55, 0.6, 0.25],
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Pont de la rivière ouest",
+            "nature_bridge.glb",
+            -31.5,
+            0.0,
+            1.15,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Moulin à eau",
+            "nature_watermill.glb",
+            -36.5,
+            8.0,
+            1.1,
+            90.0,
+            true,
+        );
+        for (i, (name, x, z)) in [
+            ("Roseaux 1", -29.5, -15.0),
+            ("Roseaux 2", -29.5, 15.0),
+            ("Roseaux 3", 0.0, 30.5),
+            ("Roseaux 4", -20.0, 30.5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            poser(
+                &mut objects,
+                &mut imported,
+                name,
+                "nature_reeds.glb",
+                x,
+                z,
+                1.0,
+                i as f32 * 40.0,
+                false,
+            );
+        }
+        for (i, (name, x, z)) in [
+            ("Nénuphars 1", -38.0, 38.0),
+            ("Nénuphars 2", -46.0, 46.0),
+            ("Nénuphars 3", -44.0, 36.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            poser(
+                &mut objects,
+                &mut imported,
+                name,
+                "nature_lily.glb",
+                x,
+                z,
+                1.0,
+                i as f32 * 50.0,
+                false,
+            );
+        }
+        for (i, (name, x, z)) in [
+            ("Rocher de berge 1", -33.0, -20.0),
+            ("Rocher de berge 2", -33.0, 20.0),
+            ("Rocher de berge 3", -25.0, 33.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            poser(
+                &mut objects,
+                &mut imported,
+                name,
+                "nature_rock.glb",
+                x,
+                z,
+                1.0,
+                i as f32 * 70.0,
+                false,
+            );
+        }
+        for i in 0..4 {
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Riz du sud {}", i + 1),
+                "nature_rice.glb",
+                -45.0 + i as f32 * 3.0,
+                60.0,
+                1.0,
+                0.0,
+                false,
+            );
+        }
+
+        // --- Forêt en anneau (27 → 70 m), couloirs dégagés dans l'axe des 6
+        // lisières de spawn, eau/rizière exclues + faune variée.
+        let excl_eau: [(f32, f32, f32, f32); 4] = [
+            (-34.0, -29.0, -29.0, 29.0), // rivière ouest
+            (-29.0, 29.0, 29.0, 34.0),   // rivière sud
+            (-58.0, 27.0, -27.0, 58.0),  // lac + berge
+            (-46.0, 57.0, -38.0, 63.0),  // rizière du sud
+        ];
+        let mut rng = crate::runtime::rng::Rng::new(0x4841_4D45_4155_3438); // « HAMEAU48 »
+        foret_scatter(
+            &mut objects,
+            &mut imported,
+            &mut rng,
+            27.0,
+            70.0,
+            &excl_eau,
+            110,
+        );
+
+        const FOREST_FAUNA: &[&str] = &[
+            "fauna_deer.glb",
+            "fauna_rabbit.glb",
+            "fauna_squirrel.glb",
+            "fauna_fox.glb",
+            "fauna_boar.glb",
+            "fauna_hedgehog.glb",
+            "fauna_goat.glb",
+            "fauna_raccoon.glb",
+            "fauna_mole.glb",
+        ];
+        const AIR_FAUNA: &[&str] = &[
+            "fauna_bird.glb",
+            "fauna_crow.glb",
+            "fauna_jay.glb",
+            "fauna_bat.glb",
+            "fauna_butterfly.glb",
+            "fauna_dragonfly.glb",
+            "fauna_bee.glb",
+            "fauna_ladybug.glb",
+        ];
+        for (i, &file) in FOREST_FAUNA.iter().chain(AIR_FAUNA.iter()).enumerate() {
+            faune_scatter(
+                &mut objects,
+                &mut imported,
+                &mut rng,
+                28.0,
+                65.0,
+                &excl_eau,
+                file,
+                &format!("Faune {}", i + 1),
+                1,
+            );
+        }
+        poser(
+            &mut objects,
+            &mut imported,
+            "Chouette du chemin de ronde",
+            "fauna_owl.glb",
+            0.0,
+            -23.0,
+            0.8,
+            0.0,
+            false,
+        );
+        for (name, file, x, z) in [
+            ("Canard", "fauna_duck.glb", -31.5, 10.0),
+            ("Oie", "fauna_goose.glb", -31.5, -10.0),
+            ("Grenouille", "fauna_frog.glb", -30.0, 20.0),
+            ("Poisson", "fauna_fish.glb", -42.0, 42.0),
+            ("Héron", "fauna_heron.glb", -34.0, 28.0),
+            ("Tortue", "fauna_turtle.glb", -46.0, 46.0),
+            ("Crabe", "fauna_crab.glb", -30.0, 31.0),
+            ("Escargot", "fauna_snail.glb", -29.5, 22.0),
+        ] {
+            poser(
+                &mut objects,
+                &mut imported,
+                name,
+                file,
+                x,
+                z,
+                0.9,
+                0.0,
+                false,
+            );
+        }
+
+        Scene {
+            objects,
+            imported,
+            camera_follow: true,
+            point_lights: vec![
+                PointLight {
+                    position: [0.0, 20.0, 0.0],
+                    color: [0.9, 0.95, 1.0],
+                    intensity: 1.4,
+                    range: 100.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [0.0, 4.0, 0.0],
+                    color: [1.0, 0.75, 0.4],
+                    intensity: 1.2,
+                    range: 14.0,
+                    ..PointLight::default()
+                },
+            ],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into(), "Feu".into(), "Arme".into(), "Soin".into()],
+                ..Default::default()
+            },
+            light: Light {
+                dir: [0.55, 1.0, -0.45],
+                color: [1.0, 0.96, 0.88],
+                ambient: 0.35,
+            },
             sky: Sky {
                 horizon_color: [0.85, 0.78, 0.62],
                 zenith_color: [0.30, 0.52, 0.78],
@@ -6216,7 +7684,7 @@ mod tests {
         }
     }
 
-    /// Preuve du placement logique des 21 créatures : chaque spawn tombe dans
+    /// Preuve du placement logique des 26 créatures : chaque spawn tombe dans
     /// le rectangle de son biome annoncé (forêt, lac, rizières, hameau,
     /// promontoire…), pas éparpillé au hasard sur la carte.
     #[test]

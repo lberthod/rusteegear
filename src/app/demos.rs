@@ -95,8 +95,16 @@ impl AppState {
     pub fn load_mmorpg_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::mmorpg_demo();
+        // Créatures retirées de la scène ouverte dans l'éditeur (17 juillet 2026,
+        // demande utilisateur) : le zoo du pack « Ultimate Monsters » n'apparaît
+        // plus au démarrage ni via Démos → MMORPG. Seuls les **objets** sont
+        // retirés — leurs meshes restent dans `scene.imported` pour ne pas
+        // décaler les indices `MeshKind::Imported` du décor, et
+        // `Scene::mmorpg_demo()` reste intacte pour les tests de simulation.
+        self.scene
+            .objects
+            .retain(|o| !o.name.starts_with("Créature"));
         self.seed_mmorpg_repere_prefab_instances();
-        self.seed_mmorpg_creature_prefab_instance();
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
@@ -137,40 +145,6 @@ impl AppState {
             if let Some(instance) = crate::scene::Scene::instantiate_prefab(&asset_id, name, pos) {
                 self.scene.objects[idx] = instance;
             }
-        }
-    }
-
-    /// Convertit la « Créature » de la démo MMORPG (cf. `CREATURE_WANDER_SCRIPT`,
-    /// `Scene::mmorpg_demo`) en instance d'un prefab `MmorpgCreature`, portée
-    /// **scène** `Mmorpg` (`assets_dir()/prefabs/scenes/Mmorpg/MmorpgCreature.json`),
-    /// même patron que `MmorpgRepere` juste au-dessus — **pas** de portée générale
-    /// (essayé d'abord, corrigé en audit) : `mesh: MeshKind::Imported(0)` est un
-    /// indice **local à cette scène** dans `Scene::imported` (résolu par
-    /// `Scene::mmorpg_demo`, qui y charge `creature.glb` en position 0), pas une
-    /// référence portable — glissé dans une scène générale sans ce même mesh en
-    /// position 0, l'instance pointerait vers un mesh sans rapport ou vers rien
-    /// (silencieux : `imported.get(0)` renvoie juste `None`, cf. `gfx::renderer`).
-    /// Un prefab général `Creature` risquait en plus d'écraser sans confirmation un
-    /// prefab général du même nom créé à la main par l'utilisateur, à chaque
-    /// chargement de cette démo — la portée scène l'isole dans son propre dossier.
-    /// Même patron que `seed_mmorpg_repere_prefab_instances` (une seule instance ici
-    /// plutôt que 4) : sans effet si `assets_dir()` est indisponible (pas de
-    /// `$HOME`) ou si le glTF n'a pas pu être chargé (pas de « Créature » dans la
-    /// scène, cf. `Scene::mmorpg_demo`).
-    fn seed_mmorpg_creature_prefab_instance(&mut self) {
-        let Some(idx) = self.scene.objects.iter().position(|o| o.name == "Créature") else {
-            return;
-        };
-        let template = self.scene.objects[idx].clone();
-        let scope = crate::assets::PrefabScope::Scene("Mmorpg".into());
-        let Ok(asset_id) = crate::scene::Scene::save_prefab(&template, "MmorpgCreature", &scope)
-        else {
-            return;
-        };
-        let pos = self.scene.objects[idx].transform.position;
-        if let Some(instance) = crate::scene::Scene::instantiate_prefab(&asset_id, "Créature", pos)
-        {
-            self.scene.objects[idx] = instance;
         }
     }
 

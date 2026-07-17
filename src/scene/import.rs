@@ -1482,6 +1482,21 @@ pub(crate) mod tests {
         }
     }
 
+    /// Même preuve pour le pack « insectes & arachnides » n°27 à 31 (araignée
+    /// géante, mante religieuse, scarabée rhinocéros, frelon géant,
+    /// mille-pattes — cf. scripts/blender/gen_creature_pack27_31.py) : rigs
+    /// variés (8 pattes appariées, bras ravisseurs, ailes vrombissantes,
+    /// chaîne Body→Mid→Tail), même pipeline d'import sans cas particulier.
+    #[test]
+    fn creatures_27_to_31_glb_skin_weights_and_walk_idle_blends_stay_bounded() {
+        for n in 27..=31 {
+            assert_creature_glb_sane(&format!(
+                "{}/assets/models/creature{n}.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ));
+        }
+    }
+
     fn assert_creature_glb_sane(path: &str) {
         let (data, aabb_min, aabb_max) = load_gltf(path).expect("glb de créature lisible");
         let mut m = crate::scene::ImportedMesh {
