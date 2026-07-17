@@ -118,8 +118,11 @@ un nom de nuit (§4), chaque palier un nom de braise (§8.2). Le lore du jeu
 
 ### 2.2 Le joueur : un Veilleur
 
-L'avatar est un être féerique (asset riggé `fairy_hero`) : silhouette légère,
-lisible de loin, animations de course/attaque déjà en place. Chaque Veilleur
+L'avatar **cible** est un être féerique (asset riggé `fairy_hero`) :
+silhouette légère, lisible de loin, animations de course/attaque déjà en
+place. **État actuel** (commit `119a295`, 17 juillet 2026) : le personnage
+central servi est une **sphère**, placeholder assumé en attendant le retour
+de `fairy_hero` dans la scène embarquée. Chaque Veilleur
 porte une **couleur de braise** personnelle (teinte du matériau, persistée au
 compte) — c'est l'identité visuelle minimale : dans un groupe de 4, on se
 reconnaît à sa couleur avant de lire les noms. La couleur n'est jamais le
@@ -391,32 +394,32 @@ régénération, ramassage, repositionnement) avant la suivante. Règles :
   le plafond de 2 chasseresses (le surnombre étale la menace au lieu de la
   concentrer).
 
-**Constat sur la carte livrée** (vérifié dans `player_scene.json` et
-`src/bin/server.rs`) : le serveur en ligne fait tourner la **scène
-embarquée** (`use_embedded_scene()`), dont les 20 créatures sont **toutes à
-`wave: 0`, 1 PV, sans respawn** — la scène servie ne joue donc *aucune*
-vague : c'est une chasse plate de 20 cibles, pas « La Horde ». Pendant ce
-temps, le hameau complet et la ménagerie des ~45 monstres vivent dans
-`Scene::mmorpg_demo()` (carte 72×72 m, générée par code) — une démo
-d'éditeur que **le serveur ne sert pas**. Il y a aujourd'hui deux jeux : le
-beau n'est pas celui qui est en ligne ; l'unification (faire de la scène
-servie la vitrine, avec vagues et casting §5.4) est un chantier d'authoring
-à part entière. Conséquences de design immédiates :
-
-- la dent de scie décrite ci-dessus n'existe pas encore *en jeu* alors que
-  le système (`Combat::wave`) est codé et testé — c'est de l'authoring de
-  scène, pas du développement ;
-- **le Boulet n'a aucune cible qui le justifie** : son identité (« un chef
-  à 3 PV tombe d'un coup ») suppose des créatures à 3 PV, or toute la
-  carte est à 1 PV — l'arme lourde est objectivement inférieure sur la
-  carte actuelle. Toute vague à partir de la n°2 doit compter au moins un
-  « chef » à 3 PV : c'est la règle d'authoring qui fait exister l'arme.
+**Constat sur la carte livrée** (mis à jour à l'audit du 17 juillet 2026,
+vérifié dans `player_scene.json` et `src/scene/demos.rs`) : la scène
+embarquée servie (`use_embedded_scene()`) est resynchronisée depuis
+`Scene::mmorpg_demo()` et joue désormais la dent de scie — **26 créatures
+attaquables réparties en 4 vagues** (budgets de PV 5 / 8 / 11 / 16,
+strictement croissants), avec **7 chefs à 3 PV** dont au moins un dès la
+vague 2. **Le Boulet a maintenant les cibles qui le justifient** (« un chef
+à 3 PV tombe d'un coup »). Ces règles sont verrouillées par le test
+d'authoring `mmorpg_demo_waves_follow_the_gdd_authoring_rules`
+(`src/scene/demos.rs`). L'ancien constat (« 20 cibles plates à `wave: 0`,
+1 PV ») est résolu ; reste un chantier d'authoring : le **casting §5.4**
+(archétypes Traqueuse/Meute/Colosse/Furtive sur le pack `monster_*`, chefs
+`_evolved`) n'est pas encore appliqué à la scène servie — les vagues
+actuelles sont peuplées par la ménagerie de patrouille (scripts de
+déplacement décoratifs), pas par la grammaire d'archétypes de chasse.
 
 **Règles d'authoring des vagues** (les vagues sont de la donnée de scène,
-cf. tension n°6) : budget de PV croissant par vague (ex. 8 / 12 / 18 / 26),
-au plus 2 archétypes par vague (§5.4), au moins un chef à 3 PV dès la
-vague 2, et la dernière vague dépasse d'un tiers le budget de
-l'avant-dernière — c'est elle qui doit coûter (§11).
+cf. tension n°6) : budget de PV strictement croissant par vague
+(actuellement 5 / 8 / 11 / 16), au moins un chef à 3 PV dès la vague 2, la
+dernière vague dépasse d'un tiers le budget de l'avant-dernière — c'est
+elle qui doit coûter (§11) — et, dès que le casting §5.4 sera appliqué, au
+plus 2 archétypes par vague. Précision de vocabulaire (audit du
+17 juillet) : un *archétype* est une famille de chasse §5.4
+(Traqueuse/Meute/Colosse/Furtive), **pas** un script de patrouille
+(wander/soar/zigzag…) — une vague peut mélanger plus de deux scripts de
+patrouille décoratifs sans violer la règle de casting.
 
 ### 5.6 La latence est une règle du jeu
 
@@ -748,7 +751,8 @@ grammaire collective.
 ### 10.3 Lisibilité des classes : la silhouette d'abord
 
 À 20 m de nuit, la classe d'un allié doit se lire **sans** le roster. Sur
-la base `fairy_hero` commune, trois variations à coût d'asset quasi nul
+la base commune cible `fairy_hero` (l'avatar servi est aujourd'hui une
+sphère placeholder, cf. §2.2), trois variations à coût d'asset quasi nul
 (échelles et attaches, pas de nouveaux rigs) :
 
 - **Flamme** : gabarit de référence, l'arme à distance portée visible.
