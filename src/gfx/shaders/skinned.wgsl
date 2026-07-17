@@ -10,6 +10,18 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
+// Lumière : uniquement pour `vs_skinned_shadow` (passe d'ombre skinnée) — même
+// déclaration tronquée que shadow.wgsl, seule `light_vp` est lue ici (le buffer
+// réel, `SceneUniform`, est plus grand ; un uniform peut être plus grand que la
+// struct déclarée côté shader, wgpu valide sur la taille déclarée).
+struct Light {
+    dir: vec4<f32>,
+    color: vec4<f32>,
+    ambient: vec4<f32>,
+    light_vp: mat4x4<f32>,
+};
+@group(0) @binding(1) var<uniform> light: Light;
+
 struct Model {
     model: mat4x4<f32>,
     normal: mat4x4<f32>,
@@ -47,15 +59,21 @@ struct VsOut {
     @location(5) material: vec3<f32>,
 };
 
+// Mélange linéaire des 4 matrices influentes (« linear blend skinning », le schéma
+// standard — pas de dual quaternion ici : plus simple, artefacts de « candy wrapper »
+// aux articulations très pliées, acceptables pour la portée actuelle du moteur).
+// Factorisé : partagé par la passe principale (`vs_skinned_main`) et la passe
+// d'ombre (`vs_skinned_shadow`), pour que l'ombre suive exactement la même pose.
+fn skin_matrix(joints: vec4<u32>, weights: vec4<f32>) -> mat4x4<f32> {
+    return joint_matrices[joints.x] * weights.x
+        + joint_matrices[joints.y] * weights.y
+        + joint_matrices[joints.z] * weights.z
+        + joint_matrices[joints.w] * weights.w;
+}
+
 @vertex
 fn vs_skinned_main(in: VsIn) -> VsOut {
-    // Mélange linéaire des 4 matrices influentes (« linear blend skinning », le schéma
-    // standard — pas de dual quaternion ici : plus simple, artefacts de « candy wrapper »
-    // aux articulations très pliées, acceptables pour la portée actuelle du moteur).
-    let skin = joint_matrices[in.joints.x] * in.weights.x
-        + joint_matrices[in.joints.y] * in.weights.y
-        + joint_matrices[in.joints.z] * in.weights.z
-        + joint_matrices[in.joints.w] * in.weights.w;
+    let skin = skin_matrix(in.joints, in.weights);
 
     var out: VsOut;
     let model = models[in.instance];
@@ -75,4 +93,15 @@ fn vs_skinned_main(in: VsIn) -> VsOut {
     out.uv = in.uv;
     out.material = model.params.yzw;
     return out;
+}
+
+// Passe d'ombre skinnée (audit du 17 juillet 2026) : les objets skinnés ne
+// projetaient **aucune** ombre — la passe d'ombre ne dessinait que le plan statique
+// (`shadow.wgsl`), dont le vertex shader ignore la palette de joints. Entrée dédiée
+// profondeur seule (pas d'étage fragment, comme shadow.wgsl) : même skinning que
+// `vs_skinned_main`, projeté par `light.light_vp` au lieu de la caméra.
+@vertex
+fn vs_skinned_shadow(in: VsIn) -> @builtin(position) vec4<f32> {
+    let skin = skin_matrix(in.joints, in.weights);
+    return light.light_vp * models[in.instance].model * skin * vec4<f32>(in.position, 1.0);
 }

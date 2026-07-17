@@ -587,23 +587,43 @@ fn local_pose(
     }
 }
 
+/// Tampons de travail réutilisables du calcul des matrices de joints
+/// (`compute_joint_matrices_into`/`compute_joint_matrices_blended_into`) : évite de
+/// réallouer les deux Vec internes de la résolution par vagues à chaque objet skinné
+/// et à chaque frame — l'appelant (le renderer) en garde un et le repasse.
+#[derive(Default)]
+pub struct SkinningScratch {
+    world: Vec<Option<Mat4>>,
+    remaining: Vec<usize>,
+}
+
 /// Résout la hiérarchie monde d'un squelette à partir d'une transform locale par joint —
 /// partagé par `compute_joint_matrices` et `compute_joint_matrices_blended`,
 /// qui ne diffèrent que par la façon dont `local_of` calcule cette transform (un clip,
-/// ou un mélange de deux). Renvoie `monde_du_joint * inverse_bind` : la partie
+/// ou un mélange de deux). Écrit `monde_du_joint * inverse_bind` dans `out` : la partie
 /// `inverse_bind` annule la pose de liaison pour ne laisser que le **déplacement** depuis
 /// cette pose, ce qui est ce qu'un sommet en espace de liaison doit subir.
 ///
 /// Robuste à un ordre de `Skeleton::joints` où un parent n'est **pas** garanti apparaître
 /// avant ses enfants (le glTF ne l'impose pas, même si c'est l'usage courant des
 /// exportateurs) : résolution par vagues plutôt que par simple parcours linéaire.
-fn resolve_world_matrices(
+///
+/// Variante « into » (audit perf, juillet 2026) : tous les tampons viennent de
+/// l'appelant (`scratch` + `out`), aucune allocation par appel une fois les capacités
+/// atteintes — c'est le chemin chaud du skinning, exécuté par objet et par frame.
+fn resolve_world_matrices_into(
     skeleton: &Skeleton,
     local_of: impl Fn(usize, &Joint) -> Mat4,
-) -> Vec<Mat4> {
+    scratch: &mut SkinningScratch,
+    out: &mut Vec<Mat4>,
+) {
     let n = skeleton.joints.len();
-    let mut world: Vec<Option<Mat4>> = vec![None; n];
-    let mut remaining: Vec<usize> = (0..n).collect();
+    let world = &mut scratch.world;
+    world.clear();
+    world.resize(n, None);
+    let remaining = &mut scratch.remaining;
+    remaining.clear();
+    remaining.extend(0..n);
 
     while !remaining.is_empty() {
         let mut progressed = false;
@@ -632,20 +652,47 @@ fn resolve_world_matrices(
         }
     }
 
-    (0..n)
-        .map(|i| world[i].unwrap_or(Mat4::IDENTITY) * skeleton.joints[i].inverse_bind)
-        .collect()
+    out.clear();
+    out.extend(
+        (0..n).map(|i| world[i].unwrap_or(Mat4::IDENTITY) * skeleton.joints[i].inverse_bind),
+    );
 }
 
 /// Calcule, pour chaque joint d'un `Skeleton`, la matrice à envoyer au shader de skinning.
 /// `clip = None` ⇒ pose de liaison pure (équivalent à un modèle statique :
 /// chaque matrice résultante est proche de l'identité, à l'erreur de précision flottante
-/// près — cf. test).
+/// près — cf. test). API de confort qui alloue à chaque appel : le chemin chaud du
+/// renderer passe par `compute_joint_matrices_into` avec des tampons réutilisés.
 pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f32) -> Vec<Mat4> {
-    resolve_world_matrices(skeleton, |i, joint| {
-        let (t, r, s) = local_pose(joint, i, clip, time);
-        Mat4::from_scale_rotation_translation(s, r, t)
-    })
+    let mut out = Vec::new();
+    compute_joint_matrices_into(
+        skeleton,
+        clip,
+        time,
+        &mut SkinningScratch::default(),
+        &mut out,
+    );
+    out
+}
+
+/// Variante sans allocation de `compute_joint_matrices` : écrit le résultat dans `out`
+/// (vidé puis rempli) en réutilisant les tampons internes de `scratch`.
+pub fn compute_joint_matrices_into(
+    skeleton: &Skeleton,
+    clip: Option<&Clip>,
+    time: f32,
+    scratch: &mut SkinningScratch,
+    out: &mut Vec<Mat4>,
+) {
+    resolve_world_matrices_into(
+        skeleton,
+        |i, joint| {
+            let (t, r, s) = local_pose(joint, i, clip, time);
+            Mat4::from_scale_rotation_translation(s, r, t)
+        },
+        scratch,
+        out,
+    );
 }
 
 /// Comme `compute_joint_matrices`, mais mélange (crossfade) deux clips — transitions
@@ -657,6 +704,9 @@ pub fn compute_joint_matrices(skeleton: &Skeleton, clip: Option<&Clip>, time: f3
 /// pratique standard de blending d'animation squelettale.
 ///
 /// `blend` : 0.0 = `clip_a` pur, 1.0 = `clip_b` pur, clampé entre les deux.
+///
+/// API de confort qui alloue à chaque appel — le chemin chaud du renderer passe par
+/// `compute_joint_matrices_blended_into` avec des tampons réutilisés.
 pub fn compute_joint_matrices_blended(
     skeleton: &Skeleton,
     clip_a: Option<&Clip>,
@@ -665,16 +715,48 @@ pub fn compute_joint_matrices_blended(
     time_b: f32,
     blend: f32,
 ) -> Vec<Mat4> {
+    let mut out = Vec::new();
+    compute_joint_matrices_blended_into(
+        skeleton,
+        clip_a,
+        time_a,
+        clip_b,
+        time_b,
+        blend,
+        &mut SkinningScratch::default(),
+        &mut out,
+    );
+    out
+}
+
+/// Variante sans allocation de `compute_joint_matrices_blended` : écrit le résultat
+/// dans `out` (vidé puis rempli) en réutilisant les tampons internes de `scratch`.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_joint_matrices_blended_into(
+    skeleton: &Skeleton,
+    clip_a: Option<&Clip>,
+    time_a: f32,
+    clip_b: Option<&Clip>,
+    time_b: f32,
+    blend: f32,
+    scratch: &mut SkinningScratch,
+    out: &mut Vec<Mat4>,
+) {
     let blend = blend.clamp(0.0, 1.0);
-    resolve_world_matrices(skeleton, |i, joint| {
-        let (ta, ra, sa) = local_pose(joint, i, clip_a, time_a);
-        let (tb, rb, sb) = local_pose(joint, i, clip_b, time_b);
-        Mat4::from_scale_rotation_translation(
-            sa.lerp(sb, blend),
-            nlerp(ra, rb, blend),
-            ta.lerp(tb, blend),
-        )
-    })
+    resolve_world_matrices_into(
+        skeleton,
+        |i, joint| {
+            let (ta, ra, sa) = local_pose(joint, i, clip_a, time_a);
+            let (tb, rb, sb) = local_pose(joint, i, clip_b, time_b);
+            Mat4::from_scale_rotation_translation(
+                sa.lerp(sb, blend),
+                nlerp(ra, rb, blend),
+                ta.lerp(tb, blend),
+            )
+        },
+        scratch,
+        out,
+    );
 }
 
 #[cfg(test)]

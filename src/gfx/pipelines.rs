@@ -399,6 +399,7 @@ pub(super) struct PipelineBundle {
     pub(super) mipgen_sampler: wgpu::Sampler,
     pub(super) editor: Option<Editor>,
     pub(super) skinned_pipeline: wgpu::RenderPipeline,
+    pub(super) skinned_shadow_pipeline: wgpu::RenderPipeline,
     pub(super) skinned_model_layout: wgpu::BindGroupLayout,
     pub(super) joint_buf: wgpu::Buffer,
     pub(super) skinned_models_bind_group: wgpu::BindGroup,
@@ -1123,6 +1124,55 @@ pub(super) fn build(
         cache: None,
     });
 
+    // --- Pipeline d'ombre **skinnée** (audit du 17 juillet 2026) : les objets
+    // skinnés ne projetaient aucune ombre, la passe d'ombre n'utilisant que
+    // `shadow_pipeline` (vertex statique, sans palette de joints). Même profil que
+    // `shadow_pipeline` — profondeur seule, cull des faces avant, même biais — mais
+    // vertex `vs_skinned_shadow` de skinned.wgsl (même skinning que la passe
+    // principale, projeté par `light_vp`) et groupe 1 `skinned_model_layout`
+    // (models + palette de joints à offset dynamique, comme `skinned_pipeline`).
+    let skinned_shadow_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("skinned_shadow_pl"),
+        bind_group_layouts: &[Some(&camera_layout), Some(&skinned_model_layout)],
+        immediate_size: 0,
+    });
+    let skinned_shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("skinned_shadow_pipeline"),
+        layout: Some(&skinned_shadow_pl),
+        vertex: wgpu::VertexState {
+            module: &skinned_shader,
+            entry_point: Some("vs_skinned_shadow"),
+            buffers: &[crate::gfx::mesh::SkinnedVertex::layout()],
+            compilation_options: Default::default(),
+        },
+        fragment: None,
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            // cull des faces avant : pousse l'acné d'ombre vers les faces arrière.
+            cull_mode: Some(wgpu::Face::Front),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            // même biais que `shadow_pipeline` (acné d'ombre).
+            bias: wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 2.0,
+                clamp: 0.0,
+            },
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
     // --- Pipeline gizmo (lignes, par-dessus la scène) ---
     let gizmo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("gizmo_shader"),
@@ -1294,6 +1344,7 @@ pub(super) fn build(
         mipgen_sampler,
         editor,
         skinned_pipeline,
+        skinned_shadow_pipeline,
         skinned_model_layout,
         joint_buf,
         skinned_models_bind_group,

@@ -351,12 +351,40 @@ pub struct Renderer {
     //     Groupe 1 dédié (`skinned_model_layout`) : `models` + joints fusionnés, pour
     //     tenir dans la limite WebGPU de 4 bind groups (cf. `pipelines.rs::build`).
     skinned_pipeline: wgpu::RenderPipeline,
+    /// Passe d'ombre des objets skinnés (audit du 17 juillet 2026) : profondeur seule
+    /// depuis la lumière, vertex de skinning (`vs_skinned_shadow`) — sans lui, aucun
+    /// objet skinné ne projetait d'ombre (la passe d'ombre n'itérait que `draw_plan`).
+    skinned_shadow_pipeline: wgpu::RenderPipeline,
     skinned_model_layout: wgpu::BindGroupLayout,
     joint_buf: wgpu::Buffer,
     /// Référence `models_buf` + `joint_buf` : à recréer si l'un des deux l'est
     /// (cf. `sync_objects`, seul site où `models_buf` change de capacité).
     skinned_models_bind_group: wgpu::BindGroup,
     joint_capacity: usize,
+    // --- Tampons réutilisés du chemin skinning (audit perf, juillet 2026) : comme
+    //     `order_scratch`/`models_scratch` pour le chemin statique, zéro allocation
+    //     par frame une fois les capacités atteintes. ---
+    /// Offsets dynamiques de la frame, dans l'ordre de `draw_plan_skinned`
+    /// (rempli par `prepare_skinned_draws`, lu par `draw_skinned_objects`/
+    /// `draw_skinned_shadows`).
+    skinned_offsets_scratch: Vec<Option<u32>>,
+    /// Palette de joints d'**un** objet, recalculée par objet dans la boucle de
+    /// `prepare_skinned_draws`.
+    joint_matrices_scratch: Vec<glam::Mat4>,
+    /// Conversion `Mat4` → `[[f32; 4]; 4]` avant `write_buffer` (cf. `write_joint_matrices`).
+    joint_raw_scratch: Vec<[[f32; 4]; 4]>,
+    /// Tampons internes de `compute_joint_matrices_into` (résolution par vagues).
+    skinning_scratch: crate::scene::import::SkinningScratch,
+    /// Nombre d'objets skinnés **ignorés** (pas dessinés du tout) à la dernière frame
+    /// faute de créneau (`slot >= MAX_SKINNED_INSTANCES`) — garde-fou visible du
+    /// dépassement silencieux de capacité, exposé par `skinned_dropped_count`.
+    skinned_dropped_last_frame: u32,
+    /// Chemins de texture dont le chargement a échoué : mémorisés pour ne pas
+    /// réessayer (et re-logger) à chaque frame — le dessin retombe sur la texture
+    /// blanche `""` déjà en cache via le repli des sites de draw, sans en recréer une.
+    /// Vidé par `invalidate_asset_textures` (hot-reload : un fichier réparé redevient
+    /// chargeable).
+    failed_textures: std::collections::HashSet<String>,
 
     // --- profiler GPU (Sprint 112) ---
     /// `None` si l'adaptateur ne supporte pas `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
@@ -549,6 +577,7 @@ impl Renderer {
             mipgen_sampler,
             editor,
             skinned_pipeline,
+            skinned_shadow_pipeline,
             skinned_model_layout,
             joint_buf,
             skinned_models_bind_group,
@@ -611,10 +640,17 @@ impl Renderer {
             editor,
             backend,
             skinned_pipeline,
+            skinned_shadow_pipeline,
             skinned_model_layout,
             joint_buf,
             skinned_models_bind_group,
             joint_capacity: JOINT_CAPACITY,
+            skinned_offsets_scratch: Vec::new(),
+            joint_matrices_scratch: Vec::new(),
+            joint_raw_scratch: Vec::new(),
+            skinning_scratch: crate::scene::import::SkinningScratch::default(),
+            skinned_dropped_last_frame: 0,
+            failed_textures: std::collections::HashSet::new(),
             gpu_profiler,
             gpu_pass_timings_ms: Vec::new(),
             last_frame_draw_calls: 0,
@@ -674,8 +710,18 @@ impl Renderer {
     /// squelette d'une créature quelconque.
     ///
     /// Renvoie l'offset dynamique (octets) à passer à `set_bind_group(1, &skinned_models_bind_group, &[offset])`,
-    /// ou `None` si l'instance doit être sautée (pas de créneau disponible).
-    fn write_joint_matrices(&mut self, slot: usize, matrices: &[glam::Mat4]) -> Option<u32> {
+    /// ou `None` si l'instance doit être sautée (pas de créneau disponible — les
+    /// appelants comptabilisent ce cas dans `skinned_dropped_last_frame`, garde-fou
+    /// visible du dépassement de `MAX_SKINNED_INSTANCES`).
+    ///
+    /// `raw` : tampon de conversion fourni par l'appelant (vidé puis rempli) — évite
+    /// une allocation par objet skinné et par frame (audit perf, juillet 2026).
+    fn write_joint_matrices(
+        &self,
+        slot: usize,
+        matrices: &[glam::Mat4],
+        raw: &mut Vec<[[f32; 4]; 4]>,
+    ) -> Option<u32> {
         if slot >= MAX_SKINNED_INSTANCES {
             log::warn!(
                 "skinning : créneau {slot} au-delà de la capacité ({MAX_SKINNED_INSTANCES}) — objet ignoré"
@@ -690,26 +736,40 @@ impl Renderer {
                 self.joint_capacity
             );
         }
-        let raw: Vec<[[f32; 4]; 4]> = matrices[..n].iter().map(|m| m.to_cols_array_2d()).collect();
+        raw.clear();
+        raw.extend(matrices[..n].iter().map(|m| m.to_cols_array_2d()));
         let offset = slot as wgpu::BufferAddress * JOINT_SLOT_BYTES;
         self.queue
-            .write_buffer(&self.joint_buf, offset, bytemuck::cast_slice(&raw));
+            .write_buffer(&self.joint_buf, offset, bytemuck::cast_slice(raw));
         Some(offset as u32)
     }
 
     /// Calcule et envoie au GPU la palette de joints de chaque objet skinné visible de la
     /// frame (`self.draw_plan_skinned`, déjà construit par `write_uniforms`),
     /// **avant** toute passe de rendu (cf. commentaire aux sites d'appel : `write_buffer`
-    /// n'est pas ordonné avec les draw calls d'un encoder pas encore soumis). Renvoie les
-    /// offsets dynamiques, dans l'ordre de `draw_plan_skinned`, à passer à
+    /// n'est pas ordonné avec les draw calls d'un encoder pas encore soumis). Remplit
+    /// `self.skinned_offsets_scratch` avec les offsets dynamiques, dans l'ordre de
+    /// `draw_plan_skinned`, à passer à
     /// `set_bind_group(1, &skinned_models_bind_group, &[offset])` lors du dessin réel dans la
     /// passe — `None` (mesh non importé/introuvable, pas de squelette, ou capacité de
     /// créneaux dépassée dans `write_joint_matrices`) signifie que `draw_skinned_objects`
     /// doit sauter l'objet plutôt que de le dessiner avec l'offset ambigu `0`, qui est
     /// *aussi* un offset valide pour l'objet réellement au slot 0.
-    fn prepare_skinned_draws(&mut self, scene: &Scene) -> Vec<Option<u32>> {
-        let mut offsets = Vec::with_capacity(self.draw_plan_skinned.len());
-        for (slot, &(obj_idx, _instance)) in self.draw_plan_skinned.clone().iter().enumerate() {
+    ///
+    /// Audit perf (juillet 2026) : plus aucune allocation par frame ici — les tampons
+    /// (`skinned_offsets_scratch`, `joint_matrices_scratch`, `joint_raw_scratch`,
+    /// `skinning_scratch`) sont des champs réutilisés, et `draw_plan_skinned` est
+    /// `mem::take`-é le temps de la boucle (au lieu de l'ancien `.clone()` par frame,
+    /// simple contournement d'emprunt).
+    fn prepare_skinned_draws(&mut self, scene: &Scene) {
+        self.skinned_dropped_last_frame = 0;
+        let plan = std::mem::take(&mut self.draw_plan_skinned);
+        let mut offsets = std::mem::take(&mut self.skinned_offsets_scratch);
+        let mut matrices = std::mem::take(&mut self.joint_matrices_scratch);
+        let mut raw = std::mem::take(&mut self.joint_raw_scratch);
+        let mut scratch = std::mem::take(&mut self.skinning_scratch);
+        offsets.clear();
+        for (slot, &(obj_idx, _instance)) in plan.iter().enumerate() {
             let obj = &scene.objects[obj_idx];
             let MeshKind::Imported(mesh_idx) = obj.mesh else {
                 offsets.push(None);
@@ -723,6 +783,12 @@ impl Renderer {
                 offsets.push(None);
                 continue;
             };
+            // Garde-fou visible (audit du 17 juillet 2026) : au-delà de la capacité de
+            // créneaux, l'objet est **ignoré** (pas dessiné) — compté ici pour que le
+            // dépassement ne reste pas qu'un `log::warn` (cf. `skinned_dropped_count`).
+            if slot >= MAX_SKINNED_INSTANCES {
+                self.skinned_dropped_last_frame += 1;
+            }
             // Sans `AnimationState` (ou clip introuvable/vide) : pose de liaison figée,
             // pas une erreur — un mesh skinné a le droit de rester immobile (décor posé).
             let find_clip = |name: &str| imported.clips.iter().find(|c| c.name == name);
@@ -734,20 +800,43 @@ impl Renderer {
             // Fondu enchaîné : `blend < 1.0` tant qu'une transition est en
             // cours (cf. `AppState::sim_step`) — mélange avec le clip quitté au niveau
             // des poses locales, pas des matrices monde (`compute_joint_matrices_blended`).
-            let matrices = match anim.filter(|a| a.blend < 1.0 && !a.prev_clip.is_empty()) {
-                Some(a) => crate::scene::import::compute_joint_matrices_blended(
+            match anim.filter(|a| a.blend < 1.0 && !a.prev_clip.is_empty()) {
+                Some(a) => crate::scene::import::compute_joint_matrices_blended_into(
                     skeleton,
                     find_clip(&a.prev_clip),
                     a.prev_time,
                     clip,
                     time,
                     a.blend,
+                    &mut scratch,
+                    &mut matrices,
                 ),
-                None => crate::scene::import::compute_joint_matrices(skeleton, clip, time),
+                None => crate::scene::import::compute_joint_matrices_into(
+                    skeleton,
+                    clip,
+                    time,
+                    &mut scratch,
+                    &mut matrices,
+                ),
             };
-            offsets.push(self.write_joint_matrices(slot, &matrices));
+            offsets.push(self.write_joint_matrices(slot, &matrices, &mut raw));
         }
-        offsets
+        self.draw_plan_skinned = plan;
+        self.skinned_offsets_scratch = offsets;
+        self.joint_matrices_scratch = matrices;
+        self.joint_raw_scratch = raw;
+        self.skinning_scratch = scratch;
+    }
+
+    /// Nombre d'objets skinnés visibles **non dessinés** à la dernière frame préparée,
+    /// faute de créneau de palette de joints (`slot >= MAX_SKINNED_INSTANCES`) —
+    /// garde-fou visible du dépassement de capacité (audit du 17 juillet 2026) : `0`
+    /// en régime normal ; une valeur non nulle signifie qu'il faut remonter
+    /// `MAX_SKINNED_INSTANCES` (cf. sa doc). Note : le panneau de stats vit dans
+    /// `src/editor` (hors de portée ici) — la stat est exposée côté renderer, prête à
+    /// y être affichée.
+    pub fn skinned_dropped_count(&self) -> u32 {
+        self.skinned_dropped_last_frame
     }
 
     /// Dessine les objets skinnés de `self.draw_plan_skinned`, un draw individuel par
@@ -758,12 +847,16 @@ impl Renderer {
     /// **saute** l'objet plutôt que de le dessiner avec l'offset `0`, qui appartient à un
     /// autre objet skinné (cf. la doc de `write_joint_matrices` : le bug qui scindait le
     /// mesh du joueur venait exactement de dessiner malgré un `None`/absence de créneau).
+    ///
+    /// Renvoie le nombre de draw calls réellement émis (compteur de stats, cf.
+    /// `last_frame_draw_calls`).
     fn draw_skinned_objects<'p>(
         &'p self,
         pass: &mut wgpu::RenderPass<'p>,
         scene: &Scene,
         offsets: &[Option<u32>],
-    ) {
+    ) -> u32 {
+        let mut draws = 0;
         for (&(obj_idx, instance_index), &offset) in self.draw_plan_skinned.iter().zip(offsets) {
             let Some(offset) = offset else {
                 continue;
@@ -791,7 +884,52 @@ impl Renderer {
                 0,
                 instance_index..instance_index + 1,
             );
+            draws += 1;
         }
+        draws
+    }
+
+    /// Ombres des objets skinnés (audit du 17 juillet 2026) : dessine chaque objet de
+    /// `draw_plan_skinned` dans la carte d'ombre avec `skinned_shadow_pipeline`
+    /// (profondeur seule + vertex de skinning — sans ce chemin, un objet skinné ne
+    /// projetait **aucune** ombre, la passe d'ombre n'itérant que le plan statique).
+    /// Mêmes règles de saut que `draw_skinned_objects` (`offsets` de la même frame,
+    /// `None` ⇒ objet sauté). Choix assumé : `draw_plan_skinned` est déjà filtré par le
+    /// frustum caméra (contrairement au plan statique, rendu hors champ dans l'ombre) —
+    /// une créature hors champ ne projette donc pas d'ombre dans le champ, imprécision
+    /// mineure acceptée plutôt que de maintenir un second plan skinné non cullé.
+    ///
+    /// Renvoie le nombre de draw calls réellement émis (compteur de stats).
+    fn draw_skinned_shadows<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        scene: &Scene,
+        offsets: &[Option<u32>],
+    ) -> u32 {
+        let mut draws = 0;
+        for (&(obj_idx, instance_index), &offset) in self.draw_plan_skinned.iter().zip(offsets) {
+            let Some(offset) = offset else {
+                continue;
+            };
+            let MeshKind::Imported(mesh_idx) = scene.objects[obj_idx].mesh else {
+                continue;
+            };
+            let Some(Some(gpu_mesh)) = self.imported_gpu_skinned.get(mesh_idx as usize) else {
+                continue;
+            };
+            pass.set_pipeline(&self.skinned_shadow_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.skinned_models_bind_group, &[offset]);
+            pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
+            pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(
+                0..gpu_mesh.num_indices,
+                0,
+                instance_index..instance_index + 1,
+            );
+            draws += 1;
+        }
+        draws
     }
 
     /// Rendu headless d'**un** mesh skinné, en une seule instance (chemin de
@@ -808,9 +946,11 @@ impl Renderer {
     ) -> Vec<u8> {
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
         self.write_uniforms(app);
+        let mut raw = std::mem::take(&mut self.joint_raw_scratch);
         let joint_offset = self
-            .write_joint_matrices(0, joint_matrices)
+            .write_joint_matrices(0, joint_matrices, &mut raw)
             .expect("slot 0 < MAX_SKINNED_INSTANCES, toujours valide");
+        self.joint_raw_scratch = raw;
 
         let gpu_mesh = crate::gfx::mesh::GpuMesh::new_skinned(&self.device, mesh);
 
@@ -999,44 +1139,41 @@ impl Renderer {
     /// vers le même fichier disque avant de savoir laquelle jeter.
     pub(crate) fn invalidate_asset_textures(&mut self) {
         self.textures.retain(|k, _| k.is_empty());
+        // Les échecs mémorisés redeviennent tentables : un fichier réparé/ajouté
+        // sur le disque doit pouvoir se charger au prochain `sync_textures`.
+        self.failed_textures.clear();
     }
 
     /// Charge les textures référencées par la scène pas encore en cache.
     fn sync_textures(&mut self, scene: &Scene) {
         for obj in &scene.objects {
-            if obj.texture.is_empty() || self.textures.contains_key(&obj.texture) {
+            if obj.texture.is_empty()
+                || self.textures.contains_key(&obj.texture)
+                || self.failed_textures.contains(&obj.texture)
+            {
                 continue;
             }
-            let bg = match load_rgba(&obj.texture) {
-                Some((rgba, w, h)) => make_texture(
-                    &self.device,
-                    &self.queue,
-                    &self.tex_layout,
-                    &self.tex_sampler,
-                    &self.mipgen_pipeline,
-                    &self.mipgen_layout,
-                    &self.mipgen_sampler,
-                    &rgba,
-                    w,
-                    h,
-                ),
-                None => {
-                    log::error!("Texture illisible : {}", obj.texture);
-                    // repli : réutilise la blanche pour ne pas réessayer en boucle
-                    make_texture(
-                        &self.device,
-                        &self.queue,
-                        &self.tex_layout,
-                        &self.tex_sampler,
-                        &self.mipgen_pipeline,
-                        &self.mipgen_layout,
-                        &self.mipgen_sampler,
-                        &[255, 255, 255, 255],
-                        1,
-                        1,
-                    )
-                }
+            let Some((rgba, w, h)) = load_rgba(&obj.texture) else {
+                log::error!("Texture illisible : {}", obj.texture);
+                // Repli : mémorise l'échec pour ne pas réessayer (ni re-logger) à
+                // chaque frame — les sites de dessin retombent déjà sur la texture
+                // blanche `""` quand le chemin est absent du cache, inutile d'en
+                // recréer une 1×1 par chemin cassé comme avant (audit juillet 2026).
+                self.failed_textures.insert(obj.texture.clone());
+                continue;
             };
+            let bg = make_texture(
+                &self.device,
+                &self.queue,
+                &self.tex_layout,
+                &self.tex_sampler,
+                &self.mipgen_pipeline,
+                &self.mipgen_layout,
+                &self.mipgen_sampler,
+                &rgba,
+                w,
+                h,
+            );
             self.textures.insert(obj.texture.clone(), bg);
         }
     }
@@ -1903,7 +2040,8 @@ impl Renderer {
         // les lignes de debug ci-dessous) — `queue.write_buffer` n'est pas ordonné avec
         // les draw calls d'un encoder pas encore soumis, donc rien de tout ça ne peut
         // être fait entre deux `draw_indexed` de la passe principale plus bas.
-        let skinned_offsets = self.prepare_skinned_draws(&app.scene);
+        // Offsets dans `self.skinned_offsets_scratch` (tampon réutilisé, audit perf).
+        self.prepare_skinned_draws(&app.scene);
 
         // Préparer les lignes du gizmo + marqueurs de lumières (jamais en player/aperçu mobile).
         let gizmo_count = if app.player || app.device_preview {
@@ -2082,6 +2220,12 @@ impl Renderer {
             encoder.write_timestamp(&prof.query_set, 0);
         }
 
+        // Nombre de draw calls réellement émis par les passes ombre + scène (les
+        // boucles ci-dessous l'incrémentent à chaque `draw_indexed`) — remplace
+        // l'ancienne estimation `2 × (plan + plan skinné)`, qui surcomptait les
+        // statiques (batchés en plages d'instances, pas un draw par objet).
+        let mut scene_draw_calls: u32 = 0;
+
         // Passe d'ombre : profondeur de la scène depuis la lumière → carte d'ombre.
         {
             let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2128,10 +2272,17 @@ impl Renderer {
                             k += 1;
                         }
                         spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                        scene_draw_calls += 1;
                     }
                 }
                 i = j;
             }
+            // Objets skinnés dans la carte d'ombre (audit du 17 juillet 2026) : pipeline
+            // dédié profondeur seule + skinning, cf. `draw_skinned_shadows` — avant, la
+            // passe d'ombre n'itérait que `draw_plan` et aucun objet skinné ne projetait
+            // d'ombre.
+            scene_draw_calls +=
+                self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
         }
         if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
             encoder.write_timestamp(&prof.query_set, 1);
@@ -2230,6 +2381,7 @@ impl Renderer {
                             k += 1;
                         }
                         pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                        scene_draw_calls += 1;
                     }
                 }
                 i = group_end;
@@ -2253,7 +2405,8 @@ impl Renderer {
 
             // Objets skinnés : un draw individuel par objet, palettes déjà
             // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
-            self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
+            scene_draw_calls +=
+                self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
         }
         if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
             encoder.write_timestamp(&prof.query_set, 2);
@@ -2297,12 +2450,12 @@ impl Renderer {
         };
         self.editor = Some(editor);
 
-        // Estimation du nombre de draw calls (ombre + scène — cf. doc de
-        // `last_frame_draw_calls`, bloom/tonemap/UI ajoutent quelques draws fixes
-        // non comptés ici) : coût dominant d'une frame, pas besoin de compter chaque
-        // site d'appel pour que le chiffre reste utile en pratique.
-        self.last_frame_draw_calls =
-            2 * (self.draw_plan.len() as u32 + self.draw_plan_skinned.len() as u32);
+        // Nombre de draw calls des passes ombre + scène (cf. doc de
+        // `last_frame_draw_calls`, bloom/tonemap/UI/ciel/grille/gizmos ajoutent
+        // quelques draws fixes non comptés ici) : compté sur les `draw_indexed`
+        // réellement émis — l'ancienne estimation `2 × (plan + plan skinné)`
+        // surcomptait les statiques (batchés) et devinait au lieu de mesurer.
+        self.last_frame_draw_calls = scene_draw_calls;
 
         if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
             encoder.write_timestamp(&prof.query_set, 4);
@@ -2336,7 +2489,7 @@ impl Renderer {
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
         self.write_uniforms(app);
         // Skinning GPU : cf. commentaire équivalent dans `render()`.
-        let skinned_offsets = self.prepare_skinned_draws(&app.scene);
+        self.prepare_skinned_draws(&app.scene);
 
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("headless_target"),
@@ -2460,6 +2613,10 @@ impl Renderer {
                 }
                 i = j;
             }
+            // Objets skinnés dans la carte d'ombre — même correctif que `render()`
+            // (audit du 17 juillet 2026), appliqué ici aussi pour que les golden
+            // tests capturent les ombres skinnées.
+            self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
         }
 
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
@@ -2552,7 +2709,7 @@ impl Renderer {
             }
 
             // Objets skinnés : cf. commentaire équivalent dans `render()`.
-            self.draw_skinned_objects(&mut pass, &app.scene, &skinned_offsets);
+            self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
         }
 
         // Bloom : cf. commentaire équivalent dans `render()`.
@@ -2789,7 +2946,8 @@ mod tests {
         };
 
         renderer.draw_plan_skinned = (0..n).map(|i| (i, i as u32)).collect();
-        let offsets = renderer.prepare_skinned_draws(&scene);
+        renderer.prepare_skinned_draws(&scene);
+        let offsets = &renderer.skinned_offsets_scratch;
 
         assert_eq!(offsets.len(), n);
         let valid = MAX_SKINNED_INSTANCES;
@@ -2818,6 +2976,162 @@ mod tests {
             valid_offsets.len(),
             valid,
             "les offsets des objets dans la capacité doivent être tous distincts"
+        );
+
+        // Garde-fou visible (audit du 17 juillet 2026) : les 3 objets au-delà de la
+        // capacité ne doivent pas rester un simple `log::warn` — le compteur exposé
+        // (`skinned_dropped_count`) doit les recenser, prêt à être affiché dans un
+        // panneau de stats.
+        assert_eq!(
+            renderer.skinned_dropped_count(),
+            3,
+            "les objets skinnés ignorés faute de créneau doivent être comptés"
+        );
+
+        // Et il se réinitialise à chaque frame préparée : une frame qui tient dans la
+        // capacité doit revenir à 0, pas cumuler les frames passées.
+        renderer.draw_plan_skinned = vec![(0, 0)];
+        renderer.prepare_skinned_draws(&scene);
+        assert_eq!(
+            renderer.skinned_dropped_count(),
+            0,
+            "le compteur d'objets ignorés doit repartir de zéro à chaque frame"
+        );
+    }
+
+    /// P1 (audit du 17 juillet 2026) : les objets skinnés ne projetaient **aucune**
+    /// ombre — la passe d'ombre n'itérait que `draw_plan` (statiques), jamais
+    /// `draw_plan_skinned`. Preuve par le rendu : un triangle skinné horizontal
+    /// au-dessus d'un sol nu doit créer une zone nettement sombre quelque part sur ce
+    /// sol (détectée par balayage, sans dépendre de la position exacte de l'ombre —
+    /// la géométrie de la fixture après import/skinning rend le calcul analytique
+    /// fragile). Sans le correctif, le sol est un dégradé lisse sans aucune zone
+    /// sombre : le test échoue. Passe par `render_scene_headless`, le même chemin que
+    /// les golden tests — le correctif y est donc couvert aussi.
+    #[test]
+    fn skinned_objects_cast_a_shadow_on_the_ground() {
+        use crate::scene::{ImportedMesh, SceneObject, import};
+
+        let (width, height) = (160u32, 120u32);
+        let mut renderer = match pollster::block_on(Renderer::new_headless(width, height)) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "skinned_objects_cast_a_shadow_on_the_ground : pas de GPU ({e}) — sauté."
+                );
+                return;
+            }
+        };
+
+        // Mesh skinné minimal : la fixture triangle + squelette de `import::tests`,
+        // rechargée par `load_skinning` (même chemin que le vrai import).
+        let bytes = import::tests::skinned_triangle_glb();
+        let path = import::tests::write_temp_glb(&bytes, "renderer_skinned_shadow");
+        let (data, aabb_min, aabb_max) =
+            import::load_gltf(path.to_str().unwrap()).expect("glTF de test valide");
+        let mut imported = ImportedMesh {
+            path: path.to_str().unwrap().to_string(),
+            data,
+            aabb_min,
+            aabb_max,
+            ..Default::default()
+        };
+        imported.load_skinning();
+        let _ = std::fs::remove_file(&path);
+        assert!(imported.skeleton.is_some(), "fixture : squelette attendu");
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            imported: vec![imported],
+            objects: vec![
+                // Sol : cube aplati et élargi, blanc par défaut.
+                SceneObject {
+                    mesh: MeshKind::Cube,
+                    transform: crate::scene::Transform {
+                        scale: glam::Vec3::new(10.0, 0.1, 10.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                // Triangle skinné : couché à l'horizontale 3 m au-dessus du sol,
+                // normale vers le bas — sa face **arrière** regarde la lumière, ce que
+                // le cull front de la passe d'ombre laisse passer (vérifié : l'autre
+                // orientation est cullée, une fixture à un seul triangle n'est pas un
+                // volume fermé). Émissif : vu de dessus, sa face avant tournée vers le
+                // sol ne reçoit aucune lumière directe et rendrait sa silhouette aussi
+                // sombre que l'ombre cherchée — l'émissif la garde brillante sans
+                // changer quoi que ce soit à la profondeur écrite dans la carte
+                // d'ombre, donc aucun faux positif du balayage ci-dessous.
+                SceneObject {
+                    mesh: MeshKind::Imported(0),
+                    transform: crate::scene::Transform {
+                        position: glam::Vec3::new(0.0, 3.0, 0.0),
+                        rotation: glam::Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                        scale: glam::Vec3::splat(2.0),
+                    },
+                    emissive: 2.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        // Lumière inclinée depuis +X (ombre décalée hors de la silhouette des
+        // triangles vus de haut), ambiante réduite : l'ombre n'atténue que la part
+        // directe, un plancher ambiant fort noierait le contraste recherché.
+        app.scene.light.dir = [0.6, 1.0, 0.0];
+        app.scene.light.ambient = 0.05;
+        // Vue quasi zénithale : sol, triangle et zone d'ombre tous à l'écran.
+        app.camera.target = glam::Vec3::ZERO;
+        app.camera.distance = 10.0;
+        app.camera.pitch = 1.4;
+        app.camera.yaw = 0.0;
+
+        let pixels = renderer.render_scene_headless(&mut app, width, height);
+
+        // Projette un point monde en pixel (l'aspect de la caméra vient d'être fixé
+        // par `render_scene_headless`).
+        let vp = app.camera.view_proj();
+        let to_px = |p: glam::Vec3| -> (u32, u32) {
+            let clip = vp * p.extend(1.0);
+            let ndc = clip.truncate() / clip.w;
+            (
+                (((ndc.x * 0.5 + 0.5) * width as f32) as u32).min(width - 1),
+                (((0.5 - ndc.y * 0.5) * height as f32) as u32).min(height - 1),
+            )
+        };
+        // Luminance moyenne d'un carré 3×3 autour d'un pixel.
+        let lum_at = |(cx, cy): (u32, u32)| -> f32 {
+            let mut sum = 0.0;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let x = (cx as i32 + dx).clamp(0, width as i32 - 1) as u32;
+                    let y = (cy as i32 + dy).clamp(0, height as i32 - 1) as u32;
+                    let i = ((y * width + x) * 4) as usize;
+                    sum += pixels[i] as f32 + pixels[i + 1] as f32 + pixels[i + 2] as f32;
+                }
+            }
+            sum / (9.0 * 3.0)
+        };
+
+        // Balayage du sol autour de l'origine : sans ombre skinnée, cette zone est un
+        // dégradé lisse et bien éclairé (~150-215 mesurés, seuls le ciel/hors-sol
+        // descendent plus bas mais sont hors de la zone balayée) ; l'ombre portée y
+        // creuse une plage quasi noire (~2 mesuré, plancher ambiant). Les triangles
+        // eux-mêmes, blancs et éclairés par-dessus, restent clairs même s'ils occluent
+        // un point balayé — aucun faux positif possible à ce seuil.
+        let mut dark_samples = 0;
+        for ix in -22..=22 {
+            for iz in -22..=22 {
+                let p = glam::Vec3::new(ix as f32 * 0.2, 0.05, iz as f32 * 0.2);
+                if lum_at(to_px(p)) < 90.0 {
+                    dark_samples += 1;
+                }
+            }
+        }
+        assert!(
+            dark_samples >= 10,
+            "aucune zone d'ombre détectée sur le sol ({dark_samples} échantillons sombres) \
+             — la passe d'ombre ne dessine probablement pas les objets skinnés"
         );
     }
 
@@ -2852,7 +3166,8 @@ mod tests {
 
         renderer.sync_objects(&app.scene);
         renderer.write_uniforms(&app);
-        let offsets = renderer.prepare_skinned_draws(&app.scene);
+        renderer.prepare_skinned_draws(&app.scene);
+        let offsets = &renderer.skinned_offsets_scratch;
 
         let player_obj_idx = app
             .scene
@@ -2866,10 +3181,7 @@ mod tests {
         // n'a donc pas de palette de joints à protéger — seule sa présence compte.
         if !is_skinned(&app.scene, app.scene.objects[player_obj_idx].mesh) {
             assert!(
-                renderer
-                    .draw_plan
-                    .iter()
-                    .any(|d| d.obj == player_obj_idx),
+                renderer.draw_plan.iter().any(|d| d.obj == player_obj_idx),
                 "le joueur non skinné doit apparaître dans le plan de dessin statique"
             );
             return;
