@@ -1678,6 +1678,7 @@ impl Renderer {
                 debug_view: app.debug_view,
                 gpu_pass_timings_ms,
                 gpu_draw_calls,
+                skinned_dropped: self.skinned_dropped_count(),
             };
             let net_status = app.net_status.clone();
             let net_connected = app.is_connected();

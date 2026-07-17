@@ -194,6 +194,10 @@ pub struct StatusInfo<'a> {
     /// Estimation du nombre de draw calls de la dernière frame — cf. doc de
     /// `Renderer::last_frame_draw_calls`.
     pub gpu_draw_calls: u32,
+    /// Objets skinnés ignorés à la dernière frame faute de slot
+    /// (`MAX_SKINNED_INSTANCES`) — cf. `Renderer::skinned_dropped_count`.
+    /// Doit rester à 0 ; toute valeur > 0 est mise en évidence dans le Profiler.
+    pub skinned_dropped: u32,
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.

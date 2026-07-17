@@ -145,6 +145,14 @@ pub(super) fn tool_windows(
                 "🔺 ~{} draw calls (estimation)",
                 status.gpu_draw_calls
             ));
+            // Dépassement du budget d'instances skinnées : silencieux à l'écran
+            // (objets simplement absents), donc mis en évidence ici dès que > 0.
+            let (label, alert) = skinned_dropped_status(status.skinned_dropped);
+            if alert {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 80), label);
+            } else {
+                ui.label(label);
+            }
         });
 
     // --- Contrôle qualité APK (APK Readiness Check) ---
@@ -1590,6 +1598,20 @@ pub(super) fn add_object_cards_window(
     panels.add_object_cards = open;
 }
 
+/// Libellé du compteur d'objets skinnés ignorés (`MAX_SKINNED_INSTANCES`
+/// dépassé) et faut-il l'afficher en couleur d'alerte. Extrait du Profiler FPS
+/// pour être testable sans contexte egui.
+fn skinned_dropped_status(dropped: u32) -> (String, bool) {
+    if dropped == 0 {
+        ("🦴 0 objet skinné ignoré".to_string(), false)
+    } else {
+        (
+            format!("🦴 {dropped} objet(s) skinné(s) ignoré(s) — budget d'instances dépassé !"),
+            true,
+        )
+    }
+}
+
 fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
     egui::ComboBox::from_label("liaison")
         .selected_text(format!("{binding:?}"))
@@ -1604,4 +1626,27 @@ fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
                 ui.selectable_value(binding, b, format!("{b:?}"));
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skinned_dropped_status;
+
+    /// Zéro objet ignoré : affichage neutre, pas de couleur d'alerte.
+    #[test]
+    fn skinned_dropped_zero_sans_alerte() {
+        let (label, alert) = skinned_dropped_status(0);
+        assert!(!alert);
+        assert!(label.contains('0'), "libellé inattendu : {label}");
+    }
+
+    /// Dès qu'un objet est ignoré, le compteur exact apparaît et l'alerte
+    /// s'active — le dépassement ne doit plus jamais être silencieux
+    /// (audit du 17 juillet, §3).
+    #[test]
+    fn skinned_dropped_positif_avec_alerte() {
+        let (label, alert) = skinned_dropped_status(7);
+        assert!(alert);
+        assert!(label.contains('7'), "libellé inattendu : {label}");
+    }
 }
