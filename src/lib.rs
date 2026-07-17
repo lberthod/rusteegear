@@ -266,8 +266,23 @@ impl App {
             return;
         };
         let mut changed = false;
-        while let Some(gilrs::Event { event, .. }) = gilrs.next_event() {
+        while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             match event {
+                // Diagnostic de branchement : nom + source du mapping. Une
+                // Logitech F310/F710 a un commutateur X/D au dos — dans le
+                // mauvais mode elle arrive sans mapping SDL (boutons/axes
+                // fantaisistes) ou n'apparaît pas du tout selon l'OS ; ce log
+                // est le seul indice pour le diagnostiquer sans deviner.
+                gilrs::EventType::Connected => {
+                    let pad = gilrs.gamepad(id);
+                    log::info!(
+                        "Manette connectée : « {} » (mapping : {:?}) — si les boutons ne \
+                         répondent pas comme attendu (Logitech F310/F710), basculer le \
+                         commutateur X/D au dos de la manette",
+                        pad.name(),
+                        pad.mapping_source()
+                    );
+                }
                 gilrs::EventType::ButtonPressed(btn, _) => {
                     self.gamepad_held.insert(btn);
                     changed = true;
@@ -716,10 +731,11 @@ fn make_app(player: bool) -> App {
             &guest_name(),
         );
     } else {
-        // L'éditeur s'ouvre directement sur la scène centrale du projet (MMORPG),
-        // pas sur la petite démo par défaut. `clear_history` évite qu'un Ctrl+Z
-        // juste après l'ouverture ramène la scène vide interne.
-        app.state.load_mmorpg_demo();
+        // L'éditeur s'ouvre directement sur la scène de base du MMORPG
+        // (`assets/player_scene.json`, embarquée — la même que jouent le site web
+        // et les builds Player), pas sur la petite démo par défaut. `clear_history`
+        // évite qu'un Ctrl+Z juste après l'ouverture ramène la scène vide interne.
+        app.state.load_embedded_player_scene();
         app.state.clear_history();
     }
     app
@@ -830,19 +846,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_editor_opens_directly_on_the_mmorpg_scene_with_a_clean_history() {
-        // `load_mmorpg_demo` seed des prefabs dans le vrai `assets_dir()` : même
-        // verrou que les autres tests dans ce cas (cf. `app::demos`).
-        if crate::assets::assets_dir().is_none() {
-            return;
-        }
-        let _guard = crate::assets::REAL_ASSETS_DIR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+    fn the_editor_opens_directly_on_the_embedded_player_scene_with_a_clean_history() {
         let mut app = make_app(false);
+        // « Feu communal » n'existe que dans la scène du jeu exporté
+        // (`assets/player_scene.json`, le hameau fortifié) — ni dans la démo par
+        // défaut ni dans `Scene::mmorpg_demo`.
         assert!(
-            app.state.scene.objects.iter().any(|o| o.name == "Repère 1"),
-            "l'éditeur doit s'ouvrir sur la scène MMORPG (scène centrale), pas la démo par défaut"
+            app.state
+                .scene
+                .objects
+                .iter()
+                .any(|o| o.name == "Feu communal"),
+            "l'éditeur doit s'ouvrir sur la scène de base du MMORPG \
+             (assets/player_scene.json), pas sur une démo"
         );
         // Ctrl+Z juste après l'ouverture ne doit PAS ramener la scène vide
         // interne : l'historique est vidé au démarrage (`clear_history`).

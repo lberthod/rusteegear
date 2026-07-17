@@ -114,6 +114,14 @@ pub const STICK_DEADZONE: f32 = 0.15;
 
 /// Résout l'état manette d'une frame à partir des boutons tenus (`gilrs::Button`),
 /// des axes bruts des deux sticks et de la table de remapping — cf. `GamepadInput`.
+///
+/// **D-pad = déplacement de secours** : une croix directionnelle tenue pilote
+/// `turn`/`thrust` comme le stick gauche (cumulés puis bornés). Deux raisons :
+/// certaines manettes en mode DirectInput (Logitech F310/F710, commutateur
+/// « D ») rapportent le hat à la place du stick selon l'OS/le mapping, et un
+/// déplacement digital est un repli universel qui ne coûte rien. Un bouton de
+/// croix **assigné à une action** dans la table de remapping est exclu du
+/// déplacement (sinon « Saut sur DPadUp » ferait aussi avancer à chaque saut).
 pub fn resolve_gamepad_input(
     held: &std::collections::HashSet<gilrs::Button>,
     raw_axes: (f32, f32),
@@ -121,9 +129,29 @@ pub fn resolve_gamepad_input(
     bindings: &crate::app::settings::GamepadBindings,
 ) -> GamepadInput {
     let pressed = |name: &str| gamepad_button_from_name(name).is_some_and(|b| held.contains(&b));
+    let bound = |btn: gilrs::Button| {
+        [
+            &bindings.jump,
+            &bindings.attack,
+            &bindings.fire,
+            &bindings.heal,
+            &bindings.weapon,
+            &bindings.menu,
+            &bindings.hud,
+        ]
+        .iter()
+        .any(|name| gamepad_button_from_name(name) == Some(btn))
+    };
+    let dpad_axis = |neg: gilrs::Button, pos: gilrs::Button| -> f32 {
+        let held_free = |b: gilrs::Button| held.contains(&b) && !bound(b);
+        (held_free(pos) as i8 - held_free(neg) as i8) as f32
+    };
+    use gilrs::Button::{DPadDown, DPadLeft, DPadRight, DPadUp};
+    let turn = apply_deadzone(raw_axes.0, STICK_DEADZONE) + dpad_axis(DPadLeft, DPadRight);
+    let thrust = apply_deadzone(raw_axes.1, STICK_DEADZONE) + dpad_axis(DPadDown, DPadUp);
     GamepadInput {
-        turn: apply_deadzone(raw_axes.0, STICK_DEADZONE),
-        thrust: apply_deadzone(raw_axes.1, STICK_DEADZONE),
+        turn: turn.clamp(-1.0, 1.0),
+        thrust: thrust.clamp(-1.0, 1.0),
         look_x: apply_deadzone(raw_axes_right.0, STICK_DEADZONE),
         look_y: apply_deadzone(raw_axes_right.1, STICK_DEADZONE),
         jump: pressed(&bindings.jump),
@@ -198,6 +226,44 @@ mod tests {
         assert!(
             resolved.jump,
             "le remapping doit être respecté, pas le défaut South"
+        );
+    }
+
+    /// D-pad = déplacement de secours (Logitech F310/F710 en mode « D » : le
+    /// hat remplace parfois le stick gauche selon l'OS) — la croix tenue doit
+    /// piloter `turn`/`thrust` comme le stick, cumulée puis bornée.
+    #[test]
+    fn dpad_drives_movement_as_a_left_stick_fallback() {
+        let mut held = std::collections::HashSet::new();
+        held.insert(gilrs::Button::DPadUp);
+        held.insert(gilrs::Button::DPadRight);
+        let bindings = GamepadBindings::default();
+        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
+        assert_eq!(resolved.thrust, 1.0, "DPadUp = avancer");
+        assert_eq!(resolved.turn, 1.0, "DPadRight = tourner à droite");
+
+        // Cumul stick + croix : borné, jamais au-delà de ±1.
+        let resolved = resolve_gamepad_input(&held, (0.8, 0.9), (0.0, 0.0), &bindings);
+        assert_eq!(resolved.turn, 1.0);
+        assert_eq!(resolved.thrust, 1.0);
+    }
+
+    /// Un bouton de croix **assigné à une action** dans le remapping ne doit
+    /// plus contribuer au déplacement — sinon « Saut sur DPadUp » ferait aussi
+    /// avancer le personnage à chaque saut.
+    #[test]
+    fn a_dpad_button_bound_to_an_action_no_longer_moves_the_player() {
+        let mut held = std::collections::HashSet::new();
+        held.insert(gilrs::Button::DPadUp);
+        let bindings = GamepadBindings {
+            jump: "DPadUp".into(),
+            ..GamepadBindings::default()
+        };
+        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
+        assert!(resolved.jump, "DPadUp remappé sur Saut doit sauter");
+        assert_eq!(
+            resolved.thrust, 0.0,
+            "un bouton de croix assigné à une action est exclu du déplacement"
         );
     }
 
