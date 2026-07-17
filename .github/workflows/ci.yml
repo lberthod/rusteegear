@@ -44,6 +44,55 @@ jobs:
       - name: Budget unwrap/expect/panic (Sprint 113b)
         run: python3 scripts/check_unwrap_budget.py
 
+  # Tests réseau à sockets réels (feature `net_tests`, cf. Cargo.toml et
+  # docs/architecture.md) : ils ouvrent des sockets TCP sur localhost, ce que
+  # les runners ubuntu-latest autorisent. Job séparé du job `check` pour ne pas
+  # rallonger le chemin critique et isoler d'éventuels flakes réseau.
+  net-tests:
+    name: Tests réseau (net_tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer la toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Dépendances système pour winit/wgpu/egui sur Linux.
+      - name: Dépendances système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libasound2-dev libudev-dev pkg-config
+
+      - name: Tests avec sockets réels
+        run: cargo test --features net_tests
+
+  # Goldens de rendu sur macOS : les runners Apple Silicon ont un GPU Metal,
+  # contrairement à ubuntu-latest où ces tests sont sautés faute de GPU.
+  # `continue-on-error: true` car le GPU des runners n'est pas identique au GPU
+  # local qui a produit les goldens : une divergence de pixels au-delà de la
+  # tolérance est possible. Le job est d'abord informatif — à durcir (retirer
+  # le continue-on-error) après quelques runs verts.
+  golden:
+    name: Goldens de rendu (macOS/Metal)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer la toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Tests goldens (rendu + skinning)
+        run: cargo test --test golden_render --test golden_skinning
+
   # Vérifie que la lib compile pour les cibles mobiles (build seul, pas de tests).
   cross-build:
     name: Build cross (${{ matrix.target }})
