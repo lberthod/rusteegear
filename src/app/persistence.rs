@@ -250,6 +250,15 @@ impl AppState {
         // séparément, cf. `ImportedMesh::load_skinning` — silencieux si le mesh est
         // statique (squelette).
         imported.load_skinning();
+        // Un GLB riggé démarre sur son clip par défaut (« Idle » ou le premier) plutôt
+        // qu'en pose de liaison figée : sans `AnimationState`, il ne s'animerait jamais
+        // — même `obj.anim = ...` en Lua est ignoré sur un état absent.
+        let animation = imported
+            .default_clip()
+            .map(|clip| crate::scene::AnimationState {
+                clip: clip.to_string(),
+                ..Default::default()
+            });
         self.scene.imported.push(imported);
         // Recadrage auto : centrer à l'origine, mise à l'échelle ~2 u.
         let size = max - min;
@@ -274,6 +283,7 @@ impl AppState {
             roughness: 0.6,
             emissive: 0.0,
             trigger: false,
+            animation,
             ..Default::default()
         });
         self.select_single(self.scene.objects.len() - 1);

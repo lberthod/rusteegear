@@ -1753,6 +1753,34 @@ mod tests {
         );
     }
 
+    /// Hors Play, les clips squelettaux tournent quand même (prévisualisation
+    /// d'édition) : `advance_play` avance `anim.time` au dt de frame même quand
+    /// `playing == false` — sans ça, tout GLB riggé reste figé en pose de liaison
+    /// (T-pose) dans la vue d'édition tant qu'on ne lance pas Play.
+    #[test]
+    fn edit_mode_still_advances_skeletal_clips() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            animation: Some(crate::scene::AnimationState {
+                clip: "Idle".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(!app.playing, "AppState démarre en mode édition");
+        // Simule ~50 ms écoulés depuis la frame précédente (l'horloge réelle
+        // d'`advance_play` ne verrait que quelques µs entre deux appels de test).
+        app.last_frame = Instant::now() - std::time::Duration::from_millis(50);
+        app.advance_play();
+        let anim = app.scene.objects[0].animation.as_ref().unwrap();
+        assert!(
+            anim.time >= 0.04,
+            "~50 ms hors Play doivent avancer la lecture d'autant, obtenu {}",
+            anim.time
+        );
+    }
+
     #[test]
     fn sim_step_leaves_objects_without_animation_untouched() {
         let mut app = AppState::new();

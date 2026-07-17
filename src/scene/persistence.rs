@@ -23,6 +23,39 @@ impl Scene {
             }
             m.load_skinning();
         }
+        // Les clips viennent d'être rechargés : les objets skinnés sans état
+        // d'animation (scènes anciennes, imports d'avant le clip par défaut) reçoivent
+        // le leur maintenant — sinon ils resteraient figés en pose de liaison (T-pose).
+        self.ensure_default_animations();
+    }
+
+    /// Donne un `AnimationState` par défaut (« Idle » ou premier clip, cf.
+    /// `ImportedMesh::default_clip`) à tout objet dont le mesh importé a des clips mais
+    /// qui n'en a pas encore. Sans état, un mesh skinné reste figé en pose de liaison
+    /// (T-pose) et même `obj.anim = ...` en Lua est ignoré (cf. `app::scripting` :
+    /// le script ne fait que changer le clip d'un état **existant**). Les phases de
+    /// départ sont décalées d'un objet à l'autre pour éviter l'effet « armée
+    /// synchronisée » quand plusieurs copies du même asset jouent le même clip
+    /// (la lecture regarde `time % durée`, cf. `Clip::sample_joint` — n'importe
+    /// quel temps positif est valide).
+    pub fn ensure_default_animations(&mut self) {
+        let imported = &self.imported;
+        for (i, obj) in self.objects.iter_mut().enumerate() {
+            if obj.animation.is_some() {
+                continue;
+            }
+            let MeshKind::Imported(idx) = obj.mesh else {
+                continue;
+            };
+            let Some(clip) = imported.get(idx as usize).and_then(|m| m.default_clip()) else {
+                continue;
+            };
+            obj.animation = Some(super::AnimationState {
+                clip: clip.to_string(),
+                time: i as f32 * 0.37,
+                ..Default::default()
+            });
+        }
     }
 
     /// Construit une scène depuis le JSON contraint produit par l'IA (cf. `app::ai`).

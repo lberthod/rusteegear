@@ -173,6 +173,18 @@ pub struct ImportedMesh {
 }
 
 impl ImportedMesh {
+    /// Clip joué par défaut quand un objet utilisant ce mesh n'a pas d'`AnimationState` :
+    /// « Idle » si présent (convention de tous les packs Blender du projet,
+    /// cf. `scripts/blender/`), sinon le premier clip du fichier. `None` si le mesh
+    /// n'a aucun clip (statique) — rien à jouer.
+    pub fn default_clip(&self) -> Option<&str> {
+        self.clips
+            .iter()
+            .find(|c| c.name == "Idle")
+            .or_else(|| self.clips.first())
+            .map(|c| c.name.as_str())
+    }
+
     /// Recharge `skeleton`/`clips`/`vertex_skins` depuis `path`, **et**
     /// `tangents` depuis `data` déjà chargée — malgré son nom, cette méthode
     /// recalcule toute donnée dérivée non sérialisée d'un mesh importé, pas seulement le
@@ -1763,6 +1775,56 @@ mod tests {
             s.objects
                 .iter()
                 .any(|o| o.name == "Étoile Arrivée" && o.respawn_delay == 0.0)
+        );
+    }
+
+    #[test]
+    fn default_clip_prefers_idle_then_first() {
+        let mut m = ImportedMesh {
+            clips: vec![
+                import::Clip::without_tracks("Walk", 1.0),
+                import::Clip::without_tracks("Idle", 2.0),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(m.default_clip(), Some("Idle"));
+        m.clips.remove(1);
+        assert_eq!(m.default_clip(), Some("Walk"));
+        m.clips.clear();
+        assert_eq!(m.default_clip(), None, "mesh statique : rien à jouer");
+    }
+
+    #[test]
+    fn ensure_default_animations_fills_only_missing_states() {
+        let mut scene = Scene::demo(); // Sol/Cube/Sphère : meshes builtin, jamais touchés
+        scene.imported.push(ImportedMesh {
+            clips: vec![import::Clip::without_tracks("Idle", 2.0)],
+            ..Default::default()
+        });
+        // Un GLB riggé sans état (le bug : T-pose pour toujours) et un autre dont le
+        // clip a déjà été choisi (par une démo ou un script) qui doit rester intact.
+        scene.objects.push(SceneObject {
+            mesh: MeshKind::Imported(0),
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            mesh: MeshKind::Imported(0),
+            animation: Some(AnimationState {
+                clip: "Walk".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        scene.ensure_default_animations();
+        assert!(
+            scene.objects[..3].iter().all(|o| o.animation.is_none()),
+            "les meshes builtin ne reçoivent pas d'état d'animation"
+        );
+        assert_eq!(scene.objects[3].animation.as_ref().unwrap().clip, "Idle");
+        assert_eq!(
+            scene.objects[4].animation.as_ref().unwrap().clip,
+            "Walk",
+            "un état existant n'est jamais écrasé"
         );
     }
 
