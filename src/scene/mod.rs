@@ -473,11 +473,19 @@ pub struct Combat {
     /// Une valeur plus grande décrit un adversaire qui encaisse plusieurs coups avant de
     /// tomber (cf. `Scene::brawl_demo`, un duel façon Tekken/Smash) — décompté par
     /// `Scene::damage_attackable`, qui ne masque la cible que si ce coup l'achève.
-    /// Limite connue : un ennemi qui réapparaît (`respawn_delay` positif) revient avec
-    /// les PV où il les a laissés (0), pas remis à son maximum — sans effet sur les
-    /// démos actuelles (aucune ne combine plusieurs PV et réapparition).
+    /// Un ennemi qui réapparaît (`respawn_delay` positif) est remis à ses PV
+    /// d'origine (cf. `max_hp`), pas laissé à 0 — sinon il reviendrait « déjà
+    /// vaincu », re-masqué au premier coup sans jamais encaisser ses PV.
     #[serde(default = "default_combat_hp")]
     pub hp: u32,
+    /// PV d'origine, capturés au **premier coup reçu** (cf.
+    /// `Scene::damage_attackable_by`) : 0 = pas encore capturés (jamais touché).
+    /// Sert à restaurer `hp` au respawn (cf. `AppState::process_respawns`) — un
+    /// champ d'exécution, pas d'authoring, donc jamais sérialisé (`skip`) : les
+    /// scènes JSON existantes n'ont pas à le connaître, `hp` reste la seule
+    /// source d'authoring des PV.
+    #[serde(skip)]
+    pub max_hp: u32,
 }
 
 // Manuel comme `Controller`/`AiChaser` : `derive(Default)` donnerait hp=0 (cible déjà
@@ -490,6 +498,7 @@ impl Default for Combat {
             is_attack_fx: false,
             wave: 0,
             hp: default_combat_hp(),
+            max_hp: 0,
         }
     }
 }
@@ -3298,6 +3307,63 @@ mod tests {
             Some("joueur"),
             "le joueur embarqué doit porter le tag « joueur » (scripts des créatures 12/13)"
         );
+    }
+
+    /// Garde-fou du trou de synchro démo ↔ scène servie : l'authoring des vagues
+    /// (`mmorpg_demo_waves_follow_the_gdd_authoring_rules`, cf. `demos.rs`) ne
+    /// valide que `Scene::mmorpg_demo()`, alors que la scène réellement servie en
+    /// ligne est `assets/player_scene.json` (embarquée via `embedded_player`,
+    /// réécrite par `editor::export::bundle_scene_json` et les outils
+    /// `sync_embedded_scene_*`). Sans ce test, on peut retoucher les vagues de la
+    /// démo, garder tous les tests verts, et laisser la scène en ligne diverger.
+    /// Comparaison **structurelle** (aucune constante en dur) : chaque créature
+    /// attaquable doit porter la même manche (`Combat::wave`) et les mêmes PV
+    /// (`Combat::hp`) des deux côtés, appariée par nom — plus précis qu'un simple
+    /// multiset (wave, hp), qui laisserait passer un échange de stats entre deux
+    /// créatures. Lit le JSON du disque (pas `embedded_player()`, dont le repli
+    /// silencieux vers `Scene::demo()` masquerait un fichier corrompu).
+    #[test]
+    fn the_embedded_scene_waves_and_hp_match_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::mmorpg_demo();
+
+        // name → (wave, hp) des cibles attaquables d'une scène.
+        fn combat_stats(scene: &Scene) -> std::collections::BTreeMap<&str, (u32, u32)> {
+            scene
+                .objects
+                .iter()
+                .filter_map(|o| {
+                    let c = o.combat.as_ref()?;
+                    c.attackable.then_some((o.name.as_str(), (c.wave, c.hp)))
+                })
+                .collect()
+        }
+        let demo_stats = combat_stats(&demo);
+        let embedded_stats = combat_stats(&embedded);
+        assert!(
+            !demo_stats.is_empty(),
+            "la démo MMORPG doit avoir des cibles attaquables"
+        );
+        let sync_hint = "démo et scène servie divergent — relancer `cargo test \
+             sync_embedded_scene_creatures_from_the_demo -- --ignored` puis \
+             recompiler (cf. embedded-scene-export-overwrite-trap)";
+        assert_eq!(
+            demo_stats.len(),
+            embedded_stats.len(),
+            "nombre de cibles attaquables : {sync_hint}"
+        );
+        for (name, &(wave, hp)) in &demo_stats {
+            let &(e_wave, e_hp) = embedded_stats.get(name).unwrap_or_else(|| {
+                panic!("« {name} » absente de la scène embarquée : {sync_hint}")
+            });
+            assert_eq!(
+                (e_wave, e_hp),
+                (wave, hp),
+                "(wave, hp) de « {name} » : {sync_hint}"
+            );
+        }
     }
 
     #[test]

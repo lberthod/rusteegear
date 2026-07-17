@@ -211,6 +211,13 @@ impl Scene {
         let Some(c) = &mut o.combat else {
             return false;
         };
+        // Premier coup reçu : capture les PV d'origine (cf. `Combat::max_hp`, champ
+        // d'exécution non sérialisé) pour pouvoir les restaurer au respawn — ici, au
+        // point de dégât unique, plutôt qu'à la construction (les scènes JSON et les
+        // démos fabriquent leurs `Combat` sans passer par un constructeur commun).
+        if c.max_hp == 0 {
+            c.max_hp = c.hp;
+        }
         c.hp = c.hp.saturating_sub(amount);
         if c.hp == 0 {
             o.visible = false;

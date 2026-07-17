@@ -512,18 +512,9 @@ impl AppState {
             self.update_creature_bite(dt);
             self.update_network_heal(dt);
             self.update_network_revive(dt);
-            // Réapparition des pièces bonus dont le délai est écoulé.
+            // Réapparition des pièces bonus et ennemis dont le délai est écoulé.
             let now = self.time;
-            self.respawn_queue.retain(|&(i, at)| {
-                if now >= at {
-                    if let Some(o) = self.scene.objects.get_mut(i) {
-                        o.visible = true;
-                    }
-                    false
-                } else {
-                    true
-                }
-            });
+            self.process_respawns(now);
             // Défaite : le joueur a touché une zone mortelle (mort instantanée, ex. lave).
             if !self.lost
                 && let Some(p) = self.player_position()
@@ -635,6 +626,30 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Fait réapparaître les objets de `respawn_queue` dont le délai est écoulé
+    /// (pièces bonus, ennemis à `respawn_delay > 0`). Un ennemi qui revient est
+    /// remis à ses PV d'origine (`Combat::max_hp`, capturés au premier coup reçu,
+    /// cf. `Scene::damage_attackable_by`) : sans cette restauration, un ennemi à
+    /// plusieurs PV réapparaîtrait avec hp=0 — « déjà vaincu », re-masqué au
+    /// premier coup suivant sans jamais encaisser sa barre de vie.
+    fn process_respawns(&mut self, now: f32) {
+        self.respawn_queue.retain(|&(i, at)| {
+            if now >= at {
+                if let Some(o) = self.scene.objects.get_mut(i) {
+                    o.visible = true;
+                    if let Some(c) = &mut o.combat
+                        && c.max_hp > 0
+                    {
+                        c.hp = c.max_hp;
+                    }
+                }
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Déplace la caméra d'orbite comme une caméra libre (« vol libre »/noclip) :
@@ -2672,5 +2687,56 @@ mod tests {
             (yaw1 - yaw0).abs() < 1e-3,
             "reculer (S) ne doit jamais faire tourner le personnage : yaw0={yaw0}, yaw1={yaw1}"
         );
+    }
+
+    /// Garde-fou du piège respawn + PV : un ennemi à plusieurs PV et
+    /// `respawn_delay > 0` doit revenir avec ses PV d'origine, pas avec les 0 PV
+    /// où il les a laissés (sinon il réapparaît « déjà vaincu » : re-masqué au
+    /// premier coup, sans jamais encaisser sa barre de vie). Cf. `Combat::max_hp`
+    /// (capture au premier coup dans `Scene::damage_attackable_by`) et
+    /// `process_respawns` (restauration).
+    #[test]
+    fn a_respawning_enemy_comes_back_with_its_original_hp() {
+        let mut app = AppState::new();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Brute".into(),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                hp: 3,
+                ..Default::default()
+            }),
+            respawn_delay: 2.0,
+            ..Default::default()
+        });
+        let i = app.scene.objects.len() - 1;
+
+        // Trois coups pour le vaincre : les deux premiers blessent, le troisième
+        // l'achève (masqué) — mise en file de respawn comme le fait `update_attack`
+        // (cf. `app::combat`) au moment de la mise à mort.
+        assert!(!app.scene.damage_attackable(i));
+        assert!(!app.scene.damage_attackable(i));
+        assert!(app.scene.damage_attackable(i), "3e coup = mise à mort");
+        assert!(!app.scene.objects[i].visible, "vaincu ⇒ masqué");
+        let delay = app.scene.objects[i].respawn_delay;
+        app.respawn_queue.push((i, app.time + delay));
+
+        // Délai non écoulé : rien ne bouge.
+        app.process_respawns(app.time + delay * 0.5);
+        assert!(!app.scene.objects[i].visible);
+
+        // Délai écoulé : il réapparaît avec ses 3 PV d'origine…
+        app.process_respawns(app.time + delay);
+        assert!(app.scene.objects[i].visible, "délai écoulé ⇒ réapparu");
+        assert_eq!(
+            app.scene.objects[i].combat.as_ref().unwrap().hp,
+            3,
+            "le respawn doit restaurer les PV d'origine, pas laisser 0"
+        );
+        // …et redevient un adversaire entier : un coup le blesse sans le vaincre.
+        assert!(
+            !app.scene.damage_attackable(i),
+            "après respawn, un seul coup ne doit plus suffire"
+        );
+        assert!(app.scene.objects[i].visible);
     }
 }
