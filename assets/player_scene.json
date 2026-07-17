@@ -33982,9 +33982,7 @@
           1.0
         ]
       },
-      "mesh": {
-        "Imported": 112
-      },
+      "mesh": "Sphere",
       "script": "",
       "physics": "None",
       "collider_shape": "Auto",
@@ -34033,14 +34031,7 @@
       "visible": true,
       "deadly": false,
       "respawn_delay": 0.0,
-      "animation": {
-        "clip": "Idle",
-        "time": 0.0,
-        "speed": 1.0,
-        "prev_clip": "",
-        "prev_time": 0.0,
-        "blend": 1.0
-      },
+      "animation": null,
       "prefab": null,
       "tag": "joueur"
     },

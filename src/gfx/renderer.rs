@@ -2860,6 +2860,21 @@ mod tests {
             .iter()
             .position(|o| o.tag == "joueur")
             .expect("objet joueur introuvable dans la scène embarquée");
+
+        // Le joueur n'est plus forcément skinné (ex. primitive Sphere) : dans ce cas,
+        // il est dessiné par le plan statique batché, pas par `draw_plan_skinned`, et
+        // n'a donc pas de palette de joints à protéger — seule sa présence compte.
+        if !is_skinned(&app.scene, app.scene.objects[player_obj_idx].mesh) {
+            assert!(
+                renderer
+                    .draw_plan
+                    .iter()
+                    .any(|d| d.obj == player_obj_idx),
+                "le joueur non skinné doit apparaître dans le plan de dessin statique"
+            );
+            return;
+        }
+
         let slot = renderer
             .draw_plan_skinned
             .iter()
