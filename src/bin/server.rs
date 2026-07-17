@@ -173,7 +173,7 @@ impl Room {
     /// `NetServer` ne connaît pas la notion de salon, cf. sa doc :
     /// `broadcast_all_rooms()` atteint TOUS les clients du serveur, pas
     /// seulement ceux d'un salon donné, donc jamais utilisé ici, uniquement
-    /// `send_to` en boucle).
+    /// `send_to`/`send_to_many` ciblés sur ces ids).
     fn connected_ids(&self) -> Vec<PlayerId> {
         self.lobby.names.keys().copied().collect()
     }
@@ -252,15 +252,13 @@ fn handle_message(
                     room.lobby.firebase_uids.insert(id, uid);
                 }
                 player_room.insert(id, code);
-                for pid in room.connected_ids() {
-                    net.send_to(
-                        pid,
-                        &ServerMsg::PlayerJoined {
-                            player_id: id,
-                            name: name.clone(),
-                        },
-                    );
-                }
+                net.send_to_many(
+                    &room.connected_ids(),
+                    &ServerMsg::PlayerJoined {
+                        player_id: id,
+                        name,
+                    },
+                );
             } else {
                 log::warn!(
                     "Joueur {id} ({name}) : aucun gabarit pilotable dans la scène (salon « {code} »)"
@@ -305,9 +303,10 @@ fn handle_message(
             room.app.despawn_network_player(id);
             room.lobby.forget(id);
             log::info!("Joueur {id} quitte le salon « {code} »");
-            for pid in room.connected_ids() {
-                net.send_to(pid, &ServerMsg::PlayerLeft { player_id: id });
-            }
+            net.send_to_many(
+                &room.connected_ids(),
+                &ServerMsg::PlayerLeft { player_id: id },
+            );
         }
     }
 }
@@ -339,9 +338,10 @@ fn evict_timed_out_players(
             room.app.despawn_network_player(id);
             room.lobby.forget(id);
             player_room.remove(&id);
-            for pid in room.connected_ids() {
-                net.send_to(pid, &ServerMsg::PlayerLeft { player_id: id });
-            }
+            net.send_to_many(
+                &room.connected_ids(),
+                &ServerMsg::PlayerLeft { player_id: id },
+            );
         }
     }
 }
@@ -577,19 +577,18 @@ fn main() {
 
             if let Some(net) = &net {
                 let ids = room.connected_ids();
+                // Broadcast ciblé (`send_to_many`) : la `Snapshot` — le plus
+                // gros message du protocole — est encodée UNE seule fois par
+                // tick et par salon, au lieu d'un ré-encodage bincode identique
+                // par destinataire (audit réseau 2026-07).
                 let snapshot = ServerMsg::Snapshot(room.app.network_snapshot(tick));
-                for &pid in &ids {
-                    net.send_to(pid, &snapshot);
-                }
+                net.send_to_many(&ids, &snapshot);
                 // Évènements ponctuels produits par la simulation de ce tick
                 // (monstre vaincu, joueur vaincu...) : diffusés une fois, pour
                 // que les clients réagissent (son/flash) sans comparer deux
                 // snapshots — uniquement aux joueurs *de ce salon*.
                 for event in room.app.take_net_events() {
-                    let msg = ServerMsg::Event(event);
-                    for &pid in &ids {
-                        net.send_to(pid, &msg);
-                    }
+                    net.send_to_many(&ids, &ServerMsg::Event(event));
                 }
             }
 

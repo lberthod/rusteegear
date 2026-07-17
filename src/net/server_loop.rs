@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,8 +48,8 @@ fn server_ws_config() -> WebSocketConfig {
 /// Rate limiting par connexion (Sprint 113c) : `MAX_WS_MESSAGE_BYTES` borne déjà la
 /// taille d'un message *individuel*, mais rien n'empêchait jusqu'ici un client de les
 /// enchaîner sans limite — un flood de petits messages valides passe outre ce filtre.
-/// Fenêtre glissante d'une seconde, réinitialisée en continu (pas de fuite mémoire :
-/// juste deux compteurs + un `Instant` par connexion).
+/// Fenêtre glissante d'une seconde approchée par deux seaux (cf. `RateLimiter` —
+/// pas de fuite mémoire : quatre compteurs + un `Instant` par connexion).
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 /// Un client légitime envoie au plus un `Input` par tick serveur (`SERVER_TICK` =
 /// ~60 Hz, cf. `src/bin/server.rs`) ; ×2 pour absorber le jitter réseau/scheduling
@@ -68,6 +68,79 @@ const MAX_BYTES_PER_SEC: usize = MAX_WS_MESSAGE_BYTES;
 /// qu'une seule machine épuise les ressources du serveur en ouvrant des centaines de
 /// sockets.
 const MAX_CONNECTIONS_PER_IP: usize = 4;
+
+/// Limiteur de débit à fenêtre glissante **approchée par deux seaux** (audit
+/// réseau 2026-07) : l'ancienne fenêtre « réinitialisée en bloc » laissait un
+/// client émettre jusqu'à ~2× `MAX_MESSAGES_PER_SEC` en concentrant un burst à
+/// la toute fin d'une fenêtre puis un second juste après la remise à zéro. Ici,
+/// le débit estimé sur la dernière seconde glissante compte le seau courant en
+/// entier plus le seau précédent pondéré par la fraction de sa fenêtre encore
+/// couverte (technique classique du « sliding window counter ») : le pire
+/// dépassement possible tombe de ~2× à une approximation marginale, sans
+/// horodater chaque message individuellement.
+///
+/// Struct pure (le temps est un paramètre, jamais `Instant::now()` en interne)
+/// pour être testable de façon déterministe sans socket ni `sleep`.
+struct RateLimiter {
+    /// Début de la fenêtre courante (avance par pas de `RATE_LIMIT_WINDOW`).
+    window_start: Instant,
+    /// Compteurs de la fenêtre précédente (pondérés à l'estimation).
+    prev_msgs: u32,
+    prev_bytes: usize,
+    /// Compteurs de la fenêtre courante (comptés en entier).
+    curr_msgs: u32,
+    curr_bytes: usize,
+}
+
+impl RateLimiter {
+    fn new(now: Instant) -> Self {
+        Self {
+            window_start: now,
+            prev_msgs: 0,
+            prev_bytes: 0,
+            curr_msgs: 0,
+            curr_bytes: 0,
+        }
+    }
+
+    /// Fait basculer les seaux jusqu'à ce que `now` tombe dans la fenêtre
+    /// courante : une fenêtre écoulée décale courant → précédent ; plus d'une
+    /// fenêtre complète de silence périme les deux seaux d'un coup.
+    fn roll(&mut self, now: Instant) {
+        let elapsed = now.duration_since(self.window_start);
+        if elapsed >= RATE_LIMIT_WINDOW * 2 {
+            self.prev_msgs = 0;
+            self.prev_bytes = 0;
+            self.curr_msgs = 0;
+            self.curr_bytes = 0;
+            self.window_start = now;
+        } else if elapsed >= RATE_LIMIT_WINDOW {
+            self.prev_msgs = self.curr_msgs;
+            self.prev_bytes = self.curr_bytes;
+            self.curr_msgs = 0;
+            self.curr_bytes = 0;
+            self.window_start += RATE_LIMIT_WINDOW;
+        }
+    }
+
+    /// Enregistre un message de `len` octets reçu à `now` ; `true` si le débit
+    /// estimé sur la dernière seconde glissante dépasse `MAX_MESSAGES_PER_SEC`
+    /// ou `MAX_BYTES_PER_SEC` (l'appelant coupe alors la connexion).
+    fn over_budget(&mut self, now: Instant, len: usize) -> bool {
+        self.roll(now);
+        self.curr_msgs = self.curr_msgs.saturating_add(1);
+        self.curr_bytes = self.curr_bytes.saturating_add(len);
+        // Part de la fenêtre précédente encore couverte par la seconde
+        // glissante qui se termine à `now` : 1.0 au tout début de la fenêtre
+        // courante, 0.0 à sa fin.
+        let frac =
+            now.duration_since(self.window_start).as_secs_f64() / RATE_LIMIT_WINDOW.as_secs_f64();
+        let carry = (1.0 - frac).max(0.0);
+        let msgs = f64::from(self.prev_msgs) * carry + f64::from(self.curr_msgs);
+        let bytes = self.prev_bytes as f64 * carry + self.curr_bytes as f64;
+        msgs > f64::from(MAX_MESSAGES_PER_SEC) || bytes > MAX_BYTES_PER_SEC as f64
+    }
+}
 
 type IpCounts = Arc<Mutex<HashMap<IpAddr, usize>>>;
 
@@ -97,6 +170,18 @@ impl Drop for IpGuard {
     }
 }
 
+/// Plafond de l'inbox partagée (messages en attente côté thread principal,
+/// toutes connexions confondues — audit réseau 2026-07) : l'ancien canal non
+/// borné laissait la mémoire croître sans limite si le thread principal calait
+/// (GC de scène, pause débogueur…). Dimensionnement : `MAX_MESSAGES_PER_SEC`
+/// (120) × 16 joueurs ≈ 2000 messages/s au pire toléré par le rate limiting,
+/// et la boucle de tick draine tout toutes les ~16 ms — 4096 messages
+/// représentent ~2 s de calage complet avant les premières pertes, pour
+/// quelques centaines de Kio au maximum. Au-delà, les messages sont jetés
+/// (`try_send`, jamais bloquant : cf. la pompe entrante) avec un compteur
+/// logué par connexion.
+const INBOX_CAPACITY: usize = 4096;
+
 /// Message reçu d'un client, avec l'identifiant du joueur qui l'a envoyé.
 pub type Inbound = (PlayerId, ClientMsg);
 
@@ -117,8 +202,9 @@ fn lock_outboxes(
 }
 
 /// Serveur réseau : accepte des connexions WebSocket, décode les `ClientMsg` reçus
-/// et les pousse dans `inbox` ; `send_to`/`broadcast_all_rooms` encodent et poussent des
-/// `ServerMsg` vers un ou tous les clients connectés.
+/// et les pousse dans `inbox` ; `send_to`/`send_to_many`/`broadcast_all_rooms`
+/// encodent et poussent des `ServerMsg` vers un, plusieurs ou tous les clients
+/// connectés.
 pub struct NetServer {
     /// Messages reçus des clients, à consommer par le thread principal (non
     /// bloquant : `try_recv` une fois par tick).
@@ -144,7 +230,18 @@ impl NetServer {
     /// 5ᵉ). La production (`src/bin/server.rs`) passe toujours par `start` :
     /// le garde-fou anti-DoS n'y est pas affaibli.
     pub fn start_with_ip_cap(addr: &str, max_connections_per_ip: usize) -> std::io::Result<Self> {
-        let (tx, rx) = channel::<Inbound>();
+        Self::start_inner(addr, max_connections_per_ip, INBOX_CAPACITY)
+    }
+
+    /// Cœur commun : `inbox_capacity` en paramètre uniquement pour que les
+    /// tests puissent saturer une inbox minuscule sans envoyer 4096 messages
+    /// réels (la production passe toujours `INBOX_CAPACITY`).
+    fn start_inner(
+        addr: &str,
+        max_connections_per_ip: usize,
+        inbox_capacity: usize,
+    ) -> std::io::Result<Self> {
+        let (tx, rx) = sync_channel::<Inbound>(inbox_capacity);
         let outboxes: Outboxes = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU32::new(1));
         let ip_counts: IpCounts = Arc::new(Mutex::new(HashMap::new()));
@@ -251,6 +348,30 @@ impl NetServer {
         }
     }
 
+    /// Broadcast **ciblé** : envoie le même message à chaque joueur de `ids`,
+    /// en ne l'encodant qu'UNE seule fois (les destinataires reçoivent un clone
+    /// des octets, pas un ré-encodage bincode par joueur — à 16 joueurs × 60 Hz
+    /// de `Snapshot`, l'ancien `send_to` en boucle refaisait 16 encodages
+    /// identiques par tick, cf. docs/audits/net.md). À la différence de
+    /// `broadcast_all_rooms` (tous les clients du process), la liste d'ids est
+    /// fournie par l'appelant : le serveur multi-salons passe les joueurs du
+    /// salon concerné et rien ne fuite vers les autres salons. Les ids absents
+    /// (déconnectés entre-temps) sont ignorés, comme dans `send_to`.
+    pub fn send_to_many(&self, ids: &[PlayerId], msg: &ServerMsg) {
+        if ids.is_empty() {
+            return;
+        }
+        let Ok(bytes) = protocol::encode(msg) else {
+            return;
+        };
+        let outboxes = lock_outboxes(&self.outboxes);
+        for id in ids {
+            if let Some(tx) = outboxes.get(id) {
+                let _ = tx.send(bytes.clone());
+            }
+        }
+    }
+
     /// Envoie un message à **tous les clients du process, tous salons
     /// confondus** — d'où le nom : `NetServer` ne connaît pas les salons
     /// (routage applicatif dans `src/bin/server.rs`), un appel naïf ici
@@ -293,7 +414,7 @@ impl NetServer {
 async fn handle_connection(
     stream: TcpStream,
     peer: SocketAddr,
-    tx: Sender<Inbound>,
+    tx: SyncSender<Inbound>,
     outboxes: Outboxes,
     next_id: Arc<AtomicU32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -353,9 +474,10 @@ async fn handle_connection(
     // Relaie aussi le `Join` lui-même au thread principal (contrairement au
     // `Welcome`, géré ici) : c'est le signal qui doit faire apparaître le joueur
     // dans la partie (cf. `AppState::spawn_network_player`). Une défaillance
-    // d'envoi ici (thread principal arrêté) ne doit pas empêcher la connexion
-    // de continuer, donc pas de `?`.
-    let _ = tx.send((
+    // d'envoi ici (thread principal arrêté, ou inbox pleine parce qu'il est
+    // calé — auquel cas ce join n'aurait de toute façon pas été traité) ne
+    // doit pas empêcher la connexion de continuer, donc ni `?` ni blocage.
+    let _ = tx.try_send((
         id,
         ClientMsg::Join {
             protocol: client_protocol,
@@ -378,36 +500,53 @@ async fn handle_connection(
     };
 
     // Pompe entrante : décode chaque trame en `ClientMsg` et la transmet au thread
-    // principal via le canal synchrone (jamais bloquant : `std::sync::mpsc` est
-    // non borné, même choix que pour les imports glTF/IA dans `app/mod.rs`).
-    // Rate limiting (Sprint 113c) : fenêtre glissante d'une seconde, réinitialisée
-    // dès qu'elle est dépassée — état purement local à cette tâche, pas besoin de
-    // le partager (chaque connexion a la sienne).
+    // principal via le canal synchrone borné (jamais bloquant : `try_send`, cf.
+    // `INBOX_CAPACITY` — un envoi bloquant sur canal plein figerait le runtime
+    // `current_thread`, donc TOUTES les connexions, exactement le deadlock à
+    // éviter). Rate limiting (Sprint 113c, durci audit 2026-07) : fenêtre
+    // glissante à deux seaux (`RateLimiter`) — état purement local à cette
+    // tâche, pas besoin de le partager (chaque connexion a la sienne).
     let inbound_tx = tx.clone();
     let inbound = async move {
-        let mut window_start = Instant::now();
-        let mut window_msgs: u32 = 0;
-        let mut window_bytes: usize = 0;
+        let mut limiter = RateLimiter::new(Instant::now());
+        // Messages jetés faute de place dans l'inbox (thread principal calé) —
+        // logué avec parcimonie pour ne pas transformer l'incident en flood de
+        // logs.
+        let mut dropped: u64 = 0;
         while let Some(Ok(msg)) = stream.next().await {
             if let Message::Binary(bytes) = msg {
-                let now = Instant::now();
-                if now.duration_since(window_start) >= RATE_LIMIT_WINDOW {
-                    window_start = now;
-                    window_msgs = 0;
-                    window_bytes = 0;
-                }
-                window_msgs += 1;
-                window_bytes += bytes.len();
-                if window_msgs > MAX_MESSAGES_PER_SEC || window_bytes > MAX_BYTES_PER_SEC {
+                if limiter.over_budget(Instant::now(), bytes.len()) {
                     log::warn!(
                         "Connexion {peer} (joueur {id}) coupée : rate limit dépassé \
-                         ({window_msgs} messages / {window_bytes} octets dans la dernière seconde)"
+                         ({} messages / {} octets dans la dernière seconde)",
+                        limiter.curr_msgs,
+                        limiter.curr_bytes
                     );
                     break;
                 }
                 if let Ok(client_msg) = protocol::decode::<ClientMsg>(&bytes) {
                     let is_leave = matches!(client_msg, ClientMsg::Leave);
-                    if inbound_tx.send((id, client_msg)).is_err() || is_leave {
+                    match inbound_tx.try_send((id, client_msg)) {
+                        Ok(()) => {}
+                        // Inbox pleine : le thread principal ne draine plus. On
+                        // jette le message plutôt que d'accumuler sans borne (un
+                        // `Input` perdu est remplacé par le suivant ; un `Leave`
+                        // perdu est rattrapé par le `Leave` synthétique de fin de
+                        // connexion puis, au pire, par `CLIENT_TIMEOUT`).
+                        Err(TrySendError::Full(_)) => {
+                            dropped += 1;
+                            if dropped == 1 || dropped.is_multiple_of(1000) {
+                                log::warn!(
+                                    "Connexion {peer} (joueur {id}) : inbox serveur pleine \
+                                     ({INBOX_CAPACITY} messages), {dropped} message(s) jeté(s) — \
+                                     thread principal calé ?"
+                                );
+                            }
+                        }
+                        // Thread principal terminé : plus personne à prévenir.
+                        Err(TrySendError::Disconnected(_)) => break,
+                    }
+                    if is_leave {
                         break;
                     }
                 }
@@ -423,10 +562,104 @@ async fn handle_connection(
     // Signale la déconnexion au thread principal, qu'elle soit volontaire (déjà
     // relayée par la pompe entrante) ou abrupte (perte de connexion) — envoyer un
     // second `Leave` dans le premier cas ne coûte rien : `despawn_network_player`
-    // est idempotent (retirer un joueur déjà absent ne fait rien).
-    let _ = tx.send((id, ClientMsg::Leave));
+    // est idempotent (retirer un joueur déjà absent ne fait rien). `try_send` :
+    // si l'inbox est pleine, `CLIENT_TIMEOUT` finit de nettoyer le fantôme.
+    let _ = tx.try_send((id, ClientMsg::Leave));
     log::info!("Joueur {id} déconnecté");
     Ok(())
+}
+
+// Tests **purs** du limiteur de débit (aucun socket : le temps est un
+// paramètre de `RateLimiter`) — hors du gate `net_tests` exprès, la propriété
+// « pas de burst à ~2× la limite à cheval sur deux fenêtres » doit être
+// vérifiée par le `cargo test` de tous les jours.
+#[cfg(test)]
+mod rate_limiter_tests {
+    use super::*;
+
+    /// Le cœur du correctif (audit 2026-07) : un burst juste sous la limite à
+    /// la toute fin d'une fenêtre, suivi d'un second juste après le
+    /// basculement, doit être coupé — l'ancienne remise à zéro en bloc
+    /// laissait passer les deux (~2× `MAX_MESSAGES_PER_SEC` en ~20 ms).
+    #[test]
+    fn a_burst_straddling_two_windows_is_still_cut() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0);
+
+        let end_of_first = t0 + RATE_LIMIT_WINDOW - Duration::from_millis(10);
+        for _ in 0..100 {
+            assert!(
+                !limiter.over_budget(end_of_first, 10),
+                "100 messages dans une fenêtre restent sous la limite ({MAX_MESSAGES_PER_SEC})"
+            );
+        }
+
+        let start_of_second = t0 + RATE_LIMIT_WINDOW + Duration::from_millis(10);
+        let cut = (0..100).any(|_| limiter.over_budget(start_of_second, 10));
+        assert!(
+            cut,
+            "un second burst juste après le basculement de fenêtre doit être coupé \
+             (l'ancienne fenêtre en bloc l'aurait laissé passer)"
+        );
+    }
+
+    /// Un client honnête (~60 `Input`/s, un par tick) ne doit jamais être
+    /// coupé, y compris au franchissement des fenêtres.
+    #[test]
+    fn a_steady_legitimate_client_is_never_cut() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0);
+        for i in 0u64..180 {
+            let now = t0 + Duration::from_millis(1000 * i / 60);
+            assert!(
+                !limiter.over_budget(now, 40),
+                "un client à ~60 messages/s ne doit jamais être coupé (message {i})"
+            );
+        }
+    }
+
+    /// Le budget d'octets glisse lui aussi : des messages volumineux juste
+    /// sous `MAX_BYTES_PER_SEC` en fin de fenêtre pèsent encore au début de
+    /// la suivante.
+    #[test]
+    fn the_byte_budget_also_slides_across_windows() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0);
+
+        let end_of_first = t0 + RATE_LIMIT_WINDOW - Duration::from_millis(10);
+        for _ in 0..60 {
+            assert!(
+                !limiter.over_budget(end_of_first, 1090),
+                "60 × 1090 octets restent sous MAX_BYTES_PER_SEC ({MAX_BYTES_PER_SEC})"
+            );
+        }
+
+        let start_of_second = t0 + RATE_LIMIT_WINDOW + Duration::from_millis(10);
+        let cut = (0..60).any(|_| limiter.over_budget(start_of_second, 1090));
+        assert!(
+            cut,
+            "le report pondéré des octets de la fenêtre précédente doit couper ce second burst"
+        );
+    }
+
+    /// Après plus d'une fenêtre complète de silence, les deux seaux sont
+    /// périmés : un client qui reprend un trafic normal repart de zéro (pas
+    /// de dette fantôme).
+    #[test]
+    fn an_idle_gap_clears_both_buckets() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0);
+        for _ in 0..100 {
+            assert!(!limiter.over_budget(t0, 10));
+        }
+        let after_gap = t0 + Duration::from_secs(3);
+        for _ in 0..100 {
+            assert!(
+                !limiter.over_budget(after_gap, 10),
+                "après > 2 fenêtres de silence, un burst sous la limite doit passer"
+            );
+        }
+    }
 }
 
 // Sprint 105a-3 : tous les tests de ce module ouvrent un vrai socket
@@ -548,6 +781,118 @@ mod tests {
                 ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 1 })
             );
         }
+    }
+
+    /// Broadcast ciblé (audit 2026-07) : `send_to_many` encode une seule fois
+    /// mais ne doit atteindre QUE les ids listés — c'est la garantie qui le
+    /// rend utilisable par le serveur multi-salons (contrairement à
+    /// `broadcast_all_rooms`, qui fuiterait l'état d'un salon vers les autres).
+    #[test]
+    fn send_to_many_reaches_only_the_listed_recipients() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let a = NetClient::connect(&url, "A", None).expect("connexion A");
+        let b = NetClient::connect(&url, "B", None).expect("connexion B");
+        let c = NetClient::connect(&url, "C", None).expect("connexion C");
+
+        let mut ids = Vec::new();
+        for client in [&a, &b, &c] {
+            let welcome = client.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
+            let ServerMsg::Welcome { player_id } = welcome else {
+                panic!("Welcome attendu, reçu {welcome:?}");
+            };
+            ids.push(player_id);
+        }
+
+        // Comme pour le broadcast : attend que les trois outboxes soient
+        // enregistrées avant d'envoyer.
+        let mut waited = Duration::ZERO;
+        while server.connected_count() < 3 && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert_eq!(server.connected_count(), 3);
+
+        // Cible A et B — C joue le rôle d'un client d'un AUTRE salon.
+        server.send_to_many(
+            &ids[..2],
+            &ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 7 }),
+        );
+
+        for client in [&a, &b] {
+            let msg = client.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(
+                msg,
+                ServerMsg::Event(protocol::GameEvent::WaveStart { wave: 7 })
+            );
+        }
+        assert!(
+            c.inbox.recv_timeout(Duration::from_millis(300)).is_err(),
+            "un client hors de la liste de destinataires ne doit rien recevoir \
+             (sinon, fuite inter-salons)"
+        );
+    }
+
+    /// Inbox bornée (audit 2026-07) : quand le thread principal ne draine plus
+    /// l'inbox, les messages excédentaires sont jetés (pas d'accumulation
+    /// mémoire sans borne) **sans** couper la connexion ni bloquer la pompe —
+    /// et le flux reprend dès que l'inbox est drainée. Capacité minuscule via
+    /// `start_inner` pour saturer sans envoyer 4096 messages réels.
+    #[test]
+    fn a_full_inbox_drops_excess_messages_without_killing_the_connection() {
+        let capacity = 2;
+        let server = NetServer::start_inner("127.0.0.1:0", MAX_CONNECTIONS_PER_IP, capacity)
+            .expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let client = NetClient::connect(&url, "Patient", None).expect("connexion du client");
+        client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu");
+
+        // L'inbox n'est PAS drainée : le `Join` relayé occupe déjà un créneau.
+        // Dix `Input` (très en-deçà du rate limit) : au plus `capacity`
+        // messages au total peuvent tenir, le reste doit être jeté.
+        let input = ClientMsg::Input {
+            move_x: 1.0,
+            move_y: 0.0,
+            aim_yaw: 0.0,
+            attack: false,
+            jump: false,
+            fire: false,
+            weapon: 0,
+            heal: false,
+        };
+        for _ in 0..10 {
+            client.send(&input);
+        }
+        std::thread::sleep(Duration::from_millis(300));
+
+        let mut queued = 0;
+        while server.inbox.try_recv().is_ok() {
+            queued += 1;
+        }
+        assert!(
+            queued <= capacity,
+            "l'inbox bornée ne doit jamais retenir plus de {capacity} messages : {queued}"
+        );
+
+        // La connexion a survécu au débordement…
+        assert!(
+            client.is_alive(),
+            "un débordement d'inbox ne coupe pas le client"
+        );
+        assert_eq!(server.connected_count(), 1);
+
+        // …et le flux reprend maintenant que l'inbox est vide.
+        client.send(&input);
+        let (_, msg) = server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("les messages doivent circuler à nouveau après drainage");
+        assert_eq!(msg, input);
     }
 
     /// `start_with_ip_cap` doit accepter plus de clients d'une même IP que le
