@@ -66,6 +66,10 @@ fn render_headless() -> Option<Vec<u8>> {
     };
     let mut app = AppState::default();
     app.scene.light.ambient = 0.3;
+    // Ciel clair (valeurs de la démo) : le Sky::default() nuit rend l'ambiante
+    // hémisphérique quasi noire et la charnière perdrait tout contraste.
+    app.scene.sky.horizon_color = [0.85, 0.78, 0.62];
+    app.scene.sky.zenith_color = [0.30, 0.52, 0.78];
 
     let joint0 = glam::Mat4::IDENTITY;
     let joint1 = glam::Mat4::from_rotation_z((-90.0f32).to_radians());
