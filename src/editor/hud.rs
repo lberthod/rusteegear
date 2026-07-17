@@ -509,10 +509,27 @@ pub(super) fn multiplayer_roster_panel(
                         };
                         ui.painter().rect_filled(fill, 2.0, color);
                     }
-                    if *is_self {
-                        ui.strong(crate::app::locale::you_suffix(locale, name));
+                    // Spectateur (0 PV, GDD §5.3/§9.1) : grisé — jamais la
+                    // seule information (le nom et la barre de vie vide le
+                    // disent aussi), juste une distinction visuelle du reste
+                    // du roster, réclamée explicitement par le GDD.
+                    let is_spectator = health.is_some_and(|h| h <= 0.0);
+                    let display_name = if is_spectator {
+                        format!("🕯 {name}")
                     } else {
-                        ui.label(name);
+                        name.clone()
+                    };
+                    if *is_self {
+                        let text = crate::app::locale::you_suffix(locale, &display_name);
+                        if is_spectator {
+                            ui.label(egui::RichText::new(text).color(Color32::from_gray(140)));
+                        } else {
+                            ui.strong(text);
+                        }
+                    } else if is_spectator {
+                        ui.label(egui::RichText::new(display_name).color(Color32::from_gray(140)));
+                    } else {
+                        ui.label(display_name);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(format!("💀 {}", kills.unwrap_or(0)));
@@ -819,6 +836,33 @@ pub(super) fn defeated_banner(
         crate::app::locale::waiting_next_round(locale),
         FontId::proportional(15.0),
         Color32::from_white_alpha(200),
+    );
+}
+
+/// Bannière brève (haut de l'écran, ne recouvre jamais le réticule — GDD
+/// §16.3) quand un **autre** joueur réseau tombe à 0 PV : `intensity`
+/// (1 = pic) décroît vers 0 côté App (`AppState::ally_down_flash`), même
+/// mécanisme que `damage_vignette`. Distincte de `defeated_banner` (qui
+/// s'affiche à *nous*, plein écran, tant qu'on est spectateur) : ici c'est un
+/// signal ponctuel pour le reste du groupe, pas un état qui dure.
+pub(super) fn ally_down_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    intensity: f32,
+    locale: crate::app::locale::Locale,
+) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_ally_down"),
+    ));
+    let alpha = (230.0 * intensity.clamp(0.0, 1.0)) as u8;
+    painter.text(
+        egui::pos2(area.center().x, area.top() + 48.0),
+        Align2::CENTER_CENTER,
+        crate::app::locale::ally_down(locale),
+        FontId::proportional(22.0),
+        Color32::from_rgba_unmultiplied(230, 90, 80, alpha),
     );
 }
 

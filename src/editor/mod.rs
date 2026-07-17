@@ -14,10 +14,11 @@ use winit::window::Window;
 
 use hierarchy::hierarchy_panel;
 use hud::{
-    HudImageCache, HudWidgetValues, RosterEntry, collectibles_hud, crosshair, damage_vignette,
-    defeated_banner, health_bar, hud_preview_overlays, hud_widgets, item_inventory_panel,
-    kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel, restart_button,
-    scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud, weapon_inventory_panel,
+    HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
+    damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
+    item_inventory_panel, kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel,
+    restart_button, scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud,
+    weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -455,6 +456,7 @@ impl Editor {
         device_portrait: bool,
         hud_health: Option<f32>,
         damage_flash: f32,
+        ally_down_flash: f32,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -486,6 +488,9 @@ impl Editor {
             }
             if damage_flash > 0.0 {
                 damage_vignette(ctx, area, damage_flash);
+            }
+            if ally_down_flash > 0.0 {
+                ally_down_banner(ctx, area, ally_down_flash, locale);
             }
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h);
@@ -597,6 +602,7 @@ impl Editor {
         view_rect: &mut (f32, f32, f32, f32),
         hud_health: Option<f32>,
         damage_flash: f32,
+        ally_down_flash: f32,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -658,6 +664,7 @@ impl Editor {
                 view_rect,
                 hud_health,
                 damage_flash,
+                ally_down_flash,
                 game_time,
                 score,
                 lost,
@@ -776,6 +783,7 @@ fn build_ui(
     view_rect: &mut (f32, f32, f32, f32),
     hud_health: Option<f32>,
     damage_flash: f32,
+    ally_down_flash: f32,
     game_time: Option<f32>,
     score: u32,
     lost: bool,
@@ -1843,6 +1851,9 @@ fn build_ui(
     }
     if *playing && damage_flash > 0.0 {
         damage_vignette(root.ctx(), play_rect, damage_flash);
+    }
+    if *playing && ally_down_flash > 0.0 {
+        ally_down_banner(root.ctx(), play_rect, ally_down_flash, locale);
     }
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
         health_bar(root.ctx(), play_rect, h);

@@ -289,6 +289,20 @@ impl AppState {
     /// cf. `take_net_events` — les clients y réagissent une fois, son + flash,
     /// sans attendre le prochain `Snapshot`).
     fn resolve_fireball_hit(&mut self, i: usize, at: Vec3, damage: u32, owner: usize) {
+        // Dégâts infligés −30 % pour le Soutien (GDD §8.1) : appliqué ici,
+        // au point de résolution unique des tirs, jamais côté client — un
+        // tireur non réseau (joueur local solo) n'a pas de classe connue,
+        // `ranged_damage_mult` ne s'applique donc qu'aux joueurs réseau.
+        // Le minimum de 1 évite qu'un arrondi vers le bas ne rende un tir
+        // Soutien totalement inoffensif contre une cible à 1 PV.
+        let damage = self
+            .network_player_id_at(owner)
+            .and_then(|id| self.network_player_class(id))
+            .map_or(damage, |class| {
+                ((damage as f32) * class.ranged_damage_mult())
+                    .round()
+                    .max(1.0) as u32
+            });
         let defeated = self.scene.damage_attackable_by(i, damage);
         self.attack_flash = 1.0;
         if let Some(fx) = self.attack_fx_index()
@@ -424,7 +438,7 @@ mod tests {
 
     use super::super::AppState;
     use super::{RANGED_WEAPONS, clamp_weapon};
-    use crate::app::multiplayer::NetworkInput;
+    use crate::app::multiplayer::{NetworkInput, PlayerClass};
     use crate::runtime::physics::PhysicsKind;
     use crate::scene::{Combat, Controller, MeshKind, Scene, SceneObject, Transform};
 
@@ -576,7 +590,7 @@ mod tests {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
         let index = app
-            .spawn_network_player(1)
+            .spawn_network_player(1, PlayerClass::Assault)
             .expect("la scène de test a un gabarit pilotable");
         app.set_network_input(
             1,
@@ -607,7 +621,7 @@ mod tests {
     fn a_network_players_fireball_kill_credits_their_kill_count() {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         assert_eq!(app.network_player_kills(1), Some(0));
         // `spawn_network_player` décale le joueur réseau sur un cercle autour du
         // gabarit d'origine (cf. sa doc) : réaligne le monstre sur ce nouveau
@@ -637,6 +651,68 @@ mod tests {
         );
     }
 
+    /// GDD §8.1 : « dégâts −30 % » pour le Soutien — un Boulet (3 dégâts de
+    /// base) tiré par un Soutien doit infliger strictement moins qu'un
+    /// Boulet tiré par un Assaut sur la même cible à PV multiples (sans quoi
+    /// le monstre à 1 PV des autres tests ne pourrait jamais montrer la
+    /// différence : les deux le vaincraient en un coup).
+    #[test]
+    fn support_class_deals_less_ranged_damage_than_assault() {
+        let boulet: NetworkInput = NetworkInput {
+            fire: true,
+            weapon: 2, // « Boulet », 3 dégâts de base (cf. RANGED_WEAPONS)
+            ..net_input()
+        };
+
+        let mut assault_app = app_with(scene_with_monster_ahead(false));
+        assault_app.hide_local_player_template();
+        assault_app.scene.objects[MONSTER]
+            .combat
+            .as_mut()
+            .unwrap()
+            .hp = 10;
+        let index = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let shooter_pos = assault_app.scene.objects[index].transform.position;
+        assault_app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        assault_app.set_network_input(1, boulet);
+        advance(&mut assault_app, 40, 0.05);
+        let assault_hp = assault_app.scene.objects[MONSTER]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hp;
+
+        let mut support_app = app_with(scene_with_monster_ahead(false));
+        support_app.hide_local_player_template();
+        support_app.scene.objects[MONSTER]
+            .combat
+            .as_mut()
+            .unwrap()
+            .hp = 10;
+        let index = support_app
+            .spawn_network_player(1, PlayerClass::Support)
+            .unwrap();
+        let shooter_pos = support_app.scene.objects[index].transform.position;
+        support_app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        support_app.set_network_input(1, boulet);
+        advance(&mut support_app, 40, 0.05);
+        let support_hp = support_app.scene.objects[MONSTER]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hp;
+
+        assert!(
+            support_hp > assault_hp,
+            "un Boulet de Soutien doit laisser plus de PV à la cible qu'un Boulet d'Assaut : \
+             {support_hp} <= {assault_hp}"
+        );
+    }
+
     /// GAMEDESIGN_EN_LIGNE.md §3.1 : un joueur réseau vaincu (0 PV)
     /// devient spectateur — son `fire: true` ne doit plus rien déclencher, même
     /// si son objet est encore techniquement présent dans `scene.objects`.
@@ -644,7 +720,7 @@ mod tests {
     fn a_defeated_network_player_cannot_fire() {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         app.network_health.insert(1, 0.0);
         // Un vrai mort est masqué (cf. `health::update_network_health`) : sans
         // ça, la régénération passive (objet toujours visible, donc considéré
@@ -676,7 +752,7 @@ mod tests {
     fn a_network_fireball_flies_along_the_clients_aim_yaw() {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         // Déplace le monstre en +X du joueur réseau : seul un tir orienté par
         // l'aim_yaw (-π/2 ⇒ direction (+1, 0, 0)) peut le toucher.
         let shooter = app.scene.objects[index].transform.position;
@@ -706,7 +782,7 @@ mod tests {
     fn the_clients_aim_yaw_rotates_its_server_side_object() {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         app.set_network_input(
             1,
             NetworkInput {
@@ -743,7 +819,7 @@ mod tests {
     fn a_spamming_network_client_cannot_outrun_the_server_cooldown() {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
-        app.spawn_network_player(1);
+        app.spawn_network_player(1, PlayerClass::Assault);
         app.set_network_input(
             1,
             NetworkInput {
@@ -800,7 +876,7 @@ mod tests {
         assert_eq!(clamp_weapon(250), RANGED_WEAPONS.len() - 1);
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
-        app.spawn_network_player(1);
+        app.spawn_network_player(1, PlayerClass::Assault);
         app.set_network_input(
             1,
             NetworkInput {

@@ -20,7 +20,9 @@ pub type PlayerId = u32;
 /// imbriqués (champ ajouté sans `#[serde(default)]`, variant réordonné…).
 /// ⚠️ Déploiement : un bump casse le format — client et serveur (VPS) doivent
 /// être redéployés ensemble (vérifier ensuite avec `examples/smoke_vps.rs`).
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// v2 (GAMEDESIGN_MMORPG.md §3.2) : `ClientMsg::Join` gagne `class: u8`.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
@@ -126,6 +128,13 @@ pub enum ClientMsg {
         /// n'envoie rien de particulier atterrit dans le même salon partagé
         /// que tout le monde).
         lobby: String,
+        /// Classe choisie (GAMEDESIGN_MMORPG.md §3.2, `PROTOCOL_VERSION` 2) :
+        /// `0` = Assaut (défaut, les valeurs actuelles — zéro régression pour
+        /// qui ne choisit pas), `1` = Éclaireur, `2` = Soutien. Une valeur
+        /// hors table est traitée comme Assaut par `spawn_network_player`
+        /// (jamais rejetée : un client futur avec une classe non reconnue ne
+        /// doit pas perdre sa connexion pour ça).
+        class: u8,
     },
     /// État des contrôles pour le tick courant (cf. `app::PlayerInput`, en plus
     /// compact — un client réseau ne pilote qu'un joueur, pas un overlay tactile
@@ -354,12 +363,14 @@ mod tests {
             name: "Loïc".to_string(),
             firebase_uid: None,
             lobby: DEFAULT_LOBBY.to_string(),
+            class: 0,
         });
         round_trip(ClientMsg::Join {
             protocol: PROTOCOL_VERSION,
             name: "Loïc".to_string(),
             firebase_uid: Some("uid-1234".to_string()),
             lobby: "salon-prive".to_string(),
+            class: 2,
         });
     }
 

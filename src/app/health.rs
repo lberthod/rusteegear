@@ -42,6 +42,26 @@ const HEAL_RANGE: f32 = 2.5;
 /// Débit de soin (par seconde) appliqué à l'allié le plus blessé à portée.
 const HEAL_RATE_PER_S: f32 = 0.2;
 
+/// Portée (m) du soin du Soutien (GDD §8.1 : « 0,5 PV/s, 4 m ») — le soin
+/// universel (`HEAL_RANGE`/`HEAL_RATE_PER_S`) reste inchangé pour tous, le
+/// Soutien le *multiplie*, il ne le remplace pas côté mécanique.
+const SUPPORT_HEAL_RANGE: f32 = 4.0;
+
+/// Débit de soin (par seconde) du Soutien — ×2,5 le débit universel.
+const SUPPORT_HEAL_RATE_PER_S: f32 = 0.5;
+
+/// Portée (m) de la réanimation (GDD §8.1) : non chiffrée explicitement au-delà
+/// de « canal immobile » — réutilise `HEAL_RANGE`, cohérente avec le reste du
+/// soin coopératif plutôt qu'une nouvelle valeur inventée sans playtest.
+const REVIVE_RANGE: f32 = HEAL_RANGE;
+
+/// Durée (s) du canal de réanimation (GDD §8.1 : « 10 s de canal immobile »).
+const REVIVE_DURATION: f32 = 10.0;
+
+/// Fraction de PV max restaurée à la fin d'une réanimation (GDD §8.1 :
+/// « retour à 30 % PV »).
+const REVIVE_HEALTH_FRACTION: f32 = 0.3;
+
 /// Chevauchement de deux AABB monde `(min, max)` — même test que
 /// `Scene::world_aabb_intersects`, réimplémenté ici sur des paires `Vec3`
 /// **possédées** plutôt que sur deux `&SceneObject` : évite d'emprunter deux
@@ -100,12 +120,13 @@ impl AppState {
             let touched = monster_aabbs
                 .iter()
                 .any(|&aabb| aabbs_overlap(aabb, player_aabb));
-            let was_alive = self.network_health.get(&id).copied().unwrap_or(MAX_HEALTH) > 0.0;
-            let hp = self.network_health.entry(id).or_insert(MAX_HEALTH);
+            let max_hp = self.max_health_for(id);
+            let was_alive = self.network_health.get(&id).copied().unwrap_or(max_hp) > 0.0;
+            let hp = self.network_health.entry(id).or_insert(max_hp);
             if touched {
                 *hp = (*hp - MONSTER_CONTACT_DPS * dt).max(0.0);
             } else {
-                *hp = (*hp + REGEN_PER_S * dt).min(MAX_HEALTH);
+                *hp = (*hp + REGEN_PER_S * dt).min(max_hp);
             }
             let just_died = was_alive && *hp <= 0.0;
             if just_died {
@@ -233,7 +254,18 @@ impl AppState {
             else {
                 continue;
             };
-            // Allié vivant, blessé (pas déjà à `MAX_HEALTH` : sans ce filtre, un
+            // Soutien (GDD §8.1) : soin ×2,5 — 0,5 PV/s à 4 m, contre 0,2 PV/s
+            // à 2,5 m pour les autres classes (soin universel, jamais retiré).
+            let is_support = self
+                .network_classes
+                .get(&healer_id)
+                .is_some_and(|c| matches!(c, crate::app::multiplayer::PlayerClass::Support));
+            let (heal_range, heal_rate) = if is_support {
+                (SUPPORT_HEAL_RANGE, SUPPORT_HEAL_RATE_PER_S)
+            } else {
+                (HEAL_RANGE, HEAL_RATE_PER_S)
+            };
+            // Allié vivant, blessé (pas déjà à son plafond : sans ce filtre, un
             // soigneur entouré d'alliés au max ne soignerait jamais personne
             // d'autre malgré un blessé un peu plus loin, mais à portée), le
             // plus proche à portée — jamais soi-même.
@@ -243,19 +275,106 @@ impl AppState {
                 .filter(|(id, _)| **id != healer_id)
                 .filter_map(|(&id, &idx)| {
                     let hp = self.network_health.get(&id).copied().unwrap_or(0.0);
-                    if hp <= 0.0 || hp >= MAX_HEALTH {
+                    if hp <= 0.0 || hp >= self.max_health_for(id) {
                         return None;
                     }
                     let pos = self.scene.objects.get(idx)?.transform.position;
                     let dist = pos.distance(healer_pos);
-                    (dist <= HEAL_RANGE).then_some((id, dist))
+                    (dist <= heal_range).then_some((id, dist))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(id, _)| id);
-            if let Some(target_id) = target_id
-                && let Some(hp) = self.network_health.get_mut(&target_id)
-            {
-                *hp = (*hp + HEAL_RATE_PER_S * dt).min(MAX_HEALTH);
+            if let Some(target_id) = target_id {
+                let max_hp = self.max_health_for(target_id);
+                if let Some(hp) = self.network_health.get_mut(&target_id) {
+                    *hp = (*hp + heal_rate * dt).min(max_hp);
+                }
+            }
+        }
+    }
+
+    /// Résout la réanimation pour ce tick (GDD §8.1 : exclusivité du Soutien,
+    /// « seul à réanimer »). Un Soutien vivant dont l'`Input` demande `heal`
+    /// et qui reste à portée (`REVIVE_RANGE`) d'un allié spectateur (0 PV)
+    /// canalise dessus ; `REVIVE_DURATION` d'affilée le ramène à
+    /// `REVIVE_HEALTH_FRACTION` de ses PV max. **Canal, pas jauge** : relâcher
+    /// `heal`, sortir de portée ou changer de cible remet le compteur à zéro
+    /// — c'est la décision dramatique du GDD (§5.3 : « 10 s de canal immobile
+    /// au milieu d'une horde »), pas un droit acquis qu'on peut fractionner
+    /// sans risque.
+    pub(super) fn update_network_revive(&mut self, dt: f32) {
+        if self.network_players.len() < 2 {
+            return;
+        }
+        let healers: Vec<(PlayerId, usize)> = self
+            .network_players
+            .iter()
+            .filter(|(id, _)| self.network_classes.get(id).is_some_and(|c| c.can_revive()))
+            .filter(|(id, _)| self.network_inputs.get(id).is_some_and(|i| i.heal))
+            .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(0.0) > 0.0)
+            .map(|(&id, &idx)| (id, idx))
+            .collect();
+
+        // Oublie le canal de tout Soutien qui ne remplit plus les conditions
+        // de base ci-dessus (heal relâché, déconnecté...) — sans ce nettoyage,
+        // un canal interrompu resterait accumulé en attente d'une reprise
+        // plutôt que d'exiger un canal continu comme le décrit le GDD.
+        let healer_ids: std::collections::HashSet<PlayerId> =
+            healers.iter().map(|(id, _)| *id).collect();
+        self.network_revive.retain(|id, _| healer_ids.contains(id));
+
+        for (healer_id, healer_idx) in healers {
+            let Some(healer_pos) = self
+                .scene
+                .objects
+                .get(healer_idx)
+                .map(|o| o.transform.position)
+            else {
+                continue;
+            };
+            // Allié spectateur (0 PV, jamais un simple blessé — cf.
+            // `update_network_heal` pour ce cas) le plus proche à portée.
+            let target_id = self
+                .network_players
+                .iter()
+                .filter(|(id, _)| **id != healer_id)
+                .filter_map(|(&id, &idx)| {
+                    let hp = self.network_health.get(&id).copied().unwrap_or(1.0);
+                    if hp > 0.0 {
+                        return None;
+                    }
+                    let pos = self.scene.objects.get(idx)?.transform.position;
+                    let dist = pos.distance(healer_pos);
+                    (dist <= REVIVE_RANGE).then_some((id, dist))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(id, _)| id);
+
+            let Some(target_id) = target_id else {
+                self.network_revive.remove(&healer_id);
+                continue;
+            };
+
+            let entry = self
+                .network_revive
+                .entry(healer_id)
+                .or_insert((target_id, 0.0));
+            if entry.0 != target_id {
+                // Cible changée : le canal recommence, aucun progrès reporté.
+                *entry = (target_id, 0.0);
+            }
+            entry.1 += dt;
+            if entry.1 >= REVIVE_DURATION {
+                let max_hp = self.max_health_for(target_id);
+                if let Some(hp) = self.network_health.get_mut(&target_id) {
+                    *hp = max_hp * REVIVE_HEALTH_FRACTION;
+                }
+                if let Some(&idx) = self.network_players.get(&target_id)
+                    && let Some(o) = self.scene.objects.get_mut(idx)
+                {
+                    o.visible = true;
+                }
+                self.network_revive.remove(&healer_id);
             }
         }
     }
@@ -280,6 +399,18 @@ impl AppState {
         self.network_health.get(&id).copied()
     }
 
+    /// PV max du joueur réseau `id` (base `MAX_HEALTH` modulée par sa classe,
+    /// GDD §3.2 — ex. Éclaireur ×0,70) : `spawn_network_player` la calcule une
+    /// fois pour toutes au spawn. `MAX_HEALTH` en repli si `id` est inconnu
+    /// (jamais censé arriver après un spawn, mais un repli sûr plutôt qu'un
+    /// panic pour un id qui ne serait plus connecté).
+    pub(super) fn max_health_for(&self, id: PlayerId) -> f32 {
+        self.network_max_health
+            .get(&id)
+            .copied()
+            .unwrap_or(MAX_HEALTH)
+    }
+
     /// `true` si l'objet `index` n'est **pas** un joueur réseau vaincu — `true`
     /// par défaut pour tout objet qui n'est pas un joueur réseau (joueur local,
     /// monstre, décor...), qui n'a pas de notion de vie individualisée ici.
@@ -299,7 +430,7 @@ mod tests {
 
     use super::super::AppState;
     use super::MAX_HEALTH;
-    use crate::app::multiplayer::NetworkInput;
+    use crate::app::multiplayer::{NetworkInput, PlayerClass};
     use crate::net::protocol::GameEvent;
     use crate::scene::{AiChaser, Combat, Controller, MeshKind, Scene, SceneObject, Transform};
 
@@ -376,7 +507,7 @@ mod tests {
     fn joining_starts_at_full_health() {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        app.spawn_network_player(1);
+        app.spawn_network_player(1, PlayerClass::Assault);
         assert_eq!(app.network_player_health(1), Some(MAX_HEALTH));
     }
 
@@ -384,7 +515,7 @@ mod tests {
     fn contact_with_a_visible_chaser_drains_health_over_time() {
         let mut app = app_with(scene_with_optional_monster(true));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         // Replace le joueur pile sur le monstre (contact garanti). Appelle
         // `update_network_health` **directement**, pas `advance_play`/la
         // physique : deux corps rigides placés au même point se repousseraient
@@ -410,7 +541,7 @@ mod tests {
     fn health_regenerates_passively_out_of_contact() {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        app.spawn_network_player(1);
+        app.spawn_network_player(1, PlayerClass::Assault);
         app.network_health.insert(1, 0.3);
 
         advance(&mut app, 40, 0.05); // 2 s hors de tout contact
@@ -426,7 +557,7 @@ mod tests {
     fn dying_hides_the_player_and_queues_a_player_down_event() {
         let mut app = app_with(scene_with_optional_monster(true));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         let monster_pos = app.scene.objects[2].transform.position;
         app.scene.objects[index].transform.position = monster_pos;
 
@@ -457,8 +588,8 @@ mod tests {
     fn room_is_lost_only_once_every_network_player_is_defeated() {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        app.spawn_network_player(1);
-        app.spawn_network_player(2);
+        app.spawn_network_player(1, PlayerClass::Assault);
+        app.spawn_network_player(2, PlayerClass::Assault);
 
         assert!(!app.is_room_lost(), "deux joueurs en vie : le salon tient");
 
@@ -479,7 +610,7 @@ mod tests {
     fn a_defeated_players_movement_and_attack_inputs_are_ignored() {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         app.network_health.insert(1, 0.0);
         // Un vrai mort est masqué (cf. `update_network_health`) : sans ça, la
         // régénération passive (objet visible ⇒ « vivant mais blessé », pas de
@@ -510,8 +641,8 @@ mod tests {
     fn healing_transfers_health_to_the_nearest_wounded_ally_in_range() {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        let healer = app.spawn_network_player(1).unwrap();
-        let wounded = app.spawn_network_player(2).unwrap();
+        let healer = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let wounded = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         // Rapproche l'allié blessé, à portée de soin.
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[wounded].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
@@ -537,8 +668,8 @@ mod tests {
     fn healing_ignores_allies_out_of_range() {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        let healer = app.spawn_network_player(1).unwrap();
-        let far = app.spawn_network_player(2).unwrap();
+        let healer = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let far = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[far].transform.position = healer_pos + Vec3::new(50.0, 0.0, 0.0);
         app.network_health.insert(2, 0.4);
@@ -572,9 +703,9 @@ mod tests {
         // un autre, blessé, est aussi à portée.
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
-        let healer = app.spawn_network_player(1).unwrap();
-        let healthy = app.spawn_network_player(2).unwrap();
-        let wounded = app.spawn_network_player(3).unwrap();
+        let healer = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let healthy = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        let wounded = app.spawn_network_player(3, PlayerClass::Assault).unwrap();
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[healthy].transform.position = healer_pos + Vec3::new(0.5, 0.0, 0.0);
         app.scene.objects[wounded].transform.position = healer_pos + Vec3::new(-0.5, 0.0, 0.0);
@@ -591,5 +722,190 @@ mod tests {
 
         assert_eq!(app.network_player_health(2), Some(MAX_HEALTH));
         assert!(app.network_player_health(3).unwrap() > 0.3);
+    }
+
+    /// GDD §8.1 : le Soutien soigne ×2,5 le débit universel — un Soutien et
+    /// un Assaut soignant le même allié blessé le même temps ne rendent pas
+    /// la même vie.
+    #[test]
+    fn support_class_heals_faster_than_the_universal_rate() {
+        let mut assault_app = app_with(scene_with_optional_monster(false));
+        assault_app.hide_local_player_template();
+        let healer = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let wounded = assault_app
+            .spawn_network_player(2, PlayerClass::Assault)
+            .unwrap();
+        let healer_pos = assault_app.scene.objects[healer].transform.position;
+        assault_app.scene.objects[wounded].transform.position =
+            healer_pos + Vec3::new(1.0, 0.0, 0.0);
+        assault_app.network_health.insert(2, 0.1);
+        assault_app.set_network_input(
+            1,
+            NetworkInput {
+                heal: true,
+                ..net_input()
+            },
+        );
+        for _ in 0..20 {
+            assault_app.update_network_heal(0.05);
+        }
+        let assault_healed = assault_app.network_player_health(2).unwrap();
+
+        let mut support_app = app_with(scene_with_optional_monster(false));
+        support_app.hide_local_player_template();
+        let healer = support_app
+            .spawn_network_player(1, PlayerClass::Support)
+            .unwrap();
+        let wounded = support_app
+            .spawn_network_player(2, PlayerClass::Assault)
+            .unwrap();
+        let healer_pos = support_app.scene.objects[healer].transform.position;
+        support_app.scene.objects[wounded].transform.position =
+            healer_pos + Vec3::new(1.0, 0.0, 0.0);
+        support_app.network_health.insert(2, 0.1);
+        support_app.set_network_input(
+            1,
+            NetworkInput {
+                heal: true,
+                ..net_input()
+            },
+        );
+        for _ in 0..20 {
+            support_app.update_network_heal(0.05);
+        }
+        let support_healed = support_app.network_player_health(2).unwrap();
+
+        assert!(
+            support_healed > assault_healed,
+            "le Soutien doit soigner plus vite : {support_healed} <= {assault_healed}"
+        );
+    }
+
+    /// GDD §8.1 : « seul à réanimer » — un canal continu de 10 s ramène un
+    /// spectateur à 30 % PV, exclusivité du Soutien.
+    #[test]
+    fn a_support_channeling_ten_seconds_revives_a_downed_ally_to_30_percent() {
+        let mut app = app_with(scene_with_optional_monster(false));
+        app.hide_local_player_template();
+        let healer = app.spawn_network_player(1, PlayerClass::Support).unwrap();
+        let downed = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        let healer_pos = app.scene.objects[healer].transform.position;
+        app.scene.objects[downed].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
+        app.network_health.insert(2, 0.0);
+        app.scene.objects[downed].visible = false;
+        app.set_network_input(
+            1,
+            NetworkInput {
+                heal: true,
+                ..net_input()
+            },
+        );
+
+        for _ in 0..199 {
+            app.update_network_revive(0.05);
+        }
+        assert_eq!(
+            app.network_player_health(2),
+            Some(0.0),
+            "à moins de 10 s de canal, la cible doit rester vaincue"
+        );
+        assert!(
+            !app.scene.objects[downed].visible,
+            "toujours spectateur avant la fin du canal"
+        );
+
+        app.update_network_revive(0.05); // franchit les 10 s (199×0,05 + 0,05 = 10.0)
+
+        assert_eq!(
+            app.network_player_health(2),
+            Some(MAX_HEALTH * 0.3),
+            "la réanimation doit rendre exactement 30 % des PV max"
+        );
+        assert!(
+            app.scene.objects[downed].visible,
+            "l'allié réanimé doit redevenir visible"
+        );
+    }
+
+    /// Une classe autre que Soutien ne peut jamais réanimer, même en
+    /// maintenant `heal` à portée d'un allié vaincu — c'est l'exclusivité
+    /// même de la classe (GDD §8.1).
+    #[test]
+    fn a_non_support_player_never_revives_a_downed_ally() {
+        let mut app = app_with(scene_with_optional_monster(false));
+        app.hide_local_player_template();
+        let healer = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let downed = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        let healer_pos = app.scene.objects[healer].transform.position;
+        app.scene.objects[downed].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
+        app.network_health.insert(2, 0.0);
+        app.scene.objects[downed].visible = false;
+        app.set_network_input(
+            1,
+            NetworkInput {
+                heal: true,
+                ..net_input()
+            },
+        );
+
+        for _ in 0..250 {
+            app.update_network_revive(0.05);
+        }
+
+        assert_eq!(
+            app.network_player_health(2),
+            Some(0.0),
+            "un Assaut/Éclaireur ne réanime jamais, quelle que soit la durée du canal"
+        );
+    }
+
+    /// GDD §5.3 : « 10 s de canal immobile » — un canal interrompu (heal
+    /// relâché à mi-chemin) ne conserve pas son progrès ; le reprendre repart
+    /// de zéro, jamais de là où il s'était arrêté.
+    #[test]
+    fn an_interrupted_revive_channel_loses_its_progress() {
+        let mut app = app_with(scene_with_optional_monster(false));
+        app.hide_local_player_template();
+        let healer = app.spawn_network_player(1, PlayerClass::Support).unwrap();
+        let downed = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        let healer_pos = app.scene.objects[healer].transform.position;
+        app.scene.objects[downed].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
+        app.network_health.insert(2, 0.0);
+        app.scene.objects[downed].visible = false;
+        app.set_network_input(
+            1,
+            NetworkInput {
+                heal: true,
+                ..net_input()
+            },
+        );
+        for _ in 0..100 {
+            app.update_network_revive(0.05); // 5 s de canal, à mi-chemin
+        }
+
+        // Relâche `heal` un tick : le canal doit être abandonné.
+        app.set_network_input(1, net_input());
+        app.update_network_revive(0.05);
+
+        // Reprend le canal : encore 9,9 s ne doivent PAS suffire (il faudrait
+        // les 10 s pleines si le progrès avait été conservé).
+        app.set_network_input(
+            1,
+            NetworkInput {
+                heal: true,
+                ..net_input()
+            },
+        );
+        for _ in 0..198 {
+            app.update_network_revive(0.05);
+        }
+
+        assert_eq!(
+            app.network_player_health(2),
+            Some(0.0),
+            "un canal interrompu doit repartir de zéro, pas reprendre où il s'était arrêté"
+        );
     }
 }

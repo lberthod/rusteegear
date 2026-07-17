@@ -511,6 +511,7 @@ impl AppState {
             self.update_network_health(dt);
             self.update_creature_bite(dt);
             self.update_network_heal(dt);
+            self.update_network_revive(dt);
             // Réapparition des pièces bonus dont le délai est écoulé.
             let now = self.time;
             self.respawn_queue.retain(|&(i, at)| {
@@ -614,6 +615,11 @@ impl AppState {
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
         if self.damage_flash > 0.0 {
             self.damage_flash = (self.damage_flash - dt * 2.5).max(0.0);
+        }
+        // Décroissance de la bannière « allié à terre » (~1,3 s : assez pour se
+        // lire, conforme à GDD §16.3 « les bannières d'événement durent < 2 s »).
+        if self.ally_down_flash > 0.0 {
+            self.ally_down_flash = (self.ally_down_flash - dt * 0.75).max(0.0);
         }
         // Décroissance de l'effet d'attaque (~0,33 s) : rétrécit l'ancre `is_attack_fx`
         // jusqu'à disparition, puis la remasque pour ne pas polluer le prochain coup.

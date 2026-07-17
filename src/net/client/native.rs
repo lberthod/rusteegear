@@ -66,6 +66,10 @@ impl NetClient {
             name: name.to_string(),
             firebase_uid: firebase_uid.map(str::to_string),
             lobby: lobby.to_string(),
+            // Sélection de classe (GAMEDESIGN_MMORPG.md §3.2) pas encore
+            // câblée à une UI — Assaut (0) pour tous, zéro régression tant
+            // qu'aucun sélecteur n'existe (cf. `net::protocol::ClientMsg::Join::class`).
+            class: 0,
         })?;
         // Mis en file avant même que le thread de fond n'existe : la pompe
         // sortante le trouvera prêt dès sa première itération.

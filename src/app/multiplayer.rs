@@ -35,6 +35,82 @@ pub struct NetworkInput {
     pub heal: bool,
 }
 
+/// Classe d'un joueur réseau (`GAMEDESIGN_MMORPG.md` §3.2) : choisie au
+/// `Join` (`ClientMsg::Join::class`), les modificateurs qu'elle implique ne
+/// sont **jamais** appliqués côté client — `spawn_network_player` les
+/// applique une fois pour toutes au clone du gabarit, au moment du spawn
+/// (règle d'or anti-triche, GDD §5.7 : le serveur est seul juge).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlayerClass {
+    /// Valeurs actuelles inchangées (3 armes à distance, mêlée normale) :
+    /// zéro régression pour qui ne choisit pas de classe.
+    #[default]
+    Assault,
+    /// Vitesse +25 %, saut +30 %, PV max −30 % : attire, détourne, active —
+    /// le kiting rendu viable par `MAX_ACTIVE_CHASERS_PER_TARGET` côté IA.
+    Scout,
+    /// Vitesse −15 %, dégâts infligés −30 %, soin ×2,5 (portée et débit) —
+    /// et seule classe autorisée à réanimer (`update_network_revive`).
+    Support,
+}
+
+impl PlayerClass {
+    /// Traduit l'octet reçu du réseau — une valeur hors table retombe sur
+    /// Assaut (même principe que `fireball::clamp_weapon` : un client
+    /// modifié qui envoie `class: 250` ne panique jamais le serveur, il
+    /// obtient juste les valeurs par défaut).
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => PlayerClass::Scout,
+            2 => PlayerClass::Support,
+            _ => PlayerClass::Assault,
+        }
+    }
+
+    /// Multiplicateur de `Controller::move_speed` appliqué au spawn.
+    fn move_speed_mult(self) -> f32 {
+        match self {
+            PlayerClass::Assault => 1.0,
+            PlayerClass::Scout => 1.25,
+            PlayerClass::Support => 0.85,
+        }
+    }
+
+    /// Multiplicateur de `Controller::jump_height` appliqué au spawn (GDD
+    /// §3.2 : « saut +30 % » pour l'Éclaireur — distinct de la vitesse de
+    /// déplacement, +25 %).
+    fn jump_height_mult(self) -> f32 {
+        match self {
+            PlayerClass::Assault | PlayerClass::Support => 1.0,
+            PlayerClass::Scout => 1.30,
+        }
+    }
+
+    /// Multiplicateur de PV max (base `health::MAX_HEALTH`) appliqué au spawn.
+    fn max_health_mult(self) -> f32 {
+        match self {
+            PlayerClass::Assault => 1.0,
+            PlayerClass::Scout => 0.70,
+            PlayerClass::Support => 1.0,
+        }
+    }
+
+    /// Multiplicateur des dégâts infligés (armes à distance, cf.
+    /// `fireball::resolve_fireball_hit`) — le Soutien tape moins fort, en
+    /// échange de son soin renforcé et de sa réanimation exclusive.
+    pub(super) fn ranged_damage_mult(self) -> f32 {
+        match self {
+            PlayerClass::Support => 0.70,
+            PlayerClass::Assault | PlayerClass::Scout => 1.0,
+        }
+    }
+
+    /// `true` seul le Soutien peut réanimer (GDD §8.1 : « seul à réanimer »).
+    pub(super) fn can_revive(self) -> bool {
+        matches!(self, PlayerClass::Support)
+    }
+}
+
 /// Portée (m) de l'attaque réseau : un coup immédiat au contact, pas le
 /// missile homing avec préparation du joueur local (`app::combat`, qui
 /// dépend d'un unique `attack_charge`/`attack_projectile` par `AppState` —
@@ -170,7 +246,7 @@ impl AppState {
     /// n'appartient plus à aucun joueur connu, avant d'en pousser un nouveau —
     /// borne la taille de la scène au pic de joueurs *simultanés* jamais
     /// atteint, pas au nombre cumulé de connexions depuis le démarrage.
-    pub fn spawn_network_player(&mut self, id: PlayerId) -> Option<usize> {
+    pub fn spawn_network_player(&mut self, id: PlayerId, class: PlayerClass) -> Option<usize> {
         if let Some(&existing) = self.network_players.get(&id) {
             return Some(existing);
         }
@@ -198,6 +274,13 @@ impl AppState {
         let angle = n * std::f32::consts::TAU / 8.0;
         template.transform.position.x += angle.cos() * SPAWN_RADIUS;
         template.transform.position.z += angle.sin() * SPAWN_RADIUS;
+        // Modificateurs de classe (GAMEDESIGN_MMORPG.md §3.2) : appliqués une
+        // fois pour toutes au clone, jamais recalculés côté client — c'est le
+        // serveur qui décide de la vitesse/portée de saut réellement simulées.
+        if let Some(controller) = template.controller.as_mut() {
+            controller.move_speed *= class.move_speed_mult();
+            controller.jump_height *= class.jump_height_mult();
+        }
         // Toujours visible, même si le gabarit d'origine est déjà masqué (cf. plus
         // bas, et `hide_local_player_template` appelé avant le premier join) : sans
         // ce reset, chaque joueur réseau hérite du `visible=false` du gabarit et
@@ -219,11 +302,16 @@ impl AppState {
         };
         self.network_players.insert(id, index);
         self.network_inputs.insert(id, NetworkInput::default());
+        self.network_classes.insert(id, class);
+        // PV max modulés par la classe (GDD §3.2 : Éclaireur −30 %) : calculé
+        // une fois au spawn, jamais recalculé côté client — cf. `health::
+        // max_health_for`, seule fonction qui doit lire ce champ.
+        let max_health = crate::app::health::MAX_HEALTH * class.max_health_mult();
+        self.network_max_health.insert(id, max_health);
         // Vie individualisée (GAMEDESIGN_EN_LIGNE.md §3.1) : chaque joueur
-        // réseau démarre à pleine vie, indépendamment des autres — cf.
-        // `app::health`.
-        self.network_health
-            .insert(id, crate::app::health::MAX_HEALTH);
+        // réseau démarre à pleine vie (celle de sa classe), indépendamment
+        // des autres — cf. `app::health`.
+        self.network_health.insert(id, max_health);
         // Frags individualisés (brique de progression pour un futur MMORPG) :
         // chaque nouvelle connexion démarre à 0, comme la vie.
         self.network_kills.insert(id, 0);
@@ -262,6 +350,9 @@ impl AppState {
         self.network_attack_cooldowns.remove(&id);
         self.network_health.remove(&id);
         self.network_kills.remove(&id);
+        self.network_classes.remove(&id);
+        self.network_max_health.remove(&id);
+        self.network_revive.remove(&id);
         // Reconstruction complète documentée et acceptée — cf. le commentaire
         // du site jumeau dans `spawn_network_player`.
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
@@ -285,6 +376,9 @@ impl AppState {
         self.network_attack_cooldowns.clear();
         self.network_health.clear();
         self.network_kills.clear();
+        self.network_classes.clear();
+        self.network_max_health.clear();
+        self.network_revive.clear();
     }
 
     /// Enregistre l'input reçu d'un joueur réseau pour le tick courant : remplace
@@ -343,6 +437,11 @@ impl AppState {
     /// MMORPG), `None` s'il n'est pas connecté.
     pub fn network_player_kills(&self, id: PlayerId) -> Option<u32> {
         self.network_kills.get(&id).copied()
+    }
+
+    /// Classe du joueur réseau `id` (GDD §3.2), `None` s'il n'est pas connecté.
+    pub fn network_player_class(&self, id: PlayerId) -> Option<PlayerClass> {
+        self.network_classes.get(&id).copied()
     }
 
     /// Résout les attaques des joueurs réseau pour ce tick : décompte
@@ -528,7 +627,7 @@ mod tests {
         let before = app.scene.objects.len();
 
         let index = app
-            .spawn_network_player(1)
+            .spawn_network_player(1, PlayerClass::Assault)
             .expect("la démo zombies a un gabarit pilotable");
 
         assert_eq!(app.scene.objects.len(), before + 1);
@@ -540,10 +639,116 @@ mod tests {
     #[test]
     fn two_network_players_get_independent_objects_and_ids() {
         let mut app = app_with_zombies_demo();
-        let a = app.spawn_network_player(1).unwrap();
-        let b = app.spawn_network_player(2).unwrap();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let b = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         assert_ne!(a, b, "chaque joueur doit avoir son propre objet");
         assert_eq!(app.network_player_count(), 2);
+    }
+
+    /// GDD §3.2 : « L'Assaut reproduit exactement les valeurs actuelles —
+    /// zéro régression pour qui ne choisit pas ». Le gabarit cloné pour un
+    /// Assaut doit garder exactement la vitesse du gabarit d'origine.
+    #[test]
+    fn assault_class_keeps_the_templates_move_speed_unmodified() {
+        let mut app = app_with_zombies_demo();
+        let template_speed = app
+            .scene
+            .objects
+            .iter()
+            .find_map(|o| o.controller.as_ref())
+            .expect("gabarit pilotable")
+            .move_speed;
+
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let spawned_speed = app.scene.objects[index]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+        assert_eq!(
+            spawned_speed, template_speed,
+            "Assaut ne doit modifier ni la vitesse ni rien d'autre"
+        );
+    }
+
+    /// GDD §3.2 : Éclaireur = vitesse +25 %, PV max −30 %.
+    #[test]
+    fn scout_class_is_faster_and_has_less_max_health_than_assault() {
+        let mut assault_app = app_with_zombies_demo();
+        let assault_idx = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let assault_speed = assault_app.scene.objects[assault_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        let mut scout_app = app_with_zombies_demo();
+        let scout_idx = scout_app
+            .spawn_network_player(1, PlayerClass::Scout)
+            .unwrap();
+        let scout_speed = scout_app.scene.objects[scout_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        assert!(
+            scout_speed > assault_speed,
+            "l'Éclaireur doit être plus rapide que l'Assaut : {scout_speed} <= {assault_speed}"
+        );
+        assert_eq!(
+            scout_app.network_player_health(1),
+            Some(crate::app::health::MAX_HEALTH * 0.70),
+            "l'Éclaireur doit démarrer à 70 % des PV max de base"
+        );
+    }
+
+    /// GDD §3.2 : Soutien = vitesse −15 %, mais PV max inchangés (seuls les
+    /// dégâts infligés et la vitesse sont réduits, pas l'endurance).
+    #[test]
+    fn support_class_is_slower_but_keeps_full_max_health() {
+        let mut assault_app = app_with_zombies_demo();
+        let assault_idx = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let assault_speed = assault_app.scene.objects[assault_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        let mut support_app = app_with_zombies_demo();
+        let support_idx = support_app
+            .spawn_network_player(1, PlayerClass::Support)
+            .unwrap();
+        let support_speed = support_app.scene.objects[support_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        assert!(
+            support_speed < assault_speed,
+            "le Soutien doit être plus lent que l'Assaut : {support_speed} >= {assault_speed}"
+        );
+        assert_eq!(
+            support_app.network_player_health(1),
+            Some(crate::app::health::MAX_HEALTH),
+            "le Soutien garde ses PV max pleins"
+        );
+    }
+
+    /// `PlayerClass::from_u8` (décodage du réseau) : une valeur hors table ne
+    /// doit jamais faire paniquer le serveur, elle retombe sur Assaut — même
+    /// principe que `fireball::clamp_weapon` pour un indice d'arme invalide.
+    #[test]
+    fn player_class_from_u8_falls_back_to_assault_for_unknown_values() {
+        assert_eq!(PlayerClass::from_u8(0), PlayerClass::Assault);
+        assert_eq!(PlayerClass::from_u8(1), PlayerClass::Scout);
+        assert_eq!(PlayerClass::from_u8(2), PlayerClass::Support);
+        assert_eq!(PlayerClass::from_u8(250), PlayerClass::Assault);
     }
 
     /// Régression : rien dans le protocole
@@ -558,8 +763,8 @@ mod tests {
         let mut app = app_with_zombies_demo();
         let before = app.scene.objects.len();
 
-        let first = app.spawn_network_player(1).unwrap();
-        let second = app.spawn_network_player(1).unwrap();
+        let first = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let second = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
 
         assert_eq!(
             first, second,
@@ -576,7 +781,7 @@ mod tests {
     #[test]
     fn despawning_hides_the_object_and_forgets_the_player() {
         let mut app = app_with_zombies_demo();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
 
         app.despawn_network_player(1);
 
@@ -600,11 +805,11 @@ mod tests {
         let mut app = app_with_zombies_demo();
         let before = app.scene.objects.len();
 
-        let first = app.spawn_network_player(1).unwrap();
+        let first = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         assert_eq!(app.scene.objects.len(), before + 1);
         app.despawn_network_player(1);
 
-        let second = app.spawn_network_player(2).unwrap();
+        let second = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
 
         assert_eq!(
             second, first,
@@ -628,14 +833,14 @@ mod tests {
     #[test]
     fn simultaneous_players_never_share_a_recycled_slot() {
         let mut app = app_with_zombies_demo();
-        let a = app.spawn_network_player(1).unwrap();
-        let b = app.spawn_network_player(2).unwrap();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let b = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         assert_ne!(a, b);
 
         app.despawn_network_player(1);
         // Pendant que 2 est toujours connecté, 3 rejoint : doit récupérer
         // l'emplacement de 1 (le seul orphelin), jamais celui de 2.
-        let c = app.spawn_network_player(3).unwrap();
+        let c = app.spawn_network_player(3, PlayerClass::Assault).unwrap();
 
         assert_eq!(
             c, a,
@@ -653,7 +858,7 @@ mod tests {
     fn restart_game_forgets_network_players() {
         let mut app = app_with_zombies_demo();
         app.play_snapshot = app.scene.objects.clone();
-        app.spawn_network_player(1);
+        app.spawn_network_player(1, PlayerClass::Assault);
         assert_eq!(app.network_player_count(), 1);
 
         app.restart_game();
@@ -690,8 +895,8 @@ mod tests {
     #[test]
     fn network_input_moves_the_players_own_object_independently() {
         let mut app = app_with_zombies_demo();
-        let a = app.spawn_network_player(1).unwrap();
-        let b = app.spawn_network_player(2).unwrap();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let b = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let start_a = app.scene.objects[a].transform.position;
         let start_b = app.scene.objects[b].transform.position;
 
@@ -738,8 +943,8 @@ mod tests {
     #[test]
     fn network_snapshot_reports_every_connected_player() {
         let mut app = app_with_zombies_demo();
-        let a = app.spawn_network_player(1).unwrap();
-        let b = app.spawn_network_player(2).unwrap();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let b = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
 
         let snap = app.network_snapshot(7);
         assert_eq!(snap.tick, 7);
@@ -754,7 +959,7 @@ mod tests {
         // `AnimationState`) doit atterrir dans son `EntityDelta`, pour que les
         // autres écrans jouent la même animation sur son fantôme.
         let mut app = app_with_zombies_demo();
-        let a = app.spawn_network_player(1).unwrap();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         app.scene.objects[a].animation = Some(crate::scene::AnimationState {
             clip: "run".into(),
             time: 0.0,
@@ -778,7 +983,7 @@ mod tests {
         // Un joueur sans `AnimationState` (mesh non skinné) ne doit pas planter
         // ni inventer un clip — champ vide, comme documenté.
         let mut app = app_with_zombies_demo();
-        app.spawn_network_player(1).unwrap();
+        app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         let snap = app.network_snapshot(1);
         let entity = snap
             .entities
@@ -799,7 +1004,7 @@ mod tests {
         // pour le bug réel que ça a causé).
         let mut app = app_with_zombies_demo();
         app.hide_local_player_template();
-        let index = app.spawn_network_player(1).unwrap();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         assert!(
             app.scene.objects[index].visible,
             "un joueur réseau tout juste spawné doit être visible, \
@@ -860,7 +1065,7 @@ mod tests {
         // nécessairement un client légitime passant par des sliders bornés) :
         // vérifie que la position reste finie après plusieurs pas de simulation.
         let mut app = app_with_zombies_demo();
-        let a = app.spawn_network_player(1).unwrap();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         app.set_network_input(
             1,
             NetworkInput {
@@ -969,7 +1174,7 @@ mod tests {
     fn server_rejects_attack_before_cooldown_elapsed() {
         let mut app = AppState::new();
         app.scene = scene_with_player_and_two_targets_in_range();
-        let player_index = app.spawn_network_player(1).unwrap();
+        let player_index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         // Les deux cibles sont à portée du point d'apparition du joueur réseau
         // (décalé de +5 en X par `spawn_network_player`) : replace-les au même
         // décalage pour rester dans `NETWORK_ATTACK_RANGE`.
@@ -1037,7 +1242,7 @@ mod tests {
     fn a_contact_kill_credits_the_attacking_players_kill_count() {
         let mut app = AppState::new();
         app.scene = scene_with_player_and_two_targets_in_range();
-        let player_index = app.spawn_network_player(1).unwrap();
+        let player_index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         let player_pos = app.scene.objects[player_index].transform.position;
         for o in app.scene.objects.iter_mut() {
             if o.combat.is_some() {

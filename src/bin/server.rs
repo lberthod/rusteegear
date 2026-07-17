@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use motor3derust::app::AppState;
-use motor3derust::app::multiplayer::NetworkInput;
+use motor3derust::app::multiplayer::{NetworkInput, PlayerClass};
 use motor3derust::net::firebase::{
     self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
 };
@@ -83,6 +83,11 @@ struct Lobby {
     firebase_uids: HashMap<PlayerId, String>,
     /// Horodatage du dernier message reçu de chaque joueur (cf. `CLIENT_TIMEOUT`).
     last_seen: HashMap<PlayerId, Instant>,
+    /// Classe choisie au `Join` (GAMEDESIGN_MMORPG.md §3.2) — vit au niveau du
+    /// salon, pas de `Room::app` (remplacée en bloc par `Room::restart`), pour
+    /// qu'un joueur déjà connecté garde sa classe d'une manche à l'autre au
+    /// sein du même salon, sans avoir à renvoyer un nouveau `Join`.
+    classes: HashMap<PlayerId, u8>,
 }
 
 impl Lobby {
@@ -90,7 +95,20 @@ impl Lobby {
         self.names.remove(&id);
         self.firebase_uids.remove(&id);
         self.last_seen.remove(&id);
+        self.classes.remove(&id);
     }
+}
+
+/// Distance (m) cumulée par un joueur réseau sur la manche courante — seul
+/// signal d'activité disponible côté serveur en dehors des frags (garde
+/// anti-AFK, GDD §8.3 : « la participation n'est due qu'à un joueur
+/// *actif* »). Remise à zéro à chaque nouvelle manche (`Room::new`/`restart`),
+/// jamais lue directement par le protocole — un client ne peut donc pas la
+/// mentir, elle est recalculée du seul mouvement observé de son objet serveur.
+#[derive(Default)]
+struct PlayerActivity {
+    last_position: Option<glam::Vec3>,
+    distance: f32,
 }
 
 /// Un salon : sa propre manche (`AppState`, donc sa propre scène/physique/
@@ -102,6 +120,8 @@ struct Room {
     last_wave: u32,
     last_score: u32,
     started: Instant,
+    /// Cf. `PlayerActivity` — garde anti-AFK de l'économie d'XP (GDD §8.3).
+    activity: HashMap<PlayerId, PlayerActivity>,
 }
 
 impl Room {
@@ -122,6 +142,7 @@ impl Room {
             last_wave,
             last_score,
             started: Instant::now(),
+            activity: HashMap::new(),
         }
     }
 
@@ -137,11 +158,15 @@ impl Room {
         self.app.hide_local_player_template();
         self.app.playing = true;
         for id in ids {
-            self.app.spawn_network_player(id);
+            let class = PlayerClass::from_u8(self.lobby.classes.get(&id).copied().unwrap_or(0));
+            self.app.spawn_network_player(id, class);
         }
         self.last_wave = self.app.wave;
         self.last_score = self.app.score();
         self.started = Instant::now();
+        // Nouvelle manche = nouvelle mesure d'activité (GDD §8.3) : la
+        // participation à la manche précédente ne doit pas se reporter.
+        self.activity.clear();
     }
 
     /// Joueurs actuellement connectés à ce salon (pour cibler les envois —
@@ -151,6 +176,26 @@ impl Room {
     /// `send_to` en boucle).
     fn connected_ids(&self) -> Vec<PlayerId> {
         self.lobby.names.keys().copied().collect()
+    }
+
+    /// Accumule la distance parcourue par chaque joueur connecté depuis le
+    /// dernier tick (garde anti-AFK, GDD §8.3) — appelé une fois par tick,
+    /// après `advance_play()` (positions fraîchement simulées).
+    fn update_activity(&mut self) {
+        for id in self.connected_ids() {
+            let Some(index) = self.app.network_player_object(id) else {
+                continue;
+            };
+            let Some(object) = self.app.scene.objects.get(index) else {
+                continue;
+            };
+            let position = object.transform.position;
+            let entry = self.activity.entry(id).or_default();
+            if let Some(last) = entry.last_position {
+                entry.distance += last.distance(position);
+            }
+            entry.last_position = Some(position);
+        }
     }
 }
 
@@ -177,6 +222,7 @@ fn handle_message(
             name,
             firebase_uid,
             lobby,
+            class,
         } => {
             // Durcissement (Sprint 105a-2) : `lobby` devient une clé de `rooms`
             // et `firebase_uid` finit non échappé dans une URL Firebase RTDB
@@ -194,7 +240,12 @@ fn handle_message(
             };
             let room = rooms.entry(code.clone()).or_insert_with(Room::new);
             room.lobby.last_seen.insert(id, Instant::now());
-            if room.app.spawn_network_player(id).is_some() {
+            room.lobby.classes.insert(id, class);
+            if room
+                .app
+                .spawn_network_player(id, PlayerClass::from_u8(class))
+                .is_some()
+            {
                 log::info!("Joueur {id} ({name}) entre en jeu (salon « {code} »)");
                 room.lobby.names.insert(id, name.clone());
                 if let Some(uid) = firebase_uid {
@@ -346,18 +397,77 @@ fn merged_progress(previous: Result<PlayerProgress, String>, score: u32) -> Opti
     })
 }
 
-/// Crédite le score de la manche en XP à chaque joueur réseau connu de
-/// Firebase. Les échecs (réseau, règles RTDB non configurées...) sont logués
-/// mais ne font pas planter le serveur — la progression est un bonus, pas une
-/// condition de fonctionnement du jeu. Pas de retry sur une lecture échouée :
-/// `get_progress`/`set_progress` sont des appels bloquants dans la boucle de
-/// tick — au pire, le joueur perd le bonus d'une manche (logué), jamais son
-/// cumul (cf. `merged_progress`).
-fn award_progress(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobby, score: u32) {
+/// Contribution individuelle utilisée pour l'XP et le classement (GDD §8.2 :
+/// « le classement suit la contribution individuelle, pas le score de
+/// salon » — cf. `AUDIT_GAMEPLAY_2026-07-16.md` §3.6, un joueur AFK d'une
+/// manche gagnante était crédité comme son MVP). Frags du joueur réseau
+/// `id`, `0` si non trouvé — jamais la contribution des autres.
+fn network_player_score(app: &AppState, id: PlayerId) -> u32 {
+    app.network_player_kills(id).unwrap_or(0)
+}
+
+/// XP de participation (GDD §8.3) : due une fois par manche à tout joueur
+/// **actif**, indépendamment du résultat — « la défaite paie aussi » (§3.2)
+/// — sinon l'XP existerait mais resterait imperceptible à l'échelle d'une
+/// vie de joueur (constat du GDD : ~100 nuits pour le premier palier avec
+/// l'ancien barème « score de salon = XP brute »).
+const XP_PARTICIPATION: u32 = 150;
+
+/// XP par frag ou assist (GDD §8.3) — les assists (Soutien : PV soignés,
+/// réanimations) n'existent pas encore (`GAMEDESIGN_MMORPG.md` §3.2, classes
+/// légères non livrées) : seuls les frags comptent pour l'instant, la
+/// formule est déjà prête à les additionner le jour où ils existeront.
+const XP_PER_FRAG_OR_ASSIST: u32 = 5;
+
+/// Bonus d'XP si la manche est gagnée (GDD §8.3) : « gagner compte, sans
+/// doubler la mise » — la participation (ci-dessus) reste le terme dominant.
+const XP_VICTORY_BONUS: u32 = 75;
+
+/// Distance (m) minimale parcourue sur la manche pour compter comme *actif*
+/// côté garde anti-AFK (GDD §8.3, point 1), si aucun frag n'a été marqué —
+/// sans cette garde, rester immobile à encaisser 150 XP par nuit serait
+/// l'« optimum anti-fun » que le GDD interdit explicitement (§15.5). Une
+/// valeur volontairement basse (quelques pas) : le but n'est pas d'exiger un
+/// niveau d'activité, juste d'exclure un joueur qui n'a jamais bougé ni frag.
+const ACTIVITY_DISTANCE_THRESHOLD: f32 = 3.0;
+
+/// XP créditée à un joueur pour cette manche (GDD §8.3, barème cible : niv. 3
+/// ≈ 2000 XP, niv. 6 ≈ 5000, niv. 10 ≈ 9000 — déjà exact avec `XP_PER_LEVEL`
+/// inchangé, `1 + xp / 1000` : le seul écart au « ~100× trop lent » constaté
+/// était le score crédité par manche, pas la formule de niveau). Le contrat
+/// du jour (+250, GDD §3.4/§3.5) dépend de contenu de scène non livré : pas
+/// de terme ici, à ajouter avec le premier `RoundObjective`.
+fn round_xp(frags: u32, active: bool, won: bool) -> u32 {
+    if !active {
+        return 0;
+    }
+    let victory_bonus = if won { XP_VICTORY_BONUS } else { 0 };
+    XP_PARTICIPATION + XP_PER_FRAG_OR_ASSIST * frags + victory_bonus
+}
+
+/// Crédite l'XP de la manche à chaque joueur réseau connu de Firebase, selon
+/// `round_xp` (participation + frags + bonus de victoire, garde anti-AFK
+/// incluse). Les échecs (réseau, règles RTDB non configurées...) sont logués
+/// mais ne font pas planter le serveur — la progression est un bonus, pas
+/// une condition de fonctionnement du jeu. Pas de retry sur une lecture
+/// échouée : `get_progress`/`set_progress` sont des appels bloquants dans la
+/// boucle de tick — au pire, le joueur perd le bonus d'une manche (logué),
+/// jamais son cumul (cf. `merged_progress`).
+fn award_progress(
+    firebase: &Option<(FirebaseConfig, AuthSession)>,
+    lobby: &Lobby,
+    app: &AppState,
+    won: bool,
+    activity: &HashMap<PlayerId, PlayerActivity>,
+) {
     let Some((config, session)) = firebase else {
         return;
     };
     for (id, uid) in &lobby.firebase_uids {
+        let frags = network_player_score(app, *id);
+        let moved = activity.get(id).map(|a| a.distance).unwrap_or(0.0);
+        let active = frags > 0 || moved >= ACTIVITY_DISTANCE_THRESHOLD;
+        let score = round_xp(frags, active, won);
         let previous = firebase::get_progress(config, uid);
         if let Err(e) = &previous {
             log::warn!(
@@ -378,10 +488,15 @@ fn award_progress(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobb
     }
 }
 
-/// Poste une entrée de classement pour chaque joueur réseau connu de Firebase
-/// (même score que `award_progress`, appelé juste après elle en fin de
-/// manche). Mêmes garanties : jamais fatal, juste logué en cas d'échec.
-fn post_leaderboard(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lobby, score: u32) {
+/// Poste une entrée de classement pour chaque joueur réseau connu de
+/// Firebase, à sa propre contribution (`network_player_score` — même source
+/// que `award_progress`, appelé juste avant elle en fin de manche). Mêmes
+/// garanties : jamais fatal, juste logué en cas d'échec.
+fn post_leaderboard(
+    firebase: &Option<(FirebaseConfig, AuthSession)>,
+    lobby: &Lobby,
+    app: &AppState,
+) {
     let Some((config, session)) = firebase else {
         return;
     };
@@ -390,6 +505,7 @@ fn post_leaderboard(firebase: &Option<(FirebaseConfig, AuthSession)>, lobby: &Lo
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     for id in lobby.firebase_uids.keys() {
+        let score = network_player_score(app, *id);
         let name = lobby
             .names
             .get(id)
@@ -457,6 +573,7 @@ fn main() {
         let mut to_close: Vec<String> = Vec::new();
         for (code, room) in rooms.iter_mut() {
             room.app.advance_play();
+            room.update_activity();
 
             if let Some(net) = &net {
                 let ids = room.connected_ids();
@@ -509,8 +626,14 @@ fn main() {
                         "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
                     );
                 }
-                award_progress(&firebase, &room.lobby, room.app.score());
-                post_leaderboard(&firebase, &room.lobby, room.app.score());
+                award_progress(
+                    &firebase,
+                    &room.lobby,
+                    &room.app,
+                    room.app.has_won(),
+                    &room.activity,
+                );
+                post_leaderboard(&firebase, &room.lobby, &room.app);
                 // Une manche décidée ne ferme pas tout le serveur : seul CE
                 // salon repart, les autres continuent — sauf s'il est déjà
                 // vide (dernier joueur parti entre-temps), auquel cas autant
@@ -575,6 +698,146 @@ mod progress_tests {
         assert_eq!(updated.xp, 1100);
         assert_eq!(updated.level, 2, "1100 XP à {XP_PER_LEVEL} XP/niveau");
     }
+
+    /// GDD §8.2 : « le classement suit la contribution individuelle, pas le
+    /// score de salon » — contre-exemple direct du bug documenté dans
+    /// `AUDIT_GAMEPLAY_2026-07-16.md` §3.6 (un joueur AFK d'une manche
+    /// gagnante classé comme son MVP). Deux joueurs réseau dans la même
+    /// `AppState`, un seul frappe une cible attaquable à portée : leurs
+    /// scores individuels (`network_player_score`, la valeur désormais
+    /// utilisée par `award_progress`/`post_leaderboard`) doivent diverger,
+    /// alors que `room.app.score()` — l'ancienne valeur uniforme — resterait
+    /// identique pour les deux.
+    #[test]
+    fn network_player_score_reflects_each_players_own_kills_not_a_shared_total() {
+        let mut app = AppState::new();
+        app.scene = motor3derust::scene::Scene::controller_demo();
+        app.playing = true;
+
+        let attacker: PlayerId = 1;
+        let bystander: PlayerId = 2;
+        let attacker_idx = app
+            .spawn_network_player(attacker, PlayerClass::Assault)
+            .expect("le gabarit joueur doit exister dans controller_demo");
+        app.spawn_network_player(bystander, PlayerClass::Assault)
+            .expect("le gabarit joueur doit exister dans controller_demo");
+
+        // Place le seul attaquant au contact d'un « Ennemi » attaquable —
+        // peu importe lequel, `attack_at_defeats_only_attackable_enemies_
+        // in_range` (scene::mod.rs) garantit qu'ils le sont tous.
+        let enemy_pos = app
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.name.starts_with("Ennemi"))
+            .map(|o| o.transform.position)
+            .expect("controller_demo doit contenir au moins un « Ennemi »");
+        app.scene.objects[attacker_idx].transform.position = enemy_pos;
+
+        app.set_network_input(
+            attacker,
+            NetworkInput {
+                attack: true,
+                ..Default::default()
+            },
+        );
+        // Pas d'attaque pour `bystander` : NetworkInput::default() (attack: false).
+        app.set_network_input(bystander, NetworkInput::default());
+
+        app.update_network_attacks(1.0 / 60.0);
+
+        let attacker_score = network_player_score(&app, attacker);
+        let bystander_score = network_player_score(&app, bystander);
+        assert!(
+            attacker_score > 0,
+            "l'attaquant au contact doit avoir frag au moins une fois"
+        );
+        assert_eq!(
+            bystander_score, 0,
+            "un joueur qui n'attaque jamais ne doit recevoir aucun frag"
+        );
+        assert_ne!(
+            attacker_score, bystander_score,
+            "deux joueurs de contribution différente doivent recevoir des scores différents \
+             (avant ce correctif, les deux auraient reçu `room.app.score()`, identique pour tous)"
+        );
+    }
+
+    /// GDD §8.3, propriété 1 : « la participation domine le frag » — sans
+    /// aucun frag, un joueur actif touche déjà l'essentiel de l'XP d'une nuit
+    /// moyenne (150 sur ~300 visés), pas une fraction négligeable.
+    #[test]
+    fn an_active_player_with_no_frags_still_earns_the_participation_xp() {
+        assert_eq!(round_xp(0, true, false), XP_PARTICIPATION);
+    }
+
+    /// GDD §8.3, garde anti-AFK explicite : « un AFK gagne 0, pas 150 » — un
+    /// joueur inactif ne touche rien, même une manche gagnée, même avec des
+    /// frags à 0 (un joueur inactif ne peut de toute façon pas fragger, mais
+    /// le test isole la garde elle-même plutôt que d'en dépendre).
+    #[test]
+    fn an_inactive_player_earns_nothing_even_on_a_won_round() {
+        assert_eq!(round_xp(0, false, true), 0);
+    }
+
+    /// GDD §8.3 : « gagner compte, sans doubler la mise » — le bonus de
+    /// victoire s'ajoute, il ne multiplie pas la participation/les frags.
+    #[test]
+    fn winning_adds_a_flat_bonus_on_top_of_participation_and_frags() {
+        let lost = round_xp(3, true, false);
+        let won = round_xp(3, true, true);
+        assert_eq!(won - lost, XP_VICTORY_BONUS);
+    }
+
+    /// Nuit moyenne gagnée ≈ 300 XP (GDD §8.3, table « Économie cible ») :
+    /// participation (150) + ~15 frags/joueur (5 × 15 = 75, arrondi ici à 15
+    /// pour coller à l'exemple du GDD) + victoire (75) doit approcher 300,
+    /// pas les ~20 XP de l'ancien barème (score de salon = nombre de
+    /// monstres vaincus par toute l'équipe).
+    #[test]
+    fn an_average_won_night_lands_close_to_the_gdd_target_of_300_xp() {
+        let xp = round_xp(15, true, true);
+        assert_eq!(
+            xp,
+            XP_PARTICIPATION + XP_PER_FRAG_OR_ASSIST * 15 + XP_VICTORY_BONUS
+        );
+        assert!(
+            (250..=350).contains(&xp),
+            "une nuit moyenne gagnée doit rester proche des ~300 XP visés : {xp}"
+        );
+    }
+
+    /// `Room::update_activity` (garde anti-AFK, GDD §8.3) : un joueur qui ne
+    /// bouge jamais accumule une distance nulle ; un joueur qui se déplace
+    /// entre deux ticks voit sa distance grandir — ce compteur est ce qui
+    /// permet à `award_progress` de distinguer un joueur actif immobile en
+    /// combat rapproché (frags > 0, donc actif par l'autre voie) d'un joueur
+    /// réellement absent.
+    #[test]
+    fn room_activity_accumulates_distance_moved_between_ticks_only() {
+        let mut room = Room::new();
+        let id: PlayerId = 1;
+        let index = room
+            .app
+            .spawn_network_player(id, PlayerClass::Assault)
+            .expect("le gabarit joueur doit exister dans la scène embarquée");
+        room.lobby.names.insert(id, "Testeur".to_string());
+
+        room.update_activity();
+        assert_eq!(
+            room.activity.get(&id).map(|a| a.distance).unwrap_or(0.0),
+            0.0,
+            "aucune distance ne doit être comptée avant un premier mouvement observé"
+        );
+
+        room.app.scene.objects[index].transform.position += glam::Vec3::new(5.0, 0.0, 0.0);
+        room.update_activity();
+        let distance = room.activity.get(&id).map(|a| a.distance).unwrap_or(0.0);
+        assert!(
+            distance >= 4.9,
+            "un déplacement de 5 m entre deux ticks doit se refléter dans la distance cumulée : {distance}"
+        );
+    }
 }
 
 // Sprint 105a-3 : tous les tests de ce module ouvrent un vrai socket
@@ -609,6 +872,7 @@ mod tests {
             last_wave: 0,
             last_score: 0,
             started: Instant::now(),
+            activity: HashMap::new(),
         }
     }
 

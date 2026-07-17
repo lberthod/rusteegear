@@ -837,13 +837,18 @@ impl AppState {
                 self.attack_flash = 1.0;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
             }
-            // Un joueur réseau vient de tomber à 0 PV (GAMEDESIGN_EN_LIGNE.md
-            // §3.1) : réagit seulement si c'est **nous** (son) — la disparition
-            // d'un allié est déjà visible (son fantôme se masque, cf. le
-            // `Snapshot` suivant), pas la peine de sonoriser la mort de chacun.
+            // Un joueur réseau vient de tomber à 0 PV (GDD §5.3 : « la mort
+            // d'un allié est un événement de groupe », diffusé à tous, pas
+            // seulement à la victime). Nous : flash + son (comme avant). Un
+            // allié : bannière dédiée (`ally_down_flash`, éditeur/HUD) — son
+            // fantôme se masquer au prochain `Snapshot` ne suffisait pas, un
+            // groupe doit *sentir* qu'il perd quelqu'un, pas le déduire.
             ServerMsg::Event(crate::net::protocol::GameEvent::PlayerDown { player_id }) => {
                 if Some(player_id) == self.net_player_id {
                     self.damage_flash = 1.0;
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+                } else {
+                    self.ally_down_flash = 1.0;
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 }
             }
@@ -1340,8 +1345,11 @@ mod tests {
     fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
         while let Ok((id, msg)) = net.inbox.try_recv() {
             match msg {
-                ClientMsg::Join { .. } => {
-                    server_app.spawn_network_player(id);
+                ClientMsg::Join { class, .. } => {
+                    server_app.spawn_network_player(
+                        id,
+                        crate::app::multiplayer::PlayerClass::from_u8(class),
+                    );
                 }
                 ClientMsg::Input {
                     move_x,
@@ -1395,6 +1403,53 @@ mod tests {
         assert_eq!(app.firebase_uid.as_deref(), Some("uid-test-1234"));
     }
 
+    /// GDD §5.3 : « la mort d'un allié est un événement de groupe ». Un
+    /// `PlayerDown` pour un **autre** joueur doit déclencher la bannière
+    /// partagée (`ally_down_flash`) et ne jamais toucher `damage_flash` (déjà
+    /// réservé à notre propre mort) — pas besoin d'un vrai socket, la
+    /// distribution des `GameEvent` est un aiguillage pur dans
+    /// `handle_server_msg`.
+    #[test]
+    fn player_down_for_an_ally_raises_the_shared_banner_not_the_self_flash() {
+        let mut app = AppState::new();
+        app.net_player_id = Some(1);
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::PlayerDown { player_id: 2 },
+        ));
+
+        assert_eq!(
+            app.ally_down_flash, 1.0,
+            "la mort d'un allié doit déclencher la bannière partagée"
+        );
+        assert_eq!(
+            app.damage_flash, 0.0,
+            "la mort d'un allié ne doit jamais déclencher notre propre flash de dégâts"
+        );
+    }
+
+    /// Symétrique du test ci-dessus : notre propre `PlayerDown` continue de
+    /// déclencher `damage_flash` (comportement préexistant), jamais la
+    /// bannière « allié à terre » (qui n'a de sens que pour les autres).
+    #[test]
+    fn player_down_for_ourselves_raises_the_self_flash_not_the_ally_banner() {
+        let mut app = AppState::new();
+        app.net_player_id = Some(1);
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::PlayerDown { player_id: 1 },
+        ));
+
+        assert_eq!(
+            app.damage_flash, 1.0,
+            "notre propre mort doit déclencher le flash de dégâts"
+        );
+        assert_eq!(
+            app.ally_down_flash, 0.0,
+            "notre propre mort ne doit pas déclencher la bannière « allié à terre »"
+        );
+    }
+
     /// Une fois un `uid` Firebase connu, `connect_to_server` doit le
     /// transmettre au `Join` — c'est ce qui permet au serveur de créditer la
     /// bonne progression. Vérifié à travers un vrai socket : le
@@ -1424,6 +1479,7 @@ mod tests {
                 name: "Alice".to_string(),
                 firebase_uid: Some("uid-alice".to_string()),
                 lobby: crate::net::protocol::DEFAULT_LOBBY.to_string(),
+                class: 0,
             }
         );
     }

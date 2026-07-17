@@ -289,6 +289,11 @@ pub struct AppState {
     /// Intensité (1 = pic, décroît vers 0) du flash de dégâts (vignette rouge HUD),
     /// déclenché quand `hud_health` baisse. Purement cosmétique (retour de coup).
     pub damage_flash: f32,
+    /// Intensité (1 = pic, décroît vers 0) de la bannière « allié à terre »,
+    /// déclenchée par `GameEvent::PlayerDown` d'un **autre** joueur réseau
+    /// (GDD §5.3 : « la mort d'un allié est un événement de groupe » — jusqu'ici
+    /// seule notre propre mort déclenchait un retour, `network_client.rs`).
+    pub ally_down_flash: f32,
     /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
     /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
     pub attack_flash: f32,
@@ -344,6 +349,20 @@ pub struct AppState {
     /// partagé). Diffusé à tous via `EntityDelta::kills`, pas seulement au
     /// joueur concerné.
     network_kills: HashMap<crate::net::protocol::PlayerId, u32>,
+    /// Classe choisie par chaque joueur réseau au `Join` (cf.
+    /// `multiplayer::PlayerClass`, GAMEDESIGN_MMORPG.md §3.2) — appliquée une
+    /// fois pour toutes au spawn (vitesse, PV max), relue pour les
+    /// modificateurs qui dépendent du tick courant (dégâts, soin, réanimation).
+    network_classes: HashMap<crate::net::protocol::PlayerId, multiplayer::PlayerClass>,
+    /// PV max de chaque joueur réseau (base `health::MAX_HEALTH` modulée par
+    /// sa classe, ex. Éclaireur ×0,70) — remplace la constante plate partout
+    /// où la vie est clampée ou testée à pleine vie (cf. `health::max_health_for`).
+    network_max_health: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Réanimation en cours (GDD §8.1, exclusivité Soutien) : pour chaque
+    /// **soigneur**, la cible spectatrice qu'il canalise et le temps déjà
+    /// accumulé (s) — remis à zéro si la cible change ou si le canal
+    /// s'interrompt (cf. `health::update_network_revive`).
+    network_revive: HashMap<crate::net::protocol::PlayerId, (crate::net::protocol::PlayerId, f32)>,
     /// Cooldown restant (s) par paire (indice de créature mordeuse, joueur réseau)
     /// — cf. `health::update_creature_bite`. Clé composite plutôt qu'un cooldown
     /// par créature seule : deux joueurs au contact de la même créature ne
@@ -793,6 +812,7 @@ impl AppState {
             render_quality: crate::app::build_config::BuildConfig::load().render_quality,
             bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
             damage_flash: 0.0,
+            ally_down_flash: 0.0,
             attack_flash: 0.0,
             wave: 0,
             is_leveled_demo: false,
@@ -805,6 +825,9 @@ impl AppState {
             network_attack_cooldowns: HashMap::new(),
             network_health: HashMap::new(),
             network_kills: HashMap::new(),
+            network_classes: HashMap::new(),
+            network_max_health: HashMap::new(),
+            network_revive: HashMap::new(),
             bite_cooldowns: HashMap::new(),
             fireballs: Vec::new(),
             fireball_cooldowns: HashMap::new(),
@@ -1166,6 +1189,7 @@ mod tests {
     // pas ré-exportés par `use super::*` (qui ne remonte que le contenu de
     // `app` lui-même) — import explicite des symboles `pub(super)` que ces
     // tests appellent directement (par nom, pas via `AppState::advance_play`).
+    use super::multiplayer::PlayerClass;
     use super::scripting::run_script;
 
     /// Nom de prefab unique par appel (horloge + pid) : contrairement aux tests de
@@ -2457,7 +2481,7 @@ mod tests {
             ..Default::default()
         };
         app.hide_local_player_template();
-        app.spawn_network_player(1);
+        app.spawn_network_player(1, PlayerClass::Assault);
         app.playing = true;
         let start = app.scene.objects[2].transform.position;
         for _ in 0..60 {
@@ -2517,8 +2541,8 @@ mod tests {
         };
         app.playing = true;
         app.hide_local_player_template();
-        let p1 = app.spawn_network_player(1).unwrap();
-        let p2 = app.spawn_network_player(2).unwrap();
+        let p1 = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let p2 = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let chaser_idx = 2; // sol=0, joueur(masqué)=1, chasseur=2, puis p1/p2 ajoutés ensuite.
         // Repositionne explicitement les deux joueurs (plutôt que de dépendre
         // de la géométrie de spawn de `spawn_network_player`, qui les place

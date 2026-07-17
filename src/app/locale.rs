@@ -95,6 +95,15 @@ pub fn waiting_next_round(locale: Locale) -> &'static str {
     }
 }
 
+/// Bannière brève (GDD §5.3, §16.3 : « < 2 s ») quand un allié — pas nous —
+/// tombe à 0 PV : `ally_down_banner`.
+pub fn ally_down(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🕯 Un allié est tombé",
+        Locale::En => "🕯 An ally is down",
+    }
+}
+
 pub fn restart_button_label(locale: Locale, won: bool) -> &'static str {
     match (locale, won) {
         (Locale::Fr, true) => "➡ Niveau suivant",

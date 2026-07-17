@@ -95,6 +95,9 @@ impl NetClient {
             name: name.to_string(),
             firebase_uid: firebase_uid.map(str::to_string),
             lobby: lobby.to_string(),
+            // Cf. `net/client/native.rs` : pas de sélecteur de classe encore
+            // câblé, Assaut (0) pour tous.
+            class: 0,
         })?;
 
         let (in_tx, in_rx) = channel::<ServerMsg>();

@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use motor3derust::app::AppState;
-use motor3derust::app::multiplayer::NetworkInput;
+use motor3derust::app::multiplayer::{NetworkInput, PlayerClass};
 use motor3derust::net::client::NetClient;
 use motor3derust::net::protocol::{self, ClientMsg, ServerMsg};
 use motor3derust::net::server_loop::NetServer;
@@ -89,7 +89,7 @@ fn main() {
         while let Ok((id, msg)) = net.inbox.try_recv() {
             match msg {
                 ClientMsg::Join { .. } => {
-                    app.spawn_network_player(id);
+                    app.spawn_network_player(id, PlayerClass::Assault);
                 }
                 ClientMsg::Input {
                     move_x,
