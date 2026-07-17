@@ -3182,7 +3182,18 @@ mod tests {
             mobile: embedded.mobile,
             camera_follow: embedded.camera_follow,
             game_camera: embedded.game_camera,
-            sky: embedded.sky,
+            // Ciel du hameau fortifié : nuit bleutée avec brouillard léger,
+            // conforme à GDD_MMORPG.md §2.3/§10 ("féerique crépusculaire").
+            // L'ancien ciel embarqué (hérité de `mmorpg_demo`) était une
+            // palette de plein jour — incohérente avec la fiction et avec
+            // `Sky::default()` qui, lui, est déjà nocturne.
+            sky: Sky {
+                horizon_color: [0.10, 0.11, 0.20],
+                zenith_color: [0.04, 0.05, 0.12],
+                fog_color: [0.09, 0.10, 0.16],
+                fog_density: 0.02,
+                bloom_intensity: 0.9,
+            },
             version: embedded.version,
             hud_layout: embedded.hud_layout,
             hud_widgets: embedded.hud_widgets,
