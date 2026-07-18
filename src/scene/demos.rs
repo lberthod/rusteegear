@@ -108,7 +108,7 @@ use crate::runtime::physics::PhysicsKind;
 /// `runtime::physics::tests::a_scripted_kinematic_body_cannot_walk_through_walls_or_the_player`.
 /// Preuve que deux instances divergent (caps/positions distincts) :
 /// `mmorpg_creatures_do_not_all_walk_in_the_same_direction`.
-fn creature_wander_script(
+pub(crate) fn creature_wander_script(
     arena_half: f32,
     prefix: &str,
     ray_mask: u32,

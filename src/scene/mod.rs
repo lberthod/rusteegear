@@ -1,6 +1,6 @@
 //! Modèle de scène (sans ECS) : un Vec d'objets, chacun avec un Transform et un type de mesh.
 
-mod demos;
+pub(crate) mod demos;
 mod hud_widgets;
 pub mod import;
 mod mobile;

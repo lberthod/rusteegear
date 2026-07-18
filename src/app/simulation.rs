@@ -2222,6 +2222,150 @@ mod tests {
         );
     }
 
+    /// Sprint 25 (Phase K, `sprintreflecion.md`) : la bande de collines à
+    /// l'ouest (`gfx::mesh::MMORPG_HILL_STRIP_X_LOCAL`, x monde ∈[-36,-33])
+    /// n'est pas qu'un décor visuel — un obstacle réel pour la sonde IA de
+    /// patrouille. Ne réutilise pas juste une créature existante (elles
+    /// évitent déjà la bande par construction, cf. `MMORPG_CREATURES`) : on
+    /// reprend directement le vrai script de production
+    /// (`scene::demos::creature_wander_script`, rendu accessible aux tests
+    /// via `pub(crate)`) planté DANS le plateau (x=-35,25, pleine amplitude,
+    /// cf. `mmorpg_terrain_local_height`), avec un cap plein nord (le long de
+    /// la bande, pas perpendiculaire) : contrairement à l'axe X (rampe du
+    /// plateau à 0 en seulement 0,5 m — bien trop raide pour un
+    /// `KinematicCharacterController` de créature, qui n'a PAS d'`autostep`
+    /// contrairement au joueur, cf. `resolve_scripted_moves`), le relief
+    /// varie doucement le long de Z (fréquence bien plus basse dans
+    /// `mmorpg_terrain_local_height`), ce qui laisse la patrouille suivre
+    /// réellement la pente au lieu de buter dessus comme sur un mur.
+    /// Vérifie : (1) jamais figée plus d'1 s d'affilée (même piège que
+    /// documenté dans la mémoire projet : un obstacle non visible au
+    /// raycast à 0,6 m fige la patrouille) pendant qu'elle chevauche la
+    /// bande, et (2) sa hauteur `y` suit bien le relief sous elle — même
+    /// gabarit de tolérance que
+    /// `runtime::physics::tests::a_dynamic_body_settles_on_the_terrain_hill_at_the_right_height`
+    /// (`y` jamais bien en-dessous du sol attendu, jamais en lévitation
+    /// franche au-dessus), et une variation de hauteur bien réelle sur le
+    /// trajet — preuve qu'elle « négocie » la pente plutôt que de rester
+    /// plaquée à une hauteur constante.
+    #[test]
+    fn mmorpg_creature_wander_crosses_the_west_hill_band_without_getting_stuck() {
+        use crate::gfx::mesh::{MMORPG_HILL_STRIP_X_LOCAL, mmorpg_terrain_local_height};
+        use crate::scene::demos::creature_wander_script;
+
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::mmorpg_demo();
+        let half = crate::scene::Scene::MMORPG_HALF;
+        let idx = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.name == "Créature")
+            .expect("la démo MMORPG doit contenir une « Créature »");
+
+        // Bornes monde de la bande de collines (cf. `MMORPG_HILL_STRIP_X_LOCAL`,
+        // en coordonnées locales ∈[-0.5,0.5] à reconvertir en mètres via ×72).
+        let (band_x_lo, band_x_hi) = MMORPG_HILL_STRIP_X_LOCAL;
+        let world_size = 2.0 * half;
+        let band_x_lo_m = band_x_lo * world_size;
+        let band_x_hi_m = band_x_hi * world_size;
+        assert!(
+            band_x_lo_m < -33.0 && band_x_hi_m > -35.6,
+            "bande attendue autour de x∈[-36,-33] (obtenu [{band_x_lo_m},{band_x_hi_m}])"
+        );
+
+        {
+            let obj = &mut app.scene.objects[idx];
+            // x=-35.25 : centre du plateau à pleine amplitude (x∈[-35.5,-35.0]).
+            // z=-25 : loin de la route (coupée à plat entre z=9 et 19) et loin
+            // du mur nord (retombée à 0 dès |z|>33) — relief bien réel des deux
+            // côtés du trajet (cf. le calcul de `mmorpg_terrain_local_height`
+            // le long de cet axe). Cap plein nord (heading=0°, cf.
+            // `creature_wander_script` : fwd = (sin(h), cos(h)), donc fwd=(0,1)
+            // à 0°).
+            // Départ tout près du relief attendu à ce point (calculé par la
+            // même fonction que le sol) plutôt qu'à y=0 : sinon la créature
+            // démarre enfoncée sous le relief (ici ~1,1 m) et toute la
+            // patrouille se limiterait à remonter cette chute de rattrapage
+            // au lieu de longer la bande — l'objectif ici est de mesurer la
+            // variation de hauteur PENDANT la patrouille, pas pendant un
+            // rattrapage de spawn (contrairement à
+            // `a_dynamic_body_settles_on_the_terrain_hill_at_the_right_height`,
+            // qui mesure justement une chute).
+            let spawn_x = -35.25_f32;
+            let spawn_z = -25.0_f32;
+            let spawn_h =
+                mmorpg_terrain_local_height(spawn_x / (2.0 * half), spawn_z / (2.0 * half));
+            obj.transform.position = Vec3::new(spawn_x, spawn_h + 0.05, spawn_z);
+            let ray_mask = !obj.collision_layer;
+            obj.script = creature_wander_script(half, "sprint25_hill_test_", ray_mask, 0.0, 0.0);
+        }
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        let dt = 1.0 / 60.0;
+
+        const STEPS: u32 = 20 * 60;
+        let mut prev_pos = app.scene.objects[idx].transform.position;
+        let mut pinned_frames = 0u32;
+        let mut entered_band = false;
+        let mut min_y_in_band = f32::MAX;
+        let mut max_y_in_band = f32::MIN;
+
+        for step in 0..STEPS {
+            app.sim_step(dt);
+            let pos = app.scene.objects[idx].transform.position;
+
+            if (pos - prev_pos).length() < 1e-4 {
+                pinned_frames += 1;
+            } else {
+                pinned_frames = 0;
+            }
+            assert!(
+                pinned_frames <= 60,
+                "step {step} : la créature semble figée plus d'1 s d'affilée dans/près \
+                 de la bande de collines (position={pos:?})"
+            );
+
+            if pos.x >= band_x_lo_m && pos.x <= band_x_hi_m {
+                entered_band = true;
+                let expected_h =
+                    mmorpg_terrain_local_height(pos.x / world_size, pos.z / world_size);
+                let y = pos.y;
+                // Même gabarit de tolérance que
+                // `a_dynamic_body_settles_on_the_terrain_hill_at_the_right_height` :
+                // ni traversée du relief vers le bas, ni lévitation franche
+                // au-dessus (un peu plus large ici pour la marche, pas une
+                // chute libre qui se stabilise).
+                assert!(
+                    y > expected_h - 0.5,
+                    "step {step} : la créature a traversé le relief vers le bas \
+                     (y={y}, sol attendu ≈{expected_h}, position={pos:?})"
+                );
+                assert!(
+                    y < expected_h + 1.5,
+                    "step {step} : la créature lévite au-dessus du relief \
+                     (y={y}, sol attendu ≈{expected_h}, position={pos:?})"
+                );
+                min_y_in_band = min_y_in_band.min(y);
+                max_y_in_band = max_y_in_band.max(y);
+            }
+
+            prev_pos = pos;
+        }
+
+        assert!(
+            entered_band,
+            "la créature n'a jamais chevauché la bande de collines (x∈[{band_x_lo_m},\
+             {band_x_hi_m}]) — le test ne prouve rien"
+        );
+        assert!(
+            max_y_in_band - min_y_in_band > 0.3,
+            "la créature a parcouru la bande sans que sa hauteur ne varie \
+             (min={min_y_in_band}, max={max_y_in_band}) — suspect sur un relief \
+             avec plusieurs dizaines de cm d'amplitude le long de ce trajet"
+        );
+    }
+
     /// Audit gameplay « gros sauts / déplacements illogiques » : preuve que les
     /// **20** créatures de la démo MMORPG bougent continûment, sans téléportation
     /// ni pivot brutal, avec la vraie physique. Bugs observés en jeu (corrigés

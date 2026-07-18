@@ -500,6 +500,16 @@ pub fn heightgrid_mesh(res: u32, color: [f32; 3], height_fn: impl Fn(f32, f32) -
 /// la faire onduler, et retombe à 0 avant les murs Nord/Sud pour ne jamais créer de
 /// rampe improvisée par-dessus un mur (1,8 m de haut) : l'amplitude maximale
 /// (~1,3 m, `AMP`) n'est atteinte qu'au centre de la bande, loin des murs.
+///
+/// Depuis le Sprint 25 (Phase K) : la bande n'a plus un seul caractère de
+/// relief uniforme sur toute sa longueur (72 m) — au nord de la route
+/// principale (`wz < 12`, coupure déjà à 0 par construction à cet endroit),
+/// une colline douce basse fréquence ; au sud, un relief plus accidenté
+/// (fréquences plus hautes). Cf. le commentaire au fil du corps de la
+/// fonction pour le détail et la raison de ne PAS avoir introduit une
+/// deuxième zone géographiquement séparée (contenu placé à la main trouvé
+/// bien plus dense qu'il n'y paraît sur tout le reste du pourtour de la
+/// carte).
 pub fn mmorpg_terrain_local_height(x: f32, z: f32) -> f32 {
     const WORLD_SIZE: f32 = 72.0; // = 2 × Scene::MMORPG_HALF
     const AMP: f32 = 2.0; // amplitude max des collines (m)
@@ -522,12 +532,39 @@ pub fn mmorpg_terrain_local_height(x: f32, z: f32) -> f32 {
         return 0.0;
     }
 
-    // Relief : somme de sinusoïdes à fréquences/phases distinctes — continu et
-    // dérivable, suffisant pour un aspect de collines naturel sans vrai bruit de
-    // Perlin (Sprint 24).
-    let n = 0.55 * (wx * 0.18 + 1.3).sin() * (wz * 0.14).cos()
-        + 0.30 * (wx * 0.07 - wz * 0.09 + 2.1).sin()
-        + 0.15 * (wx * 0.35 + wz * 0.30).sin();
+    // Sprint 25 (Phase K) : deux caractères de relief distincts DANS la même
+    // bande plutôt qu'une deuxième zone géographique séparée — le balayage de
+    // TOUT le contenu placé à la main (`NATURE_DECOR`/`MONSTER_DECOR`/
+    // `VILLAGE_PROPS`/`MMORPG_AMBIENT_FAUNA_SPAWNS`/`MMORPG_CREATURES`/
+    // `water_rects`/`EXCL_*` de `demos.rs`) n'a trouvé, à ≥3 m de marge, AUCUNE
+    // zone géographiquement séparée : le pourtour ouest est déjà saturé par la
+    // faune riveraine (`creature43`..`creature48`, x≈-30/-31, de z=-30 à
+    // z=30 quasiment sans trou), le nord (z<-30) et le coin NE sont couverts
+    // par la haie/rangée de décor et le promontoire, et les 4 coins de la
+    // carte ne sont PAS libres pour autant : le coin SO (x<-28, z>28) contient
+    // justement `creature47` (x=-30, z=30). Élargir la bande existante ou en
+    // ajouter une seconde aurait donc reproduit exactement le piège déjà
+    // documenté (une marge « évidente » qui chevauche en fait un spawn). On
+    // se limite donc à varier la fréquence/amplitude À L'INTÉRIEUR de la bande
+    // ouest du Sprint 24, coupée net au niveau de la route principale (déjà
+    // ramenée à 0 par `road_cut` entre z=9 et z=19) : au nord (`wz < 12`,
+    // z=12 tombe en plein milieu de cette coupure, donc le changement de
+    // formule est invisible — `gate`/`n` y valent déjà 0 des deux côtés),
+    // colline douce basse fréquence/amplitude pleine ; au sud, relief plus
+    // accidenté (fréquences plus hautes, quatrième terme ajouté) avec la même
+    // somme de coefficients (=1.0) pour ne jamais dépasser `AMP` non plus.
+    let n = if wz < 12.0 {
+        // Nord (prairie/rivière nord) : une seule bosse large et douce.
+        0.65 * (wx * 0.10 + 1.3).sin() * (wz * 0.08).cos()
+            + 0.35 * (wx * 0.05 - wz * 0.06 + 2.1).sin()
+    } else {
+        // Sud (vers la rizière/rivière sud) : relief plus accidenté, davantage
+        // de bosses rapprochées (fréquences ~2-3x plus hautes qu'au nord).
+        0.35 * (wx * 0.30 + 1.3).sin() * (wz * 0.24).cos()
+            + 0.25 * (wx * 0.45 - wz * 0.38 + 2.1).sin()
+            + 0.25 * (wx * 0.65 + wz * 0.55).sin()
+            + 0.15 * (wx * 0.95 - wz * 0.85 + 0.5).sin()
+    };
     AMP * gate * n
 }
 
