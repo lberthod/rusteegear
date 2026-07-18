@@ -280,6 +280,39 @@ def stone_coursing(prefix, base_mat, mortar_mat, location, width, height, depth,
              (width * 0.99, depth * 0.06, 0.025))
 
 
+def crenellations(prefix, mat, width, n, base_z, location_xy=(0.0, 0.0), depth=0.3, merlon_h=0.3):
+    """Rangée de merlons (blocs alternés) au sommet d'un mur — mêmes
+    conventions de paramètres que plank_wall/stone_coursing. `width` = largeur
+    totale du mur, `n` = nombre de merlons, `base_z` = sommet du mur (bas des
+    merlons), `location_xy` = (x, y) du centre du mur, `depth` son épaisseur.
+    Les créneaux (vides) ont la même largeur que les merlons : n merlons +
+    (n-1) créneaux se répartissent sur `width` en 2n-1 unités égales."""
+    unit = width / (2 * n - 1)
+    x0, y0 = location_xy
+    for i in range(n):
+        x = x0 - width / 2 + unit * (2 * i + 0.5)
+        cube(f"{prefix}Merlon{i}", mat, (x, y0, base_z + merlon_h / 2),
+             (unit * 0.96, depth, merlon_h))
+
+
+def banner(prefix, cloth_mat, pole_mat, location, width, height,
+           pole_height=None, pole_radius=0.05, panel_thickness=0.02):
+    """Poteau + panneau de tissu — réutilisé par les 4 assets de
+    bannière/fanion (évite de dupliquer la géométrie). `location` = base du
+    poteau au sol (x, y, z) ; `width`/`height` = dimensions du panneau. Le
+    panneau pend accroché contre le poteau côté +X, pas centré dessus (un
+    vrai fanion n'a pas son mât au milieu du tissu)."""
+    x, y, z = location
+    pole_height = pole_height if pole_height is not None else height * 1.4
+    cylinder(f"{prefix}Poteau", pole_mat, (x, y, z + pole_height / 2),
+              pole_radius, pole_height, vertices=8)
+    panel_top = pole_height * 0.92
+    panel_z = z + panel_top - height / 2
+    panel_x = x + width / 2 - pole_radius * 0.5
+    cube(f"{prefix}Panneau", cloth_mat, (panel_x, y, panel_z),
+         (width, panel_thickness, height))
+
+
 def hip_roof(prefix, roof_mat, span_x, span_y, rise, base_z, overhang=0.2):
     """Toit à 4 pans (croupe) — pyramide à base carrée (cône à 4 sommets),
     pour les bâtiments plus massifs (tour, caserne) où un pignon deux-pans
