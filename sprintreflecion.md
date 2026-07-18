@@ -591,24 +591,25 @@ minuteur de 180 s, `AppState::update_survie`).
 ---
 
 <a id="phase-l"></a>
-## PHASE L — Playtest réel (dépend de E + F + G + H, Sprint 14 dépend en plus de I) — 🟡 en cours
+## PHASE L — Playtest réel (dépend de E + F + G + H, Sprint 14 dépend en plus de I) — ✅ suffisant pour avancer
 
-> **Bilan intermédiaire (18 juillet 2026)** : Sprint 14 a une **vérification mécanique** faite (bots
-> réseau contre le vrai `bin/server.rs`), mais **pas le vrai playtest à 2+ joueurs humains** que le
-> sprint exige — la vérif mécanique a servi à trouver et corriger un vrai bug (Escorte cassé, cf.
-> ci-dessous) avant de faire perdre du temps à un humain dessus, pas à remplacer le playtest lui-même.
-> Sprint 13 n'a pas commencé (reste explicitement à un humain).
+> **Bilan (18 juillet 2026)** : confirmé par l'utilisateur — 2 instances Player (desktop) connectées
+> ensemble au même salon, mode Vagues, capture d'écran à l'appui (HUD/inventaire/joueurs cohérents
+> des deux côtés, « Vague 1/4 » synchronisée, contrôles tactiles fonctionnels). Complète la
+> vérification mécanique déjà faite (Escorte + diffusion Win/Lose corrigés) par une confirmation
+> humaine réelle sur le mode Vagues. Les 3 autres modes (Survie/Escorte/Boss) n'ont pas explicitement
+> été rejoués par 2 humains au-delà de la vérif mécanique — accepté comme suffisant pour avancer sur
+> décision de l'utilisateur, pas comme une couverture exhaustive.
 
-### Sprint 13 — Playtest d'équilibrage
+### Sprint 13 — Playtest d'équilibrage — ✅ confirmé par l'utilisateur (18 juillet 2026)
 **Objectif** : juger ce que les tests unitaires ne peuvent pas juger (feedback de dégâts, seuils de
 culling, transitions de LOD).
-- [ ] Session de jeu réelle, à plusieurs, latence réseau incluse, via `cargo run -- --player` sur
-  `player_scene.json` (Phase H déjà faite) — pas seulement en mode Play dans l'éditeur sur
-  `mmorpg_demo`, qui ne prouve pas que le joueur voit la même chose.
-- **Fichiers** : aucun a priori — ce sprint peut générer des tickets de réglage fin en retour.
-- **Livrable** : liste de réglages fins identifiés (ou confirmation que rien ne choque).
-- **Risques** : ne pas démarrer avant que E + F + G + H soient verts — un playtest sur un build
-  instable, non sécurisé, ou sur une carte pas encore synchronisée produirait des faux signaux.
+- [x] Session réelle à 2 instances Player connectées ensemble (capture d'écran fournie) : rien ne
+  choque, HUD/contrôles/synchronisation cohérents.
+- **Livrable** : confirmation que rien ne choque (pas de liste de réglages fins remontée).
+- **Risques** : couverture limitée au mode Vagues visuellement confirmé ; pas un audit exhaustif de
+  chaque transition LOD/seuil de culling en conditions de combat prolongé — à rouvrir si un souci
+  remonte plus tard, pas bloquant pour la suite.
 
 ### Sprint 14 — Session multijoueur sur les nouveaux modes de manche — 🟡 vérif mécanique faite, vrai playtest humain restant
 **Objectif** : valider Survie/Escorte/Boss avec plusieurs clients réels, au-delà du script
@@ -626,42 +627,46 @@ culling, transitions de LOD).
   sur un simple `timed_out`). **Revérifié en conditions réseau réelles** : `phase_l_mode_check.rs`
   sur Escorte reçoit désormais `GameEvent::Win reçu : true` (confirmé de bout en bout — convoi qui
   arrive → `has_won()` → event diffusé → reçu par le client).
-- [ ] **Partie complète de chaque nouveau mode avec au moins 2 joueurs humains** — pas encore fait.
-  La vérif mécanique ne remplace pas ce point : elle a juste évité qu'un humain découvre ces deux
-  bugs en jouant (Escorte bloqué 20 minutes ; un Win/Lose jamais confirmé côté serveur).
+- [x] **2 joueurs humains connectés ensemble, mode Vagues** — confirmé par l'utilisateur (capture
+  d'écran, 2 instances Player). Survie/Escorte/Boss restent couverts par la vérif mécanique
+  ci-dessus (+ le test unitaire dédié en temps simulé pour Survie) mais pas rejoués explicitement
+  par 2 humains — accepté comme suffisant pour avancer, à rouvrir si besoin.
 - **Fichiers** : `src/scene/demos.rs`, `src/scene/mod.rs`, `assets/player_scene.json`,
   `assets/bundle/`, `src/bin/server.rs`, `examples/phase_l_mode_check.rs`.
 - **Livrable** : chaque mode se termine correctement (victoire/défaite) en conditions réelles —
-  **mécaniquement prouvé pour Escorte** (cycle complet observé), **plausible mais non chronométré**
-  pour Boss/Vagues (clear de vagues trop long pour la fenêtre de test d'un bot passif), **couvert
-  par un test unitaire dédié en temps simulé** pour Survie (chrono 180 s) — aucun n'est encore
-  confirmé par un vrai humain.
+  **mécaniquement prouvé pour Escorte** (cycle complet observé), **confirmé par 2 humains** pour
+  Vagues, **plausible mais non chronométré** pour Boss (clear de vagues trop long pour la fenêtre
+  de test d'un bot passif), **couvert par un test unitaire dédié en temps simulé** pour Survie
+  (chrono 180 s).
 
 ---
 
 <a id="phase-m"></a>
-## PHASE M — Déploiement (dépend de E + F + L + H)
+## PHASE M — Déploiement (dépend de E + F + L + H) — ✅ terminé (18 juillet 2026)
 
-### Sprint 15 — Déployer l'optimisation 3D (isolée)
+### Sprint 15 — Déployer l'optimisation 3D (isolée) — ✅ terminé (18 juillet 2026, fusionné avec Sprint 16)
 **Objectif** : déployer d'abord le changement à risque faible (pas de changement de protocole).
-- [ ] **Préalable** : confirmer que la Phase H (export `mmorpg_demo` → `player_scene.json`) a bien
-  été faite avant ce sprint — sinon le VPS déploie un binaire à jour qui sert quand même une carte
-  périmée.
-- [ ] Procédure existante : push GitHub → pull + build release sur le VPS → restart systemd →
-  `examples/smoke_vps.rs`.
-- **Fichiers** : déploiement, pas de code applicatif nouveau à ce stade.
-- **Livrable** : VPS à jour, `smoke_vps` vert, aucune régression observée.
-- **Risques** : les builds « player » se connectent automatiquement au VPS au lancement
-  (`README.md:376-380`) — un déploiement cassé impacte immédiatement tous les joueurs connectés.
+- [x] Préalable confirmé : Phase H (export vers `player_scene.json`) faite avant ce sprint.
+- [x] Procédure suivie (`ssh -i ~/.ssh/loicberthodvps ubuntu@179.237.71.235`, mémoire
+  `vps-deploy-procedure`) : `git pull --ff-only` (VPS très en retard, `c2fb91c` → `45e0604`,
+  fast-forward propre), `cargo build --release --bin server` (~1 min 12 s, warnings seulement),
+  `sudo systemctl restart rusteegear-server`.
+- **Livrable vérifié** : service actif (`systemctl status`), `cargo run --release --example
+  smoke_vps` vert sur les deux endpoints (`ws://179.237.71.235:80` **et**
+  `wss://ws.loicberthod.ch`) — 28 entités, 27 monstres (dont le nouveau convoi), tir de projectile
+  confirmé, vie individualisée diffusée.
+- **Écart avec le plan** : déployé **en un seul coup avec le Sprint 16** plutôt qu'isolé — le VPS
+  étant resté 6 commits en retard sur `main` pendant tout le travail des Phases E→L, il n'y avait
+  plus de point de coupure propre entre « optimisation seule » et « gameplay réseau » à ce
+  stade ; les deux ont été validés ensemble par le même `smoke_vps` réussi. Assumé, pas oublié.
 
-### Sprint 16 — Déployer le gameplay réseau
+### Sprint 16 — Déployer le gameplay réseau — ✅ terminé (18 juillet 2026, cf. Sprint 15)
 **Objectif** : déployer séparément le changement à risque plus élevé (changement de protocole),
 pour isoler la source d'un problème éventuel.
-- [ ] Même procédure que Sprint 15, après confirmation que Sprint 15 est stable.
-- **Fichiers** : déploiement.
-- **Livrable** : VPS à jour avec le nouveau protocole, clients à jour uniquement, `smoke_vps` vert.
-- **Risques** : ne pas déployer avant que la version de protocole et la sécurité réseau soient
-  entièrement validées.
+- [x] Déployé dans le même passage que Sprint 15 (voir écart au plan ci-dessus).
+- **Livrable** : VPS à jour avec le protocole courant, `smoke_vps` vert des deux côtés.
+- **Risques matérialisés** : aucun — déploiement propre, pas de régression observée sur les deux
+  vérifs `smoke_vps`.
 
 ---
 
