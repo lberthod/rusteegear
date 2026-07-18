@@ -31,6 +31,50 @@ use crate::app::GizmoMode;
 use crate::runtime::physics::PhysicsKind;
 use crate::scene::{MeshKind, Scene, Transform};
 
+/// Lance `glbviewer` (`src/bin/glbviewer.rs`) comme processus séparé — sa
+/// propre fenêtre wgpu/egui pour parcourir/prévisualiser `assets/models/`,
+/// indépendante de celle de l'éditeur. Pas d'intégration multi-fenêtre dans la
+/// boucle winit existante (`App` de `src/lib.rs` ne gère qu'une seule
+/// surface/un seul `Renderer`) : un binaire à part reste la façon la plus
+/// simple et la plus sûre d'offrir une « nouvelle fenêtre » de gestion des
+/// `.glb` sans toucher au rendu principal. Cherche le binaire à côté de
+/// l'exécutable courant : pas de section `[[bin]]` dans `Cargo.toml` (les
+/// deux sont découverts depuis `src/bin/*.rs`), donc les deux atterrissent
+/// dans le même dossier `target/{debug,release}/`.
+pub fn launch_glb_viewer() {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("Chemin de l'exécutable de l'éditeur introuvable : {e}");
+            return;
+        }
+    };
+    let Some(dir) = exe.parent() else {
+        log::error!("Dossier de l'exécutable de l'éditeur introuvable");
+        return;
+    };
+    let bin_name = if cfg!(windows) {
+        "glbviewer.exe"
+    } else {
+        "glbviewer"
+    };
+    let path = dir.join(bin_name);
+    if !path.exists() {
+        log::error!(
+            "{} introuvable — compiler d'abord avec `cargo build --bin glbviewer`",
+            path.display()
+        );
+        return;
+    }
+    // `glbviewer` lit `assets/models/` en chemin relatif (cf. `MODELS_DIR` dans
+    // src/bin/glbviewer.rs) : hérite du répertoire courant de l'éditeur sans le
+    // changer explicitement, comme celui-ci hérite du sien au lancement.
+    match std::process::Command::new(&path).spawn() {
+        Ok(_) => log::info!("Gestionnaire GLB lancé ({})", path.display()),
+        Err(e) => log::error!("Lancement de {} impossible : {e}", path.display()),
+    }
+}
+
 pub struct Editor {
     ctx: egui::Context,
     winit_state: egui_winit::State,
@@ -332,6 +376,9 @@ pub struct UiActions {
     pub delete_prefab: Option<(crate::assets::PrefabScope, String)>,
     /// « Quitter » : ferme l'application.
     pub quit: bool,
+    /// Menu Outils › « Gestionnaire GLB » : lance `glbviewer` (cf. `launch_glb_viewer`)
+    /// dans une fenêtre séparée, pour parcourir/prévisualiser `assets/models/`.
+    pub launch_glb_viewer: bool,
     pub play_audio: Option<String>,
     /// Fenêtre Paramètres : volume musique/ambiance changé (Sprint 104).
     pub music_volume: Option<f32>,
@@ -1023,7 +1070,7 @@ fn build_ui(
             menu_fichier(ui, export, actions);
             menu_edition(ui, selection, actions);
             menu_ajouter(ui, scene, *selection, actions);
-            menu_outils(ui, gizmo_mode, export, panels);
+            menu_outils(ui, gizmo_mode, export, panels, actions);
             menu_aide(ui, panels);
         });
     });

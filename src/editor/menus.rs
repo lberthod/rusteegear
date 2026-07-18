@@ -557,6 +557,7 @@ pub(super) fn menu_outils(
     gizmo_mode: &mut GizmoMode,
     export: &mut export::ExportPanel,
     panels: &mut Panels,
+    actions: &mut UiActions,
 ) {
     ui.menu_button("Outils", |ui| {
         // Même ordre que la barre d'outils : raccourcis Q W E R T Y.
@@ -590,6 +591,13 @@ pub(super) fn menu_outils(
         }
         if ui.button("📁  Gestionnaire d'assets").clicked() {
             panels.assets = true;
+            ui.close();
+        }
+        // Fenêtre séparée (processus à part, cf. `super::launch_glb_viewer`),
+        // pas un panneau flottant `Panels` comme les autres entrées de ce menu :
+        // rien à garder « ouvert » côté éditeur, juste une action ponctuelle.
+        if ui.button("🖼  Gestionnaire GLB").clicked() {
+            actions.launch_glb_viewer = true;
             ui.close();
         }
         if ui.button("🪶  Optimisation mobile").clicked() {

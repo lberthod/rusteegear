@@ -1949,6 +1949,9 @@ impl Renderer {
             if actions.quit {
                 app.request_quit();
             }
+            if actions.launch_glb_viewer {
+                crate::editor::launch_glb_viewer();
+            }
             if actions.undo {
                 app.undo();
             }
