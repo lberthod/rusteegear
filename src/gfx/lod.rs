@@ -1,5 +1,5 @@
-//! Sélection de LOD géométrique pour le feuillage dense (Phase D, `sprintD_optimisation10h.md`
-//! / `sprintoptimation3daudit10h.md`). Fonction pure, indépendante du pipeline de rendu —
+//! Sélection de LOD géométrique pour le feuillage dense (Phase D, `sprintoptimation3daudit10h.md`).
+//! Fonction pure, indépendante du pipeline de rendu —
 //! câblée dans `Renderer::render` (`src/gfx/renderer.rs`) via `InstanceDraw::mesh`.
 
 use crate::scene::{MeshKind, Scene};

@@ -12,7 +12,7 @@
 //! ce module n'a d'effet mesurable que sur desktop pour l'instant — cf. le document de
 //! sprint pour le suivi de ce travail restant.
 //!
-//! Audit du 18 juillet 2026 (`sprintEoptimisation10h.md`) : deux défauts corrigés ici
+//! Audit du 18 juillet 2026 (`sprintoptimation3daudit10h.md`, Phase E) : deux défauts corrigés ici
 //! après la livraison initiale — la chaîne de mips était tronquée à un seul niveau pour
 //! toute texture non multiple de 8 (`Format::compress` de `texpresso` gère en réalité
 //! très bien les blocs partiels via `num_blocks`, ceil-arrondi, donc plus besoin de

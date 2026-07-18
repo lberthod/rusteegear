@@ -82,7 +82,7 @@ Phase 0 (Baseline mesurée) ──► doit précéder toute décision de réglag
 | **B — Instancing skinning** | 2 → 3 | 0 | A, C, D, E | Diviser les draw calls skinnés et lever la contrainte de capacité | ✅ Fait (Sprint 2 ; Sprint 3 descopé) | — |
 | **C — Culling distance** | 4 | 0 | A, B, D, E | Réduire la charge en vue large/plongée | ✅ Fait (Sprint 4) | — |
 | **D — LOD géométrique** | 5 | 0 | A, B, C, E | Réduire le fill-rate du feuillage dense | ✅ Câblé (18 juillet) | — (validation visuelle/mesure Phase F restantes) |
-| **E — Compression texture** | 6 | 0 | A, B, C, D | Préparer la VRAM mobile/Android | ✅ Close avec constat (18 juillet) | Chemin BC3 sans cible réelle sur le contenu actuel — cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md#statut-vs-définition-de--terminé--phase-e) ; ASTC mobile non traité |
+| **E — Compression texture** | 6 | 0 | A, B, C, D | Préparer la VRAM mobile/Android | ✅ Close avec constat (18 juillet) | Chemin BC3 sans cible réelle sur le contenu actuel ; ASTC mobile non traité |
 | **F — Validation finale** | 7 | **A, B, C, D, E** | — | Mesurer l'après, documenter le delta | ✅ Fait (18 juillet) | — (delta FPS fenêtré non fait, limite d'outillage documentée) |
 
 ---
@@ -182,8 +182,7 @@ naturels à l'instancing.
 - **Constat additionnel (bloquant pour Sprint 3, voir ci-dessous)** : parmi les 140 objets
   éligibles, **aucun mesh n'est utilisé plus d'une fois** (chaque `monster_*.glb`/`fauna_*.glb`/
   `nature_*.glb` animé n'est posé qu'à un seul endroit dans `mmorpg_demo`) — vérifié par le même
-  test. Voir **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)** pour l'analyse
-  complète et la décision qui en découle sur Sprint 3.
+  test.
 - **Risques** : ne pas mal classer une créature qui a en fait une IA active (vérifier contre
   `AiChaser`/comportement de patrouille) — couvert par le test (`active_count == 61` verrouillé).
 
@@ -195,8 +194,7 @@ contrairement aux meshes très instanciés cités dans l'analyse initiale (`natu
 ×112, `nature_fern.glb` ×69), qui sont en réalité des primitives **non skinnées** (`gen_grass_tuft`/
 `gen_fern`, `scripts/blender/gen_nature_pack.py` — cônes/blobs sans armature), déjà couvertes par le
 batching statique existant. **Implémenter le Sprint 3 tel que spécifié n'apporterait donc aucune
-réduction mesurable de `gpu_draw_calls`** sur le contenu actuel de `mmorpg_demo` — voir le détail
-dans **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)**.
+réduction mesurable de `gpu_draw_calls`** sur le contenu actuel de `mmorpg_demo`.
 - [x] ~~Implémenter l'instancing~~ → **non fait, décision documentée** : ne pas construire un chemin
   de rendu (shader + bind groups + tri par lots) pour un gain de zéro draw call mesuré. Le design
   (palette de joints partagée par lot de phase, cf. rapport dans le sprint B) reste consigné pour le
@@ -210,8 +208,10 @@ dans **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)**.
 - **Risques** : si ce sprint est repris plus tard (contenu dupliqué ajouté), le design à
   privilégier n'est **pas** une texture de palette par instance (complexité shader/bind-group
   élevée pour un gain marginal sur des animations d'idle discrètes) mais une palette de joints
-  **partagée par lot `(mesh, texture, phase)`** — voir le détail et le compromis « pas de
-  lockstep visuel » dans **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)**.
+  **partagée par lot `(mesh, texture, phase quantifiée)`** : 4 à 8 tranches de phase suffisent à
+  casser l'effet lockstep visuel entre instances d'un même clip (`src/scene/demos.rs` décale déjà
+  volontairement la phase de départ de chaque instance, `time: anim_count as f32 * 0.37`, pour
+  cette raison — une palette 100 % unifiée par mesh les remettrait en lockstep).
 
 ### Audit du Sprint B (post-clôture) — nouvelle piste trouvée, non implémentée ici
 En auditant les 140 objets éligibles, **50 ont un squelette mais `animation: None`** (jamais de
@@ -225,12 +225,11 @@ rien. Les basculer sur le chemin statique ferait passer les 201 skinnés mesuré
 capacité de 160), réduisant voire éliminant le besoin de la Phase A. **Non implémenté ici** : la
 correction toucherait `src/gfx/renderer.rs`, hors périmètre scène de ce sprint et partagé avec les
 Phases A/C/D — à traiter dans un sprint dédié touchant le renderer, coordonné avec ces phases.
-Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)**.
 
 ---
 
 <a id="phase-c"></a>
-## PHASE C — Culling par distance (indépendante) — ✅ Sprint 4 fait, voir [sprintCoptimisation10h.md](sprintCoptimisation10h.md)
+## PHASE C — Culling par distance (indépendante) — ✅ Sprint 4 fait
 
 ### Sprint 4 — Rayon de culling par type d'objet — ✅ fait
 **Objectif** : réduire la charge en vue large/plongée sans occlusion culling complet.
@@ -243,9 +242,13 @@ Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)
 - **Fichiers** : `src/gfx/passes.rs`, `src/gfx/renderer.rs`.
 - **Livrable** : en vue large sur `mmorpg_demo`, `gpu_draw_calls` et temps de passe « Scène »
   réduits par rapport à la baseline (Phase 0), sans popping visible gênant. **Non mesuré en jeu
-  ici** — logique posée et testée unitairement (2 tests dans `gfx::passes::culling_distance_tests`),
-  mais la validation Profiler (chiffres avant/après, ajustement des rayons) reste à faire ; voir
-  [sprintCoptimisation10h.md](sprintCoptimisation10h.md) pour le détail et le « non fait ».
+  ici** — logique posée et testée unitairement (3 tests dans `gfx::passes::culling_distance_tests`),
+  mais la validation Profiler (chiffres avant/après, ajustement des rayons) reste à faire.
+- **Bug trouvé et corrigé à l'audit** : la catégorisation par sous-chaîne (`path.contains("rock")`)
+  matchait à tort `nature_rocking_chair.glb` (un meuble de jardin) dans le groupe « arbres/rochers »
+  — seul faux positif parmi les ~110 assets `nature_*.glb` vérifiés un par un. Corrigé en remplaçant
+  le test par sous-chaîne par `contains_word()` (frontière de mot exigée), avec test de
+  non-régression dédié (`rocking_chair_is_not_matched_by_rock_keyword`).
 - **Risques** : un rayon trop agressif crée du popping visible ; itérer avec le Profiler ouvert pour
   trouver le compromis distance/qualité. Rayons actuels (45 m/110 m) non calibrés en conditions
   réelles, à ajuster après mesure.
@@ -255,14 +258,16 @@ Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)
 <a id="phase-d"></a>
 ## PHASE D — LOD géométrique herbe/fougères (indépendante) — ✅ Sprint 5 fait
 
-> ✅ **Câblée le 18 juillet 2026** — détail d'exécution et historique complet (démarrage, audit,
-> finalisation) : [sprintD_optimisation10h.md](sprintD_optimisation10h.md).
-> Fait : décision de LOD (`src/gfx/lod.rs`, `foliage_lod_mesh`, 7 tests), nouvelle primitive
-> `MeshKind::Billboard` (impostor croix, `src/gfx/mesh.rs`, testée) remplaçant le choix initial
-> `MeshKind::Plane` (bug trouvé à l'audit : un plan horizontal est quasi invisible vu à hauteur
-> d'œil, inadapté au feuillage debout), câblage dans les 4 sites de dessin de
-> `Renderer::render` (`InstanceDraw::mesh` précalculé par distance caméra). Build/tests/clippy/
-> fmt propres (23 tests `gfx::`, 120 `scene::`, 7 `golden_render`).
+> ✅ **Câblée le 18 juillet 2026** — décision de LOD (`src/gfx/lod.rs`, `foliage_lod_mesh`, 7 tests),
+> nouvelle primitive `MeshKind::Billboard` (impostor croix, `src/gfx/mesh.rs`, testée) remplaçant le
+> choix initial `MeshKind::Plane` (bug trouvé à l'audit : un plan horizontal est quasi invisible vu à
+> hauteur d'œil, inadapté au feuillage debout), câblage dans les 4 sites de dessin de
+> `Renderer::render` (`InstanceDraw::mesh` précalculé par distance caméra). Un second bug trouvé et
+> corrigé pendant l'audit : `FOLIAGE_LOD_KEYWORDS` (mot-clé `"reeds"`) matchait aussi
+> `nature_reeds_sway.glb` (variante animée du roseau, rive du lac) — la substituer par l'impostor
+> statique lui aurait fait perdre silencieusement son animation ; corrigé en excluant tout chemin
+> contenant `_sway`, testé (`animated_sway_variant_is_never_substituted_even_far_away`).
+> Build/tests/clippy/fmt propres (23 tests `gfx::`, 120 `scene::`, 7 `golden_render`).
 >
 > ✅ **Validation visuelle faite le 18 juillet 2026** : captures en jeu d'une zone d'herbe/fougères
 > denses en plan rapproché (< 40m, mesh complet visible, plusieurs brins/touffes distincts) et en
@@ -287,15 +292,12 @@ Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)
   sans changement perceptible en vue rapprochée — qualitativement confirmé ; quantification
   isolée reportée à la Phase F (mesure avant/après globale).
 - **Risques** : résolus — la coordination avec la Phase C (toutes deux dans la logique de
-  visibilité par instance) a été faite en les câblant ensemble, comme recommandé dans
-  [sprintD_optimisation10h.md](sprintD_optimisation10h.md).
+  visibilité par instance) a été faite en les câblant ensemble une fois la Phase C committée.
 
 ---
 
 <a id="phase-e"></a>
 ## PHASE E — Compression de texture GPU (indépendante, prépare le mobile) — 🟡 EN COURS
-
-> Compte-rendu détaillé : **[sprintEoptimisation10h.md](sprintEoptimisation10h.md)**.
 
 ### Sprint 6 — Compression ASTC/BC7 au pipeline d'import
 **Objectif** : réduire l'empreinte VRAM avant tout ciblage Android sérieux (le projet a déjà
@@ -313,8 +315,7 @@ Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)
   linéaire ; un crash GPU réel — `wgpu error: Copy width is not a multiple of block width` — introduit
   en corrigeant le premier défaut, capturé par le golden test existant et corrigé avant livraison).
   Ce crash prouve au passage que le chemin BC3 tourne bel et bien sur le GPU de la machine de
-  développement (contrairement à ce que l'audit précédent supposait). Détail :
-  [sprintEoptimisation10h.md § Audit a posteriori](sprintEoptimisation10h.md#audit-a-posteriori-après-livraison--3-défauts-trouvés-corrigés-dans-ce-sprint).
+  développement (contrairement à ce que l'audit précédent supposait).
 - [x] Cache de texture par chemin existant (`sync_textures`, `renderer.rs:1148-1179`) réutilisé
   sans duplication — le branchement compressé/non compressé se fait en amont, dans
   `pipelines::make_texture`.
@@ -334,7 +335,7 @@ Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)
   `sync_textures` compresse toutes les textures pas encore en cache en une seule frame, sans budget
   de temps ; un micro-benchmark isolé (hors dépôt) donne ~25 ms/texture 1024×1024 (niveau de base
   seul), qui pourrait s'accumuler à plusieurs centaines de ms sur ~320 textures — non mesuré sur
-  `mmorpg_demo` réellement, à vérifier en Phase 0/F. Détail : [sprintEoptimisation10h.md](sprintEoptimisation10h.md#audit-a-posteriori-après-livraison--3-défauts-trouvés-corrigés-dans-ce-sprint).
+  `mmorpg_demo` réellement, à vérifier en Phase 0/F.
 - **Risques** : **BC7 remplacé par BC3** — aucun encodeur BC7 pur Rust (sans dépendance C/lien
   natif) identifié ; BC3 retenu pour la portabilité de build (même raisonnement que `ruzstd`
   ailleurs dans ce projet). **ASTC mobile non traité** — `TEXTURE_COMPRESSION_BC` n'est
@@ -356,9 +357,8 @@ phase, audit des 3 points restants de la Phase E (validation visuelle BC3, mesur
 compression synchrone) — découverte que le chemin BC3 (`texcompress`) n'a **aucune cible réelle**
 sur `mmorpg_demo` ni sur aucune démo du dépôt (0 objet utilisant `obj.texture` sur 887 ; tous les
 meshes visibles sont des imports glTF qui ne passent pas par ce chemin). Décision : documenter ce
-constat (cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md#statut-vs-définition-de--terminé--phase-e))
-et poursuivre — un avant/après qui n'aurait montré aucun gain BC3 est correct, pas un signe d'échec
-de la phase.
+constat et poursuivre — un avant/après qui n'aurait montré aucun gain BC3 est correct, pas un signe
+d'échec de la phase.
 
 - [x] **Impossible de piloter le panneau Profiler en jeu depuis cette session** (pas de contrôle
   clavier/souris disponible sur la fenêtre du binaire desktop — ni via le tool de contrôle d'écran,
@@ -408,8 +408,8 @@ de la phase.
 | A | ✅ `skinned_dropped == 0` en vue large sur `mmorpg_demo` (Sprint 1, `MAX_SKINNED_INSTANCES` → 256), reconfirmé headless en Phase F |
 | B | ✅ Catégorisation faite et testée (Sprint 2) ; Sprint 3 descopé (aucun bénéfice mesurable sur le contenu actuel, garde-fou de test en place pour le reprendre si du contenu dupliqué apparaît) |
 | C | Culling par distance actif, charge réduite en vue large sans popping gênant |
-| D | ✅ Câblé : `MeshKind::Billboard` (impostor croix) remplace le feuillage dense au-delà de 40 m dans `Renderer::render` ; reste la validation visuelle en jeu et la mesure Profiler avant/après dédiée — cf. [sprintD_optimisation10h.md](sprintD_optimisation10h.md) |
-| E | ✅ Compression BC3 desktop livrée (Sprint 6) ; audit (3 passages) a trouvé et corrigé 3 défauts (dont un crash GPU), validée bout-en-bout par golden test sur un vrai GPU. **Constat du 18 juillet (Phase F)** : le chemin BC3 n'a aucune cible réelle sur le contenu actuel — `mmorpg_demo` (887 objets) a 0 objet utilisant `obj.texture`, et aucune démo du dépôt n'utilise ce champ (les meshes importés glTF n'ont pas de texture image via ce chemin). Coût de compression synchrone, validation visuelle et mesure VRAM sont donc structurellement à 0 sur ce contenu, pas « non mesurés ». ASTC mobile non fait — cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md) |
+| D | ✅ Câblé : `MeshKind::Billboard` (impostor croix) remplace le feuillage dense au-delà de 40 m dans `Renderer::render` ; validation visuelle en jeu faite le 18 juillet, mesure Profiler avant/après dédiée non faite (reportée à la Phase F globale) |
+| E | ✅ Compression BC3 desktop livrée (Sprint 6) ; audit (3 passages) a trouvé et corrigé 3 défauts (dont un crash GPU), validée bout-en-bout par golden test sur un vrai GPU. **Constat du 18 juillet (Phase F)** : le chemin BC3 n'a aucune cible réelle sur le contenu actuel — `mmorpg_demo` (887 objets) a 0 objet utilisant `obj.texture`, et aucune démo du dépôt n'utilise ce champ (les meshes importés glTF n'ont pas de texture image via ce chemin). Coût de compression synchrone, validation visuelle et mesure VRAM sont donc structurellement à 0 sur ce contenu, pas « non mesurés ». ASTC mobile non fait |
 | F | ✅ Tableau avant/après complet (`optimisation3D.Analys.md` § « Mesure AVANT/APRÈS »), `skinned_dropped == 0` et `gpu_draw_calls` confirmés par un benchmark headless reproductible ; delta FPS fenêtré non fait (limite d'outillage documentée, pas un chiffre caché) |
 
 ## 📌 Conseils d'exécution

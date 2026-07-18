@@ -55,8 +55,8 @@ au VPS par défaut) est `assets/player_scene.json`, **embarquée à la compilati
 deux scènes ne se synchronisent **jamais automatiquement** : il faut ouvrir `mmorpg_demo` dans
 l'éditeur puis lancer un Export (`src/editor/export.rs:129`, `bundle_scene_json` réécrit
 `assets/player_scene.json`), et reconstruire pour que `include_str!` prenne le nouveau contenu.
-C'est une tension déjà connue et documentée (`sprintG10haudit.md` : « décor hameau + ménagerie
-animée : toujours seulement dans `mmorpg_demo`, pas dans la scène servie »).
+C'est une tension déjà connue et documentée (Phase G, Sprint 14 de `sprint10audit.md` : « décor
+hameau + ménagerie animée : toujours seulement dans `mmorpg_demo`, pas dans la scène servie »).
 
 **Conséquence directe et décision produit** : tant que cet export n'a pas été refait, **rien de ce
 qui a été livré dans les deux plans de sprints n'est réellement jouable** par quelqu'un qui lance

@@ -9882,7 +9882,7 @@ mod tests {
     /// directe pour Sprint 3 : regrouper ces instances derrière une palette de
     /// joints partagée ne réduirait aucun draw call (rien à regrouper), donc le
     /// Sprint 3 tel que spécifié n'a pas de bénéfice mesurable sur ce contenu —
-    /// voir `sprint B otpimsaiton10h.md` pour la décision qui en découle.
+    /// voir `sprintoptimation3daudit10h.md` (Phase B) pour la décision qui en découle.
     #[test]
     fn mmorpg_demo_static_skinned_decor_has_no_duplicate_mesh() {
         let scene = Scene::mmorpg_demo();
@@ -9931,7 +9931,7 @@ mod tests {
             max_instances, 1,
             "un mesh du décor skinné statique est instancié {max_instances} fois : \
              l'instancing GPU du skinning (Sprint 3) redevient rentable pour ce mesh, \
-             mettre à jour la décision documentée dans « sprint B otpimsaiton10h.md »"
+             mettre à jour la décision documentée dans « sprintoptimation3daudit10h.md » (Phase B)"
         );
     }
 
@@ -9947,7 +9947,7 @@ mod tests {
     /// emplacement de `MAX_SKINNED_INSTANCES` dépensés pour rien. Piste
     /// d'optimisation distincte du Sprint 3 (non implémentée ici : toucherait
     /// `src/gfx/renderer.rs`, hors périmètre scène de ce sprint et partagé avec les
-    /// Phases A/C/D en cours) — voir « sprint B otpimsaiton10h.md » pour le détail.
+    /// Phases A/C/D en cours) — voir « sprintoptimation3daudit10h.md » (Phase B) pour le détail.
     #[test]
     fn mmorpg_demo_has_static_skinned_decor_that_never_animates() {
         let scene = Scene::mmorpg_demo();
@@ -9961,12 +9961,12 @@ mod tests {
         // Verrouille le constat de l'audit : si ce nombre tombe à 0 (ex. un futur
         // sprint bascule ces objets sur le chemin statique, ou leur donne enfin un
         // clip), l'opportunité d'optimisation documentée est résolue — mettre à jour
-        // « sprint B otpimsaiton10h.md » en conséquence plutôt que de relâcher ce test.
+        // « sprintoptimation3daudit10h.md » (Phase B) en conséquence plutôt que de relâcher ce test.
         assert_eq!(
             never_animates, 50,
             "objets skinnés statiques sans animation active : {never_animates} — \
              coût de rendu skinné payé pour rien si ce nombre est non nul (voir \
-             « sprint B otpimsaiton10h.md », section audit)"
+             « sprintoptimation3daudit10h.md », Phase B, section audit)"
         );
     }
 

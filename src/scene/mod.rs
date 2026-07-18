@@ -89,7 +89,7 @@ pub enum MeshKind {
     Capsule,
     Terrain,
     /// Impostor « croix » (deux plans verticaux perpendiculaires) — LOD à distance pour le
-    /// feuillage dense (Phase D, `sprintD_optimisation10h.md`). Contrairement à `Plane`
+    /// feuillage dense (Phase D, `sprintoptimation3daudit10h.md`). Contrairement à `Plane`
     /// (horizontal), reste visible sous un angle de vue à hauteur d'œil.
     Billboard,
     /// Modèle glTF importé, index dans `Scene::imported`.

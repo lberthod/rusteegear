@@ -42,36 +42,68 @@ Phase G (Rattrapage doc GDD)           ─┘
 ---
 
 <a id="phase-a"></a>
-## PHASE A — Feedback combat & sélecteur de classe (indépendante)
+## PHASE A — Feedback combat & sélecteur de classe (indépendante) — ✅ terminé (2026-07-18)
 
-### Sprint 1 — Feedback visuel/sonore des dégâts subis
+### Sprint 1 — Feedback visuel/sonore des dégâts subis — ✅ terminé (2026-07-18)
 **Objectif** : le joueur perçoit immédiatement qu'il encaisse un coup (§6.1 du GDD).
-- [ ] Vignette rouge / flash d'écran bref à la réception de dégâts côté client.
-- [ ] Léger recul caméra (shake) proportionnel aux dégâts.
-- [ ] Son de contact déclenché en priorité sur les autres SFX (§10.4 : « dégâts subis d'abord »).
-- **Fichiers** : `src/gfx/renderer.rs` (post-effet), `src/app/health.rs` (point de déclenchement),
-  `src/runtime/sfx.rs`.
+- [x] Vignette rouge / flash d'écran bref à la réception de dégâts côté client — **existait déjà**
+  avant ce sprint (contrairement à l'hypothèse de l'audit), seul le recul caméra manquait.
+- [x] Léger recul caméra (shake) proportionnel aux dégâts : `AppState::camera_shake` (intensité
+  1→0, décroissance ~0,25 s, `src/app/simulation.rs`), appliqué **uniquement au rendu** de la frame
+  courante (jamais à `camera.target`/`camera.yaw` persistants) via `OrbitCamera::view_proj_shaken`
+  (`src/gfx/camera.rs`) — plafonné à 1.0, jamais cumulatif, réinitialisé à chaque rechargement de
+  scène.
+- [x] Son de contact déclenché en priorité sur les autres SFX — déjà en place.
+- **Fichiers** : `src/gfx/{camera,renderer}.rs`, `src/app/{simulation,health,creature_attack,network_client,demos,persistence}.rs`.
 - **Livrable** : encaisser un coup en Play déclenche visuellement + auditivement l'effet, sans latence perceptible.
-- **Risques** : ne pas gêner la lisibilité en combat à 2+ créatures ; garder l'effet cappé (pas de spam si dégâts multiples/frame).
+- **Risques** : ne pas gêner la lisibilité en combat à 2+ créatures ; garder l'effet cappé (pas de spam si dégâts multiples/frame) — vérifié à l'audit.
 
-### Sprint 2 — Diagnostic de mort
+### Sprint 2 — Diagnostic de mort — ✅ terminé (2026-07-18)
 **Objectif** : à la mort, afficher une cause résumée (§16.5 : ex. « Encerclé — 2 Traqueuses »).
-- [ ] Serveur : mémoriser les N dernières sources de dégâts avant la mort (type d'agresseur, nombre distinct).
-- [ ] Client : bannière de mort enrichie avec ce résumé, réutilisant `PlayerDown` déjà diffusé
-  (`src/app/network_client.rs:874-1455`, `src/net/protocol.rs:318`).
-- **Fichiers** : `src/net/protocol.rs` (champ de cause), `src/bin/server.rs`, `src/editor/hud.rs`.
+- [x] Serveur : `AppState::recent_damage` mémorise les 5 dernières sources de dégâts par joueur
+  réseau (type d'agresseur + indice d'objet), purgées à la mort (`src/app/health.rs`,
+  `compute_death_cause`).
+- [x] Client : `AppState::death_cause` (mémorisé uniquement pour notre propre mort, jamais pour un
+  allié) affiché sous le titre de `defeated_banner` (`src/editor/hud.rs`), via `locale::death_cause`
+  (FR/EN). `net::protocol::GameEvent::PlayerDown` gagne un champ `cause: Option<DeathCause>`
+  (`DeathCauseKind::{Monster,Creature}` + `distinct_attackers: u8`), `PROTOCOL_VERSION` bumpé.
+- **Fichiers** : `src/net/protocol.rs`, `src/app/health.rs`, `src/app/network_client.rs`,
+  `src/editor/{hud,mod}.rs`, `src/app/locale.rs`.
 - **Livrable** : mourir en Play affiche une cause cohérente avec les dernières attaques reçues.
-- **Risques** : ne pas alourdir le protocole réseau ; garder le calcul léger côté serveur (pas de scan long historique par tick).
+- **Risques** : calcul serveur `O(1)` amorti (fenêtre bornée à 5 entrées) — conforme au risque de départ.
 
-### Sprint 3 — Sélecteur de classe en UI
+### Sprint 3 — Sélecteur de classe en UI — ✅ terminé (2026-07-18)
 **Objectif** : exposer le choix Assaut/Éclaireur/Soutien déjà modélisé côté backend (§8).
-- [ ] Widget de sélection de classe avant/pendant la connexion multijoueur (fenêtre Multijoueur).
-- [ ] Câblage vers l'encodage réseau existant (`PlayerClass`, `src/app/multiplayer.rs:44-103`),
-  sans toucher au décodage anti-triche déjà testé (`from_u8`, lignes 59-66).
-- **Fichiers** : `src/editor/windows.rs`, `src/app/network_client.rs` / `native.rs` / `web.rs`.
+- [x] `PlayerClass` gagne `to_u8`/`label`/`ALL` (`src/app/multiplayer.rs`) — jusqu'ici seul `from_u8`
+  existait, rien n'émettait autre chose que `0` (Assaut).
+- [x] Sélecteur (`egui::ComboBox`) dans la fenêtre « 🌐 Multijoueur » desktop
+  (`src/editor/windows.rs`), désactivé une fois connecté. L'overlay mobile minimal reste sans
+  sélecteur par choix (Assaut par défaut, portée réduite documentée).
+- [x] `NetClient::connect_to_lobby` (native + web) et `AppState::connect_to_server_as` transmettent
+  la classe choisie au `Join` ; `connect_to_server` (2 arguments) reste un raccourci Assaut par
+  défaut — zéro régression pour tout appelant existant.
+- **Fichiers** : `src/editor/windows.rs`, `src/app/{multiplayer,network_client}.rs`,
+  `src/net/client/{native,web}.rs`, `src/bin/server.rs`.
 - **Livrable** : un joueur peut choisir sa classe avant de rejoindre, et son comportement en jeu
   (vitesse, dégâts, soin) reflète le choix.
-- **Risques** : valeur par défaut (Assaut) doit rester le repli si aucun choix n'est fait — ne pas casser la compatibilité avec un client qui n'envoie pas encore de classe.
+- **Risques** : valeur par défaut (Assaut) reste le repli si aucun choix n'est fait — vérifié, zéro régression.
+
+### Audit de repasse (Phase A) — un bug réel trouvé et corrigé, deux trous de test comblés
+- **Bug réel corrigé — build iOS cassé** : les deux call sites de `editor.run`/`run_player_overlay`
+  (`src/gfx/renderer.rs`) appellent `app.connect_to_server_as(...)` sans garde de plateforme, mais
+  cette méthode n'existait que dans le bloc `#[cfg(not(target_os = "ios"))]` de
+  `src/app/network_client.rs` — une compilation ciblant iOS aurait échoué. Corrigé par un stub
+  symétrique `connect_to_server_as` dans le bloc iOS (classe ignorée, comme le reste de la connexion
+  sur cette cible) — non vérifié par une compilation croisée réelle (pas de toolchain iOS
+  disponible), corrigé par stricte parité de motif avec le stub existant.
+- **Trou de test comblé — cas « Encerclé »** : le seul test de cause de mort couvrait un seul
+  monstre ; ajouté `death_by_two_simultaneous_monsters_reports_two_distinct_attackers`
+  (`src/app/health.rs`) pour le cas à 2+ agresseurs simultanés, cité littéralement dans le GDD.
+- **Trou de test comblé — texte localisé** : `locale::death_cause` intégré au filet de sécurité
+  `every_string_differs_between_locales` et testé pour la règle singulier/pluriel
+  (`death_cause_only_says_surrounded_for_two_or_more_attackers`).
+- Vérifié après ces deux correctifs : `cargo test --lib` 539 passés / 0 échoué / 7 ignorés
+  volontairement, `cargo clippy --lib -- -D warnings` propre sur les fichiers de ce sprint.
 
 ---
 
@@ -89,9 +121,13 @@ Phase G (Rattrapage doc GDD)           ─┘
   `src/app/fireball.rs` (câblage au point d'impact), `src/bin/server.rs` (XP : `network_player_assists`,
   `round_xp` prend désormais frags+assists).
 - **Livrable** : deux joueurs endommagent la même créature, celui qui ne l'achève pas reçoit quand même
-  de l'XP d'assist ; test serveur dédié. — voir [sprintB10haudit.md](sprintB10haudit.md).
+  de l'XP d'assist ; test serveur dédié bout-en-bout (`two_network_players_who_both_damage_a_creature_split_credit_between_kill_and_assist`).
 - **Risques** : bien borner la fenêtre de temps pour éviter les assists « gratuits » sans lien réel avec le kill
   — traité par `ASSIST_WINDOW` (5 s).
+- **Audit de repasse** : deux correctifs mineurs trouvés — `resolve_fireball_hit` appelait
+  `network_player_id_at(owner)` deux fois (factorisé en un seul appel), et le commentaire de la
+  boucle de crédit dans `update_network_attacks` ne mentionnait pas encore les assists. Aucun bug
+  fonctionnel trouvé ; `cargo clippy --lib -- -D warnings` propre sur les 4 fichiers du sprint après correctifs.
 
 ---
 
@@ -105,13 +141,27 @@ Phase G (Rattrapage doc GDD)           ─┘
   client→serveur (`ClientMsg::Join::objective`, `bin/server.rs::Lobby::objective` fixé au premier
   `Join` d'un salon vide) et serveur→client (`GameEvent::RoundObjective`, envoyé au Join, pour que
   la logique de manche exécutée localement par chaque client — `AppState::update_round` — reste
-  alignée sur le mode réel du salon). `PROTOCOL_VERSION` 5. Cf. [sprintC_10haudit.md](sprintC_10haudit.md).
+  alignée sur le mode réel du salon). `PROTOCOL_VERSION` 5.
 - [x] Condition de victoire/défaite générique branchée sur l'objectif actif (`AppState::update_round`, `app/combat.rs`).
 - **Fichiers** : `src/bin/server.rs`, `src/net/protocol.rs`, `src/app/combat.rs`.
 - **Livrable** : le mode Vagues actuel continue de fonctionner à l'identique, mais passe désormais
   par `RoundObjective::Vagues` plutôt que d'être codé en dur.
 - **Risques** : ne pas régresser le mode Vagues existant (`Combat::wave`, `src/scene/mod.rs:454-470`)
   pendant la migration — garder les tests existants verts.
+- **2 bugs trouvés et corrigés à l'audit** : (1) le marqueur « salon fraîchement créé » utilisé pour
+  décider si `objective` doit être fixé par un `Join` se basait sur `room.lobby.last_seen.is_empty()`
+  — or `last_seen` redevient vide dès que tous les joueurs quittent un salon (courant sans que le
+  salon se ferme), donc un salon vidé puis rejoint pouvait voir son mode réassigné en pleine manche.
+  Corrigé : `Lobby::objective` est devenu `Option<RoundObjective>` (`None` = « aucun `Join` jamais
+  traité par ce `Room` », état qui ne redevient jamais vrai). (2) trou fonctionnel plus profond :
+  chaque client exécute sa propre copie locale de `update_round`, mais `objective` n'était propagé
+  que client→serveur, jamais serveur→client une fois arbitré — un client restait sur son défaut local
+  `Vagues` et pouvait déclarer une victoire locale prématurée pendant qu'un salon `Survie` continuait
+  de rebocler côté serveur. Corrigé par le nouveau `GameEvent::RoundObjective` envoyé au `Join`
+  (ci-dessus), testé bout-en-bout via un vrai socket
+  (`a_joining_client_learns_the_rooms_objective_over_the_wire`). Les Sprints 7/8 (Escorte/Boss) ont
+  été livrés par une autre session pendant cette même relecture — non revus en détail par l'auditeur,
+  seule la compilation/suite de tests complète (547 tests) a été confirmée verte avec leur code inclus.
 
 ### Sprint 6 — Mode Survie ✅ (HUD non fait, cf. risque ci-dessous)
 **Objectif** : implémenter l'objectif Survie décrit au GDD §4.
@@ -214,35 +264,44 @@ Phase G (Rattrapage doc GDD)           ─┘
 ## PHASE E — Grammaire d'archétypes de créatures (indépendante) — ✅ Sprints 10-11 faits
 
 > Désync doc/code corrigée le 18 juillet 2026 : les cases ci-dessous étaient restées décochées
-> alors que le rapport [sprintE10haudit.md](sprintE10haudit.md) documentait un travail déjà
-> livré et testé. Vérifié directement dans le code avant de cocher : `enum Archetype`
-> (`src/scene/mod.rs:534`), champ `archetype` sur `AiChaser`, logique de vitesse/éveil dans
-> `src/app/simulation.rs:1253`, et les 2 tests dédiés (`creature_archetypes_produce_visibly_different_chase_speeds`,
-> `furtive_archetype_stays_asleep_until_the_player_enters_its_shorter_wake_radius`, `cargo test`
-> re-confirmés verts). Pas une régression réelle — juste un tableau de suivi jamais mis à jour
-> après coup. Point encore ouvert signalé par le rapport lui-même : validation visuelle en Play
-> jamais faite (seulement testée en simulation) — à faire avant de considérer la lisibilité
-> gameplay (silhouette/vitesse perçue) définitivement close.
+> alors qu'un travail déjà livré et testé existait. Vérifié directement dans le code avant de
+> cocher : `enum Archetype` (`src/scene/mod.rs:534`), champ `archetype` sur `AiChaser`, logique de
+> vitesse/éveil dans `src/app/simulation.rs:1253`, et les tests dédiés re-confirmés verts. Pas une
+> régression réelle — juste un tableau de suivi jamais mis à jour après coup. Point encore ouvert :
+> validation visuelle en Play jamais faite (seulement testée en simulation) — à faire avant de
+> considérer la lisibilité gameplay (silhouette/vitesse perçue) définitivement close.
 
-### Sprint 10 — Archétypes Traqueuse et Meute — ✅ fait, cf. [sprintE10haudit.md](sprintE10haudit.md)
+### Sprint 10 — Archétypes Traqueuse et Meute — ✅ fait
 **Objectif** : différencier le comportement de chasse au-delà de l'IA générique actuelle (§5.4).
-- [x] Enum d'archétype par créature/prefab.
+- [x] `Archetype::speed_multiplier()` : Traqueuse `1.0`, Meute `1.25`, Colosse `0.65`, Furtive `1.5`.
+  `AiChaser` gagne un champ `archetype: Archetype` (`#[serde(default)]`, rétrocompatible).
 - [x] Traqueuse : approche directe rapide et isolée ; Meute : coordination à plusieurs sur une même cible
-  (dans la limite du plafond existant).
-- **Fichiers** : `src/app/simulation.rs`, `src/scene/demos.rs` (assignation d'archétype par prefab).
+  (dans la limite du plafond existant, `MAX_ACTIVE_CHASERS_PER_TARGET` inchangé pour tous les archétypes).
+- **Fichiers** : `src/app/simulation.rs`, `src/scene/demos.rs` (assignation d'archétype par prefab :
+  `zombies_demo` Rôdeur→Traqueuse/Coureur→Meute/Brute→Colosse, `roguelike_demo` Gobelin→Meute/
+  Squelette→Furtive/Ogre→Colosse).
 - **Livrable** : en Play, une Traqueuse et un groupe de Meute se comportent visiblement différemment
   d'une créature générique actuelle.
-- **Risques** : ne pas casser les tests IA existants (`src/app/mod.rs:2456-2559`) ; garder le plafond
-  de chasseresses (`MAX_ACTIVE_CHASERS_PER_TARGET`) valable pour tous les archétypes.
+- **Risques** : ne pas casser les tests IA existants ; garder le plafond de chasseresses valable pour
+  tous les archétypes — vérifié à l'audit.
 
-### Sprint 11 — Archétypes Colosse et Furtive — ✅ fait, cf. [sprintE10haudit.md](sprintE10haudit.md)
+### Sprint 11 — Archétypes Colosse et Furtive — ✅ fait
 **Objectif** : compléter la grammaire d'archétypes.
-- [x] Colosse : charge, résistance, attaque de zone lente. Furtive : camouflage/détection tardive,
-  embuscade.
+- [x] Colosse : vitesse de poursuite ralentie (`0.65×`). Furtive : reste immobile tant que la cible
+  la plus proche est au-delà de `FURTIVE_DETECT_RANGE = 5.0` (< `CHASER_DETECT_RANGE` = 9 m,
+  appliqué en toute circonstance y compris en solo), vitesse accrue (`1.5×`) une fois éveillée.
 - **Fichiers** : `src/app/simulation.rs`, `src/scene/demos.rs`.
-- **Livrable** : les 4 archétypes du GDD §5.4 sont tous distinguables en Play.
-- **Risques** : le camouflage de la Furtive ne doit pas la rendre injouable contre (détection nulle) —
-  définir un rayon minimal de détection même camouflée.
+- **Livrable** : les 4 archétypes du GDD §5.4 sont tous distinguables en Play (9 tests verts,
+  `furtive_archetype_stays_asleep_until_the_player_enters_its_shorter_wake_radius`,
+  `creature_archetypes_produce_visibly_different_chase_speeds`).
+- **Risques** : le camouflage de la Furtive ne doit pas la rendre injouable contre — rayon minimal de
+  détection défini (5 m). PV réduits (Meute)/élevés (Colosse) du GDD §5.4 relèvent de `Combat`, pas
+  d'`AiChaser` — non traités par ce sprint (seule la vitesse est ajustée), à planifier séparément.
+- **Audit** : un bug de terminologie trouvé et corrigé — le mot « archétype » était déjà utilisé
+  dans `zombies_demo` pour un concept différent (profils d'auteur Rôdeur/Coureur/Brute) ; commentaires
+  reformulés en « profil(s) de monstres » pour ne pas confondre avec `Archetype` (grammaire GDD §5.4).
+  Le pack `MONSTER_DECOR` (~45 modèles) et `mmorpg_demo` (créatures pilotées par script Lua) restent
+  hors périmètre (aucun `AiChaser`).
 
 ---
 
@@ -253,9 +312,8 @@ Phase G (Rattrapage doc GDD)           ─┘
 **Objectif** : confirmer et compléter le chat en jeu, dont le backend Firebase est déjà prêt
 (`post_chat_message`/`list_chat_messages`, `src/net/firebase.rs:421-464`).
 - [x] Auditer l'état réel de l'onglet Salon dans la fenêtre Multijoueur (non vérifié positivement
-  dans `auditGDD10h.md`) : déjà entièrement fonctionnel avant ce sprint (UI, état, réseau, test —
-  cf. bilan [sprintF10haudit.md](sprintF10haudit.md)). Seul écart réel trouvé : pas de
-  rafraîchissement automatique.
+  dans `auditGDD10h.md`) : déjà entièrement fonctionnel avant ce sprint (UI, état, réseau, test).
+  Seul écart réel trouvé : pas de rafraîchissement automatique.
 - [x] Compléter l'affichage/saisie de chat si manquant : rien ne manquait ; ajouté à la place le
   rafraîchissement automatique (toutes les 4 s, `Editor::run`, `src/editor/mod.rs`) tant que la
   fenêtre Multijoueur reste ouverte.
@@ -281,9 +339,11 @@ Phase G (Rattrapage doc GDD)           ─┘
   fichier : clés API, réglages manette, etc.), aucune requête réseau liée au mute.
 
 **Vérification** : `cargo build`/`cargo test --lib` sur le dépôt complet (537 tests) et
-`cargo clippy -D warnings` sur les 3 fichiers touchés — tous verts (détail dans
-[sprintF10haudit.md](sprintF10haudit.md)). Reste un test manuel en éditeur avec un compte Firebase
-réel, non exécuté (pas de config Firebase disponible dans l'environnement de vérification).
+`cargo clippy -D warnings` sur les 3 fichiers touchés — tous verts. Un second passage a ajouté deux
+micro-économies (tooltip statique au lieu d'un `format!` par frame, plus de clone systématique de
+`settings.muted_players` en dépliant la section « Joueurs muets »). Reste un test manuel en éditeur
+avec un compte Firebase réel, non exécuté (pas de config Firebase disponible dans l'environnement de
+vérification).
 
 ---
 
@@ -307,6 +367,11 @@ toute contradiction découverte est une décision à acter).
   la fin des autres phases.
 - **Risques** : aucun — sprint purement documentaire, peut être fait à tout moment, y compris avant
   les autres phases.
+- **Audit de clôture** : un bug réel trouvé et corrigé — la 1ère passe affirmait à tort que la
+  réanimation Soutien (§8.1) était couverte par le Sprint 3 (sélecteur de classe) ; relecture de ce
+  sprint confirme qu'elle n'apparaît dans aucun des 14 sprints planifiés, désormais marquée
+  « non planifiée » dans le tableau §14. Ancres de section homogénéisées, tous les liens/ancres
+  vérifiés mécaniquement.
 
 ---
 
@@ -319,7 +384,7 @@ toute contradiction découverte est une décision à acter).
 | C | Vagues (migré), Survie, Escorte, Boss se terminent tous correctement dans un salon de test |
 | D | Un contrat du jour distinct de la manche normale est généré, complété et récompensé |
 | E | Les 4 archétypes de créatures du GDD §5.4 sont distinguables en Play |
-| F | ✅ Chat de salon fonctionnel + mute local opérationnel — terminé 2026-07-18, cf. [sprintF10haudit.md](sprintF10haudit.md) |
+| F | ✅ Chat de salon fonctionnel + mute local opérationnel — terminé 2026-07-18 |
 | G | `GDD_MMORPG.md` §14 ne contient plus de statut sous-évalué par rapport au code |
 
 ## 📌 Conseils d'exécution
