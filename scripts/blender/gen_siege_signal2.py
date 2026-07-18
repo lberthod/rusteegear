@@ -11,6 +11,8 @@ import math
 import os
 import sys
 
+import bpy
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hamlet_common import (  # noqa: E402
     GLOW_YELLOW,
@@ -26,12 +28,17 @@ from hamlet_common import (  # noqa: E402
     mat,
     reset_scene,
 )
+from siege_anim_common import build_prop, weight, weight_remaining  # noqa: E402
 
 
 def gen_chief_cage():
     """Cage du chef : cage de barreaux métalliques sur socle de bois, silhouette
     sombre à l'intérieur (captif suggéré, pas de figure détaillée) — pièce de
-    mise en scène, pas un ennemi jouable."""
+    mise en scène, pas un ennemi jouable. Animée (addendum) : Root + PorteCage
+    — la face avant (côté -Y) est une porte de barreaux articulée sur le
+    poteau d'angle SW, les 3 autres faces + poteaux + toit restent fixes.
+    Position par défaut « fermée » (clip Idle 40f) ; l'ouverture réelle
+    (libération du chef) est déclenchée côté scène, pas par ce clip."""
     wood_dark = mat("bois_sombre", WOOD_DARK)
     metal_dark = mat("metal_sombre", METAL_DARK)
     captive = mat("silhouette", (0.08, 0.07, 0.07))
@@ -43,14 +50,27 @@ def gen_chief_cage():
                       radius=0.03, depth=1.2, vertices=6)
     # Barreaux verticaux sur les 4 faces (bandes de cube, pas des cylindres
     # séparés) — silhouette de cage lisible sans multiplier les petits objets.
+    # La face y=-0.4 (s=-1 de la boucle BarreauX) est la porte animée.
     n_bars = 5
+    door_objs = []
     for i in range(n_bars):
         t = -0.32 + i * 0.64 / (n_bars - 1)
+        door_bar = cube(f"BarreauX{i}-1", metal_dark, (t, -0.4, 0.72), (0.025, 0.025, 1.2))
+        weight(door_bar, "PorteCage")
+        door_objs.append(door_bar)
+        cube(f"BarreauX{i}1", metal_dark, (t, 0.4, 0.72), (0.025, 0.025, 1.2))
         for s in (-1, 1):
-            cube(f"BarreauX{i}{s}", metal_dark, (t, s * 0.4, 0.72), (0.025, 0.025, 1.2))
             cube(f"BarreauY{i}{s}", metal_dark, (s * 0.4, t, 0.72), (0.025, 0.025, 1.2))
     cube("Toit", metal_dark, (0, 0, 1.34), (0.9, 0.9, 0.06))
-    export("siege_chief_cage.glb")
+    bones = {"PorteCage": ("Root", (-0.4, -0.4, 0), (-0.4, -0.4, 0.3))}
+    weight_remaining(door_objs)
+
+    def keyer(key_rot, key_loc, key_scale):
+        key_rot("PorteCage", 1, (0, 0, 0))
+        key_rot("PorteCage", 40, (0, 0, 0))
+
+    parts = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    build_prop("siege_chief_cage", parts, bones, "Idle", keyer)
 
 
 def gen_memorial_statue():
