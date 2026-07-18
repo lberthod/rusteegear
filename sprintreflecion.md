@@ -714,18 +714,24 @@ pour isoler la source d'un problème éventuel.
 ---
 
 <a id="phase-o"></a>
-## PHASE O — Hygiène de mémoire/process (dépend de toutes les phases, dernière)
+## PHASE O — Hygiène de mémoire/process (dépend de toutes les phases, dernière) — ✅ terminé (18 juillet 2026)
 
-### Sprint 17 — Revue de mémoire post-exécution
+### Sprint 17 — Revue de mémoire post-exécution — ✅ terminé (18 juillet 2026)
 **Objectif** : capturer les leçons opérationnelles de l'ensemble du travail, pas les documents de
 sprint eux-mêmes.
-- [ ] Identifier ce qui a été surprenant ou non évident pendant l'exécution (ex.
-  `MAX_SKINNED_INSTANCES` relevé une 4e fois, un mode de manche révélant un piège d'IA non
-  documenté, un conflit de session concurrent).
-- [ ] Écrire/mettre à jour les mémoires correspondantes plutôt que de laisser l'information dans ces
-  documents de sprint (qui, eux, sont des artefacts ponctuels).
+- [x] Identifié ce qui a été surprenant ou non évident pendant l'exécution de la Phase L : un
+  objectif de manche (Escorte) silencieusement no-op parce que `mmorpg_demo()` (scène servie en
+  réseau) n'avait pas l'objet requis, présent seulement dans une scène de démo isolée (`escorte_demo`)
+  ; et l'issue de manche (`GameEvent::Win`/`Lose`) calculée côté serveur mais jamais diffusée aux
+  clients avant le correctif du 18 juillet 2026.
+- [x] Mémoires écrites : `escorte-mode-missing-convoy-in-mmorpg-demo`, `server-round-outcome-not-broadcast`,
+  et complément sur `vps-deploy-procedure` (déploiement Sprint 15/16 collapsé en un seul passage
+  quand le VPS reste trop longtemps en retard). Vérifié que `siege-pack-planning`/
+  `siege-pack-animation-planning` (intégration en jeu non commencée) sont toujours à jour — aucun
+  code de scène ne référence encore le pack siège.
 - **Fichiers** : fichiers mémoire (hors dépôt de code).
-- **Livrable** : mémoires à jour, documents de sprint archivés ou marqués terminés.
+- **Livrable** : mémoires à jour, documents de sprint marqués terminés (cette phase clôt les 15
+  phases de `sprintreflecion.md`).
 - **Risques** : aucun — dernier sprint, purement rétrospectif.
 
 ---
