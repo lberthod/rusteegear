@@ -556,8 +556,10 @@ pub struct AppState {
     /// Quatrième champ (Sprint 3, `sprint10audit.md`) : la classe choisie
     /// (`multiplayer::PlayerClass::to_u8`) au `Join` initial — rejouée à
     /// l'identique par la reconnexion automatique, comme le reste du tuple.
+    /// Cinquième champ (Sprint 21, `sprintreflecion.md`) : le mode de manche
+    /// choisi (`multiplayer::RoundObjective::to_u8`), même principe.
     #[cfg(not(target_os = "ios"))]
-    net_last_connect: Option<(String, String, String, u8)>,
+    net_last_connect: Option<(String, String, String, u8, u8)>,
     /// Reconnexion automatique en cours, s'il y en a une (cf.
     /// `network_client::ReconnectState` : numéro de tentative, prochain essai,
     /// tentative de fond éventuellement en vol). `None` = connexion saine ou
@@ -1141,6 +1143,16 @@ impl AppState {
     /// Bascule la caméra libre de l'éditeur (touche G) : permet de survoler toute la
     /// carte sans contrainte, hors Play — cf. `fly_cam`/`update_fly_cam`. Sans effet en
     /// Play (la caméra suit alors le joueur/la caméra de jeu).
+    /// Bascule la pause en Play/Player (touche Échap, cf. `Phase J` de
+    /// `sprintreflecion.md`) — même champ `paused` déjà gelé par `advance_play`
+    /// et `is_active`, réutilisé tel quel plutôt qu'un second mécanisme de gel.
+    /// Sans effet hors Play (rien à mettre en pause).
+    pub fn toggle_pause(&mut self) {
+        if self.playing {
+            self.paused = !self.paused;
+        }
+    }
+
     pub fn toggle_fly_cam(&mut self) {
         if !self.playing {
             self.fly_cam = !self.fly_cam;
@@ -3754,6 +3766,76 @@ mod tests {
                 .all(|o| o.visible),
             "toutes les gemmes redeviennent visibles"
         );
+    }
+
+    /// Phase J (Sprint 22, `sprintreflecion.md`) : `toggle_pause` ne doit rien
+    /// faire hors Play (rien à mettre en pause, même garde que `toggle_fly_cam`).
+    #[test]
+    fn toggle_pause_has_no_effect_outside_play() {
+        let mut app = AppState::new();
+        assert!(!app.playing);
+        app.toggle_pause();
+        assert!(
+            !app.paused,
+            "hors Play, toggle_pause ne doit pas armer la pause"
+        );
+    }
+
+    #[test]
+    fn toggle_pause_toggles_while_playing() {
+        let mut app = AppState::new();
+        app.playing = true;
+        app.toggle_pause();
+        assert!(app.paused);
+        app.toggle_pause();
+        assert!(!app.paused);
+    }
+
+    /// Phase J (Sprint 22) : la pause doit geler la simulation sur le même
+    /// principe que `is_room_lost`/`win_time` — le chrono de
+    /// `RoundObjective::Survie` ne doit **pas** continuer à courir pendant la
+    /// pause, même si 30 s réelles s'écoulent pendant qu'elle est active.
+    #[test]
+    fn pausing_freezes_the_survie_timer() {
+        let mut monstre = SceneObject {
+            visible: true,
+            ..Default::default()
+        };
+        monstre.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.objective = crate::app::multiplayer::RoundObjective::Survie;
+        app.scene = crate::scene::Scene {
+            objects: vec![monstre],
+            ..Default::default()
+        };
+        app.playing = true;
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play(); // entrée en Play : `init_waves` + `time` remis à 0.
+
+        // 10 s avant la fin de la manche (`SURVIE_DURATION_SECS` = 180 s) : on pause.
+        app.time = 170.0;
+        app.toggle_pause();
+        assert!(app.paused);
+
+        // 30 s réelles s'écoulent pendant la pause.
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(30.0);
+        app.advance_play();
+        assert_eq!(
+            app.time, 170.0,
+            "le chrono ne doit pas avancer pendant la pause"
+        );
+        assert!(
+            app.win_time.is_none(),
+            "la manche ne doit pas s'être terminée pendant la pause"
+        );
+
+        // On reprend : la simulation doit repartir normalement.
+        app.toggle_pause();
+        assert!(!app.paused);
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(app.time > 170.0, "le chrono doit repartir après la reprise");
     }
 
     #[test]

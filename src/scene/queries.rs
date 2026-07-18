@@ -61,7 +61,13 @@ impl Scene {
             MeshKind::Plane => (Vec3::new(-0.5, -0.02, -0.5), Vec3::new(0.5, 0.02, 0.5)),
             MeshKind::Cylinder => (Vec3::new(-0.5, -0.5, -0.5), Vec3::new(0.5, 0.5, 0.5)),
             MeshKind::Capsule => (Vec3::new(-0.25, -0.5, -0.25), Vec3::new(0.25, 0.5, 0.25)),
-            MeshKind::Terrain => (Vec3::new(-0.5, -0.1, -0.5), Vec3::new(0.5, 0.1, 0.5)),
+            // Amplitude locale portée à ±2,2 m (marge sur les ±2,0 m de
+            // `gfx::mesh::mmorpg_terrain_local_height`, cf. Sprint 24 de
+            // `sprintreflecion.md`) : cette AABB alimente aussi `Physics::build`
+            // (repli `cuboid()` si jamais un `ColliderShape` non-`Auto` est forcé
+            // sur un `MeshKind::Terrain`) et les tests de culling/zone — sous-
+            // estimer l'amplitude réelle des collines y laisserait des trous.
+            MeshKind::Terrain => (Vec3::new(-0.5, -2.2, -0.5), Vec3::new(0.5, 2.2, 0.5)),
             MeshKind::Billboard => (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5)),
             MeshKind::Imported(i) => match self.imported.get(i as usize) {
                 Some(m) => (m.aabb_min, m.aabb_max),

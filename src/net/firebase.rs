@@ -107,6 +107,30 @@ fn parse_progress_response(body: &str) -> Result<PlayerProgress, String> {
     serde_json::from_value(v).map_err(|e| format!("Progression Firebase illisible : {e}"))
 }
 
+/// Longueur maximale (caractères) d'un message de chat (`ChatMessage::text`) —
+/// seul champ texte libre encore sans borne (Phase F, Sprint 10 de
+/// `sprintreflecion.md`, revue de sécurité ciblée) : `name`/`lobby`/
+/// `firebase_uid` sont déjà bornés par `protocol::valid_join_fields`, mais
+/// rien n'empêchait jusqu'ici un client buggé/malveillant d'écrire un message
+/// de plusieurs Mo dans `/lobbies/{code}/chat`, stocké et rediffusé tel quel à
+/// tous les pairs du salon (coût RTDB, UI qui doit afficher la ligne).
+pub const MAX_CHAT_LEN: usize = 240;
+
+/// Valide un message de chat avant envoi (`post_chat_message`), même
+/// discipline que `protocol::valid_join_fields` : pas vide (après `trim`), pas
+/// au-delà de `MAX_CHAT_LEN`. Pas de restriction de charset ici (texte libre
+/// affiché tel quel, jamais utilisé comme clé/chemin RTDB — contrairement à
+/// `lobby`/`firebase_uid`).
+pub fn valid_chat_text(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("le message ne peut pas être vide".to_string());
+    }
+    if text.chars().count() > MAX_CHAT_LEN {
+        return Err(format!("le message dépasse {MAX_CHAT_LEN} caractères"));
+    }
+    Ok(())
+}
+
 /// Message de chat d'un salon, sous `/lobbies/{code}/chat/{push_id}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 pub struct ChatMessage {
@@ -435,6 +459,7 @@ mod net_io {
         auth_token: &str,
         message: &ChatMessage,
     ) -> Result<(), String> {
+        valid_chat_text(&message.text)?;
         if config.database_url.trim().is_empty() {
             return Err("URL Firebase Database manquante (Outils → Paramètres)".into());
         }
@@ -769,6 +794,26 @@ mod tests {
     #[test]
     fn chat_rejects_a_malformed_message() {
         assert!(parse_chat_messages(r#"{"-push1": {"sender": "Alice"}}"#).is_err());
+    }
+
+    #[test]
+    fn valid_chat_text_accepts_a_normal_message() {
+        assert!(valid_chat_text("salut tout le monde").is_ok());
+        // Pile à la limite : accepté.
+        let exact = "x".repeat(MAX_CHAT_LEN);
+        assert!(valid_chat_text(&exact).is_ok());
+    }
+
+    #[test]
+    fn valid_chat_text_rejects_an_empty_or_blank_message() {
+        assert!(valid_chat_text("").is_err());
+        assert!(valid_chat_text("   ").is_err());
+    }
+
+    #[test]
+    fn valid_chat_text_rejects_an_oversized_message() {
+        let too_long = "x".repeat(MAX_CHAT_LEN + 1);
+        assert!(valid_chat_text(&too_long).is_err());
     }
 
     #[test]

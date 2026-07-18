@@ -136,6 +136,22 @@ pub fn restart_button_label(locale: Locale, won: bool) -> &'static str {
     }
 }
 
+/// Titre du menu pause (Phase J, `sprintreflecion.md`), ouvert à la demande
+/// (Échap) pendant une partie — distinct des bannières de fin de manche.
+pub fn pause_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "⏸ Pause",
+        Locale::En => "⏸ Paused",
+    }
+}
+
+pub fn resume_button_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "▶ Reprendre",
+        Locale::En => "▶ Resume",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1143,7 +1143,7 @@ mod tests {
         rooms.insert("salle-survie".to_string(), room);
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
-        let client = NetClient::connect_to_lobby(&url, "Bob", None, "salle-survie", 0)
+        let client = NetClient::connect_to_lobby(&url, "Bob", None, "salle-survie", 0, 0)
             .expect("connexion du client");
         let ServerMsg::Welcome { .. } = client
             .inbox
@@ -1266,7 +1266,7 @@ mod tests {
         rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
-        let client = NetClient::connect_to_lobby(&url, "Alice", None, "salon/traversal", 0)
+        let client = NetClient::connect_to_lobby(&url, "Alice", None, "salon/traversal", 0, 0)
             .expect("connexion du client");
         let ServerMsg::Welcome { player_id } = client
             .inbox
@@ -1446,8 +1446,8 @@ mod tests {
         let mut rooms: HashMap<String, Room> = HashMap::new();
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
-        let a = NetClient::connect_to_lobby(&url, "A", None, "salon-a", 0).expect("connexion A");
-        let b = NetClient::connect_to_lobby(&url, "B", None, "salon-b", 0).expect("connexion B");
+        let a = NetClient::connect_to_lobby(&url, "A", None, "salon-a", 0, 0).expect("connexion A");
+        let b = NetClient::connect_to_lobby(&url, "B", None, "salon-b", 0, 0).expect("connexion B");
         let welcome_a = a.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
         let welcome_b = b.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
         let (ServerMsg::Welcome { player_id: id_a }, ServerMsg::Welcome { player_id: id_b }) =
@@ -1491,7 +1491,7 @@ mod tests {
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
         let client =
-            NetClient::connect_to_lobby(&url, "Solo", None, "ephemere", 0).expect("connexion");
+            NetClient::connect_to_lobby(&url, "Solo", None, "ephemere", 0, 0).expect("connexion");
         client
             .inbox
             .recv_timeout(Duration::from_secs(2))

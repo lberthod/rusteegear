@@ -49,19 +49,23 @@ impl NetClient {
         // Classe fixée à Assaut (0) pour cet appel simple — cf.
         // `connect_to_lobby` pour choisir une classe (Sprint 3,
         // `sprint10audit.md`), utilisé par la fenêtre Multijoueur.
-        Self::connect_to_lobby(url, name, firebase_uid, protocol::DEFAULT_LOBBY, 0)
+        Self::connect_to_lobby(url, name, firebase_uid, protocol::DEFAULT_LOBBY, 0, 0)
     }
 
     /// Comme `connect`, mais rejoint le salon `lobby` plutôt que le salon
     /// partagé par défaut (créé à la demande côté serveur s'il n'existe pas
-    /// encore, cf. `bin/server.rs::Room`), et choisit une `class` (cf.
-    /// `net::protocol::ClientMsg::Join::class`, Sprint 3).
+    /// encore, cf. `bin/server.rs::Room`), choisit une `class` (cf.
+    /// `net::protocol::ClientMsg::Join::class`, Sprint 3) et un `objective`
+    /// (`RoundObjective::to_u8`, Sprint 21, `sprintreflecion.md` — seul le
+    /// premier joueur à rejoindre un salon vide en fait foi côté serveur,
+    /// `bin/server.rs::Lobby::objective`).
     pub fn connect_to_lobby(
         url: &str,
         name: &str,
         firebase_uid: Option<&str>,
         lobby: &str,
         class: u8,
+        objective: u8,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let (in_tx, in_rx) = channel::<ServerMsg>();
         let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -72,10 +76,7 @@ impl NetClient {
             firebase_uid: firebase_uid.map(str::to_string),
             lobby: lobby.to_string(),
             class,
-            // Sélection de mode (Phase C, `sprint10audit.md`) pas encore
-            // câblée à une UI — Vagues (0) pour tous, zéro régression tant
-            // qu'aucun sélecteur n'existe (cf. `RoundObjective`).
-            objective: 0,
+            objective,
         })?;
         // Mis en file avant même que le thread de fond n'existe : la pompe
         // sortante le trouvera prêt dès sa première itération.

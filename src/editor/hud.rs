@@ -882,6 +882,51 @@ pub(super) fn ally_down_banner(
     );
 }
 
+/// Menu pause (Phase J, `sprintreflecion.md`) : titre + deux boutons
+/// (Reprendre / Redémarrer), affiché uniquement quand `AppState::paused` est
+/// vrai (cf. `run_player_overlay`). Sur le modèle de `restart_button` mais
+/// avec deux actions distinctes en sortie plutôt qu'un seul bouton.
+/// Renvoie `(resume_clicked, restart_clicked)`.
+pub(super) fn pause_menu(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    locale: crate::app::locale::Locale,
+) -> (bool, bool) {
+    use egui::{Align2, Color32, FontId};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_pause_title"),
+    ));
+    painter.text(
+        egui::pos2(area.center().x, area.center().y - 60.0),
+        Align2::CENTER_CENTER,
+        crate::app::locale::pause_title(locale),
+        FontId::proportional(36.0),
+        Color32::WHITE,
+    );
+    let mut resume_clicked = false;
+    let mut restart_clicked = false;
+    egui::Area::new("pause_resume_btn".into())
+        .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y - 10.0))
+        .show(ctx, |ui| {
+            let label = crate::app::locale::resume_button_label(locale);
+            let btn = egui::Button::new(egui::RichText::new(label).size(20.0));
+            if ui.add_sized([170.0, 46.0], btn).clicked() {
+                resume_clicked = true;
+            }
+        });
+    egui::Area::new("pause_restart_btn".into())
+        .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y + 46.0))
+        .show(ctx, |ui| {
+            let label = crate::app::locale::restart_button_label(locale, false);
+            let btn = egui::Button::new(egui::RichText::new(label).size(20.0));
+            if ui.add_sized([170.0, 46.0], btn).clicked() {
+                restart_clicked = true;
+            }
+        });
+    (resume_clicked, restart_clicked)
+}
+
 /// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
 /// Renvoie `true` s'il est cliqué (pour relancer la partie, y compris sur APK).
 pub(super) fn restart_button(

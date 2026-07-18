@@ -202,6 +202,18 @@ impl RoundObjective {
             RoundObjective::Boss => 3,
         }
     }
+
+    /// Libellé affiché dans le sélecteur de mode réseau (fenêtre
+    /// Multijoueur, Sprint 21, `sprintreflecion.md`) — même principe que
+    /// `PlayerClass::label`.
+    pub fn label(self) -> &'static str {
+        match self {
+            RoundObjective::Vagues => "Vagues",
+            RoundObjective::Survie => "Survie",
+            RoundObjective::Escorte => "Escorte",
+            RoundObjective::Boss => "Boss",
+        }
+    }
 }
 
 /// Contrat du jour (GDD §3.4, Phase D — Sprint 9 de `sprint10audit.md`) : défi

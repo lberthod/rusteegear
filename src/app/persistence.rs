@@ -35,6 +35,9 @@ impl AppState {
         self.sim_render_poses.clear();
         self.win_time = None;
         self.lost = false;
+        // Redémarrer depuis le menu pause (Phase J) doit aussi lever la pause —
+        // sinon `advance_play` resterait gelé juste après la restauration.
+        self.paused = false;
         self.score = 0;
         self.game_events.clear();
         self.trigger_prev.clear();

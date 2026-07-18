@@ -1680,6 +1680,7 @@ impl Renderer {
         let won = app.has_won();
         let wave = app.wave;
         let mut restart = false;
+        let mut resume = false;
         let mut player_net_actions = None;
         let full_output = if app.player {
             if app.scene.mobile.any() {
@@ -1707,6 +1708,8 @@ impl Renderer {
                     won,
                     wave,
                     &mut restart,
+                    app.paused,
+                    &mut resume,
                     &net_status,
                     net_connected,
                     weapon_label,
@@ -1871,8 +1874,8 @@ impl Renderer {
             if actions.restart {
                 restart = true;
             }
-            if let Some((url, name, class)) = actions.connect_to_server {
-                app.connect_to_server_as(&url, &name, class);
+            if let Some((url, name, class, room, objective)) = actions.connect_to_server {
+                app.connect_to_server_as(&url, &name, class, &room, objective);
             }
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
@@ -2057,8 +2060,8 @@ impl Renderer {
         };
 
         if let Some(actions) = player_net_actions {
-            if let Some((url, name, class)) = actions.connect_to_server {
-                app.connect_to_server_as(&url, &name, class);
+            if let Some((url, name, class, room, objective)) = actions.connect_to_server {
+                app.connect_to_server_as(&url, &name, class, &room, objective);
             }
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
@@ -2074,6 +2077,11 @@ impl Renderer {
             } else {
                 app.restart_game();
             }
+        }
+        // « Reprendre » du menu pause (Phase J) : lève la pause sans autre effet
+        // de bord — `restart` gère déjà son propre cas ci-dessus.
+        if resume {
+            app.paused = false;
         }
 
         // 2. Comportements (Play), sync GPU, push des uniforms.
@@ -2642,6 +2650,13 @@ impl Renderer {
                 label: Some("headless_encoder"),
             });
 
+        // Compte des draw calls (Phase F, `sprintoptimation3daudit10h.md`) — même
+        // logique que `render()`/`last_frame_draw_calls` : jusqu'ici ce chemin ne
+        // renseignait jamais `last_frame_draw_calls`, donc `gpu_profiler_info()` après
+        // un rendu headless retournait toujours 0, aucune régression de draw calls
+        // n'aurait été détectable via un benchmark headless.
+        let mut scene_draw_calls: u32 = 0;
+
         // Passe d'ombre — identique à celle de `render()`, sans les gizmos ni l'UI.
         {
             let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2685,6 +2700,7 @@ impl Renderer {
                             k += 1;
                         }
                         spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                        scene_draw_calls += 1;
                     }
                 }
                 i = j;
@@ -2692,7 +2708,8 @@ impl Renderer {
             // Objets skinnés dans la carte d'ombre — même correctif que `render()`
             // (audit du 17 juillet 2026), appliqué ici aussi pour que les golden
             // tests capturent les ombres skinnées.
-            self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
+            scene_draw_calls +=
+                self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
         }
 
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
@@ -2771,6 +2788,7 @@ impl Renderer {
                             k += 1;
                         }
                         pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                        scene_draw_calls += 1;
                     }
                 }
                 i = group_end;
@@ -2785,8 +2803,14 @@ impl Renderer {
             }
 
             // Objets skinnés : cf. commentaire équivalent dans `render()`.
-            self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
+            scene_draw_calls +=
+                self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
         }
+
+        // Cf. `render()` : `last_frame_draw_calls` sert de source unique à
+        // `gpu_profiler_info()`, lu aussi bien après `render()` (panneau Profiler en
+        // jeu) qu'après `render_scene_headless()` (mesures/benchmarks headless).
+        self.last_frame_draw_calls = scene_draw_calls;
 
         // Bloom : cf. commentaire équivalent dans `render()`.
         let bloom_intensity = if app.bloom_enabled && app.render_quality.bloom_enabled() {

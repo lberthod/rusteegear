@@ -17,7 +17,7 @@ use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
     damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
     item_inventory_panel, kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel,
-    restart_button, scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud,
+    pause_menu, restart_button, scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud,
     weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
@@ -68,6 +68,17 @@ pub struct Editor {
     mp_password: String,
     /// Code de salon de chat saisi dans la fenêtre Multijoueur.
     mp_lobby_code: String,
+    /// Code de partie saisi dans la fenêtre Multijoueur (Sprint 20,
+    /// `sprintreflecion.md`) — **distinct** de `mp_lobby_code` (le salon de
+    /// chat Firebase) : ce champ isole les joueurs au niveau du salon de jeu
+    /// réseau (`ClientMsg::Join::lobby`). Vide = `protocol::DEFAULT_LOBBY`
+    /// (comportement inchangé pour qui ne le renseigne pas).
+    mp_room_code: String,
+    /// Mode de manche choisi dans la fenêtre Multijoueur avant de se
+    /// connecter (Sprint 21, `sprintreflecion.md`) — Vagues par défaut (zéro
+    /// régression pour qui ne touche pas au sélecteur). Seul le choix du
+    /// **premier** joueur à rejoindre un salon vide fait foi côté serveur.
+    mp_objective: crate::app::multiplayer::RoundObjective,
     /// Message en cours de saisie dans le chat de la fenêtre Multijoueur.
     mp_chat_input: String,
     /// Commande en cours de saisie dans la Console.
@@ -278,8 +289,16 @@ pub struct UiActions {
     /// à appliquer via `AppState::use_item`.
     pub use_item: Option<crate::scene::ItemKind>,
     /// Fenêtre Multijoueur : « Se connecter » demandé (adresse, pseudo, classe
-    /// choisie — Sprint 3, `sprint10audit.md`).
-    pub connect_to_server: Option<(String, String, crate::app::multiplayer::PlayerClass)>,
+    /// choisie — Sprint 3, `sprint10audit.md` ; code de partie et mode de
+    /// manche choisis — Sprints 20-21, `sprintreflecion.md`, code de partie
+    /// vide = salon par défaut).
+    pub connect_to_server: Option<(
+        String,
+        String,
+        crate::app::multiplayer::PlayerClass,
+        String,
+        crate::app::multiplayer::RoundObjective,
+    )>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
     pub disconnect_from_server: bool,
     /// Widgets HUD `Button` cliqués ce frame (leur champ `action`) — à transmettre à
@@ -429,6 +448,8 @@ impl Editor {
             mp_email: String::new(),
             mp_password: String::new(),
             mp_lobby_code: "default".to_string(),
+            mp_room_code: String::new(),
+            mp_objective: crate::app::multiplayer::RoundObjective::Vagues,
             mp_chat_input: String::new(),
             console_input: String::new(),
             hud_preview: HudPreview::default(),
@@ -497,6 +518,8 @@ impl Editor {
         won: bool,
         wave: u32,
         restart: &mut bool,
+        paused: bool,
+        resume: &mut bool,
         net_status: &str,
         net_connected: bool,
         weapon_label: &str,
@@ -578,6 +601,17 @@ impl Editor {
                 lose_banner(ctx, area, locale);
             } else if defeated {
                 defeated_banner(ctx, area, death_cause, locale);
+            } else if paused {
+                // Menu pause (Phase J, `sprintreflecion.md`) : exclusif avec les
+                // bannières de fin de manche ci-dessus, jamais simultané en pratique
+                // (`AppState::toggle_pause` ne s'arme qu'en Play actif).
+                let (resume_clicked, restart_clicked) = pause_menu(ctx, area, locale);
+                if resume_clicked {
+                    *resume = true;
+                }
+                if restart_clicked {
+                    *restart = true;
+                }
             }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
             if (won || lost) && restart_button(ctx, area, won, locale) {
@@ -679,6 +713,8 @@ impl Editor {
         let mp_email = &mut self.mp_email;
         let mp_password = &mut self.mp_password;
         let mp_lobby_code = &mut self.mp_lobby_code;
+        let mp_room_code = &mut self.mp_room_code;
+        let mp_objective = &mut self.mp_objective;
         let mp_chat_input = &mut self.mp_chat_input;
         let console_input = &mut self.console_input;
         let hud_preview = &mut self.hud_preview;
@@ -725,6 +761,8 @@ impl Editor {
                 mp_email,
                 mp_password,
                 mp_lobby_code,
+                mp_room_code,
+                mp_objective,
                 mp_chat_input,
                 console_input,
                 net_status,
@@ -870,6 +908,8 @@ fn build_ui(
     mp_email: &mut String,
     mp_password: &mut String,
     mp_lobby_code: &mut String,
+    mp_room_code: &mut String,
+    mp_objective: &mut crate::app::multiplayer::RoundObjective,
     mp_chat_input: &mut String,
     console_input: &mut String,
     net_status: &str,
@@ -911,6 +951,8 @@ fn build_ui(
         mp_email,
         mp_password,
         mp_lobby_code,
+        mp_room_code,
+        mp_objective,
         mp_chat_input,
         settings,
         net_status,

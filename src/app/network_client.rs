@@ -198,30 +198,52 @@ pub struct LeaderboardLine {
 #[cfg(not(target_os = "ios"))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`, en
-    /// Assaut (classe par défaut) — cf. `connect_to_server_as` pour choisir
-    /// une autre classe (Sprint 3, `sprint10audit.md`, fenêtre Multijoueur).
+    /// Assaut (classe par défaut), salon par défaut et mode Vagues — cf.
+    /// `connect_to_server_as` pour choisir une autre classe (Sprint 3,
+    /// `sprint10audit.md`), un code de partie ou un mode (Sprints 20-21,
+    /// `sprintreflecion.md`, fenêtre Multijoueur).
     pub fn connect_to_server(&mut self, url: &str, name: &str) {
-        self.connect_to_server_as(url, name, crate::app::multiplayer::PlayerClass::Assault);
+        self.connect_to_server_as(
+            url,
+            name,
+            crate::app::multiplayer::PlayerClass::Assault,
+            crate::net::protocol::DEFAULT_LOBBY,
+            crate::app::multiplayer::RoundObjective::Vagues,
+        );
     }
 
-    /// Comme `connect_to_server`, avec une classe choisie (Sprint 3). Remplace
-    /// une connexion existante s'il y en avait une. Transmet
-    /// `self.firebase_uid` au serveur s'il est connu (cf. `sign_in`/`sign_up`
-    /// ci-dessous, desktop uniquement — toujours `None` sur Android) — `None`
-    /// pour une partie anonyme.
+    /// Comme `connect_to_server`, avec une classe choisie (Sprint 3), un code
+    /// de partie (`room`, Sprint 20 — **distinct** du salon de chat Firebase,
+    /// cf. `editor::windows::multiplayer_window`) et un mode de manche
+    /// (`objective`, Sprint 21) choisis dans la fenêtre Multijoueur. `room`
+    /// vide retombe sur `protocol::DEFAULT_LOBBY` (comportement inchangé pour
+    /// qui laisse le champ vide, même repli que côté protocole,
+    /// `net/protocol.rs:52-56`). Remplace une connexion existante s'il y en
+    /// avait une. Transmet `self.firebase_uid` au serveur s'il est connu (cf.
+    /// `sign_in`/`sign_up` ci-dessous, desktop uniquement — toujours `None`
+    /// sur Android) — `None` pour une partie anonyme.
     pub fn connect_to_server_as(
         &mut self,
         url: &str,
         name: &str,
         class: crate::app::multiplayer::PlayerClass,
+        room: &str,
+        objective: crate::app::multiplayer::RoundObjective,
     ) {
         self.disconnect_from_server();
+        let room = room.trim();
+        let lobby = if room.is_empty() {
+            crate::net::protocol::DEFAULT_LOBBY
+        } else {
+            room
+        };
         match crate::net::client::NetClient::connect_to_lobby(
             url,
             name,
             self.firebase_uid.as_deref(),
-            crate::net::protocol::DEFAULT_LOBBY,
+            lobby,
             class.to_u8(),
+            objective.to_u8(),
         ) {
             Ok(client) => {
                 log::info!("Multijoueur : connecté à {url} sous « {name} »");
@@ -237,8 +259,9 @@ impl AppState {
                 self.net_last_connect = Some((
                     url.to_string(),
                     name.to_string(),
-                    crate::net::protocol::DEFAULT_LOBBY.to_string(),
+                    lobby.to_string(),
                     class.to_u8(),
+                    objective.to_u8(),
                 ));
             }
             Err(e) => {
@@ -597,7 +620,7 @@ impl AppState {
         {
             return;
         }
-        let Some((url, name, lobby, class)) = self.net_last_connect.clone() else {
+        let Some((url, name, lobby, class, objective)) = self.net_last_connect.clone() else {
             self.net_reconnect = None;
             return;
         };
@@ -615,6 +638,7 @@ impl AppState {
                     uid.as_deref(),
                     &lobby,
                     class,
+                    objective,
                 )
                 .map_err(|e| e.to_string());
                 let _ = tx.send(res);
@@ -634,6 +658,7 @@ impl AppState {
                 uid.as_deref(),
                 &lobby,
                 class,
+                objective,
             ) {
                 Ok(client) => self.install_reconnected_client(client),
                 Err(e) => {
@@ -1176,7 +1201,11 @@ impl AppState {
             self.net_status = "Connecte-toi d'abord à un compte pour discuter".to_string();
             return;
         };
-        if self.chat_busy || text.trim().is_empty() {
+        if self.chat_busy {
+            return;
+        }
+        if let Err(reason) = crate::net::firebase::valid_chat_text(&text) {
+            self.net_status = format!("Message non envoyé : {reason}");
             return;
         }
         self.chat_busy = true;
@@ -1313,13 +1342,16 @@ impl AppState {
     }
 
     /// Stub de parité avec le bloc `not(target_os = "ios")` ci-dessus (Sprint 3,
-    /// `sprint10audit.md`) : la classe est ignorée, comme le reste de la
-    /// connexion sur cette cible.
+    /// `sprint10audit.md` ; Sprints 20-21, `sprintreflecion.md`) : classe,
+    /// code de partie et mode sont ignorés, comme le reste de la connexion
+    /// sur cette cible.
     pub fn connect_to_server_as(
         &mut self,
         _url: &str,
         _name: &str,
         _class: crate::app::multiplayer::PlayerClass,
+        _room: &str,
+        _objective: crate::app::multiplayer::RoundObjective,
     ) {
         self.net_status = "Multijoueur indisponible sur iOS".to_string();
     }
@@ -2824,6 +2856,7 @@ mod tests {
             "Testeur".to_string(),
             crate::net::protocol::DEFAULT_LOBBY.to_string(),
             0,
+            0,
         ));
         for expected in 1..=MAX_RECONNECT_ATTEMPTS {
             app.schedule_reconnect_attempt();
@@ -2859,6 +2892,7 @@ mod tests {
             "ws://127.0.0.1:9".to_string(),
             "Testeur".to_string(),
             crate::net::protocol::DEFAULT_LOBBY.to_string(),
+            0,
             0,
         ));
         app.schedule_reconnect_attempt();

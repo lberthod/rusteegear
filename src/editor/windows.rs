@@ -659,12 +659,15 @@ pub(super) fn mobile_multiplayer_overlay(
                     .add_enabled(can_connect, egui::Button::new("▶ Se connecter"))
                     .clicked()
                 {
-                    // Pas de sélecteur de classe ici (overlay minimal, cf. sa
-                    // doc) : Assaut par défaut, comme avant ce sprint.
+                    // Pas de sélecteur de classe/salon/mode ici (overlay
+                    // minimal, cf. sa doc) : Assaut, salon par défaut et
+                    // Vagues, comme avant les Sprints 3/20/21.
                     actions.connect_to_server = Some((
                         server_url.clone(),
                         name.clone(),
                         crate::app::multiplayer::PlayerClass::Assault,
+                        String::new(),
+                        crate::app::multiplayer::RoundObjective::Vagues,
                     ));
                 }
             }
@@ -691,6 +694,8 @@ pub(super) fn multiplayer_window(
     email: &mut String,
     password: &mut String,
     lobby_code: &mut String,
+    room_code: &mut String,
+    objective: &mut crate::app::multiplayer::RoundObjective,
     chat_input: &mut String,
     settings: &mut crate::app::settings::Settings,
     net_status: &str,
@@ -729,6 +734,30 @@ pub(super) fn multiplayer_window(
                         }
                     });
             });
+            ui.label("Code de partie");
+            // Sprint 20 (`sprintreflecion.md`) : **distinct** du « Salon » du
+            // chat plus bas — isole une partie réseau sur le serveur (rejoint
+            // `ClientMsg::Join::lobby`), vide = salon par défaut inchangé.
+            // Désactivé une fois connecté, comme l'adresse/le pseudo/la classe.
+            ui.add_enabled_ui(!net_connected, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(room_code).hint_text("(salon par défaut si vide)"),
+                );
+            });
+            ui.label("Mode");
+            // Sprint 21 (`sprintreflecion.md`) : le mode choisi par le
+            // **premier** joueur à rejoindre un salon vide fait foi côté
+            // serveur (`Lobby::objective`) — désactivé une fois connecté pour
+            // ne pas laisser croire qu'un second arrivant peut encore choisir.
+            ui.add_enabled_ui(!net_connected, |ui| {
+                egui::ComboBox::from_id_salt("mp_objective_select")
+                    .selected_text(objective.label())
+                    .show_ui(ui, |ui| {
+                        for o in crate::app::multiplayer::RoundObjective::ALL {
+                            ui.selectable_value(objective, o, o.label());
+                        }
+                    });
+            });
             ui.add_space(6.0);
             if net_connected {
                 if ui.button("🔌  Se déconnecter").clicked() {
@@ -740,7 +769,13 @@ pub(super) fn multiplayer_window(
                     .add_enabled(can_connect, egui::Button::new("▶  Se connecter"))
                     .clicked()
                 {
-                    actions.connect_to_server = Some((server_url.clone(), name.clone(), *class));
+                    actions.connect_to_server = Some((
+                        server_url.clone(),
+                        name.clone(),
+                        *class,
+                        room_code.clone(),
+                        *objective,
+                    ));
                 }
                 if !can_connect {
                     ui.small("Adresse et pseudo requis.");
@@ -834,7 +869,8 @@ pub(super) fn multiplayer_window(
                     ui.add(
                         egui::TextEdit::singleline(chat_input)
                             .hint_text("Message…")
-                            .desired_width(180.0),
+                            .desired_width(180.0)
+                            .char_limit(crate::net::firebase::MAX_CHAT_LEN),
                     );
                     let can_send = has_firebase_account
                         && !chat_input.trim().is_empty()

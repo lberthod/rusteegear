@@ -568,6 +568,9 @@ impl ApplicationHandler for App {
                         KeyCode::Digit1 if !cmd => self.state.select_weapon(0),
                         KeyCode::Digit2 if !cmd => self.state.select_weapon(1),
                         KeyCode::Digit3 if !cmd => self.state.select_weapon(2),
+                        // Menu pause (Phase J de `sprintreflecion.md`) : sans effet
+                        // hors Play (garde dans `toggle_pause`).
+                        KeyCode::Escape => self.state.toggle_pause(),
                         _ => {}
                     }
                 }
