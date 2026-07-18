@@ -32,17 +32,36 @@ différents (asset de jeu skinné et budgeté vs. rendu vitrine).
 
 ## Option B — Vrai mesh organique sculpté/subdivisé, intégré au jeu
 
-- Remplacer l'assemblage de primitives par un mesh unique sculpté ou subdivisé en dur, avec
-  plus de vertices, une topologie continue tête/corps/pattes.
-- **Coût** : plusieurs heures par créature (modélisation), plus une refonte du skinning (le
-  moteur n'accepte aujourd'hui qu'un poids 1.0 par os/pièce — un mesh continu demanderait un
-  vrai skinning multi-os avec poids dégradés, absent du moteur actuel d'après la mémoire du
-  pipeline squelette).
-- **Risque** : casse la convention "1 os = 1 pièce, poids 1.0" documentée dans
-  [creature_kit.py](scripts/blender/creature_kit.py) et le budget de vertices pensé pour le
-  coût GPU du skinning + les sondes physiques (TriMesh) des créatures en jeu.
-- **Verdict** : pas recommandé sans discussion préalable sur le moteur — gros chantier, pas
-  un simple réglage de script.
+**Correction après vérification du moteur** : contrairement à ce qu'affirmait la première
+version de ce rapport, le moteur supporte déjà le skinning glTF standard à **4 os/poids par
+vertex avec vrai blending** (`Vertex::joints`/`weights` dans
+[mesh.rs:52-69](src/gfx/mesh.rs), `compute_joint_matrices_blended_into` dans
+[import.rs:735](src/scene/import.rs)). La règle "1 os/pièce, poids 1.0" n'est **pas** une
+limite du moteur : c'est juste un choix d'écriture de `creature_kit.py`, plus simple à coder
+à la main pour des primitives rigides. Le moteur, l'export glTF (`export_skins=True`) et le
+chemin de rendu géreraient déjà un dégradé de poids aux articulations sans aucun changement
+technique.
+
+Ça rend Option B réaliste comme vraie pipeline reproductible, pas un one-shot :
+
+1. **Modélisation** : mesh continu par créature — corps/tête/pattes fusionnés via modificateur
+   `Subdivision Surface`, ou un `Skin Modifier` le long de courbes/os, au lieu d'assembler des
+   primitives séparées et de les `join()` en un mesh à coutures dures.
+2. **Poids** : remplacer `vertex_groups.new(...).add(range(...), 1.0, "REPLACE")` par
+   `bpy.ops.object.parent_set(type='ARMATURE_AUTO')` (Automatic Weights de Blender) — calcule
+   un vrai dégradé de poids aux articulations au lieu d'un poids rigide par pièce.
+3. **Export** : `build_creature()` exporte déjà avec `export_skins=True` — aucun changement
+   nécessaire, le format transporte nativement les 4 influences par vertex.
+4. **Coût réel** : uniquement la modélisation/rigging par créature (quelques heures si sculpté
+   à la main), pas de refonte moteur. Alternative scriptable en masse : garder une génération
+   procédurale mais organique (metaballs fusionnées + retopo automatique, ou mesh loft le long
+   de courbes) pour rester dans l'esprit "un script = un pack de créatures".
+5. **Vigilance** : le budget de vertices existe pour une vraie raison (coût GPU du skinning +
+   sondes physiques TriMesh des créatures, cf. `_lod()` dans creature_kit.py) — un mesh
+   organique doit rester raisonnable en densité, pas juste viser le photoréalisme.
+- **Verdict** : faisable en pipeline propre, mais plus lourd à écrire/maintenir qu'un script de
+  primitives ; à réserver aux créatures où la silhouette lisse compte vraiment (héros, boss),
+  pas nécessairement à tout le bestiaire.
 
 ## Option C — Activer Hyper3D Rodin (le vrai chemin du diablotin)
 
@@ -60,6 +79,9 @@ différents (asset de jeu skinné et budgeté vs. rendu vitrine).
 
 ## Recommandation
 
-Pour une créature **jouable** : rester sur le pipeline procédural (Option A pour améliorer le
-rendu vitrine sans rien casser). Pour une **mascotte ou un visuel de présentation** hors
-gameplay : Option C (Hyper3D) une fois la clé API en place.
+- Retouche rapide et sans risque : Option A.
+- Investissement ciblé sur quelques créatures clés (héros, boss, mascotte jouable) : Option B —
+  c'est la seule option qui donne un vrai mesh organique **et** reste intégrable au jeu tel
+  quel, le moteur étant déjà prêt.
+- Concept art / mascotte hors gameplay uniquement : Option C (Hyper3D), une fois la clé API en
+  place.

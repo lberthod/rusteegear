@@ -59,6 +59,52 @@ fn load_thumbnail(model_path: &std::path::Path) -> Option<egui::ColorImage> {
     ))
 }
 
+/// Repli pour les modèles sans `_preview.png` (~45 % du catalogue) : on a
+/// déjà tout ce qu'il faut sous la main pour en rendre une nous-mêmes — un
+/// `Renderer` headless et le même chargeur glTF que la scène principale.
+/// Réutilise `thumb_state` (au lieu de reconstruire un `AppState` à chaque
+/// appel) : `AppState::new()` recharge les réglages depuis le disque et
+/// initialise une VM Lua, bien trop coûteux pour en refaire un par vignette.
+fn render_fallback_thumbnail(
+    renderer: &mut Renderer,
+    thumb_state: &mut Option<AppState>,
+    model_path: &std::path::Path,
+) -> Option<egui::ColorImage> {
+    let (data, aabb_min, aabb_max) =
+        motor3derust::scene::import::load_gltf(&model_path.to_string_lossy()).ok()?;
+    let imported = ImportedMesh {
+        data,
+        aabb_min,
+        aabb_max,
+        ..Default::default()
+    };
+    let center = (aabb_min + aabb_max) * 0.5;
+    let radius = (aabb_max - aabb_min).max(Vec3::splat(0.01)).length() * 0.5;
+
+    let state = thumb_state.get_or_insert_with(AppState::new);
+    // Ajoute plutôt que remplace `scene.imported` (même piège que
+    // `Viewer::load_model`, cf. sa doc) : `Renderer::sync_imported` n'uploade
+    // que ce qui dépasse son cache GPU déjà construit — repartir d'un vecteur
+    // à un élément à chaque appel ne redéclencherait jamais l'upload au-delà
+    // du tout premier, et chaque vignette suivante afficherait la précédente.
+    let mesh_index = state.scene.imported.len() as u32;
+    state.scene.imported.push(imported);
+    state.scene.objects = vec![SceneObject {
+        mesh: MeshKind::Imported(mesh_index),
+        ..Default::default()
+    }];
+    state.camera.target = center;
+    state.camera.yaw = 0.7;
+    state.camera.pitch = 0.45;
+    state.camera.distance = (radius * 2.4).clamp(1.5, 50.0);
+
+    let pixels = renderer.render_scene_headless(state, THUMB_SIZE, THUMB_SIZE);
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [THUMB_SIZE as usize, THUMB_SIZE as usize],
+        &pixels,
+    ))
+}
+
 /// Catégorie déduite du préfixe de nom de fichier (convention déjà en place
 /// dans `assets/models/`, cf. `nature_*`/`monster_*`/`fauna_*`/`hamlet_*`/
 /// `item_*`/`creature*`) — pas de métadonnées séparées à maintenir.
@@ -92,21 +138,91 @@ const CATEGORY_ORDER: [&str; 7] = [
     "📦 Autres",
 ];
 
-/// Regroupe les indices de `models` par catégorie, dans l'ordre de
-/// `CATEGORY_ORDER` — calculé une fois au démarrage (la liste de fichiers ne
-/// change pas en cours de session).
-fn group_by_category(models: &[PathBuf]) -> Vec<(&'static str, Vec<usize>)> {
-    let mut groups: Vec<(&'static str, Vec<usize>)> =
+/// Filtre de recherche partagé par la liste principale et les sous-groupes —
+/// vide = tout passe.
+fn matches_filter(models: &[PathBuf], needle: &str, i: usize) -> bool {
+    needle.is_empty() || {
+        let name = models[i].file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        name.to_lowercase().contains(needle)
+    }
+}
+
+/// Préfixe de fichier associé à `category_of`, à retirer avant de chercher un
+/// sous-groupe (cf. `group_by_category`) — `""` pour « Autres », qui n'a pas de
+/// préfixe fixe (fourre-tout de tout ce que `category_of` ne reconnaît pas).
+fn category_prefix(stem: &str) -> &'static str {
+    const PREFIXES: [&str; 5] = ["monster_", "fauna_", "nature_", "hamlet_", "item_"];
+    if stem.starts_with("creature") {
+        return "creature";
+    }
+    PREFIXES
+        .into_iter()
+        .find(|p| stem.starts_with(p))
+        .unwrap_or("")
+}
+
+/// Une catégorie de la liste, avec ses sous-catégories générées
+/// automatiquement (cf. `group_by_category`).
+struct Category {
+    label: &'static str,
+    /// Sous-groupes détectés automatiquement : au moins 6 fichiers de cette
+    /// catégorie partagent le même premier mot après le préfixe (ex. les 40
+    /// `siege_*` dans « Autres », ajoutés après coup et ne correspondant à
+    /// aucun préfixe connu de `category_of`) — évite de maintenir `category_of`
+    /// à la main à chaque nouveau pack d'assets. En dessous de ce seuil, un mot
+    /// partagé par 2-3 fichiers (ex. `nature_willow`/`nature_willow_sway`) ne
+    /// vaut pas un niveau de repli supplémentaire, cf. `flat`.
+    subgroups: Vec<(String, Vec<usize>)>,
+    /// Reste de la catégorie, sans sous-groupe assez grand pour se distinguer.
+    flat: Vec<usize>,
+}
+
+/// Regroupe les indices de `models` par catégorie puis sous-catégorie,
+/// calculé une fois au démarrage (la liste de fichiers ne change pas en cours
+/// de session).
+fn group_by_category(models: &[PathBuf]) -> Vec<Category> {
+    let mut buckets: Vec<(&'static str, Vec<usize>)> =
         CATEGORY_ORDER.iter().map(|&c| (c, Vec::new())).collect();
     for (i, path) in models.iter().enumerate() {
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let category = category_of(stem);
-        if let Some((_, indices)) = groups.iter_mut().find(|(c, _)| *c == category) {
+        if let Some((_, indices)) = buckets.iter_mut().find(|(c, _)| *c == category) {
             indices.push(i);
         }
     }
-    groups.retain(|(_, indices)| !indices.is_empty());
-    groups
+    buckets.retain(|(_, indices)| !indices.is_empty());
+
+    buckets
+        .into_iter()
+        .map(|(label, indices)| {
+            let mut by_word: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
+            for &i in &indices {
+                let stem = models[i].file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let rest = stem
+                    .strip_prefix(category_prefix(stem))
+                    .unwrap_or(stem)
+                    .trim_start_matches('_');
+                if let Some(word) = rest.split('_').next().filter(|w| !w.is_empty()) {
+                    by_word.entry(word.to_string()).or_default().push(i);
+                }
+            }
+            let mut subgroups = Vec::new();
+            let mut flat = Vec::new();
+            for (word, group) in by_word {
+                if group.len() > 5 {
+                    subgroups.push((word, group));
+                } else {
+                    flat.extend(group);
+                }
+            }
+            flat.sort();
+            Category {
+                label,
+                subgroups,
+                flat,
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -257,11 +373,18 @@ struct Viewer {
     /// dans une texture RGBA8 lue par egui, jamais à peindre directement sur
     /// notre fenêtre (deux contextes wgpu distincts).
     scene_renderer: Option<Renderer>,
+    /// Renderer headless séparé pour `render_fallback_thumbnail`. Ne PEUT PAS
+    /// partager `scene_renderer` : `Renderer::sync_imported` (src/gfx/renderer.rs)
+    /// n'ajoute jamais qu'à la fin de son cache GPU, indexé globalement au
+    /// `Renderer` — deux scènes indépendantes qui grandissent chacune de leur
+    /// côté sur le même `Renderer` verraient leurs indices se marcher dessus
+    /// (une vignette afficherait le mesh d'un tout autre modèle).
+    thumb_renderer: Option<Renderer>,
     state: AppState,
     models: Vec<PathBuf>,
-    /// Indices de `models` groupés par catégorie (cf. `group_by_category`),
-    /// calculé une fois au démarrage.
-    categories: Vec<(&'static str, Vec<usize>)>,
+    /// Indices de `models` groupés par catégorie/sous-catégorie (cf.
+    /// `group_by_category`), calculé une fois au démarrage.
+    categories: Vec<Category>,
     filter: String,
     current: Option<usize>,
     stats: Option<ModelStats>,
@@ -292,10 +415,14 @@ struct Viewer {
     /// liste, taper une recherche) devenait perceptiblement saccadé.
     dirty: bool,
     /// Vignettes de liste, chargées à la demande au premier affichage de
-    /// chaque entrée (indexées comme `models`) — `None` = pas d'aperçu
-    /// disponible ou décodage échoué, mémorisé pour ne pas retenter à
-    /// chaque frame.
+    /// chaque entrée (indexées comme `models`) — absent = pas encore tenté ou
+    /// en attente de budget (cf. `render_frame`), `None` = tenté et
+    /// définitivement sans aperçu possible (glTF illisible).
     thumbnails: std::collections::HashMap<usize, Option<egui::TextureHandle>>,
+    /// `AppState` dédié à `render_fallback_thumbnail`, réutilisé d'un appel à
+    /// l'autre — jamais celui de la vue principale (`state`), qu'on ne veut
+    /// pas déranger juste pour générer une vignette.
+    thumb_state: Option<AppState>,
 }
 
 impl Viewer {
@@ -456,7 +583,11 @@ impl Viewer {
         let Some(window) = self.window.clone() else {
             return;
         };
-        if self.gpu.is_none() || self.egui.is_none() || self.scene_renderer.is_none() {
+        if self.gpu.is_none()
+            || self.egui.is_none()
+            || self.scene_renderer.is_none()
+            || self.thumb_renderer.is_none()
+        {
             return;
         }
 
@@ -522,6 +653,7 @@ impl Viewer {
         // valeurs possédées, indépendantes de cet emprunt.
         let egui = self.egui.as_mut().unwrap();
         let scene_renderer = self.scene_renderer.as_mut().unwrap();
+        let thumb_renderer = self.thumb_renderer.as_mut().unwrap();
 
         let (vw, vh) = self.viewport_size;
         let pixels =
@@ -579,6 +711,13 @@ impl Viewer {
         // inexistant à ce stade (« Missing texture » à chaque frame sinon).
         let mut scene_tex = self.scene_tex.take();
         let mut thumbnails = std::mem::take(&mut self.thumbnails);
+        let mut thumb_state = self.thumb_state.take();
+        // Au plus N rendus 3D de repli par frame (cf. `render_fallback_thumbnail`) :
+        // dérouler toute une catégorie sans aperçu (ex. « Faune ») générerait sinon
+        // des dizaines de rendus GPU synchrones d'un coup, perceptibles comme un
+        // à-coup. Au-delà du budget, l'entrée reste simplement absente du cache
+        // cette frame — retentée (et donc affichée) une frame plus tard.
+        let mut thumb_render_budget = 2;
 
         let full_output = egui.ctx.clone().run_ui(raw_input, |root_ui| {
             let ctx = root_ui.ctx().clone();
@@ -602,81 +741,17 @@ impl Viewer {
                             .hint_text("Rechercher…")
                             .desired_width(f32::INFINITY),
                     );
-                    ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let needle = filter.to_lowercase();
-                        for (category, indices) in categories {
-                            let matching: Vec<usize> = indices
-                                .iter()
-                                .copied()
-                                .filter(|&i| {
-                                    needle.is_empty() || {
-                                        let name = models[i]
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("");
-                                        name.to_lowercase().contains(&needle)
-                                    }
-                                })
-                                .collect();
-                            if matching.is_empty() {
-                                continue;
-                            }
-                            egui::CollapsingHeader::new(format!("{category} ({})", matching.len()))
-                                .default_open(!needle.is_empty() || categories.len() == 1)
-                                .show(ui, |ui| {
-                                    for i in matching {
-                                        let name = models[i]
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("?");
-                                        // Chargée à la demande, une seule fois par
-                                        // entrée (cf. la doc de `thumbnails`) : le
-                                        // premier affichage d'une catégorie décode
-                                        // ses aperçus, les suivants réutilisent le
-                                        // handle en cache.
-                                        let thumb = thumbnails
-                                            .entry(i)
-                                            .or_insert_with(|| {
-                                                load_thumbnail(&models[i]).map(|img| {
-                                                    ctx.load_texture(
-                                                        format!("thumb{i}"),
-                                                        img,
-                                                        egui::TextureOptions::LINEAR,
-                                                    )
-                                                })
-                                            })
-                                            .as_ref()
-                                            .map(egui::TextureHandle::id);
-                                        ui.horizontal(|ui| {
-                                            ui.set_min_height(THUMB_SIZE as f32);
-                                            match thumb {
-                                                Some(id) => {
-                                                    ui.add(egui::Image::new((
-                                                        id,
-                                                        egui::vec2(
-                                                            THUMB_SIZE as f32,
-                                                            THUMB_SIZE as f32,
-                                                        ),
-                                                    )));
-                                                }
-                                                None => {
-                                                    ui.add_space(THUMB_SIZE as f32);
-                                                }
-                                            }
-                                            if ui
-                                                .selectable_label(current == Some(i), name)
-                                                .clicked()
-                                            {
-                                                model_to_load = Some(i);
-                                            }
-                                        });
-                                    }
-                                });
-                        }
-                    });
-                    ui.separator();
+                    // Infos/contrôles du modèle courant AVANT la liste (pas
+                    // après) : la liste peut compter des dizaines d'entrées
+                    // une fois une catégorie dépliée et grandit avec elle —
+                    // placés après, sommets/triangles/Recentrer/Lecture
+                    // finissaient poussés hors de la zone visible du panneau,
+                    // inaccessibles sans réduire la liste. Épinglés ici, ils
+                    // restent toujours visibles quelle que soit la longueur
+                    // de la liste, qui prend le reste de la hauteur et défile
+                    // elle-même.
                     if let Some(s) = stats {
+                        ui.separator();
                         ui.label(format!("Sommets : {}", s.vertices));
                         ui.label(format!("Triangles : {}", s.triangles));
                         ui.label(format!(
@@ -733,6 +808,128 @@ impl Viewer {
                         ui.separator();
                         ui.colored_label(egui::Color32::LIGHT_RED, err);
                     }
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let needle = filter.to_lowercase();
+                        // Capturé une fois, réutilisé pour une ligne de la
+                        // liste comme pour une ligne de sous-catégorie — même
+                        // rendu (vignette + libellé cliquable) aux deux niveaux
+                        // d'imbrication.
+                        let mut draw_item = |ui: &mut egui::Ui, i: usize| {
+                            let name = models[i]
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("?");
+                            // Chargée à la demande, une seule fois par entrée
+                            // (cf. la doc de `thumbnails`) : le premier
+                            // affichage d'une catégorie décode ses aperçus, les
+                            // suivants réutilisent le handle en cache. Repli sur
+                            // un rendu 3D (cf. `render_fallback_thumbnail`) pour
+                            // les ~45 % de modèles sans `_preview.png`, limité
+                            // par `thumb_render_budget` — au-delà, l'entrée
+                            // reste absente du cache et sera retentée plus tard,
+                            // pas de placeholder figé en cache.
+                            let thumb = match thumbnails.get(&i) {
+                                Some(cached) => cached.as_ref().map(egui::TextureHandle::id),
+                                None => {
+                                    // `Some(_)` = tenté cette frame (à mettre en
+                                    // cache, y compris un échec définitif) ;
+                                    // `None` = pas de budget, on retente plus
+                                    // tard sans rien mettre en cache.
+                                    let attempted = match load_thumbnail(&models[i]) {
+                                        Some(img) => Some(Some(img)),
+                                        None if thumb_render_budget > 0 => {
+                                            thumb_render_budget -= 1;
+                                            Some(render_fallback_thumbnail(
+                                                thumb_renderer,
+                                                &mut thumb_state,
+                                                &models[i],
+                                            ))
+                                        }
+                                        None => None,
+                                    };
+                                    attempted.and_then(|img| {
+                                        let tex = img.map(|img| {
+                                            ctx.load_texture(
+                                                format!("thumb{i}"),
+                                                img,
+                                                egui::TextureOptions::LINEAR,
+                                            )
+                                        });
+                                        let id = tex.as_ref().map(egui::TextureHandle::id);
+                                        thumbnails.insert(i, tex);
+                                        id
+                                    })
+                                }
+                            };
+                            ui.horizontal(|ui| {
+                                ui.set_min_height(THUMB_SIZE as f32);
+                                match thumb {
+                                    Some(id) => {
+                                        ui.add(egui::Image::new((
+                                            id,
+                                            egui::vec2(THUMB_SIZE as f32, THUMB_SIZE as f32),
+                                        )));
+                                    }
+                                    None => {
+                                        ui.add_space(THUMB_SIZE as f32);
+                                    }
+                                }
+                                if ui.selectable_label(current == Some(i), name).clicked() {
+                                    model_to_load = Some(i);
+                                }
+                            });
+                        };
+
+                        for category in categories {
+                            let matching_subgroups: Vec<(&String, Vec<usize>)> = category
+                                .subgroups
+                                .iter()
+                                .map(|(name, idxs)| {
+                                    let filtered: Vec<usize> = idxs
+                                        .iter()
+                                        .copied()
+                                        .filter(|&i| matches_filter(models, &needle, i))
+                                        .collect();
+                                    (name, filtered)
+                                })
+                                .filter(|(_, v)| !v.is_empty())
+                                .collect();
+                            let matching_flat: Vec<usize> = category
+                                .flat
+                                .iter()
+                                .copied()
+                                .filter(|&i| matches_filter(models, &needle, i))
+                                .collect();
+                            let total: usize = matching_subgroups
+                                .iter()
+                                .map(|(_, v)| v.len())
+                                .sum::<usize>()
+                                + matching_flat.len();
+                            if total == 0 {
+                                continue;
+                            }
+                            egui::CollapsingHeader::new(format!("{} ({total})", category.label))
+                                .default_open(!needle.is_empty() || categories.len() == 1)
+                                .show(ui, |ui| {
+                                    for (sub_name, idxs) in &matching_subgroups {
+                                        egui::CollapsingHeader::new(format!(
+                                            "{sub_name} ({})",
+                                            idxs.len()
+                                        ))
+                                        .default_open(!needle.is_empty())
+                                        .show(ui, |ui| {
+                                            for &i in idxs {
+                                                draw_item(ui, i);
+                                            }
+                                        });
+                                    }
+                                    for &i in &matching_flat {
+                                        draw_item(ui, i);
+                                    }
+                                });
+                        }
+                    });
                 });
 
             egui::CentralPanel::default().show_inside(root_ui, |ui| {
@@ -783,12 +980,24 @@ impl Viewer {
         self.filter = filter;
         self.scene_tex = scene_tex;
         self.thumbnails = thumbnails;
+        self.thumb_state = thumb_state;
         self.playing = playing;
         if let Some(clip) = clip_to_set {
             if let Some(obj) = self.state.scene.objects.first_mut() {
-                obj.animation
-                    .get_or_insert_with(AnimationState::default)
-                    .set_clip(clip);
+                // Coupe franche plutôt que `AnimationState::set_clip` : celle-ci
+                // démarre un fondu enchaîné (`blend` part à 0.0, `prev_time` figé)
+                // que seule la boucle de jeu complète (`AppState::sim_step`/
+                // `advance_play`, jamais appelée ici — ce viewer n'avance que
+                // `anim.time` à la main) fait progresser jusqu'à 1.0. Sans ça,
+                // `blend` restait bloqué à 0 pour de bon : le rendu n'affichait
+                // plus que l'ancien clip, figé sur la pose qu'il avait pile au
+                // moment du changement — d'où l'impression de plantage/gel au
+                // lieu d'un vrai changement d'animation.
+                let anim = obj.animation.get_or_insert_with(AnimationState::default);
+                anim.clip = clip;
+                anim.time = 0.0;
+                anim.prev_clip.clear();
+                anim.blend = 1.0;
             }
             self.playing = true;
         }
@@ -906,6 +1115,11 @@ impl ApplicationHandler for Viewer {
         let egui = Egui::new(&gpu.device, gpu.config.format, &window);
         let scene_renderer = pollster::block_on(Renderer::new_headless(1280, 800))
             .expect("initialisation du renderer headless impossible");
+        // Renderer distinct pour les vignettes de repli (cf. sa doc sur le
+        // champ `thumb_renderer`) — taille fixe, pas besoin de suivre le
+        // redimensionnement de la fenêtre comme `scene_renderer`.
+        let thumb_renderer = pollster::block_on(Renderer::new_headless(THUMB_SIZE, THUMB_SIZE))
+            .expect("initialisation du renderer de vignettes impossible");
 
         self.viewport_size = (1024, 720);
         self.models = discover_models();
@@ -915,6 +1129,7 @@ impl ApplicationHandler for Viewer {
         self.gpu = Some(gpu);
         self.egui = Some(egui);
         self.scene_renderer = Some(scene_renderer);
+        self.thumb_renderer = Some(thumb_renderer);
         self.window = Some(window);
         self.dirty = true;
 

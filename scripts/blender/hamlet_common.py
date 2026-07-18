@@ -149,8 +149,15 @@ def render_preview(obj, filename):
     dims = obj.dimensions
     span = max(dims.x, dims.y, dims.z, 0.3)
     cam_dist = span * 1.5 + 0.5
-    center = mathutils.Vector((0, 0, dims.z * 0.5))
-    cam_loc = mathutils.Vector((cam_dist, cam_dist * 1.15, cam_dist * 0.85 + dims.z * 0.3))
+    # Centre = milieu RÉEL de la bounding box en Z, pas `dims.z * 0.5` (qui
+    # suppose l'objet posé au sol, base à z=0) : un objet suspendu (stalactite,
+    # racine pendante...) a sa géométrie entièrement au-dessus de 0, et ce
+    # calcul cadrait alors sur du vide sous la pièce (piège rencontré sur
+    # grotto_stalactite_large, cadrage coupant la moitié haute de l'image).
+    corners = [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box]
+    z_mid = (min(c.z for c in corners) + max(c.z for c in corners)) / 2
+    center = mathutils.Vector((0, 0, z_mid))
+    cam_loc = mathutils.Vector((cam_dist, cam_dist * 1.15, cam_dist * 0.85 + z_mid))
     bpy.ops.object.camera_add(location=cam_loc)
     cam = bpy.context.active_object
     scene.camera = cam
