@@ -1363,14 +1363,8 @@ mod tests {
     use super::multiplayer::PlayerClass;
     use super::scripting::run_script;
 
-    /// Nom de prefab unique par appel (horloge + pid) : contrairement aux tests de
-    /// `scene::tests` (convertis en dossier temporaire via `Scene::save_prefab_at`),
-    /// celui-ci exerce `spawn()` côté Lua (`scripting.rs`), qui appelle la variante
-    /// **globale** `Scene::instantiate_prefab` (pas de point d'injection de
-    /// répertoire dans le binding Lua, et il ne devrait pas y en avoir un rien que
-    /// pour les tests) — écrit donc réellement dans `~/.motor3derust/assets/prefabs/`,
-    /// comme le ferait l'éditeur. Nom unique pour ne pas collisionner avec un vrai
-    /// prefab de l'utilisateur.
+    /// Nom de prefab unique par appel (horloge + pid) — surtout utile quand plusieurs
+    /// runs se partagent le même dossier temporaire d'assets.
     fn unique_test_prefab_name(tag: &str) -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
@@ -1378,6 +1372,27 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         format!("test_{tag}_{}_{}", std::process::id(), nanos)
+    }
+
+    /// Dossier temporaire unique par test, à passer à
+    /// `assets::override_assets_dir_for_test` — même patron que
+    /// `scene::tests::temp_assets_dir` : ce test exerce `spawn()` côté Lua
+    /// (`scripting.rs`), qui appelle la variante **globale**
+    /// `Scene::instantiate_prefab` (pas de point d'injection de répertoire dans le
+    /// binding Lua), d'où le besoin d'une redirection de `assets_dir()` plutôt que
+    /// d'une variante `_at`.
+    fn temp_assets_dir_for_test(tag: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rusteegear_app_assets_test_{tag}_{}_{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -1514,12 +1529,11 @@ mod tests {
         // Un script peut faire apparaître un ennemi depuis un
         // prefab (`spawn`), et cet ennemi devient trouvable par `find_tag` (au tick
         // suivant : `find_tag` lit un instantané pris avant la boucle des scripts).
-        // Verrou : ce test écrit dans le vrai `assets_dir()` (cf.
-        // `REAL_ASSETS_DIR_TEST_LOCK`), à sérialiser avec les autres tests dans le
-        // même cas (ex. `demos::tests::mmorpg_demo_landmarks_are_prefab_instances...`).
-        let _guard = crate::assets::REAL_ASSETS_DIR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // `spawn()` passe par la variante globale `Scene::instantiate_prefab`, donc
+        // `assets_dir()` est redirigé vers un dossier temporaire pour ce thread
+        // plutôt que d'écrire dans le vrai `~/.motor3derust/assets/`.
+        let _dir_guard =
+            crate::assets::override_assets_dir_for_test(temp_assets_dir_for_test("spawn_lua"));
         let name = unique_test_prefab_name("ennemi97");
         let template = crate::scene::SceneObject {
             name: "Ennemi".into(),

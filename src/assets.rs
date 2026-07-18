@@ -188,19 +188,50 @@ fn decompress(compressed: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Verrou partagé entre modules de test pour les rares tests qui doivent
-/// nécessairement exercer le vrai `assets_dir()` (pas de variante `_at`
-/// atteignable à leur point d'entrée — ex. `spawn()` Lua, démo MMORPG) : leur
-/// écriture dans `manifest.json` n'est pas atomique (lecture-modification-écriture,
-/// cf. `register_asset_at`), donc deux de ces tests exécutés en parallèle peuvent se
-/// perdre l'un l'autre une entrée. Ce verrou sérialise seulement *ces* tests entre
-/// eux ; les autres, isolés via `_at(dir)` avec un dossier temporaire, n'en ont pas
-/// besoin.
+// Redirection de `assets_dir()` pour les tests qui n'ont aucune variante `_at`
+// atteignable à leur point d'entrée (ex. `spawn()` Lua, démo MMORPG) : sans ceci,
+// ces tests écriraient réellement dans `~/.motor3derust/assets/`, ce qui échoue sur
+// une machine où `$HOME` n'est pas accessible en écriture (CI, conteneur) et pollue
+// le vrai dossier utilisateur ailleurs. `thread_local`, jamais `std::env::set_var`
+// (mutation de process global, non sûre entre threads de test parallèles) : chaque
+// test tourne sur son propre thread sous le harnais standard, donc positionner
+// l'override juste pour ce thread suffit et n'affecte aucun autre test en cours.
 #[cfg(test)]
-pub(crate) static REAL_ASSETS_DIR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+thread_local! {
+    static ASSETS_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
 
-/// Dossier des assets de projet (`~/.motor3derust/assets/`).
+/// Retire l'override d'`assets_dir()` du thread courant à la destruction — pour
+/// qu'un panic en cours de test ne laisse pas le thread (réutilisé par le pool du
+/// harnais) redirigé indéfiniment.
+#[cfg(test)]
+pub(crate) struct AssetsDirOverrideGuard;
+
+#[cfg(test)]
+impl Drop for AssetsDirOverrideGuard {
+    fn drop(&mut self) {
+        ASSETS_DIR_OVERRIDE.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+/// Redirige `assets_dir()` vers `dir` sur le thread courant, le temps de vie du
+/// guard retourné — cf. `ASSETS_DIR_OVERRIDE`.
+#[cfg(test)]
+pub(crate) fn override_assets_dir_for_test(dir: PathBuf) -> AssetsDirOverrideGuard {
+    ASSETS_DIR_OVERRIDE.with(|cell| *cell.borrow_mut() = Some(dir));
+    AssetsDirOverrideGuard
+}
+
+/// Dossier des assets de projet (`~/.motor3derust/assets/`) — ou l'override du
+/// thread courant si un test en a posé un (cf. `override_assets_dir_for_test`).
 pub fn assets_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(dir) = ASSETS_DIR_OVERRIDE.with(|cell| cell.borrow().clone()) {
+            return Some(dir);
+        }
+    }
     let home = std::env::var("HOME").ok()?;
     Some(PathBuf::from(home).join(".motor3derust").join("assets"))
 }

@@ -570,17 +570,22 @@ mod tests {
     fn mmorpg_demo_landmarks_are_prefab_instances_sharing_one_template() {
         // Sprint 96, preuve d'implémentation : les 4 repères ne sont plus 4 objets
         // indépendants mais 4 instances du même prefab (cf. `seed_mmorpg_repere_
-        // prefab_instances`) — sauf si `assets_dir()` est indisponible (pas de $HOME),
-        // auquel cas ce test n'a rien à vérifier.
-        if crate::assets::assets_dir().is_none() {
-            return;
-        }
-        // Verrou : ce test écrit dans le vrai `assets_dir()` (nom de prefab fixe,
-        // `MmorpgRepere`), à sérialiser avec les autres tests dans le même cas (cf.
-        // `REAL_ASSETS_DIR_TEST_LOCK` et `app::tests::a_spawned_enemy_via_lua_...`).
-        let _guard = crate::assets::REAL_ASSETS_DIR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // prefab_instances`).
+        // `seed_mmorpg_repere_prefab_instances` passe par la variante globale
+        // `Scene::save_prefab`/`instantiate_prefab` (nom de prefab fixe,
+        // `MmorpgRepere`), donc `assets_dir()` est redirigé vers un dossier
+        // temporaire pour ce thread plutôt que d'écrire dans le vrai
+        // `~/.motor3derust/assets/`.
+        let dir = std::env::temp_dir().join(format!(
+            "rusteegear_demos_assets_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _dir_guard = crate::assets::override_assets_dir_for_test(dir);
         let mut app = AppState::new();
         app.load_mmorpg_demo();
         let asset_ids: Vec<String> = (1..=4)
