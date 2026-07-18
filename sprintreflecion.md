@@ -535,53 +535,69 @@ minuteur de 180 s, `AppState::update_survie`).
 > décor (herbe/fougères/rochers) posé dessus, pas un heightmap couvrant toute la carte. Aucune
 > primitive de tunnel/grotte/creux n'existe dans `MeshKind`.
 
-### Sprint 24 — Heightmap paramétrable et couverture d'herbe continue
+### Sprint 24 — Heightmap paramétrable et couverture d'herbe continue — ✅ terminé (18 juillet 2026, portée réduite)
 **Objectif** : remplacer la grille fixe par un terrain configurable, sans trou de sol visible.
-- [ ] Étendre `mesh::terrain()` (ou nouveau générateur dédié) : taille de grille paramétrable,
-  fonction de hauteur par bruit procédural (ou heightmap chargée), au lieu de l'amplitude/fréquence
-  fixes actuelles.
-- [ ] Couverture d'herbe continue sur tout le maillage — texture/couleur de sol ou scatter densifié
-  (arbitrage perf à faire avec `optimisation3D.Analys.md` §3, déjà vigilant sur le fill-rate du
-  feuillage).
-- **Fichiers** : `src/gfx/mesh.rs`, `src/scene/mod.rs` (si nouveau `MeshKind`).
-- **Livrable** : `mmorpg_demo` n'a plus de zone de sol nue visible en vue large.
-- **Risques** : un terrain plus gros/plus dense augmente le nombre d'instances de décor — revalider
-  avec la Phase G (capacité skinnée) et le culling par distance déjà en place si le scatter est
-  densifié.
+- [x] `MeshKind::Terrain` remplace le sol plat (`Plane`) — générateur `heightgrid_mesh` générique
+  (résolution 96) + `mmorpg_terrain_local_height` partagée entre maillage visuel et collider
+  heightfield physique dédié (`src/gfx/mesh.rs`, `src/runtime/physics.rs`).
+- [ ] **Couverture d'herbe continue sur tout le maillage : non fait tel quel.** Le relief réel est
+  **restreint à une bande étroite le long du mur ouest** (seul endroit vérifié libre de tout contenu
+  placé à la main) — le reste de la carte reste un cuboid plat inchangé. Un heightfield global
+  cassait la navigation IA (`mmorpg_creature_never_gets_stuck_walking_into_a_wall`), donc la portée
+  a été volontairement réduite plutôt que de risquer une régression sur toute la carte. Le sol nu
+  n'a donc pas disparu partout, seulement à l'ouest.
+- **Fichiers** : `src/gfx/mesh.rs`, `src/runtime/physics.rs`, `src/scene/demos.rs`.
+- **Livrable réel** : bande de collines réelle et solide à l'ouest ; pas de couverture herbe/relief
+  sur le reste de la carte (dette assumée, pas un oubli).
+- **Risques** : matérialisé et traité (navigation IA cassée par un heightfield global) — restriction
+  géographique comme parade, documentée dans le commit.
 
-### Sprint 25 — Pentes, collines par zone, et collision IA vérifiée
+### Sprint 25 — Pentes, collines par zone, et collision IA vérifiée — ✅ terminé (18 juillet 2026, portée réduite)
 **Objectif** : un relief qui varie par zone plutôt qu'un bruit uniforme, exploitable en gameplay.
-- [ ] Variation d'amplitude/fréquence du relief par zone (pas la même fonction partout) pour créer
-  des collines/pentes distinctes.
-- [ ] Vérifier que le nouveau relief reste un obstacle réel pour les sondes IA et les joueurs —
-  piège déjà documenté en mémoire projet : tout obstacle doit être visible au raycast à 0,6 m,
-  sinon patrouille figée. Un relief prononcé change la hauteur de sol sous créatures/joueurs, pas
-  seulement l'esthétique.
-- **Fichiers** : `src/gfx/mesh.rs`, `src/scene/demos.rs`, `src/app/simulation.rs` (sondes IA).
-- **Livrable** : au moins 2 zones visuellement distinctes (plate vs vallonnée) dans `mmorpg_demo`,
-  aucune créature figée par le nouveau relief.
-- **Risques** : le plus gros risque de cette phase — coordination avec `sprint10audit.md` Phase D
-  (archétypes de créatures) si le fichier `src/app/simulation.rs` y est encore actif.
+- [x] Variation réalisée **à l'intérieur de la même bande ouest** (colline douce au nord de la
+  route, relief plus accidenté au sud) plutôt qu'entre deux zones géographiques distinctes —
+  cartographie exhaustive des coordonnées placées à la main confirmant qu'aucune autre marge de la
+  carte n'a ≥3 m de dégagement pour une deuxième zone.
+- [x] Collision IA vérifiée par un nouveau test dédié (créature en patrouille, vrai script Lua de
+  production, à l'intérieur de la bande) : négocie la pente sans se figer, hauteur cohérente avec
+  `mmorpg_terrain_local_height`.
+- **Fichiers** : `src/gfx/mesh.rs`, `src/scene/demos.rs`, `src/app/simulation.rs`.
+- **Livrable réel** : 2 caractères de relief distincts (doux/accidenté) **dans la même bande**, pas
+  2 zones séparées « plate vs vallonnée » comme envisagé initialement — objectif de fond (relief
+  exploitable, IA non cassée) atteint, forme différente de la spec d'origine.
+- **Risques** : aucune coordination nécessaire avec les archétypes de créatures au final.
 
-### Sprint 26 — Creux/tunnels et lacs intégrés au relief
+### Sprint 26 — Creux/tunnels et lacs intégrés au relief — ✅ terminé (18 juillet 2026)
 **Objectif** : les éléments qu'un heightmap seul ne peut pas représenter.
-- [ ] Creux/fosses et tunnels : géométrie non-heightmap insérée aux endroits voulus (un heightmap
-  classique ne représente pas un surplomb) — traité comme une extension du terrain, pas une
-  réécriture du système de hauteur.
-- [ ] Lacs intégrés au relief : le niveau d'eau correspond à un creux réel du terrain (plutôt qu'un
-  plan d'eau posé sur un sol plat comme aujourd'hui) pour que la rive suive la pente naturellement.
-- **Fichiers** : `src/scene/demos.rs`, `src/gfx/mesh.rs`.
-- **Livrable** : au moins un tunnel/creux et un lac dont la rive suit visiblement une pente du
-  terrain, tests de collision/étanchéité de l'eau réutilisant le pattern déjà existant
-  (`mmorpg_water_is_sealed_all_the_way_around_including_next_to_bridges`).
-- **Risques** : le plus expérimental des trois sprints de cette phase — prévoir qu'il puisse être
-  repoussé sans bloquer Sprint 24/25, qui apportent déjà l'essentiel du gain visuel (herbe
-  continue + collines).
+- [x] Petit bassin intégré à un contrefort (rive nord suivant une pente réelle du relief,
+  `MMORPG_MOUND_X_LOCAL`/`MMORPG_MOUND_Z_LOCAL`), murs invisibles sur les 4 côtés (même principe
+  que les murs d'eau existants), poche libre trouvée à l'est de la bande de collines
+  (x∈[-34,-30], z∈[3.5,8.5]).
+- [x] Tunnel statique (piliers + toit, géométrie non-heightmap, sol resté plat) dans le couloir
+  libre voisin (x∈[-34.4,-30.8], z∈[-8.8,-2.8]).
+- **Fichiers** : `src/scene/demos.rs`, `src/gfx/mesh.rs`, `src/runtime/physics.rs`.
+- **Livrable** : test `mmorpg_se_bassin_is_sealed_all_the_way_around` (même pattern que
+  `mmorpg_water_is_sealed_all_the_way_around_including_next_to_bridges`), vert. Ne touche pas au
+  lac historique ni au décor existant.
+- **Risques** : aucun incident, le plus expérimental des trois sprints s'est avéré le plus propre.
+
+> **Bilan Phase K** : les 3 sprints sont livrés, tests verts (`cargo test --lib` : 570 passés),
+> mais la portée réelle de Sprint 24/25 est **plus restreinte que la Section 5 de `reflexion.md`
+> ne le décrivait** (« herbe/sol partout ») — le relief réel ne couvre qu'une bande étroite à
+> l'ouest de la carte, pas la carte entière. C'est un compromis assumé (navigation IA cassée par un
+> relief global), pas un oubli — à rouvrir dans un futur sprint si une couverture complète reste un
+> objectif produit.
 
 ---
 
 <a id="phase-l"></a>
-## PHASE L — Playtest réel (dépend de E + F + G + H, Sprint 14 dépend en plus de I)
+## PHASE L — Playtest réel (dépend de E + F + G + H, Sprint 14 dépend en plus de I) — 🟡 en cours
+
+> **Bilan intermédiaire (18 juillet 2026)** : Sprint 14 a une **vérification mécanique** faite (bots
+> réseau contre le vrai `bin/server.rs`), mais **pas le vrai playtest à 2+ joueurs humains** que le
+> sprint exige — la vérif mécanique a servi à trouver et corriger un vrai bug (Escorte cassé, cf.
+> ci-dessous) avant de faire perdre du temps à un humain dessus, pas à remplacer le playtest lui-même.
+> Sprint 13 n'a pas commencé (reste explicitement à un humain).
 
 ### Sprint 13 — Playtest d'équilibrage
 **Objectif** : juger ce que les tests unitaires ne peuvent pas juger (feedback de dégâts, seuils de
@@ -594,16 +610,32 @@ culling, transitions de LOD).
 - **Risques** : ne pas démarrer avant que E + F + G + H soient verts — un playtest sur un build
   instable, non sécurisé, ou sur une carte pas encore synchronisée produirait des faux signaux.
 
-### Sprint 14 — Session multijoueur sur les nouveaux modes de manche
+### Sprint 14 — Session multijoueur sur les nouveaux modes de manche — 🟡 vérif mécanique faite, vrai playtest humain restant
 **Objectif** : valider Survie/Escorte/Boss avec plusieurs clients réels, au-delà du script
 `examples/load_test_client.rs`.
-- [ ] Partie complète de chaque nouveau mode avec au moins 2 joueurs humains, via `cargo run --
-  --player` (ou build déployé) pointant sur la scène synchronisée.
-- **Fichiers** : aucun a priori.
-- **Livrable** : chaque mode se termine correctement (victoire/défaite) en conditions réelles.
-- **Risques** : dépend que les modes de manche soient effectivement livrés, jouables, **et
-  présents dans `player_scene.json`** (Phase H) **et sélectionnables en salon réseau** (Phase I —
-  sans elle, tout client réseau reste en Vagues quel que soit le contenu de `player_scene.json`).
+- [x] **Vérification mécanique** (`examples/phase_l_mode_check.rs`, bots contre le vrai
+  `bin/server.rs`) : Vagues/Boss/Survie se sélectionnent et tournent normalement. **Escorte était
+  cassé** — `mmorpg_demo` n'avait aucun objet `convoy` (seule `Scene::escorte_demo()`, solo, en
+  avait un), donc un salon réseau en Escorte ne se terminait jamais. **Corrigé** : convoi ajouté à
+  `mmorpg_demo`, outil de synchro dédié créé (`sync_embedded_scene_convoy_from_the_demo`), vérifié
+  en isolant la mécanique (`has_won()` déclenché à t=13s, comme attendu pour 16 m à 1,2 m/s).
+- [x] **Deuxième bug trouvé et corrigé en creusant** : `GameEvent::Win`/`GameEvent::Lose` n'étaient
+  **jamais diffusés aux clients** (`src/bin/server.rs`) — le serveur détectait bien `has_won()`/
+  `is_room_lost()` (log, attribution d'XP, redémarrage du salon) mais ne l'annonçait jamais sur le
+  fil. Corrigé : diffusion explicite juste avant `room.restart()`, uniquement sur `decided` (jamais
+  sur un simple `timed_out`). **Revérifié en conditions réseau réelles** : `phase_l_mode_check.rs`
+  sur Escorte reçoit désormais `GameEvent::Win reçu : true` (confirmé de bout en bout — convoi qui
+  arrive → `has_won()` → event diffusé → reçu par le client).
+- [ ] **Partie complète de chaque nouveau mode avec au moins 2 joueurs humains** — pas encore fait.
+  La vérif mécanique ne remplace pas ce point : elle a juste évité qu'un humain découvre ces deux
+  bugs en jouant (Escorte bloqué 20 minutes ; un Win/Lose jamais confirmé côté serveur).
+- **Fichiers** : `src/scene/demos.rs`, `src/scene/mod.rs`, `assets/player_scene.json`,
+  `assets/bundle/`, `src/bin/server.rs`, `examples/phase_l_mode_check.rs`.
+- **Livrable** : chaque mode se termine correctement (victoire/défaite) en conditions réelles —
+  **mécaniquement prouvé pour Escorte** (cycle complet observé), **plausible mais non chronométré**
+  pour Boss/Vagues (clear de vagues trop long pour la fenêtre de test d'un bot passif), **couvert
+  par un test unitaire dédié en temps simulé** pour Survie (chrono 180 s) — aucun n'est encore
+  confirmé par un vrai humain.
 
 ---
 

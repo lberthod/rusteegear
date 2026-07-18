@@ -737,6 +737,26 @@ fn main() {
                         "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
                     );
                 }
+                // Diffuse la fin de manche décidée (Phase L, `sprintreflecion.md` —
+                // trouvé en vérifiant mécaniquement le mode Escorte : jusqu'ici
+                // `GameEvent::Win`/`Lose` n'étaient jamais envoyés, seulement
+                // calculés localement par chaque client complet via sa propre copie
+                // d'`update_round`). Un bot minimal (sans cette simulation locale,
+                // ex. `examples/phase_l_mode_check.rs`) ne pouvait donc jamais
+                // observer de fin de manche par ce biais — corrigé pour que le
+                // serveur, autoritaire, confirme aussi l'issue. Uniquement sur
+                // `decided` (jamais sur un simple `timed_out` sans victoire/défaite
+                // réelle, cf. la définition de `decided` ci-dessus) ; avant
+                // `room.restart()` pour que l'événement parte encore vers les
+                // joueurs de la manche qui vient de se terminer, pas la suivante.
+                if decided && let Some(net) = &net {
+                    let event = if room.app.has_won() {
+                        GameEvent::Win
+                    } else {
+                        GameEvent::Lose
+                    };
+                    net.send_to_many(&room.connected_ids(), &ServerMsg::Event(event));
+                }
                 // Contrat du jour (Phase D, Sprint 9) : uniquement sur une
                 // victoire *décidée* — jamais une défaite, jamais un arrêt de
                 // sécurité (`timed_out`, qui n'implique `decided` que si
