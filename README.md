@@ -2,7 +2,7 @@
 
 # 🦀 RusteeGear
 
-**Un moteur / éditeur de jeu 3D minimaliste « à la Unity », écrit _from scratch_ en Rust.**
+**Le moteur Rust compact pour créer et publier de petits jeux 3D multijoueurs — desktop, mobile et web — avec un serveur autoritaire inclus.**
 
 winit · wgpu · egui — aucun moteur tiers.
 
@@ -51,41 +51,66 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 <a id="vision"></a>
 ## ✨ Vision
 
-RusteeGear est un éditeur de jeu 3D léger et hackable. L'objectif n'est pas de
-remplacer Unity, mais d'offrir une base **comprenable de bout en bout** : chaque
-ligne du pipeline de rendu, de l'ECS-léger et de l'UI est écrite à la main, sans
-boîte noire. Le projet est pensé pour grandir vers le **mobile (iOS / Android)**
-grâce à la portabilité de `wgpu`.
+RusteeGear est un moteur Rust compact pour **créer et publier de petits jeux 3D
+multijoueurs**, du prototype à la partie jouable à plusieurs. Ce qui le
+différencie :
+
+1. **Éditeur visuel léger** — scène, hiérarchie, inspecteur, gizmos : de quoi
+   construire un niveau sans écrire de boilerplate.
+2. **Runtime et serveur écrits en Rust** — même langage, mêmes garanties,
+   du client jusqu'au serveur.
+3. **Même simulation en solo, en client et sur le serveur** — physique,
+   combat, scène : un seul code de jeu, pas de logique dupliquée à
+   synchroniser à la main.
+4. **Export web, mobile et desktop** depuis la même base de code.
+5. **Architecture compréhensible** — chaque étage (fenêtre → événements →
+   état → rendu GPU → réseau) est écrit à la main, sans boîte noire.
+6. **Aucun ECS sophistiqué à maîtriser** — la scène est une structure simple
+   (`Vec<SceneObject>`), lisible sans courbe d'apprentissage dédiée.
+7. **Un projet complet, lisible par une seule personne** — ~32 000 lignes de
+   Rust, du rendu au réseau, qu'un développeur seul peut tenir entièrement
+   dans sa tête.
 
 ---
 
 <a id="besoin"></a>
 ## 🎯 Quel besoin RusteeGear adresse-t-il ?
 
-Les moteurs grand public (Unity, Unreal, Godot) sont extraordinairement complets,
-mais ce sont des **boîtes noires** : des millions de lignes, un runtime opaque, un
-modèle de licence et de télémétrie que l'on subit, et une courbe d'apprentissage qui
-porte sur *l'outil* plus que sur *les concepts*. Quand on veut **comprendre comment
-un moteur fonctionne réellement** — comment un vertex part d'un `Vec<f32>` pour finir
-en pixel à l'écran, comment un raycast sélectionne un objet, comment une boucle de
-simulation reste stable — ces moteurs cachent justement ce qui est intéressant.
+Créer et publier un **petit jeu 3D multijoueur** — un jeu coopératif en arène,
+un wave shooter, un mini-donjon, une expérience pédagogique connectée — ne
+devrait pas obliger à avaler un moteur de plusieurs millions de lignes ni un
+ECS complet pour placer quatre joueurs dans la même scène. Les moteurs grand
+public (Unity, Unreal, Godot) sont extraordinairement complets, mais ce sont
+des **boîtes noires** : runtime opaque, modèle de licence et de télémétrie
+que l'on subit, et un multijoueur qu'il faut le plus souvent assembler
+soi-même par-dessus. À l'inverse, un moteur ECS from-scratch comme Bevy
+impose sa propre courbe d'apprentissage avant même d'écrire une ligne de
+gameplay.
 
 RusteeGear répond à un besoin précis :
 
-- **Pédagogique & maîtrise totale.** Chaque étage du pipeline (fenêtre → événements →
-  état → rendu GPU → UI) est écrit à la main, lisible en une après-midi, sans
-  abstraction magique. C'est un moteur que l'on peut **tenir entièrement dans sa tête**.
-- **Hackable et minimal.** ~32 000 lignes de Rust au total. Ajouter une primitive, un
-  type de collider ou une variable de script se fait en quelques lignes, sans se battre
-  contre un framework.
-- **Portable par conception.** La logique (scène, caméra, entrées, picking) ne dépend
-  **pas** du GPU ; seule la couche `gfx/` parle à `wgpu`. C'est ce découpage qui a permis
-  de porter l'app sur **iOS et Android** sans réécrire le cœur.
-- **Sans dépendance lourde ni runtime caché.** Pas de garbage collector, pas de moteur
-  embarqué, pas de licence à négocier — un seul binaire natif.
+- **Livrer vite, sur plusieurs plateformes.** Le même projet exporte en
+  **desktop** (macOS `.dmg`), **mobile** (Android `.apk`, iOS) et **web**
+  (WASM/WebGPU, jouable sans installation) — sans code spécifique par
+  plateforme au-delà de la couche `gfx/`.
+- **Multijoueur sans double logique.** Le **serveur autoritaire** inclus
+  (`src/bin/server.rs`) exécute exactement la même simulation
+  (scène, physique, combat) que le client — pas de code de jeu à réécrire
+  ou resynchroniser entre solo et réseau.
+- **Maîtrise totale, sans ECS à apprendre.** Chaque étage du pipeline
+  (fenêtre → événements → état → rendu GPU → réseau) est écrit à la main,
+  lisible en une après-midi, sans abstraction magique ni ordonnanceur de
+  systèmes à comprendre avant de pouvoir avancer.
+- **Hackable et minimal.** ~32 000 lignes de Rust au total. Ajouter une
+  primitive, un type de collider ou une variable de script se fait en
+  quelques lignes, sans se battre contre un framework.
+- **Sans dépendance lourde ni runtime caché.** Pas de garbage collector, pas
+  de moteur embarqué, pas de licence à négocier — un seul binaire natif.
 
-Ce n'est **pas** un concurrent d'Unity. C'est un **socle compréhensible** pour
-apprendre, prototyper et expérimenter le rendu temps réel et l'architecture moteur.
+RusteeGear ne cherche pas à rivaliser avec Unity ou Unreal sur l'ampleur des
+fonctionnalités ou le photoréalisme : c'est un moteur ciblé sur les **petits
+jeux 3D multijoueurs**, où la portabilité, la légèreté et un code que l'on
+maîtrise de bout en bout comptent plus que la richesse d'un store d'assets.
 
 ---
 
@@ -110,8 +135,8 @@ Un moteur de jeu cumule les contraintes que Rust adresse le mieux :
   SIMD), `rapier3d` (physique), `kira` (audio). On bénéficie d'un alignement rare entre
   le langage et ses bibliothèques.
 - **Portabilité réelle.** Un même cœur compile vers macOS, un `.so` Android (`cdylib` +
-  `android_main`) et un binaire iOS — `cargo` et l'abstraction `wgpu` font le gros du
-  travail.
+  `android_main`), un binaire iOS et une cible WASM/WebGPU — `cargo` et l'abstraction
+  `wgpu` font le gros du travail, sans réécriture par plateforme au moment de publier.
 - **Outillage moderne.** `cargo` (build, dépendances, tests), `clippy` (lints),
   `rustfmt` (format) et un système de modules clair rendent un projet de cette taille
   agréable à maintenir — et faciles à valider en CI.
@@ -126,37 +151,42 @@ plus haut niveau.
 ## ⚖️ From scratch sur Rust — et pas sur Bevy ?
 
 [Bevy](https://bevyengine.org/) est l'excellent moteur de jeu de l'écosystème Rust :
-ECS complet, ordonnanceur de systèmes, rendu PBR, plugins… Si l'objectif était de
-**produire un jeu** le plus vite possible, Bevy (ou Godot, Fyrox) serait un choix
-parfaitement légitime — et probablement supérieur.
+ECS complet, ordonnanceur de systèmes, rendu PBR, plugins, large écosystème de
+crates tierces. Pour un projet visant un large éventail de jeux ou une équipe,
+Bevy (ou Godot, Fyrox) reste un choix parfaitement légitime, voire préférable.
 
-Mais l'objectif de RusteeGear est exactement l'inverse : **comprendre et maîtriser le
-moteur lui-même**. Or s'appuyer sur Bevy reviendrait à remplacer une boîte noire
-(Unity) par une autre, certes en Rust. On hériterait de son ECS, de son ordonnanceur,
-de son pipeline de rendu et de ses choix d'architecture — c'est-à-dire de précisément
-ce que ce projet cherche à écrire à la main pour l'apprendre.
+RusteeGear vise autre chose : livrer de **petits jeux 3D multijoueurs**, avec un
+code que l'on maîtrise entièrement — sans ECS ni ordonnanceur de systèmes à
+apprendre avant de pouvoir avancer. S'appuyer sur Bevy reviendrait à remplacer
+une boîte noire (Unity) par une autre, certes en Rust : on hériterait de son ECS,
+de son ordonnanceur, de son pipeline de rendu et de ses choix d'architecture,
+là où RusteeGear garde une scène simple (`Vec<SceneObject>`) et un pipeline
+écrit à la main, du rendu au réseau.
 
 | Critère | RusteeGear (from scratch) | Bevy |
 |---|---|---|
-| **Objectif** | Comprendre/maîtriser un moteur | Produire des jeux efficacement |
+| **Objectif** | Petits jeux 3D multijoueurs, code compréhensible | Large éventail de jeux, écosystème riche |
 | **Taille du cœur** | ~32 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
 | **Architecture** | Scène = `Vec<SceneObject>`, explicite | ECS complet + ordonnanceur de systèmes |
 | **Rendu** | Pipeline `wgpu`/WGSL écrit à la main | Moteur de rendu intégré (PBR, etc.) |
-| **Courbe d'apprentissage** | On apprend *les concepts* | On apprend *le framework* |
+| **Courbe d'apprentissage** | Pas d'ECS à apprendre, on lit le code directement | On apprend d'abord le framework |
 | **Contrôle** | Total (chaque ligne est à soi) | Cadré par les conventions du moteur |
-| **Productivité jeu** | Faible (tout est à construire) | Élevée |
+| **Productivité jeu** | Ciblée petit format (solo/coop, scène simple) | Élevée, tout usage, écosystème mature |
 | **Boîte noire** | Aucune | Le moteur lui-même |
 
 Concrètement, RusteeGear ne s'appuie **que** sur des briques *ciblées et
 remplaçables* (`winit` pour la fenêtre, `wgpu` pour le GPU, `egui` pour l'UI,
 `rapier3d`/`kira`/`mlua` pour le runtime) et **assemble lui-même** la boucle
-d'événements, le pipeline de rendu, le picking, les gizmos, la sérialisation et le
-mode Play. C'est ce qui rend la **comparaison pertinente** : on choisit la dépendance
-pour *un problème précis et bien délimité*, jamais pour la structure générale du
-moteur — qui, elle, reste l'objet même de l'apprentissage.
+d'événements, le pipeline de rendu, le picking, les gizmos, la sérialisation, le
+réseau et le mode Play. C'est ce qui rend la **comparaison pertinente** : on
+choisit la dépendance pour *un problème précis et bien délimité*, jamais pour la
+structure générale du moteur — qui, elle, reste entièrement compréhensible et
+modifiable par une seule personne.
 
-> En une phrase : **Bevy est un moteur ; RusteeGear est l'exercice consistant à en
-> écrire un.** Les deux sont en Rust ; seul le second t'apprend ce qu'il y a dedans.
+> En une phrase : **Bevy vise à produire n'importe quel jeu ; RusteeGear vise à
+> livrer de petits jeux 3D multijoueurs avec un code que l'on maîtrise
+> entièrement.** Les deux sont en Rust ; le second reste tenable dans la tête
+> d'une seule personne.
 
 ---
 
