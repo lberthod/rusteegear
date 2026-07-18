@@ -2057,7 +2057,12 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             );
             repere.transform = repere.transform.with_scale(Vec3::new(1.0, 1.8, 1.0));
             repere.physics = PhysicsKind::Static;
-            repere.color = [0.5, 0.45, 0.62];
+            // Gris-vert mousseux (cohérent avec `nature_rock`/`nature_moss_boulder`,
+            // cf. leurs `baseColorFactor` ~0.44/0.44/0.42 et ~0.30/0.48/0.20) — l'ancien
+            // mauve/lavande ([0.5, 0.45, 0.62]) jurait avec la palette naturelle,
+            // d'autant plus visible que le Repère du coin (-15, 15) tombe juste sur
+            // la rive ouest du lac (capture en jeu : « rocher rose » signalé là).
+            repere.color = [0.42, 0.43, 0.36];
             objects.push(repere);
         }
 
@@ -2672,7 +2677,14 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                     let prefix = format!("faune{n}_");
                     let mut fauna =
                         demo_obj(&name, MeshKind::Imported(mesh_index), Vec3::new(x, 0.0, z));
-                    fauna.transform = fauna.transform.with_scale(Vec3::splat(0.35));
+                    // Gabarit 0.28..0.45 plutôt qu'une échelle 0.35 fixe pour les 35
+                    // instances (constaté sur une capture en jeu : à taille identique
+                    // et à hauteur d'œil, elles se fondent en points flous indistincts).
+                    // Suite du ratio doré (même famille de trucs que `heading0`/`phase`
+                    // ci-dessous) : distribution à faible discrépance, deux voisines
+                    // n'ont jamais un gabarit presque identique.
+                    let gabarit = 0.28 + 0.17 * (i as f32 * 0.618_034).fract();
+                    fauna.transform = fauna.transform.with_scale(Vec3::splat(gabarit));
                     fauna.animation = Some(AnimationState {
                         clip: "Idle".into(),
                         ..Default::default()
@@ -5141,6 +5153,154 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         let foret: Rect = (8.0, -34.0, 34.0, -8.0);
         let excl_foret: &[&[Rect]] = &[EXCL_EAU_ROUTES, EXCL_ZONES_AMENAGEES, EXCL_CLAIRIERES];
         let excl_std: &[&[Rect]] = &[EXCL_EAU_ROUTES, EXCL_ZONES_AMENAGEES];
+
+        // Quatre petites « Halte » à mi-distance (10-20 m du spawn, un point
+        // par biome principal) : le regard n'avait aucun échelon entre le vide
+        // proche et le mur lointain du biome. Chaque halte = un solide (arbre/
+        // rocher/souche) + un compagnon non solide tout proche (la contrainte
+        // de 2 m ne s'applique qu'aux solides entre eux, cf.
+        // `mmorpg_solid_decor_stays_inside_and_spaced`) ; positions choisies à
+        // ≥ 4 m de tout spawn de créature et hors zones aménagées. Posées AVANT
+        // tout le scatter procédural ci-dessous (leurs positions rejoignent
+        // `solid_spots` immédiatement) pour que forêt/prairie/lisières les
+        // évitent d'elles-mêmes plutôt que de risquer une fusion visuelle
+        // découverte après coup par `mmorpg_solid_decor_stays_inside_and_spaced`.
+        struct Halte {
+            name: &'static str,
+            file: &'static str,
+            pos: (f32, f32),
+            scale: f32,
+            yaw_deg: f32,
+            solide: bool,
+        }
+        const MMORPG_HALTES: &[Halte] = &[
+            // Vers la forêt nord-est.
+            Halte {
+                name: "Halte NE rocher",
+                file: "nature_rock.glb",
+                pos: (7.5, -11.5),
+                scale: 0.8,
+                yaw_deg: 35.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte NE fougère",
+                file: "nature_fern.glb",
+                pos: (8.3, -10.5),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+            // Vers le lac et les rivières (ouest).
+            Halte {
+                name: "Halte Ouest souche",
+                file: "nature_stump.glb",
+                pos: (-11.5, -6.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte Ouest fleurs",
+                file: "nature_daisies.glb",
+                pos: (-10.3, -5.3),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+            // Vers les rizières (sud-ouest).
+            Halte {
+                name: "Halte Sud-Ouest arbre",
+                file: "nature_willow.glb",
+                pos: (-6.0, 12.0),
+                scale: 0.9,
+                yaw_deg: 200.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte Sud-Ouest fleurs",
+                file: "nature_lavender.glb",
+                pos: (-4.8, 11.3),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+            // Vers le hameau et le promontoire (est).
+            Halte {
+                name: "Halte Est rocher",
+                file: "nature_rock.glb",
+                // Pas (13, 4) : à 1,4 m de « Bannière » (landmark posé à la
+                // main du hameau, cf. `NATURE_DECOR`) — constaté par
+                // `mmorpg_solid_decor_stays_inside_and_spaced`. Décalé plus au
+                // nord, dans la bande étroite (z 1..4) qui échappe à la fois
+                // au col venté (z ≤ 1) et au hameau (z ≥ 4).
+                pos: (15.0, 2.5),
+                scale: 0.85,
+                yaw_deg: 150.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte Est fleurs",
+                file: "nature_sunflowers.glb",
+                pos: (15.8, 1.7),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+        ];
+        for h in MMORPG_HALTES {
+            poser(
+                h.name, h.file, h.pos.0, h.pos.1, h.scale, h.yaw_deg, h.solide, None,
+            );
+            if h.solide {
+                solid_spots.push(h.pos);
+            }
+        }
+
+        // Variété de la lisière forêt/prairie (bord sud-ouest, x 9..15,5, z
+        // -17,5..-12 — le segment de forêt le plus proche du regard du
+        // joueur depuis la prairie) : le remplissage `Arbre`/`Sapin`
+        // ci-dessous y répète surtout arbres/arbres2/sapins/sapins2, un mur
+        // de silhouettes similaires constaté sur une capture en jeu.
+        // Positions FIXES (pas de tirage RNG, contrairement à `scatter`) :
+        // cette portion de `foret` est déjà saturée à ~69 % par le
+        // remplissage suivant (cf. son propre commentaire) — un tirage
+        // aléatoire y échoue près de 100 % du temps (constaté : 8 demandés,
+        // 0 placés). Réservées dans `solid_spots` avant ledit remplissage,
+        // qui les évite de lui-même. Même préfixe « Arbre exotique » que le
+        // bosquet A) plus bas : aucun nouveau préfixe à ajouter à l'outil de
+        // synchro. Espacées ≥ 2,5 m entre elles et du Halte NE tout proche,
+        // ≥ 4 m des spawns des créatures dont le territoire touche ce coin
+        // (RAY_DIST 3,5 m + marge, cf. `mmorpg_demo_contains_walkable_nature_decor`).
+        for (name, file, x, z) in [
+            (
+                "Arbre exotique bouleau de lisière",
+                "nature_birch.glb",
+                9.0,
+                -15.0,
+            ),
+            (
+                "Arbre exotique chêne de lisière",
+                "nature_oak.glb",
+                13.5,
+                -15.0,
+            ),
+            (
+                "Arbre exotique érable de lisière",
+                "nature_maple_autumn.glb",
+                11.0,
+                -17.5,
+            ),
+            (
+                "Arbre exotique ginkgo de lisière",
+                "nature_ginkgo.glb",
+                15.5,
+                -12.0,
+            ),
+        ] {
+            poser(name, file, x, z, 1.0, 0.0, true, None);
+            solid_spots.push((x, z));
+        }
         scatter(
             &mut rng,
             &mut poser,
@@ -5158,7 +5318,12 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             // savane & terreurs) décalent le flux RNG du scatter — marge pour
             // garder l'invariant ≥ 30 sans rejouer cette compensation à chaque
             // nouveau spawn.
-            31,
+            // 31 → 40 : les 4 arbres de lisière + le rocher du Halte NE
+            // ci-dessus réservent désormais des places dans `foret` avant ce
+            // tirage (rejection sampling à ≥ 2,5 m), qui en trouve donc moins
+            // — reconstaté par comptage direct (25 arbres pour n=31) ; 40
+            // restaure une marge confortable au-dessus du minimum testé.
+            40,
             (0.9, 1.3),
             true,
         );
@@ -5171,7 +5336,9 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &["nature_pine.glb", "nature_pine2.glb"],
             "Sapin",
             foret,
-            15,
+            // 15 → 20 : même compensation que ci-dessus pour `Arbre` (places
+            // réservées par la lisière/Halte), constaté par comptage direct.
+            20,
             (0.9, 1.25),
             true,
         );
@@ -5298,6 +5465,105 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             (0.85, 1.3),
             false,
         );
+
+        // --- Élargissement de la prairie centrale ---------------------------
+        // Le rect `prairie` ci-dessus (-10,-12)-(8,8) concentre tout le semis
+        // près du spawn ; entre lui et les quatre « Repère » (±15, ±15) qui
+        // bordent la prairie restait un large anneau d'herbe nue (constaté sur
+        // une capture en jeu : grand aplat vert vide). Comble cet anneau sans
+        // toucher aux biomes voisins (forêt/hameau/lac/rizières/promontoire),
+        // ni au rect déjà dense, ni aux abords du spawn joueur et des Repère
+        // (rien ne doit gêner la vue au tout premier coup d'œil).
+        const PRAIRIE_DEJA_SEMEE: &[Rect] = &[(-10.0, -12.0, 8.0, 8.0)];
+        // Même bornes que le rect `foret` : la prairie élargie ne doit jamais
+        // mordre sur la forêt (son propre semis gère sa densité).
+        const EXCL_FORET_ZONE: &[Rect] = &[(8.0, -34.0, 34.0, -8.0)];
+        // Dégagement (6×6 m) autour de chacun des quatre Repère.
+        const EXCL_REPERES: &[Rect] = &[
+            (-18.0, -18.0, -12.0, -12.0),
+            (12.0, -18.0, 18.0, -12.0),
+            (-18.0, 12.0, -12.0, 18.0),
+            (12.0, 12.0, 18.0, 18.0),
+        ];
+        // Dégagement (8×8 m) autour du spawn du joueur (0, 0).
+        const EXCL_SPAWN_JOUEUR: &[Rect] = &[(-4.0, -4.0, 4.0, 4.0)];
+        let excl_prairie_large: &[&[Rect]] = &[
+            EXCL_EAU_ROUTES,
+            EXCL_ZONES_AMENAGEES,
+            EXCL_FORET_ZONE,
+            PRAIRIE_DEJA_SEMEE,
+            EXCL_REPERES,
+            EXCL_SPAWN_JOUEUR,
+        ];
+        let prairie_large: Rect = (-16.0, -16.0, 16.0, 16.0);
+
+        // Touffes/fougères éparses (non solides) : le gros de la densité
+        // visuelle, sans peser sur la broad-phase des raycasts.
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &["nature_grass_tuft.glb", "nature_fern.glb"],
+            "Prairie centrale herbe",
+            prairie_large,
+            8,
+            (3, 6),
+            2.2,
+            (0.85, 1.25),
+            false,
+        );
+        // Fleurs des prés (non solides), variété différente de celles déjà
+        // semées dans le rect dense pour ne pas juste répéter le motif.
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &[
+                "nature_daisies.glb",
+                "nature_irises.glb",
+                "nature_lavender.glb",
+            ],
+            "Prairie centrale fleur",
+            prairie_large,
+            10,
+            (0.85, 1.3),
+            false,
+        );
+        // Petits rochers isolés (solides, échelle réduite pour rester
+        // discrets — pas l'anneau du promontoire).
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &["nature_rock.glb"],
+            "Prairie centrale rocher",
+            prairie_large,
+            4,
+            (0.5, 0.75),
+            true,
+        );
+        // Un ou deux arbres isolés (solides) : jamais un bosquet, juste de
+        // quoi casser la platitude du grand aplat vert.
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &["nature_oak.glb", "nature_tree.glb"],
+            "Prairie centrale arbre isolé",
+            prairie_large,
+            2,
+            (0.8, 1.0),
+            true,
+        );
+
         // Plants de riz dans chaque bassin (traversables) : le scatter vise
         // l'intérieur du bassin, seules les zones eau/routes le repoussent.
         let excl_riz: &[&[Rect]] = &[EXCL_EAU_ROUTES];

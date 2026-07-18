@@ -3436,6 +3436,12 @@ mod tests {
         "Étal des vivres",
         "Coin trésor",
         "Table d'apothicaire",
+        // Prairie centrale élargie + haltes à mi-distance (audit de composition
+        // du paysage, capture en jeu : grand aplat vert vide entre le spawn et
+        // les biomes). Vérifié : ni "Prairie", ni "Halte" ne préfixe aucun nom
+        // déjà embarqué (contrairement à l'incident "Faune"/`hameau_gdd_demo`).
+        "Prairie centrale",
+        "Halte ",
     ];
 
     /// OUTIL (portée : décor ambiant ajouté à `Scene::mmorpg_demo` — faune 27-61
