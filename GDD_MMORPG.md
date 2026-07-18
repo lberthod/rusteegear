@@ -890,21 +890,21 @@ d'alerte :
 |---|---|
 | Vie individuelle, spectateur, défaite de salon | ✅ En jeu |
 | IA poursuite + plafond 2 chasseresses + rayon d'éveil | ✅ En jeu |
-| 3 armes à distance, mêlée, soin universel (H) | ✅ En jeu (⚠️ régression tactile scène ré-exportée signalée le 16 juillet — vérifier l'état courant dans ROADMAP_SPRINTS.md avant de s'y fier) |
+| 3 armes à distance, mêlée, soin universel (H) | ✅ En jeu — régression tactile du 16 juillet résolue (ROADMAP_SPRINTS.md, sprints 75-82, tous ✅ FAIT) |
 | Multi-salons par code | ✅ Backend (UI de saisie à brancher) |
 | Frags individuels diffusés | ✅ En jeu (colonne 💀 du roster HUD, `hud.rs:535`) |
-| Comptes, XP, classement (contribution individuelle), chat (Firebase) | ✅ En jeu (classement individuel livré, `network_player_score` ; barème d'XP recalibré, `round_xp`, §8.3 — seuls les assists manquent encore, cf. Phase B de [sprint10audit.md](sprint10audit.md#phase-b)) |
-| Décor hameau + ménagerie animée + héroïne fée | ⚠️ Dans la démo d'éditeur (`mmorpg_demo`), **pas dans la scène que le serveur sert** — tension n°7 ; faune paisible encore inutilisée, §7.3 |
-| Système de vagues (`Combat::wave`) | ✅ Codé et testé, **mais la carte livrée est toute à `wave: 0`, 1 PV** — aucune vague réelle, pas de chef à 3 PV pour le Boulet (§5.5) |
+| Comptes, XP, classement (contribution individuelle), chat (Firebase) | ✅ En jeu (classement individuel livré, `network_player_score` ; barème d'XP recalibré, `round_xp`, §8.3 ; assists livrés aussi, cf. ligne dédiée ci-dessous) |
+| Décor hameau + ménagerie animée + héroïne fée | ⚠️ Dans la démo d'éditeur (`mmorpg_demo`), **pas dans la scène que le serveur sert** — tension n°7 toujours ouverte ; faune paisible encore inutilisée, §7.3 |
+| Système de vagues (`Combat::wave`) | ✅ Codé et testé, **et la carte livrée porte désormais de vraies vagues** (`assets/player_scene.json` : `wave` 1 à 4, `hp` jusqu'à 3 sur certaines créatures) — plus le `wave: 0`/1 PV uniforme constaté précédemment |
 | Roster HUD (barres de vie, frags, spectateur grisé) | ✅ En jeu (`hud.rs:463-609`, branché depuis `editor/mod.rs`) |
-| Sélecteur de classe UI | 🔜 Phase A, sprint 3 ([sprint10audit.md](sprint10audit.md#phase-a)) |
-| Réanimation Soutien (§8.1) | 🔜 **Non planifiée** — absente des 14 sprints de `sprint10audit.md`, à ajouter à un plan futur |
-| Assists (XP, canal de reconnaissance) | 🔜 [Phase B, sprint 4](sprint10audit.md#phase-b) — la formule (`XP_PER_FRAG_OR_ASSIST`) existe déjà, seule la détection manque |
-| Modes Survie / Boss / Escorte | 🔜 [Phase C, sprints 5-8](sprint10audit.md#phase-c) |
-| Contrat du jour | 🔜 [Phase D, sprint 9](sprint10audit.md#phase-d) (dépend de la phase C) |
-| Archétypes de créatures (Traqueuse/Meute/Colosse/Furtive) | 🔜 [Phase E, sprints 10-11](sprint10audit.md#phase-e) |
+| Sélecteur de classe UI | ✅ En jeu (fenêtre Multijoueur desktop, `src/editor/windows.rs:684-730`, `ComboBox` câblé à `PlayerClass` ; l'overlay tactile mobile reste volontairement sans sélecteur, Assaut par défaut) — [sprint10audit.md](sprint10audit.md#phase-a) Sprint 3, checkbox non cochée mais code livré |
+| Réanimation Soutien (§8.1) | ✅ En jeu (`src/app/health.rs:357-439`, `update_network_revive`, canal 10 s, 30 % PV, réservé à Soutien) — absente de `sprint10audit.md` mais livrée hors plan |
+| Assists (XP, canal de reconnaissance) | ✅ En jeu ([Phase B, sprint 4](sprint10audit.md#phase-b), terminé 2026-07-18) — `record_damage_contribution`/`credit_assists_on_kill`, fenêtre `ASSIST_WINDOW` 5 s, `src/app/multiplayer.rs` |
+| Modes Survie / Boss / Escorte | ✅ Codés et testés ([Phase C, sprints 5-8](sprint10audit.md#phase-c), tous terminés) — `update_survie`/`update_escorte`, archétype Colosse pour Boss, `src/app/combat.rs` — **mais aucun sélecteur réseau** : `src/net/client/native.rs` envoie toujours `objective: 0` (Vagues) en dur, seules les démos solo dédiées les exposent (cf. Sprint 21 de `sprintreflecion.md`) |
+| Contrat du jour | ✅ En jeu ([Phase D, sprint 9](sprint10audit.md#phase-d), terminé 2026-07-18) — `src/app/multiplayer.rs:207-282` (tirage déterministe par jour), XP côté serveur, persistance Firebase |
+| Archétypes de créatures (Traqueuse/Meute/Colosse/Furtive) | ✅ En jeu ([Phase E, sprints 10-11](sprint10audit.md#phase-e), terminés) — `src/scene/mod.rs:537-571`, comportements différenciés dans `src/app/simulation.rs` |
 | Salon multijoueur (chat) & mute local | ✅ En jeu ([Phase F, sprints 12-13](sprint10audit.md#phase-f), terminé 2026-07-18) — chat + rafraîchissement automatique, mute local persisté (`src/app/settings.rs::muted_players`) |
-| Feedback dégâts subis (vignette, recul caméra, diagnostic de mort), affordances, charte (§6, §10) | 🔜 [Phase A, sprints 1-2](sprint10audit.md#phase-a) |
+| Feedback dégâts subis (vignette, recul caméra, diagnostic de mort), affordances, charte (§6, §10) | ✅ En jeu — vignette/shake (`src/app/health.rs:283`, `src/gfx/renderer.rs:1702-1776`), son de contact (`src/runtime/sfx.rs`), cause de mort diffusée et affichée (`src/net/protocol.rs:328-345`, `src/editor/hud.rs:819-841`) — [sprint10audit.md](sprint10audit.md#phase-a) Sprint 1/2, checkboxes non cochées mais code livré |
 | Audio (dégâts subis, défaite, fin de vague) | ✅ En jeu (`src/runtime/audio.rs`, `src/runtime/sfx.rs`) — allié à terre et éveil de créature encore muets, §10.4 |
 
 La séquence de livraison et ses dépendances sont pilotées par

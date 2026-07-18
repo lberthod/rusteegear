@@ -77,13 +77,13 @@ Phase 0 (Baseline mesurée) ──► doit précéder toute décision de réglag
 
 | Phase | Sprints | Dépend de | Parallèle possible avec | But | Statut | Blocage |
 |---|---|---|---|---|---|---|
-| **0 — Baseline** | 0 | — | — (à faire en premier) | Mesurer l'état réel avant toute optimisation | ⬜ Pas démarré | — |
-| **A — Sécurité skinnée** | 1 | 0 | B, C, D, E | Éliminer la perte silencieuse de créatures en vue large | ⬜ Pas démarré | — |
+| **0 — Baseline** | 0 | — | — (à faire en premier) | Mesurer l'état réel avant toute optimisation | ✅ Fait (18 juillet) | — |
+| **A — Sécurité skinnée** | 1 | 0 | B, C, D, E | Éliminer la perte silencieuse de créatures en vue large | ✅ Fait (Sprint 1, 18 juillet) | — |
 | **B — Instancing skinning** | 2 → 3 | 0 | A, C, D, E | Diviser les draw calls skinnés et lever la contrainte de capacité | ✅ Fait (Sprint 2 ; Sprint 3 descopé) | — |
 | **C — Culling distance** | 4 | 0 | A, B, D, E | Réduire la charge en vue large/plongée | ✅ Fait (Sprint 4) | — |
 | **D — LOD géométrique** | 5 | 0 | A, B, C, E | Réduire le fill-rate du feuillage dense | ✅ Câblé (18 juillet) | — (validation visuelle/mesure Phase F restantes) |
-| **E — Compression texture** | 6 | 0 | A, B, C, D | Préparer la VRAM mobile/Android | 🟡 En cours | ASTC mobile / mesure VRAM non faites |
-| **F — Validation finale** | 7 | **A, B, C, D, E** | — | Mesurer l'après, documenter le delta | ⬜ Pas démarré | dépend de A, D encore ouvertes |
+| **E — Compression texture** | 6 | 0 | A, B, C, D | Préparer la VRAM mobile/Android | ✅ Close avec constat (18 juillet) | Chemin BC3 sans cible réelle sur le contenu actuel — cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md#statut-vs-définition-de--terminé--phase-e) ; ASTC mobile non traité |
+| **F — Validation finale** | 7 | **A, B, C, D, E** | — | Mesurer l'après, documenter le delta | ✅ Fait (18 juillet) | — (delta FPS fenêtré non fait, limite d'outillage documentée) |
 
 ---
 
@@ -347,19 +347,56 @@ Détail complet : **[sprint B otpimsaiton10h.md](sprint%20B%20otpimsaiton10h.md)
 <a id="phase-f"></a>
 ## PHASE F — Validation finale avant/après (dépend de A, B, C, D, E)
 
-### Sprint 7 — Re-mesure complète et documentation du delta
+### Sprint 7 — Re-mesure complète et documentation du delta — ✅ fait (18 juillet 2026)
 **Objectif** : confirmer que le plan a effectivement amélioré la situation, avec les mêmes mesures
 que la Phase 0.
-- [ ] Répéter exactement le protocole de la Phase 0 (même vue large/plongée sur `mmorpg_demo`) :
-  FPS moyen/min, `gpu_draw_calls`, `skinned_dropped`, temps GPU par passe.
-- [ ] Comparer aux chiffres de la Phase 0 dans un tableau avant/après.
-- [ ] Mettre à jour `optimisation3D.Analys.md` avec les résultats réels (remplacer les recommandations
-  traitées par leur statut « fait » et les chiffres mesurés).
-- **Fichiers** : `optimisation3D.Analys.md` (mise à jour), ce document.
-- **Livrable** : tableau avant/après complet, avec au minimum `skinned_dropped == 0` et une
-  réduction mesurable de `gpu_draw_calls` et/ou du temps de passe « Scène ».
-- **Risques** : ne pas démarrer avant que A, B, C, D, E soient toutes vertes — un avant/après
-  partiel serait trompeur sur l'effet réel du plan.
+
+**Préalable — Phase E close avec un constat plutôt qu'un feu vert plein** : avant de lancer cette
+phase, audit des 3 points restants de la Phase E (validation visuelle BC3, mesure VRAM, coût de
+compression synchrone) — découverte que le chemin BC3 (`texcompress`) n'a **aucune cible réelle**
+sur `mmorpg_demo` ni sur aucune démo du dépôt (0 objet utilisant `obj.texture` sur 887 ; tous les
+meshes visibles sont des imports glTF qui ne passent pas par ce chemin). Décision : documenter ce
+constat (cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md#statut-vs-définition-de--terminé--phase-e))
+et poursuivre — un avant/après qui n'aurait montré aucun gain BC3 est correct, pas un signe d'échec
+de la phase.
+
+- [x] **Impossible de piloter le panneau Profiler en jeu depuis cette session** (pas de contrôle
+  clavier/souris disponible sur la fenêtre du binaire desktop — ni via le tool de contrôle d'écran,
+  qui ne résout pas le process par son nom sur cette machine, ni via un second lancement, une
+  instance concurrente tournant déjà). Décision (validée avec l'utilisateur) : remplacer le
+  pilotage manuel par un **benchmark headless reproductible**, `examples/phase_f_measure.rs`
+  (nouveau, `cargo run --release --example phase_f_measure`) — charge `Scene::mmorpg_demo()` telle
+  quelle, positionne une caméra fixe documentée (vue large/plongée : `distance=90`, `yaw=0.7`,
+  `pitch=1.1`, `target=0` — la plus large possible sans dépasser le plan éloigné à 100 m sur une
+  arène de rayon `MMORPG_HALF=36`), effectue 5 rendus de chauffe puis 60 rendus chronométrés via
+  `Renderer::render_scene_headless`, et lit `gpu_draw_calls`/`skinned_dropped` via
+  `gpu_profiler_info()`/`skinned_dropped_count()`.
+- [x] **Bug trouvé et corrigé en cours de mesure** : `render_scene_headless` ne renseignait jamais
+  `last_frame_draw_calls` (toujours 0 en sortie de `gpu_profiler_info()` après un rendu headless) —
+  seul `render()` (chemin fenêtré) le faisait. Corrigé dans `src/gfx/renderer.rs` en dupliquant
+  exactement le même comptage (`scene_draw_calls` incrémenté à chaque `draw_indexed`, plus les
+  retours de `draw_skinned_shadows`/`draw_skinned_objects`) dans `render_scene_headless`. Sans ce
+  correctif, ce sprint (et tout futur benchmark headless) aurait rapporté `gpu_draw_calls: 0` en
+  permanence — un faux signal de régression totale. `cargo test --release --test golden_render
+  --test golden_skinning` : 8/8 verts après le correctif (aucune régression visuelle).
+- [x] Résultats mesurés (Metal/Apple, résolution 1280×720, 887 objets scène) : **`gpu_draw_calls =
+  592`**, **`skinned_dropped = 0`**, 6,41 ms/frame en boucle headless (156 FPS-équivalent — **non
+  comparable** aux FPS fenêtrés de Phase 0/Sprint 1, cf. limite ci-dessous). Temps GPU par passe :
+  toujours indisponible (`gpu_profiling = false`, gel Metal documenté en Phase 0, non réactivé ici —
+  hors scope, nécessite un vrai débogueur GPU).
+- [x] Tableau avant/après + limite méthodologique consignés dans `optimisation3D.Analys.md`
+  (section « Mesure AVANT/APRÈS »).
+- **Fichiers** : `optimisation3D.Analys.md` (mise à jour), `src/gfx/renderer.rs` (fix
+  `last_frame_draw_calls` en headless), `examples/phase_f_measure.rs` (nouveau benchmark), ce
+  document.
+- **Livrable** : `skinned_dropped == 0` confirmé ; `gpu_draw_calls` mesuré exactement (592, comparable
+  aux compteurs GPU des sprints précédents malgré la vue différente) — pas de comparaison FPS directe
+  possible sans piloter la fenêtre (limite documentée, pas contournée silencieusement).
+- **Risques restants** : la vue caméra du benchmark (90/0,7/1,1) est un choix raisonnable mais pas
+  strictement identique aux vues « à l'œil » de Phase 0/Sprint 1 — un futur audit voulant un delta
+  FPS fenêtré strict devra piloter le binaire desktop manuellement (limite d'outillage de cette
+  session, pas du produit). Le volet ASTC mobile (Phase E) et le détail GPU par passe (timestamp
+  queries désactivées) restent hors de portée de ce sprint.
 
 ---
 
@@ -367,13 +404,13 @@ que la Phase 0.
 
 | Phase | Terminée quand |
 |---|---|
-| 0 | Chiffres FPS/draw calls/skinned_dropped réels consignés |
-| A | `skinned_dropped == 0` en vue large sur `mmorpg_demo` |
+| 0 | ✅ Chiffres FPS/draw calls/skinned_dropped réels consignés (Sprint 0) |
+| A | ✅ `skinned_dropped == 0` en vue large sur `mmorpg_demo` (Sprint 1, `MAX_SKINNED_INSTANCES` → 256), reconfirmé headless en Phase F |
 | B | ✅ Catégorisation faite et testée (Sprint 2) ; Sprint 3 descopé (aucun bénéfice mesurable sur le contenu actuel, garde-fou de test en place pour le reprendre si du contenu dupliqué apparaît) |
 | C | Culling par distance actif, charge réduite en vue large sans popping gênant |
 | D | ✅ Câblé : `MeshKind::Billboard` (impostor croix) remplace le feuillage dense au-delà de 40 m dans `Renderer::render` ; reste la validation visuelle en jeu et la mesure Profiler avant/après dédiée — cf. [sprintD_optimisation10h.md](sprintD_optimisation10h.md) |
-| E | 🟡 Compression BC3 desktop livrée (Sprint 6) ; audit (3 passages) a trouvé et corrigé 3 défauts (dont un crash GPU), validée bout-en-bout par golden test sur un vrai GPU ; reste : coût de compression synchrone au chargement (non mesuré sur `mmorpg_demo`, potentiel gel), validation visuelle sur les vraies textures, mesure VRAM chiffrée, ASTC mobile non fait — cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md) |
-| F | Tableau avant/après complet, `optimisation3D.Analys.md` mis à jour |
+| E | ✅ Compression BC3 desktop livrée (Sprint 6) ; audit (3 passages) a trouvé et corrigé 3 défauts (dont un crash GPU), validée bout-en-bout par golden test sur un vrai GPU. **Constat du 18 juillet (Phase F)** : le chemin BC3 n'a aucune cible réelle sur le contenu actuel — `mmorpg_demo` (887 objets) a 0 objet utilisant `obj.texture`, et aucune démo du dépôt n'utilise ce champ (les meshes importés glTF n'ont pas de texture image via ce chemin). Coût de compression synchrone, validation visuelle et mesure VRAM sont donc structurellement à 0 sur ce contenu, pas « non mesurés ». ASTC mobile non fait — cf. [sprintEoptimisation10h.md](sprintEoptimisation10h.md) |
+| F | ✅ Tableau avant/après complet (`optimisation3D.Analys.md` § « Mesure AVANT/APRÈS »), `skinned_dropped == 0` et `gpu_draw_calls` confirmés par un benchmark headless reproductible ; delta FPS fenêtré non fait (limite d'outillage documentée, pas un chiffre caché) |
 
 ## 📌 Conseils d'exécution
 

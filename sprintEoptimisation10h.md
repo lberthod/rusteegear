@@ -72,18 +72,35 @@ bibliothèque (cf. « Audit a posteriori », défaut n°1).
   (`wgpu::Features::TEXTURE_COMPRESSION_ASTC`), non implémenté ici — l'encodage ASTC
   n'a pas d'équivalent pur-Rust simple identifié (à rechercher : `astc-encoder`
   bindings C, ou compression pré-calculée hors ligne au lieu d'à l'import).
+- **Découverte du 18 juillet 2026 (Phase F, audit préalable) : le chemin BC3 n'a
+  aucune cible réelle sur le contenu actuel du jeu.** `make_texture`/`texcompress`
+  n'est appelé que depuis `Renderer::sync_textures` (`src/gfx/renderer.rs:1173`), qui
+  ne traite que `SceneObject::texture` (chemin d'image sur un `MeshKind` procédural —
+  Plane/Cube/etc.). Les meshes importés (glTF/GLB), qui composent la quasi-totalité de
+  `mmorpg_demo` (887 objets, 315 imports), passent par `GpuMesh::new`
+  (`Renderer::sync_imported`) et ne portent **aucune texture image** — vérifié par une
+  sonde directe (`Scene::mmorpg_demo().objects.iter().filter(|o| !o.texture.is_empty())`
+  → **0 résultat sur 887**) et confirmé par `grep -c 'texture: "' src/scene/demos.rs`
+  → **0** dans tout le fichier : aucune scène démo du dépôt n'utilise jamais ce champ.
+  Conséquence directe sur les 3 points ci-dessous : ils ne peuvent pas être mesurés sur
+  `mmorpg_demo` (ni sur aucune autre démo embarquée), pas parce que la mesure serait
+  difficile, mais parce que le delta est structurellement nul — zéro texture n'emprunte
+  le chemin compressé sur ce contenu. Le travail livré (BC3 + golden tests) reste
+  valide et testé, mais **n'a aujourd'hui aucun effet visible ni mesurable en jeu**.
+  Pour que la Phase E ait un effet réel, il faudrait soit (a) brancher aussi le
+  matériau des meshes importés sur ce chemin (changement bien plus large, hors scope
+  de ce sprint), soit (b) qu'une scène/un contenu utilise réellement `obj.texture`.
 - **Pas de mesure VRAM avant/après.** Le Profiler existant (`src/editor/windows.rs`)
   n'expose pas de compteur mémoire GPU — seulement FPS/draw calls/temps de passe. Une
   mesure chiffrée du gain réel (attendu ~4× sur les textures compressées) nécessite
-  soit un ajout au Profiler, soit un outil externe (Instruments/RenderDoc), à faire
-  en Phase F si jugé utile.
+  soit un ajout au Profiler, soit un outil externe (Instruments/RenderDoc) — **et de
+  toute façon 0 sur `mmorpg_demo`, cf. point ci-dessus.**
 - **Pas de vérification visuelle en jeu (`mmorpg_demo` en particulier).** Le chemin
   compressé a bien été validé sur un vrai GPU via les golden tests headless (voir
   « Audit a posteriori »), mais uniquement sur une texture de test (damier 64×64) —
-  pas sur les vraies textures de personnages/créatures visées par le risque signalé
-  dans le sprint d'origine. Le binaire desktop tournait déjà (session concurrente
-  active pendant ce sprint, cf. `ps aux` au démarrage), donc pas de test lancé en jeu
-  ici pour éviter toute interférence.
+  **et il n'y a rien à valider visuellement sur `mmorpg_demo` puisqu'aucun objet de
+  cette scène n'emprunte le chemin BC3** (cf. point ci-dessus), pas seulement parce que
+  le test n'a pas été lancé.
 - **`cargo test --lib` complet non vert au moment de ce sprint — cause externe.** Un
   échec (`runtime::sfx::tests::synth_variation_...`) puis une erreur de compilation
   des tests (`app.update_round()` appelé sans le nouvel argument `dt: f32`) sont
@@ -200,14 +217,18 @@ aucun autre fichier de cette phase ni d'une autre phase modifié pour ces correc
 > « Textures compressées en VRAM, qualité visuelle validée »
 > (tableau récapitulatif de `sprintoptimation3daudit10h.md`)
 
-**Nettement plus proche du vert qu'à la livraison initiale, mais pas encore complet —
-et pas encore « parfait » comme le montre le point 5 ci-dessus.** L'audit a posteriori
-a trouvé et corrigé 3 défauts réels dans `src/gfx/texcompress.rs` — dont un crash GPU
-reproductible, désormais couvert par un golden test qui passe (validation bout-en-bout
-sur un vrai GPU, pas seulement des tests unitaires) — et a identifié un 4ᵉ problème
-(coût de compression synchrone au chargement) qui reste non corrigé, documenté plutôt
-que caché. Restent, avant de considérer la Phase E réellement verte : (a) corriger ou
-au moins mesurer précisément le point 5 (coût de chargement), (b) une validation
-visuelle sur les vraies textures de `mmorpg_demo` (personnages/créatures, pas
-seulement le damier de test), (c) une mesure VRAM avant/après chiffrée, (d) le volet
-ASTC mobile, non traité par ce sprint.
+**Nettement plus proche du vert qu'à la livraison initiale côté correction (3 défauts
+trouvés/corrigés), mais l'objectif de la phase — « textures compressées en VRAM,
+qualité visuelle validée » — est en réalité sans objet sur le contenu actuel : aucune
+texture de `mmorpg_demo` (ni d'aucune démo du dépôt) n'emprunte le chemin BC3
+(cf. constat du 18 juillet 2026 ci-dessus).** L'audit a posteriori a trouvé et corrigé
+3 défauts réels dans `src/gfx/texcompress.rs` — dont un crash GPU reproductible,
+désormais couvert par un golden test qui passe (validation bout-en-bout sur un vrai
+GPU, pas seulement des tests unitaires). Les points (a) coût de compression synchrone,
+(b) validation visuelle sur `mmorpg_demo`, (c) mesure VRAM chiffrée ne sont **pas
+mesurables sur le contenu embarqué actuel** (delta structurellement nul, pas une
+mesure non faite) — cf. constat ci-dessus. (d) le volet ASTC mobile reste non traité.
+**Décision (Phase F, 18 juillet 2026) : Phase E est close avec ce constat documenté**
+plutôt que bloquée indéfiniment sur une mesure impossible ; la Phase F (validation
+avant/après) intègre cette limite — le delta mesuré ne montrera aucun gain lié à BC3,
+ce qui est correct et attendu.

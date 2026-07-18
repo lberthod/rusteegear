@@ -32,7 +32,7 @@ Phase G (Rattrapage doc GDD)           ─┘
 | **B — Assists** | 4 | — | A, C, E, F, G | Le score reflète l'aide au combat, pas seulement les frags |
 | **C — Modes de manche** | 5 → 8 | — | A, B, E, F, G | Survie / Escorte / Boss, au-delà des Vagues |
 | **D — Contrat du jour** | 9 | **C** | — (démarre après C) | Objectif quotidien rejouable, posé sur `RoundObjective` |
-| **E — Archétypes créatures** | 10 → 11 | — | A, B, C, F, G | IA différenciée (Traqueuse/Meute/Colosse/Furtive) |
+| **E — Archétypes créatures** — ✅ terminé 2026-07-18 | 10 → 11 | — | A, B, C, F, G | IA différenciée (Traqueuse/Meute/Colosse/Furtive) |
 | **F — Salon & mute** — ✅ terminé 2026-07-18 | 12 → 13 | — | A, B, C, E, G | Chat en jeu utilisable, silence d'un joueur gênant |
 | **G — Rattrapage doc GDD** | 14 | — | A, B, C, E, F | Le GDD §14 reflète l'avance réelle (XP, roster, audio) |
 
@@ -211,12 +211,23 @@ Phase G (Rattrapage doc GDD)           ─┘
 ---
 
 <a id="phase-e"></a>
-## PHASE E — Grammaire d'archétypes de créatures (indépendante)
+## PHASE E — Grammaire d'archétypes de créatures (indépendante) — ✅ Sprints 10-11 faits
 
-### Sprint 10 — Archétypes Traqueuse et Meute
+> Désync doc/code corrigée le 18 juillet 2026 : les cases ci-dessous étaient restées décochées
+> alors que le rapport [sprintE10haudit.md](sprintE10haudit.md) documentait un travail déjà
+> livré et testé. Vérifié directement dans le code avant de cocher : `enum Archetype`
+> (`src/scene/mod.rs:534`), champ `archetype` sur `AiChaser`, logique de vitesse/éveil dans
+> `src/app/simulation.rs:1253`, et les 2 tests dédiés (`creature_archetypes_produce_visibly_different_chase_speeds`,
+> `furtive_archetype_stays_asleep_until_the_player_enters_its_shorter_wake_radius`, `cargo test`
+> re-confirmés verts). Pas une régression réelle — juste un tableau de suivi jamais mis à jour
+> après coup. Point encore ouvert signalé par le rapport lui-même : validation visuelle en Play
+> jamais faite (seulement testée en simulation) — à faire avant de considérer la lisibilité
+> gameplay (silhouette/vitesse perçue) définitivement close.
+
+### Sprint 10 — Archétypes Traqueuse et Meute — ✅ fait, cf. [sprintE10haudit.md](sprintE10haudit.md)
 **Objectif** : différencier le comportement de chasse au-delà de l'IA générique actuelle (§5.4).
-- [ ] Enum d'archétype par créature/prefab.
-- [ ] Traqueuse : approche directe rapide et isolée ; Meute : coordination à plusieurs sur une même cible
+- [x] Enum d'archétype par créature/prefab.
+- [x] Traqueuse : approche directe rapide et isolée ; Meute : coordination à plusieurs sur une même cible
   (dans la limite du plafond existant).
 - **Fichiers** : `src/app/simulation.rs`, `src/scene/demos.rs` (assignation d'archétype par prefab).
 - **Livrable** : en Play, une Traqueuse et un groupe de Meute se comportent visiblement différemment
@@ -224,9 +235,9 @@ Phase G (Rattrapage doc GDD)           ─┘
 - **Risques** : ne pas casser les tests IA existants (`src/app/mod.rs:2456-2559`) ; garder le plafond
   de chasseresses (`MAX_ACTIVE_CHASERS_PER_TARGET`) valable pour tous les archétypes.
 
-### Sprint 11 — Archétypes Colosse et Furtive
+### Sprint 11 — Archétypes Colosse et Furtive — ✅ fait, cf. [sprintE10haudit.md](sprintE10haudit.md)
 **Objectif** : compléter la grammaire d'archétypes.
-- [ ] Colosse : charge, résistance, attaque de zone lente. Furtive : camouflage/détection tardive,
+- [x] Colosse : charge, résistance, attaque de zone lente. Furtive : camouflage/détection tardive,
   embuscade.
 - **Fichiers** : `src/app/simulation.rs`, `src/scene/demos.rs`.
 - **Livrable** : les 4 archétypes du GDD §5.4 sont tous distinguables en Play.

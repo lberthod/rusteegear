@@ -8,22 +8,51 @@ mesh/texture au total), **201 objets skinnés simultanés**, **26 créatures** n
 
 ---
 
-## Constat prioritaire — capacité skinnée dépassée par le contenu actuel
+## Constat prioritaire — capacité skinnée dépassée par le contenu actuel ✅ traité
 
-**`MAX_SKINNED_INSTANCES = 160`** (`src/gfx/renderer.rs:160`) alors que la scène contient
-**201 objets skinnés** (créatures + PNJ errants + décor animé des packs menagerie/monstres).
-Si les 201 sont simultanément dans le frustum — le scénario de vue large/plongée qui a déjà
-justifié 3 relèvements successifs de cette constante par le passé (8 → 32 → 96 → 160,
-commentaires détaillés à `renderer.rs:137-159`) — **jusqu'à 41 objets skinnés seraient
-silencieusement non dessinés**. Ce n'est pas un crash : le garde-fou existe déjà
-(`skinned_dropped_last_frame`, remonté dans le Profiler avec alerte, `src/editor/mod.rs:207-209`,
-`src/editor/windows.rs:152`), mais c'est un appauvrissement visible de la scène (créatures qui
-disparaissent) si la marge n'a pas été revalidée depuis les derniers ajouts de contenu (paysage
-de prairie, faune ambiante — commits récents `f7a3de0`, `0da59dc`).
+**Historique (avant Phase A)** : `MAX_SKINNED_INSTANCES = 160` alors que la scène contient
+**201 objets skinnés** (créatures + PNJ errants + décor animé des packs menagerie/monstres) —
+en vue large/plongée avec les 201 simultanément dans le frustum, jusqu'à 41 objets skinnés
+auraient été silencieusement non dessinés.
 
-**Action immédiate recommandée** : ouvrir le panneau Profiler en jeu sur `mmorpg_demo`, se placer
-en vue large/plongée, lire `skinned_dropped`. Si > 0, relever `MAX_SKINNED_INSTANCES` (changement
-d'une ligne, `renderer.rs:160`, ex. → 224 ou 256) le temps de traiter le point structurel ci-dessous.
+**Traité (Phase A, Sprint 1, 18 juillet 2026)** : `MAX_SKINNED_INSTANCES` relevée à **256**
+(`src/gfx/renderer.rs:174`), marge de ~55 au-dessus des 201 objets skinnés mesurés dans le code.
+Re-mesuré à `skinned_dropped == 0` en vue large/zénithale (Sprint 1) et confirmé par la mesure
+headless de la Phase F ci-dessous (`skinned_dropped: 0`). Cf.
+[sprintoptimation3daudit10h.md § Phase A](sprintoptimation3daudit10h.md#phase-a).
+
+---
+
+## Mesure AVANT/APRÈS (Phase F, Sprint 7 — 18 juillet 2026)
+
+Protocole détaillé, écarts de méthode et discussion : voir
+[sprintoptimation3daudit10h.md § Phase F](sprintoptimation3daudit10h.md#phase-f). Résumé :
+
+| Métrique | AVANT (Phase 0, vue large en jeu) | APRÈS (Phase F, benchmark headless reproductible) |
+|---|---|---|
+| `skinned_dropped` | 0 | **0** (confirmé, marge ×1,3 avec `MAX_SKINNED_INSTANCES = 256`) |
+| `gpu_draw_calls` | ~382 (Sprint 0) / ~590 (Sprint 1, vue différente) | **592** (887 objets scène, vue englobant le plus d'objets possible sans dépasser le plan éloigné à 100 m) |
+| FPS | 125 (Sprint 0) / 67 (Sprint 1) — mesuré en jeu, fenêtré, vsync/present inclus | 156 FPS-équivalent — **non comparable directement** : boucle headless sans fenêtre/vsync/UI egui, cf. limite méthodologique ci-dessous |
+| Temps GPU par passe | Non mesuré (timestamp queries désactivées, gel Metal) | Toujours indisponible (`gpu_profiling = false`, non réactivé) |
+| Compression texture (Phase E) | — | **Sans effet mesurable sur `mmorpg_demo`** : 0 objet de cette scène n'utilise `obj.texture` (tous les meshes visibles sont des imports glTF sans texture image via ce chemin) |
+
+**Limite méthodologique assumée** : les FPS de Phase 0/Sprint 1 viennent d'une session interactive
+réelle (fenêtre, vsync, egui) pilotée manuellement ; la mesure Phase F vient d'un benchmark headless
+reproductible (`cargo run --release --example phase_f_measure`, ajouté à ce sprint) qui n'a ni
+fenêtre ni present — les FPS ne sont donc pas comparables terme à terme entre les deux. En
+revanche `gpu_draw_calls` et `skinned_dropped` sont des compteurs GPU exacts, comparables. Note :
+`render_scene_headless` ne renseignait jusqu'ici jamais `last_frame_draw_calls` (toujours 0) —
+corrigé dans ce sprint (`src/gfx/renderer.rs`) pour que ce benchmark ait un sens.
+
+**Non couvert par cette mesure** : le pack « siège du hameau » (40 assets `siege_*`,
+sprints 0-7, complet et commité le 18 juillet 2026 — postérieur à ce benchmark) a été ajouté après
+le benchmark ci-dessus — décor statique non skinné confirmé (`check_siege_pack.py` : un seul mesh
+joint par asset, aucun skin), mais pas encore intégré à `mmorpg_demo`/la scène servie (chantier
+séparé, non commencé) donc pas encore mesuré en conditions réelles. Le
+« re-test cumulé » et la « revalidation de la marge avec le contenu final » restent donc à faire
+tels quels (Phase G, Sprints 11-12 de [sprintreflecion.md](sprintreflecion.md#phase-g),
+non cochés) — ne pas considérer les 201 objets skinnés/887 objets ci-dessus comme définitifs tant
+que ces deux sprints ne sont pas passés après stabilisation du contenu de scène.
 
 ---
 

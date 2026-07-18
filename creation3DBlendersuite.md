@@ -106,14 +106,16 @@ Et surtout, un écart vérifié directement dans le code, pas dans la doc : **le
 
 ## Plan d'exécution par sprints
 
-- **Sprint 0 — préparation** : ajouter `crenellations()` et `banner()` à `hamlet_common.py`, les tester isolément sur un mur factice (même méthode que pour `plank_wall`/`stone_coursing` au Sprint 5 du hameau : générer un petit test, vérifier la vignette, avant de les utiliser dans les vrais scripts). Écrire `check_siege_pack.py`.
-- **Sprint 1 — fortifications lot 1** (5 : mur, angle, tour, porte fermée, porte embrasée) : `gen_siege_walls.py`.
-- **Sprint 2 — fortifications lot 2** (5 : créneau, chemin de ronde, escalier, poterne, bastion) : `gen_siege_walls2.py`.
-- **Sprint 3 — props des modes lot 1** (6 : chariot, brasero, boulet, bannière de vague, autel, trophées) : `gen_siege_modes.py`.
-- **Sprint 4 — props des modes lot 2** (4 : balise, caisse, herse, pieux) + **lande lot 1** (6 : rocher, arbre mort, ossements, menhir, broussaille, mare) : `gen_siege_modes2.py` + `gen_siege_lande.py`.
-- **Sprint 5 — lande lot 2** (4 : ravine, poteau en ruine, cairn, brume) + **signalétique lot 1** (5 : bannières de mode, corne, torche, marqueur, fanion) : `gen_siege_lande2.py` + `gen_siege_signal.py`.
-- **Sprint 6 — signalétique lot 2** (5 : cage, statue, trophée, portail, panneau) : `gen_siege_signal2.py`.
-- **Sprint 7 — QA finale & revue** : `check_siege_pack.py` sur les 40 fichiers, revue visuelle groupée des vignettes.
+- **Sprint 0 — préparation** ✅ FAIT : ajouter `crenellations()` et `banner()` à `hamlet_common.py`, les tester isolément sur un mur factice (même méthode que pour `plank_wall`/`stone_coursing` au Sprint 5 du hameau : générer un petit test, vérifier la vignette, avant de les utiliser dans les vrais scripts). Écrire `check_siege_pack.py`.
+- **Sprint 1 — fortifications lot 1** ✅ FAIT (5 : mur, angle, tour, porte fermée, porte embrasée) : `gen_siege_walls.py`.
+- **Sprint 2 — fortifications lot 2** ✅ FAIT (5 : créneau, chemin de ronde, escalier, poterne, bastion) : `gen_siege_walls2.py`.
+- **Sprint 3 — props des modes lot 1** ✅ FAIT (6 : chariot, brasero, boulet, bannière de vague, autel, trophées) : `gen_siege_modes.py`.
+- **Sprint 4 — props des modes lot 2** ✅ FAIT (4 : balise, caisse, herse, pieux) + **lande lot 1** ✅ FAIT (6 : rocher, arbre mort, ossements, menhir, broussaille, mare) : `gen_siege_modes2.py` + `gen_siege_lande.py`.
+- **Sprint 5 — lande lot 2** ✅ FAIT (4 : ravine, poteau en ruine, cairn, brume — QA 30/30, corrections d'un flanc de ravine et d'un moignon de poteau sous le sol) : `gen_siege_lande2.py`. **signalétique lot 1** ✅ FAIT (5 : `siege_mode_banner` — pan générique retiendu par mode via matériau en jeu, pas 4 fichiers séparés —, `siege_alert_horn`, `siege_rampart_torch`, `siege_ground_marker`, `siege_team_pennant` — QA 35/35 du premier coup) : `gen_siege_signal.py`.
+- **Sprint 6 — signalétique lot 2** ✅ FAIT (5 : `siege_chief_cage`, `siege_memorial_statue`, `siege_round_trophy`, `siege_end_portal`, `siege_rampart_signpost`) : `gen_siege_signal2.py`.
+- **Sprint 7 — QA finale & revue** ✅ FAIT : `check_siege_pack.py` → **40/40 sans échec** sur les 40 fichiers planifiés ; vignettes du dernier lot (cage, portail) revues visuellement, silhouettes lisibles.
+
+> État au 18 juillet 2026 : **pack complet, 40/40 assets livrés et commités** (`dd59a0b` → `ef28737`), `check_siege_pack.py` à 40/40 sans échec. Reste ouvert : [creationAnimation3DBlendersuite.md](creationAnimation3DBlendersuite.md) (addendum écrit après le début de la génération) liste 12 assets — dont la balise de spawn (Sprint 4) déjà livrée en statique — comme candidats à un squelette/clip ; cette divergence n'a **pas** été tranchée avant de clore le Sprint 7, à traiter dans un sprint de reprise dédié si l'animation est jugée nécessaire. L'intégration en jeu (remplacer les `box_seg` des remparts par ces assets, `src/scene/demos.rs:6555-6650`) reste un chantier séparé, non commencé.
 
 Chaque sprint se clôt par : script(s) exécutés en headless, vignettes générées et inspectées, `check_siege_pack.py` sans échec, commit au format en usage (français, cf. mémoire `rusteegear-project-conventions`).
 
