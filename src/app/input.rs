@@ -83,7 +83,10 @@ pub fn apply_deadzone(v: f32, threshold: f32) -> f32 {
 /// ni à winit) — testable sans manette réelle ni boucle d'événements.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GamepadInput {
-    /// Stick gauche, zone morte déjà appliquée : x = tourne, y = avance/recul
+    /// `turn` : rotation, pilotée uniquement par le D-pad (le stick gauche
+    /// horizontal est ignoré à la demande — le joueur ne veut avancer/reculer
+    /// qu'avec le stick, la rotation restant au D-pad/stick droit).
+    /// `thrust` : stick gauche vertical, zone morte déjà appliquée, avance/recul
     /// (mêmes axes que les contrôles clavier « tank », cf. `PlayerInput::turn`/
     /// `thrust`).
     pub turn: f32,
@@ -147,7 +150,7 @@ pub fn resolve_gamepad_input(
         (held_free(pos) as i8 - held_free(neg) as i8) as f32
     };
     use gilrs::Button::{DPadDown, DPadLeft, DPadRight, DPadUp};
-    let turn = apply_deadzone(raw_axes.0, STICK_DEADZONE) + dpad_axis(DPadLeft, DPadRight);
+    let turn = dpad_axis(DPadLeft, DPadRight);
     let thrust = apply_deadzone(raw_axes.1, STICK_DEADZONE) + dpad_axis(DPadDown, DPadUp);
     GamepadInput {
         turn: turn.clamp(-1.0, 1.0),
@@ -210,7 +213,10 @@ mod tests {
         assert!(!resolved.heal, "North (Soin) n'est pas tenu");
         assert!(!resolved.menu, "Start (Menu) n'est pas tenu");
         assert!(!resolved.hud, "Select (HUD) n'est pas tenu");
-        assert_eq!(resolved.turn, 0.6);
+        assert_eq!(
+            resolved.turn, 0.0,
+            "stick gauche horizontal ignoré, seul le D-pad tourne"
+        );
         assert_eq!(resolved.thrust, -1.0, "reclampé à 1 en valeur absolue");
     }
 

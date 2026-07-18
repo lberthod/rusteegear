@@ -18,6 +18,17 @@ pub struct MobileControls {
     /// même coin de l'écran.
     #[serde(default)]
     pub dpad: bool,
+    /// Joystick virtuel bridé à l'axe avance/recul (coin bas-gauche) : contrairement
+    /// à `joystick` (axe libre X/Y), dévier le pouce latéralement n'a aucun effet —
+    /// seul l'axe vertical compte, écrit dans `PlayerInput::touch_thrust`. À la
+    /// place de `joystick`. Prioritaire sur `joystick` mais pas sur `dpad` (cf.
+    /// `mobile_overlay`), pour ne jamais superposer plusieurs schémas de contrôle
+    /// dans le même coin de l'écran. **Pas de second stick pour tourner** : une
+    /// première version ajoutait un stick droit (axe horizontal → rotation
+    /// caméra/personnage) mais il a été retiré sur retour explicite — tourner
+    /// reste au clavier (flèches) tant qu'aucun remplacement tactile n'est défini.
+    #[serde(default)]
+    pub dual_stick: bool,
     /// Boutons tactiles nommés (coin bas-droite).
     pub buttons: Vec<String>,
     /// Zone tactile plein écran : un tap n'importe où expose `input.btn.touch` au script.
@@ -34,6 +45,11 @@ pub struct MobileControls {
 impl MobileControls {
     /// Au moins un contrôle est-il actif ?
     pub fn any(&self) -> bool {
-        self.joystick || self.dpad || !self.buttons.is_empty() || self.touch_zone || self.health_bar
+        self.joystick
+            || self.dpad
+            || self.dual_stick
+            || !self.buttons.is_empty()
+            || self.touch_zone
+            || self.health_bar
     }
 }

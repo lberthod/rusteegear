@@ -15,6 +15,18 @@ category = "public.app-category.developer-tools"
 copyright = "© 2026 Berthod"
 icon = ["assets/icon/icon.icns"]
 
+# `cargo bundle --bin motor3derust` (utilisé par `packaging/build_dmg.sh`, seul moyen fiable
+# de bundler le bon binaire quand plusieurs `[[bin]]` existent dans le crate) ignore la table
+# `[package.metadata.bundle]` ci-dessus et lit exclusivement cette sous-table dédiée — sans
+# elle, cargo-bundle retombe sur ses valeurs par défaut (nom = nom du binaire, pas d'icône).
+[package.metadata.bundle.bin.motor3derust]
+name = "RusteeGear"
+identifier = "com.berthod.rusteegear"
+short_description = "Moteur de jeu 3D minimaliste"
+category = "public.app-category.developer-tools"
+copyright = "© 2026 Berthod"
+icon = ["assets/icon/icon.icns"]
+
 # Bibliothèque partagée : rlib pour le bin desktop, cdylib pour le .so Android.
 [lib]
 name = "motor3derust"

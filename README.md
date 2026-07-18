@@ -31,6 +31,7 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 - [🦀 Pourquoi Rust ?](#pourquoi-rust)
 - [⚖️ From scratch sur Rust — et pas sur Bevy ?](#from-scratch-vs-bevy)
 - [🎮 Fonctionnalités (disponibles aujourd'hui)](#fonctionnalites)
+- [🗿 Pipeline d'assets 3D — Blender → GLB](#pipeline-assets)
 - [🌐 Multijoueur en ligne](#multijoueur)
 - [🗓️ Historique & avancement](#historique)
 - [🚀 Démarrage rapide](#demarrage-rapide)
@@ -233,6 +234,69 @@ set_health(0..1)                       -- barre de vie du HUD
 
 ---
 
+<a id="pipeline-assets"></a>
+## 🗿 Pipeline d'assets 3D — Blender → GLB
+
+Tout le contenu 3D du jeu (**412 fichiers `.glb`** dans `assets/models/`) est
+produit par un pipeline **procédural, reproductible et scripté** — aucun
+modèle téléchargé, aucun artiste externe : chaque asset sort d'un script
+Python qui pilote Blender en ligne de commande.
+
+**Génération** (`scripts/blender/`, ~60 scripts `gen_*.py`)
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+    --python scripts/blender/gen_shore_decor.py   # → assets/models/shore_*.glb
+```
+- Chaque script construit un ou plusieurs meshes avec l'API Python de
+  Blender (primitives, modificateurs, métaballes pour le style organique des
+  packs `grotto_*`/`shore_*`), applique une **charte graphique stricte**
+  partagée par tout le catalogue (≤ 3 teintes par objet, aucune texture —
+  `base_color_factor` uniquement, un seul mesh joint par objet exporté sauf
+  squelette animé, sol Blender à `z=0`, export **Y-up**, échelle appliquée
+  avant rotation), puis exporte en `.glb` — parfois accompagné d'un
+  `<nom>_preview.png` (vignette de rendu).
+- **Familles de préfixe** du catalogue : `creature_*`/`monster_*` (bestiaire
+  animé, ~106), `hamlet_*` (bâtiments du village, 40), `siege_*`
+  (fortifications + props de modes de jeu, 40), `nature_*` (flore/mécanismes,
+  123), `fauna_*` (faune décorative neutre, 29), `item_*` (objets ramassables,
+  30), `grotto_*`/`shore_*` (décor organique grotte/rive, 20+20),
+  `fairy_hero` (placeholder héroïne).
+- Détail par pack : **[docs/creation3DBlendersuite.md](docs/creation3DBlendersuite.md)**
+  (bâtiments/fortifications), **[docs/creationAnimation3DBlendersuite.md](docs/creationAnimation3DBlendersuite.md)**
+  (props animés), **[docs/creation3DBlenderOrganicSuite.md](docs/creation3DBlenderOrganicSuite.md)**
+  (grottes/rives, style métaballes).
+
+**Import moteur** (`src/scene/import.rs`, crate `gltf`)
+- Chargement **asynchrone** (thread de fond, ne bloque jamais l'éditeur), glTF
+  statique ou **skinné** (squelette + clips d'animation → skinning GPU,
+  fondu enchaîné entre clips).
+- Un asset une fois importé est mis en cache (`ImportedMesh`) et référencé
+  par chemin — un même `.glb` posé 50 fois dans une scène ne le recharge
+  qu'une fois (cf. `poser()` dans `src/scene/demos.rs`).
+
+**Gestionnaire GLB** (`glbviewer`, menu éditeur **Outils → 🖼 Gestionnaire GLB**)
+- Visualiseur **autonome** (`src/bin/glbviewer.rs`, `cargo run --bin
+  glbviewer`) : parcourt tout `assets/models/`, affiche une vignette 3D
+  par fichier (le `_preview.png` du pipeline s'il existe, sinon rendu à la
+  volée par un `Renderer` headless), sans lancer l'éditeur complet — pratique
+  pour retrouver un asset dans un catalogue de 400+ fichiers sans deviner son
+  nom exact.
+
+**Composition assistée par Blender (MCP)** — nouveau : plutôt que d'écrire des
+coordonnées `(x, y, z)` à l'aveugle dans `src/scene/demos.rs`, une session
+Claude Code connectée au **serveur MCP `blender-mcp`** peut piloter une
+instance Blender en direct (import, positionnement, rendu de prévisualisation)
+pour **composer une scène en la regardant**, puis ne traduire en Rust que le
+plan obtenu et vérifié à l'œil. Démonstration concrète sur l'habillage
+organique du hameau fortifié (rives `shore_*`, entrée de grotte `grotto_*`) :
+**[docs/mapsJeuReflexionAnalyse.md](docs/mapsJeuReflexionAnalyse.md)**
+(méthode, inventaire, pièges rencontrés) et
+**[docs/sprintjeurefelxion.md](docs/sprintjeurefelxion.md)** (déroulé de
+sprint, bilan phase par phase) — fichiers `.blend` de référence et rendus
+versionnés dans `docs/blender/`.
+
+---
+
 <a id="multijoueur"></a>
 ## 🌐 Multijoueur en ligne
 
@@ -240,8 +304,27 @@ RusteeGear est jouable **à plusieurs, en ligne**, sur un mode manches façon
 « Call of Zombies » avec plusieurs objectifs (Vagues / Survie / Escorte /
 Boss), des classes de joueur et un contrat quotidien — un chantier séparé du
 moteur solo, suivi sprint par sprint dans
-**[SPRINT_MMORPG.md](docs/SPRINT_MMORPG.md)**. Trois décisions de scope, prises
-dès le départ :
+**[SPRINT_MMORPG.md](docs/SPRINT_MMORPG.md)**.
+
+### 🏰 Le Hameau des Braises — le premier jeu construit sur le moteur
+
+C'est le **premier vrai jeu livré sur RusteeGear**, pas juste une démo
+technique : un coop d'action en ligne (2 à 16 joueurs, pensé pour 3-4) où un
+groupe de Veilleurs féeriques défend chaque « nuit » (une manche de 10-20
+min) un village fortifié contre des hordes attirées par son feu — vision
+complète, boucles de jeu et direction artistique dans
+**[GDD_MMORPG.md](GDD_MMORPG.md)**. La carte servie (`assets/player_scene.json`,
+embarquée à la compilation) est un hameau fortifié entièrement composé avec
+le catalogue d'assets du pipeline ci-dessus : remparts et props de siège
+(`siege_*`), village en enceinte (`hamlet_*`), forêt en anneau et faune
+ambiante (`nature_*`/`fauna_*`), rives organiques et entrée de grotte
+(`shore_*`/`grotto_*`, composées à l'œil via Blender MCP — voir plus haut) et
+26 créatures reprises de la carte biome (`Scene::mmorpg_demo()`). C'est la
+preuve, à l'échelle d'une vraie carte jouable, que le pipeline entier —
+génération Blender headless → import glTF → composition → traduction Rust →
+scène embarquée — tient bout en bout, sans moteur tiers.
+
+Trois décisions de scope, prises dès le départ :
 
 - **Échelle visée** : des salons de **2 à 16 joueurs**, pas un MMO à monde
   persistant (qui demanderait du sharding de zones et une infra bien plus
@@ -563,6 +646,10 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
   (capacité skinnée, culling, LOD, compression texture) et son plan de sprints.
 - **[reflexion.md](docs/reflexion.md)** / **[sprintreflecion.md](docs/sprintreflecion.md)** — validation,
   coordination et déploiement en aval des deux plans ci-dessus.
+- **[mapsJeuReflexionAnalyse.md](docs/mapsJeuReflexionAnalyse.md)** /
+  **[sprintjeurefelxion.md](docs/sprintjeurefelxion.md)** — composition de la carte du Hameau des
+  Braises assistée par Blender MCP (inventaire d'assets, méthode, pièges rencontrés) et son plan de
+  sprints phase par phase (eau `shore_*`, grotte `grotto_*`, régénération de la scène servie).
 
 **Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)) :
 audio bus/panning/streaming (104) et randomisation pitch/volume (108),

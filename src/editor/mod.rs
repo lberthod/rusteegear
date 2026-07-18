@@ -24,7 +24,7 @@ use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
     ai_scene_window, asset_browser_window, device_bezel, hud_preview_window,
     mobile_multiplayer_overlay, multiplayer_window, optimize_window, play_area_rect,
-    scripts_window, settings_window, tool_windows,
+    player_corner_minimap, player_map_overlay, scripts_window, settings_window, tool_windows,
 };
 
 use crate::app::GizmoMode;
@@ -268,6 +268,18 @@ struct Panels {
     /// Décalage de panoramique de la mini-carte (unités monde x/z), déplacé au
     /// clic-glissé ou en double-cliquant un marqueur pour le recentrer.
     minimap_pan: [f32; 2],
+    /// Carte plein écran du HUD joueur (`player_map_overlay`), ouverte/fermée
+    /// à la touche `M` (cf. `Editor::toggle_player_map`) — distincte de
+    /// `minimap`, qui ne concerne que la fenêtre flottante de l'éditeur.
+    map_open: bool,
+    /// Zoom courant de la carte plein écran joueur — même convention que
+    /// `minimap_zoom` (`<= 0.0` traité comme 1.0), mais état séparé : les deux
+    /// vues (mini-carte éditeur, carte plein écran joueur) ne partagent pas
+    /// leur cadrage, un zoom sur l'une ne doit pas affecter l'autre.
+    map_zoom: f32,
+    /// Décalage de panoramique de la carte plein écran joueur (unités monde
+    /// x/z), cf. `minimap_pan`.
+    map_pan: [f32; 2],
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -574,6 +586,14 @@ impl Editor {
         self.panels.settings = !self.panels.settings;
     }
 
+    /// Ouvre/ferme la carte plein écran du mode Player (touche `M`, cf.
+    /// [src/lib.rs](../lib.rs)) — affiche joueur/alliés/créatures sur
+    /// `AppState::minimap_data`, cadrée automatiquement (pas de pan/zoom,
+    /// contrairement à la mini-carte flottante de l'éditeur).
+    pub fn toggle_player_map(&mut self) {
+        self.panels.map_open = !self.panels.map_open;
+    }
+
     /// Panneau « 📊 Profiler FPS » ouvert ? Lu par `Renderer::render` (Sprint 112)
     /// pour ne payer le coût des timestamp queries GPU que quand ce panneau est
     /// visible — même logique que `fps_history`, qui ne s'accumule aussi que là.
@@ -631,6 +651,7 @@ impl Editor {
         round_contract_label: Option<&str>,
         wave_banner_flash: f32,
         wave_banner_wave: u32,
+        minimap: &crate::app::MinimapData,
         locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -640,6 +661,9 @@ impl Editor {
         let mp_name = &mut self.mp_name;
         let settings = &mut self.settings;
         let settings_open = &mut self.panels.settings;
+        let map_open = self.panels.map_open;
+        let map_zoom = &mut self.panels.map_zoom;
+        let map_pan = &mut self.panels.map_pan;
         let output = self.ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
             let hud_scale = settings.hud_scale;
@@ -777,6 +801,14 @@ impl Editor {
             );
             if *settings_open {
                 windows::player_settings_window(ctx, settings_open, settings, &mut actions);
+            }
+            // Carte (Phase carte plein écran) : mini-carte permanente en coin,
+            // remplacée par la carte plein écran pendant que `M` la garde ouverte
+            // (jamais les deux à la fois, cf. doc de `player_map_overlay`).
+            if map_open {
+                player_map_overlay(ctx, area, minimap, locale, map_zoom, map_pan);
+            } else {
+                player_corner_minimap(ctx, area, minimap, hud_scale);
             }
             let values = HudWidgetValues {
                 health: hud_health.unwrap_or(1.0),
@@ -2267,6 +2299,27 @@ fn build_ui(
             locale,
             hud_scale,
         );
+    }
+    // Carte (mini-carte permanente + plein écran sur `M`) : les deux vues
+    // vivent dans `editor/windows.rs` et n'étaient jusqu'ici câblées que dans
+    // `run_player_overlay` (build joueur/mobile réel) — absentes du Play
+    // testé depuis l'éditeur (bouton ▶ Play, ce `build_ui`), qui passe par un
+    // chemin de rendu séparé. Même état partagé (`Panels::map_open`/
+    // `map_zoom`/`map_pan`), donc la touche `M` (cf. `Renderer::toggle_player_map`,
+    // maintenant armée aussi hors mode `--player`) les bascule ici aussi.
+    if *playing {
+        if panels.map_open {
+            player_map_overlay(
+                root.ctx(),
+                play_rect,
+                minimap,
+                locale,
+                &mut panels.map_zoom,
+                &mut panels.map_pan,
+            );
+        } else {
+            player_corner_minimap(root.ctx(), play_rect, minimap, hud_scale);
+        }
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
         collectibles_hud(

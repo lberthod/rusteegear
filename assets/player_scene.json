@@ -60162,8 +60162,9 @@
     }
   ],
   "mobile": {
-    "joystick": true,
+    "joystick": false,
     "dpad": false,
+    "dual_stick": true,
     "buttons": [
       "Saut",
       "Feu",

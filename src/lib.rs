@@ -589,6 +589,17 @@ impl ApplicationHandler for App {
                                 r.toggle_player_settings();
                             }
                         }
+                        // Carte plein écran (joueur/alliés/monstres), cf.
+                        // `Editor::toggle_player_map`/`player_map_overlay` — mode
+                        // Player, mais aussi Play testé depuis l'éditeur
+                        // (`self.state.playing`, cf. `build_ui`) : sans ce second
+                        // cas, tester la carte nécessitait un vrai build joueur,
+                        // impossible à vérifier depuis l'éditeur desktop.
+                        KeyCode::KeyM if self.state.player || self.state.playing => {
+                            if let Some(r) = self.renderer.as_mut() {
+                                r.toggle_player_map();
+                            }
+                        }
                         _ => {}
                     }
                 }

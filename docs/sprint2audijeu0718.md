@@ -41,14 +41,21 @@ M, N (ou davantage) peuvent démarrer les 4 en même temps — vous aviez raison
 
 | Bloc | Phases dedans (aucune ne partage de fichier avec une autre du même bloc) | Fichiers touchés par ce bloc | Doit attendre la fin de |
 |---|---|---|---|
-| **1** | **L**, **R** | `windows.rs`, `hud.rs`, `protocol.rs`, `firebase.rs`, `network_client.rs` (+ CI config, sans rapport) | — (démarre tout de suite) |
-| **2** | **J**, **O** | `protocol.rs`, `server.rs`, `hud.rs`, `editor/mod.rs`, `sfx.rs`, `network_client.rs`, `simulation.rs` | **Bloc 1** (J reprend `hud.rs`/`protocol.rs` juste libérés par L) |
+| **1** ✅ | **L**, **R** | `windows.rs`, `hud.rs`, `protocol.rs`, `firebase.rs`, `network_client.rs` (+ CI config, sans rapport) | — (démarre tout de suite) |
+| **2** ✅ | **J**, **O** | `protocol.rs`, `server.rs`, `hud.rs`, `editor/mod.rs`, `sfx.rs`, `network_client.rs`, `simulation.rs` | **Bloc 1** (J reprend `hud.rs`/`protocol.rs` juste libérés par L) |
 | **3** | **M**, **Q** | `multiplayer.rs`, `simulation.rs`, `protocol.rs`, `server.rs`, `hud.rs`, `menus.rs`, `windows.rs` | **Bloc 2** (M reprend `protocol.rs`/`server.rs` juste libérés par J ; Q reprend `hud.rs`/`windows.rs`) |
 | **4** | **K**, **N** | `settings.rs`, `windows.rs`, `hud.rs`, `renderer.rs`, `camera.rs`, `app/mod.rs`, `server.rs`, `firebase.rs` | **Bloc 3** (K reprend `windows.rs`/`hud.rs` juste libérés par Q ; N reprend `server.rs` juste libéré par M) |
 | **5** | **P** (seule) | `server.rs`, `protocol.rs`, `firebase.rs` | **Bloc 4** (reprend `server.rs`/`firebase.rs` juste libérés par N) |
 
 **R peut démarrer n'importe quand, y compris avant le Bloc 1** — elle ne touche aucun fichier source,
 posée au Bloc 1 seulement parce qu'elle n'a besoin d'attendre rien.
+
+**Blocs 1 et 2 ✅ fusionnés sur `main`** (18 juillet 2026, commit `6c79635`) : L (3 sprints), R et J
+(2 sprints, déjà livrés avant ce document) forment le Bloc 1+J ; O (Sprint 1) complète le Bloc 2 —
+les quatre phases sont terminées, vérifiées ensemble (`cargo test --all-targets` : 592 passés,
+`cargo clippy --all-targets -- -D warnings`, `cargo fmt --all --check`,
+`python3 scripts/check_unwrap_budget.py`) et poussées dans le même commit groupé. **Le Bloc 3 (M+Q)
+peut démarrer** — `protocol.rs`/`server.rs`/`hud.rs`/`windows.rs` sont désormais libres.
 
 ### Pourquoi cet ordre précis (pas un autre)
 
@@ -442,17 +449,17 @@ widgets) plutôt que le rendu.
 
 ## ✅ Définition de « terminé » par phase
 
-| Phase | Terminée quand |
-|---|---|
-| J | Résumé par joueur + bannière de vague + contrat rempli visibles en fin/pendant de manche |
-| K | Taille HUD et réduction de secousses fonctionnelles et testées ; mode daltonien minimal pour vie/allié à terre/cible |
-| L | Fenêtre Multijoueur sectionnée avec présence en ligne ; marqueur allié hors-écran ; détail frags/assists au HUD |
-| M | Un ramassage d'arme par un joueur réseau est visible par les autres joueurs du même salon |
-| N | `PlayerProgress::favorite_weapon` alimenté et vérifiable en base |
-| O | Son dédié pour allié à terre et éveil de créature |
-| P | `firebase_uid` vérifié par token, déploiement couplé effectué |
-| Q | `hud.rs`/`menus.rs`/`windows.rs` ont chacun une couverture de test non nulle sur leur logique extractible |
-| R | Job CI GPU des goldens visible et fonctionnel (même informatif) |
+| Phase | Statut | Terminée quand |
+|---|---|---|
+| J | ✅ Sur `main` (`6c79635`) | Résumé par joueur + bannière de vague + contrat rempli visibles en fin/pendant de manche |
+| K | non terminé | Taille HUD et réduction de secousses fonctionnelles et testées ; mode daltonien minimal pour vie/allié à terre/cible |
+| L | ✅ Sur `main` (`6c79635`) | Fenêtre Multijoueur sectionnée avec présence en ligne ; marqueur allié hors-écran ; détail frags/assists au HUD |
+| M | non terminé | Un ramassage d'arme par un joueur réseau est visible par les autres joueurs du même salon |
+| N | non terminé | `PlayerProgress::favorite_weapon` alimenté et vérifiable en base |
+| O | ✅ Sur `main` (`6c79635`) | Son dédié pour allié à terre et éveil de créature |
+| P | non terminé | `firebase_uid` vérifié par token, déploiement couplé effectué |
+| Q | non terminé | `hud.rs`/`menus.rs`/`windows.rs` ont chacun une couverture de test non nulle sur leur logique extractible |
+| R | ✅ Sur `main` (`6c79635`) | Job CI GPU des goldens visible et fonctionnel (même informatif) |
 
 ## 📌 Conseils d'exécution
 

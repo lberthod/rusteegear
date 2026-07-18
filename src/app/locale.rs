@@ -200,6 +200,23 @@ pub fn resume_button_label(locale: Locale) -> &'static str {
     }
 }
 
+/// Titre de la carte plein écran (`player_map_overlay`), ouverte/fermée à la
+/// touche `M` en mode Player.
+pub fn map_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🗺 Carte",
+        Locale::En => "🗺 Map",
+    }
+}
+
+/// Légende + rappel du raccourci, affichés en bas de `player_map_overlay`.
+pub fn map_legend(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🔵 Vous · 🟢 Alliés · 🔴 Monstres — M pour fermer",
+        Locale::En => "🔵 You · 🟢 Allies · 🔴 Monsters — M to close",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +270,8 @@ mod tests {
                 );
             }
         }
+        assert_ne!(map_title(Locale::Fr), map_title(Locale::En));
+        assert_ne!(map_legend(Locale::Fr), map_legend(Locale::En));
     }
 
     #[test]

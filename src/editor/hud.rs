@@ -1172,6 +1172,34 @@ pub(super) fn mobile_overlay(
                 input.touch_thrust = thrust;
                 input.touch_turn = turn;
             });
+    } else if cfg.dual_stick {
+        let radius = 55.0;
+        // Gauche : avance/recul uniquement (axe vertical, tank thrust) — le
+        // pouce ne dévie jamais latéralement le déplacement.
+        let left_pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
+        egui::Area::new("mobile_joystick_left".into())
+            .fixed_pos(left_pos)
+            .show(ctx, |ui| {
+                let (rect, resp) = ui.allocate_exact_size(Vec2::splat(radius * 2.0), Sense::drag());
+                let center = rect.center();
+                let painter = ui.painter();
+                painter.circle_filled(center, radius, Color32::from_black_alpha(110));
+                painter.circle_stroke(
+                    center,
+                    radius,
+                    Stroke::new(2.0_f32, Color32::from_white_alpha(120)),
+                );
+                let mut knob = center;
+                if let Some(p) = resp.interact_pointer_pos() {
+                    let mut off = p - center;
+                    if off.length() > radius {
+                        off = off.normalized() * radius;
+                    }
+                    knob = center + egui::vec2(0.0, off.y); // verrouillé sur l'axe vertical
+                    input.touch_thrust = (-off.y / radius).clamp(-1.0, 1.0); // haut = avance
+                }
+                painter.circle_filled(knob, 22.0, Color32::from_white_alpha(200));
+            });
     } else if cfg.joystick {
         let radius = 55.0;
         let pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
@@ -1193,8 +1221,14 @@ pub(super) fn mobile_overlay(
                     if off.length() > radius {
                         off = off.normalized() * radius;
                     }
-                    knob = center + off;
-                    input.joy = (off.x / radius, -off.y / radius); // y inversé : haut = +1
+                    // Bridé à l'axe vertical (avance/recul) — même principe que le
+                    // stick gauche de `dual_stick` : dévier le pouce latéralement ne
+                    // doit ni faire pivoter le personnage ni entraîner la caméra
+                    // (cf. `camera.yaw` asservi à l'orientation du joueur en mode
+                    // arme à distance, ligne ~630). Retour explicite : le stick
+                    // gauche sert uniquement à avancer/reculer, jamais à tourner.
+                    knob = center + egui::vec2(0.0, off.y);
+                    input.joy = (0.0, -off.y / radius); // y inversé : haut = +1
                 }
                 painter.circle_filled(knob, 22.0, Color32::from_white_alpha(200));
             });

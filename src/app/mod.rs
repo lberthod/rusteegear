@@ -43,7 +43,9 @@ use rilua::LuaApiMut;
 
 use crate::gfx::camera::OrbitCamera;
 use crate::gfx::mesh::MeshData;
-use crate::scene::{GameCamera, MobileControls, PointLight, Scene, SceneObject, Transform};
+use crate::scene::{
+    GameCamera, MeshKind, MobileControls, PointLight, Scene, SceneObject, Transform,
+};
 
 /// Instantané léger de la scène pour l'undo/redo (sans les meshes importés, lourds
 /// et rarement modifiés) : objets + lumières + caméra de jeu + contrôles + groupes.
@@ -1345,16 +1347,29 @@ impl AppState {
                     })
             })
             .collect();
+        // `active_wave` (demande utilisateur : « où sont les monstres de la
+        // vague qui attaque ? ») — même filtre que `wave_hud`
+        // (`o.combat.wave == self.wave`), pour désigner sur la carte les
+        // ennemis de la manche en cours, distincts des créatures hors manche
+        // (`combat.wave == 0` ou wave désactivé, `self.wave == 0`).
+        let current_wave = self.wave;
         let creatures = self
             .scene
             .objects
             .iter()
             .filter(|o| o.visible && o.ai_chaser.is_some())
-            .map(|o| (o.transform.position.x, o.transform.position.z))
+            .map(|o| MinimapCreature {
+                x: o.transform.position.x,
+                z: o.transform.position.z,
+                active_wave: current_wave != 0
+                    && o.combat.as_ref().is_some_and(|c| c.wave == current_wave),
+            })
             .collect();
         // Bornes du monde : le sol conventionnel « Sol » (cf. assets/*.json), sa
         // `transform.scale` encodant un demi-extent horizontal — à défaut,
         // englobante de tous les objets, avec un repli fixe si la scène est vide.
+        // Calculées avant `decor` ci-dessous : `thin_decor` a besoin de ces
+        // bornes pour caler sa grille de dédoublonnage.
         let bounds = self
             .scene
             .objects
@@ -1383,10 +1398,47 @@ impl AppState {
                     (min_x, min_z, max_x, max_z)
                 }
             });
+        // Décor repérable (eau, bâtiments, murs/remparts, forêt) : demande
+        // utilisateur (« repères pour comprendre » la carte) — sans ça, la
+        // mini-carte n'affiche que des points flottants sans contexte de
+        // terrain. Exclut joueur/créatures/sol (déjà couverts ci-dessus/
+        // ci-dessous) et tout objet dont `classify_decor` ne reconnaît pas le
+        // nom/l'asset (la grande majorité du décor scatter, herbe/rochers
+        // isolés — resterait un bruit visuel non catégorisable). `thin_decor`
+        // dédoublonne ensuite (une forêt de centaines d'arbres ou une rive de
+        // dizaines de tuiles d'eau produirait sinon un nuage de points
+        // illisible, constaté en jeu).
+        let raw_decor: Vec<MinimapDecor> = self
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && o.ai_chaser.is_none() && o.name != "Sol")
+            .filter_map(|o| {
+                let asset_path = match o.mesh {
+                    MeshKind::Imported(i) => self
+                        .scene
+                        .imported
+                        .get(i as usize)
+                        .map(|m| m.path.as_str())
+                        .unwrap_or(""),
+                    _ => "",
+                };
+                classify_decor(&o.name, asset_path).map(|kind| MinimapDecor {
+                    x: o.transform.position.x,
+                    z: o.transform.position.z,
+                    kind,
+                })
+            })
+            .collect();
+        let span = (bounds.2 - bounds.0).max(bounds.3 - bounds.1).max(1.0);
+        let decor_cell = (span / 24.0).max(1.0);
+        let decor = thin_decor(raw_decor, bounds, decor_cell);
         MinimapData {
             player,
             allies,
             creatures,
+            decor,
+            decor_cell,
             bounds,
         }
     }
@@ -1419,12 +1471,126 @@ pub struct MinimapPoint {
     pub label: String,
 }
 
+/// Catégorie de décor repérable sur la mini-carte (cf. `classify_decor`) —
+/// juste de quoi distinguer visuellement les types de terrain les plus
+/// fréquents dans les scènes du jeu (hameau fortifié, biome forêt/rive), pas
+/// une taxonomie exhaustive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MinimapDecorKind {
+    Water,
+    Building,
+    Wall,
+    Forest,
+}
+
+/// Marqueur de décor de la mini-carte (position monde x/z + catégorie) — cf.
+/// `AppState::minimap_data`.
+pub struct MinimapDecor {
+    pub x: f32,
+    pub z: f32,
+    pub kind: MinimapDecorKind,
+}
+
+/// Marqueur de créature de la mini-carte (position monde x/z + appartenance
+/// à la manche en cours) — cf. `AppState::minimap_data`. `active_wave` : ce
+/// monstre appartient à la manche affichée par `wave_hud`
+/// (`combat.wave == AppState::wave`), donc à la vague qui attaque
+/// actuellement le joueur ; `false` pour toute créature hors système de
+/// manches ou d'une manche déjà passée/pas encore révélée.
+pub struct MinimapCreature {
+    pub x: f32,
+    pub z: f32,
+    pub active_wave: bool,
+}
+
 /// Cf. `AppState::minimap_data`. `bounds` = (min_x, min_z, max_x, max_z).
 pub struct MinimapData {
     pub player: Option<(f32, f32)>,
     pub allies: Vec<MinimapPoint>,
-    pub creatures: Vec<(f32, f32)>,
+    pub creatures: Vec<MinimapCreature>,
+    pub decor: Vec<MinimapDecor>,
+    /// Taille (unités monde) de la grille utilisée par `thin_decor` pour
+    /// `decor` — permet au rendu (`draw_minimap_decor`) de dimensionner ses
+    /// pastilles pour qu'elles se rejoignent en régions continues (rendu
+    /// « carte peinte ») plutôt que de laisser des points isolés.
+    pub decor_cell: f32,
     pub bounds: (f32, f32, f32, f32),
+}
+
+/// Devine une catégorie de décor affichable sur la mini-carte (eau, bâtiment,
+/// mur/rempart, forêt) à partir du nom de l'objet et du chemin de l'asset
+/// glTF importé, le cas échéant. La scène n'a pas de champ de catégorie dédié
+/// — seulement des noms descriptifs en français posés par les générateurs
+/// procéduraux (cf. `scene/demos.rs`, ex. « Halte Sud-Ouest arbre ») et des
+/// chemins de fichiers en anglais (`hamlet_house_a.glb`,
+/// `nature_tree_windswept.glb`…). Heuristique par **mots entiers** (pas de
+/// simple sous-chaîne) découpés sur la ponctuation/les espaces/underscores :
+/// un `contains("eau")` naïf matchait à tort « hameau », « château »… — le
+/// hameau fortifié de la démo en est plein. Même esprit pragmatique que la
+/// détection de « Sol »/du joueur ailleurs dans ce module — approximatif par
+/// construction, pensé comme un repère visuel en jeu, pas une classification
+/// garantie exhaustive. Fonction pure (pas de `&self`) : testable sans
+/// construire de scène complète.
+fn classify_decor(name: &str, asset_path: &str) -> Option<MinimapDecorKind> {
+    let haystack = format!("{name} {asset_path}").to_lowercase();
+    let words: std::collections::HashSet<&str> = haystack
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    const WATER: [&str; 6] = ["eau", "water", "shore", "lac", "riviere", "bassin"];
+    const BUILDING: [&str; 5] = ["maison", "house", "hamlet", "cabane", "hut"];
+    const WALL: [&str; 4] = ["mur", "wall", "rempart", "rampart"];
+    const FOREST: [&str; 5] = ["arbre", "sapin", "tree", "foret", "forest"];
+    let has_any = |keywords: &[&str]| keywords.iter().any(|k| words.contains(k));
+    if has_any(&WATER) {
+        Some(MinimapDecorKind::Water)
+    } else if has_any(&BUILDING) {
+        Some(MinimapDecorKind::Building)
+    } else if has_any(&WALL) {
+        Some(MinimapDecorKind::Wall)
+    } else if has_any(&FOREST) {
+        Some(MinimapDecorKind::Forest)
+    } else {
+        None
+    }
+}
+
+/// Réduit `decor` à un marqueur par catégorie et par cellule d'une grille de
+/// pas `cell` calée sur `bounds` — un décor scatter dense (une forêt de
+/// centaines d'arbres, une rive faite de dizaines de tuiles d'eau) produit
+/// sinon un nuage de points illisible sur la mini-carte (constaté en jeu).
+///
+/// Recale chaque marqueur gardé sur le **centre** de sa cellule plutôt que
+/// la position brute du premier objet rencontré : combiné à un rayon de
+/// rendu qui couvre la cellule (cf. `draw_minimap_decor`), des cellules
+/// voisines de même catégorie se rejoignent alors en régions colorées
+/// continues (terrain « peint », comme une vraie carte de jeu) au lieu d'un
+/// semis de points disjoints — deuxième itération demandée en jeu après une
+/// première version qui gardait la position brute (toujours un nuage, juste
+/// plus clairsemé).
+///
+/// Fonction pure : testable sans construire de scène.
+fn thin_decor(
+    decor: Vec<MinimapDecor>,
+    bounds: (f32, f32, f32, f32),
+    cell: f32,
+) -> Vec<MinimapDecor> {
+    let (min_x, min_z, ..) = bounds;
+    let cell = cell.max(0.01);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for d in decor {
+        let cx = ((d.x - min_x) / cell).floor() as i32;
+        let cz = ((d.z - min_z) / cell).floor() as i32;
+        if seen.insert((d.kind, cx, cz)) {
+            out.push(MinimapDecor {
+                x: min_x + (cx as f32 + 0.5) * cell,
+                z: min_z + (cz as f32 + 0.5) * cell,
+                kind: d.kind,
+            });
+        }
+    }
+    out
 }
 
 impl Default for AppState {
@@ -1448,6 +1614,183 @@ mod tests {
     // tests appellent directement (par nom, pas via `AppState::advance_play`).
     use super::multiplayer::PlayerClass;
     use super::scripting::run_script;
+
+    /// Noms français (générateurs procéduraux) reconnus par catégorie.
+    #[test]
+    fn classify_decor_recognizes_french_object_names() {
+        assert_eq!(
+            classify_decor("Halte Sud-Ouest arbre", ""),
+            Some(MinimapDecorKind::Forest)
+        );
+        assert_eq!(
+            classify_decor("Mur nord du hameau", ""),
+            Some(MinimapDecorKind::Wall)
+        );
+        assert_eq!(
+            classify_decor("Rive Est", "shore_bank_a.glb"),
+            Some(MinimapDecorKind::Water)
+        );
+    }
+
+    /// Chemins d'assets glTF (générés en anglais) reconnus par catégorie.
+    #[test]
+    fn classify_decor_recognizes_asset_paths() {
+        assert_eq!(
+            classify_decor("Maison 3", "hamlet_house_a.glb"),
+            Some(MinimapDecorKind::Building)
+        );
+        assert_eq!(
+            classify_decor("Objet 12", "nature_tree_windswept.glb"),
+            Some(MinimapDecorKind::Forest)
+        );
+    }
+
+    /// Le décor scatter non catégorisable (herbe, rochers isolés…) ne doit
+    /// jamais se voir attribuer une catégorie au hasard.
+    #[test]
+    fn classify_decor_returns_none_for_unrecognized_names() {
+        assert_eq!(classify_decor("Rocher 4", "nature_rock_medium.glb"), None);
+        assert_eq!(classify_decor("Touffe d'herbe", ""), None);
+    }
+
+    /// Un mot-clé ne doit matcher qu'en mot entier, pas en sous-chaîne — « eau »
+    /// apparaît dans « hameau »/« château », qui n'ont rien à voir avec de l'eau
+    /// (bug constaté : « Mur nord du hameau » se classait « Eau »).
+    #[test]
+    fn classify_decor_does_not_match_substrings_inside_other_words() {
+        assert_eq!(
+            classify_decor("Mur nord du hameau", ""),
+            Some(MinimapDecorKind::Wall)
+        );
+        assert_eq!(classify_decor("Château en ruine", ""), None);
+    }
+
+    /// Une centaine d'arbres serrés dans un même coin de carte (forêt dense)
+    /// doit s'effondrer en une poignée de marqueurs, pas rester un point par
+    /// arbre — sinon la carte devient un nuage de points illisible.
+    #[test]
+    fn thin_decor_collapses_a_dense_cluster_to_few_markers() {
+        let bounds = (-50.0, -50.0, 50.0, 50.0);
+        let decor: Vec<MinimapDecor> = (0..100)
+            .map(|i| MinimapDecor {
+                x: 10.0 + (i % 10) as f32 * 0.1,
+                z: 10.0 + (i / 10) as f32 * 0.1,
+                kind: MinimapDecorKind::Forest,
+            })
+            .collect();
+        let thinned = thin_decor(decor, bounds, 4.0);
+        assert!(
+            thinned.len() < 10,
+            "attendu une forte réduction, obtenu {} marqueurs",
+            thinned.len()
+        );
+        assert!(!thinned.is_empty());
+    }
+
+    /// Deux catégories au même endroit (ex. un mur et une maison voisins) ne
+    /// doivent jamais se fondre en un seul marqueur — le dédoublonnage est
+    /// par (catégorie, cellule), pas par cellule seule.
+    #[test]
+    fn thin_decor_keeps_distinct_categories_in_the_same_cell() {
+        let bounds = (-50.0, -50.0, 50.0, 50.0);
+        let decor = vec![
+            MinimapDecor {
+                x: 0.0,
+                z: 0.0,
+                kind: MinimapDecorKind::Wall,
+            },
+            MinimapDecor {
+                x: 0.05,
+                z: 0.05,
+                kind: MinimapDecorKind::Building,
+            },
+        ];
+        let thinned = thin_decor(decor, bounds, 4.0);
+        assert_eq!(thinned.len(), 2);
+    }
+
+    /// Un décor déjà épars (un marqueur par grande zone) ne doit rien perdre :
+    /// `thin_decor` ne doit jamais supprimer un marqueur isolé.
+    #[test]
+    fn thin_decor_keeps_sparse_markers_untouched() {
+        let bounds = (-50.0, -50.0, 50.0, 50.0);
+        let decor = vec![
+            MinimapDecor {
+                x: -40.0,
+                z: -40.0,
+                kind: MinimapDecorKind::Water,
+            },
+            MinimapDecor {
+                x: 40.0,
+                z: 40.0,
+                kind: MinimapDecorKind::Water,
+            },
+        ];
+        let thinned = thin_decor(decor, bounds, 4.0);
+        assert_eq!(thinned.len(), 2);
+    }
+
+    /// Le marqueur gardé est recalé sur le centre de sa cellule (rendu en
+    /// régions continues, cf. doc de `thin_decor`), pas laissé à la position
+    /// brute de l'objet — sinon les pastilles voisines ne s'alignent pas.
+    #[test]
+    fn thin_decor_snaps_kept_markers_to_cell_centers() {
+        let bounds = (0.0, 0.0, 100.0, 100.0);
+        let decor = vec![MinimapDecor {
+            x: 11.0, // cellule 2 (pas 4.0) : [8, 12), centre attendu 10.0
+            z: 9.0,
+            kind: MinimapDecorKind::Forest,
+        }];
+        let thinned = thin_decor(decor, bounds, 4.0);
+        assert_eq!(thinned.len(), 1);
+        assert!((thinned[0].x - 10.0).abs() < 0.001);
+        assert!((thinned[0].z - 10.0).abs() < 0.001);
+    }
+
+    /// `minimap_data` doit distinguer les créatures de la manche affichée
+    /// (`AppState::wave`) des autres — demande utilisateur (« où sont les
+    /// monstres de la vague qui attaque ? »). Seul le monstre dont
+    /// `combat.wave` correspond à la manche courante est `active_wave`.
+    #[test]
+    fn minimap_data_flags_only_current_wave_creatures_as_active() {
+        let mut app = AppState::new();
+        app.wave = 2;
+        app.scene.objects.push(SceneObject {
+            name: "Traqueuse vague 2".to_string(),
+            transform: Transform {
+                position: Vec3::new(5.0, 0.0, 5.0),
+                ..Default::default()
+            },
+            ai_chaser: Some(crate::scene::AiChaser::default()),
+            combat: Some(crate::scene::Combat {
+                wave: 2,
+                ..Default::default()
+            }),
+            visible: true,
+            ..Default::default()
+        });
+        app.scene.objects.push(SceneObject {
+            name: "Traqueuse vague 1 (passée)".to_string(),
+            transform: Transform {
+                position: Vec3::new(-5.0, 0.0, -5.0),
+                ..Default::default()
+            },
+            ai_chaser: Some(crate::scene::AiChaser::default()),
+            combat: Some(crate::scene::Combat {
+                wave: 1,
+                ..Default::default()
+            }),
+            visible: true,
+            ..Default::default()
+        });
+        let minimap = app.minimap_data();
+        assert_eq!(minimap.creatures.len(), 2);
+        let active_count = minimap.creatures.iter().filter(|c| c.active_wave).count();
+        assert_eq!(
+            active_count, 1,
+            "une seule créature (vague 2) doit être marquée active_wave"
+        );
+    }
 
     /// Nom de prefab unique par appel (horloge + pid) — surtout utile quand plusieurs
     /// runs se partagent le même dossier temporaire d'assets.

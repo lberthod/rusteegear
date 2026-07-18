@@ -15,7 +15,7 @@ if [ "${PLAYER_BUILD:-0}" = "1" ]; then
 else
     echo "▶ Compilation + bundle éditeur (release)…"
 fi
-cargo bundle --release $FEATURES
+cargo bundle --release --bin motor3derust $FEATURES
 
 if [ "$OUTPUT_NAME" != "RusteeGear" ]; then
     # Export : applique l'identité (id/nom/version) au .app puis (re)crée le .dmg.

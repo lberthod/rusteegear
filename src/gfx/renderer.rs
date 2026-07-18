@@ -1118,6 +1118,13 @@ impl Renderer {
         }
     }
 
+    /// Bascule la carte plein écran du mode Player (touche `M`) — même relais.
+    pub fn toggle_player_map(&mut self) {
+        if let Some(e) = self.editor.as_mut() {
+            e.toggle_player_map();
+        }
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();
@@ -1705,6 +1712,7 @@ impl Renderer {
                 let ally_marker = app
                     .nearest_downed_ally_position()
                     .map(|p| (app.camera.view_proj(), p));
+                let minimap = app.minimap_data();
                 let (output, actions) = editor.run_player_overlay(
                     &window,
                     &app.scene,
@@ -1739,6 +1747,7 @@ impl Renderer {
                     app.round_contract_label,
                     app.wave_banner_flash,
                     app.wave_banner_wave,
+                    &minimap,
                     app.locale,
                 );
                 if let Some(i) = actions.select_weapon {

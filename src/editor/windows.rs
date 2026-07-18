@@ -7,6 +7,7 @@ use crate::scene::{
     HudAnchor, HudBinding, HudWidget, HudWidgetKind, MAX_POINT_LIGHTS, MeshKind, PointLight, Scene,
 };
 
+use super::hud::clamp_hud_scale;
 use super::{HudPreview, Panels, StatusInfo, UiActions, export, readiness};
 
 /// Fenêtres flottantes des menus « Aide » et « Outils ».
@@ -279,6 +280,126 @@ pub(super) fn tool_windows(
         });
 }
 
+/// Projection monde (x/z) → écran (points egui) partagée par la mini-carte
+/// éditeur (`minimap_window`), la mini-carte permanente du HUD joueur
+/// (`player_corner_minimap`) et la carte plein écran (`player_map_overlay`) —
+/// une seule formule de cadrage à corriger en cas de bug, et testable sans
+/// contexte egui (entrées/sorties = flottants et `egui::Pos2`, pas de `Ui`).
+struct MinimapProjection {
+    center_x: f32,
+    center_z: f32,
+    scale: f32,
+    origin: egui::Pos2,
+}
+
+impl MinimapProjection {
+    /// `bounds` = (min_x, min_z, max_x, max_z) du monde à cadrer (cf.
+    /// `AppState::minimap_data`) ; `rect` = zone écran cible ; `zoom`/`pan`
+    /// permettent un cadrage interactif (mini-carte éditeur) — `zoom = 1.0`,
+    /// `pan = [0.0, 0.0]` pour un cadrage automatique fixe (HUD joueur).
+    fn new(bounds: (f32, f32, f32, f32), rect: egui::Rect, zoom: f32, pan: [f32; 2]) -> Self {
+        let (min_x, min_z, max_x, max_z) = bounds;
+        let span = (max_x - min_x).max(max_z - min_z).max(1.0);
+        // Marge de 10% pour ne pas coller les marqueurs du bord au cadre.
+        let scale = (rect.width().min(rect.height()) / span) * 0.9 * zoom;
+        Self {
+            center_x: (min_x + max_x) * 0.5 + pan[0],
+            center_z: (min_z + max_z) * 0.5 + pan[1],
+            scale,
+            origin: rect.center(),
+        }
+    }
+
+    fn project(&self, x: f32, z: f32) -> egui::Pos2 {
+        egui::pos2(
+            self.origin.x + (x - self.center_x) * self.scale,
+            self.origin.y + (z - self.center_z) * self.scale,
+        )
+    }
+}
+
+/// Couleur d'affichage d'une catégorie de décor de mini-carte (cf.
+/// `crate::app::classify_decor`) — eau (bleu), bâtiment (ocre), mur/rempart
+/// (gris pierre), forêt (vert foncé), distinctes des couleurs des marqueurs
+/// vivants (joueur bleu clair, alliés vert vif, créatures rouge).
+fn minimap_decor_color(kind: crate::app::MinimapDecorKind) -> egui::Color32 {
+    use crate::app::MinimapDecorKind::*;
+    match kind {
+        Water => egui::Color32::from_rgb(70, 130, 200),
+        Building => egui::Color32::from_rgb(200, 160, 90),
+        Wall => egui::Color32::from_rgb(140, 130, 120),
+        Forest => egui::Color32::from_rgb(60, 110, 60),
+    }
+}
+
+/// Rouge franc des marqueurs de créature (constant partagé par les deux
+/// branches ci-dessous) — demande utilisateur (« je veux voir en rouge les
+/// monstres ennemis ») : l'ancien rouge saumon `rgb(220, 90, 80)` se
+/// confondait trop avec l'ocre des bâtiments (`minimap_decor_color`) sur un
+/// fond de pastilles de décor denses.
+const MINIMAP_CREATURE_RED: egui::Color32 = egui::Color32::from_rgb(230, 35, 30);
+
+/// Dessine un marqueur de créature — surligné (pastille plus grande + anneau
+/// jaune) quand `active_wave` (cf. `MinimapCreature::active_wave`) : demande
+/// utilisateur (« où sont les monstres de la vague qui attaque ? ») —
+/// distingue les ennemis de la manche en cours des autres créatures visibles
+/// sur la carte. Contour sombre sur les deux variantes : sans lui, un point
+/// rouge se noie facilement dans les pastilles de décor voisines (vert
+/// forêt/ocre bâtiment), surtout à la taille réduite de la mini-carte de coin.
+fn draw_minimap_creature(
+    painter: &egui::Painter,
+    p: egui::Pos2,
+    base_radius: f32,
+    active_wave: bool,
+) {
+    if active_wave {
+        let r = base_radius * 1.35;
+        painter.circle_filled(p, r, MINIMAP_CREATURE_RED);
+        painter.circle_stroke(
+            p,
+            r + 2.0,
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 210, 60)),
+        );
+    } else {
+        painter.circle_filled(p, base_radius, MINIMAP_CREATURE_RED);
+        painter.circle_stroke(
+            p,
+            base_radius,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(180)),
+        );
+    }
+}
+
+/// Dessine les repères de décor (`minimap.decor`) sur une mini-carte déjà
+/// cadrée — appelé avant les marqueurs joueur/alliés/créatures (couche de
+/// fond) par `minimap_window`, `player_corner_minimap` et
+/// `player_map_overlay`, pour que les points vivants restent toujours
+/// visibles par-dessus le terrain.
+///
+/// Rayon dérivé de `decor_cell` (taille monde de la grille de
+/// `thin_decor`, cf. sa doc) projetée à l'échelle courante : des pastilles
+/// dimensionnées pour couvrir leur cellule se rejoignent avec leurs voisines
+/// de même catégorie en régions continues (rendu « carte peinte » plutôt
+/// qu'un semis de points, cf. `MinimapData::decor_cell`) — `min_radius` reste
+/// un plancher pour les cadrages très dézoomés où une cellule ferait moins
+/// d'un pixel.
+fn draw_minimap_decor(
+    painter: &egui::Painter,
+    proj: &MinimapProjection,
+    rect: egui::Rect,
+    decor: &[crate::app::MinimapDecor],
+    decor_cell: f32,
+    min_radius: f32,
+) {
+    let radius = (decor_cell * proj.scale * 0.62).max(min_radius);
+    for d in decor {
+        let p = proj.project(d.x, d.z);
+        if rect.contains(p) {
+            painter.circle_filled(p, radius, minimap_decor_color(d.kind));
+        }
+    }
+}
+
 /// Fenêtre « 🗺 Mini-carte » : vue de dessus (x/z) cliquable/zoomable de la
 /// scène — joueur (bleu), alliés réseau (vert, nom affiché) et créatures
 /// (rouge). Cadrée par défaut sur `minimap.bounds` (cf. `AppState::minimap_data`,
@@ -298,17 +419,14 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
 
             let (min_x, min_z, max_x, max_z) = minimap.bounds;
-            let span = (max_x - min_x).max(max_z - min_z).max(1.0);
-            let center_x = (min_x + max_x) * 0.5 + panels.minimap_pan[0];
-            let center_z = (min_z + max_z) * 0.5 + panels.minimap_pan[1];
-            // Marge de 10% pour ne pas coller les marqueurs du bord au cadre.
-            let scale = (rect.width().min(rect.height()) / span) * 0.9 * panels.minimap_zoom;
-            let world_to_screen = |x: f32, z: f32| {
-                egui::pos2(
-                    rect.center().x + (x - center_x) * scale,
-                    rect.center().y + (z - center_z) * scale,
-                )
-            };
+            let proj = MinimapProjection::new(
+                minimap.bounds,
+                rect,
+                panels.minimap_zoom,
+                panels.minimap_pan,
+            );
+            let scale = proj.scale;
+            let world_to_screen = |x: f32, z: f32| proj.project(x, z);
 
             if response.dragged() && scale > 0.0 {
                 let delta = response.drag_delta();
@@ -346,11 +464,19 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
                 egui::Stroke::new(1.0_f32, egui::Color32::from_gray(60)),
                 egui::StrokeKind::Inside,
             );
+            draw_minimap_decor(
+                &painter,
+                &proj,
+                rect,
+                &minimap.decor,
+                minimap.decor_cell,
+                3.0,
+            );
 
-            for &(x, z) in &minimap.creatures {
-                let p = world_to_screen(x, z);
+            for c in &minimap.creatures {
+                let p = world_to_screen(c.x, c.z);
                 if rect.contains(p) {
-                    painter.circle_filled(p, 3.5, egui::Color32::from_rgb(220, 90, 80));
+                    draw_minimap_creature(&painter, p, 3.5, c.active_wave);
                 }
             }
             for ally in &minimap.allies {
@@ -383,6 +509,236 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
                     }
                 });
             });
+        });
+}
+
+/// Mini-carte permanente du HUD joueur (pas éditeur) : coin haut-**gauche**,
+/// toujours visible en jeu — joueur (bleu), alliés réseau (vert) et créatures
+/// (rouge), sans étiquette de nom (cadre trop petit pour rester lisible).
+/// Cadrage automatique fixe sur `minimap.bounds`, pas de pan/zoom (le joueur
+/// ne navigue pas cette vue, contrairement à `minimap_window`). Masquée
+/// pendant que `player_map_overlay` est ouverte (`Panels::map_open`), pour ne
+/// pas superposer deux cartes.
+///
+/// Coin **gauche**, pas droit : le coin haut-droit est déjà occupé (icône
+/// d'arme + munitions, `kills_hud` — squelette/frags — et la fenêtre
+/// repliable Multijoueur ancrée à `(-8, 56)`, cf. `mobile_multiplayer_overlay`)
+/// — la carte y chevauchait ces widgets (rapporté en jeu : masquait l'icône de
+/// connexion et le compteur de morts). Le coin gauche ne porte que la barre
+/// de vie tout en haut ; un décalage vertical de 64 points la dégage.
+///
+/// Taille bornée par le **petit côté** de `area` (pas sa largeur seule — sur
+/// un aperçu téléphone étroit, `area.width() * fraction` dépasse vite l'écran
+/// une fois combiné au plancher de taille minimale) et par un `hud_scale`
+/// resserré à `0.75..=1.35` : le curseur d'accessibilité (jusqu'à 3.0, cf.
+/// `clamp_hud_scale`) ne doit pas faire grossir cette carte au point de
+/// couvrir les autres widgets HUD. Les points egui sont déjà indépendants de
+/// la résolution physique (DPI géré par `pixels_per_point`), donc pas besoin
+/// de grossir en plus sur UHD/4K : une taille en points reste visuellement
+/// comparable partout.
+pub(super) fn player_corner_minimap(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    minimap: &crate::app::MinimapData,
+    hud_scale: f32,
+) {
+    use egui::{Color32, Stroke};
+    let scale = clamp_hud_scale(hud_scale).clamp(0.75, 1.35);
+    let short_side = area.width().min(area.height());
+    let size = (short_side * 0.2).clamp(64.0, 130.0) * scale;
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(area.left() + 8.0, area.top() + 64.0),
+        egui::vec2(size, size),
+    );
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("player_corner_minimap"),
+    ));
+    painter.rect_filled(rect, 4.0, Color32::from_black_alpha(140));
+    painter.rect_stroke(
+        rect,
+        4.0,
+        Stroke::new(1.0_f32, Color32::from_gray(90)),
+        egui::StrokeKind::Inside,
+    );
+
+    let (min_x, min_z, max_x, max_z) = minimap.bounds;
+    let proj = MinimapProjection::new(minimap.bounds, rect, 1.0, [0.0, 0.0]);
+    // Repères (demande utilisateur : des points seuls sur fond uni ne donnent
+    // aucune idée d'échelle ni de position relative) : contour des bornes du
+    // monde cadrées (mêmes bornes que `player_map_overlay`/`minimap_window`,
+    // donc cohérent entre les trois vues) + croix discrète au centre du cadre
+    // pour repérer les axes sans surcharger un cadre aussi petit.
+    let world_rect =
+        egui::Rect::from_two_pos(proj.project(min_x, min_z), proj.project(max_x, max_z));
+    painter.rect_stroke(
+        world_rect,
+        0.0,
+        Stroke::new(1.0_f32, Color32::from_gray(70)),
+        egui::StrokeKind::Inside,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(rect.center().x, rect.top()),
+            egui::pos2(rect.center().x, rect.bottom()),
+        ],
+        Stroke::new(0.75_f32, Color32::from_white_alpha(35)),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.center().y),
+            egui::pos2(rect.right(), rect.center().y),
+        ],
+        Stroke::new(0.75_f32, Color32::from_white_alpha(35)),
+    );
+    draw_minimap_decor(
+        &painter,
+        &proj,
+        rect,
+        &minimap.decor,
+        minimap.decor_cell,
+        2.0,
+    );
+
+    for c in &minimap.creatures {
+        let p = proj.project(c.x, c.z);
+        if rect.contains(p) {
+            draw_minimap_creature(&painter, p, 3.0, c.active_wave);
+        }
+    }
+    for ally in &minimap.allies {
+        let p = proj.project(ally.x, ally.z);
+        if rect.contains(p) {
+            painter.circle_filled(p, 3.5, Color32::from_rgb(110, 200, 110));
+        }
+    }
+    if let Some((x, z)) = minimap.player {
+        let p = proj.project(x, z);
+        if rect.contains(p) {
+            painter.circle_filled(p, 4.0, Color32::from_rgb(90, 160, 240));
+            painter.circle_stroke(p, 4.0, Stroke::new(1.2_f32, Color32::WHITE));
+        }
+    }
+}
+
+/// Carte plein écran du HUD joueur : ouverte/fermée avec la touche `M`
+/// (`Editor::toggle_player_map`, `Panels::map_open`) — vue détaillée de
+/// `minimap.bounds` pour repérer précisément monstres et joueurs. Glisser
+/// pour déplacer la vue, molette (ou pincer, tactile) pour zoomer,
+/// double-clic/double-tap pour recentrer — mêmes gestes que la mini-carte
+/// éditeur (`minimap_window`), état de cadrage séparé (`Panels::map_zoom`/
+/// `map_pan`, cf. leur doc). Dessinée en `egui::Area` par-dessus tout le
+/// reste (pas une `egui::Window`, pour un vrai plein écran sans chrome de
+/// fenêtre) sur toute `area`, avec un fond assombri pour la lisibilité
+/// par-dessus la scène 3D.
+pub(super) fn player_map_overlay(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    minimap: &crate::app::MinimapData,
+    locale: crate::app::locale::Locale,
+    zoom: &mut f32,
+    pan: &mut [f32; 2],
+) {
+    use egui::{Align2, Color32, FontId, Sense, Stroke};
+    if *zoom <= 0.0 {
+        *zoom = 1.0;
+    }
+    egui::Area::new(egui::Id::new("player_map_overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(area.min)
+        .show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(area.size(), Sense::click_and_drag());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, Color32::from_black_alpha(210));
+
+            let margin = (rect.width().min(rect.height()) * 0.1).max(24.0);
+            let map_rect = rect.shrink(margin);
+            let (min_x, min_z, max_x, max_z) = minimap.bounds;
+            let proj = MinimapProjection::new(minimap.bounds, map_rect, *zoom, *pan);
+
+            if response.dragged() && proj.scale > 0.0 {
+                let delta = response.drag_delta();
+                pan[0] -= delta.x / proj.scale;
+                pan[1] -= delta.y / proj.scale;
+            }
+            if response.double_clicked() {
+                *pan = [0.0, 0.0];
+                *zoom = 1.0;
+            }
+            if response.hovered() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    *zoom = (*zoom * (1.0 + scroll * 0.002)).clamp(0.25, 8.0);
+                }
+            }
+            // Recadré après un zoom/pan éventuel ci-dessus (sinon les
+            // marqueurs de cette frame utiliseraient encore l'ancien cadrage).
+            let proj = MinimapProjection::new(minimap.bounds, map_rect, *zoom, *pan);
+
+            painter.rect_stroke(
+                map_rect,
+                0.0,
+                Stroke::new(1.0_f32, Color32::from_gray(90)),
+                egui::StrokeKind::Inside,
+            );
+            let world_rect =
+                egui::Rect::from_two_pos(proj.project(min_x, min_z), proj.project(max_x, max_z));
+            painter.rect_stroke(
+                world_rect,
+                0.0,
+                Stroke::new(1.0_f32, Color32::from_gray(70)),
+                egui::StrokeKind::Inside,
+            );
+            draw_minimap_decor(
+                &painter,
+                &proj,
+                map_rect,
+                &minimap.decor,
+                minimap.decor_cell,
+                6.0,
+            );
+
+            for c in &minimap.creatures {
+                let p = proj.project(c.x, c.z);
+                if map_rect.contains(p) {
+                    draw_minimap_creature(&painter, p, 7.0, c.active_wave);
+                }
+            }
+            for ally in &minimap.allies {
+                let p = proj.project(ally.x, ally.z);
+                if map_rect.contains(p) {
+                    painter.circle_filled(p, 8.0, Color32::from_rgb(110, 200, 110));
+                    painter.text(
+                        p + egui::vec2(10.0, -10.0),
+                        Align2::LEFT_BOTTOM,
+                        &ally.label,
+                        FontId::proportional(16.0),
+                        Color32::from_gray(230),
+                    );
+                }
+            }
+            if let Some((x, z)) = minimap.player {
+                let p = proj.project(x, z);
+                if map_rect.contains(p) {
+                    painter.circle_filled(p, 9.0, Color32::from_rgb(90, 160, 240));
+                    painter.circle_stroke(p, 9.0, Stroke::new(2.0_f32, Color32::WHITE));
+                }
+            }
+
+            painter.text(
+                egui::pos2(rect.center().x, rect.top() + margin * 0.5),
+                Align2::CENTER_CENTER,
+                crate::app::locale::map_title(locale),
+                FontId::proportional(22.0),
+                Color32::WHITE,
+            );
+            painter.text(
+                egui::pos2(rect.center().x, rect.bottom() - margin * 0.5),
+                Align2::CENTER_CENTER,
+                crate::app::locale::map_legend(locale),
+                FontId::proportional(15.0),
+                Color32::from_gray(220),
+            );
         });
 }
 
@@ -1928,7 +2284,44 @@ fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
 
 #[cfg(test)]
 mod tests {
-    use super::skinned_dropped_status;
+    use super::{MinimapProjection, skinned_dropped_status};
+
+    /// Un monde carré cadré sans pan/zoom : son centre doit tomber exactement
+    /// au centre du rect écran.
+    #[test]
+    fn minimap_projection_centre_du_monde_au_centre_du_rect() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
+        let proj = MinimapProjection::new((-10.0, -10.0, 10.0, 10.0), rect, 1.0, [0.0, 0.0]);
+        let p = proj.project(0.0, 0.0);
+        assert!((p.x - rect.center().x).abs() < 0.01, "x inattendu : {p:?}");
+        assert!((p.y - rect.center().y).abs() < 0.01, "y inattendu : {p:?}");
+    }
+
+    /// Un point aux bornes du monde doit rester dans le rect écran (marge de
+    /// 10% appliquée par `MinimapProjection::new`), pas déborder dessus.
+    #[test]
+    fn minimap_projection_bornes_du_monde_restent_dans_le_rect() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
+        let proj = MinimapProjection::new((-10.0, -10.0, 10.0, 10.0), rect, 1.0, [0.0, 0.0]);
+        let corner = proj.project(10.0, 10.0);
+        assert!(
+            rect.contains(corner),
+            "coin du monde hors cadre : {corner:?}"
+        );
+    }
+
+    /// Le panoramique (`pan`) décale le cadrage : un point au centre du monde
+    /// ne doit plus tomber au centre du rect une fois décalé.
+    #[test]
+    fn minimap_projection_pan_decale_le_cadrage() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
+        let proj = MinimapProjection::new((-10.0, -10.0, 10.0, 10.0), rect, 1.0, [5.0, 0.0]);
+        let p = proj.project(0.0, 0.0);
+        assert!(
+            p.x < rect.center().x - 0.01,
+            "pan positif en x doit décaler le centre du monde vers la gauche du rect : {p:?}"
+        );
+    }
 
     /// Zéro objet ignoré : affichage neutre, pas de couleur d'alerte.
     #[test]
