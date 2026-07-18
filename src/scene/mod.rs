@@ -3860,4 +3860,80 @@ mod tests {
             );
         }
     }
+
+    /// Synchronise le convoi (GDD §4, mode Escorte) depuis `Scene::mmorpg_demo`
+    /// vers la scène embarquée — absent jusqu'ici (Phase L, `sprintreflecion.md` :
+    /// un salon réseau en `RoundObjective::Escorte` ne se terminait jamais faute
+    /// de `convoy` dans la scène réellement servie). Réutilise l'import existant
+    /// de `nature_cart.glb` si `sync_embedded_scene_ambient_decor_from_the_demo`
+    /// (ou un autre outil) l'a déjà bundlé, sinon en ajoute un nouveau en fin de
+    /// `imported` (clé `bundle://m{i}_nature_cart.glb`, même convention que les
+    /// autres outils de cette famille) — le fichier source doit déjà exister
+    /// dans `assets/bundle/` (`bundle_missing_assets_referenced_by_the_embedded_scene`
+    /// le complète sinon).
+    #[test]
+    #[ignore = "outil : réécrit assets/player_scene.json, à lancer explicitement"]
+    fn sync_embedded_scene_convoy_from_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let mut embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::mmorpg_demo();
+
+        let demo_convoi = demo
+            .objects
+            .iter()
+            .find(|o| o.convoy.is_some())
+            .expect("Scene::mmorpg_demo doit contenir un objet `convoy`");
+        let demo_mesh_key = match demo_convoi.mesh {
+            MeshKind::Imported(i) => demo.imported[i as usize]
+                .path
+                .rsplit('/')
+                .next()
+                .expect("nom de fichier")
+                .to_string(),
+            _ => panic!("le convoi de la démo doit référencer un mesh importé"),
+        };
+
+        embedded.objects.retain(|o| o.convoy.is_none());
+        let existing_key = embedded
+            .imported
+            .iter()
+            .position(|m| m.path.ends_with(&demo_mesh_key));
+        let mesh_index = match existing_key {
+            Some(i) => i as u32,
+            None => {
+                let i = embedded.imported.len() as u32;
+                embedded.imported.push(ImportedMesh {
+                    path: format!("{}m{i}_{demo_mesh_key}", crate::assets::SCHEME),
+                    ..Default::default()
+                });
+                i
+            }
+        };
+
+        let mut convoi = demo_convoi.clone();
+        convoi.mesh = MeshKind::Imported(mesh_index);
+        embedded.objects.push(convoi);
+
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&embedded).expect("sérialisation"),
+        )
+        .expect("écriture de player_scene.json");
+        println!(
+            "player_scene.json : convoi synchronisé (mesh index {mesh_index}, {} imports au total)",
+            embedded.imported.len()
+        );
+    }
+
+    /// Garde-fou compagnon de `sync_embedded_scene_convoy_from_the_demo`.
+    #[test]
+    fn the_embedded_scene_has_a_convoy_for_the_escorte_mode() {
+        let embedded = Scene::embedded_player();
+        assert!(
+            embedded.objects.iter().any(|o| o.convoy.is_some()),
+            "la scène embarquée doit contenir un objet `convoy` (mode Escorte, GDD §4) — \
+             lancer `cargo test sync_embedded_scene_convoy_from_the_demo -- --ignored --nocapture`"
+        );
+    }
 }

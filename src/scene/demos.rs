@@ -6266,6 +6266,41 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             }
         }
 
+        // Convoi (GDD §4, mode Escorte) : jusqu'ici absent de la scène réseau
+        // réelle (`mmorpg_demo`, embarquée via `player_scene.json`) — seule
+        // `Scene::escorte_demo()` (solo) en avait un. Conséquence mécanique
+        // vérifiée (Phase L, `sprintreflecion.md`) : un salon réseau qui
+        // choisit `RoundObjective::Escorte` ne se terminait jamais
+        // (`AppState::update_escorte`/`is_convoy_destroyed` retournent tôt
+        // sans rien faire quand aucun objet `convoy` n'existe, cf.
+        // `src/app/combat.rs`/`src/app/health.rs`). Même modèle
+        // (`nature_cart.glb`) et mêmes composants (`Combat`/`Convoy`) que
+        // `escorte_demo`, positionné sur la route principale (bande z
+        // 12.3–15.7, exclue du scatter procédural ci-dessus — cf.
+        // `EXCL_EAU_ROUTES`), entre le col venté et le hameau : x -18 → -2,
+        // à l'écart des collines de l'Ouest (x < -27) et des bâtiments du
+        // hameau (x > 2).
+        {
+            let convoi_mesh = import_single_model(&mut imported, "nature_cart.glb", MeshKind::Cube);
+            let mut convoi = demo_obj(
+                "Convoi — chariot de braises",
+                convoi_mesh,
+                Vec3::new(-18.0, 0.0, 14.0),
+            );
+            convoi.transform.rotation = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+            convoi.emissive = 0.3;
+            convoi.combat = Some(Combat {
+                attackable: true,
+                hp: 8,
+                ..Default::default()
+            });
+            convoi.convoy = Some(Convoy {
+                destination: Vec3::new(-2.0, 0.0, 14.0),
+                speed: 1.2,
+            });
+            objects.push(convoi);
+        }
+
         Scene {
             objects,
             imported,
