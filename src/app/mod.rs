@@ -430,6 +430,14 @@ pub struct AppState {
     /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
     /// localement (le serveur est autoritaire sur eux).
     remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
+    /// `true` si un fantôme réseau (joueur distant ou créature diffusée par le
+    /// serveur) a changé de visibilité depuis le dernier appel à
+    /// `network_client::poll_network` — un fantôme masqué n'a pas de corps
+    /// physique (cf. `runtime::physics::Physics::build`), donc chaque
+    /// bascule doit reconstruire le monde physique pour que son collider
+    /// apparaisse/disparaisse (même mécanisme que `App::update_waves` pour
+    /// une manche révélée). Remis à `false` une fois le rebuild fait.
+    net_visibility_dirty: bool,
     /// Horodatage du dernier `Snapshot` reçu couvrant chaque créature autoritaire
     /// (indexée par `SceneObject`, cf. `network_client::handle_server_msg`). Sert
     /// de filet de secours (`simulation::advance_play`) : si le serveur ne
@@ -845,6 +853,7 @@ impl AppState {
             net_player_id: None,
             net_status: String::new(),
             remote_players: HashMap::new(),
+            net_visibility_dirty: false,
             net_creature_last_snapshot: HashMap::new(),
             #[cfg(not(target_os = "ios"))]
             net_local_interp: crate::net::interpolation::RemoteEntity::default(),

@@ -198,6 +198,16 @@ impl Physics {
             if matches!(obj.physics, PhysicsKind::None) && !controllable {
                 continue;
             }
+            // Même garde-fou que `is_ai` ci-dessus, pour un fantôme réseau masqué
+            // (`app::network_client::ensure_remote_player`, joueur/créature pas
+            // encore diffusé ou déconnecté) : sans elle, il obtiendrait un corps
+            // **fixe** (branche `else` plus bas, faute d'être `is_scripted`) qui
+            // bloquerait le joueur local à sa dernière position connue, invisible
+            // — un mur fantôme (cf. demande gameplay « les entités mobiles ne
+            // doivent pas rester superposées »).
+            if obj.physics == PhysicsKind::Kinematic && !controllable && !obj.visible {
+                continue;
+            }
             // Objet scripté à collisions (cf. `PhysicsKind::Kinematic`) : corps
             // kinématique piloté par `resolve_scripted_moves`, sauf s'il est déjà
             // joueur (le contrôleur joueur prime) ou IA poursuivante (corps

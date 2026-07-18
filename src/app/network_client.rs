@@ -9,8 +9,11 @@
 //! Le joueur local reste **piloté par prédiction**, exactement comme en solo
 //! (`sim_step` ne change pas) : ce module se contente d'envoyer son `Input` au
 //! serveur, et d'afficher les *autres* joueurs reçus par `Snapshot` comme des
-//! objets « fantômes » — sans physique ni script, leur position suit le
+//! objets « fantômes » — sans contrôleur ni script Lua, leur position suit le
 //! dernier `Snapshot` reçu, interpolée (cf. `net::interpolation::RemoteEntity`).
+//! Ils ont cependant un corps physique kinématique (comme une créature
+//! scriptée, cf. `runtime::physics::resolve_scripted_moves`) pour rester des
+//! obstacles réels vis-à-vis du joueur local.
 
 use super::AppState;
 
@@ -251,6 +254,9 @@ impl AppState {
         self.net_player_id = None;
         for rp in self.remote_players.values() {
             if let Some(o) = self.scene.objects.get_mut(rp.scene_index) {
+                if o.visible {
+                    self.net_visibility_dirty = true;
+                }
                 o.visible = false;
             }
         }
@@ -442,6 +448,9 @@ impl AppState {
             {
                 o.transform.position = pos;
                 o.transform.rotation = glam::Quat::from_rotation_y(yaw);
+                if o.visible != visible {
+                    self.net_visibility_dirty = true;
+                }
                 o.visible = visible;
             }
             // Animation répliquée : le clip n'est **pas** interpolé
@@ -461,6 +470,19 @@ impl AppState {
         // ici (avant `sim_step`) serait aussitôt écrasé par la simulation locale
         // du même objet, produisant un aller-retour visible entre les deux
         // positions à chaque frame.
+
+        // Un fantôme (joueur distant ou créature diffusée) vient de changer de
+        // visibilité : reconstruit la physique pour que son corps kinématique
+        // apparaisse/disparaisse en même temps que lui à l'écran (cf. la doc
+        // de `net_visibility_dirty` et `ensure_remote_player` — même principe
+        // que `App::update_waves` pour une manche révélée). Rare (connexion/
+        // déconnexion, mort) : pas de rebuild à chaque frame en régime normal.
+        if self.net_visibility_dirty {
+            self.net_visibility_dirty = false;
+            if self.physics.is_some() {
+                self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+            }
+        }
     }
 
     /// Arme (ou fait progresser d'une tentative) la reconnexion automatique
@@ -752,6 +774,9 @@ impl AppState {
                 if let Some(rp) = self.remote_players.remove(&player_id)
                     && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
                 {
+                    if o.visible {
+                        self.net_visibility_dirty = true;
+                    }
                     o.visible = false;
                 }
             }
@@ -796,6 +821,9 @@ impl AppState {
                             self.net_creature_last_snapshot.insert(i, now);
                             o.transform.position = glam::Vec3::from_array(e.position);
                             o.transform.rotation = glam::Quat::from_rotation_y(e.yaw);
+                            if o.visible != e.visible {
+                                self.net_visibility_dirty = true;
+                            }
                             o.visible = e.visible;
                             // Animation répliquée : même mécanisme que
                             // pour les fantômes de joueurs, cf. `poll_network`.
@@ -870,8 +898,17 @@ impl AppState {
 
     /// Renvoie le fantôme du joueur `id`, en le créant s'il n'existe pas
     /// encore : clone du gabarit pilotable local, mais sans contrôleur ni
-    /// physique (affichage seul — le serveur est autoritaire sur sa position,
-    /// appliquée directement au `transform`, pas simulée localement).
+    /// prédiction propre — le serveur reste autoritaire sur sa position,
+    /// appliquée directement au `transform` (`poll_network`). `PhysicsKind::
+    /// Kinematic` (et non `None`) : un corps kinématique scripté (comme les
+    /// créatures, cf. `runtime::physics::resolve_scripted_moves`) fait de ce
+    /// fantôme un obstacle réel pour le joueur local — sans quoi il n'a aucun
+    /// collider et le joueur local peut le traverser/se superposer avec lui
+    /// (demande gameplay « les entités mobiles ne doivent pas se retrouver
+    /// superposées »). Masqué tant qu'invisible, `Physics::build` lui refuse
+    /// alors tout corps (cf. sa doc) — un rebuild est déclenché à chaque
+    /// bascule de visibilité (`poll_network`/`handle_server_msg`) pour que ce
+    /// corps apparaisse/disparaisse en même temps que le fantôme à l'écran.
     fn ensure_remote_player(
         &mut self,
         id: crate::net::protocol::PlayerId,
@@ -888,7 +925,7 @@ impl AppState {
             let ghost = crate::scene::SceneObject {
                 name: format!("Joueur réseau {name}"),
                 controller: None,
-                physics: crate::runtime::physics::PhysicsKind::None,
+                physics: crate::runtime::physics::PhysicsKind::Kinematic,
                 // Masqué tant qu'aucun `Snapshot` n'est arrivé pour ce joueur.
                 visible: false,
                 ..template
@@ -1588,6 +1625,76 @@ mod tests {
                 .remote_players
                 .contains_key(&alice.net_player_id.expect("vérifié ci-dessus")),
             "Alice ne doit jamais avoir un fantôme d'elle-même"
+        );
+    }
+
+    /// Pas besoin d'un vrai socket : construit une scène minimale (sol +
+    /// joueur pilotable), crée le fantôme d'un joueur réseau via
+    /// `ensure_remote_player` puis simule l'arrivée d'un premier `Snapshot`
+    /// (le fantôme devient visible juste devant le joueur, chevauchement
+    /// voulu) — preuve de la demande gameplay « les entités mobiles ne
+    /// doivent pas se retrouver superposées » : avant ce correctif, le
+    /// fantôme réseau n'avait aucun corps physique (`PhysicsKind::None`,
+    /// « affichage seul ») et le joueur local pouvait le traverser librement.
+    #[test]
+    fn a_remote_player_ghost_blocks_the_local_player_instead_of_overlapping() {
+        let mut app = AppState::new();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(glam::Vec3::new(20.0, 1.0, 20.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::new(-1.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let player = 1;
+        app.playing = true;
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        // Crée le fantôme (encore masqué, `visible: false` — pas de corps tant
+        // qu'aucun `Snapshot` n'est arrivé, cf. `Physics::build`).
+        let rp = app.ensure_remote_player(1, "Bob");
+        let ghost = rp.scene_index;
+        assert_eq!(
+            app.scene.objects[ghost].physics,
+            crate::runtime::physics::PhysicsKind::Kinematic,
+            "un fantôme réseau doit être un corps kinématique scripté, comme une créature"
+        );
+
+        // Simule le premier `Snapshot` : Bob apparaît juste devant Alice,
+        // presque confondu avec elle (chevauchement délibéré).
+        app.scene.objects[ghost].transform.position = glam::Vec3::new(-0.9, 1.0, 0.0);
+        app.scene.objects[ghost].visible = true;
+        // `poll_network` déclenche normalement ce rebuild via `net_visibility_dirty`
+        // (bascule détectée en comparant l'ancienne et la nouvelle valeur de
+        // `visible`) — reproduit ici à la main, ce test écrivant directement
+        // `scene.objects[ghost].visible` sans passer par un vrai `Snapshot` réseau.
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+        // Alice fonce plein est droit dans le fantôme.
+        let dt = 1.0 / 60.0;
+        for _ in 0..120 {
+            let phys = app.physics.as_mut().expect("construit ci-dessus");
+            phys.control(player, 2.0, 0.0, false, 0.0, 0.0, dt);
+            phys.resolve_scripted_moves(dt, &mut app.scene);
+            phys.step(dt, &mut app.scene);
+        }
+        let player_pos = app.scene.objects[player].transform.position;
+        let ghost_pos = app.scene.objects[ghost].transform.position;
+        assert!(
+            player_pos.distance(ghost_pos) > 0.5,
+            "le joueur local doit être bloqué par le fantôme réseau, pas se superposer avec \
+             lui — joueur={player_pos:?}, fantôme={ghost_pos:?}"
         );
     }
 
