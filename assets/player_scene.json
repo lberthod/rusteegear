@@ -46867,27 +46867,27 @@
     },
     {
       "name": "",
-      "path": "bundle://m26_village_stairs.glb",
+      "path": "bundle://m26_hamlet_stairs.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m27_village_bonfire.glb",
+      "path": "bundle://m27_hamlet_bonfire.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m28_village_cauldron.glb",
+      "path": "bundle://m28_hamlet_cauldron.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m29_village_gazebo.glb",
+      "path": "bundle://m29_hamlet_gazebo.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m30_village_bell_tower.glb",
+      "path": "bundle://m30_hamlet_bell_tower.glb",
       "notifies": {}
     },
     {
@@ -46902,12 +46902,12 @@
     },
     {
       "name": "",
-      "path": "bundle://m33_village_house_a.glb",
+      "path": "bundle://m33_hamlet_house_a.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m34_village_fence.glb",
+      "path": "bundle://m34_hamlet_fence.glb",
       "notifies": {}
     },
     {
@@ -46917,7 +46917,7 @@
     },
     {
       "name": "",
-      "path": "bundle://m36_village_inn.glb",
+      "path": "bundle://m36_hamlet_inn.glb",
       "notifies": {}
     },
     {
@@ -46927,12 +46927,12 @@
     },
     {
       "name": "",
-      "path": "bundle://m38_village_house_b.glb",
+      "path": "bundle://m38_hamlet_house_b.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m39_village_house_c.glb",
+      "path": "bundle://m39_hamlet_house_c.glb",
       "notifies": {}
     },
     {
@@ -46947,7 +46947,7 @@
     },
     {
       "name": "",
-      "path": "bundle://m42_village_blacksmith.glb",
+      "path": "bundle://m42_hamlet_blacksmith.glb",
       "notifies": {}
     },
     {
@@ -46967,12 +46967,12 @@
     },
     {
       "name": "",
-      "path": "bundle://m46_village_stable.glb",
+      "path": "bundle://m46_hamlet_stable.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m47_village_hay.glb",
+      "path": "bundle://m47_hamlet_hay.glb",
       "notifies": {}
     },
     {
@@ -46982,12 +46982,12 @@
     },
     {
       "name": "",
-      "path": "bundle://m49_village_sawmill.glb",
+      "path": "bundle://m49_hamlet_sawmill.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m50_village_sawmill_saw.glb",
+      "path": "bundle://m50_hamlet_sawmill_saw.glb",
       "notifies": {}
     },
     {
@@ -46997,7 +46997,7 @@
     },
     {
       "name": "",
-      "path": "bundle://m52_village_well.glb",
+      "path": "bundle://m52_hamlet_well.glb",
       "notifies": {}
     },
     {
@@ -47007,67 +47007,67 @@
     },
     {
       "name": "",
-      "path": "bundle://m54_village_mill.glb",
+      "path": "bundle://m54_hamlet_mill.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m55_village_market_stand_a.glb",
+      "path": "bundle://m55_hamlet_market_stand_a.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m56_village_market_stand_b.glb",
+      "path": "bundle://m56_hamlet_market_stand_b.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m57_village_bench_a.glb",
+      "path": "bundle://m57_hamlet_bench_a.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m58_village_bench_b.glb",
+      "path": "bundle://m58_hamlet_bench_b.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m59_village_barrel.glb",
+      "path": "bundle://m59_hamlet_barrel.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m60_village_crate.glb",
+      "path": "bundle://m60_hamlet_crate.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m61_village_bag.glb",
+      "path": "bundle://m61_hamlet_bag.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m62_village_bag_open.glb",
+      "path": "bundle://m62_hamlet_bag_open.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m63_village_bags.glb",
+      "path": "bundle://m63_hamlet_bags.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m64_village_package_a.glb",
+      "path": "bundle://m64_hamlet_package_a.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m65_village_package_b.glb",
+      "path": "bundle://m65_hamlet_package_b.glb",
       "notifies": {}
     },
     {
       "name": "",
-      "path": "bundle://m66_village_chair.glb",
+      "path": "bundle://m66_hamlet_chair.glb",
       "notifies": {}
     },
     {

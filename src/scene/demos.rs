@@ -5991,7 +5991,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 "item_berry.glb",
             ],
             // Pas « Étal du marché » : déjà pris par `VILLAGE_PROPS` (« Étal du
-            // marché 1/2 », `village_market_stand_*`) — un préfixe partagé
+            // marché 1/2 », `hamlet_market_stand_*`) — un préfixe partagé
             // ferait retirer/réinjecter ces deux landmarks par erreur dans
             // l'outil de synchro du décor ambiant (cf. `AMBIENT_DECOR_PREFIXES`
             // dans `scene::mod`).
@@ -6252,7 +6252,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
     ///   joueur) sont de minuscules cylindres non solides : le moteur n'a pas
     ///   de type « Empty » distinct d'un mesh (cf. `MeshKind`), c'est
     ///   l'équivalent le plus proche.
-    /// - Chaque cour est fermée par exactement 3 panneaux `village_fence.glb`
+    /// - Chaque cour est fermée par exactement 3 panneaux `hamlet_fence.glb`
     ///   à l'échelle native (~3 m), un par côté bâti — pas une rangée de
     ///   panneaux jointifs : au sens strict ça laisse un jour entre panneau et
     ///   coin de cour plutôt qu'un mur continu, mais respecte la spec « 3
