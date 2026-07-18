@@ -62,33 +62,79 @@ toute composition nouvelle.
 |---|---|---|---|
 | `Scene::mmorpg_demo()` | `src/scene/demos.rs:2043` | `MMORPG_HALF = 36.0` (carte 72×72 m, commentaire à jour) | La grande carte biome : prairie centrale, forêt NE (2 clairières), **lac + 2 rivières + 1 coude à l'ouest** (rects d'eau réels, ci-dessous), **rizières en damier au sud-ouest** (5 parcelles, coordonnées réelles ci-dessous), **promontoire rocheux à l'est** (tour de guet), un village construit avec le pack `hamlet_*` (66 occurrences : maisons, puits, auberge, forge, écurie, étals, clôtures…), relief réel (`MeshKind::Terrain`) sur la marge ouest, système de scatter procédural seedé pour forêt/prairie/lisières avec zones d'exclusion (`EXCL_EAU_ROUTES`, `EXCL_ZONES_AMENAGEES`, `EXCL_CLAIRIERES`). **Aucun usage de `siege_*`** dans cette fonction (0 occurrence vérifiée). |
 | `Scene::hameau_gdd_demo()` | `src/scene/demos.rs:6427` | `HALF = 24.0` (« fort 48×48 ») | Le hameau **fortifié** : remparts/tours/portes en `siege_*`, dressing de lande en `siege_*`. C'est la fonction utilisée comme source de vérité par le test de synchro décor (`sync_embedded_scene_hameau_from_the_demo`). |
-| `assets/player_scene.json` (la **scène réellement servie**) | — | `Sol.transform.scale = (90, 1, 90)` (vérifié en lisant le JSON directement) | Un **mélange partiel** des deux précédentes : décor `Rempart`/`Tour` (44/3 occurrences, vient de `hameau_gdd_demo()`), `Faune` (119, vient de `mmorpg_demo()`), `Créature` (26, vient de `mmorpg_demo()`), objets `Lac`/`Rivière` (18/3 — le système d'eau de `mmorpg_demo()` **est bien présent**). **Mais 0 occurrence de `hamlet` (village), 0 `Promontoire`, seulement 1 `Rizière`** (probablement juste un panneau, pas les 5 parcelles réelles) — le village, le promontoire et les rizières décrits dans les commentaires de `mmorpg_demo()` **n'ont jamais été synchronisés vers la scène servie**. Ce que les joueurs voient réellement aujourd'hui est plus pauvre que ce que le code de la démo décrit. |
+| `assets/player_scene.json` (la **scène réellement servie**) | — | `Sol.transform.scale = (90, 1, 90)` (vérifié en lisant le JSON directement) | **Corrigé (Phase A, 2026-07-18) : c'est en fait la quasi-totalité de `hameau_gdd_demo()` telle quelle**, pas un mélange des deux fonctions. `Rempart`/`Tour` (44/3), `Faune` (119, construite par l'appel à `faune_scatter` **dans `hameau_gdd_demo()` elle-même**, `src/scene/demos.rs:8497`), le village en enceinte (`hamlet_*` — Forge, Puits, Auberge, Écurie, Moulin… 27 chemins `hamlet_*` distincts vérifiés dans le JSON), l'eau (`Lac`/`Rivière ouest`/`Rivière sud`, coordonnées vérifiées `Lac=(-42,42) 24×24`, `Rivière ouest=(-31.5,0) 5×58`, `Rivière sud=(0,31.5) 58×5`) et la rizière stub (`Rizière du sud`, un seul `Plane`, `demos.rs:7976`) viennent **tous** de `hameau_gdd_demo()` (Sol : `demos.rs:6660` ; eau : `demos.rs:7954-7973`). **Seules les 26 `Créature` sont réellement copiées depuis `mmorpg_demo()`** (filtre `starts_with("Créature")`, `src/scene/mod.rs:3325` → `demos.rs:6683-6714`). L'ancienne ligne de ce tableau affirmant que la Faune et l'eau venaient de `mmorpg_demo()` était **fausse** — vérifié en comparant les coordonnées exactes (celles de `mmorpg_demo()`, §2 bis.3 ci-dessous, ne correspondent à aucun objet du JSON servi). `hamlet` (village) et `Rizière` **ne sont donc pas absents** de la scène servie — c'est le village *en enceinte* et la rizière stub de `hameau_gdd_demo()` qui y sont, pas le village *hors les murs* / les 5 parcelles de `mmorpg_demo()`. Seul `Promontoire` reste à 0 occurrence : `hameau_gdd_demo()` n'en construit aucun. |
 
-### 2 bis.2 — Deux écarts concrets à réconcilier **avant** de composer quoi que ce soit
+### 2 bis.2 — Deux écarts concrets, réconciliés Phase A (2026-07-18)
 
-1. **L'échelle du sol ne correspond à aucune des deux fonctions** :
-   `Sol.scale = 90` dans le JSON servi, alors que `mmorpg_demo()` construit un
-   sol à `2 × MMORPG_HALF = 72` (le calcul exact, vérifié dans le code :
-   `sol.transform.with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half))`, base
-   `MeshKind::Terrain` de demi-étendue locale 0,5, donc scale = taille pleine).
-   Il y a donc un agrandissement de 72 → 90 quelque part dans la chaîne de
-   synchronisation, non documenté à ce jour. **À élucider en premier** (relire
-   `sync_embedded_scene_hameau_from_the_demo` et les tests de synchro pour
-   trouver où ce redimensionnement a lieu), sinon toute composition sera faite
-   sur de mauvaises proportions.
-2. **L'alignement spatial hameau fortifié / village n'est pas prouvé.**
-   `hameau_gdd_demo()` (fort `siege_*`, `HALF=24`, vraisemblablement centré à
-   l'origine) et `mmorpg_demo()` (village `hamlet_*`, ex. `"Place du hameau"`
-   posée à `(10.0, 0.031, 7.0)`, pas à l'origine) sont deux fonctions écrites
-   séparément, à des moments différents, **sans jamais avoir été composées
-   ensemble ni visualisées côte à côte**. Que le village tombe par coïncidence
-   à l'intérieur du footprint du fort (`(10,7)` est bien dans `±24`) ne prouve
-   pas que les rues/bâtiments s'alignent avec les remparts/portes réels. Comme
-   le village n'est de toute façon pas synchronisé vers la scène servie (point
-   2 bis.1), la question ne casse rien *aujourd'hui* — mais elle redevient
-   critique dès qu'on veut réintroduire le village dans la carte réelle.
+1. **L'écart 72/90 n'est pas un bug de redimensionnement — ce sont deux
+   fonctions différentes, jamais censées partager une échelle.**
+   `sol.transform.with_scale(Vec3::new(90.0, 1.0, 90.0))` est écrit **en dur**
+   dans `hameau_gdd_demo()` elle-même (`src/scene/demos.rs:6660`) ; ce n'est
+   pas dérivé de `MMORPG_HALF`. `mmorpg_demo()` construit de son côté un sol
+   à `2 × MMORPG_HALF = 72` (`demos.rs:2056`), mais **cette valeur n'entre à
+   aucun moment dans le calcul du sol de `hameau_gdd_demo()`**.
+   `sync_embedded_scene_hameau_from_the_demo` (`src/scene/mod.rs:3325`) prend
+   `Scene::hameau_gdd_demo()` comme base complète de la scène servie et n'en
+   copie que les 26 objets `Créature` depuis `Scene::mmorpg_demo()`
+   (`demos.rs:6683-6714`, filtre `starts_with("Créature")`) — remparts,
+   village, eau, faune et **le sol lui-même** restent ceux de
+   `hameau_gdd_demo()`, à son échelle 90×90, indépendamment de tout calcul
+   fait dans `mmorpg_demo()`. Il n'y a donc **rien à corriger dans
+   `demos.rs`** : le sol de la scène servie est correct et volontaire à
+   90×90 m ; l'attente initiale de « 72 » était fondée sur l'hypothèse fausse
+   que `hameau_gdd_demo()` dérivait sa taille de `mmorpg_demo()`, ce qui n'a
+   jamais été le cas.
+2. **Décision actée : le village hors les murs, le promontoire et les 5
+   parcelles de rizières de `mmorpg_demo()` ne sont PAS réintroduits dans la
+   scène servie.** `hameau_gdd_demo()` est une composition **autonome et déjà
+   cohérente** : elle a son propre village en enceinte (`hamlet_*` — Forge,
+   Puits, Auberge, Écurie, Moulin, étals…), sa propre eau (`Lac`, `Rivière
+   ouest`, `Rivière sud`, coordonnées ci-dessous), sa propre forêt en anneau
+   et une rizière stub — tout cela déjà verrouillé par
+   `the_embedded_scene_decor_and_wildlife_match_the_demo` (CI). Fusionner en
+   plus le village hors les murs, le promontoire et les rizières de
+   `mmorpg_demo()` (système de coordonnées 72×72, origine et scatter propres,
+   jamais visualisés à côté du fort — cf. l'ancien point 2 sur l'alignement
+   non prouvé) referait courir le risque de chevauchement avec les remparts
+   sans bénéfice clair, alors que `hameau_gdd_demo()` couvre déjà chacun de
+   ces rôles (village, eau, forêt, un peu de rizière) à sa manière. **Seul
+   manque réellement absent de toute composition existante : un promontoire**
+   — hors scope de ce sprint (aucune des étapes 1-2 n'en a besoin ; à
+   reconsidérer dans un sprint futur si le GDD l'exige).
+   `mmorpg_demo()` reste une fonction indépendante et plus ancienne (démo
+   MMORPG PC↔mobile, 72×72 m), toujours utile comme **source des définitions
+   de créatures** réutilisées par `hameau_gdd_demo()`, mais sa propre
+   composition d'environnement (village hors les murs, promontoire, 5
+   rizières, forêt NE) n'a pas vocation à être synchronisée vers la scène
+   servie — ses commentaires (`demos.rs:2029-2042`) décrivent correctement
+   *sa propre* carte, pas la scène servie, donc ne nécessitent pas de
+   correction.
+3. **Correction du tableau §2 bis.3 en conséquence** : les coordonnées d'eau
+   qui y étaient données étaient celles de `mmorpg_demo()`, une fonction dont
+   l'eau n'est plus la cible de composition (décision ci-dessus). L'Étape 1
+   du plan (§5) doit habiller l'eau de `hameau_gdd_demo()` — voir les
+   coordonnées corrigées ci-dessous, remplaçant l'ancien tableau.
 
-### 2 bis.3 — Coordonnées réelles du système d'eau (à réutiliser, pas à réinventer)
+   | Zone d'eau (`hameau_gdd_demo()`, source réelle de la scène servie) | Position (x, z) | Taille (X × Z) | Habillage `shore_*` à ajouter |
+   |---|---|---|---|
+   | Rivière ouest | (-31.5, 0.0) | 5 × 58 | Berges, rochers lissés, racines immergées |
+   | Rivière sud | (0.0, 31.5) | 58 × 5 | Berges, débris flottants |
+   | Lac | (-42.0, 42.0) | 24 × 24 | Ondulations (`shore_water_ripple`), berge naturelle, nid (`shore_nest`), faune échouée |
+
+   Les ponts, exclusions de scatter (`EXCL_EAU_ROUTES` et équivalents) et la
+   forêt en anneau propres à `hameau_gdd_demo()` restent à vérifier
+   précisément (nom/ligne) avant l'Étape 1 — non fait dans cette Phase A,
+   volontairement limitée à la réconciliation d'échelle et à la décision
+   village/promontoire/rizières.
+
+### 2 bis.3 — Coordonnées du système d'eau de `mmorpg_demo()` (référence historique — **plus la cible**, voir §2 bis.2 point 3)
+
+> **Mise à jour Phase A (2026-07-18)** : ce tableau documente le système
+> d'eau de `mmorpg_demo()`, pas celui de la scène servie. La décision §2 bis.2
+> point 2 exclut `mmorpg_demo()` de la composition — **utiliser le tableau
+> corrigé du §2 bis.2 point 3** (coordonnées `hameau_gdd_demo()`) pour
+> l'Étape 1, pas celui-ci. Conservé ici à titre de référence historique et
+> pour documenter fidèlement `mmorpg_demo()` elle-même.
 
 Le système d'eau de `mmorpg_demo()` est déjà mature : 4 rectangles d'eau,
 murs invisibles rastérisés automatiquement sur une grille de 1 m (évite les
@@ -112,14 +158,21 @@ constats ci-dessus :
   de lande) — **verrouillé par test non-`#[ignore]`**
   (`the_embedded_scene_decor_and_wildlife_match_the_demo`, `src/scene/mod.rs`).
 - Les packs `grotto_*`/`shore_*` (organiques, 40 assets validés) **ne sont
-  posés nulle part** — ni dans la scène servie, ni même dans `mmorpg_demo()`.
-  Le système d'eau et la marge de relief ouest qui les attendent naturellement
-  existent déjà (§2 bis.3) mais sont habillés en primitives génériques.
-- Le village (`hamlet_*`), le promontoire et les rizières existent dans
-  `mmorpg_demo()` mais **ne sont jamais arrivés dans la scène servie** — un
-  écart plus large que ce qu'un premier passage de cet audit avait supposé
-  (« ménagerie de patrouille générique » ne concernait que le casting
-  d'archétype des créatures, pas l'absence de biomes entiers).
+  posés nulle part** — ni dans la scène servie, ni dans `hameau_gdd_demo()`,
+  ni dans `mmorpg_demo()`. Le système d'eau qui les attend naturellement
+  existe déjà **dans la scène servie elle-même** (`hameau_gdd_demo()`, voir
+  le tableau corrigé du §2 bis.2 point 3, pas celui du §2 bis.3 qui décrit
+  `mmorpg_demo()`) mais est habillé en primitives génériques. La marge de
+  relief ouest, elle, n'a été creusée que pour `mmorpg_demo()` (§2 bis.2
+  Étape 2 révisée) — son équivalent dans `hameau_gdd_demo()` reste à
+  vérifier.
+- **Mise à jour Phase A (2026-07-18)** : contrairement à ce qu'affirmait
+  cette ligne jusqu'ici, le village et une rizière stub **sont bien arrivés**
+  dans la scène servie — via `hameau_gdd_demo()`, pas via `mmorpg_demo()`
+  (voir §2 bis.1, §2 bis.2 point 2). Seul le **promontoire** n'existe dans
+  aucune des deux fonctions autrement que comme description dans les
+  commentaires de `mmorpg_demo()`, et la décision Phase A ne le réintroduit
+  pas (hors scope de ce sprint).
 - Le relief réel (terrain à heightmap, `sprintreflecion.md` Phase K) **ne
   couvre qu'une bande étroite à l'ouest de la carte**, pas la carte entière —
   le reste de la lande est un plan plat avec du décor posé dessus, pas un
@@ -202,40 +255,54 @@ inventé, la carte réelle (§2 bis) a déjà une géographie précise et cohér
 Le travail de ce sprint n'est donc **pas d'inventer une macro-structure**,
 c'est d'**étendre et d'habiller ce qui existe déjà**, dans cet ordre :
 
-### Étape 0 (préalable, avant toute composition visuelle) — réconciliation
-1. Élucider l'écart d'échelle du sol (90 servi vs 72 attendu, §2 bis.2 point 1)
-   — sans ça, toute coordonnée choisie pendant la composition risque d'être
-   fausse une fois régénérée.
-2. Décider explicitement du sort du village (`hamlet_*`), du promontoire et
-   des rizières : **les réintroduire dans la scène servie**, ou **acter
-   consciemment leur absence** (auquel cas retirer/clarifier les commentaires
-   de `mmorpg_demo()` qui les décrivent comme si elles y étaient). Ne pas
-   laisser la question ouverte par défaut — c'est exactement le genre d'écart
-   documentation/code que les audits précédents ont dû corriger a posteriori.
-3. Si le village est réintroduit : vérifier **visuellement**, dans Blender,
-   que son emprise ne chevauche pas les remparts/portes du fort — la
-   coïncidence de coordonnées (§2 bis.2 point 2) n'est pas une preuve.
+### Étape 0 (préalable, avant toute composition visuelle) — réconciliation — **RÉSOLUE (Phase A, 2026-07-18)**
+1. ~~Élucider l'écart d'échelle du sol (90 servi vs 72 attendu)~~ — **fait,
+   voir §2 bis.2 point 1** : ce n'est pas un écart à corriger, `90` est la
+   valeur voulue et codée en dur dans `hameau_gdd_demo()`, indépendante de
+   `mmorpg_demo()`. Aucun changement de code nécessaire.
+2. ~~Décider du sort du village/promontoire/rizières~~ — **fait, voir §2 bis.2
+   point 2** : le village hors les murs, le promontoire et les 5 parcelles de
+   rizières de `mmorpg_demo()` ne sont **pas** réintroduits — `hameau_gdd_demo()`
+   a déjà sa propre version de chacun (sauf promontoire, hors scope). Les
+   commentaires de `mmorpg_demo()` restent corrects tels quels : ils décrivent
+   sa propre carte (72×72, démo MMORPG PC↔mobile), jamais la scène servie.
+3. Point 3 (vérification visuelle de non-chevauchement village/fort) devient
+   **sans objet** : ce village-là n'est plus candidat à la réintroduction.
 
 ### Étape 1 — habiller le système d'eau existant avec `shore_*`
-Les 4 rects d'eau et leurs coordonnées exactes sont donnés au §2 bis.3 — ne
-pas les redessiner, les **habiller** : berges organiques, rochers lissés,
-brume basse, faune échouée neutre autour du lac (zone calme, cohérente avec
-§7.3 du GDD), sans toucher aux murs invisibles ni aux ouvertures de pont déjà
-calibrées à ~3 m (fragiles, cf. le commentaire de `demos.rs` sur `GRID=1.0`).
+Les 3 rects d'eau de `hameau_gdd_demo()` (source réelle de la scène servie)
+et leurs coordonnées exactes sont donnés au §2 bis.2 point 3 (corrigé Phase
+A — remplace l'ancien tableau à 4 rects issu de `mmorpg_demo()`, qui n'est
+plus la cible) — ne pas les redessiner, les **habiller** : berges
+organiques, rochers lissés, brume basse, faune échouée neutre autour du lac
+(zone calme, cohérente avec §7.3 du GDD). Les ouvertures de pont et le
+`GRID` invoqués par l'ancien texte appartiennent à `mmorpg_demo()` ; leurs
+équivalents dans `hameau_gdd_demo()` (s'il y en a) restent à identifier
+avant de composer — non fait dans cette Phase A.
 
 ### Étape 2 — poser `grotto_*` sur la marge de relief ouest existante
 Le relief réel (Phase K, `sprintreflecion.md`) a déjà commencé à creuser un
 « petit bassin intégré à un contrefort + tunnel/arceau statique » sur cette
 même bande ouest — c'est l'emplacement naturel pour les 20 assets `grotto_*`
 (entrée de grotte, stalactites/stalagmites, champignons lumineux…), pas une
-nouvelle zone à inventer ailleurs sur la carte.
+nouvelle zone à inventer ailleurs sur la carte. **À vérifier avant de
+composer** : ce relief (Phase K) a été creusé pour `mmorpg_demo()` —
+confirmer qu'un relief ouest équivalent existe bien dans `hameau_gdd_demo()`
+(sol `Plane` plat, pas `Terrain`, d'après §2 bis.1) avant de poser quoi que
+ce soit ; sinon cette étape n'a pas de cible dans la scène servie.
 
-### Étape 3 — vérifier la cohérence du reste (forêt NE, rizières SO, promontoire est)
-Ces trois biomes sont déjà cartographiés avec un système de scatter
-procédural mature (graine + zones d'exclusion `EXCL_EAU_ROUTES`/
-`EXCL_ZONES_AMENAGEES`/`EXCL_CLAIRIERES`) — ne pas les refaire. Le sprint se
-contente de vérifier, après les étapes 1-2, qu'aucun nouvel élément ne casse
-leurs zones d'exclusion existantes (piège solid_spots, §4.3).
+### Étape 3 — **à revoir** (visait à tort les biomes de `mmorpg_demo()`)
+Le texte original (« forêt NE, rizières SO, promontoire est », zones
+d'exclusion `EXCL_EAU_ROUTES`/`EXCL_ZONES_AMENAGEES`/`EXCL_CLAIRIERES`)
+décrit le scatter procédural de `mmorpg_demo()`, pas celui de
+`hameau_gdd_demo()`. Or la décision ci-dessus exclut ces biomes-là de la
+scène servie. `hameau_gdd_demo()` a sa propre forêt (« forêt en anneau »,
+27→70 m autour du fort, `demos.rs:8447`) et ses propres
+fonctions de scatter (`foret_scatter` à `demos.rs:6549`, `faune_scatter` à
+`demos.rs:6615`, appelées respectivement `demos.rs:8465` et `demos.rs:8497`)
+— l'étape doit être
+réécrite pour vérifier **cette** forêt-là et ses propres zones d'exclusion
+(à identifier), pas celles de `mmorpg_demo()`. Non fait dans cette Phase A.
 
 ### Ce qui reste vrai du raisonnement initial (règles GDD, §4)
 - Le hameau fortifié (place, ruelles, cours) reste le cœur du gameplay de
@@ -275,11 +342,11 @@ déjà connues/déductibles ?*
 
 | Élément | Méthode recommandée | Pourquoi |
 |---|---|---|
-| Étape 0 — réconciliation (écart d'échelle 90/72, sort du village) | **Rust/lecture de code seule**, pas Blender | C'est un problème de calcul et de décision produit, pas de composition visuelle — relire `sync_embedded_scene_hameau_from_the_demo` et les tests de synchro suffit (§5 Étape 0). |
-| Habillage du système d'eau (`shore_*` sur les 4 rects, §2 bis.3) | **Blender d'abord**, coordonnées déjà connues à ajuster visuellement | Les rects/ouvertures sont fixes et documentés, mais la densité et le placement des berges/rochers (éviter le "collier de perles", §7.5) sont un jugement d'œil — exactement le cas d'usage visé par ce sprint (§6). |
-| `grotto_*` sur la marge de relief ouest (§5 Étape 2) | **Blender d'abord** | Emplacement déjà identifié, mais l'intégration avec le relief à heightmap existant (bassin/contrefort de la Phase K) demande de voir le terrain réel en 3D pour ne pas faire flotter/enfoncer les assets. |
-| Vérification forêt NE / rizières SO / promontoire est (§5 Étape 3) | **Rust/lecture de code seule** | Scatter procédural déjà mature (graine + zones d'exclusion) — le sprint ne fait que vérifier qu'aucun nouvel élément ne casse `EXCL_EAU_ROUTES` etc., pas re-composer ; une relecture de `demos.rs` suffit, pas besoin du viewport. |
-| Réintroduction du village (`hamlet_*`) dans la scène servie, si retenue (§5 Étape 0 point 2) | **Blender d'abord, obligatoire** | C'est justement le cas où la coïncidence de coordonnées (§2 bis.2 point 2) n'a jamais été vérifiée visuellement — composer ça directement en Rust reproduirait l'erreur méthodologique que ce sprint cherche à corriger. |
+| Étape 0 — réconciliation (écart d'échelle 90/72, sort du village) | **Rust/lecture de code seule**, pas Blender — **résolue Phase A** | Question de calcul et de décision produit, pas de composition visuelle. Résultat : 90 est correct et volontaire (pas un bug), village/promontoire/rizières de `mmorpg_demo()` non réintroduits (§2 bis.2). |
+| Habillage du système d'eau (`shore_*` sur les 3 rects de `hameau_gdd_demo()`, §2 bis.2 point 3) | **Blender d'abord**, coordonnées déjà connues à ajuster visuellement | Les rects sont fixes et documentés (corrigés Phase A), mais la densité et le placement des berges/rochers (éviter le "collier de perles", §7.5) sont un jugement d'œil — exactement le cas d'usage visé par ce sprint (§6). |
+| `grotto_*` sur la marge de relief ouest (§5 Étape 2) | **Blender d'abord**, après vérification qu'un relief équivalent existe dans `hameau_gdd_demo()` | Emplacement identifié dans `mmorpg_demo()` (Phase K) ; à confirmer côté `hameau_gdd_demo()` avant de composer (non fait en Phase A). |
+| Vérification de la forêt en anneau de `hameau_gdd_demo()` (§5 Étape 3, à revoir) | **Rust/lecture de code seule** | Scatter déjà en place (`foret_scatter`/`faune_scatter`) — l'étape doit d'abord être réécrite pour cibler cette forêt-ci (pas celle de `mmorpg_demo()`) avant d'être exécutée. |
+| Réintroduction du village hors les murs (`mmorpg_demo()`) dans la scène servie | **Non retenu (Phase A)** | `hameau_gdd_demo()` a déjà son propre village en enceinte ; fusionner en plus celui de `mmorpg_demo()` referait courir le risque de chevauchement jamais vérifié (§2 bis.2 point 2, historique) sans bénéfice clair. |
 | Ajustements mineurs sur du décor déjà posé et testé (hameau fortifié `siege_*`) | **Ni l'un ni l'autre par défaut** | Hors scope (§10) — ne pas retoucher sans raison de gameplay. |
 
 ### Ce que "Blender d'abord" veut dire concrètement
@@ -289,7 +356,8 @@ coordonnées et des captures d'écran de référence, **jamais** un export
 automatique vers `demos.rs` ou vers le JSON. Si le MCP Blender est
 indisponible au moment de composer un élément listé "Blender d'abord",
 l'alternative de repli est d'écrire directement en Rust avec les coordonnées
-connues du §2 bis.3 puis de corriger visuellement plus tard en jeu (`cargo run`
+déjà connues (§2 bis.2 point 3 pour l'eau de `hameau_gdd_demo()` — pas le
+§2 bis.3, qui documente `mmorpg_demo()`) puis de corriger visuellement plus tard en jeu (`cargo run`
 + Play) — moins bon qu'une vraie itération Blender, mais strictement meilleur
 que de laisser le sprint bloqué en attendant que le MCP réponde.
 
@@ -485,7 +553,8 @@ n'étant une fonctionnalité joueur :
 2. **Une extension optionnelle du panneau `minimap_window` existant**, pour
    la phase de vérification pendant la composition (pas pour le joueur final) :
    superposer aux points dynamiques déjà affichés les **bornes statiques** des
-   zones en cours de composition — rects d'eau (§2 bis.3), zones d'exclusion
+   zones en cours de composition — rects d'eau de `hameau_gdd_demo()` (§2 bis.2
+   point 3), zones d'exclusion
    du scatter procédural (`EXCL_EAU_ROUTES` etc.), footprint du fort — pour
    repérer un chevauchement ou un chemin bouché sans repasser par Blender à
    chaque itération. Reste dans l'éditeur, gardé par le même `Panels::minimap`
