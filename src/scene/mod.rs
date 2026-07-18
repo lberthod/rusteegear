@@ -88,19 +88,24 @@ pub enum MeshKind {
     Cylinder,
     Capsule,
     Terrain,
+    /// Impostor « croix » (deux plans verticaux perpendiculaires) — LOD à distance pour le
+    /// feuillage dense (Phase D, `sprintD_optimisation10h.md`). Contrairement à `Plane`
+    /// (horizontal), reste visible sous un angle de vue à hauteur d'œil.
+    Billboard,
     /// Modèle glTF importé, index dans `Scene::imported`.
     Imported(u32),
 }
 
 impl MeshKind {
     /// Primitives générées par code (clés du cache de meshes GPU).
-    pub const ALL: [MeshKind; 6] = [
+    pub const ALL: [MeshKind; 7] = [
         MeshKind::Cube,
         MeshKind::Sphere,
         MeshKind::Plane,
         MeshKind::Cylinder,
         MeshKind::Capsule,
         MeshKind::Terrain,
+        MeshKind::Billboard,
     ];
 
     /// Données CPU des primitives (pas valable pour `Imported`).
@@ -112,6 +117,7 @@ impl MeshKind {
             MeshKind::Cylinder => mesh::cylinder([0.55, 0.45, 0.7]),
             MeshKind::Capsule => mesh::capsule([0.45, 0.7, 0.5]),
             MeshKind::Terrain => mesh::terrain([0.4, 0.55, 0.35]),
+            MeshKind::Billboard => mesh::billboard_cross([0.3, 0.45, 0.2]),
             MeshKind::Imported(_) => MeshData::default(),
         }
     }
@@ -124,6 +130,7 @@ impl MeshKind {
             MeshKind::Cylinder => "Cylindre",
             MeshKind::Capsule => "Capsule",
             MeshKind::Terrain => "Terrain",
+            MeshKind::Billboard => "Impostor",
             MeshKind::Imported(_) => "Modèle",
         }
     }
@@ -520,6 +527,36 @@ pub struct BiteAttack {
     pub damage: f32,
 }
 
+/// Grammaire d'archétypes de créatures (GDD_MMORPG.md §5.4) : des paramètres sur
+/// `AiChaser`, pas de nouveaux systèmes — chaque archétype doit rester identifiable à sa
+/// silhouette/gabarit (choix du prefab), le champ ci-dessous ne module que la poursuite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Archetype {
+    /// Valeurs standard — silhouette moyenne, tout l'arsenal en contre-jeu.
+    #[default]
+    Traqueuse,
+    /// Vitesse accrue, PV réduits (côté `Combat`, hors `AiChaser`) — coordination à
+    /// plusieurs sur une cible, dans la limite du plafond `MAX_ACTIVE_CHASERS_PER_TARGET`.
+    Meute,
+    /// Silhouette massive, poursuite ralentie — PV élevés et contact fort (côté `Combat`).
+    Colosse,
+    /// Éveil tardif : n'engage la poursuite qu'à courte portée (`FURTIVE_DETECT_RANGE`,
+    /// < `CHASER_DETECT_RANGE`), mais fonce une fois éveillée.
+    Furtive,
+}
+
+impl Archetype {
+    /// Multiplicateur appliqué à `AiChaser::speed` une fois la poursuite engagée.
+    pub fn speed_multiplier(self) -> f32 {
+        match self {
+            Archetype::Traqueuse => 1.0,
+            Archetype::Meute => 1.25,
+            Archetype::Colosse => 0.65,
+            Archetype::Furtive => 1.5,
+        }
+    }
+}
+
 /// Composant optionnel : IA qui **poursuit activement le joueur** (contrairement aux
 /// patrouilles scriptées à trajectoire fixe/sinusoïdale, prévisibles) — se déplace en
 /// ligne droite vers la position courante du joueur chaque frame, via le moteur physique
@@ -531,6 +568,9 @@ pub struct AiChaser {
     /// Vitesse de poursuite (unités/seconde).
     #[serde(default = "default_move_speed")]
     pub speed: f32,
+    /// Famille de chasse (GDD §5.4) — `Traqueuse` par défaut (comportement historique).
+    #[serde(default)]
+    pub archetype: Archetype,
 }
 
 // Manuel comme `Controller` : `derive(Default)` donnerait speed=0.0 (immobile), pas la
@@ -539,6 +579,7 @@ impl Default for AiChaser {
     fn default() -> Self {
         Self {
             speed: default_move_speed(),
+            archetype: Archetype::default(),
         }
     }
 }
@@ -830,6 +871,44 @@ pub struct SceneObject {
     /// (ex. plusieurs ennemis tagués `"ennemi"`) sans connaître leurs indices.
     #[serde(default)]
     pub tag: String,
+    /// Convoi à escorter (`RoundObjective::Escorte`, Sprint 7 de `sprint10audit.md`) :
+    /// `None` pour la grande majorité des objets — un seul objet par scène en a un.
+    /// Déplacement piloté par `AppState::update_escorte` (pas de script Lua ni
+    /// d'`AiChaser`, dont la poursuite viserait le joueur au lieu d'une destination
+    /// fixe). Combiné à `combat` (PV, cible d'attaque) pour être vaincu comme tout
+    /// autre `Combat::attackable`.
+    #[serde(default)]
+    pub convoy: Option<Convoy>,
+}
+
+/// Composant optionnel : trajectoire d'un convoi à escorter (GDD_MMORPG.md §4, mode
+/// Escorte — « Amener un chariot lent d'une porte du hameau à l'autre »). Ligne droite
+/// vers `destination` plutôt qu'une liste de points : aucune scène existante n'a de
+/// notion de chemin/patrouille structuré (les créatures errent via script Lua, cf.
+/// `AiChaser`), une trajectoire simple suffit au premier mode Escorte livré — à
+/// enrichir en `Vec<Vec3>` si un futur niveau a besoin de détours.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Convoy {
+    /// Point d'arrivée (coordonnées monde) : la manche est gagnée quand le convoi
+    /// s'en approche suffisamment (cf. `AppState::update_escorte`).
+    pub destination: Vec3,
+    /// Vitesse d'avance (unités/seconde) — « chariot lent » (GDD §4) : volontairement
+    /// plus bas qu'un `AiChaser` de créature (cf. `default_move_speed`).
+    #[serde(default = "default_convoy_speed")]
+    pub speed: f32,
+}
+
+fn default_convoy_speed() -> f32 {
+    1.2
+}
+
+impl Default for Convoy {
+    fn default() -> Self {
+        Self {
+            destination: Vec3::ZERO,
+            speed: default_convoy_speed(),
+        }
+    }
 }
 
 /// Composant optionnel : lecture d'un clip d'animation squelettale. `None` =
@@ -1038,6 +1117,7 @@ impl Default for SceneObject {
             animation: None,
             prefab: None,
             tag: String::new(),
+            convoy: None,
         }
     }
 }
@@ -2425,6 +2505,97 @@ mod tests {
         // Une caméra de jeu est définie (cadrage de duel), pas la vue par défaut.
         assert!(s.game_camera.is_some());
         assert!(s.camera_follow);
+    }
+
+    /// Phase C (Sprint 8, `sprint10audit.md`) : le prefab boss respecte le GDD §4
+    /// (« dernière vague : une créature unique, PV massifs, lente, contact doublé »).
+    #[test]
+    fn boss_demo_has_a_single_high_hp_slow_colosse_on_wave_one() {
+        let s = Scene::boss_demo();
+        let bosses: Vec<_> = s.objects.iter().filter(|o| o.ai_chaser.is_some()).collect();
+        assert_eq!(
+            bosses.len(),
+            1,
+            "un unique boss, pas des vagues de monstres"
+        );
+        let boss = bosses[0];
+        let chaser = boss.ai_chaser.as_ref().unwrap();
+        assert_eq!(
+            chaser.archetype,
+            Archetype::Colosse,
+            "GDD_MMORPG.md:368 — Colosse est explicitement « aussi le boss »"
+        );
+        let combat = boss.combat.as_ref().expect("le boss doit être attaquable");
+        assert!(combat.attackable);
+        assert!(
+            combat.hp >= 10,
+            "PV massifs (GDD §4) : hp={} doit dépasser largement le rival du Duel (3)",
+            combat.hp
+        );
+        assert_eq!(
+            combat.wave, 1,
+            "manche unique : sa mort est déjà la dernière manche vidée (cf. AppState::update_round)"
+        );
+        assert!(boss.trigger, "attaque de contact au trigger");
+        assert!(s.objects.iter().any(|o| o.controller.is_some()));
+        assert!(
+            matches!(boss.mesh, MeshKind::Imported(_)),
+            "le boss doit utiliser un vrai modèle (monster_dragon_evolved.glb), pas un primitif — \
+             `MeshKind::Capsule` signalerait que l'asset n'a pas pu être chargé"
+        );
+        assert!(
+            !s.imported.is_empty(),
+            "le mesh importé du boss doit être présent dans `Scene::imported`"
+        );
+    }
+
+    /// Phase C (Sprint 7, `sprint10audit.md`) : le prefab escorte a un convoi
+    /// attaquable avec une destination distincte de son point de départ, et au moins
+    /// une créature poursuivante qui pourra le cibler en priorité
+    /// (`AppState::advance_play`).
+    #[test]
+    fn escorte_demo_has_an_attackable_convoy_with_a_reachable_destination() {
+        let s = Scene::escorte_demo();
+        let convois: Vec<_> = s.objects.iter().filter(|o| o.convoy.is_some()).collect();
+        assert_eq!(convois.len(), 1, "un seul convoi par scène Escorte");
+        let convoi = convois[0];
+        let combat = convoi
+            .combat
+            .as_ref()
+            .expect("le convoi doit être attaquable pour pouvoir être détruit");
+        assert!(combat.attackable);
+        let route = convoi.convoy.as_ref().unwrap();
+        assert!(
+            (route.destination - convoi.transform.position).length() > 1.0,
+            "la destination doit être distincte du point de départ"
+        );
+        assert!(
+            route.speed > 0.0,
+            "un convoi immobile ne peut jamais gagner"
+        );
+        assert!(
+            s.objects.iter().any(|o| o.ai_chaser.is_some()),
+            "au moins une créature pour menacer le convoi"
+        );
+        assert!(
+            matches!(convoi.mesh, MeshKind::Imported(_)),
+            "le convoi doit utiliser un vrai modèle (nature_cart.glb), pas un primitif — \
+             `MeshKind::Cube` signalerait que l'asset n'a pas pu être chargé"
+        );
+        let chasseresse = s
+            .objects
+            .iter()
+            .find(|o| o.ai_chaser.is_some())
+            .expect("au moins une créature");
+        assert!(
+            matches!(chasseresse.mesh, MeshKind::Imported(_)),
+            "la créature poursuivante doit utiliser un vrai modèle, pas une capsule"
+        );
+        assert_eq!(
+            s.imported.len(),
+            2,
+            "un mesh importé pour le convoi et un pour la chasseresse"
+        );
     }
 
     #[test]

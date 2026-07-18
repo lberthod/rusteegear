@@ -197,14 +197,32 @@ pub struct LeaderboardLine {
 
 #[cfg(not(target_os = "ios"))]
 impl AppState {
-    /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`.
-    /// Remplace une connexion existante s'il y en avait une. Transmet
+    /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`, en
+    /// Assaut (classe par défaut) — cf. `connect_to_server_as` pour choisir
+    /// une autre classe (Sprint 3, `sprint10audit.md`, fenêtre Multijoueur).
+    pub fn connect_to_server(&mut self, url: &str, name: &str) {
+        self.connect_to_server_as(url, name, crate::app::multiplayer::PlayerClass::Assault);
+    }
+
+    /// Comme `connect_to_server`, avec une classe choisie (Sprint 3). Remplace
+    /// une connexion existante s'il y en avait une. Transmet
     /// `self.firebase_uid` au serveur s'il est connu (cf. `sign_in`/`sign_up`
     /// ci-dessous, desktop uniquement — toujours `None` sur Android) — `None`
     /// pour une partie anonyme.
-    pub fn connect_to_server(&mut self, url: &str, name: &str) {
+    pub fn connect_to_server_as(
+        &mut self,
+        url: &str,
+        name: &str,
+        class: crate::app::multiplayer::PlayerClass,
+    ) {
         self.disconnect_from_server();
-        match crate::net::client::NetClient::connect(url, name, self.firebase_uid.as_deref()) {
+        match crate::net::client::NetClient::connect_to_lobby(
+            url,
+            name,
+            self.firebase_uid.as_deref(),
+            crate::net::protocol::DEFAULT_LOBBY,
+            class.to_u8(),
+        ) {
             Ok(client) => {
                 log::info!("Multijoueur : connecté à {url} sous « {name} »");
                 self.net_client = Some(client);
@@ -220,6 +238,7 @@ impl AppState {
                     url.to_string(),
                     name.to_string(),
                     crate::net::protocol::DEFAULT_LOBBY.to_string(),
+                    class.to_u8(),
                 ));
             }
             Err(e) => {
@@ -578,7 +597,7 @@ impl AppState {
         {
             return;
         }
-        let Some((url, name, lobby)) = self.net_last_connect.clone() else {
+        let Some((url, name, lobby, class)) = self.net_last_connect.clone() else {
             self.net_reconnect = None;
             return;
         };
@@ -595,6 +614,7 @@ impl AppState {
                     &name,
                     uid.as_deref(),
                     &lobby,
+                    class,
                 )
                 .map_err(|e| e.to_string());
                 let _ = tx.send(res);
@@ -613,6 +633,7 @@ impl AppState {
                 &name,
                 uid.as_deref(),
                 &lobby,
+                class,
             ) {
                 Ok(client) => self.install_reconnected_client(client),
                 Err(e) => {
@@ -871,14 +892,32 @@ impl AppState {
             // allié : bannière dédiée (`ally_down_flash`, éditeur/HUD) — son
             // fantôme se masquer au prochain `Snapshot` ne suffisait pas, un
             // groupe doit *sentir* qu'il perd quelqu'un, pas le déduire.
-            ServerMsg::Event(crate::net::protocol::GameEvent::PlayerDown { player_id }) => {
+            ServerMsg::Event(crate::net::protocol::GameEvent::PlayerDown { player_id, cause }) => {
                 if Some(player_id) == self.net_player_id {
                     self.damage_flash = 1.0;
+                    self.camera_shake = 1.0;
+                    // Sprint 2 (`sprint10audit.md`) : mémorisé pour la bannière
+                    // « Vaincu » enrichie (cf. `editor::hud::defeated_banner`) —
+                    // seulement pour nous, une cause de mort n'a de sens que pour
+                    // la victime qui la lit sur son propre écran.
+                    self.death_cause = cause;
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 } else {
                     self.ally_down_flash = 1.0;
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 }
+            }
+            // Mode de manche arbitré par le salon (Phase C, `sprint10audit.md`) :
+            // aligne notre `AppState::objective` locale sur celle, autoritaire,
+            // du serveur — sans ça, `update_round` (`app::combat`) resterait
+            // sur le défaut `Vagues` local même dans un salon `Survie`/etc.,
+            // et déclencherait une victoire locale prématurée à la dernière
+            // manche vidée (le serveur, lui, la reboucle). La visibilité des
+            // monstres reste dictée par les `Snapshot` (`EntityDelta::visible`),
+            // ce message ne change que la *condition de victoire* évaluée
+            // localement.
+            ServerMsg::Event(crate::net::protocol::GameEvent::RoundObjective { objective }) => {
+                self.objective = crate::app::multiplayer::RoundObjective::from_u8(objective);
             }
             ServerMsg::Event(_) => {}
             // Rejet **fatal** (version de protocole incompatible…) : on affiche
@@ -1273,6 +1312,18 @@ impl AppState {
         self.net_status = "Multijoueur indisponible sur iOS".to_string();
     }
 
+    /// Stub de parité avec le bloc `not(target_os = "ios")` ci-dessus (Sprint 3,
+    /// `sprint10audit.md`) : la classe est ignorée, comme le reste de la
+    /// connexion sur cette cible.
+    pub fn connect_to_server_as(
+        &mut self,
+        _url: &str,
+        _name: &str,
+        _class: crate::app::multiplayer::PlayerClass,
+    ) {
+        self.net_status = "Multijoueur indisponible sur iOS".to_string();
+    }
+
     pub fn disconnect_from_server(&mut self) {}
 
     pub fn is_connected(&self) -> bool {
@@ -1452,7 +1503,10 @@ mod tests {
         app.net_player_id = Some(1);
 
         app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
-            crate::net::protocol::GameEvent::PlayerDown { player_id: 2 },
+            crate::net::protocol::GameEvent::PlayerDown {
+                player_id: 2,
+                cause: None,
+            },
         ));
 
         assert_eq!(
@@ -1474,7 +1528,10 @@ mod tests {
         app.net_player_id = Some(1);
 
         app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
-            crate::net::protocol::GameEvent::PlayerDown { player_id: 1 },
+            crate::net::protocol::GameEvent::PlayerDown {
+                player_id: 1,
+                cause: None,
+            },
         ));
 
         assert_eq!(
@@ -1484,6 +1541,70 @@ mod tests {
         assert_eq!(
             app.ally_down_flash, 0.0,
             "notre propre mort ne doit pas déclencher la bannière « allié à terre »"
+        );
+    }
+
+    /// Phase C (Sprint 5, `sprint10audit.md`, auto-relecture) : sans ce
+    /// message, un client resterait sur son défaut local `Vagues` même dans
+    /// un salon `Survie`/etc. arbitré côté serveur (`Lobby::objective`,
+    /// `bin/server.rs`) — `update_round` (`app::combat`) déclencherait alors
+    /// une victoire locale prématurée à la dernière manche vidée, que le
+    /// serveur, lui, reboucle.
+    #[test]
+    fn round_objective_event_aligns_our_local_objective_with_the_room() {
+        let mut app = AppState::new();
+        assert_eq!(
+            app.objective,
+            crate::app::multiplayer::RoundObjective::Vagues,
+            "défaut avant tout message du serveur"
+        );
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::RoundObjective {
+                objective: crate::app::multiplayer::RoundObjective::Survie.to_u8(),
+            },
+        ));
+
+        assert_eq!(
+            app.objective,
+            crate::app::multiplayer::RoundObjective::Survie
+        );
+    }
+
+    /// Sprint 2 (`sprint10audit.md`) : la cause de mort reçue du serveur doit
+    /// être mémorisée pour notre propre mort (affichage `defeated_banner`),
+    /// mais jamais pour la mort d'un allié — elle n'a de sens que pour la
+    /// victime qui la lit sur son propre écran.
+    #[test]
+    fn death_cause_is_stored_for_our_own_death_only() {
+        let mut app = AppState::new();
+        app.net_player_id = Some(1);
+        let cause = crate::net::protocol::DeathCause {
+            kind: crate::net::protocol::DeathCauseKind::Monster,
+            distinct_attackers: 2,
+        };
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::PlayerDown {
+                player_id: 2,
+                cause: Some(cause),
+            },
+        ));
+        assert_eq!(
+            app.death_cause, None,
+            "la cause de mort d'un allié ne doit pas être mémorisée comme la nôtre"
+        );
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::PlayerDown {
+                player_id: 1,
+                cause: Some(cause),
+            },
+        ));
+        assert_eq!(
+            app.death_cause,
+            Some(cause),
+            "notre propre cause de mort doit être mémorisée pour l'affichage"
         );
     }
 
@@ -1517,6 +1638,7 @@ mod tests {
                 firebase_uid: Some("uid-alice".to_string()),
                 lobby: crate::net::protocol::DEFAULT_LOBBY.to_string(),
                 class: 0,
+                objective: 0,
             }
         );
     }
@@ -2701,6 +2823,7 @@ mod tests {
             "ws://127.0.0.1:9".to_string(),
             "Testeur".to_string(),
             crate::net::protocol::DEFAULT_LOBBY.to_string(),
+            0,
         ));
         for expected in 1..=MAX_RECONNECT_ATTEMPTS {
             app.schedule_reconnect_attempt();
@@ -2736,6 +2859,7 @@ mod tests {
             "ws://127.0.0.1:9".to_string(),
             "Testeur".to_string(),
             crate::net::protocol::DEFAULT_LOBBY.to_string(),
+            0,
         ));
         app.schedule_reconnect_attempt();
         assert!(app.net_reconnect.is_some());

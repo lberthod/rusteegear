@@ -62,6 +62,13 @@ const MAX_ACTIVE_CHASERS_PER_TARGET: usize = 2;
 /// autres ne s'activent que si on s'aventure dans leur secteur.
 const CHASER_DETECT_RANGE: f32 = 9.0;
 
+/// Portée d'éveil (m) de l'archétype `Furtive` (GDD_MMORPG.md §5.4 : « éveil réduit
+/// (< 9 m) mais vitesse accrue éveillée ») — plus courte que `CHASER_DETECT_RANGE` et,
+/// contrairement à elle, appliquée **en toute circonstance** (pas seulement en réseau) :
+/// c'est justement ce délai d'éveil court qui doit permettre au contre-jeu « l'Éclaireur
+/// la déclenche de loin » d'exister aussi en solo.
+const FURTIVE_DETECT_RANGE: f32 = 5.0;
+
 /// Écart angulaire **signé le plus court** (radians, dans [-π, π]) de `cur` vers
 /// `target` — jamais plus d'un demi-tour, quel que soit l'enroulement des angles.
 fn shortest_angle(cur: f32, target: f32) -> f32 {
@@ -105,6 +112,31 @@ pub(super) fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
     let wx = mx * cos_y - my * sin_y;
     let wz = -mx * sin_y - my * cos_y;
     (wx, wz)
+}
+
+/// Décalage de recul caméra pour la frame courante (Sprint 1, `sprint10audit.md`) :
+/// jitter dans le plan écran (axes droite/haut de la caméra), amplitude
+/// proportionnelle à `camera_shake` et oscillante via `self.time` — pas de RNG à
+/// état pour rester déterministe/rejouable comme le reste de la simulation
+/// (cf. `deterministic_roll` dans `health.rs`). Ne mute jamais `self.camera` :
+/// seul `Renderer::render` (via `OrbitCamera::view_proj_shaken`) l'applique,
+/// la caméra de simulation (suivi joueur, IA, réseau) reste intacte.
+impl AppState {
+    pub(crate) fn camera_shake_offset(&self) -> Vec3 {
+        if self.camera_shake <= 0.0 {
+            return Vec3::ZERO;
+        }
+        let forward = (self.camera.target - self.camera.eye()).normalize_or_zero();
+        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let up = right.cross(forward);
+        // Amplitude (mètres) au pic (camera_shake = 1) : assez sensible pour se
+        // sentir sans désorienter la visée.
+        const AMPLITUDE: f32 = 0.12;
+        let t = self.time;
+        let jx = (t * 47.0).sin() + (t * 71.0).sin() * 0.5;
+        let jy = (t * 59.0).sin() + (t * 83.0).sin() * 0.5;
+        (right * jx + up * jy) * AMPLITUDE * self.camera_shake
+    }
 }
 
 /// Rayon mort du joystick virtuel (0..1) : en-deçà, l'entrée est ramenée à zéro plutôt
@@ -543,9 +575,10 @@ impl AppState {
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
             }
             // Système de manches (cf. `Combat::wave`) : révèle la manche suivante une
-            // fois la courante vidée, ou déclenche la victoire à la dernière. N'a aucun
-            // effet si la scène n'a pas de monstres à manches (self.wave == 0).
-            self.update_waves();
+            // fois la courante vidée, ou déclenche la victoire (selon `self.objective`,
+            // cf. `update_round`, Phase C `sprint10audit.md`). N'a aucun effet si la
+            // scène n'a pas de monstres à manches (self.wave == 0).
+            self.update_round(dt);
         }
 
         // Position réseau du joueur local : appliquée *après* la physique (cf. sa
@@ -606,6 +639,11 @@ impl AppState {
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
         if self.damage_flash > 0.0 {
             self.damage_flash = (self.damage_flash - dt * 2.5).max(0.0);
+        }
+        // Décroissance du recul caméra (~0,25 s, plus rapide que le flash : une
+        // secousse qui traîne gênerait la visée du joueur en combat rapproché).
+        if self.camera_shake > 0.0 {
+            self.camera_shake = (self.camera_shake - dt * 4.0).max(0.0);
         }
         // Décroissance de la bannière « allié à terre » (~1,3 s : assez pour se
         // lire, conforme à GDD §16.3 « les bannières d'événement durent < 2 s »).
@@ -975,6 +1013,7 @@ impl AppState {
             && cur < prev - 1e-4
         {
             self.damage_flash = 1.0;
+            self.camera_shake = 1.0;
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
         }
         self.hud_health = health;
@@ -1007,7 +1046,24 @@ impl AppState {
         // visible piloté trouvé, donc le joueur 1, jamais le 2e+ quelle que soit
         // sa proximité). `player_position()` reste utilisé tel quel en solo (pas
         // de joueurs réseau) : aucun changement de comportement pour ce cas.
-        let candidate_targets: Vec<Vec3> = if self.network_players.is_empty() {
+        // Mode Escorte (Sprint 7, `sprint10audit.md`) : « les créatures ciblent le
+        // convoi en priorité » (GDD §4) — implémenté comme cible **exclusive** tant
+        // qu'il est vivant, plutôt qu'une simple entrée de plus dans la liste (où le
+        // choix « au plus proche », ci-dessous, ne le préférerait aux joueurs que
+        // par hasard de distance). Convoi détruit ou scène sans convoi ⇒ retombe sur
+        // les joueurs, pour ne pas geler les chasseurs sans cible.
+        let convoy_target = (self.objective == crate::app::multiplayer::RoundObjective::Escorte)
+            .then(|| {
+                self.scene
+                    .objects
+                    .iter()
+                    .find(|o| o.convoy.is_some() && o.visible)
+                    .map(|o| o.transform.position)
+            })
+            .flatten();
+        let candidate_targets: Vec<Vec3> = if let Some(convoy) = convoy_target {
+            vec![convoy]
+        } else if self.network_players.is_empty() {
             self.player_position().into_iter().collect()
         } else {
             self.network_players
@@ -1190,6 +1246,16 @@ impl AppState {
                         phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
                         continue;
                     }
+                    // Éveil de l'archétype `Furtive` (GDD §5.4) : portée réduite,
+                    // appliquée en toute circonstance (pas seulement en réseau, cf.
+                    // `FURTIVE_DETECT_RANGE`) — c'est ce délai court qui permet au
+                    // contre-jeu « l'Éclaireur la déclenche de loin » d'exister aussi solo.
+                    if obj.ai_chaser.as_ref().unwrap().archetype == crate::scene::Archetype::Furtive
+                        && dist_sq > FURTIVE_DETECT_RANGE * FURTIVE_DETECT_RANGE
+                    {
+                        phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                        continue;
+                    }
                     by_target.entry(target_i).or_default().push((idx, dist_sq));
                 }
                 // Plafond de chasseurs actifs par cible : sans lui, TOUS les monstres
@@ -1211,11 +1277,13 @@ impl AppState {
                             continue;
                         }
                         let obj_pos = self.scene.objects[idx].transform.position;
-                        let speed = self.scene.objects[idx]
+                        let ai = self.scene.objects[idx]
                             .ai_chaser
                             .as_ref()
-                            .expect("filtré ci-dessus : cet objet a un ai_chaser")
-                            .speed;
+                            .expect("filtré ci-dessus : cet objet a un ai_chaser");
+                        // Multiplicateur d'archétype (GDD §5.4) : Meute/Furtive accélèrent
+                        // la poursuite, Colosse la ralentit — cf. `Archetype::speed_multiplier`.
+                        let speed = ai.speed * ai.archetype.speed_multiplier();
                         let to_target = target - obj_pos;
                         let dir = Vec3::new(to_target.x, 0.0, to_target.z);
                         let (vx, vz) = if dir.length_squared() > 1e-6 {

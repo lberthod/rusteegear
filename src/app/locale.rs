@@ -104,6 +104,29 @@ pub fn ally_down(locale: Locale) -> &'static str {
     }
 }
 
+/// Résumé lisible d'une `net::protocol::DeathCause` (Sprint 2,
+/// `sprint10audit.md`, GDD §16.5 : « Encerclé — 2 Traqueuses ») — affiché sous
+/// `defeated_spectator` tant qu'on reste spectateur. Un seul agresseur du même
+/// type reste au singulier (« Rattrapé par… »), plusieurs deviennent
+/// « Encerclé — N… » comme l'exemple du GDD.
+pub fn death_cause(
+    locale: Locale,
+    kind: crate::net::protocol::DeathCauseKind,
+    distinct_attackers: u8,
+) -> String {
+    use crate::net::protocol::DeathCauseKind;
+    match (locale, kind, distinct_attackers.max(1)) {
+        (Locale::Fr, DeathCauseKind::Monster, 1) => "Rattrapé par un monstre".to_string(),
+        (Locale::Fr, DeathCauseKind::Monster, n) => format!("Encerclé — {n} monstres"),
+        (Locale::Fr, DeathCauseKind::Creature, 1) => "Mordu par une créature".to_string(),
+        (Locale::Fr, DeathCauseKind::Creature, n) => format!("Encerclé — {n} créatures"),
+        (Locale::En, DeathCauseKind::Monster, 1) => "Caught by a monster".to_string(),
+        (Locale::En, DeathCauseKind::Monster, n) => format!("Surrounded — {n} monsters"),
+        (Locale::En, DeathCauseKind::Creature, 1) => "Bitten by a creature".to_string(),
+        (Locale::En, DeathCauseKind::Creature, n) => format!("Surrounded — {n} creatures"),
+    }
+}
+
 pub fn restart_button_label(locale: Locale, won: bool) -> &'static str {
     match (locale, won) {
         (Locale::Fr, true) => "➡ Niveau suivant",
@@ -156,6 +179,15 @@ mod tests {
             restart_button_label(Locale::Fr, false),
             restart_button_label(Locale::En, false)
         );
+        use crate::net::protocol::DeathCauseKind;
+        for kind in [DeathCauseKind::Monster, DeathCauseKind::Creature] {
+            for n in [1, 2] {
+                assert_ne!(
+                    death_cause(Locale::Fr, kind, n),
+                    death_cause(Locale::En, kind, n)
+                );
+            }
+        }
     }
 
     #[test]
@@ -166,6 +198,18 @@ mod tests {
         assert!(kills(Locale::En, 42).contains("42"));
         assert!(wave(Locale::En, 3, 7).contains('3') && wave(Locale::En, 3, 7).contains('7'));
         assert!(remaining(Locale::En, 5).contains('5'));
+    }
+
+    /// Sprint 2 (`sprint10audit.md`) : « Encerclé/Surrounded » (GDD §16.5) ne
+    /// doit apparaître qu'à partir de deux agresseurs distincts — un seul
+    /// agresseur reste au singulier (« Rattrapé par… »/« Caught by… »).
+    #[test]
+    fn death_cause_only_says_surrounded_for_two_or_more_attackers() {
+        use crate::net::protocol::DeathCauseKind;
+        assert!(!death_cause(Locale::Fr, DeathCauseKind::Monster, 1).contains("Encerclé"));
+        assert!(death_cause(Locale::Fr, DeathCauseKind::Monster, 2).contains("Encerclé"));
+        assert!(!death_cause(Locale::En, DeathCauseKind::Monster, 1).contains("Surrounded"));
+        assert!(death_cause(Locale::En, DeathCauseKind::Monster, 2).contains("Surrounded"));
     }
 
     #[test]

@@ -7,8 +7,12 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
+use super::lod::foliage_lod_mesh;
 use super::mesh::GpuMesh;
-use super::passes::{aabb_visible, frustum_planes, is_skinned, mesh_key, render_input_hash};
+use super::passes::{
+    aabb_visible, culling_radius_for, distance_visible, frustum_planes, is_skinned, mesh_key,
+    render_input_hash,
+};
 #[cfg(test)]
 use super::pipelines::mip_count_for;
 use super::pipelines::{
@@ -157,7 +161,16 @@ pub(super) const JOINT_CAPACITY: usize = 128;
 /// portent le total à 20 créatures + 90 décors animés + le joueur, soit 111
 /// instances skinnées potentiellement visibles ensemble — 160 laisse à
 /// nouveau de la marge (~49) sans reproduire l'audit ci-dessus.
-pub(super) const MAX_SKINNED_INSTANCES: usize = 160;
+///
+/// Remonté de 160 à 256 (Phase A, `sprintoptimation3daudit10h.md`, 2026-07-18) :
+/// la sonde sur `Scene::mmorpg_demo()` (`optimisation3D.Analys.md`) mesure 201
+/// objets skinnés dans le contenu actuel, déjà au-delà de 160 — la mesure Phase 0
+/// en jeu (vue large, `skinned_dropped == 0`) n'avait pas eu tous les 201 visibles
+/// simultanément (861/887 objets chargés dans cette prise de vue précise), donc le
+/// dépassement ne s'était pas encore manifesté à l'écran, mais restait latent (cf.
+/// l'historique ci-dessus : ce cas s'est déjà produit 3 fois). 256 laisse à nouveau
+/// une marge (~55) sans attendre de reproduire l'audit une 4e fois.
+pub(super) const MAX_SKINNED_INSTANCES: usize = 256;
 /// Taille en octets d'un créneau de la palette de joints — un objet skinné à la fois.
 pub(super) const JOINT_SLOT_BYTES: wgpu::BufferAddress =
     (JOINT_CAPACITY * std::mem::size_of::<[[f32; 4]; 4]>()) as wgpu::BufferAddress;
@@ -168,11 +181,17 @@ const _: () = assert!(JOINT_SLOT_BYTES.is_multiple_of(256));
 
 /// Descripteur d'une instance dans le plan de rendu (ordre = index dans le buffer storage).
 struct InstanceDraw {
-    /// Index de l'objet dans `scene.objects` (mesh/texture relus au draw, sans clone).
+    /// Index de l'objet dans `scene.objects` (texture relue au draw, sans clone).
     /// La scène n'est pas mutée entre la construction du plan et les passes de dessin.
     obj: usize,
     /// Visible par la caméra (frustum culling) — la passe d'ombre l'ignore.
     visible: bool,
+    /// Mesh effectif à dessiner : `objs[obj].mesh`, sauf pour le feuillage dense LOD
+    /// (Phase D, `foliage_lod_mesh`) au-delà du seuil de distance, où il devient
+    /// `MeshKind::Billboard` — précalculé ici (pas relu depuis `scene.objects`, contrairement
+    /// à `obj`) car il dépend de la distance caméra, recalculée à chaque frame où le plan est
+    /// reconstruit, alors que le champ `mesh` de l'objet en scène reste inchangé.
+    mesh: MeshKind,
 }
 
 /// Nombre de marqueurs temporels écrits par frame (Sprint 112) : un avant chaque
@@ -442,7 +461,13 @@ impl Renderer {
         // dégradation silencieuse comme pour `gilrs`/`notify`).
         let profiler_features =
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-        let requested_features = profiler_features & adapter.features();
+        // Phase E (`sprintoptimation3daudit10h.md`, Sprint 6) : compression BC3 des
+        // textures d'albédo, demandée seulement si l'adaptateur la supporte (desktop en
+        // pratique — mobile/web n'exposent typiquement pas `TEXTURE_COMPRESSION_BC`,
+        // même dégradation silencieuse que le profiler ci-dessus). Cf. `gfx::texcompress`.
+        let texture_compression_features = wgpu::Features::TEXTURE_COMPRESSION_BC;
+        let requested_features =
+            (profiler_features | texture_compression_features) & adapter.features();
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -1181,8 +1206,12 @@ impl Renderer {
     /// Pousse les uniforms (caméra + matrices modèle + surbrillance) depuis l'état.
     /// N'écrit le buffer d'un objet que si sa pose ou sa surbrillance a changé.
     fn write_uniforms(&mut self, app: &AppState) {
-        let eye = app.camera.eye();
-        let view_proj = app.camera.view_proj();
+        // Recul caméra (Sprint 1, `sprint10audit.md`) : décalage cosmétique du
+        // rendu seulement (cf. doc `OrbitCamera::view_proj_shaken`), jamais de
+        // `app.camera` lui-même.
+        let shake = app.camera_shake_offset();
+        let eye = app.camera.eye() + shake;
+        let view_proj = app.camera.view_proj_shaken(shake);
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
@@ -1288,6 +1317,10 @@ impl Renderer {
         // Instances ordonnées par (mesh, texture) pour permettre des draws groupés.
         // On bâtit en parallèle le buffer storage et le plan de rendu (même ordre).
         let planes = frustum_planes(app.camera.view_proj());
+        // Culling par distance (Phase C, `sprintoptimation3daudit10h.md`) : complète le
+        // frustum ci-dessus, sur la position caméra « pure » (pas le décalage cosmétique
+        // de `write_uniforms`, qui ne doit affecter que le rendu, jamais la visibilité).
+        let eye = app.camera.eye();
         let n = app.scene.objects.len();
         let order = &mut self.order_scratch;
         // Re-tri paresseux : l'ordre (groupé par mesh/texture pour le batching) ne dépend
@@ -1329,9 +1362,18 @@ impl Renderer {
                 color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
             });
             let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
+            let radius = culling_radius_for(&app.scene, obj.mesh);
+            let visible = obj.visible
+                && distance_visible(eye, obj.transform.position, radius)
+                && aabb_visible(&planes, model, lmin, lmax);
+            // LOD géométrique (Phase D) : distance à la caméra « pure », comme le culling
+            // par distance ci-dessus — jamais le décalage cosmétique de `write_uniforms`.
+            let lod_mesh =
+                foliage_lod_mesh(&app.scene, obj.mesh, eye.distance(obj.transform.position));
             self.draw_plan.push(InstanceDraw {
                 obj: i,
-                visible: obj.visible && aabb_visible(&planes, model, lmin, lmax),
+                visible,
+                mesh: lod_mesh,
             });
         }
 
@@ -1539,13 +1581,27 @@ impl Renderer {
         let Some(prof) = self.gpu_profiler.as_ref() else {
             return;
         };
+        // Borné à 1s (au lieu de `wait_indefinitely`, Sprint 112 d'origine) : un
+        // pilote/adaptateur qui ne relance jamais le callback de `map_async` gelait
+        // l'éditeur sans retour possible dès l'ouverture du Profiler (rapporté
+        // Phase 0 de `sprintoptimation3daudit10h.md`, 2026-07-18) — mieux vaut
+        // renoncer à la mesure GPU de cette frame que geler l'app.
         let slice = prof.readback_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).ok();
-        let Ok(Ok(())) = rx.recv() else {
+        let timeout = std::time::Duration::from_secs(1);
+        let polled = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(timeout),
+        });
+        if polled.is_err() {
+            log::warn!("read_gpu_pass_timings : device.poll a expiré, mesure GPU ignorée");
+            return;
+        }
+        let Ok(Ok(())) = rx.recv_timeout(timeout) else {
+            log::warn!("read_gpu_pass_timings : map_async n'a jamais répondu, mesure GPU ignorée");
             return;
         };
         let ticks: Vec<u64> = {
@@ -1604,7 +1660,16 @@ impl Renderer {
         };
         // Profiler GPU (Sprint 112) : n'écrit les timestamp queries que si le
         // panneau est ouvert **et** le device les supporte — cf. doc de `GpuProfiler`.
-        let gpu_profiling = editor.profiler_open() && self.gpu_profiler.is_some();
+        //
+        // Désactivé (2026-07-18, Phase 0 de `sprintoptimation3daudit10h.md`) : sur cette
+        // machine (Metal, Apple M1), `read_gpu_pass_timings` ne revient jamais dans un
+        // délai raisonnable dès que le Profiler est ouvert — chaque frame attend jusqu'au
+        // timeout borné (1s, cf. sa doc), ce qui rend l'éditeur perçu comme figé tant que
+        // le panneau reste ouvert. FPS/draw calls/`skinned_dropped` restent mesurables
+        // sans cette fonctionnalité (non gatée par `gpu_profiling`, cf. plus bas) ; seul le
+        // détail des temps GPU par passe (Ombres/Scène/HDR+Bloom/UI) est perdu. À
+        // ré-investiguer avec un vrai débogueur GPU avant de réactiver.
+        let gpu_profiling = false;
 
         // 1. Construire l'UI éditeur. En mode player : pas de panneaux, mais on
         //    dessine quand même les contrôles tactiles (joystick + boutons).
@@ -1646,6 +1711,7 @@ impl Renderer {
                     net_connected,
                     weapon_label,
                     defeated,
+                    app.death_cause,
                     kills,
                     &weapon_inventory,
                     selected_weapon,
@@ -1690,6 +1756,7 @@ impl Renderer {
             let selected_weapon = app.selected_weapon();
             let item_inventory = app.inventory_items().to_vec();
             let roster = app.multiplayer_roster();
+            let minimap = app.minimap_data();
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -1720,11 +1787,13 @@ impl Renderer {
                 &app.leaderboard,
                 weapon_label,
                 defeated,
+                app.death_cause,
                 kills,
                 &weapon_inventory,
                 selected_weapon,
                 &item_inventory,
                 &roster,
+                &minimap,
                 app.locale,
             );
             if let Some(kind) = actions.use_item {
@@ -1793,11 +1862,17 @@ impl Renderer {
             if actions.load_brawl {
                 app.load_brawl_demo();
             }
+            if actions.load_boss {
+                app.load_boss_demo();
+            }
+            if actions.load_escorte {
+                app.load_escorte_demo();
+            }
             if actions.restart {
                 restart = true;
             }
-            if let Some((url, name)) = actions.connect_to_server {
-                app.connect_to_server(&url, &name);
+            if let Some((url, name, class)) = actions.connect_to_server {
+                app.connect_to_server_as(&url, &name, class);
             }
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
@@ -1982,8 +2057,8 @@ impl Renderer {
         };
 
         if let Some(actions) = player_net_actions {
-            if let Some((url, name)) = actions.connect_to_server {
-                app.connect_to_server(&url, &name);
+            if let Some((url, name, class)) = actions.connect_to_server {
+                app.connect_to_server_as(&url, &name, class);
             }
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
@@ -2254,9 +2329,9 @@ impl Renderer {
             let objs = &app.scene.objects;
             let mut i = 0;
             while i < plan.len() {
-                let mi = objs[plan[i].obj].mesh;
+                let mi = plan[i].mesh;
                 let mut j = i + 1;
-                while j < plan.len() && objs[plan[j].obj].mesh == mi {
+                while j < plan.len() && plan[j].mesh == mi {
                     j += 1;
                 }
                 if let Some(mesh) = self.resolve_mesh(mi) {
@@ -2353,11 +2428,11 @@ impl Renderer {
             let objs = &app.scene.objects;
             let mut i = 0;
             while i < plan.len() {
-                let mi = objs[plan[i].obj].mesh;
+                let mi = plan[i].mesh;
                 let tex_key = &objs[plan[i].obj].texture;
                 let mut group_end = i + 1;
                 while group_end < plan.len()
-                    && objs[plan[group_end].obj].mesh == mi
+                    && plan[group_end].mesh == mi
                     && &objs[plan[group_end].obj].texture == tex_key
                 {
                     group_end += 1;
@@ -2591,9 +2666,9 @@ impl Renderer {
             let objs = &app.scene.objects;
             let mut i = 0;
             while i < plan.len() {
-                let mi = objs[plan[i].obj].mesh;
+                let mi = plan[i].mesh;
                 let mut j = i + 1;
-                while j < plan.len() && objs[plan[j].obj].mesh == mi {
+                while j < plan.len() && plan[j].mesh == mi {
                     j += 1;
                 }
                 if let Some(mesh) = self.resolve_mesh(mi) {
@@ -2668,11 +2743,11 @@ impl Renderer {
             let objs = &app.scene.objects;
             let mut i = 0;
             while i < plan.len() {
-                let mi = objs[plan[i].obj].mesh;
+                let mi = plan[i].mesh;
                 let tex_key = &objs[plan[i].obj].texture;
                 let mut group_end = i + 1;
                 while group_end < plan.len()
-                    && objs[plan[group_end].obj].mesh == mi
+                    && plan[group_end].mesh == mi
                     && &objs[plan[group_end].obj].texture == tex_key
                 {
                     group_end += 1;

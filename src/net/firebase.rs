@@ -69,6 +69,16 @@ pub struct PlayerProgress {
     pub level: u32,
     #[serde(default)]
     pub xp: u32,
+    /// Jour (numéro de jour UTC, secondes Unix / 86 400 — cf.
+    /// `bin/server.rs::day_number`) où ce compte a pour la dernière fois reçu
+    /// la récompense du Contrat du jour (GDD §3.4, Phase D). `0` = jamais
+    /// (aucun jour réel n'a ce numéro : le jour 0 serait le 1er janvier 1970,
+    /// avant l'existence du jeu) — un compte tout juste créé peut donc
+    /// toujours réclamer le contrat du jour courant. `#[serde(default)]` :
+    /// les comptes existants avant ce sprint n'ont pas ce champ dans Firebase,
+    /// se relisent à `0`, comportement identique à « jamais réclamé ».
+    #[serde(default)]
+    pub last_contract_day: u64,
 }
 
 fn default_level() -> u32 {
@@ -80,6 +90,7 @@ impl Default for PlayerProgress {
         Self {
             level: default_level(),
             xp: 0,
+            last_contract_day: 0,
         }
     }
 }
@@ -708,13 +719,29 @@ mod tests {
         // RTDB renvoie littéralement `null` quand le nœud n'existe pas encore
         // (premier lancement du joueur) — pas une erreur à traiter.
         let progress = parse_progress_response("null").expect("null est un cas valide");
-        assert_eq!(progress, PlayerProgress { level: 1, xp: 0 });
+        assert_eq!(progress, PlayerProgress::default());
     }
 
     #[test]
     fn progress_parses_an_existing_node() {
         let progress = parse_progress_response(r#"{"level": 4, "xp": 1250}"#).expect("nœud valide");
-        assert_eq!(progress, PlayerProgress { level: 4, xp: 1250 });
+        assert_eq!(
+            progress,
+            PlayerProgress {
+                level: 4,
+                xp: 1250,
+                ..PlayerProgress::default()
+            }
+        );
+    }
+
+    /// Un nœud écrit par une version antérieure au Contrat du jour (sans
+    /// `last_contract_day`) doit rester lisible : le compte se relit à `0`
+    /// (« jamais réclamé »), pas une erreur de désérialisation.
+    #[test]
+    fn progress_without_last_contract_day_deserializes_to_zero() {
+        let progress = parse_progress_response(r#"{"level": 2, "xp": 400}"#).expect("nœud valide");
+        assert_eq!(progress.last_contract_day, 0);
     }
 
     #[test]

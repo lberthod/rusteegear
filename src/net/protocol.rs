@@ -22,7 +22,17 @@ pub type PlayerId = u32;
 /// être redéployés ensemble (vérifier ensuite avec `examples/smoke_vps.rs`).
 ///
 /// v2 (GAMEDESIGN_MMORPG.md §3.2) : `ClientMsg::Join` gagne `class: u8`.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v3 → v4 (Sprint 2 et Sprint 5, `sprint10audit.md`, changements groupés dans
+/// le même bump) : `GameEvent::PlayerDown` gagne `cause` (diagnostic de mort)
+/// et `ClientMsg::Join` gagne `objective: u8` (mode de manche du salon, cf.
+/// `RoundObjective`).
+/// v5 (Sprint 5, `sprint10audit.md`, auto-relecture) : `GameEvent` gagne le
+/// variant `RoundObjective { objective: u8 }` — le mode choisi n'était
+/// propagé que du client vers le serveur (v4), jamais renvoyé au client une
+/// fois arbitré par le salon (premier `Join` gagnant, cf. `Lobby::objective`) ;
+/// sans ce sens retour, un client restait sur son défaut `Vagues` local alors
+/// que le salon tournait en `Survie`.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
@@ -135,6 +145,16 @@ pub enum ClientMsg {
         /// (jamais rejetée : un client futur avec une classe non reconnue ne
         /// doit pas perdre sa connexion pour ça).
         class: u8,
+        /// Mode de manche choisi (Phase C, `sprint10audit.md`, `PROTOCOL_VERSION`
+        /// 4) : `0` = Vagues (défaut, comportement historique — zéro régression
+        /// pour qui ne choisit pas), `1` = Survie, `2` = Escorte, `3` = Boss.
+        /// Fixé à la **création** du salon (premier `Join` d'un code encore
+        /// inconnu, cf. `bin/server.rs::Lobby::objective`) — les joins suivants
+        /// dans le même salon héritent du mode déjà choisi, comme `class` mais
+        /// au niveau du salon plutôt que du joueur. Valeur hors table traitée
+        /// comme Vagues par `RoundObjective::from_u8` (même principe que
+        /// `class` : jamais de connexion refusée pour ça).
+        objective: u8,
     },
     /// État des contrôles pour le tick courant (cf. `app::PlayerInput`, en plus
     /// compact — un client réseau ne pilote qu'un joueur, pas un overlay tactile
@@ -298,6 +318,31 @@ pub struct EntityDelta {
     pub kills: Option<u32>,
 }
 
+/// Type d'agresseur à l'origine des derniers dégâts reçus avant une mort
+/// (Sprint 2, `sprint10audit.md` — diagnostic de mort, GDD §16.5). Distingue
+/// seulement les deux sources de dégâts réseau existantes côté serveur (cf.
+/// `app::health::update_network_health`/`update_creature_bite`) : pas de
+/// variant générique « inconnu », les deux fonctions qui tuent un joueur
+/// réseau savent toujours laquelle des deux les a touchés.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeathCauseKind {
+    /// Contact avec un monstre `AiChaser` (`MONSTER_CONTACT_DPS`).
+    Monster,
+    /// Morsure d'une créature scriptée (`SceneObject::bite`).
+    Creature,
+}
+
+/// Résumé de la cause de mort d'un joueur réseau (Sprint 2) : type
+/// d'agresseur dominant sur la courte fenêtre précédant la mort, et nombre
+/// d'agresseurs *distincts* de ce type impliqués (ex. « Encerclé — 2
+/// Traqueuses », GDD §16.5) — pas un historique complet, juste de quoi
+/// afficher une cause lisible sans alourdir le protocole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeathCause {
+    pub kind: DeathCauseKind,
+    pub distinct_attackers: u8,
+}
+
 /// Évènement ponctuel de gameplay, distinct d'un `Snapshot` (état continu) : le
 /// client peut y réagir une fois (son, flash HUD) sans avoir à comparer deux états.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -317,6 +362,28 @@ pub enum GameEvent {
     /// comparer deux snapshots.
     PlayerDown {
         player_id: PlayerId,
+        /// `None` si aucune source de dégâts n'a été mémorisée avant la mort
+        /// (ex. import/scène de test qui met `network_health` à 0 directement) —
+        /// le client retombe alors sur la bannière sans détail (comportement
+        /// préexistant).
+        cause: Option<DeathCause>,
+    },
+    /// Mode de manche du salon rejoint (Phase C, Sprint 5 — suite,
+    /// `sprint10audit.md`) : envoyé une fois au joueur qui vient de rejoindre
+    /// (`bin/server.rs`, juste après `ServerMsg::PlayerJoined`), pour que sa
+    /// propre `AppState::objective` locale (utilisée par `update_round`, cf.
+    /// `app::combat`) corresponde à celle, autoritaire, de `Room::app` côté
+    /// serveur. Indispensable dès qu'un mode diverge de `Vagues` : chaque
+    /// client exécute sa propre copie de la logique de manche pour son HUD/
+    /// ses transitions locales (la visibilité des monstres, elle, reste
+    /// strictement dictée par les `Snapshot`, cf. `EntityDelta::visible`) —
+    /// sans ce message, un salon `Survie` verrait un client resté sur le
+    /// défaut `Vagues` déclencher une victoire locale prématurée dès que la
+    /// dernière manche se vide, alors que le serveur la reboucle. Encodé en
+    /// `u8` comme `ClientMsg::Join::objective` (`RoundObjective::to_u8`),
+    /// décodé avec le même repli sur `Vagues` pour une valeur hors table.
+    RoundObjective {
+        objective: u8,
     },
 }
 
@@ -364,6 +431,7 @@ mod tests {
             firebase_uid: None,
             lobby: DEFAULT_LOBBY.to_string(),
             class: 0,
+            objective: 0,
         });
         round_trip(ClientMsg::Join {
             protocol: PROTOCOL_VERSION,
@@ -371,6 +439,7 @@ mod tests {
             firebase_uid: Some("uid-1234".to_string()),
             lobby: "salon-prive".to_string(),
             class: 2,
+            objective: 1,
         });
     }
 
@@ -500,7 +569,13 @@ mod tests {
         round_trip(ServerMsg::Event(GameEvent::Defeated { index: 5 }));
         round_trip(ServerMsg::Event(GameEvent::Win));
         round_trip(ServerMsg::Event(GameEvent::Lose));
-        round_trip(ServerMsg::Event(GameEvent::PlayerDown { player_id: 7 }));
+        round_trip(ServerMsg::Event(GameEvent::PlayerDown {
+            player_id: 7,
+            cause: Some(DeathCause {
+                kind: DeathCauseKind::Monster,
+                distinct_attackers: 2,
+            }),
+        }));
     }
 
     #[test]

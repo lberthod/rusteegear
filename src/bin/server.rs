@@ -24,15 +24,15 @@
 //! régression). En fin de manche, chaque joueur réseau connecté avec un
 //! `firebase_uid` (cf. `ClientMsg::Join`) reçoit son score de la manche en XP.
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use motor3derust::app::AppState;
-use motor3derust::app::multiplayer::{NetworkInput, PlayerClass};
+use motor3derust::app::multiplayer::{Contract, NetworkInput, PlayerClass, RoundObjective};
 use motor3derust::net::firebase::{
     self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
 };
 use motor3derust::net::protocol::{
-    ClientMsg, DEFAULT_LOBBY, PlayerId, ServerMsg, valid_join_fields,
+    ClientMsg, DEFAULT_LOBBY, GameEvent, PlayerId, ServerMsg, valid_join_fields,
 };
 use motor3derust::net::server_loop::NetServer;
 
@@ -88,6 +88,21 @@ struct Lobby {
     /// qu'un joueur déjà connecté garde sa classe d'une manche à l'autre au
     /// sein du même salon, sans avoir à renvoyer un nouveau `Join`.
     classes: HashMap<PlayerId, u8>,
+    /// Mode de manche du salon (Phase C, `sprint10audit.md`) — fixé par le
+    /// **premier** `Join` jamais reçu par ce salon (`None` jusque-là, cf.
+    /// `handle_message`), ignoré pour tous les suivants : un salon joue un
+    /// seul mode pour toute sa durée de vie, comme son code. `Option`
+    /// plutôt qu'un `RoundObjective` nu avec un marqueur « salon vide » basé
+    /// sur `last_seen.is_empty()` : `last_seen` redevient vide si **tous**
+    /// les joueurs quittent avant la fin de la manche (le salon n'est fermé
+    /// qu'à manche décidée, cf. la boucle principale) — un tel marqueur
+    /// aurait laissé un rejoin ultérieur re-choisir le mode en pleine manche
+    /// (`Room::restart` n'ayant pas eu lieu, la scène/le `wave` en cours
+    /// resteraient d'un autre mode que celui nouvellement assigné). Réappliqué
+    /// à `Room::app.objective` par `Room::restart` (contrairement à `classes`,
+    /// qui vit déjà au niveau du salon pour la même raison — persister d'une
+    /// manche à l'autre du même salon sans nouveau `Join`).
+    objective: Option<RoundObjective>,
 }
 
 impl Lobby {
@@ -157,6 +172,11 @@ impl Room {
         self.app.use_embedded_scene();
         self.app.hide_local_player_template();
         self.app.playing = true;
+        // Le mode de manche vit au niveau du salon (`Lobby::objective`, fixé
+        // au premier `Join`), pas de `Room::app` recréé à chaque manche —
+        // sans cette ligne, chaque `restart()` retomberait sur `Vagues`
+        // (défaut d'`AppState::new()`), quel que soit le mode choisi.
+        self.app.objective = self.lobby.objective.unwrap_or_default();
         for id in ids {
             let class = PlayerClass::from_u8(self.lobby.classes.get(&id).copied().unwrap_or(0));
             self.app.spawn_network_player(id, class);
@@ -223,6 +243,7 @@ fn handle_message(
             firebase_uid,
             lobby,
             class,
+            objective,
         } => {
             // Durcissement (Sprint 105a-2) : `lobby` devient une clé de `rooms`
             // et `firebase_uid` finit non échappé dans une URL Firebase RTDB
@@ -239,6 +260,20 @@ fn handle_message(
                 lobby
             };
             let room = rooms.entry(code.clone()).or_insert_with(Room::new);
+            // Mode fixé au tout premier `Join` jamais reçu par ce salon (avant
+            // même qu'il ait un joueur effectivement piloté, cf.
+            // `Lobby::objective`) — `objective` encore `None` est le marqueur
+            // « aucun Join traité depuis la création de ce `Room` », y compris
+            // si ce tout premier essai échoue à spawn (pas de gabarit
+            // pilotable) : le mode reste alors celui-là plutôt que d'être
+            // redéfini par le prochain venu. Contrairement à `last_seen.is_empty()`,
+            // ne se réinitialise pas si tous les joueurs quittent avant la fin
+            // de la manche (cf. la doc du champ).
+            if room.lobby.objective.is_none() {
+                let chosen = RoundObjective::from_u8(objective);
+                room.lobby.objective = Some(chosen);
+                room.app.objective = chosen;
+            }
             room.lobby.last_seen.insert(id, Instant::now());
             room.lobby.classes.insert(id, class);
             if room
@@ -258,6 +293,16 @@ fn handle_message(
                         player_id: id,
                         name,
                     },
+                );
+                // Retour du mode arbitré par le salon (cf. `Lobby::objective`
+                // ci-dessus) : sans ça, ce joueur resterait sur son défaut
+                // local `Vagues` même si le salon tourne en `Survie`/etc.
+                // (cf. `GameEvent::RoundObjective`, `PROTOCOL_VERSION` 5).
+                net.send_to(
+                    id,
+                    &ServerMsg::Event(GameEvent::RoundObjective {
+                        objective: room.lobby.objective.unwrap_or_default().to_u8(),
+                    }),
                 );
             } else {
                 log::warn!(
@@ -394,6 +439,9 @@ fn merged_progress(previous: Result<PlayerProgress, String>, score: u32) -> Opti
     Some(PlayerProgress {
         level: 1 + xp / XP_PER_LEVEL,
         xp,
+        // Inchangé ici : seul `award_progress` sait si le Contrat du jour a été
+        // rempli *cette* manche, il le met à jour lui-même après cet appel.
+        last_contract_day: previous.last_contract_day,
     })
 }
 
@@ -406,6 +454,14 @@ fn network_player_score(app: &AppState, id: PlayerId) -> u32 {
     app.network_player_kills(id).unwrap_or(0)
 }
 
+/// Assists du joueur réseau `id` (GDD §8.3 : Sprint 4, XP due à qui blesse une
+/// cible achevée par un autre joueur), `0` si non trouvé — comptés à part du
+/// classement (`network_player_score`, frags uniquement) : un assist compte
+/// pour l'XP, pas pour la contribution de classement (§8.2, cf. sa doc).
+fn network_player_assists(app: &AppState, id: PlayerId) -> u32 {
+    app.network_player_assists(id).unwrap_or(0)
+}
+
 /// XP de participation (GDD §8.3) : due une fois par manche à tout joueur
 /// **actif**, indépendamment du résultat — « la défaite paie aussi » (§3.2)
 /// — sinon l'XP existerait mais resterait imperceptible à l'échelle d'une
@@ -413,10 +469,10 @@ fn network_player_score(app: &AppState, id: PlayerId) -> u32 {
 /// l'ancien barème « score de salon = XP brute »).
 const XP_PARTICIPATION: u32 = 150;
 
-/// XP par frag ou assist (GDD §8.3) — les assists (Soutien : PV soignés,
-/// réanimations) n'existent pas encore (`GAMEDESIGN_MMORPG.md` §3.2, classes
-/// légères non livrées) : seuls les frags comptent pour l'instant, la
-/// formule est déjà prête à les additionner le jour où ils existeront.
+/// XP par frag ou assist (GDD §8.3) : un assist (dégât porté à une cible
+/// achevée par un autre joueur peu après, cf. `AppState::credit_assists_on_kill`)
+/// compte autant qu'un frag pour l'XP — seul le classement (`network_player_score`)
+/// reste frags uniquement (§8.2).
 const XP_PER_FRAG_OR_ASSIST: u32 = 5;
 
 /// Bonus d'XP si la manche est gagnée (GDD §8.3) : « gagner compte, sans
@@ -424,50 +480,88 @@ const XP_PER_FRAG_OR_ASSIST: u32 = 5;
 const XP_VICTORY_BONUS: u32 = 75;
 
 /// Distance (m) minimale parcourue sur la manche pour compter comme *actif*
-/// côté garde anti-AFK (GDD §8.3, point 1), si aucun frag n'a été marqué —
-/// sans cette garde, rester immobile à encaisser 150 XP par nuit serait
-/// l'« optimum anti-fun » que le GDD interdit explicitement (§15.5). Une
-/// valeur volontairement basse (quelques pas) : le but n'est pas d'exiger un
-/// niveau d'activité, juste d'exclure un joueur qui n'a jamais bougé ni frag.
+/// côté garde anti-AFK (GDD §8.3, point 1), si ni frag ni assist n'a été
+/// marqué — sans cette garde, rester immobile à encaisser 150 XP par nuit
+/// serait l'« optimum anti-fun » que le GDD interdit explicitement (§15.5).
+/// Une valeur volontairement basse (quelques pas) : le but n'est pas
+/// d'exiger un niveau d'activité, juste d'exclure un joueur qui n'a jamais
+/// bougé ni contribué au combat.
 const ACTIVITY_DISTANCE_THRESHOLD: f32 = 3.0;
+
+/// XP du Contrat du jour (GDD §3.4/§3.5, table §3.5 : « Contrat du jour | 250 |
+/// vaut ~une nuit »), Phase D — Sprint 9 de `sprint10audit.md`. Crédité au plus
+/// une fois par compte et par jour (`PlayerProgress::last_contract_day`), sur
+/// une manche **gagnée** dont `AppState::contract_completed` confirme la
+/// condition du contrat du jour (`Contract::of_day`) — jamais sur une défaite
+/// ni un arrêt de sécurité (`MAX_DURATION`).
+const XP_CONTRACT: u32 = 250;
+
+/// Numéro de jour UTC (secondes Unix / 86 400) : seed déterministe du Contrat
+/// du jour (GDD §3.4 : « calculé identiquement par serveur et clients ») et
+/// clé de « déjà réclamé aujourd'hui » (`PlayerProgress::last_contract_day`).
+/// Pas de dépendance `chrono` : un simple compteur de jours suffit, aucune
+/// notion de fuseau horaire/calendrier n'est nécessaire au seed (contrairement
+/// à un affichage de date, hors scope ici).
+fn day_number(now: SystemTime) -> u64 {
+    now.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0)
+}
 
 /// XP créditée à un joueur pour cette manche (GDD §8.3, barème cible : niv. 3
 /// ≈ 2000 XP, niv. 6 ≈ 5000, niv. 10 ≈ 9000 — déjà exact avec `XP_PER_LEVEL`
 /// inchangé, `1 + xp / 1000` : le seul écart au « ~100× trop lent » constaté
 /// était le score crédité par manche, pas la formule de niveau). Le contrat
-/// du jour (+250, GDD §3.4/§3.5) dépend de contenu de scène non livré : pas
-/// de terme ici, à ajouter avec le premier `RoundObjective`.
-fn round_xp(frags: u32, active: bool, won: bool) -> u32 {
+/// du jour (`XP_CONTRACT`, Phase D, Sprint 9) est un terme **séparé**, ajouté
+/// par `award_progress` — « distincte du score de manche normal » (sprint10audit.md) :
+/// pas mélangé ici pour rester testable indépendamment (`round_xp` ne connaît
+/// ni le contrat ni le jour). `frags_and_assists`
+/// est déjà la somme des deux (cf. `award_progress`) — jamais compté deux fois
+/// pour la même mise à mort (un joueur reçoit soit le frag, soit l'assist).
+fn round_xp(frags_and_assists: u32, active: bool, won: bool) -> u32 {
     if !active {
         return 0;
     }
     let victory_bonus = if won { XP_VICTORY_BONUS } else { 0 };
-    XP_PARTICIPATION + XP_PER_FRAG_OR_ASSIST * frags + victory_bonus
+    XP_PARTICIPATION + XP_PER_FRAG_OR_ASSIST * frags_and_assists + victory_bonus
 }
 
 /// Crédite l'XP de la manche à chaque joueur réseau connu de Firebase, selon
-/// `round_xp` (participation + frags + bonus de victoire, garde anti-AFK
-/// incluse). Les échecs (réseau, règles RTDB non configurées...) sont logués
-/// mais ne font pas planter le serveur — la progression est un bonus, pas
-/// une condition de fonctionnement du jeu. Pas de retry sur une lecture
-/// échouée : `get_progress`/`set_progress` sont des appels bloquants dans la
-/// boucle de tick — au pire, le joueur perd le bonus d'une manche (logué),
-/// jamais son cumul (cf. `merged_progress`).
+/// `round_xp` (participation + frags/assists + bonus de victoire, garde
+/// anti-AFK incluse), plus `XP_CONTRACT` si `contract` est le contrat du jour
+/// rempli par cette manche (`Some((contract, day))`, calculé par l'appelant
+/// via `AppState::contract_completed` — seulement sur une victoire, jamais une
+/// défaite ni un arrêt de sécurité) et que ce compte ne l'a pas déjà réclamé
+/// aujourd'hui (`PlayerProgress::last_contract_day != day`). Même garde
+/// anti-AFK que la participation normale (§8.3) : un joueur inactif d'une
+/// manche par ailleurs gagnante ne réclame pas le contrat à sa place — sans
+/// quoi rester immobile dans un salon qui gagne suffirait à l'encaisser.
+/// Les échecs (réseau, règles RTDB non configurées...) sont logués mais ne
+/// font pas planter le serveur — la progression est un bonus, pas une
+/// condition de fonctionnement du jeu. Pas de retry sur une lecture échouée :
+/// `get_progress`/`set_progress` sont des appels bloquants dans la boucle de
+/// tick — au pire, le joueur perd le bonus d'une manche (logué), jamais son
+/// cumul (cf. `merged_progress`).
 fn award_progress(
     firebase: &Option<(FirebaseConfig, AuthSession)>,
     lobby: &Lobby,
     app: &AppState,
     won: bool,
     activity: &HashMap<PlayerId, PlayerActivity>,
+    contract: Option<(Contract, u64)>,
 ) {
     let Some((config, session)) = firebase else {
         return;
     };
     for (id, uid) in &lobby.firebase_uids {
         let frags = network_player_score(app, *id);
+        let assists = network_player_assists(app, *id);
         let moved = activity.get(id).map(|a| a.distance).unwrap_or(0.0);
-        let active = frags > 0 || moved >= ACTIVITY_DISTANCE_THRESHOLD;
-        let score = round_xp(frags, active, won);
+        // Un assist compte comme un frag pour la garde anti-AFK (§8.3, point
+        // 1) : blesser une cible achevée par un allié est une contribution
+        // réelle au combat, pas de l'immobilité déguisée.
+        let active = frags > 0 || assists > 0 || moved >= ACTIVITY_DISTANCE_THRESHOLD;
+        let score = round_xp(frags + assists, active, won);
         let previous = firebase::get_progress(config, uid);
         if let Err(e) = &previous {
             log::warn!(
@@ -475,13 +569,31 @@ fn award_progress(
                  XP NON crédité pour ne pas écraser sa progression réelle"
             );
         }
-        let Some(updated) = merged_progress(previous, score) else {
+        let claims_contract = active
+            && contract
+                .is_some_and(|(_, day)| !matches!(&previous, Ok(p) if p.last_contract_day == day));
+        let contract_bonus = if claims_contract { XP_CONTRACT } else { 0 };
+        let Some(mut updated) = merged_progress(previous, score + contract_bonus) else {
             continue;
         };
-        let PlayerProgress { level, xp } = updated;
+        if claims_contract && let Some((_, day)) = contract {
+            updated.last_contract_day = day;
+        }
+        let PlayerProgress {
+            level,
+            xp,
+            last_contract_day: _,
+        } = updated;
         match firebase::set_progress(config, uid, updated, &session.id_token) {
             Ok(()) => {
-                log::info!("Firebase : joueur {id} ({uid}) → niveau {level}, {xp} XP (+{score})")
+                log::info!(
+                    "Firebase : joueur {id} ({uid}) → niveau {level}, {xp} XP (+{score}{})",
+                    if contract_bonus > 0 {
+                        format!(" +{contract_bonus} contrat")
+                    } else {
+                        String::new()
+                    }
+                )
             }
             Err(e) => log::warn!("Firebase : écriture progression du joueur {id} échouée ({e})"),
         }
@@ -625,12 +737,27 @@ fn main() {
                         "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
                     );
                 }
+                // Contrat du jour (Phase D, Sprint 9) : uniquement sur une
+                // victoire *décidée* — jamais une défaite, jamais un arrêt de
+                // sécurité (`timed_out`, qui n'implique `decided` que si
+                // `has_won()` l'est aussi, cf. la définition de `decided`
+                // ci-dessus). `day` recalculé à chaque manche décidée plutôt
+                // que mémorisé sur `Room` : un contrat commencé la veille et
+                // terminé après minuit ne doit pas être crédité comme celui
+                // d'hier (GDD §3.4 : le contrat du jour est celui du jour où
+                // la manche se termine, pas celui où elle a commencé).
+                let day = day_number(SystemTime::now());
+                let contract = (decided && room.app.has_won())
+                    .then(|| Contract::of_day(day))
+                    .filter(|&c| room.app.contract_completed(c, room.started.elapsed()))
+                    .map(|c| (c, day));
                 award_progress(
                     &firebase,
                     &room.lobby,
                     &room.app,
                     room.app.has_won(),
                     &room.activity,
+                    contract,
                 );
                 post_leaderboard(&firebase, &room.lobby, &room.app);
                 // Une manche décidée ne ferme pas tout le serveur : seul CE
@@ -692,7 +819,11 @@ mod progress_tests {
     /// L'XP s'accumule par-dessus l'existant et le niveau suit `XP_PER_LEVEL`.
     #[test]
     fn xp_accumulates_on_top_of_previous() {
-        let previous = PlayerProgress { level: 1, xp: 900 };
+        let previous = PlayerProgress {
+            level: 1,
+            xp: 900,
+            ..PlayerProgress::default()
+        };
         let updated = merged_progress(Ok(previous), 200).expect("écriture attendue");
         assert_eq!(updated.xp, 1100);
         assert_eq!(updated.level, 2, "1100 XP à {XP_PER_LEVEL} XP/niveau");
@@ -760,6 +891,30 @@ mod progress_tests {
             "deux joueurs de contribution différente doivent recevoir des scores différents \
              (avant ce correctif, les deux auraient reçu `room.app.score()`, identique pour tous)"
         );
+    }
+
+    /// Sprint 4 (PHASE B, `sprint10audit.md`) : un assist vaut exactement la
+    /// même XP qu'un frag (`round_xp` ne distingue pas leur origine, cf.
+    /// `XP_PER_FRAG_OR_ASSIST`) — seul `network_player_score` (classement,
+    /// §8.2) reste frags uniquement, jamais `network_player_assists`. Le
+    /// détail du déclenchement d'un assist (dégât porté sans achever,
+    /// achevé par un autre joueur dans `ASSIST_WINDOW`) est couvert côté
+    /// bibliothèque par
+    /// `multiplayer::tests::damaging_a_creature_that_another_player_finishes_off_credits_an_assist_not_a_kill`
+    /// et l'intégration bout en bout par
+    /// `fireball::tests::two_network_players_who_both_damage_a_creature_split_credit_between_kill_and_assist`.
+    #[test]
+    fn an_assist_is_worth_exactly_as_much_xp_as_a_frag() {
+        let frag_only = round_xp(1, true, false);
+        // `0 + 1` : 0 frag + 1 assist, écrit explicitement pour la lisibilité de
+        // l'intention (assist compté comme un frag), pas une vraie opération.
+        #[allow(clippy::identity_op)]
+        let assist_folded_in = round_xp(0 + 1, true, false);
+        assert_eq!(
+            frag_only, assist_folded_in,
+            "round_xp ne doit pas distinguer un frag d'un assist, seule leur somme compte"
+        );
+        assert_eq!(frag_only - round_xp(0, true, false), XP_PER_FRAG_OR_ASSIST);
     }
 
     /// GDD §8.3, propriété 1 : « la participation domine le frag » — sans
@@ -835,6 +990,22 @@ mod progress_tests {
         assert!(
             distance >= 4.9,
             "un déplacement de 5 m entre deux ticks doit se refléter dans la distance cumulée : {distance}"
+        );
+    }
+
+    /// `day_number` (Phase D, Sprint 9) : seed déterministe du Contrat du jour —
+    /// deux instants dans la même journée UTC donnent le même jour, un instant
+    /// 24 h plus tard donne le suivant.
+    #[test]
+    fn day_number_is_stable_within_a_day_and_advances_after_24h() {
+        let epoch_plus_1h = UNIX_EPOCH + Duration::from_secs(3600);
+        let epoch_plus_23h = UNIX_EPOCH + Duration::from_secs(23 * 3600);
+        assert_eq!(day_number(epoch_plus_1h), day_number(epoch_plus_23h));
+        assert_eq!(day_number(epoch_plus_1h), 0);
+        assert_eq!(
+            day_number(UNIX_EPOCH + Duration::from_secs(25 * 3600)),
+            1,
+            "25 h après l'époque, on est passé au jour suivant"
         );
     }
 }
@@ -952,6 +1123,134 @@ mod tests {
         );
     }
 
+    /// Phase C (Sprint 5, `sprint10audit.md`, auto-relecture) : le mode arbitré
+    /// par le salon (`Lobby::objective`) doit être **renvoyé** à tout joueur
+    /// qui rejoint (`GameEvent::RoundObjective`, `PROTOCOL_VERSION` 5) —
+    /// bout-en-bout à travers un vrai socket, pas seulement `Lobby::objective`
+    /// côté serveur (déjà couvert par le test précédent) : sans ce retour,
+    /// `app::network_client::handle_server_msg` (côté client, testé isolément
+    /// dans `app::network_client::tests::
+    /// round_objective_event_aligns_our_local_objective_with_the_room`)
+    /// n'aurait jamais rien à traiter, et le client resterait sur son défaut
+    /// local `Vagues`.
+    #[test]
+    fn a_joining_client_learns_the_rooms_objective_over_the_wire() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", net.local_addr);
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        let mut room = zombies_room();
+        room.lobby.objective = Some(RoundObjective::Survie);
+        rooms.insert("salle-survie".to_string(), room);
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let client = NetClient::connect_to_lobby(&url, "Bob", None, "salle-survie", 0)
+            .expect("connexion du client");
+        let ServerMsg::Welcome { .. } = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu")
+        else {
+            panic!("premier message attendu : Welcome");
+        };
+
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+
+        // `PlayerJoined` (déjà couvert ailleurs) précède `RoundObjective` sur
+        // le fil : on consomme les messages dans l'ordre plutôt que de
+        // supposer une position fixe, pour ne pas coupler ce test à l'ordre
+        // exact d'émission dans `handle_message`.
+        let mut saw_round_objective = false;
+        for _ in 0..5 {
+            let Ok(msg) = client.inbox.recv_timeout(Duration::from_secs(2)) else {
+                break;
+            };
+            if let ServerMsg::Event(GameEvent::RoundObjective { objective }) = msg {
+                assert_eq!(
+                    RoundObjective::from_u8(objective),
+                    RoundObjective::Survie,
+                    "doit refléter le mode réel du salon rejoint"
+                );
+                saw_round_objective = true;
+                break;
+            }
+        }
+        assert!(
+            saw_round_objective,
+            "le client doit recevoir GameEvent::RoundObjective au Join"
+        );
+    }
+
+    /// Phase C (Sprint 5, `sprint10audit.md`) : le mode d'un salon est fixé au
+    /// premier `Join` **jamais reçu**, pas simplement « pas de joueur connu en
+    /// ce moment » — sans ça, un salon dont tous les joueurs sont partis avant
+    /// la fin de la manche (le salon n'est fermé qu'à manche décidée, cf. la
+    /// boucle `main`) verrait son mode réassigné par le prochain venu, en
+    /// pleine manche d'un autre mode.
+    #[test]
+    fn a_room_keeps_its_objective_even_after_every_player_leaves_before_the_round_ends() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        handle_message(
+            &mut rooms,
+            &mut player_room,
+            &net,
+            1,
+            ClientMsg::Join {
+                protocol: motor3derust::net::protocol::PROTOCOL_VERSION,
+                name: "Alice".to_string(),
+                firebase_uid: None,
+                lobby: "salle-survie".to_string(),
+                class: 0,
+                objective: RoundObjective::Survie.to_u8(),
+            },
+        );
+        {
+            let room = rooms.get("salle-survie").expect("salon créé au Join");
+            assert_eq!(room.lobby.objective, Some(RoundObjective::Survie));
+            assert_eq!(room.app.objective, RoundObjective::Survie);
+        }
+
+        // Alice quitte : plus personne dans le salon, mais il n'est pas fermé
+        // (fermeture réservée à la boucle `main`, à manche décidée).
+        handle_message(&mut rooms, &mut player_room, &net, 1, ClientMsg::Leave);
+        {
+            let room = rooms
+                .get("salle-survie")
+                .expect("le salon vide n'est pas fermé ici");
+            assert!(room.lobby.last_seen.is_empty(), "plus aucun joueur connu");
+        }
+
+        // Bob rejoint le même salon en demandant Vagues : le mode déjà choisi
+        // (Survie) doit être conservé, pas réassigné.
+        handle_message(
+            &mut rooms,
+            &mut player_room,
+            &net,
+            2,
+            ClientMsg::Join {
+                protocol: motor3derust::net::protocol::PROTOCOL_VERSION,
+                name: "Bob".to_string(),
+                firebase_uid: None,
+                lobby: "salle-survie".to_string(),
+                class: 0,
+                objective: RoundObjective::Vagues.to_u8(),
+            },
+        );
+        let room = rooms.get("salle-survie").expect("salon toujours là");
+        assert_eq!(
+            room.lobby.objective,
+            Some(RoundObjective::Survie),
+            "le mode du salon ne doit pas être réassignable après le premier Join"
+        );
+        assert_eq!(room.app.objective, RoundObjective::Survie);
+    }
+
     /// Sprint 105a-2 (durcissement des entrées réseau) : un `Join` dont le
     /// code de salon contient des caractères interdits (`valid_join_fields`)
     /// est rejeté — le joueur ne doit apparaître dans aucun salon, à la
@@ -967,7 +1266,7 @@ mod tests {
         rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
-        let client = NetClient::connect_to_lobby(&url, "Alice", None, "salon/traversal")
+        let client = NetClient::connect_to_lobby(&url, "Alice", None, "salon/traversal", 0)
             .expect("connexion du client");
         let ServerMsg::Welcome { player_id } = client
             .inbox
@@ -1147,8 +1446,8 @@ mod tests {
         let mut rooms: HashMap<String, Room> = HashMap::new();
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
-        let a = NetClient::connect_to_lobby(&url, "A", None, "salon-a").expect("connexion A");
-        let b = NetClient::connect_to_lobby(&url, "B", None, "salon-b").expect("connexion B");
+        let a = NetClient::connect_to_lobby(&url, "A", None, "salon-a", 0).expect("connexion A");
+        let b = NetClient::connect_to_lobby(&url, "B", None, "salon-b", 0).expect("connexion B");
         let welcome_a = a.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
         let welcome_b = b.inbox.recv_timeout(Duration::from_secs(2)).unwrap();
         let (ServerMsg::Welcome { player_id: id_a }, ServerMsg::Welcome { player_id: id_b }) =
@@ -1192,7 +1491,7 @@ mod tests {
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
         let client =
-            NetClient::connect_to_lobby(&url, "Solo", None, "ephemere").expect("connexion");
+            NetClient::connect_to_lobby(&url, "Solo", None, "ephemere", 0).expect("connexion");
         client
             .inbox
             .recv_timeout(Duration::from_secs(2))

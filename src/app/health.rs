@@ -11,10 +11,36 @@
 //! soin d'un allié. `hud_health` reste inchangé pour le joueur solo (aucune
 //! régression : un seul joueur, ce champ suffit toujours).
 
+use std::collections::VecDeque;
+
 use glam::Vec3;
 
 use super::AppState;
-use crate::net::protocol::{GameEvent, PlayerId};
+use crate::net::protocol::{DeathCause, DeathCauseKind, GameEvent, PlayerId};
+
+/// Nombre de dernières sources de dégâts mémorisées par joueur réseau, pour le
+/// diagnostic de mort (Sprint 2, `sprint10audit.md`, GDD §16.5) — juste assez
+/// pour distinguer « un seul agresseur » d'« encerclé », pas un historique
+/// complet (protocole/mémoire bornés, purge continue via `pop_front`).
+const DEATH_CAUSE_WINDOW: usize = 5;
+
+/// Résume la fenêtre de dégâts d'un joueur en cause de mort affichable : type
+/// d'agresseur le plus récent, nombre d'agresseurs *distincts* de ce type dans
+/// la fenêtre. `None` si la fenêtre est vide (mort sans dégât mémorisé, ex.
+/// vie mise à 0 directement par un test/import).
+fn compute_death_cause(buf: &VecDeque<(DeathCauseKind, usize)>) -> Option<DeathCause> {
+    let last_kind = buf.back()?.0;
+    let distinct = buf
+        .iter()
+        .filter(|(kind, _)| *kind == last_kind)
+        .map(|(_, idx)| *idx)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    Some(DeathCause {
+        kind: last_kind,
+        distinct_attackers: distinct.min(u8::MAX as usize) as u8,
+    })
+}
 
 /// Vie de départ (et maximum) d'un joueur réseau — pas encore différenciée par
 /// rôle (cf. GAMEDESIGN_EN_LIGNE.md §3.5, délibérément hors scope ici : un
@@ -92,12 +118,15 @@ impl AppState {
         // AABB des monstres `AiChaser` visibles ce tick — même notion de
         // « danger » que le pilotage IA (cf. `sim_step`), calculée une fois et
         // réutilisée pour chaque joueur plutôt que reparcourue par joueur.
-        let monster_aabbs: Vec<(Vec3, Vec3)> = self
+        // Indice d'objet conservé (pas seulement l'AABB) pour le diagnostic de
+        // mort (Sprint 2) : distinguer un seul monstre au contact de plusieurs.
+        let monster_aabbs: Vec<(usize, (Vec3, Vec3))> = self
             .scene
             .objects
             .iter()
-            .filter(|o| o.ai_chaser.is_some() && o.visible)
-            .map(|o| self.scene.world_aabb(o))
+            .enumerate()
+            .filter(|(_, o)| o.ai_chaser.is_some() && o.visible)
+            .map(|(i, o)| (i, self.scene.world_aabb(o)))
             .collect();
 
         let ids: Vec<PlayerId> = self.network_players.keys().copied().collect();
@@ -117,14 +146,24 @@ impl AppState {
                 // Déjà vaincu (spectateur) : vie figée à 0, rien à faire.
                 continue;
             }
-            let touched = monster_aabbs
+            let touching: Vec<usize> = monster_aabbs
                 .iter()
-                .any(|&aabb| aabbs_overlap(aabb, player_aabb));
+                .filter(|&&(_, aabb)| aabbs_overlap(aabb, player_aabb))
+                .map(|&(idx, _)| idx)
+                .collect();
+            let touched = !touching.is_empty();
             let max_hp = self.max_health_for(id);
             let was_alive = self.network_health.get(&id).copied().unwrap_or(max_hp) > 0.0;
             let hp = self.network_health.entry(id).or_insert(max_hp);
             if touched {
                 *hp = (*hp - MONSTER_CONTACT_DPS * dt).max(0.0);
+                let buf = self.recent_damage.entry(id).or_default();
+                for idx in touching {
+                    buf.push_back((DeathCauseKind::Monster, idx));
+                    while buf.len() > DEATH_CAUSE_WINDOW {
+                        buf.pop_front();
+                    }
+                }
             } else {
                 *hp = (*hp + REGEN_PER_S * dt).min(max_hp);
             }
@@ -137,8 +176,15 @@ impl AppState {
                 if let Some(o) = self.scene.objects.get_mut(index) {
                     o.visible = false;
                 }
-                self.pending_net_events
-                    .push(GameEvent::PlayerDown { player_id: id });
+                let cause = self
+                    .recent_damage
+                    .remove(&id)
+                    .and_then(|buf| compute_death_cause(&buf));
+                self.pending_net_events.push(GameEvent::PlayerDown {
+                    player_id: id,
+                    cause,
+                });
+                self.player_down_count += 1;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
             }
         }
@@ -212,15 +258,30 @@ impl AppState {
                 let was_alive = self.network_health.get(&id).copied().unwrap_or(MAX_HEALTH) > 0.0;
                 let hp = self.network_health.entry(id).or_insert(MAX_HEALTH);
                 *hp = (*hp - bite.damage).max(0.0);
+                let buf = self.recent_damage.entry(id).or_default();
+                buf.push_back((DeathCauseKind::Creature, creature_idx));
+                while buf.len() > DEATH_CAUSE_WINDOW {
+                    buf.pop_front();
+                }
                 let just_died = was_alive && *hp <= 0.0;
                 if just_died {
                     if let Some(o) = self.scene.objects.get_mut(index) {
                         o.visible = false;
                     }
-                    self.pending_net_events
-                        .push(GameEvent::PlayerDown { player_id: id });
+                    let cause = self
+                        .recent_damage
+                        .remove(&id)
+                        .and_then(|buf| compute_death_cause(&buf));
+                    self.pending_net_events.push(GameEvent::PlayerDown {
+                        player_id: id,
+                        cause,
+                    });
+                    self.player_down_count += 1;
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 } else {
+                    if Some(id) == self.net_player_id {
+                        self.camera_shake = 1.0;
+                    }
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
                 }
             }
@@ -375,16 +436,26 @@ impl AppState {
                     o.visible = true;
                 }
                 self.network_revive.remove(&healer_id);
+                self.revives_completed += 1;
             }
         }
     }
 
     /// Défaite de **salon** en multijoueur (GAMEDESIGN_EN_LIGNE.md §3.1) : vrai
-    /// quand au moins un joueur réseau est connu et que TOUS sont vaincus.
-    /// Remplace `is_lost()` (pensé pour un joueur local unique) côté serveur
-    /// headless dès qu'un salon a des joueurs réseau ; en solo (aucun joueur
-    /// réseau), retombe sur `is_lost()`, inchangé — aucune régression.
+    /// quand au moins un joueur réseau est connu et que TOUS sont vaincus, **ou**
+    /// (mode Escorte, Sprint 7 de `sprint10audit.md`) quand le convoi est détruit —
+    /// ce second cas prime sur l'état des joueurs : un convoi anéanti perd la manche
+    /// même si des joueurs sont encore en vie (GDD §4, contrairement aux autres
+    /// modes où seule la mort de tous les joueurs compte). Remplace `is_lost()`
+    /// (pensé pour un joueur local unique) côté serveur headless dès qu'un salon a
+    /// des joueurs réseau ; en solo (aucun joueur réseau) et hors mode Escorte,
+    /// retombe sur `is_lost()`, inchangé — aucune régression.
     pub fn is_room_lost(&self) -> bool {
+        if self.objective == crate::app::multiplayer::RoundObjective::Escorte
+            && self.is_convoy_destroyed()
+        {
+            return true;
+        }
         if self.network_players.is_empty() {
             self.is_lost()
         } else {
@@ -392,6 +463,18 @@ impl AppState {
                 .keys()
                 .all(|id| self.network_health.get(id).copied().unwrap_or(MAX_HEALTH) <= 0.0)
         }
+    }
+
+    /// Convoi détruit (mode Escorte, Sprint 7) : présent dans la scène mais rendu
+    /// invisible par `Scene::damage_attackable` une fois ses PV à 0 — `false` si la
+    /// scène n'a pas d'objet `convoy` (mauvais mode/scène) plutôt que de compter ça
+    /// comme une défaite immédiate.
+    fn is_convoy_destroyed(&self) -> bool {
+        self.scene
+            .objects
+            .iter()
+            .find(|o| o.convoy.is_some())
+            .is_some_and(|o| !o.visible)
     }
 
     /// Vie (0..1) du joueur réseau `id`, `None` s'il n'est pas connecté.
@@ -431,7 +514,7 @@ mod tests {
     use super::super::AppState;
     use super::MAX_HEALTH;
     use crate::app::multiplayer::{NetworkInput, PlayerClass};
-    use crate::net::protocol::GameEvent;
+    use crate::net::protocol::{DeathCauseKind, GameEvent};
     use crate::scene::{AiChaser, Combat, Controller, MeshKind, Scene, SceneObject, Transform};
 
     /// Scène minimale : un sol (les joueurs doivent tenir debout, sans quoi ils
@@ -464,7 +547,10 @@ mod tests {
                 mesh: MeshKind::Cube,
                 transform: Transform::from_pos(Vec3::new(0.0, 1.0, 0.0))
                     .with_scale(Vec3::splat(1.0)),
-                ai_chaser: Some(AiChaser { speed: 0.0 }),
+                ai_chaser: Some(AiChaser {
+                    speed: 0.0,
+                    ..Default::default()
+                }),
                 combat: Some(Combat {
                     attackable: true,
                     ..Default::default()
@@ -579,8 +665,93 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, GameEvent::PlayerDown { player_id: 1 })),
+                .any(|e| matches!(e, GameEvent::PlayerDown { player_id: 1, .. })),
             "la mort d'un joueur réseau doit être diffusée : {events:?}"
+        );
+    }
+
+    /// Sprint 2 (`sprint10audit.md`) : la mort par contact monstre doit porter
+    /// une cause exploitable côté client (diagnostic de mort, GDD §16.5), pas
+    /// juste l'identifiant de la victime.
+    #[test]
+    fn death_by_monster_contact_carries_a_death_cause() {
+        let mut app = app_with(scene_with_optional_monster(true));
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let monster_pos = app.scene.objects[2].transform.position;
+        app.scene.objects[index].transform.position = monster_pos;
+
+        for _ in 0..160 {
+            app.update_network_health(0.05);
+        }
+
+        let events = app.take_net_events();
+        let cause = events.iter().find_map(|e| match e {
+            GameEvent::PlayerDown {
+                player_id: 1,
+                cause,
+            } => Some(*cause),
+            _ => None,
+        });
+        assert_eq!(
+            cause,
+            Some(Some(crate::net::protocol::DeathCause {
+                kind: DeathCauseKind::Monster,
+                distinct_attackers: 1,
+            })),
+            "un seul monstre au contact doit produire une cause Monster/1 : {events:?}"
+        );
+    }
+
+    /// Symétrique du test ci-dessus pour le cas « Encerclé » (GDD §16.5,
+    /// exemple cité littéralement : « Encerclé — 2 Traqueuses ») : deux
+    /// monstres au contact **au même instant** doivent produire
+    /// `distinct_attackers: 2`, pas 1 — sans ce test, une régression qui
+    /// écraserait la fenêtre à un seul agresseur (ex. `push_back` remplacé par
+    /// une simple affectation) serait passée inaperçue.
+    #[test]
+    fn death_by_two_simultaneous_monsters_reports_two_distinct_attackers() {
+        let mut app = app_with(scene_with_optional_monster(false));
+        app.hide_local_player_template();
+        let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let player_pos = app.scene.objects[index].transform.position;
+        for i in 0..2 {
+            app.scene.objects.push(SceneObject {
+                name: format!("Monstre {i}"),
+                mesh: MeshKind::Cube,
+                transform: Transform::from_pos(player_pos).with_scale(Vec3::splat(1.0)),
+                ai_chaser: Some(AiChaser {
+                    speed: 0.0,
+                    ..Default::default()
+                }),
+                combat: Some(Combat {
+                    attackable: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+
+        for _ in 0..160 {
+            app.update_network_health(0.05);
+        }
+
+        let events = app.take_net_events();
+        let cause = events.iter().find_map(|e| match e {
+            GameEvent::PlayerDown {
+                player_id: 1,
+                cause,
+            } => Some(*cause),
+            _ => None,
+        });
+        assert_eq!(
+            cause,
+            Some(Some(crate::net::protocol::DeathCause {
+                kind: DeathCauseKind::Monster,
+                distinct_attackers: 2,
+            })),
+            "deux monstres au contact simultané doivent produire une cause \
+             Monster/2 (« Encerclé ») : {events:?}"
         );
     }
 

@@ -43,7 +43,9 @@ impl AppState {
         self.inventory.clear();
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.ally_down_flash = 0.0;
+        self.death_cause = None;
         self.attack_flash = 0.0;
         self.attack_cooldown_remaining = 0.0;
         self.attack_projectile = None;

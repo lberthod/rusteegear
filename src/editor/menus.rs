@@ -124,6 +124,26 @@ pub(super) fn menu_fichier(
                 actions.load_brawl = true;
                 ui.close();
             }
+            if ui
+                .button("👑  Démo Boss (mode Boss)")
+                .on_hover_text(
+                    "Arène fermée, un adversaire unique à PV massifs et contact doublé (RoundObjective::Boss)",
+                )
+                .clicked()
+            {
+                actions.load_boss = true;
+                ui.close();
+            }
+            if ui
+                .button("🛒  Démo Escorte (mode Escorte)")
+                .on_hover_text(
+                    "Convoi lent à mener d'un bout à l'autre d'un couloir, ciblé en priorité par les créatures (RoundObjective::Escorte)",
+                )
+                .clicked()
+            {
+                actions.load_escorte = true;
+                ui.close();
+            }
         });
         ui.separator();
         if ui
@@ -553,6 +573,10 @@ pub(super) fn menu_outils(
         }
         if ui.button("📊  Profiler FPS").clicked() {
             panels.profiler = true;
+            ui.close();
+        }
+        if ui.button("🗺  Mini-carte").clicked() {
+            panels.minimap = true;
             ui.close();
         }
         if ui.button("📜  Gestionnaire de scripts Lua").clicked() {

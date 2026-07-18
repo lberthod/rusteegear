@@ -36,6 +36,110 @@ pub(super) fn frustum_planes(vp: glam::Mat4) -> [glam::Vec4; 6] {
     ]
 }
 
+/// Rayon de culling par distance (mètres) selon la catégorie de mesh — `None` = pas de
+/// limite (bâtiments/créatures/décor imposant, dont la disparition à distance serait trop
+/// visible). Complète le frustum culling (`aabb_visible`) : réduit la charge en vue
+/// large/plongée en coupant tôt le feuillage/petit décor dense, avant même le tri en
+/// plages contiguës. Catégorisation par sous-chaîne du nom de fichier importé — grossière
+/// mais suffisante pour les packs d'assets `nature_*.glb` de ce projet (Phase C,
+/// `sprintoptimation3daudit10h.md`).
+const FOLIAGE_LOW_RADIUS_KEYWORDS: &[&str] = &[
+    "grass_tuft",
+    "fern",
+    "reeds",
+    "flowers",
+    "daisies",
+    "thistle",
+    "cattails",
+    "lavender",
+    "irises",
+    "lily",
+    "sunflowers",
+    "wheat",
+    "rice",
+    "mushrooms",
+    "clover",
+    "bramble",
+];
+const MEDIUM_RADIUS_KEYWORDS: &[&str] = &[
+    "tree",
+    "pine",
+    "oak",
+    "birch",
+    "cypress",
+    "sequoia",
+    "palm",
+    "willow",
+    "maple",
+    "poplar",
+    "cherry_blossom",
+    "magnolia",
+    "ginkgo",
+    "olive",
+    "plum",
+    "hazel",
+    "rock",
+    "stump",
+    "mossy_log",
+    "cairn",
+    "menhir",
+    "bush",
+    "holly",
+    "topiary",
+];
+const FOLIAGE_LOW_RADIUS: f32 = 45.0;
+const MEDIUM_RADIUS: f32 = 110.0;
+
+/// `true` si `word` apparaît dans `haystack` sur une frontière de mot (délimitée par
+/// début/fin de chaîne ou un caractère non alphanumérique — `_`/`.` dans un nom de
+/// fichier). Une simple sous-chaîne ferait matcher le mot-clé `rock` dans
+/// `nature_rocking_chair.glb` (meuble, pas un rocher) — bug constaté à l'audit du
+/// Sprint 4, corrigé ici plutôt qu'en retirant le mot-clé `rock` (nécessaire pour
+/// `nature_rock.glb`).
+fn contains_word(haystack: &str, word: &str) -> bool {
+    let is_boundary = |c: Option<char>| c.is_none_or(|c| !c.is_ascii_alphanumeric());
+    haystack.match_indices(word).any(|(idx, _)| {
+        let before = haystack[..idx].chars().next_back();
+        let after = haystack[idx + word.len()..].chars().next();
+        is_boundary(before) && is_boundary(after)
+    })
+}
+
+/// Rayon de culling par distance pour `mesh`, `None` si aucune limite ne s'applique
+/// (catégorie « bâtiments/créatures » du plan Phase C, ou primitive codée).
+pub(super) fn culling_radius_for(scene: &Scene, mesh: MeshKind) -> Option<f32> {
+    let MeshKind::Imported(i) = mesh else {
+        return None;
+    };
+    let path = scene.imported.get(i as usize)?.path.to_ascii_lowercase();
+    if FOLIAGE_LOW_RADIUS_KEYWORDS
+        .iter()
+        .any(|k| contains_word(&path, k))
+    {
+        Some(FOLIAGE_LOW_RADIUS)
+    } else if MEDIUM_RADIUS_KEYWORDS
+        .iter()
+        .any(|k| contains_word(&path, k))
+    {
+        Some(MEDIUM_RADIUS)
+    } else {
+        None
+    }
+}
+
+/// `true` si la position `world_pos` est à moins de `radius` de `eye` — `radius = None`
+/// signifie toujours visible (pas de limite de distance pour cette catégorie).
+pub(super) fn distance_visible(
+    eye: glam::Vec3,
+    world_pos: glam::Vec3,
+    radius: Option<f32>,
+) -> bool {
+    match radius {
+        Some(r) => eye.distance_squared(world_pos) <= r * r,
+        None => true,
+    }
+}
+
 /// Teste si l'AABB locale `[lmin, lmax]` (transformée par `model`) est au moins
 /// partiellement dans le frustum. Conservateur : peut garder un objet juste hors champ.
 pub(super) fn aabb_visible(
@@ -117,6 +221,7 @@ pub(super) fn mesh_key(m: MeshKind) -> u32 {
         MeshKind::Cylinder => 3,
         MeshKind::Capsule => 4,
         MeshKind::Terrain => 5,
+        MeshKind::Billboard => 6,
         MeshKind::Imported(i) => 100 + i,
     }
 }
@@ -161,4 +266,62 @@ pub(super) fn render_input_hash(app: &AppState) -> u64 {
         h.write_u8(o.visible as u8);
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod culling_distance_tests {
+    use super::*;
+    use crate::scene::{ImportedMesh, Scene};
+
+    fn scene_with_mesh(path: &str) -> Scene {
+        let mut scene = Scene::default();
+        scene.imported.push(ImportedMesh {
+            path: path.to_string(),
+            ..Default::default()
+        });
+        scene
+    }
+
+    /// Preuve Phase C (Sprint 4, `sprintoptimation3daudit10h.md`) : le feuillage bas
+    /// (herbe/fougères) reçoit un rayon de culling court, distinct des arbres/rochers
+    /// (rayon moyen) et des bâtiments/créatures (aucune limite) — évite qu'un réglage
+    /// mal placé fasse disparaître un bâtiment à mi-distance sans que rien ne le signale.
+    #[test]
+    fn categorizes_foliage_trees_and_unbounded_correctly() {
+        let grass = scene_with_mesh("assets/models/nature_grass_tuft.glb");
+        let tree = scene_with_mesh("assets/models/nature_oak.glb");
+        let building = scene_with_mesh("assets/models/nature_cabin.glb");
+        let creature = scene_with_mesh("assets/models/creature.glb");
+
+        let grass_r = culling_radius_for(&grass, MeshKind::Imported(0)).unwrap();
+        let tree_r = culling_radius_for(&tree, MeshKind::Imported(0)).unwrap();
+        assert!(
+            grass_r < tree_r,
+            "l'herbe doit avoir un rayon plus court que les arbres"
+        );
+        assert_eq!(culling_radius_for(&building, MeshKind::Imported(0)), None);
+        assert_eq!(culling_radius_for(&creature, MeshKind::Imported(0)), None);
+        // Une primitive codée (pas de mesh importé) n'a jamais de limite de distance.
+        assert_eq!(culling_radius_for(&grass, MeshKind::Cube), None);
+    }
+
+    /// Régression : `nature_rocking_chair.glb` (meuble) ne doit pas être catégorisé comme
+    /// « rocher » à cause d'une sous-chaîne `rock` non bornée — corrigé par `contains_word`.
+    #[test]
+    fn rocking_chair_is_not_matched_by_rock_keyword() {
+        let chair = scene_with_mesh("assets/models/nature_rocking_chair.glb");
+        assert_eq!(culling_radius_for(&chair, MeshKind::Imported(0)), None);
+    }
+
+    /// Preuve que `distance_visible` respecte le rayon fourni et que `None` ne coupe
+    /// jamais rien, même à très grande distance (bâtiments/créatures).
+    #[test]
+    fn distance_visible_respects_radius_and_none_is_unbounded() {
+        let eye = glam::Vec3::ZERO;
+        let near = glam::Vec3::new(10.0, 0.0, 0.0);
+        let far = glam::Vec3::new(1000.0, 0.0, 0.0);
+        assert!(distance_visible(eye, near, Some(FOLIAGE_LOW_RADIUS)));
+        assert!(!distance_visible(eye, far, Some(FOLIAGE_LOW_RADIUS)));
+        assert!(distance_visible(eye, far, None));
+    }
 }

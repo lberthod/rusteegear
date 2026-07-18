@@ -10,6 +10,7 @@ use crate::scene::{
 use super::{HudPreview, Panels, StatusInfo, UiActions, export, readiness};
 
 /// Fenêtres flottantes des menus « Aide » et « Outils ».
+#[allow(clippy::too_many_arguments)]
 pub(super) fn tool_windows(
     ctx: &egui::Context,
     panels: &mut Panels,
@@ -17,6 +18,7 @@ pub(super) fn tool_windows(
     export: &export::ExportPanel,
     status: &StatusInfo,
     console_input: &mut String,
+    minimap: &crate::app::MinimapData,
     actions: &mut UiActions,
 ) {
     // --- Console (logs en mémoire + commandes) ---
@@ -155,6 +157,9 @@ pub(super) fn tool_windows(
             }
         });
 
+    // --- Mini-carte (vue de dessus x/z, cliquable/zoomable) ---
+    minimap_window(ctx, panels, minimap);
+
     // --- Contrôle qualité APK (APK Readiness Check) ---
     let mut do_analyze = false;
     egui::Window::new("✔  Contrôle qualité APK")
@@ -271,6 +276,113 @@ pub(super) fn tool_windows(
                 "github.com/lberthod/rusteegear",
                 "https://github.com/lberthod/rusteegear",
             );
+        });
+}
+
+/// Fenêtre « 🗺 Mini-carte » : vue de dessus (x/z) cliquable/zoomable de la
+/// scène — joueur (bleu), alliés réseau (vert, nom affiché) et créatures
+/// (rouge). Cadrée par défaut sur `minimap.bounds` (cf. `AppState::minimap_data`,
+/// bornes du sol nommé « Sol » ou englobante des objets à défaut). Glisser pour
+/// déplacer la vue, molette pour zoomer, double-clic pour recentrer — mêmes
+/// gestes qu'un éditeur de niveau, pas de widget dédié en plus des `Sense`
+/// standard d'egui (cf. doc de `hud_anchor` sur `Ui::interact`).
+fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app::MinimapData) {
+    if panels.minimap_zoom <= 0.0 {
+        panels.minimap_zoom = 1.0;
+    }
+    egui::Window::new("🗺  Mini-carte")
+        .open(&mut panels.minimap)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let size = egui::vec2(260.0, 260.0);
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+
+            let (min_x, min_z, max_x, max_z) = minimap.bounds;
+            let span = (max_x - min_x).max(max_z - min_z).max(1.0);
+            let center_x = (min_x + max_x) * 0.5 + panels.minimap_pan[0];
+            let center_z = (min_z + max_z) * 0.5 + panels.minimap_pan[1];
+            // Marge de 10% pour ne pas coller les marqueurs du bord au cadre.
+            let scale = (rect.width().min(rect.height()) / span) * 0.9 * panels.minimap_zoom;
+            let world_to_screen = |x: f32, z: f32| {
+                egui::pos2(
+                    rect.center().x + (x - center_x) * scale,
+                    rect.center().y + (z - center_z) * scale,
+                )
+            };
+
+            if response.dragged() && scale > 0.0 {
+                let delta = response.drag_delta();
+                panels.minimap_pan[0] -= delta.x / scale;
+                panels.minimap_pan[1] -= delta.y / scale;
+            }
+            if response.double_clicked() {
+                panels.minimap_pan = [0.0, 0.0];
+                panels.minimap_zoom = 1.0;
+            }
+            if response.hovered() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    panels.minimap_zoom =
+                        (panels.minimap_zoom * (1.0 + scroll * 0.002)).clamp(0.25, 8.0);
+                }
+            }
+
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(30, 40, 32));
+            painter.rect_stroke(
+                rect,
+                4.0,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+                egui::StrokeKind::Inside,
+            );
+            // Bornes du monde (contour), pour situer le cadrage courant.
+            let world_rect = egui::Rect::from_two_pos(
+                world_to_screen(min_x, min_z),
+                world_to_screen(max_x, max_z),
+            );
+            painter.rect_stroke(
+                world_rect,
+                0.0,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+                egui::StrokeKind::Inside,
+            );
+
+            for &(x, z) in &minimap.creatures {
+                let p = world_to_screen(x, z);
+                if rect.contains(p) {
+                    painter.circle_filled(p, 3.5, egui::Color32::from_rgb(220, 90, 80));
+                }
+            }
+            for ally in &minimap.allies {
+                let p = world_to_screen(ally.x, ally.z);
+                if rect.contains(p) {
+                    painter.circle_filled(p, 4.5, egui::Color32::from_rgb(110, 200, 110));
+                    painter.text(
+                        p + egui::vec2(6.0, -6.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        &ally.label,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_gray(220),
+                    );
+                }
+            }
+            if let Some((x, z)) = minimap.player {
+                let p = world_to_screen(x, z);
+                if rect.contains(p) {
+                    painter.circle_filled(p, 5.0, egui::Color32::from_rgb(90, 160, 240));
+                    painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+                }
+            }
+
+            ui.horizontal(|ui| {
+                ui.small("🔵 Vous · 🟢 Alliés · 🔴 Créatures");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("🎯 Recentrer").clicked() {
+                        panels.minimap_pan = [0.0, 0.0];
+                        panels.minimap_zoom = 1.0;
+                    }
+                });
+            });
         });
 }
 
@@ -547,7 +659,13 @@ pub(super) fn mobile_multiplayer_overlay(
                     .add_enabled(can_connect, egui::Button::new("▶ Se connecter"))
                     .clicked()
                 {
-                    actions.connect_to_server = Some((server_url.clone(), name.clone()));
+                    // Pas de sélecteur de classe ici (overlay minimal, cf. sa
+                    // doc) : Assaut par défaut, comme avant ce sprint.
+                    actions.connect_to_server = Some((
+                        server_url.clone(),
+                        name.clone(),
+                        crate::app::multiplayer::PlayerClass::Assault,
+                    ));
                 }
             }
             ui.add_space(4.0);
@@ -569,11 +687,12 @@ pub(super) fn multiplayer_window(
     panels: &mut Panels,
     server_url: &mut String,
     name: &mut String,
+    class: &mut crate::app::multiplayer::PlayerClass,
     email: &mut String,
     password: &mut String,
     lobby_code: &mut String,
     chat_input: &mut String,
-    settings: &crate::app::settings::Settings,
+    settings: &mut crate::app::settings::Settings,
     net_status: &str,
     net_connected: bool,
     chat_messages: &[crate::app::network_client::ChatLine],
@@ -597,6 +716,19 @@ pub(super) fn multiplayer_window(
                 !net_connected,
                 egui::TextEdit::singleline(name).hint_text("Joueur"),
             );
+            ui.label("Classe");
+            // Sprint 3 (`sprint10audit.md`) : la classe est fixée au `Join`
+            // (côté serveur, `spawn_network_player`) — désactivé une fois
+            // connecté, comme l'adresse et le pseudo juste au-dessus.
+            ui.add_enabled_ui(!net_connected, |ui| {
+                egui::ComboBox::from_id_salt("mp_class_select")
+                    .selected_text(class.label())
+                    .show_ui(ui, |ui| {
+                        for c in crate::app::multiplayer::PlayerClass::ALL {
+                            ui.selectable_value(class, c, c.label());
+                        }
+                    });
+            });
             ui.add_space(6.0);
             if net_connected {
                 if ui.button("🔌  Se déconnecter").clicked() {
@@ -608,7 +740,7 @@ pub(super) fn multiplayer_window(
                     .add_enabled(can_connect, egui::Button::new("▶  Se connecter"))
                     .clicked()
                 {
-                    actions.connect_to_server = Some((server_url.clone(), name.clone()));
+                    actions.connect_to_server = Some((server_url.clone(), name.clone(), *class));
                 }
                 if !can_connect {
                     ui.small("Adresse et pseudo requis.");
@@ -672,11 +804,30 @@ pub(super) fn multiplayer_window(
                 egui::ScrollArea::vertical()
                     .max_height(140.0)
                     .show(ui, |ui| {
-                        if chat_messages.is_empty() {
+                        let visible: Vec<_> = chat_messages
+                            .iter()
+                            .filter(|line| !settings.is_muted(&line.sender))
+                            .collect();
+                        if visible.is_empty() {
                             ui.small("Aucun message pour l'instant.");
                         }
-                        for line in chat_messages {
-                            ui.label(format!("{} : {}", line.sender, line.text));
+                        for line in visible {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{} : {}", line.sender, line.text));
+                                // Un joueur ne peut pas se muter lui-même.
+                                if line.sender != *name
+                                    // Texte statique plutôt que `format!` par ligne : le
+                                    // pseudo est déjà affiché juste à côté, pas besoin de
+                                    // le répéter dans l'infobulle — évite une allocation
+                                    // par ligne visible à chaque frame.
+                                    && ui
+                                        .small_button("🔇")
+                                        .on_hover_text("Muet ce joueur")
+                                        .clicked()
+                                {
+                                    settings.mute_player(&line.sender);
+                                }
+                            });
                         }
                     });
                 ui.horizontal(|ui| {
@@ -702,6 +853,30 @@ pub(super) fn multiplayer_window(
                 }
                 if ui.button("🔄  Rafraîchir").clicked() && !lobby_code.trim().is_empty() {
                     actions.refresh_chat = Some(lobby_code.clone());
+                }
+                ui.small(
+                    "Le salon se rafraîchit aussi automatiquement toutes les quelques \
+                     secondes tant que cette fenêtre reste ouverte.",
+                );
+                if !settings.muted_players.is_empty() {
+                    ui.add_space(6.0);
+                    ui.collapsing("Joueurs muets", |ui| {
+                        // Un seul pseudo cloné (au clic), pas toute la liste à chaque
+                        // frame : `settings` reste emprunté en lecture pendant la
+                        // boucle, la mutation n'arrive qu'une fois cet emprunt terminé.
+                        let mut to_unmute: Option<String> = None;
+                        for player in &settings.muted_players {
+                            ui.horizontal(|ui| {
+                                ui.small(player);
+                                if ui.small_button("🔊 Démuter").clicked() {
+                                    to_unmute = Some(player.clone());
+                                }
+                            });
+                        }
+                        if let Some(player) = to_unmute {
+                            settings.unmute_player(&player);
+                        }
+                    });
                 }
 
                 ui.add_space(12.0);

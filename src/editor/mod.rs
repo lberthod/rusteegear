@@ -58,6 +58,10 @@ pub struct Editor {
     mp_server_url: String,
     /// Pseudo saisi dans la fenêtre Multijoueur.
     mp_name: String,
+    /// Classe choisie dans la fenêtre Multijoueur avant de se connecter
+    /// (Sprint 3, `sprint10audit.md`) — Assaut par défaut (zéro régression
+    /// pour qui ne touche pas au sélecteur).
+    mp_class: crate::app::multiplayer::PlayerClass,
     /// Email saisi dans la fenêtre Multijoueur (connexion Firebase).
     mp_email: String,
     /// Mot de passe saisi dans la fenêtre Multijoueur (connexion Firebase).
@@ -82,7 +86,17 @@ pub struct Editor {
     /// frame, le fichier ne change pas en cours de session (seul un panic l'écrit,
     /// et celui-ci termine le process avant que cette valeur ne compte à nouveau).
     crash_log_text: Option<String>,
+    /// Dernier rafraîchissement automatique du chat de salon (Sprint F-12) —
+    /// `None` tant qu'aucun n'a encore eu lieu cette session, pour forcer le
+    /// tout premier dès que la fenêtre Multijoueur s'ouvre.
+    mp_last_chat_refresh: Option<crate::time_compat::Instant>,
 }
+
+/// Intervalle minimal entre deux rafraîchissements automatiques du chat de
+/// salon (Sprint F-12) : assez court pour rester réactif, assez long pour ne
+/// pas spammer Firebase à chaque frame tant que la fenêtre Multijoueur reste
+/// ouverte.
+const AUTO_CHAT_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// Réglages du panneau « 👁 Aperçu HUD » : quels overlays de jeu (réticule,
 /// inventaire, joueurs…) prévisualiser en mode Édition, sans passer par Play —
@@ -172,6 +186,15 @@ struct Panels {
     /// appliqué directement au clic (destructif : toujours un aller-retour de
     /// validation, cf. demande utilisateur).
     prefab_pending_delete: Option<(crate::assets::PrefabScope, String)>,
+    /// Fenêtre « 🗺 Mini-carte » : vue de dessus (x/z) cliquable/zoomable du
+    /// joueur, des alliés réseau et des créatures.
+    minimap: bool,
+    /// Zoom courant de la mini-carte (1 = cadrage sur les bornes du monde) ;
+    /// `<= 0.0` (valeur par défaut de `Panels`) traité comme 1.0 à l'ouverture.
+    minimap_zoom: f32,
+    /// Décalage de panoramique de la mini-carte (unités monde x/z), déplacé au
+    /// clic-glissé ou en double-cliquant un marqueur pour le recentrer.
+    minimap_pan: [f32; 2],
 }
 
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
@@ -242,6 +265,10 @@ pub struct UiActions {
     pub load_roguelike: bool,
     /// « Démo Duel (Tekken/Smash) » : arène flottante, rival à plusieurs PV, ring out.
     pub load_brawl: bool,
+    /// « Démo Boss » (mode `RoundObjective::Boss`) : arène fermée, adversaire unique à PV massifs.
+    pub load_boss: bool,
+    /// « Démo Escorte » (mode `RoundObjective::Escorte`) : convoi à mener à destination.
+    pub load_escorte: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// Inventaire d'armes (cf. `weapon_inventory_panel`) : arme choisie par le
@@ -250,8 +277,9 @@ pub struct UiActions {
     /// « Utiliser » cliqué dans le panneau 👜 Sac : sorte d'objet à consommer,
     /// à appliquer via `AppState::use_item`.
     pub use_item: Option<crate::scene::ItemKind>,
-    /// Fenêtre Multijoueur : « Se connecter » demandé (adresse, pseudo).
-    pub connect_to_server: Option<(String, String)>,
+    /// Fenêtre Multijoueur : « Se connecter » demandé (adresse, pseudo, classe
+    /// choisie — Sprint 3, `sprint10audit.md`).
+    pub connect_to_server: Option<(String, String, crate::app::multiplayer::PlayerClass)>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
     pub disconnect_from_server: bool,
     /// Widgets HUD `Button` cliqués ce frame (leur champ `action`) — à transmettre à
@@ -397,6 +425,7 @@ impl Editor {
             ai_history: Vec::new(),
             mp_server_url: crate::app::network_client::DEFAULT_SERVER_URL.to_string(),
             mp_name: String::new(),
+            mp_class: crate::app::multiplayer::PlayerClass::Assault,
             mp_email: String::new(),
             mp_password: String::new(),
             mp_lobby_code: "default".to_string(),
@@ -406,6 +435,7 @@ impl Editor {
             hud_widget_new_id: String::new(),
             hud_image_cache: HudImageCache::default(),
             crash_log_text,
+            mp_last_chat_refresh: None,
         }
     }
 
@@ -471,6 +501,7 @@ impl Editor {
         net_connected: bool,
         weapon_label: &str,
         defeated: bool,
+        death_cause: Option<crate::net::protocol::DeathCause>,
         kills: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
@@ -546,7 +577,7 @@ impl Editor {
             if lost {
                 lose_banner(ctx, area, locale);
             } else if defeated {
-                defeated_banner(ctx, area, locale);
+                defeated_banner(ctx, area, death_cause, locale);
             }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
             if (won || lost) && restart_button(ctx, area, won, locale) {
@@ -620,11 +651,13 @@ impl Editor {
         leaderboard: &[crate::app::network_client::LeaderboardLine],
         weapon_label: &str,
         defeated: bool,
+        death_cause: Option<crate::net::protocol::DeathCause>,
         kills: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
         item_inventory: &[(crate::scene::ItemKind, u32)],
         roster: &[RosterEntry],
+        minimap: &crate::app::MinimapData,
         locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -642,6 +675,7 @@ impl Editor {
         let ai_history = &mut self.ai_history;
         let mp_server_url = &mut self.mp_server_url;
         let mp_name = &mut self.mp_name;
+        let mp_class = &mut self.mp_class;
         let mp_email = &mut self.mp_email;
         let mp_password = &mut self.mp_password;
         let mp_lobby_code = &mut self.mp_lobby_code;
@@ -687,6 +721,7 @@ impl Editor {
                 ai_history,
                 mp_server_url,
                 mp_name,
+                mp_class,
                 mp_email,
                 mp_password,
                 mp_lobby_code,
@@ -699,11 +734,13 @@ impl Editor {
                 leaderboard,
                 weapon_label,
                 defeated,
+                death_cause,
                 kills,
                 weapon_inventory,
                 selected_weapon,
                 item_inventory,
                 roster,
+                minimap,
                 hud_preview,
                 hud_image_cache,
                 hud_widget_new_id,
@@ -712,6 +749,29 @@ impl Editor {
                 locale,
             );
         });
+
+        // Rafraîchissement automatique du chat de salon (Sprint F-12) : tant que
+        // la fenêtre Multijoueur reste ouverte, un salon renseigné et Firebase
+        // configuré, pas besoin de cliquer « Rafraîchir » pour voir les nouveaux
+        // messages. Ne prend jamais le pas sur un rafraîchissement explicite déjà
+        // déclenché ce frame par un clic — on note juste l'horodatage dans ce cas,
+        // pour ne pas redéclencher un auto-refresh juste après.
+        if actions.refresh_chat.is_some() {
+            self.mp_last_chat_refresh = Some(crate::time_compat::Instant::now());
+        } else if self.panels.multiplayer
+            && !self.mp_lobby_code.trim().is_empty()
+            && !self.settings.firebase_api_key.trim().is_empty()
+            && !self.settings.firebase_database_url.trim().is_empty()
+        {
+            let now = crate::time_compat::Instant::now();
+            let due = self
+                .mp_last_chat_refresh
+                .is_none_or(|last| now.duration_since(last) >= AUTO_CHAT_REFRESH_INTERVAL);
+            if due {
+                actions.refresh_chat = Some(self.mp_lobby_code.clone());
+                self.mp_last_chat_refresh = Some(now);
+            }
+        }
 
         self.winit_state
             .handle_platform_output(window, output.platform_output.clone());
@@ -806,6 +866,7 @@ fn build_ui(
     ai_history: &mut Vec<String>,
     mp_server_url: &mut String,
     mp_name: &mut String,
+    mp_class: &mut crate::app::multiplayer::PlayerClass,
     mp_email: &mut String,
     mp_password: &mut String,
     mp_lobby_code: &mut String,
@@ -818,11 +879,13 @@ fn build_ui(
     leaderboard: &[crate::app::network_client::LeaderboardLine],
     weapon_label: &str,
     defeated: bool,
+    death_cause: Option<crate::net::protocol::DeathCause>,
     kills: u32,
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
     item_inventory: &[(crate::scene::ItemKind, u32)],
     roster: &[RosterEntry],
+    minimap: &crate::app::MinimapData,
     hud_preview: &mut HudPreview,
     hud_image_cache: &mut HudImageCache,
     hud_widget_new_id: &mut String,
@@ -844,6 +907,7 @@ fn build_ui(
         panels,
         mp_server_url,
         mp_name,
+        mp_class,
         mp_email,
         mp_password,
         mp_lobby_code,
@@ -890,6 +954,7 @@ fn build_ui(
         export,
         status,
         console_input,
+        minimap,
         actions,
     );
 
@@ -1938,7 +2003,7 @@ fn build_ui(
     if *playing && lost {
         lose_banner(root.ctx(), play_rect, locale);
     } else if *playing && defeated {
-        defeated_banner(root.ctx(), play_rect, locale);
+        defeated_banner(root.ctx(), play_rect, death_cause, locale);
     }
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
     if *playing && (won || lost) && restart_button(root.ctx(), play_rect, won, locale) {

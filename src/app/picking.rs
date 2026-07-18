@@ -138,11 +138,15 @@ impl AppState {
                     return;
                 }
                 // appui sans déplacement notable = sélection éditeur — sauf en
-                // outil de navigation, ou après un pan forcé non additif.
+                // outil de navigation, après un pan forcé non additif, ou
+                // pendant une simulation Play active (la sélection d'objets 3D
+                // ne reprend qu'à l'arrêt ou en Pause, pour ne pas interférer
+                // avec le clic gameplay pendant que la scène tourne).
                 if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
                     && !self.gizmo_mode.is_nav()
                     && (!was_pan || self.additive)
+                    && (!self.playing || self.paused)
                 {
                     // Debug drawing : visualise le rayon de picking envoyé.
                     let (ray_origin, ray_dir) = self.ray(cx, cy);
@@ -769,6 +773,45 @@ mod tests {
         assert!(
             app.effective_snap(),
             "snap on sans Ctrl doit rester actif, sans changement"
+        );
+    }
+
+    /// Un objet 3D ne doit pas être sélectionnable au clic pendant une
+    /// simulation Play active, seulement à l'arrêt ou en Pause — sinon la
+    /// souris interfère avec le gameplay en cours.
+    #[test]
+    fn scene_object_is_not_clickable_while_playing_but_is_once_paused() {
+        use crate::scene::{MeshKind, SceneObject};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            ..Default::default()
+        });
+        app.clear_selection();
+        app.set_gizmo_mode(GizmoMode::Translate);
+
+        // Play actif (non pausé) : le tap centre ne sélectionne rien.
+        app.playing = true;
+        app.paused = false;
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(
+            app.selection, None,
+            "tap centre pendant Play actif ne doit pas sélectionner"
+        );
+
+        // Play en Pause : le même tap sélectionne à nouveau.
+        app.paused = true;
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(
+            app.selection,
+            Some(0),
+            "tap centre en Pause doit sélectionner comme en édition"
         );
     }
 }

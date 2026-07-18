@@ -317,6 +317,71 @@ pub fn plane(color: [f32; 3]) -> MeshData {
     MeshData { vertices, indices }
 }
 
+/// Impostor « croix » (deux plans verticaux 1×1 perpendiculaires, base à `y=0`, sommet à
+/// `y=1`) pour le feuillage dense vu de loin (Phase D, LOD géométrique) — technique
+/// classique d'impostor d'herbe : contrairement à `plane()` (horizontal, quasi invisible
+/// vu à hauteur d'œil), une croix verticale présente toujours une face visible sous un
+/// angle de vue horizontal, quel que soit le yaw de l'instance. Pas de calcul de rotation
+/// face-caméra par frame nécessaire : les deux plans à 90° suffisent avec le culling de
+/// faces déjà désactivé sur le pipeline principal (`cull_mode: None`,
+/// `src/gfx/pipelines.rs`), donc visibles des deux côtés.
+pub fn billboard_cross(color: [f32; 3]) -> MeshData {
+    let vertices = vec![
+        // Plan A : dans le plan XY (normale +Z).
+        Vertex {
+            position: [-0.5, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            color,
+            uv: [0.0, 1.0],
+        },
+        Vertex {
+            position: [0.5, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            color,
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            position: [0.5, 1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            color,
+            uv: [1.0, 0.0],
+        },
+        Vertex {
+            position: [-0.5, 1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            color,
+            uv: [0.0, 0.0],
+        },
+        // Plan B : dans le plan ZY (normale +X), perpendiculaire au plan A.
+        Vertex {
+            position: [0.0, 0.0, -0.5],
+            normal: [1.0, 0.0, 0.0],
+            color,
+            uv: [0.0, 1.0],
+        },
+        Vertex {
+            position: [0.0, 0.0, 0.5],
+            normal: [1.0, 0.0, 0.0],
+            color,
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            position: [0.0, 1.0, 0.5],
+            normal: [1.0, 0.0, 0.0],
+            color,
+            uv: [1.0, 0.0],
+        },
+        Vertex {
+            position: [0.0, 1.0, -0.5],
+            normal: [1.0, 0.0, 0.0],
+            color,
+            uv: [0.0, 0.0],
+        },
+    ];
+    let indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+    MeshData { vertices, indices }
+}
+
 /// Terrain : grille 1×1 (plan XZ) subdivisée avec un relief doux procédural.
 /// Hauteur et normales analytiques ; à mettre à l'échelle via le Transform.
 pub fn terrain(color: [f32; 3]) -> MeshData {
@@ -515,5 +580,19 @@ mod tests {
                 .any(|v| v.position[2] > 0.15 && v.position[1] > 0.0 && is_marked(v)),
             "un sommet marqué a été trouvé côté +Z (dos) — le repère visage doit rester devant"
         );
+    }
+
+    #[test]
+    fn billboard_cross_has_two_perpendicular_quads_standing_on_the_ground() {
+        let data = billboard_cross([0.2, 0.6, 0.2]);
+        assert_eq!(data.vertices.len(), 8);
+        assert_eq!(data.indices.len(), 12);
+        // Base au sol (y=0), sommet à y=1 — cohérent avec un objet posé par son
+        // `Transform::position` comme les autres primitives (`cube`, `plane`, ...).
+        assert!(data.vertices.iter().all(|v| v.position[1] >= 0.0));
+        assert!(data.vertices.iter().any(|v| v.position[1] == 1.0));
+        // Les deux plans sont bien perpendiculaires (normales +Z et +X).
+        assert!(data.vertices.iter().any(|v| v.normal == [0.0, 0.0, 1.0]));
+        assert!(data.vertices.iter().any(|v| v.normal == [1.0, 0.0, 0.0]));
     }
 }

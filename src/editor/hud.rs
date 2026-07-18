@@ -816,6 +816,7 @@ pub(super) fn lose_banner(
 pub(super) fn defeated_banner(
     ctx: &egui::Context,
     area: egui::Rect,
+    cause: Option<crate::net::protocol::DeathCause>,
     locale: crate::app::locale::Locale,
 ) {
     use egui::{Align2, Color32, FontId};
@@ -830,8 +831,23 @@ pub(super) fn defeated_banner(
         FontId::proportional(36.0),
         Color32::from_rgb(230, 90, 80),
     );
+    // Diagnostic de mort (Sprint 2, `sprint10audit.md`, GDD §16.5) : cause
+    // résumée entre le titre et le texte d'attente, sur sa propre ligne pour
+    // ne pas concurrencer visuellement le titre (36pt) ni le sous-texte (15pt).
+    let waiting_y = if let Some(c) = cause {
+        painter.text(
+            egui::pos2(area.center().x, area.center().y + 34.0),
+            Align2::CENTER_CENTER,
+            crate::app::locale::death_cause(locale, c.kind, c.distinct_attackers),
+            FontId::proportional(18.0),
+            Color32::from_white_alpha(230),
+        );
+        area.center().y + 60.0
+    } else {
+        area.center().y + 34.0
+    };
     painter.text(
-        egui::pos2(area.center().x, area.center().y + 34.0),
+        egui::pos2(area.center().x, waiting_y),
         Align2::CENTER_CENTER,
         crate::app::locale::waiting_next_round(locale),
         FontId::proportional(15.0),

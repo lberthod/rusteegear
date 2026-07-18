@@ -31,6 +31,21 @@ impl OrbitCamera {
         self.target + Vec3::new(x, y, z)
     }
 
+    /// Vue+projection pour le rendu, avec un décalage additif appliqué à `target`
+    /// (recul caméra en pixels-monde) — n'affecte que la matrice produite ici,
+    /// jamais `self.target` : la caméra de jeu (suivi joueur, IA, réseau) reste
+    /// inchangée, seul le rendu de la frame courante tressaute (Sprint 1,
+    /// `sprint10audit.md` — retour d'encaissement de coup).
+    pub fn view_proj_shaken(&self, shake_offset: Vec3) -> Mat4 {
+        let view = Mat4::look_at_rh(
+            self.eye() + shake_offset,
+            self.target + shake_offset,
+            Vec3::Y,
+        );
+        let proj = Mat4::perspective_rh(self.fovy, self.aspect, 0.1, 100.0);
+        proj * view
+    }
+
     /// Pan « outil Main » : glisse `target` dans le plan écran de la caméra.
     /// `dx`/`dy` en pixels ; le contenu suit le curseur (glisser à droite =
     /// la scène part à droite). Échelle proportionnelle à `distance` pour un

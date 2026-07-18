@@ -8,7 +8,20 @@
 use glam::Vec3;
 
 use super::AppState;
+use crate::app::multiplayer::RoundObjective;
 use crate::scene::AttackMode;
+
+/// Durée (s) à survivre en mode `RoundObjective::Survie` (GDD §4, Sprint 6 de
+/// `sprint10audit.md`) avant victoire — assez long pour sentir la pression
+/// d'un supplément de vagues face à Vagues (mode fini), assez court pour
+/// rester jouable en solo/duo sans contenu de scène dédié à ce mode.
+const SURVIE_DURATION_SECS: f32 = 180.0;
+
+/// Distance (m) sous laquelle le convoi (`RoundObjective::Escorte`, Sprint 7 de
+/// `sprint10audit.md`) est considéré arrivé à destination — non nulle : une
+/// trajectoire en ligne droite à vitesse constante ne tombe pas exactement sur le
+/// point cible au pas fixe près (cf. `AppState::update_escorte`).
+const CONVOY_ARRIVAL_DISTANCE: f32 = 1.0;
 
 /// Missile en vol vers une cible verrouillée au tir (cf. `AppState::attack_projectile`).
 /// Homing : vise la position **courante** de la cible chaque frame (une cible qui bouge
@@ -119,6 +132,113 @@ impl AppState {
             return;
         }
         self.wave += 1;
+        let next = self.wave;
+        for o in &mut self.scene.objects {
+            if let Some(c) = &o.combat
+                && c.wave == next
+            {
+                o.visible = true;
+            }
+        }
+        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::WaveStart);
+    }
+
+    /// Point d'entrée générique de la condition de victoire/défaite de manche
+    /// (Phase C, `sprint10audit.md`) : branché sur `self.objective` plutôt que
+    /// d'appeler `update_waves` en dur — c'est ce qui permet à `Room::restart`
+    /// (`bin/server.rs`) de faire tourner des salons sur des modes différents
+    /// sans dupliquer la boucle appelante (`advance_play`). Boss (Sprint 8) reste
+    /// sur `update_waves` : le GDD le décrit comme « dernière vague : une créature
+    /// unique » (§4), donc une scène Boss n'a qu'une manche contenant le boss — la
+    /// victoire « dernière manche vidée » d'`update_waves` *est* déjà « boss vaincu »,
+    /// sans logique dédiée à dupliquer. Escorte (Sprint 7) a sa propre fonction : ses
+    /// conditions (arrivée à destination, convoi détruit) n'ont rien à voir avec des
+    /// manches de monstres. `dt` uniquement nécessaire à `update_escorte` (déplacement
+    /// du convoi), transmis à tous les bras pour un point d'entrée uniforme.
+    pub(super) fn update_round(&mut self, dt: f32) {
+        match self.objective {
+            RoundObjective::Vagues | RoundObjective::Boss => self.update_waves(),
+            RoundObjective::Survie => self.update_survie(),
+            RoundObjective::Escorte => self.update_escorte(dt),
+        }
+    }
+
+    /// Mode Escorte (GDD §4, Sprint 7) : fait avancer le convoi (`SceneObject::convoy`,
+    /// premier objet qui en porte un — une seule scène Escorte n'en a qu'un) en ligne
+    /// droite vers sa destination, à sa vitesse propre. Victoire dès que le convoi
+    /// est assez proche de sa destination ; la défaite (convoi détruit par les
+    /// créatures, cf. `Combat::attackable`) est détectée à côté par
+    /// `AppState::is_room_lost` (comme pour les autres modes), pas ici — cette
+    /// fonction n'a donc rien à faire une fois le convoi invisible (vaincu), sans
+    /// quoi elle le ferait « avancer » depuis une position qui n'a plus de sens.
+    /// Sans objet `convoy` dans la scène (mauvaise démo/scène chargée en mode
+    /// Escorte), ne fait rien plutôt que de paniquer — même tolérance que
+    /// `update_waves`/`update_survie` face à une scène sans manches (`self.wave == 0`).
+    pub(super) fn update_escorte(&mut self, dt: f32) {
+        if self.win_time.is_some() {
+            return;
+        }
+        let Some(idx) = self.scene.objects.iter().position(|o| o.convoy.is_some()) else {
+            return;
+        };
+        if !self.scene.objects[idx].visible {
+            return;
+        }
+        let (destination, speed) = {
+            let convoy = self.scene.objects[idx]
+                .convoy
+                .as_ref()
+                .expect("idx pointe sur l'objet convoy trouvé ci-dessus");
+            (convoy.destination, convoy.speed)
+        };
+        let pos = self.scene.objects[idx].transform.position;
+        let to_dest = destination - pos;
+        let dist = to_dest.length();
+        if dist <= CONVOY_ARRIVAL_DISTANCE {
+            self.win_time = Some(self.time);
+            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
+            return;
+        }
+        let step = (speed * dt).min(dist);
+        let new_pos = pos + to_dest / dist * step;
+        self.scene.objects[idx].transform.position = new_pos;
+        if let Some(physics) = self.physics.as_mut() {
+            physics.set_position(idx, new_pos);
+        }
+    }
+
+    /// Mode Survie (GDD §4, Sprint 6) : victoire à `SURVIE_DURATION_SECS`
+    /// écoulées (`self.time`, remis à 0 à l'entrée en Play, cf. `advance_play`)
+    /// tant qu'au moins un joueur est vivant (la défaite reste détectée à côté,
+    /// par `AppState::is_room_lost`, comme pour `Vagues`). Contrairement à
+    /// `update_waves`, vider la dernière manche ne gagne pas la partie : elle
+    /// boucle sur la manche 1 (monstres re-révélés) pour maintenir la pression
+    /// jusqu'au chrono, plutôt que de laisser le salon vide de tout ennemi.
+    pub(super) fn update_survie(&mut self) {
+        if self.wave == 0 {
+            return;
+        }
+        if self.win_time.is_some() {
+            return;
+        }
+        if self.time >= SURVIE_DURATION_SECS {
+            self.win_time = Some(self.time);
+            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
+            return;
+        }
+        let wave = self.wave;
+        let remaining = self
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && o.combat.as_ref().is_some_and(|c| c.wave == wave))
+            .count();
+        if remaining > 0 {
+            return;
+        }
+        let max = self.max_wave();
+        self.wave = if self.wave >= max { 1 } else { self.wave + 1 };
         let next = self.wave;
         for o in &mut self.scene.objects {
             if let Some(c) = &o.combat

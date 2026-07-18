@@ -66,6 +66,20 @@ pub(super) fn make_texture(
     width: u32,
     height: u32,
 ) -> wgpu::BindGroup {
+    // Phase E (`sprintoptimation3daudit10h.md`, Sprint 6) : quand le GPU expose
+    // `TEXTURE_COMPRESSION_BC`, l'albédo est stocké en BC3 (÷4 en VRAM) plutôt qu'en
+    // `Rgba8UnormSrgb` brut — dégradation silencieuse vers le chemin existant ci-dessous
+    // si le GPU ne supporte pas la feature ou si les dimensions ne s'y prêtent pas
+    // (cf. `texcompress::supports_compression`), donc sans risque de régression.
+    if device
+        .features()
+        .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        && super::texcompress::supports_compression(width, height)
+    {
+        return super::texcompress::make_compressed_texture(
+            device, queue, layout, sampler, rgba, width, height,
+        );
+    }
     let size = wgpu::Extent3d {
         width,
         height,

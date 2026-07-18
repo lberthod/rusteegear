@@ -109,6 +109,208 @@ impl PlayerClass {
     pub(super) fn can_revive(self) -> bool {
         matches!(self, PlayerClass::Support)
     }
+
+    /// Traduit vers l'octet réseau (`ClientMsg::Join::class`) — symétrique de
+    /// `from_u8`. Ajouté pour le sélecteur de classe (Sprint 3,
+    /// `sprint10audit.md`) : jusqu'ici seul `from_u8` existait, rien
+    /// n'émettait encore autre chose que `0` (Assaut) au `Join`.
+    pub fn to_u8(self) -> u8 {
+        match self {
+            PlayerClass::Assault => 0,
+            PlayerClass::Scout => 1,
+            PlayerClass::Support => 2,
+        }
+    }
+
+    /// Libellé court affiché dans le sélecteur de classe (fenêtre
+    /// Multijoueur, Sprint 3).
+    pub fn label(self) -> &'static str {
+        match self {
+            PlayerClass::Assault => "Assaut",
+            PlayerClass::Scout => "Éclaireur",
+            PlayerClass::Support => "Soutien",
+        }
+    }
+
+    /// Les trois classes existantes, dans l'ordre affiché au sélecteur.
+    pub const ALL: [PlayerClass; 3] = [
+        PlayerClass::Assault,
+        PlayerClass::Scout,
+        PlayerClass::Support,
+    ];
+}
+
+/// Objectif de manche (Phase C, `sprint10audit.md` : Sprint 5 pose l'enum et
+/// migre Vagues, Sprint 6 ajoute Survie, Sprint 7 ajoute Escorte, Sprint 8
+/// câble Boss sur `Vagues` — cf. doc de chaque variante). Choisi au `Join`
+/// (`ClientMsg::Join::objective`,
+/// `PROTOCOL_VERSION` 3) et fixé pour la durée de vie d'un salon (cf.
+/// `bin/server.rs::Lobby::objective`), sur le même principe que `PlayerClass`
+/// mais au niveau du salon plutôt que du joueur — tous les joueurs d'un même
+/// salon jouent le même mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RoundObjective {
+    /// Vagues successives jusqu'à la dernière : comportement historique, seul
+    /// mode qui existait avant ce sprint — défaut, zéro régression pour qui
+    /// ne choisit pas de mode (`AppState::update_waves`).
+    #[default]
+    Vagues,
+    /// Survivre `SURVIE_DURATION_SECS` (cf. `app::combat`) face à des vagues
+    /// qui recommencent en boucle une fois la dernière vidée, plutôt que de
+    /// s'arrêter à la victoire (GDD §4).
+    Survie,
+    /// Escorter un convoi (`SceneObject::convoy`) jusqu'à destination (GDD §4,
+    /// Sprint 7 de `sprint10audit.md`) : victoire à l'arrivée
+    /// (`AppState::update_escorte`), défaite si le convoi est détruit en route
+    /// (`AppState::is_room_lost`) — indépendant de tout système de manches.
+    Escorte,
+    /// Vaincre un boss unique à PV élevés (GDD §4, Sprint 8) : le GDD le décrit
+    /// comme « dernière vague : une créature unique », donc une scène Boss n'a
+    /// qu'une seule manche contenant le boss — traité comme `Vagues` par
+    /// `AppState::update_round` (victoire à la dernière manche vidée = boss
+    /// vaincu), sans logique dédiée à dupliquer (cf. `Scene::boss_demo`).
+    Boss,
+}
+
+impl RoundObjective {
+    /// Toutes les valeurs de l'enum, dans l'ordre de `to_u8` — même usage que
+    /// `PlayerClass::ALL` (itérer en test, ex. round-trip `to_u8`/`from_u8`).
+    pub const ALL: [RoundObjective; 4] = [
+        RoundObjective::Vagues,
+        RoundObjective::Survie,
+        RoundObjective::Escorte,
+        RoundObjective::Boss,
+    ];
+
+    /// Traduit l'octet reçu du réseau — une valeur hors table retombe sur
+    /// `Vagues` (même principe que `PlayerClass::from_u8`).
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => RoundObjective::Survie,
+            2 => RoundObjective::Escorte,
+            3 => RoundObjective::Boss,
+            _ => RoundObjective::Vagues,
+        }
+    }
+
+    /// Traduit vers l'octet réseau — symétrique de `from_u8`.
+    pub fn to_u8(self) -> u8 {
+        match self {
+            RoundObjective::Vagues => 0,
+            RoundObjective::Survie => 1,
+            RoundObjective::Escorte => 2,
+            RoundObjective::Boss => 3,
+        }
+    }
+}
+
+/// Contrat du jour (GDD §3.4, Phase D — Sprint 9 de `sprint10audit.md`) : défi
+/// quotidien dérivé du seed du jour (`Contract::of_day`), récompensé une fois
+/// par compte et par jour (`PlayerProgress::last_contract_day`,
+/// `net::firebase`). Sous-ensemble du catalogue du GDD (`GDD_MMORPG.md` §3.4,
+/// 6 entrées) : *Main de braise* (mêlée seule) et *Sobriété* (sans ramassage
+/// d'arme) en sont volontairement absents — le premier n'a aucune notion de
+/// mêlée distincte du missile homing du joueur (`app::combat::AttackProjectile`,
+/// toujours à distance), le second n'a pas de ramassage d'arme câblé aux
+/// joueurs réseau (`WeaponPickup` n'existe que côté donjon solo) — le catalogue
+/// « grandit avec » le contenu livré (GDD §3.4, règle du catalogue), il n'a
+/// jamais eu à être complet dès ce sprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Contract {
+    /// *Nuit blanche* : gagner la manche sans qu'aucun `GameEvent::PlayerDown`
+    /// ne survienne (`AppState::player_down_count`).
+    NuitBlanche,
+    /// *À l'aube juste* : gagner une manche Horde (`RoundObjective::Vagues`) en
+    /// moins de 8 minutes.
+    AubeJuste,
+    /// *La lande garde ses morts* : gagner sans qu'aucune réanimation ne se
+    /// termine (`AppState::revives_completed`).
+    LandeGardeSesMorts,
+    /// *Le troupeau compte sur vous* : gagner une manche Escorte
+    /// (`RoundObjective::Escorte`) avec le convoi à plus de 50 % de ses PV.
+    TroupeauCompteSurVous,
+}
+
+impl Contract {
+    /// Toutes les valeurs de l'enum, dans l'ordre de `to_u8` — même usage que
+    /// `RoundObjective::ALL`/`PlayerClass::ALL`.
+    pub const ALL: [Contract; 4] = [
+        Contract::NuitBlanche,
+        Contract::AubeJuste,
+        Contract::LandeGardeSesMorts,
+        Contract::TroupeauCompteSurVous,
+    ];
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Contract::AubeJuste,
+            2 => Contract::LandeGardeSesMorts,
+            3 => Contract::TroupeauCompteSurVous,
+            _ => Contract::NuitBlanche,
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Contract::NuitBlanche => 0,
+            Contract::AubeJuste => 1,
+            Contract::LandeGardeSesMorts => 2,
+            Contract::TroupeauCompteSurVous => 3,
+        }
+    }
+
+    /// Contrat du jour pour un numéro de jour donné (jour UTC = secondes Unix
+    /// / 86 400, cf. `bin/server.rs::day_number`) : « seed = jour UTC, calculé
+    /// identiquement par serveur et clients » (GDD §3.4) — un simple modulo sur
+    /// `ALL` suffit, déterministe et sans dépendance externe (pas de `chrono`).
+    pub fn of_day(day: u64) -> Contract {
+        Contract::ALL[(day as usize) % Contract::ALL.len()]
+    }
+
+    /// Libellé affiché (fiction « l'Almanach du Hameau », GDD §3.4).
+    pub fn label(self) -> &'static str {
+        match self {
+            Contract::NuitBlanche => "Nuit blanche",
+            Contract::AubeJuste => "À l'aube juste",
+            Contract::LandeGardeSesMorts => "La lande garde ses morts",
+            Contract::TroupeauCompteSurVous => "Le troupeau compte sur vous",
+        }
+    }
+}
+
+impl AppState {
+    /// Le contrat du jour est-il rempli par **cette** manche, telle qu'elle
+    /// vient de se terminer par une victoire (`elapsed` : durée écoulée depuis
+    /// le début de la manche, `Room::started.elapsed()` côté serveur — vit
+    /// dans `bin/server.rs`, pas dans `AppState`, d'où le paramètre plutôt
+    /// qu'un champ) ? Appelé uniquement sur une manche **gagnée** : une
+    /// défaite ne remplit jamais de contrat, quelle que soit sa condition.
+    pub fn contract_completed(&self, contract: Contract, elapsed: std::time::Duration) -> bool {
+        match contract {
+            Contract::NuitBlanche => self.player_down_count == 0,
+            Contract::AubeJuste => {
+                self.objective == RoundObjective::Vagues
+                    && elapsed < std::time::Duration::from_secs(8 * 60)
+            }
+            Contract::LandeGardeSesMorts => self.revives_completed == 0,
+            Contract::TroupeauCompteSurVous => {
+                self.objective == RoundObjective::Escorte
+                    && self
+                        .scene
+                        .objects
+                        .iter()
+                        .find(|o| o.convoy.is_some())
+                        .is_some_and(|o| {
+                            o.combat.as_ref().is_some_and(|c| {
+                                // `max_hp == 0` : jamais touché (cf. `Combat::max_hp`,
+                                // capturé au premier coup reçu) — un convoi jamais
+                                // attaqué est trivialement à plus de 50 % de ses PV.
+                                c.max_hp == 0 || (c.hp as f32) > 0.5 * (c.max_hp as f32)
+                            })
+                        })
+            }
+        }
+    }
 }
 
 /// Portée (m) de l'attaque réseau : un coup immédiat au contact, pas le
@@ -124,6 +326,12 @@ const NETWORK_ATTACK_RANGE: f32 = 1.2;
 /// qui entre en portée sans le moindre risque, cf. le même raisonnement que
 /// `Controller::attack_cooldown` pour le joueur local (`app::combat`).
 const NETWORK_ATTACK_COOLDOWN: f32 = 0.4;
+
+/// Fenêtre (s) après laquelle un dégât porté à un monstre ne compte plus pour
+/// l'assist (GDD §8.3) si un autre joueur l'achève — borne volontairement
+/// courte : un dégât porté puis oublié pendant de longues secondes n'a plus
+/// de lien réel avec la mise à mort qui suit (cf. `credit_assists_on_kill`).
+const ASSIST_WINDOW: f32 = 5.0;
 
 /// Ramène un yaw reçu du réseau dans `(-π, π]` (0 si `NaN`/infini) : un f32
 /// **fini** mais énorme (ex. `1e30`, qu'un client modifié peut envoyer — il
@@ -315,6 +523,9 @@ impl AppState {
         // Frags individualisés (brique de progression pour un futur MMORPG) :
         // chaque nouvelle connexion démarre à 0, comme la vie.
         self.network_kills.insert(id, 0);
+        // Assists individualisés (cf. `credit_assists_on_kill`) : même
+        // principe que les frags ci-dessus, démarre à 0 par connexion.
+        self.network_assists.insert(id, 0);
         // Masque le gabarit d'origine : personne ne le pilote (ni un joueur
         // réseau — chacun a son propre clone — ni un joueur local, le serveur
         // étant headless). Sans ça, `player_index` continuerait de le désigner
@@ -350,6 +561,7 @@ impl AppState {
         self.network_attack_cooldowns.remove(&id);
         self.network_health.remove(&id);
         self.network_kills.remove(&id);
+        self.network_assists.remove(&id);
         self.network_classes.remove(&id);
         self.network_max_health.remove(&id);
         self.network_revive.remove(&id);
@@ -376,6 +588,8 @@ impl AppState {
         self.network_attack_cooldowns.clear();
         self.network_health.clear();
         self.network_kills.clear();
+        self.network_assists.clear();
+        self.damage_contributions.clear();
         self.network_classes.clear();
         self.network_max_health.clear();
         self.network_revive.clear();
@@ -428,6 +642,46 @@ impl AppState {
         }
     }
 
+    /// Enregistre que le joueur réseau `id` vient de porter un dégât au
+    /// monstre d'indice `creature` — brique de détection d'assist (GDD §8.3) :
+    /// si un autre joueur achève ce monstre dans `ASSIST_WINDOW`, `id` reçoit
+    /// un assist (cf. `credit_assists_on_kill`). Écrase l'horodatage précédent
+    /// du même couple (monstre, joueur) plutôt que d'empiler : seul le
+    /// dernier coup de chacun compte pour la fenêtre.
+    pub(super) fn record_damage_contribution(&mut self, creature: usize, id: PlayerId) {
+        let now = self.time;
+        self.damage_contributions
+            .entry(creature)
+            .or_default()
+            .insert(id, now);
+    }
+
+    /// À la mort du monstre `creature`, crédite un assist à chaque joueur
+    /// réseau ayant porté un dégât dans `ASSIST_WINDOW` (GDD §8.3), hors le
+    /// tireur `killer` — celui-ci reçoit déjà le frag (`credit_kill`), jamais
+    /// les deux pour la même mise à mort. Purge systématiquement l'historique
+    /// du monstre, qu'un assist ait été crédité ou non : sa prochaine vie
+    /// (après respawn) ne doit rien hériter de la précédente.
+    pub(super) fn credit_assists_on_kill(&mut self, creature: usize, killer: PlayerId) {
+        let now = self.time;
+        if let Some(contributors) = self.damage_contributions.remove(&creature) {
+            for (id, at) in contributors {
+                if id != killer && now - at <= ASSIST_WINDOW {
+                    self.credit_assist(id);
+                }
+            }
+        }
+    }
+
+    /// Crédite `id` d'un assist (cf. `credit_assists_on_kill`) — compteur
+    /// séparé de `credit_kill` pour ne jamais confondre un assist avec un
+    /// frag côté XP (`round_xp`, `src/bin/server.rs`).
+    fn credit_assist(&mut self, id: PlayerId) {
+        if let Some(count) = self.network_assists.get_mut(&id) {
+            *count += 1;
+        }
+    }
+
     /// Nombre de joueurs réseau actuellement en jeu (hors joueur local).
     pub fn network_player_count(&self) -> usize {
         self.network_players.len()
@@ -437,6 +691,12 @@ impl AppState {
     /// MMORPG), `None` s'il n'est pas connecté.
     pub fn network_player_kills(&self, id: PlayerId) -> Option<u32> {
         self.network_kills.get(&id).copied()
+    }
+
+    /// Assists du joueur réseau `id` (GDD §8.3, cf. `credit_assists_on_kill`),
+    /// `None` s'il n'est pas connecté.
+    pub fn network_player_assists(&self, id: PlayerId) -> Option<u32> {
+        self.network_assists.get(&id).copied()
     }
 
     /// Classe du joueur réseau `id` (GDD §3.2), `None` s'il n'est pas connecté.
@@ -482,8 +742,13 @@ impl AppState {
             // `network_kills` directement, deux logiques à garder synchronisées.
             // Sa garde « id inconnu = ignoré » est sans effet ici : `id` vient de
             // `network_players.keys()`, son entrée existe depuis
-            // `spawn_network_player`.
-            for _ in &defeated {
+            // `spawn_network_player`. `credit_assists_on_kill` d'abord : le
+            // contact tue toujours en un coup (pas de dégât partiel ici), donc
+            // un assist n'a de sens que si une autre arme (tir à distance)
+            // avait déjà entamé cette cible plus tôt — même mémoire partagée
+            // que `resolve_fireball_hit` (cf. `damage_contributions`).
+            for &i in &defeated {
+                self.credit_assists_on_kill(i, id);
                 self.credit_kill(id);
             }
             self.network_attack_cooldowns
@@ -749,6 +1014,147 @@ mod tests {
         assert_eq!(PlayerClass::from_u8(1), PlayerClass::Scout);
         assert_eq!(PlayerClass::from_u8(2), PlayerClass::Support);
         assert_eq!(PlayerClass::from_u8(250), PlayerClass::Assault);
+    }
+
+    /// Sprint 3 (`sprint10audit.md`) : `to_u8` doit être l'inverse exact de
+    /// `from_u8` pour les trois classes — c'est ce qui garantit que la classe
+    /// choisie dans le sélecteur (fenêtre Multijoueur) arrive intacte côté
+    /// serveur via `ClientMsg::Join::class`.
+    #[test]
+    fn player_class_to_u8_round_trips_through_from_u8() {
+        for class in PlayerClass::ALL {
+            assert_eq!(PlayerClass::from_u8(class.to_u8()), class);
+        }
+    }
+
+    /// Phase C (Sprint 5, `sprint10audit.md`) : même garantie que
+    /// `player_class_from_u8_falls_back_to_assault_for_unknown_values`/
+    /// `player_class_to_u8_round_trips_through_from_u8` ci-dessus, pour
+    /// `RoundObjective` — une valeur hors table (`ClientMsg::Join::objective`
+    /// forgée) ne doit jamais faire paniquer le serveur, et `to_u8` doit rester
+    /// l'inverse exact de `from_u8` pour les quatre modes.
+    #[test]
+    fn round_objective_from_u8_falls_back_to_vagues_for_unknown_values() {
+        assert_eq!(RoundObjective::from_u8(0), RoundObjective::Vagues);
+        assert_eq!(RoundObjective::from_u8(1), RoundObjective::Survie);
+        assert_eq!(RoundObjective::from_u8(2), RoundObjective::Escorte);
+        assert_eq!(RoundObjective::from_u8(3), RoundObjective::Boss);
+        assert_eq!(RoundObjective::from_u8(250), RoundObjective::Vagues);
+    }
+
+    #[test]
+    fn round_objective_to_u8_round_trips_through_from_u8() {
+        for objective in RoundObjective::ALL {
+            assert_eq!(RoundObjective::from_u8(objective.to_u8()), objective);
+        }
+    }
+
+    /// Phase D (Sprint 9, `sprint10audit.md`) : même garantie round-trip que
+    /// `RoundObjective`/`PlayerClass` — une valeur hors table ne doit jamais
+    /// paniquer, `to_u8`/`from_u8` doivent rester inverses l'un de l'autre.
+    #[test]
+    fn contract_to_u8_round_trips_through_from_u8() {
+        for contract in Contract::ALL {
+            assert_eq!(Contract::from_u8(contract.to_u8()), contract);
+        }
+        assert_eq!(Contract::from_u8(250), Contract::NuitBlanche);
+    }
+
+    /// Le contrat du jour est déterministe (même jour ⇒ même contrat, cf. GDD
+    /// §3.4 « calculé identiquement par serveur et clients ») et parcourt tout
+    /// le catalogue au fil des jours plutôt que de retomber toujours sur le
+    /// même (`% ALL.len()` couvre les 4 valeurs sur des jours consécutifs).
+    #[test]
+    fn contract_of_day_is_deterministic_and_cycles_through_the_catalogue() {
+        assert_eq!(Contract::of_day(100), Contract::of_day(100));
+        let seen: std::collections::HashSet<Contract> = (0..Contract::ALL.len() as u64)
+            .map(Contract::of_day)
+            .collect();
+        assert_eq!(
+            seen.len(),
+            Contract::ALL.len(),
+            "4 jours consécutifs doivent couvrir les 4 contrats du catalogue"
+        );
+    }
+
+    /// *Nuit blanche* : un seul `PlayerDown` sur la manche suffit à invalider
+    /// le contrat, même si la manche est par ailleurs gagnée.
+    #[test]
+    fn nuit_blanche_fails_as_soon_as_one_player_goes_down() {
+        let mut app = AppState::new();
+        assert!(app.contract_completed(Contract::NuitBlanche, std::time::Duration::ZERO));
+        app.player_down_count = 1;
+        assert!(!app.contract_completed(Contract::NuitBlanche, std::time::Duration::ZERO));
+    }
+
+    /// *À l'aube juste* : seul le mode Horde (`Vagues`) compte, et seulement
+    /// sous 8 minutes — un autre mode ou une manche trop longue ne remplit
+    /// jamais ce contrat, quelle que soit sa durée/son mode par ailleurs.
+    #[test]
+    fn aube_juste_requires_vagues_under_eight_minutes() {
+        let mut app = AppState::new();
+        app.objective = RoundObjective::Vagues;
+        assert!(
+            app.contract_completed(Contract::AubeJuste, std::time::Duration::from_secs(7 * 60))
+        );
+        assert!(
+            !app.contract_completed(Contract::AubeJuste, std::time::Duration::from_secs(9 * 60))
+        );
+
+        app.objective = RoundObjective::Survie;
+        assert!(
+            !app.contract_completed(Contract::AubeJuste, std::time::Duration::from_secs(60)),
+            "un autre mode que Vagues (Horde) ne peut jamais remplir ce contrat"
+        );
+    }
+
+    /// *La lande garde ses morts* : la moindre réanimation achevée invalide le
+    /// contrat, même une seule sur toute la manche.
+    #[test]
+    fn lande_garde_ses_morts_fails_as_soon_as_one_revive_completes() {
+        let mut app = AppState::new();
+        assert!(app.contract_completed(Contract::LandeGardeSesMorts, std::time::Duration::ZERO));
+        app.revives_completed = 1;
+        assert!(!app.contract_completed(Contract::LandeGardeSesMorts, std::time::Duration::ZERO));
+    }
+
+    /// *Le troupeau compte sur vous* : nécessite le mode Escorte et un convoi
+    /// à plus de 50 % de ses PV ; un convoi jamais touché (`max_hp == 0`,
+    /// jamais capturé) compte comme trivialement au-dessus du seuil.
+    #[test]
+    fn troupeau_compte_sur_vous_requires_escorte_and_convoy_above_half_hp() {
+        let mut app = AppState::new();
+        app.objective = RoundObjective::Escorte;
+        app.scene = crate::scene::Scene {
+            objects: vec![crate::scene::SceneObject {
+                convoy: Some(crate::scene::Convoy::default()),
+                combat: Some(crate::scene::Combat {
+                    attackable: true,
+                    hp: 8,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            app.contract_completed(Contract::TroupeauCompteSurVous, std::time::Duration::ZERO),
+            "convoi jamais touché (max_hp=0) ⇒ trivialement au-dessus de 50 %"
+        );
+
+        app.scene.objects[0].combat.as_mut().unwrap().max_hp = 8;
+        app.scene.objects[0].combat.as_mut().unwrap().hp = 3;
+        assert!(
+            !app.contract_completed(Contract::TroupeauCompteSurVous, std::time::Duration::ZERO),
+            "3/8 PV est sous le seuil de 50 %"
+        );
+
+        app.objective = RoundObjective::Vagues;
+        app.scene.objects[0].combat.as_mut().unwrap().hp = 8;
+        assert!(
+            !app.contract_completed(Contract::TroupeauCompteSurVous, std::time::Duration::ZERO),
+            "un mode autre qu'Escorte ne peut jamais remplir ce contrat"
+        );
     }
 
     /// Régression : rien dans le protocole
@@ -1283,6 +1689,95 @@ mod tests {
             entity.kills,
             Some(1),
             "le frag doit être diffusé dans le Snapshot, pas seulement connu localement"
+        );
+    }
+
+    /// Sprint 4 (PHASE B, `sprint10audit.md`) : deux joueurs endommagent la même
+    /// créature, celui qui ne l'achève pas reçoit quand même de l'XP d'assist —
+    /// jamais compté comme un frag (compteurs séparés, `network_kills` /
+    /// `network_assists`).
+    #[test]
+    fn damaging_a_creature_that_another_player_finishes_off_credits_an_assist_not_a_kill() {
+        let mut app = AppState::new();
+        app.scene = scene_with_player_and_two_targets_in_range();
+        app.spawn_network_player(1, PlayerClass::Assault);
+        app.spawn_network_player(2, PlayerClass::Assault);
+        assert_eq!(app.network_player_assists(1), Some(0));
+        assert_eq!(app.network_player_assists(2), Some(0));
+
+        const CREATURE: usize = 42;
+        app.record_damage_contribution(CREATURE, 1);
+        app.credit_assists_on_kill(CREATURE, 2);
+        app.credit_kill(2);
+
+        assert_eq!(
+            app.network_player_assists(1),
+            Some(1),
+            "le joueur qui a blessé la cible sans l'achever doit recevoir un assist"
+        );
+        assert_eq!(
+            app.network_player_kills(1),
+            Some(0),
+            "pas de frag pour l'assist"
+        );
+        assert_eq!(
+            app.network_player_assists(2),
+            Some(0),
+            "le tireur qui achève la cible ne se crédite pas lui-même d'un assist"
+        );
+        assert_eq!(
+            app.network_player_kills(2),
+            Some(1),
+            "le tireur qui achève la cible reçoit le frag"
+        );
+    }
+
+    /// Une contribution de dégâts trop ancienne (au-delà de `ASSIST_WINDOW`) ne
+    /// doit plus ouvrir droit à un assist — sans cette borne, un dégât porté en
+    /// tout début de manche créditerait un assist sans lien réel avec un kill
+    /// survenu bien plus tard.
+    #[test]
+    fn a_damage_contribution_older_than_the_assist_window_does_not_count() {
+        let mut app = AppState::new();
+        app.scene = scene_with_player_and_two_targets_in_range();
+        app.spawn_network_player(1, PlayerClass::Assault);
+        app.spawn_network_player(2, PlayerClass::Assault);
+
+        const CREATURE: usize = 7;
+        app.record_damage_contribution(CREATURE, 1);
+        app.time += ASSIST_WINDOW + 1.0;
+        app.credit_assists_on_kill(CREATURE, 2);
+
+        assert_eq!(
+            app.network_player_assists(1),
+            Some(0),
+            "une contribution trop ancienne ne doit plus créditer d'assist"
+        );
+    }
+
+    /// L'historique de contributions d'une créature doit être purgé après
+    /// résolution de sa mort, qu'un assist ait été crédité ou non — sinon sa
+    /// prochaine vie (après respawn, même indice d'objet) hériterait à tort
+    /// des dégâts de la vie précédente.
+    #[test]
+    fn credit_assists_on_kill_clears_the_creatures_contribution_history() {
+        let mut app = AppState::new();
+        app.scene = scene_with_player_and_two_targets_in_range();
+        app.spawn_network_player(1, PlayerClass::Assault);
+        app.spawn_network_player(2, PlayerClass::Assault);
+
+        const CREATURE: usize = 3;
+        app.record_damage_contribution(CREATURE, 1);
+        app.credit_assists_on_kill(CREATURE, 2);
+        assert_eq!(app.network_player_assists(1), Some(1));
+
+        // Nouvelle vie du même emplacement : un assist sans nouvelle
+        // contribution enregistrée ne doit rien créditer de plus.
+        app.credit_assists_on_kill(CREATURE, 2);
+        assert_eq!(
+            app.network_player_assists(1),
+            Some(1),
+            "l'historique de la créature doit avoir été purgé au premier kill résolu"
         );
     }
 }

@@ -545,6 +545,7 @@ impl AppState {
             if hit {
                 self.hud_health = self.hud_health.map(|h| (h - cfg.damage).max(0.0));
                 self.damage_flash = 1.0;
+                self.camera_shake = 1.0;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
             }
             !hit

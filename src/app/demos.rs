@@ -28,6 +28,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -42,6 +43,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = true;
@@ -56,6 +58,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -70,6 +73,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -84,6 +88,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -99,6 +104,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -123,6 +129,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -172,6 +179,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -187,6 +195,45 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
+    /// Charge la démo « Boss » (cf. `Scene::boss_demo`, Sprint 8 de `sprint10audit.md`) :
+    /// arène fermée, un unique adversaire à PV massifs — `objective` posé sur `Boss`
+    /// pour que `AppState::update_round` s'exécute dans le bon mode (sans effet
+    /// fonctionnel différent de `Vagues` à ce jour, cf. la doc de `RoundObjective::Boss`,
+    /// mais correct pour tout futur affichage/branchement spécifique au mode).
+    pub fn load_boss_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::boss_demo();
+        self.objective = crate::app::multiplayer::RoundObjective::Boss;
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
+    /// Charge la démo « Escorte » (cf. `Scene::escorte_demo`, Sprint 7 de
+    /// `sprint10audit.md`) : un convoi lent traverse un couloir pendant qu'une
+    /// créature le prend pour cible en priorité — `objective` posé sur `Escorte`
+    /// pour que `AppState::update_round`/`is_room_lost` et le ciblage IA prioritaire
+    /// (`AppState::advance_play`) s'appliquent.
+    pub fn load_escorte_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::escorte_demo();
+        self.objective = crate::app::multiplayer::RoundObjective::Escorte;
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;
@@ -201,6 +248,7 @@ impl AppState {
         self.imported_dirty = true;
         self.hud_health = None;
         self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
         self.attack_flash = 0.0;
         self.wave = 0;
         self.is_leveled_demo = false;

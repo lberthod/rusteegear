@@ -5,10 +5,10 @@
 use glam::Vec3;
 
 use super::{
-    AiChaser, AnimationState, AudioSource, Combat, Controller, GameCamera, HudAnchor, HudBinding,
-    HudLayout, HudWidget, HudWidgetKind, ImportedMesh, ItemKind, ItemPickup, Light, MeshKind,
-    MobileControls, PointLight, Scene, SceneObject, Sky, TapAction, Transform, WEAPONS,
-    WeaponPickup, demo_obj,
+    AiChaser, AnimationState, Archetype, AudioSource, Combat, Controller, Convoy, GameCamera,
+    HudAnchor, HudBinding, HudLayout, HudWidget, HudWidgetKind, ImportedMesh, ItemKind, ItemPickup,
+    Light, MeshKind, MobileControls, PointLight, Scene, SceneObject, Sky, TapAction, Transform,
+    WEAPONS, WeaponPickup, demo_obj,
 };
 use crate::runtime::physics::PhysicsKind;
 
@@ -894,6 +894,43 @@ fn creature_turret_script(
     )
 }
 
+/// Charge un unique glTF d'`assets/models/` dans `imported` et renvoie le
+/// `MeshKind::Imported` qui le référence — même pipeline que la grande table
+/// `MMORPG_CREATURES`/`NATURE_DECOR`/`MONSTER_DECOR` (cf. leurs boucles) mais
+/// pour une démo à une poignée d'objets qui n'a pas besoin d'une table
+/// data-driven. `mesh.load_skinning()` est inconditionnel (comme dans ces
+/// boucles) : sans effet sur un asset statique (peuple juste ses tangentes de
+/// rendu), charge squelette/clips sur un asset riggé — le même appel convient
+/// aux deux cas. Repli sur `fallback` (mesh primitif) si le fichier est
+/// introuvable/invalide, plutôt que de faire planter la démo entière pour un
+/// asset manquant.
+fn import_single_model(
+    imported: &mut Vec<ImportedMesh>,
+    file: &str,
+    fallback: MeshKind,
+) -> MeshKind {
+    let path = format!("{}/assets/models/{file}", env!("CARGO_MANIFEST_DIR"));
+    match crate::scene::import::load_gltf(&path) {
+        Ok((data, aabb_min, aabb_max)) => {
+            let mut mesh = ImportedMesh {
+                path,
+                data,
+                aabb_min,
+                aabb_max,
+                ..Default::default()
+            };
+            mesh.load_skinning();
+            let mesh_index = imported.len() as u32;
+            imported.push(mesh);
+            MeshKind::Imported(mesh_index)
+        }
+        Err(e) => {
+            log::error!("import_single_model({file}) : {e}");
+            fallback
+        }
+    }
+}
+
 impl Scene {
     /// Démo « contrôleur » **sans script** (niveau 1) : joueur pilotable au joystick,
     /// saut, collisions, pièces à ramasser, lave à éviter.
@@ -1764,7 +1801,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
     }
 
     /// Démo « Vagues de zombies » : jeu **local contre l'ordinateur**, sans réseau, en
-    /// **manches** (style Call of Duty Zombies) — 3 archétypes de monstres (`AiChaser`,
+    /// **manches** (style Call of Duty Zombies) — 3 profils de monstres (`AiChaser`,
     /// poursuite active, pas de patrouille scriptée), de plus en plus nombreux et variés
     /// à chaque manche. Vaincre tous les monstres d'une manche révèle la suivante ; la
     /// dernière vaincue ⇒ victoire (`App` pilote la progression, cf. `AppState::wave`).
@@ -1850,15 +1887,20 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         fx.visible = false;
         objects.push(fx);
 
-        // --- 3 archétypes de monstres, de plus en plus présents/variés à chaque manche
+        // --- 3 profils de monstres, de plus en plus présents/variés à chaque manche
         // (comme les vagues d'un mode zombies) : Rôdeur (basique), Coureur (rapide et
         // fragile), Brute (lente mais très punitive et plus difficile à esquiver).
+        // Chacun porte aussi un `archetype` (grammaire GDD §5.4, cf. `Archetype`) —
+        // à ne pas confondre : `Kind` est un profil d'auteur local à cette démo
+        // (stats/couleur/dégâts), `Archetype` est la famille de chasse partagée par
+        // tout `AiChaser` du moteur.
         struct Kind {
             label: &'static str,
             speed: f32,
             dmg: f32,
             scale: f32,
             color: [f32; 3],
+            archetype: Archetype,
         }
         const RODEUR: Kind = Kind {
             label: "Rôdeur",
@@ -1866,6 +1908,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: 0.8,
             scale: 0.7,
             color: [0.35, 0.55, 0.25],
+            archetype: Archetype::Traqueuse,
         };
         const COUREUR: Kind = Kind {
             label: "Coureur",
@@ -1873,6 +1916,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: 0.5,
             scale: 0.55,
             color: [0.75, 0.8, 0.2],
+            archetype: Archetype::Meute,
         };
         const BRUTE: Kind = Kind {
             label: "Brute",
@@ -1880,9 +1924,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: 2.2,
             scale: 1.3,
             color: [0.45, 0.08, 0.25],
+            archetype: Archetype::Colosse,
         };
-        // (manche, archétypes de cette manche) — la difficulté monte : plus de monstres,
-        // puis des archétypes plus dangereux introduits progressivement.
+        // (manche, profils de cette manche) — la difficulté monte : plus de monstres,
+        // puis des profils plus dangereux introduits progressivement.
         let waves: &[(u32, &[&Kind])] = &[
             (1, &[&RODEUR, &RODEUR, &RODEUR]),
             (2, &[&RODEUR, &RODEUR, &RODEUR, &COUREUR, &COUREUR]),
@@ -1917,7 +1962,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 m.color = k.color;
                 m.emissive = 0.5;
                 m.trigger = true;
-                m.ai_chaser = Some(AiChaser { speed: k.speed });
+                m.ai_chaser = Some(AiChaser {
+                    speed: k.speed,
+                    archetype: k.archetype,
+                });
                 m.combat = Some(Combat {
                     attackable: true,
                     wave,
@@ -3870,18 +3918,23 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
         ];
 
-        // Hameau fortifié (Medieval Village Pack, Quaternius/CC0, retraité par
-        // scripts/blender/import_village_pack.py — join + transform_apply,
-        // cf. ce script pour le pourquoi). Posé dans le coin sud-est de la
-        // carte (x∈[22,36], z∈[-36,-20]), à l'écart du hameau existant et à
-        // ≥ 4 m du spawn le plus proche (créature 5, (20,-20)) — la règle des
-        // 3,5 m (RAY_DIST) ne s'applique qu'au décor solide, testée plus bas.
+        // Hameau fortifié : assets « maison », générés procéduralement par
+        // scripts/blender/gen_hamlet_*.py (cf. sprintcration3delement.md et
+        // la mémoire projet `charte-graphique-assets-maison` pour le détail
+        // du pipeline). Remplace depuis le Sprint 7 les assets tiers
+        // village_*.glb (Medieval Village Pack, Quaternius/CC0, retraités par
+        // scripts/blender/import_village_pack.py) — mêmes noms de fonction/
+        // silhouette, aucune géométrie tierce réutilisée. Posé dans le coin
+        // sud-est de la carte (x∈[22,36], z∈[-36,-20]), à l'écart du hameau
+        // existant et à ≥ 4 m du spawn le plus proche (créature 5, (20,-20))
+        // — la règle des 3,5 m (RAY_DIST) ne s'applique qu'au décor solide,
+        // testée plus bas.
         const VILLAGE_PROPS: &[DemoDecor] = &[
             // --- Bâtiments (grille 3×4, colonnes x=25/29/33, lignes
             //     z=-23/-27/-30.5/-34) ---
             DemoDecor {
                 name: "Caserne du hameau",
-                file: "village_barracks.glb",
+                file: "hamlet_barracks.glb",
                 pos: (25.0, -23.0),
                 scale: 1.0,
                 yaw_deg: 200.0,
@@ -3890,7 +3943,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Tour du hameau",
-                file: "village_bell_tower.glb",
+                file: "hamlet_bell_tower.glb",
                 pos: (29.0, -23.0),
                 scale: 1.0,
                 yaw_deg: 0.0,
@@ -3899,7 +3952,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Auberge",
-                file: "village_inn.glb",
+                file: "hamlet_inn.glb",
                 pos: (33.0, -23.0),
                 scale: 1.0,
                 yaw_deg: 160.0,
@@ -3908,7 +3961,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Forge",
-                file: "village_blacksmith.glb",
+                file: "hamlet_blacksmith.glb",
                 pos: (25.0, -27.0),
                 scale: 1.0,
                 yaw_deg: 90.0,
@@ -3917,7 +3970,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Puits du hameau",
-                file: "village_well.glb",
+                file: "hamlet_well.glb",
                 pos: (29.0, -27.0),
                 scale: 2.0,
                 yaw_deg: 0.0,
@@ -3926,7 +3979,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Scierie",
-                file: "village_sawmill.glb",
+                file: "hamlet_sawmill.glb",
                 pos: (33.0, -27.0),
                 scale: 1.0,
                 yaw_deg: 270.0,
@@ -3935,7 +3988,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Maison du hameau 1",
-                file: "village_house_a.glb",
+                file: "hamlet_house_a.glb",
                 pos: (25.0, -30.5),
                 scale: 1.0,
                 yaw_deg: 190.0,
@@ -3944,7 +3997,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Gazebo du hameau",
-                file: "village_gazebo.glb",
+                file: "hamlet_gazebo.glb",
                 pos: (29.0, -30.5),
                 scale: 1.0,
                 yaw_deg: 0.0,
@@ -3953,7 +4006,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Moulin du hameau",
-                file: "village_mill.glb",
+                file: "hamlet_mill.glb",
                 pos: (33.0, -30.5),
                 scale: 1.0,
                 yaw_deg: 250.0,
@@ -3962,7 +4015,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Maison du hameau 2",
-                file: "village_house_b.glb",
+                file: "hamlet_house_b.glb",
                 pos: (25.0, -34.0),
                 scale: 1.0,
                 yaw_deg: 180.0,
@@ -3971,7 +4024,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Écurie",
-                file: "village_stable.glb",
+                file: "hamlet_stable.glb",
                 pos: (29.0, -34.0),
                 scale: 1.0,
                 yaw_deg: 0.0,
@@ -3980,7 +4033,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Maison du hameau 3",
-                file: "village_house_c.glb",
+                file: "hamlet_house_c.glb",
                 pos: (33.0, -34.0),
                 scale: 1.0,
                 yaw_deg: 220.0,
@@ -3990,7 +4043,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             // --- Étals et clôtures (solides) ---
             DemoDecor {
                 name: "Étal du marché 1",
-                file: "village_market_stand_a.glb",
+                file: "hamlet_market_stand_a.glb",
                 pos: (27.0, -24.5),
                 scale: 2.2,
                 yaw_deg: 45.0,
@@ -3999,7 +4052,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Étal du marché 2",
-                file: "village_market_stand_b.glb",
+                file: "hamlet_market_stand_b.glb",
                 pos: (31.0, -24.5),
                 scale: 2.2,
                 yaw_deg: 315.0,
@@ -4008,7 +4061,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Clôture du hameau 1",
-                file: "village_fence.glb",
+                file: "hamlet_fence.glb",
                 pos: (26.0, -19.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4017,7 +4070,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Clôture du hameau 2",
-                file: "village_fence.glb",
+                file: "hamlet_fence.glb",
                 pos: (29.0, -19.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4026,7 +4079,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Clôture du hameau 3",
-                file: "village_fence.glb",
+                file: "hamlet_fence.glb",
                 pos: (32.0, -19.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4035,7 +4088,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Clôture du hameau 4",
-                file: "village_fence.glb",
+                file: "hamlet_fence.glb",
                 pos: (27.0, -35.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4044,7 +4097,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Clôture du hameau 5",
-                file: "village_fence.glb",
+                file: "hamlet_fence.glb",
                 pos: (31.0, -35.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4054,7 +4107,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             // --- Petit décor solide (tonneaux, caisses, bancs, rochers) ---
             DemoDecor {
                 name: "Tonneau du hameau 1",
-                file: "village_barrel.glb",
+                file: "hamlet_barrel.glb",
                 pos: (23.0, -24.0),
                 scale: 3.0,
                 yaw_deg: 15.0,
@@ -4063,7 +4116,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Tonneau du hameau 2",
-                file: "village_barrel.glb",
+                file: "hamlet_barrel.glb",
                 pos: (34.7, -25.0),
                 scale: 3.0,
                 yaw_deg: 80.0,
@@ -4072,7 +4125,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Tonneau du hameau 3",
-                file: "village_barrel.glb",
+                file: "hamlet_barrel.glb",
                 pos: (27.5, -21.5),
                 scale: 3.0,
                 yaw_deg: 200.0,
@@ -4081,7 +4134,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Caisse du hameau 1",
-                file: "village_crate.glb",
+                file: "hamlet_crate.glb",
                 pos: (23.0, -28.0),
                 scale: 3.0,
                 yaw_deg: 25.0,
@@ -4090,7 +4143,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Caisse du hameau 2",
-                file: "village_crate.glb",
+                file: "hamlet_crate.glb",
                 pos: (34.7, -29.0),
                 scale: 3.0,
                 yaw_deg: 140.0,
@@ -4099,7 +4152,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Caisse du hameau 3",
-                file: "village_crate.glb",
+                file: "hamlet_crate.glb",
                 pos: (30.5, -21.5),
                 scale: 3.0,
                 yaw_deg: 300.0,
@@ -4108,7 +4161,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Banc du hameau 1",
-                file: "village_bench_a.glb",
+                file: "hamlet_bench_a.glb",
                 pos: (27.0, -28.75),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4117,7 +4170,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Banc du hameau 2",
-                file: "village_bench_a.glb",
+                file: "hamlet_bench_a.glb",
                 pos: (31.0, -28.75),
                 scale: 3.0,
                 yaw_deg: 180.0,
@@ -4126,7 +4179,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Banc du hameau 3",
-                file: "village_bench_b.glb",
+                file: "hamlet_bench_b.glb",
                 pos: (27.0, -32.25),
                 scale: 3.0,
                 yaw_deg: 90.0,
@@ -4135,7 +4188,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Banc du hameau 4",
-                file: "village_bench_b.glb",
+                file: "hamlet_bench_b.glb",
                 pos: (31.0, -32.25),
                 scale: 3.0,
                 yaw_deg: 270.0,
@@ -4144,7 +4197,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Rocher du hameau 1",
-                file: "village_rocks.glb",
+                file: "hamlet_rocks.glb",
                 pos: (23.0, -32.0),
                 scale: 2.5,
                 yaw_deg: 10.0,
@@ -4153,7 +4206,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Rocher du hameau 2",
-                file: "village_rocks.glb",
+                file: "hamlet_rocks.glb",
                 pos: (34.7, -32.5),
                 scale: 2.2,
                 yaw_deg: 80.0,
@@ -4162,7 +4215,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Rocher du hameau 3",
-                file: "village_rocks.glb",
+                file: "hamlet_rocks.glb",
                 pos: (24.0, -20.5),
                 scale: 2.0,
                 yaw_deg: 140.0,
@@ -4173,7 +4226,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             //     posées, fumée…) : aucune contrainte de dégagement. ---
             DemoDecor {
                 name: "Sac du hameau 1",
-                file: "village_bag.glb",
+                file: "hamlet_bag.glb",
                 pos: (28.0, -24.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4182,7 +4235,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Sac du hameau 2",
-                file: "village_bag.glb",
+                file: "hamlet_bag.glb",
                 pos: (32.0, -31.0),
                 scale: 3.0,
                 yaw_deg: 90.0,
@@ -4191,7 +4244,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Sac ouvert du hameau",
-                file: "village_bag_open.glb",
+                file: "hamlet_bag_open.glb",
                 pos: (26.0, -24.5),
                 scale: 3.0,
                 yaw_deg: 45.0,
@@ -4200,7 +4253,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Sacs du hameau",
-                file: "village_bags.glb",
+                file: "hamlet_bags.glb",
                 pos: (34.0, -31.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4209,7 +4262,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Foin du hameau 1",
-                file: "village_hay.glb",
+                file: "hamlet_hay.glb",
                 pos: (24.0, -22.0),
                 scale: 3.5,
                 yaw_deg: 0.0,
@@ -4218,7 +4271,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Foin du hameau 2",
-                file: "village_hay.glb",
+                file: "hamlet_hay.glb",
                 pos: (34.0, -24.0),
                 scale: 3.5,
                 yaw_deg: 0.0,
@@ -4227,7 +4280,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Foin du hameau 3",
-                file: "village_hay.glb",
+                file: "hamlet_hay.glb",
                 pos: (28.0, -32.0),
                 scale: 3.5,
                 yaw_deg: 0.0,
@@ -4236,7 +4289,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Paquet du hameau 1",
-                file: "village_package_a.glb",
+                file: "hamlet_package_a.glb",
                 pos: (30.0, -24.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4245,7 +4298,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Paquet du hameau 2",
-                file: "village_package_a.glb",
+                file: "hamlet_package_a.glb",
                 pos: (24.0, -31.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4254,7 +4307,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Paquet du hameau 3",
-                file: "village_package_b.glb",
+                file: "hamlet_package_b.glb",
                 pos: (32.0, -28.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4263,7 +4316,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Paquet du hameau 4",
-                file: "village_package_b.glb",
+                file: "hamlet_package_b.glb",
                 pos: (26.0, -29.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4272,7 +4325,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Chaudron de la forge",
-                file: "village_cauldron.glb",
+                file: "hamlet_cauldron.glb",
                 pos: (24.5, -27.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4281,7 +4334,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Feu du hameau",
-                file: "village_bonfire.glb",
+                file: "hamlet_bonfire.glb",
                 pos: (28.0, -29.0),
                 scale: 3.5,
                 yaw_deg: 0.0,
@@ -4290,7 +4343,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fumée de la forge",
-                file: "village_smoke.glb",
+                file: "hamlet_smoke.glb",
                 pos: (24.5, -27.5),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4299,7 +4352,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fumée de la scierie",
-                file: "village_smoke.glb",
+                file: "hamlet_smoke.glb",
                 pos: (33.0, -27.3),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4308,7 +4361,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Lame de la scierie",
-                file: "village_sawmill_saw.glb",
+                file: "hamlet_sawmill_saw.glb",
                 pos: (33.0, -27.6),
                 scale: 1.0,
                 yaw_deg: 0.0,
@@ -4317,7 +4370,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Porte ronde du hameau",
-                file: "village_door_round.glb",
+                file: "hamlet_door_round.glb",
                 pos: (27.0, -22.5),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4326,7 +4379,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Porte droite du hameau",
-                file: "village_door_straight.glb",
+                file: "hamlet_door_straight.glb",
                 pos: (31.0, -23.5),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4335,7 +4388,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fenêtre ronde 1",
-                file: "village_round_window.glb",
+                file: "hamlet_round_window.glb",
                 pos: (24.3, -23.5),
                 scale: 2.0,
                 yaw_deg: 0.0,
@@ -4344,7 +4397,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fenêtre ronde 2",
-                file: "village_round_window.glb",
+                file: "hamlet_round_window.glb",
                 pos: (33.7, -31.0),
                 scale: 2.0,
                 yaw_deg: 0.0,
@@ -4353,7 +4406,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fenêtre du hameau 1",
-                file: "village_window_a.glb",
+                file: "hamlet_window_a.glb",
                 pos: (25.5, -26.0),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4362,7 +4415,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fenêtre du hameau 2",
-                file: "village_window_a.glb",
+                file: "hamlet_window_a.glb",
                 pos: (32.5, -31.5),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4371,7 +4424,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fenêtre du hameau 3",
-                file: "village_window_b.glb",
+                file: "hamlet_window_b.glb",
                 pos: (28.5, -31.0),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4380,7 +4433,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Fenêtre du hameau 4",
-                file: "village_window_b.glb",
+                file: "hamlet_window_b.glb",
                 pos: (30.5, -27.0),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4389,7 +4442,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Cloche du hameau",
-                file: "village_bell.glb",
+                file: "hamlet_bell.glb",
                 pos: (29.0, -22.3),
                 scale: 2.0,
                 yaw_deg: 0.0,
@@ -4398,7 +4451,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Marches du hameau 1",
-                file: "village_stairs.glb",
+                file: "hamlet_stairs.glb",
                 pos: (29.0, -21.7),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4407,7 +4460,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Marches du hameau 2",
-                file: "village_stairs.glb",
+                file: "hamlet_stairs.glb",
                 pos: (33.0, -29.3),
                 scale: 2.5,
                 yaw_deg: 0.0,
@@ -4416,7 +4469,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Chemin du hameau 1",
-                file: "village_path_straight.glb",
+                file: "hamlet_path_straight.glb",
                 pos: (29.0, -21.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4425,7 +4478,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Chemin du hameau 2",
-                file: "village_path_straight.glb",
+                file: "hamlet_path_straight.glb",
                 pos: (29.0, -24.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4434,7 +4487,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Chemin du hameau 3",
-                file: "village_path_straight.glb",
+                file: "hamlet_path_straight.glb",
                 pos: (29.0, -27.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -4443,7 +4496,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             },
             DemoDecor {
                 name: "Chemin du hameau 4",
-                file: "village_path_straight.glb",
+                file: "hamlet_path_straight.glb",
                 pos: (29.0, -30.0),
                 scale: 3.0,
                 yaw_deg: 0.0,
@@ -6662,7 +6715,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Marches du rempart Nord-Ouest",
-            "village_stairs.glb",
+            "hamlet_stairs.glb",
             -HALF + 2.0,
             -HALF + 4.0,
             1.1,
@@ -6673,7 +6726,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Marches du rempart Sud-Est",
-            "village_stairs.glb",
+            "hamlet_stairs.glb",
             HALF - 2.0,
             HALF - 4.0,
             1.1,
@@ -6687,7 +6740,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Feu communal",
-            "village_bonfire.glb",
+            "hamlet_bonfire.glb",
             0.0,
             0.0,
             1.2,
@@ -6698,7 +6751,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Chaudron de la place",
-            "village_cauldron.glb",
+            "hamlet_cauldron.glb",
             1.3,
             0.8,
             1.0,
@@ -6709,7 +6762,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Gazebo de la place",
-            "village_gazebo.glb",
+            "hamlet_gazebo.glb",
             4.5,
             -3.0,
             1.1,
@@ -6720,7 +6773,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Beffroi",
-            "village_bell_tower.glb",
+            "hamlet_bell_tower.glb",
             -4.5,
             -3.0,
             1.1,
@@ -6800,28 +6853,28 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         const ISLETS: &[Islet] = &[
             Islet {
                 label: "Nord-Est",
-                house_file: "village_house_a.glb",
+                house_file: "hamlet_house_a.glb",
                 az: 45.0,
                 fauna: Some(("Mouton", "fauna_sheep.glb")),
                 extra: None,
             },
             Islet {
                 label: "Sud-Est",
-                house_file: "village_inn.glb",
+                house_file: "hamlet_inn.glb",
                 az: 135.0,
                 fauna: Some(("Poule", "fauna_chicken.glb")),
                 extra: None,
             },
             Islet {
                 label: "Sud-Ouest",
-                house_file: "village_house_b.glb",
+                house_file: "hamlet_house_b.glb",
                 az: 225.0,
                 fauna: None,
                 extra: None,
             },
             Islet {
                 label: "Nord-Ouest",
-                house_file: "village_house_c.glb",
+                house_file: "hamlet_house_c.glb",
                 az: 315.0,
                 fauna: None,
                 extra: Some("nature_scarecrow.glb"),
@@ -6870,7 +6923,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                     &mut objects,
                     &mut imported,
                     &format!("Clôture {} {slabel}", isl.label),
-                    "village_fence.glb",
+                    "hamlet_fence.glb",
                     mx,
                     mz,
                     3.0,
@@ -6934,7 +6987,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Forge",
-            "village_blacksmith.glb",
+            "hamlet_blacksmith.glb",
             8.0,
             -19.0,
             1.1,
@@ -6978,7 +7031,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Écurie",
-            "village_stable.glb",
+            "hamlet_stable.glb",
             19.0,
             -8.0,
             1.1,
@@ -6989,7 +7042,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Foin de l'écurie",
-            "village_hay.glb",
+            "hamlet_hay.glb",
             19.0,
             -5.8,
             1.0,
@@ -7011,7 +7064,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Scierie",
-            "village_sawmill.glb",
+            "hamlet_sawmill.glb",
             8.0,
             19.0,
             1.1,
@@ -7022,7 +7075,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Lame de la scierie",
-            "village_sawmill_saw.glb",
+            "hamlet_sawmill_saw.glb",
             9.4,
             19.6,
             1.0,
@@ -7044,7 +7097,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Puits",
-            "village_well.glb",
+            "hamlet_well.glb",
             -19.0,
             -8.0,
             1.0,
@@ -7066,7 +7119,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Moulin",
-            "village_mill.glb",
+            "hamlet_mill.glb",
             -19.0,
             8.0,
             1.1,
@@ -7079,7 +7132,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Étal du marché 1",
-            "village_market_stand_a.glb",
+            "hamlet_market_stand_a.glb",
             6.0,
             3.5,
             1.0,
@@ -7090,7 +7143,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Étal du marché 2",
-            "village_market_stand_b.glb",
+            "hamlet_market_stand_b.glb",
             -6.0,
             3.5,
             1.0,
@@ -7101,7 +7154,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Banc du marché 1",
-            "village_bench_a.glb",
+            "hamlet_bench_a.glb",
             3.0,
             6.5,
             1.0,
@@ -7112,7 +7165,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Banc du marché 2",
-            "village_bench_b.glb",
+            "hamlet_bench_b.glb",
             -3.0,
             6.5,
             1.0,
@@ -7123,7 +7176,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Tonneau du marché 1",
-            "village_barrel.glb",
+            "hamlet_barrel.glb",
             6.5,
             -0.5,
             1.0,
@@ -7134,7 +7187,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Tonneau du marché 2",
-            "village_barrel.glb",
+            "hamlet_barrel.glb",
             6.9,
             1.0,
             1.0,
@@ -7145,7 +7198,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Tonneau du marché 3",
-            "village_barrel.glb",
+            "hamlet_barrel.glb",
             -6.5,
             -0.5,
             1.0,
@@ -7156,7 +7209,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du marché 1",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             7.5,
             0.5,
             1.0,
@@ -7167,7 +7220,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du marché 2",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             -7.5,
             0.5,
             1.0,
@@ -7178,7 +7231,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du marché 3",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             -7.2,
             -1.5,
             1.0,
@@ -7189,7 +7242,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Sac du marché",
-            "village_bag.glb",
+            "hamlet_bag.glb",
             5.0,
             5.0,
             1.0,
@@ -7200,7 +7253,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Sac ouvert du marché",
-            "village_bag_open.glb",
+            "hamlet_bag_open.glb",
             5.5,
             5.4,
             1.0,
@@ -7211,7 +7264,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Sacs du marché",
-            "village_bags.glb",
+            "hamlet_bags.glb",
             -5.0,
             5.0,
             1.0,
@@ -7222,7 +7275,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Paquet du marché 1",
-            "village_package_a.glb",
+            "hamlet_package_a.glb",
             -5.5,
             -5.5,
             1.0,
@@ -7233,7 +7286,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Paquet du marché 2",
-            "village_package_b.glb",
+            "hamlet_package_b.glb",
             5.5,
             -5.5,
             1.0,
@@ -7244,7 +7297,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Chaise du marché 1",
-            "village_chair.glb",
+            "hamlet_chair.glb",
             2.0,
             6.0,
             1.0,
@@ -7255,7 +7308,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Chaise du marché 2",
-            "village_chair.glb",
+            "hamlet_chair.glb",
             -2.0,
             6.0,
             1.0,
@@ -7527,7 +7580,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Tonneau du garde-forestier",
-            "village_barrel.glb",
+            "hamlet_barrel.glb",
             37.0,
             -25.5,
             1.0,
@@ -7538,7 +7591,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du garde-forestier 1",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             41.5,
             -19.5,
             1.0,
@@ -7549,7 +7602,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du garde-forestier 2",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             35.5,
             -24.0,
             1.0,
@@ -7573,7 +7626,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Foin du camp de chasseurs 1",
-            "village_hay.glb",
+            "hamlet_hay.glb",
             14.0,
             49.5,
             1.0,
@@ -7584,7 +7637,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Foin du camp de chasseurs 2",
-            "village_hay.glb",
+            "hamlet_hay.glb",
             20.0,
             44.5,
             1.0,
@@ -7595,7 +7648,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du camp de chasseurs 1",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             19.5,
             50.0,
             1.0,
@@ -7606,7 +7659,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Caisse du camp de chasseurs 2",
-            "village_crate.glb",
+            "hamlet_crate.glb",
             15.5,
             44.0,
             1.0,
@@ -7617,7 +7670,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Sac du camp de chasseurs",
-            "village_bag.glb",
+            "hamlet_bag.glb",
             18.0,
             43.0,
             1.0,
@@ -8139,6 +8192,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: f32,
             scale: f32,
             color: [f32; 3],
+            archetype: Archetype,
         }
         const GOBELIN: Kind = Kind {
             label: "Gobelin",
@@ -8146,6 +8200,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: 0.6,
             scale: 0.6,
             color: [0.35, 0.6, 0.3],
+            archetype: Archetype::Meute,
         };
         const SQUELETTE: Kind = Kind {
             label: "Squelette",
@@ -8153,6 +8208,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: 1.0,
             scale: 0.85,
             color: [0.75, 0.72, 0.65],
+            archetype: Archetype::Furtive,
         };
         const OGRE: Kind = Kind {
             label: "Ogre",
@@ -8160,6 +8216,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             dmg: 2.4,
             scale: 1.4,
             color: [0.4, 0.15, 0.15],
+            archetype: Archetype::Colosse,
         };
         // Décalage du monstre par rapport au centre de sa salle : loin du point d'entrée
         // du joueur — son spawn pour la salle 1 (sinon le Gobelin apparaissait pile sur
@@ -8183,7 +8240,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             m.color = k.color;
             m.emissive = 0.5;
             m.trigger = true;
-            m.ai_chaser = Some(AiChaser { speed: k.speed });
+            m.ai_chaser = Some(AiChaser {
+                speed: k.speed,
+                archetype: k.archetype,
+            });
             m.combat = Some(Combat {
                 attackable: true,
                 wave,
@@ -8367,7 +8427,10 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         rival.color = [0.55, 0.08, 0.12];
         rival.emissive = 0.35;
         rival.trigger = true;
-        rival.ai_chaser = Some(AiChaser { speed: 2.8 });
+        rival.ai_chaser = Some(AiChaser {
+            speed: 2.8,
+            ..Default::default()
+        });
         rival.combat = Some(Combat {
             attackable: true,
             // Une seule « manche » (cf. `Combat::wave`) : un adversaire unique, pas des
@@ -8418,6 +8481,236 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                     ..PointLight::default()
                 },
             ],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into(), "Attaque".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Démo « Boss » (Phase C, Sprint 8 de `sprint10audit.md`, `RoundObjective::Boss`) :
+    /// arène fermée, un unique adversaire à PV massifs, lent, contact doublé (GDD §4 :
+    /// « dernière vague : une créature unique, PV massifs, lente, contact doublé » —
+    /// archétype `Colosse`, cf. `GDD_MMORPG.md:368` « c'est aussi le boss »). Une seule
+    /// manche (`Combat::wave: 1`) contenant le boss : `AppState::update_round` gagne la
+    /// partie dès qu'elle est vidée (comportement `Vagues`, cf. sa doc), donc « mort du
+    /// boss » et « dernière manche vidée » sont ici la même condition — pas de logique
+    /// de victoire dédiée à écrire pour ce sprint, juste ce contenu.
+    pub fn boss_demo() -> Self {
+        let half = 10.0_f32;
+        let mut imported: Vec<ImportedMesh> = Vec::new();
+
+        let mut sol = demo_obj("Arène", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.14, 0.12, 0.16];
+        sol.roughness = 0.7;
+
+        let mut mur = demo_obj("Mur d'arène", MeshKind::Cube, Vec3::new(0.0, 2.0, -half));
+        mur.transform = mur.transform.with_scale(Vec3::new(2.0 * half, 4.0, 0.6));
+        mur.physics = PhysicsKind::Static;
+        mur.color = [0.2, 0.18, 0.24];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 6.0));
+        joueur.color = [0.9, 0.75, 0.3];
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.2,
+            attack_button: "Attaque".into(),
+            attack_range: 1.6,
+            attack_cooldown: 0.45,
+            attack_windup: 0.15,
+            ..Default::default()
+        });
+
+        let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
+        fx.color = [1.0, 0.9, 0.6];
+        fx.emissive = 1.6;
+        fx.combat = Some(Combat {
+            is_attack_fx: true,
+            ..Default::default()
+        });
+        fx.visible = false;
+
+        // Modèle réel plutôt qu'un primitif (le GDD §4 nomme explicitement
+        // l'archétype Colosse « yéti, dragon, roi-champignon, alpaking » —
+        // GDD_MMORPG.md:368) : `monster_dragon_evolved.glb`, silhouette figée
+        // sans squelette (comme tout `MONSTER_DECOR`, cf. sa doc — armature
+        // retirée à l'export), suffisant pour un adversaire massif qui charge
+        // plus qu'il n'anime. Repli sur une capsule si l'asset est introuvable.
+        let boss_mesh = import_single_model(
+            &mut imported,
+            "monster_dragon_evolved.glb",
+            MeshKind::Capsule,
+        );
+        let mut boss = demo_obj(
+            "Boss — L'Aînée de la lande",
+            boss_mesh,
+            Vec3::new(0.0, 1.4, -4.0),
+        );
+        boss.transform = boss.transform.with_scale(Vec3::splat(2.2));
+        boss.emissive = 0.3;
+        boss.trigger = true;
+        boss.ai_chaser = Some(AiChaser {
+            // Lente (GDD §4) : l'archétype Colosse ralentit déjà la poursuite une fois
+            // engagée (`Archetype::speed_multiplier`), une vitesse de base modeste la
+            // garde lente même avant application du multiplicateur.
+            speed: 1.8,
+            archetype: Archetype::Colosse,
+        });
+        boss.combat = Some(Combat {
+            attackable: true,
+            wave: 1,
+            // PV massifs (GDD §4) : très au-dessus du rival du Duel (`hp: 3`).
+            hp: 15,
+            ..Default::default()
+        });
+        boss.respawn_delay = 0.0;
+        // Contact doublé (GDD §4) : deux fois le dégât de contact du rival du Duel
+        // (`Scene::brawl_demo`, 0.9) — pattern d'attaque distinct par son intensité,
+        // pas par un nouveau système. Pulse de teinte rouge (télégraphe la menace)
+        // en plus de la couleur propre du modèle, pas à sa place (`color` reste
+        // blanc = inchangée au repos, cf. `demo_obj`) — un tint fixe agressif
+        // écraserait la texture du modèle importé en continu, pas seulement au pic.
+        boss.script = "if obj.triggered then damage(1.8 * dt) end\n\
+             local p = 0.5 + 0.5 * math.sin(time * 3.0)\n\
+             obj.r = 1.0; obj.g = 1.0 - 0.5 * p; obj.b = 1.0 - 0.5 * p"
+            .into();
+
+        Scene {
+            objects: vec![sol, mur, joueur, fx, boss],
+            imported,
+            camera_follow: true,
+            game_camera: Some(GameCamera {
+                target: [0.0, 1.5, 0.0],
+                yaw: 0.0,
+                pitch: 0.45,
+                distance: 11.0,
+            }),
+            point_lights: vec![PointLight {
+                position: [0.0, 6.0, -2.0],
+                color: [0.7, 0.3, 0.9],
+                intensity: 1.3,
+                range: 20.0,
+                ..PointLight::default()
+            }],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into(), "Attaque".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Démo « Escorte » (Phase C, Sprint 7 de `sprint10audit.md`, `RoundObjective::Escorte`) :
+    /// un convoi lent traverse un couloir d'une porte à l'autre (GDD §4) pendant que des
+    /// créatures le prennent pour cible en priorité (cf. `AppState::update_escorte` et le
+    /// ciblage prioritaire dans `AppState::advance_play`). Victoire à l'arrivée, défaite
+    /// si le convoi est détruit avant (`AppState::is_room_lost`).
+    pub fn escorte_demo() -> Self {
+        let longueur = 40.0_f32;
+        let mut imported: Vec<ImportedMesh> = Vec::new();
+
+        let mut sol = demo_obj("Couloir", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(8.0, 1.0, longueur + 8.0));
+        sol.physics = PhysicsKind::Static;
+        sol.color = [0.2, 0.18, 0.14];
+
+        let mut joueur = demo_obj(
+            "Joueur",
+            MeshKind::Capsule,
+            Vec3::new(-2.0, 1.0, -longueur / 2.0 + 2.0),
+        );
+        joueur.color = [0.9, 0.75, 0.3];
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 5.0,
+            jump_button: "Saut".into(),
+            jump_height: 1.2,
+            attack_button: "Attaque".into(),
+            attack_range: 2.0,
+            attack_cooldown: 0.4,
+            attack_windup: 0.12,
+            ..Default::default()
+        });
+
+        let mut fx = demo_obj("FX Attaque", MeshKind::Sphere, Vec3::ZERO);
+        fx.color = [1.0, 0.9, 0.6];
+        fx.emissive = 1.6;
+        fx.combat = Some(Combat {
+            is_attack_fx: true,
+            ..Default::default()
+        });
+        fx.visible = false;
+
+        // Modèle réel plutôt qu'un cube (« chariot lent », GDD §4) : même
+        // asset que la démo « Charrette » du hameau (`nature_cart.glb`, décor
+        // déjà utilisé ailleurs à l'échelle 1.0 — cf. `NATURE_DECOR`), repli
+        // sur un cube si l'asset est introuvable.
+        let convoi_mesh = import_single_model(&mut imported, "nature_cart.glb", MeshKind::Cube);
+        let mut convoi = demo_obj(
+            "Convoi — chariot de braises",
+            convoi_mesh,
+            Vec3::new(0.0, 0.0, -longueur / 2.0),
+        );
+        convoi.transform.rotation = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        convoi.emissive = 0.3;
+        convoi.combat = Some(Combat {
+            attackable: true,
+            hp: 8,
+            ..Default::default()
+        });
+        convoi.convoy = Some(Convoy {
+            destination: Vec3::new(0.0, 0.0, longueur / 2.0),
+            speed: 1.2,
+        });
+
+        // Créature réelle plutôt qu'une capsule teintée : silhouette figée
+        // (comme `monster_dragon_evolved.glb` du boss, cf. sa doc) mais
+        // suffisante pour un chasseur qui fonce en ligne droite (`AiChaser`),
+        // sans animation de marche à proprement parler.
+        let chasseresse_mesh =
+            import_single_model(&mut imported, "monster_alien.glb", MeshKind::Capsule);
+        let mut chasseresse = demo_obj("Chasseresse", chasseresse_mesh, Vec3::new(3.0, 0.0, 0.0));
+        chasseresse.trigger = true;
+        chasseresse.ai_chaser = Some(AiChaser {
+            speed: 3.0,
+            archetype: Archetype::Traqueuse,
+        });
+        chasseresse.combat = Some(Combat {
+            attackable: true,
+            hp: 2,
+            ..Default::default()
+        });
+        chasseresse.respawn_delay = 0.0;
+        chasseresse.script = "if obj.triggered then damage(0.8 * dt) end".into();
+
+        Scene {
+            objects: vec![sol, joueur, fx, convoi, chasseresse],
+            imported,
+            camera_follow: true,
+            game_camera: Some(GameCamera {
+                target: [0.0, 1.5, 0.0],
+                yaw: 0.0,
+                pitch: 0.5,
+                distance: 10.0,
+            }),
+            point_lights: vec![PointLight {
+                position: [0.0, 6.0, -longueur / 2.0],
+                color: [1.0, 0.6, 0.3],
+                intensity: 1.2,
+                range: 24.0,
+                ..PointLight::default()
+            }],
             mobile: MobileControls {
                 joystick: true,
                 buttons: vec!["Saut".into(), "Attaque".into()],
@@ -9374,5 +9667,102 @@ mod tests {
                 "« {name} » est une trouvaille unique, sans réapparition"
             );
         }
+    }
+
+    /// Sprint 2 de `sprintoptimation3daudit10h.md` (Phase B) : catégorise les
+    /// objets skinnés de `mmorpg_demo` entre créatures actives (IA/script de
+    /// patrouille) et décor statique en place (candidat à l'instancing GPU du
+    /// skinning), et vérifie que le décor éligible n'a **aucun** mesh partagé
+    /// par plusieurs instances — chaque fichier `monster_*.glb`/`fauna_*.glb`/
+    /// `nature_*.glb` animé n'est posé qu'une fois dans la démo. Conséquence
+    /// directe pour Sprint 3 : regrouper ces instances derrière une palette de
+    /// joints partagée ne réduirait aucun draw call (rien à regrouper), donc le
+    /// Sprint 3 tel que spécifié n'a pas de bénéfice mesurable sur ce contenu —
+    /// voir `sprint B otpimsaiton10h.md` pour la décision qui en découle.
+    #[test]
+    fn mmorpg_demo_static_skinned_decor_has_no_duplicate_mesh() {
+        let scene = Scene::mmorpg_demo();
+        let skinned: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| scene.is_skinned_mesh(o.mesh))
+            .collect();
+        assert!(
+            !skinned.is_empty(),
+            "la démo MMORPG doit contenir des objets skinnés"
+        );
+
+        let eligible: Vec<&SceneObject> = skinned
+            .iter()
+            .copied()
+            .filter(|o| scene.is_static_skinned_decor(o))
+            .collect();
+        let active_count = skinned.len() - eligible.len();
+
+        // Régression : verrouille les comptages mesurés en Sprint 2 (26
+        // créatures `MMORPG_CREATURES` + 35 « Errant N » scriptées = 61
+        // objets skinnés actifs, non éligibles à l'instancing).
+        assert_eq!(
+            active_count, 61,
+            "objets skinnés actifs (AiChaser ou script non vide) : {active_count} \
+             — si ce nombre a changé, la répartition Sprint 2 est à revérifier"
+        );
+        assert!(
+            !eligible.is_empty(),
+            "aucun décor skinné statique trouvé — la ménagerie/les mécanismes animés \
+             ont-ils changé de forme ?"
+        );
+
+        // Constat central du Sprint 2 (conditionne le Sprint 3) : parmi le
+        // décor éligible, aucun mesh (fichier importé) n'est instancié plus
+        // d'une fois.
+        let mut instances_per_mesh = std::collections::HashMap::<u32, u32>::new();
+        for o in &eligible {
+            if let MeshKind::Imported(i) = o.mesh {
+                *instances_per_mesh.entry(i).or_insert(0) += 1;
+            }
+        }
+        let max_instances = instances_per_mesh.values().copied().max().unwrap_or(0);
+        assert_eq!(
+            max_instances, 1,
+            "un mesh du décor skinné statique est instancié {max_instances} fois : \
+             l'instancing GPU du skinning (Sprint 3) redevient rentable pour ce mesh, \
+             mettre à jour la décision documentée dans « sprint B otpimsaiton10h.md »"
+        );
+    }
+
+    /// Audit du Sprint B (Phase B) : parmi le décor skinné statique éligible
+    /// (`Scene::is_static_skinned_decor`), une partie a un squelette **sans jamais
+    /// jouer de clip** (`animation: None` — ex. les étals/établis de `VILLAGE_PROPS`,
+    /// riggés par le même gabarit que les créatures via
+    /// `scripts/blender/gen_items_pack11_20.py`, mais jamais activés dans
+    /// `demos.rs`). Ces objets rendent une pose de liaison figée, visuellement
+    /// identique à un mesh statique, mais passent quand même par le chemin de
+    /// dessin skinné (`gfx::renderer::draw_skinned_objects`, `is_skinned` ne teste
+    /// que la présence d'un squelette, jamais `AnimationState`) — un draw call et un
+    /// emplacement de `MAX_SKINNED_INSTANCES` dépensés pour rien. Piste
+    /// d'optimisation distincte du Sprint 3 (non implémentée ici : toucherait
+    /// `src/gfx/renderer.rs`, hors périmètre scène de ce sprint et partagé avec les
+    /// Phases A/C/D en cours) — voir « sprint B otpimsaiton10h.md » pour le détail.
+    #[test]
+    fn mmorpg_demo_has_static_skinned_decor_that_never_animates() {
+        let scene = Scene::mmorpg_demo();
+        let eligible: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| scene.is_static_skinned_decor(o))
+            .collect();
+        let never_animates = eligible.iter().filter(|o| o.animation.is_none()).count();
+
+        // Verrouille le constat de l'audit : si ce nombre tombe à 0 (ex. un futur
+        // sprint bascule ces objets sur le chemin statique, ou leur donne enfin un
+        // clip), l'opportunité d'optimisation documentée est résolue — mettre à jour
+        // « sprint B otpimsaiton10h.md » en conséquence plutôt que de relâcher ce test.
+        assert_eq!(
+            never_animates, 50,
+            "objets skinnés statiques sans animation active : {never_animates} — \
+             coût de rendu skinné payé pour rien si ce nombre est non nul (voir \
+             « sprint B otpimsaiton10h.md », section audit)"
+        );
     }
 }

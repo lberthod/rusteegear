@@ -289,11 +289,20 @@ pub struct AppState {
     /// Intensité (1 = pic, décroît vers 0) du flash de dégâts (vignette rouge HUD),
     /// déclenché quand `hud_health` baisse. Purement cosmétique (retour de coup).
     pub damage_flash: f32,
+    /// Intensité (1 = pic, décroît vers 0) du recul caméra à l'encaissement d'un
+    /// coup (secousse brève) — même déclencheurs que `damage_flash`, décroissance
+    /// séparée pour pouvoir ajuster l'un sans l'autre (Sprint 1, `sprint10audit.md`).
+    pub camera_shake: f32,
     /// Intensité (1 = pic, décroît vers 0) de la bannière « allié à terre »,
     /// déclenchée par `GameEvent::PlayerDown` d'un **autre** joueur réseau
     /// (GDD §5.3 : « la mort d'un allié est un événement de groupe » — jusqu'ici
     /// seule notre propre mort déclenchait un retour, `network_client.rs`).
     pub ally_down_flash: f32,
+    /// Cause résumée de notre dernière mort (Sprint 2, `sprint10audit.md`,
+    /// GDD §16.5), affichée par `editor::hud::defeated_banner` tant qu'on
+    /// reste spectateur — `None` par défaut ou si le serveur n'a diffusé
+    /// aucune cause (ex. vie mise à 0 sans dégât mémorisé).
+    pub death_cause: Option<crate::net::protocol::DeathCause>,
     /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
     /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
     pub attack_flash: f32,
@@ -302,6 +311,27 @@ pub struct AppState {
     /// cibles de la manche courante vaincues ⇒ manche suivante révélée ; dernière
     /// manche vaincue ⇒ victoire (cf. `update_waves` dans `advance_play`).
     pub wave: u32,
+    /// Objectif de la manche courante (Phase C, `sprint10audit.md`) : décide
+    /// quelle condition de victoire/défaite `update_round` applique (cf.
+    /// `app::combat`). Défaut `Vagues` (comportement historique, seul mode qui
+    /// existait avant ce sprint) — zéro régression pour une scène/salon qui ne
+    /// choisit pas de mode. Fixé côté salon multijoueur par `bin/server.rs::
+    /// Lobby::objective` (propagé au `Join`, cf. `multiplayer::RoundObjective`) ;
+    /// n'a d'effet que si la scène a un système de manches (`wave > 0`).
+    pub objective: multiplayer::RoundObjective,
+    /// Nombre de `GameEvent::PlayerDown` survenus depuis le début de la manche
+    /// courante (Phase D, Sprint 9 de `sprint10audit.md` — contrat « Nuit
+    /// blanche », GDD §3.4 : « gagnez sans qu'aucun Veilleur ne tombe »).
+    /// Remis à zéro à chaque nouvelle manche (`AppState::new`, appelé par
+    /// `Room::restart`) — jamais décrémenté : contrairement à `network_health`,
+    /// une réanimation ultérieure ne doit pas effacer qu'une chute a eu lieu.
+    pub player_down_count: u32,
+    /// Nombre de réanimations **achevées** depuis le début de la manche
+    /// courante (Phase D, Sprint 9 — contrat « La lande garde ses morts »,
+    /// GDD §3.4 : « gagnez sans réanimation »). Distinct de `network_revive`
+    /// (canal de réanimation *en cours*, purgé dès qu'elle se termine) : ce
+    /// compteur, lui, persiste au-delà de la fin du canal.
+    pub revives_completed: u32,
     /// La scène courante est-elle la démo contrôleur à niveaux (`Scene::controller_level`) ?
     /// Seule cette famille de scènes a un « niveau suivant » (cf. `next_level`) ; toute
     /// autre victoire (course infinie, tour, manches de zombies...) doit juste relancer
@@ -349,6 +379,19 @@ pub struct AppState {
     /// partagé). Diffusé à tous via `EntityDelta::kills`, pas seulement au
     /// joueur concerné.
     network_kills: HashMap<crate::net::protocol::PlayerId, u32>,
+    /// Assists individualisés par joueur réseau (GDD §8.3) : nombre de fois où
+    /// **ce** joueur a porté un dégât à un monstre achevé par un autre joueur
+    /// peu après (cf. `multiplayer::credit_assists_on_kill`) — distinct de
+    /// `network_kills`, jamais incrémentés pour la même mise à mort (le
+    /// tireur reçoit le frag, les autres contributeurs l'assist).
+    network_assists: HashMap<crate::net::protocol::PlayerId, u32>,
+    /// Dernier instant (`self.time`) où chaque joueur réseau a porté un dégât
+    /// à chaque monstre encore vivant (indice d'objet → joueur → instant) —
+    /// mémoire courte servant uniquement à décider qui a droit à un assist
+    /// quand ce monstre meurt (cf. `multiplayer::ASSIST_WINDOW`), purgée à
+    /// chaque mise à mort résolue (`credit_assists_on_kill`) pour ne jamais
+    /// compter sur la vie suivante du même emplacement après respawn.
+    damage_contributions: HashMap<usize, HashMap<crate::net::protocol::PlayerId, f32>>,
     /// Classe choisie par chaque joueur réseau au `Join` (cf.
     /// `multiplayer::PlayerClass`, GAMEDESIGN_MMORPG.md §3.2) — appliquée une
     /// fois pour toutes au spawn (vitesse, PV max), relue pour les
@@ -369,6 +412,16 @@ pub struct AppState {
     /// doivent pas partager un seul temporisateur (l'un mordu ne doit pas
     /// « protéger » l'autre).
     bite_cooldowns: HashMap<(usize, crate::net::protocol::PlayerId), f32>,
+    /// Dernières sources de dégâts subies par chaque joueur réseau — type
+    /// d'agresseur et indice de l'objet attaquant — bornées à
+    /// `health::DEATH_CAUSE_WINDOW` (Sprint 2, `sprint10audit.md`) :
+    /// consommées à la mort pour calculer `net::protocol::DeathCause`
+    /// (diagnostic de mort, GDD §16.5), purgées ensuite (`health::
+    /// compute_death_cause`).
+    recent_damage: HashMap<
+        crate::net::protocol::PlayerId,
+        VecDeque<(crate::net::protocol::DeathCauseKind, usize)>,
+    >,
     /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
     /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
     /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
@@ -500,8 +553,11 @@ pub struct AppState {
     /// s'est jamais connecté, et remis à `None` par une déconnexion
     /// **volontaire** (`disconnect_from_server`) : quitter la partie ne doit
     /// jamais déclencher une reconnexion dans le dos du joueur.
+    /// Quatrième champ (Sprint 3, `sprint10audit.md`) : la classe choisie
+    /// (`multiplayer::PlayerClass::to_u8`) au `Join` initial — rejouée à
+    /// l'identique par la reconnexion automatique, comme le reste du tuple.
     #[cfg(not(target_os = "ios"))]
-    net_last_connect: Option<(String, String, String)>,
+    net_last_connect: Option<(String, String, String, u8)>,
     /// Reconnexion automatique en cours, s'il y en a une (cf.
     /// `network_client::ReconnectState` : numéro de tentative, prochain essai,
     /// tentative de fond éventuellement en vol). `None` = connexion saine ou
@@ -820,9 +876,14 @@ impl AppState {
             render_quality: crate::app::build_config::BuildConfig::load().render_quality,
             bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
             damage_flash: 0.0,
+            camera_shake: 0.0,
             ally_down_flash: 0.0,
+            death_cause: None,
             attack_flash: 0.0,
             wave: 0,
+            objective: multiplayer::RoundObjective::default(),
+            player_down_count: 0,
+            revives_completed: 0,
             is_leveled_demo: false,
             attack_cooldown_remaining: 0.0,
             attack_projectile: None,
@@ -833,10 +894,13 @@ impl AppState {
             network_attack_cooldowns: HashMap::new(),
             network_health: HashMap::new(),
             network_kills: HashMap::new(),
+            network_assists: HashMap::new(),
+            damage_contributions: HashMap::new(),
             network_classes: HashMap::new(),
             network_max_health: HashMap::new(),
             network_revive: HashMap::new(),
             bite_cooldowns: HashMap::new(),
+            recent_damage: HashMap::new(),
             fireballs: Vec::new(),
             fireball_cooldowns: HashMap::new(),
             fireball_pool: Vec::new(),
@@ -1177,6 +1241,92 @@ impl AppState {
     fn player_position(&self) -> Option<Vec3> {
         self.player_object().map(|o| o.transform.position)
     }
+
+    /// Données pour la mini-carte (overlay HUD/éditeur) : positions (x, z, plan
+    /// horizontal — la hauteur n'y a pas sa place) du joueur local, des joueurs
+    /// réseau et des créatures, plus les bornes du monde à cadrer. Recalculé
+    /// chaque frame (peu d'objets en jeu, coût négligeable) plutôt que mis en
+    /// cache : la position des joueurs/créatures change en continu.
+    pub fn minimap_data(&self) -> MinimapData {
+        let player = self
+            .player_index()
+            .and_then(|i| self.scene.objects.get(i))
+            .map(|o| (o.transform.position.x, o.transform.position.z));
+        let allies = self
+            .remote_players
+            .values()
+            .filter_map(|rp| {
+                self.scene
+                    .objects
+                    .get(rp.scene_index)
+                    .map(|o| MinimapPoint {
+                        x: o.transform.position.x,
+                        z: o.transform.position.z,
+                        label: rp.name.clone(),
+                    })
+            })
+            .collect();
+        let creatures = self
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && o.ai_chaser.is_some())
+            .map(|o| (o.transform.position.x, o.transform.position.z))
+            .collect();
+        // Bornes du monde : le sol conventionnel « Sol » (cf. assets/*.json), sa
+        // `transform.scale` encodant un demi-extent horizontal — à défaut,
+        // englobante de tous les objets, avec un repli fixe si la scène est vide.
+        let bounds = self
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Sol")
+            .map(|o| {
+                let p = o.transform.position;
+                let s = o.transform.scale;
+                (p.x - s.x, p.z - s.z, p.x + s.x, p.z + s.z)
+            })
+            .unwrap_or_else(|| {
+                let mut min_x = f32::MAX;
+                let mut min_z = f32::MAX;
+                let mut max_x = f32::MIN;
+                let mut max_z = f32::MIN;
+                for o in &self.scene.objects {
+                    let p = o.transform.position;
+                    min_x = min_x.min(p.x);
+                    max_x = max_x.max(p.x);
+                    min_z = min_z.min(p.z);
+                    max_z = max_z.max(p.z);
+                }
+                if min_x > max_x {
+                    (-50.0, -50.0, 50.0, 50.0)
+                } else {
+                    (min_x, min_z, max_x, max_z)
+                }
+            });
+        MinimapData {
+            player,
+            allies,
+            creatures,
+            bounds,
+        }
+    }
+}
+
+/// Marqueur nommé de la mini-carte (position monde x/z + étiquette) — cf.
+/// `AppState::minimap_data`.
+pub struct MinimapPoint {
+    pub x: f32,
+    pub z: f32,
+    pub label: String,
+}
+
+/// Cf. `AppState::minimap_data`. `bounds` = (min_x, min_z, max_x, max_z).
+pub struct MinimapData {
+    pub player: Option<(f32, f32)>,
+    pub allies: Vec<MinimapPoint>,
+    pub creatures: Vec<(f32, f32)>,
+    pub bounds: (f32, f32, f32, f32),
 }
 
 impl Default for AppState {
@@ -2345,7 +2495,10 @@ mod tests {
             name: "Chasseur".into(),
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(10.0, 0.5, 0.0)),
-            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 3.0,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         chaser.color = [1.0; 3];
@@ -2400,7 +2553,10 @@ mod tests {
             name: format!("Chasseur {x}"),
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(x, 0.5, 0.0)),
-            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 3.0,
+                ..Default::default()
+            }),
             color: [1.0; 3],
             ..Default::default()
         };
@@ -2480,7 +2636,10 @@ mod tests {
             name: "Chasseur lointain".into(),
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(20.0, 0.5, 0.0)),
-            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 3.0,
+                ..Default::default()
+            }),
             color: [1.0; 3],
             ..Default::default()
         };
@@ -2502,6 +2661,108 @@ mod tests {
             moved < 0.2,
             "un chasseur hors de portée de détection ne doit pas se rapprocher \
              de l'unique joueur réseau, aussi loin soit-il : déplacement {moved}"
+        );
+    }
+
+    /// Construit une scène minimale sol + joueur immobile + un unique `AiChaser`
+    /// (à `chaser_x` du joueur, sur l'archétype donné), fait tourner `steps` ticks
+    /// de 0.05 s, et renvoie la distance parcourue par le chasseur. Isole chaque
+    /// scénario dans son propre `AppState` (un seul chasseur, une seule cible) pour
+    /// ne jamais retomber sur `MAX_ACTIVE_CHASERS_PER_TARGET`, qui plafonnerait à 2
+    /// des chasseurs multiples visant le même joueur et fausserait la comparaison.
+    fn chaser_distance_moved(chaser_x: f32, archetype: crate::scene::Archetype, steps: u32) -> f32 {
+        let mut sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(60.0, 1.0, 60.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        sol.color = [1.0; 3];
+        let joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            color: [1.0; 3],
+            ..Default::default()
+        };
+        let chaser = crate::scene::SceneObject {
+            name: format!("{archetype:?}"),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(chaser_x, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 3.0,
+                archetype,
+            }),
+            color: [1.0; 3],
+            ..Default::default()
+        };
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, joueur, chaser],
+            ..Default::default()
+        };
+        app.playing = true;
+        let start = app.scene.objects[2].transform.position;
+        for _ in 0..steps {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        (app.scene.objects[2].transform.position - start).length()
+    }
+
+    /// GDD_MMORPG.md §5.4, archétype Furtive : « éveil réduit (< 9 m) », appliqué
+    /// **même en solo** (contrairement à `CHASER_DETECT_RANGE`, réseau uniquement,
+    /// cf. `a_chaser_beyond_detection_range_never_moves_towards_a_lone_network_player`).
+    #[test]
+    fn furtive_archetype_stays_asleep_until_the_player_enters_its_shorter_wake_radius() {
+        // 7 m : sous CHASER_DETECT_RANGE (9 m, non appliqué en solo de toute façon),
+        // mais au-delà de FURTIVE_DETECT_RANGE (5 m) — doit rester endormie.
+        let asleep = chaser_distance_moved(7.0, crate::scene::Archetype::Furtive, 30);
+        assert!(
+            asleep < 0.2,
+            "une Furtive hors de sa portée d'éveil réduite ne doit pas bouger : \
+             déplacement {asleep}"
+        );
+
+        // 3 m : sous FURTIVE_DETECT_RANGE (5 m) — doit foncer, et plus vite qu'une
+        // Traqueuse standard partie de la même distance (vitesse accrue éveillée).
+        let furtive_awake = chaser_distance_moved(3.0, crate::scene::Archetype::Furtive, 30);
+        let traqueuse = chaser_distance_moved(3.0, crate::scene::Archetype::Traqueuse, 30);
+        assert!(
+            furtive_awake > 0.5,
+            "une fois dans sa portée d'éveil, la Furtive doit se rapprocher : \
+             déplacement {furtive_awake}"
+        );
+        assert!(
+            furtive_awake > traqueuse,
+            "éveillée, la Furtive doit avancer plus vite qu'une Traqueuse standard : \
+             {furtive_awake} <= {traqueuse}"
+        );
+    }
+
+    /// GDD_MMORPG.md §5.4 : les 4 archétypes doivent être « distinguables en Play »
+    /// — au minimum par leur vitesse de poursuite effective une fois la même
+    /// distance/temps de simulation appliqués. Vérifie l'ordre attendu
+    /// Colosse (ralenti) < Traqueuse (standard) < Meute (accéléré), cf.
+    /// `Archetype::speed_multiplier`.
+    #[test]
+    fn creature_archetypes_produce_visibly_different_chase_speeds() {
+        let colosse = chaser_distance_moved(4.0, crate::scene::Archetype::Colosse, 20);
+        let traqueuse = chaser_distance_moved(4.0, crate::scene::Archetype::Traqueuse, 20);
+        let meute = chaser_distance_moved(4.0, crate::scene::Archetype::Meute, 20);
+        assert!(
+            colosse < traqueuse,
+            "le Colosse doit avancer plus lentement que la Traqueuse : {colosse} >= {traqueuse}"
+        );
+        assert!(
+            traqueuse < meute,
+            "la Meute doit avancer plus vite que la Traqueuse : {traqueuse} >= {meute}"
         );
     }
 
@@ -2538,7 +2799,10 @@ mod tests {
             name: "Chasseur".into(),
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.5, -20.0)),
-            ai_chaser: Some(crate::scene::AiChaser { speed: 3.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 3.0,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         chaser.color = [1.0; 3];
@@ -2620,7 +2884,10 @@ mod tests {
             name: "Monstre Vague1".into(),
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(5.0, 0.5, 0.0)),
-            ai_chaser: Some(crate::scene::AiChaser { speed: 1.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 1.0,
+                ..Default::default()
+            }),
             combat: Some(crate::scene::Combat {
                 attackable: true,
                 wave: 1,
@@ -2633,7 +2900,10 @@ mod tests {
             name: "Monstre Vague2".into(),
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(-5.0, 0.5, 0.0)),
-            ai_chaser: Some(crate::scene::AiChaser { speed: 1.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 1.0,
+                ..Default::default()
+            }),
             combat: Some(crate::scene::Combat {
                 attackable: true,
                 wave: 2,
@@ -2698,6 +2968,171 @@ mod tests {
         assert!(
             app.win_time.is_some(),
             "toutes les manches vidées ⇒ victoire"
+        );
+    }
+
+    /// Phase C (Sprint 6, `sprint10audit.md`) : contrairement à `RoundObjective::Vagues`
+    /// (test ci-dessus), vider l'unique manche en `Survie` doit la reboucler plutôt que
+    /// de gagner — la victoire ne se déclenche qu'au chrono (`SURVIE_DURATION_SECS`),
+    /// indépendamment de l'état des monstres.
+    #[test]
+    fn survie_mode_loops_the_wave_then_wins_once_the_timer_elapses() {
+        let mut monstre = crate::scene::SceneObject {
+            name: "Monstre".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                wave: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        monstre.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.objective = crate::app::multiplayer::RoundObjective::Survie;
+        app.scene = crate::scene::Scene {
+            objects: vec![monstre],
+            ..Default::default()
+        };
+        app.init_waves();
+        assert_eq!(app.wave, 1, "démarre à la manche 1 comme Vagues");
+        assert!(app.scene.objects[0].visible, "manche 1 révélée");
+
+        // Vide la manche 1 (équivalent d'un monstre vaincu) : en Survie, ça ne
+        // doit pas déclencher `win_time`, juste reboucler sur la manche 1.
+        app.scene.objects[0].visible = false;
+        app.update_round(1.0 / 60.0);
+        assert!(
+            app.win_time.is_none(),
+            "vider l'unique manche ne doit pas gagner la partie en Survie"
+        );
+        assert_eq!(
+            app.wave, 1,
+            "reboucle sur la manche 1, pas de manche 2 à révéler"
+        );
+        assert!(
+            app.scene.objects[0].visible,
+            "la manche 1 est re-révélée après avoir bouclé"
+        );
+
+        // Chrono écoulé : la victoire doit se déclencher, peu importe l'état
+        // des monstres visibles (la manche 1, toujours pleine ici, le prouve).
+        app.time = 200.0; // > SURVIE_DURATION_SECS (180 s)
+        app.update_round(1.0 / 60.0);
+        assert!(
+            app.win_time.is_some(),
+            "le chrono écoulé doit déclencher la victoire en Survie"
+        );
+    }
+
+    /// Phase C (Sprint 8, `sprint10audit.md`) : `Boss` est décrit au GDD §4 comme
+    /// « dernière vague : une créature unique » — une scène Boss n'a donc qu'une
+    /// manche contenant le boss, et `update_round` doit retomber sur le comportement
+    /// `Vagues` (victoire à la dernière manche vidée) : c'est exactement « boss
+    /// vaincu », sans logique dédiée à écrire.
+    #[test]
+    fn update_round_boss_wins_when_its_single_wave_is_cleared() {
+        let mut boss = crate::scene::SceneObject {
+            name: "Boss".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                wave: 1,
+                hp: 12,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        boss.color = [1.0; 3];
+
+        let mut app = AppState::new();
+        app.objective = crate::app::multiplayer::RoundObjective::Boss;
+        app.scene = crate::scene::Scene {
+            objects: vec![boss],
+            ..Default::default()
+        };
+        app.init_waves();
+        app.scene.objects[0].visible = false; // le boss vaincu vide l'unique manche
+
+        app.update_round(1.0 / 60.0);
+        assert!(
+            app.win_time.is_some(),
+            "la mort du boss (dernière et unique manche vidée) doit gagner la partie"
+        );
+    }
+
+    /// Phase C (Sprint 7, `sprint10audit.md`) : le convoi avance en ligne droite vers
+    /// sa destination et la victoire se déclenche dès qu'il en est assez proche,
+    /// indépendamment de tout système de manches (`self.wave` reste à 0 ici).
+    #[test]
+    fn update_round_escorte_wins_once_the_convoy_reaches_its_destination() {
+        let convoy = crate::scene::SceneObject {
+            name: "Convoi".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            convoy: Some(crate::scene::Convoy {
+                destination: glam::Vec3::new(10.0, 0.0, 0.0),
+                speed: 5.0,
+            }),
+            ..Default::default()
+        };
+
+        let mut app = AppState::new();
+        app.objective = crate::app::multiplayer::RoundObjective::Escorte;
+        app.scene = crate::scene::Scene {
+            objects: vec![convoy],
+            ..Default::default()
+        };
+
+        // Encore loin de la destination : pas de victoire, le convoi a avancé.
+        app.update_round(1.0);
+        assert!(app.win_time.is_none(), "trop loin pour arriver en un pas");
+        assert!(
+            app.scene.objects[0].transform.position.x > 0.0,
+            "le convoi doit avancer vers sa destination"
+        );
+
+        // Assez de pas pour couvrir la distance restante : victoire.
+        for _ in 0..10 {
+            app.update_round(1.0);
+        }
+        assert!(
+            app.win_time.is_some(),
+            "le convoi doit finir par déclencher la victoire en approchant sa destination"
+        );
+    }
+
+    /// Phase C (Sprint 7) : un convoi vaincu (`Combat::hp` à 0, masqué comme toute
+    /// autre cible d'attaque, cf. `Scene::damage_attackable`) doit compter comme une
+    /// défaite de salon même si des joueurs réseau sont encore vivants — contrairement
+    /// aux autres modes, où seule la mort de tous les joueurs compte
+    /// (`AppState::is_room_lost`).
+    #[test]
+    fn is_room_lost_true_when_the_escorte_convoy_is_destroyed_even_with_a_living_player() {
+        let convoy = crate::scene::SceneObject {
+            name: "Convoi".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            visible: false, // vaincu
+            convoy: Some(crate::scene::Convoy {
+                destination: glam::Vec3::new(10.0, 0.0, 0.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut app = AppState::new();
+        app.objective = crate::app::multiplayer::RoundObjective::Escorte;
+        app.scene = crate::scene::Scene {
+            objects: vec![convoy],
+            ..Default::default()
+        };
+        let player_id = 1;
+        app.network_players.insert(player_id, 0);
+        app.network_health.insert(player_id, 100.0);
+
+        assert!(
+            app.is_room_lost(),
+            "convoi détruit ⇒ salon perdu, même joueur(s) vivant(s)"
         );
     }
 
@@ -2899,7 +3334,10 @@ mod tests {
             mesh: crate::scene::MeshKind::Sphere,
             transform: crate::scene::Transform::from_pos(Vec3::new(1.0, 0.5, 0.0)),
             trigger: true,
-            ai_chaser: Some(crate::scene::AiChaser { speed: 4.0 }),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 4.0,
+                ..Default::default()
+            }),
             combat: Some(crate::scene::Combat {
                 attackable: true,
                 ..Default::default()

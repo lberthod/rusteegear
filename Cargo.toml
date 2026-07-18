@@ -125,6 +125,12 @@ gilrs = "0.11.2"
 # unknown où `bundle_bytes` (src/assets.rs) tourne aussi (Sprint 115, assets embarqués
 # partagés par toutes les cibles y compris le player web).
 ruzstd = "0.8.3"
+# Phase E (`sprintoptimation3daudit10h.md`) : compression BC3 des textures d'albédo à
+# l'import GPU (réduit l'empreinte VRAM d'un facteur ~4 sur les GPU qui exposent
+# `Features::TEXTURE_COMPRESSION_BC`) — pur Rust, aucun lien C, compile donc sur toutes
+# les cibles (dont wasm32) même si seuls les GPU desktop l'activent réellement
+# aujourd'hui (cf. `gfx::texcompress`).
+texpresso = "2.0.2"
 
 # Sélecteur de fichiers + client HTTP (génération de scripts par IA) : desktop
 # uniquement (Firebase/IA restent hors mobile pour l'instant, cf. réseau ci-dessous).

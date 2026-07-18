@@ -28,6 +28,32 @@ impl Scene {
         (obj_bytes, mesh_bytes, textures.len())
     }
 
+    /// `true` si `mesh` référence un import glTF skinné (`ImportedMesh::skeleton`
+    /// renseigné) — même règle que `gfx::passes::is_skinned`, dupliquée ici
+    /// plutôt que partagée car `passes::is_skinned` est `pub(super)` à `gfx`
+    /// (raison d'être de ce module : rendu), alors que la catégorisation
+    /// gameplay/scène (Sprint 2 de `sprintoptimation3daudit10h.md`) doit
+    /// pouvoir tourner sans dépendre du renderer.
+    pub fn is_skinned_mesh(&self, mesh: MeshKind) -> bool {
+        match mesh {
+            MeshKind::Imported(i) => self
+                .imported
+                .get(i as usize)
+                .is_some_and(|m| m.skeleton.is_some()),
+            _ => false,
+        }
+    }
+
+    /// `true` si `o` est un objet skinné « décor statique en place » — candidat
+    /// à l'instancing GPU du skinning (Phase B, Sprint 2 de
+    /// `sprintoptimation3daudit10h.md`) : squelette présent, mais **aucun**
+    /// mouvement actif (ni `AiChaser`, ni script Lua de patrouille). Une vraie
+    /// créature (IA, script `creature_*_script`) est exclue même si elle boucle
+    /// un clip `Idle` par moments.
+    pub fn is_static_skinned_decor(&self, o: &SceneObject) -> bool {
+        self.is_skinned_mesh(o.mesh) && o.ai_chaser.is_none() && o.script.is_empty()
+    }
+
     /// AABB local d'un objet (primitive codée ou mesh importé).
     pub fn local_aabb(&self, mesh: MeshKind) -> (Vec3, Vec3) {
         match mesh {
@@ -36,10 +62,18 @@ impl Scene {
             MeshKind::Cylinder => (Vec3::new(-0.5, -0.5, -0.5), Vec3::new(0.5, 0.5, 0.5)),
             MeshKind::Capsule => (Vec3::new(-0.25, -0.5, -0.25), Vec3::new(0.25, 0.5, 0.25)),
             MeshKind::Terrain => (Vec3::new(-0.5, -0.1, -0.5), Vec3::new(0.5, 0.1, 0.5)),
-            MeshKind::Imported(i) => {
-                let m = &self.imported[i as usize];
-                (m.aabb_min, m.aabb_max)
-            }
+            MeshKind::Billboard => (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5)),
+            MeshKind::Imported(i) => match self.imported.get(i as usize) {
+                Some(m) => (m.aabb_min, m.aabb_max),
+                None => {
+                    log::warn!(
+                        "local_aabb : index de mesh importé hors bornes ({i} >= {}), \
+                         probable désync scène chargée/synchronisée — AABB nulle en repli",
+                        self.imported.len()
+                    );
+                    (Vec3::ZERO, Vec3::ZERO)
+                }
+            },
         }
     }
 

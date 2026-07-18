@@ -58,16 +58,18 @@ impl NetClient {
         name: &str,
         firebase_uid: Option<&str>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::connect_to_lobby(url, name, firebase_uid, protocol::DEFAULT_LOBBY)
+        // Classe fixée à Assaut (0) pour cet appel simple — cf. `net/client/native.rs`.
+        Self::connect_to_lobby(url, name, firebase_uid, protocol::DEFAULT_LOBBY, 0)
     }
 
     /// Comme `connect`, mais rejoint le salon `lobby` plutôt que le salon
-    /// partagé par défaut.
+    /// partagé par défaut, et choisit une `class` (Sprint 3, `sprint10audit.md`).
     pub fn connect_to_lobby(
         url: &str,
         name: &str,
         firebase_uid: Option<&str>,
         lobby: &str,
+        class: u8,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Sprint 113f : un navigateur refuse d'ouvrir un WebSocket `ws://` (non
         // chiffré) depuis une page servie en `https:` — `WebSocket::new` lève une
@@ -95,9 +97,10 @@ impl NetClient {
             name: name.to_string(),
             firebase_uid: firebase_uid.map(str::to_string),
             lobby: lobby.to_string(),
-            // Cf. `net/client/native.rs` : pas de sélecteur de classe encore
-            // câblé, Assaut (0) pour tous.
-            class: 0,
+            class,
+            // Cf. `net/client/native.rs` : pas de sélecteur de mode encore
+            // câblé, Vagues (0) pour tous.
+            objective: 0,
         })?;
 
         let (in_tx, in_rx) = channel::<ServerMsg>();

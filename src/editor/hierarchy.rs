@@ -16,6 +16,7 @@ fn mesh_category(mesh: MeshKind) -> (&'static str, &'static str) {
         MeshKind::Cylinder => ("Cylindres", "🛢"),
         MeshKind::Capsule => ("Capsules", "💊"),
         MeshKind::Terrain => ("Terrains", "⛰"),
+        MeshKind::Billboard => ("Impostors", "🌿"),
         MeshKind::Imported(_) => ("Modèles", "📦"),
     }
 }

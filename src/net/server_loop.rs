@@ -434,6 +434,7 @@ async fn handle_connection(
         firebase_uid,
         lobby,
         class,
+        objective,
     } = protocol::decode::<ClientMsg>(&join_bytes)?
     else {
         return Err("première trame n'est pas un Join".into());
@@ -485,6 +486,7 @@ async fn handle_connection(
             firebase_uid,
             lobby,
             class,
+            objective,
         },
     ));
 
@@ -710,6 +712,7 @@ mod tests {
                 firebase_uid: None,
                 lobby: protocol::DEFAULT_LOBBY.to_string(),
                 class: 0,
+                objective: 0,
             }
         );
 
@@ -945,6 +948,7 @@ mod tests {
                 firebase_uid: None,
                 lobby: String::new(),
                 class: 0,
+                objective: 0,
             })
             .expect("encodage");
             sink.send(Message::Binary(join.into()))

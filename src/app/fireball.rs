@@ -295,14 +295,21 @@ impl AppState {
         // `ranged_damage_mult` ne s'applique donc qu'aux joueurs réseau.
         // Le minimum de 1 évite qu'un arrondi vers le bas ne rende un tir
         // Soutien totalement inoffensif contre une cible à 1 PV.
-        let damage = self
-            .network_player_id_at(owner)
+        let shooter_id = self.network_player_id_at(owner);
+        let damage = shooter_id
             .and_then(|id| self.network_player_class(id))
             .map_or(damage, |class| {
                 ((damage as f32) * class.ranged_damage_mult())
                     .round()
                     .max(1.0) as u32
             });
+        // Contribution de dégâts (GDD §8.3, assists) : enregistrée avant de
+        // savoir si ce coup achève la cible — un tir qui blesse sans tuer est
+        // justement le cas qui doit ouvrir droit à un assist si un autre
+        // joueur achève juste après (cf. `credit_assists_on_kill`).
+        if let Some(id) = shooter_id {
+            self.record_damage_contribution(i, id);
+        }
         let defeated = self.scene.damage_attackable_by(i, damage);
         self.attack_flash = 1.0;
         if let Some(fx) = self.attack_fx_index()
@@ -314,7 +321,8 @@ impl AppState {
         }
         if defeated {
             self.add_score(1);
-            if let Some(shooter_id) = self.network_player_id_at(owner) {
+            if let Some(shooter_id) = shooter_id {
+                self.credit_assists_on_kill(i, shooter_id);
                 self.credit_kill(shooter_id);
             }
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
@@ -648,6 +656,82 @@ mod tests {
             app.network_player_kills(1),
             Some(1),
             "le tireur doit être crédité du frag"
+        );
+    }
+
+    /// Sprint 4 (PHASE B, `sprint10audit.md`) : deux joueurs réseau tirent sur
+    /// la même cible à plusieurs PV — celui qui la blesse sans l'achever doit
+    /// recevoir un assist (pas un frag), celui qui l'achève reçoit le frag
+    /// (pas d'assist pour son propre kill). Bout en bout via `fire: true`,
+    /// pas un appel direct aux briques internes (`credit_assists_on_kill`),
+    /// pour couvrir aussi le câblage dans `resolve_fireball_hit`.
+    #[test]
+    fn two_network_players_who_both_damage_a_creature_split_credit_between_kill_and_assist() {
+        let mut app = app_with(scene_with_monster_ahead(false));
+        app.hide_local_player_template();
+        app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = 2;
+
+        let p1 = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let p2 = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        // Réaligne les deux tireurs sur l'origine du gabarit (`spawn_network_player`
+        // les décale sur un cercle, cf. sa doc) pour rester au plus près de
+        // `scene_with_monster_ahead` (monstre droit devant à -Z).
+        app.scene.objects[p1].transform.position = Vec3::new(0.0, 1.0, 0.0);
+        app.scene.objects[p2].transform.position = Vec3::new(0.0, 1.0, 0.0);
+
+        // Joueur 1 tire seul : un coup (1 dégât sur 2 PV) doit blesser sans
+        // achever. 0,6 s laisse le temps au premier tir d'atteindre la cible
+        // (≈0,5 s de vol) sans laisser la recharge (0,9 s) permettre un second tir.
+        app.set_network_input(
+            1,
+            NetworkInput {
+                fire: true,
+                ..net_input()
+            },
+        );
+        app.set_network_input(2, net_input());
+        advance(&mut app, 12, 0.05);
+
+        assert!(
+            app.scene.objects[MONSTER].visible,
+            "1 dégât sur 2 PV ne doit pas achever la cible"
+        );
+        assert_eq!(app.scene.objects[MONSTER].combat.as_ref().unwrap().hp, 1);
+
+        // Joueur 1 arrête de tirer, joueur 2 achève la cible.
+        app.set_network_input(1, net_input());
+        app.set_network_input(
+            2,
+            NetworkInput {
+                fire: true,
+                ..net_input()
+            },
+        );
+        advance(&mut app, 12, 0.05);
+
+        assert!(
+            !app.scene.objects[MONSTER].visible,
+            "le second tireur doit achever la cible"
+        );
+        assert_eq!(
+            app.network_player_kills(2),
+            Some(1),
+            "le tireur qui achève la cible reçoit le frag"
+        );
+        assert_eq!(
+            app.network_player_kills(1),
+            Some(0),
+            "le premier tireur n'a pas achevé la cible, pas de frag"
+        );
+        assert_eq!(
+            app.network_player_assists(1),
+            Some(1),
+            "le premier tireur a blessé une cible achevée par un autre joueur peu après : assist"
+        );
+        assert_eq!(
+            app.network_player_assists(2),
+            Some(0),
+            "le tireur qui achève la cible ne se crédite pas d'un assist pour son propre kill"
         );
     }
 

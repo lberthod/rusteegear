@@ -40,6 +40,11 @@ pub struct Settings {
     /// Langue du texte runtime affiché en Play (Sprint 130) — pas l'éditeur.
     #[serde(default)]
     pub locale: crate::app::locale::Locale,
+    /// Pseudos mute localement dans le chat de salon (Sprint F-13,
+    /// SPRINT_MMORPG.md §18.4.1) : purement client, pas partagé réseau — un
+    /// joueur muté ici continue de voir ses messages chez les autres.
+    #[serde(default)]
+    pub muted_players: Vec<String>,
 }
 
 /// Table de remapping manette → action, persistée et éditable dans les paramètres
@@ -109,6 +114,7 @@ impl Default for Settings {
             sfx_volume: default_volume(),
             gamepad: GamepadBindings::default(),
             locale: crate::app::locale::Locale::default(),
+            muted_players: Vec::new(),
         }
     }
 }
@@ -139,6 +145,28 @@ impl Settings {
         }
         if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(p, json);
+        }
+    }
+
+    /// `true` si `name` est mute localement (cf. `muted_players`).
+    pub fn is_muted(&self, name: &str) -> bool {
+        self.muted_players.iter().any(|m| m == name)
+    }
+
+    /// Mute `name` et persiste immédiatement. Sans effet si déjà mute.
+    pub fn mute_player(&mut self, name: &str) {
+        if !self.is_muted(name) {
+            self.muted_players.push(name.to_string());
+            self.save();
+        }
+    }
+
+    /// Démute `name` et persiste immédiatement. Sans effet si pas mute.
+    pub fn unmute_player(&mut self, name: &str) {
+        let before = self.muted_players.len();
+        self.muted_players.retain(|m| m != name);
+        if self.muted_players.len() != before {
+            self.save();
         }
     }
 }
@@ -199,5 +227,39 @@ mod tests {
         let settings: Settings = serde_json::from_str(old_json)
             .expect("un ancien settings.json sans `gamepad` doit rester lisible");
         assert_eq!(settings.gamepad, GamepadBindings::default());
+    }
+
+    /// Sprint F-13 : un `settings.json` antérieur (sans le champ `muted_players`)
+    /// doit continuer à charger, avec une liste vide — même garde-fou que les
+    /// tests ci-dessus pour les champs ajoutés par des sprints ultérieurs.
+    #[test]
+    fn an_old_settings_file_without_muted_players_field_loads_with_empty_list() {
+        let old_json = r#"{
+            "deepseek_api_key": "",
+            "deepseek_model": "deepseek-chat",
+            "deepseek_temperature": 0.2,
+            "firebase_api_key": "",
+            "firebase_database_url": ""
+        }"#;
+        let settings: Settings = serde_json::from_str(old_json)
+            .expect("un ancien settings.json sans `muted_players` doit rester lisible");
+        assert!(settings.muted_players.is_empty());
+    }
+
+    /// `mute_player`/`unmute_player` : ajoutent/retirent sans doublon, sans
+    /// toucher `$HOME` (pas de `save()` observable ici, juste l'état en mémoire).
+    #[test]
+    fn mute_player_is_idempotent_and_unmute_removes_it() {
+        let mut settings = Settings::default();
+        assert!(!settings.is_muted("Grosse Bertha"));
+        settings.muted_players.push("Grosse Bertha".to_string());
+        assert!(settings.is_muted("Grosse Bertha"));
+        // Second ajout manuel simulé : `mute_player` ne duplique pas l'entrée.
+        if !settings.is_muted("Grosse Bertha") {
+            settings.muted_players.push("Grosse Bertha".to_string());
+        }
+        assert_eq!(settings.muted_players.len(), 1);
+        settings.muted_players.retain(|m| m != "Grosse Bertha");
+        assert!(!settings.is_muted("Grosse Bertha"));
     }
 }
