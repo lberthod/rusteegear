@@ -1,5 +1,18 @@
 # Création 3D — pack « grottes & rives » en style organique (metaball)
 
+## État d'avancement : terminé, 40/40
+
+Les 40 assets (`grotto_*.glb` ×20, `shore_*.glb` ×20) sont générés et validés (`check_organic_pack.py` : 40/40, 0 échec). Scripts : `organic_common.py` (boîte à outils + palette), `gen_grotto_hero.py` (4), `gen_grotto_rocks.py` (8), `gen_grotto_decor.py` (8), `gen_shore_rocks.py` (6), `gen_shore_decor.py` (7), `gen_shore_props.py` (7).
+
+Pièges réels rencontrés et corrigés en cours de route (tous documentés dans la mémoire `organic-pack-planning` et directement en commentaire dans le code) :
+- **Éléments trop espacés → « collier de perles »** : le premier jet de `gen_entrance_arch`/`gen_back_wall`/`shore_natural_basin`/`shore_beached_fish` fixait un nombre d'éléments à la main sans vérifier le ratio espacement/rayon — résultat, des boules détachées au lieu d'un volume fusionné. Corrigé une fois pour toutes dans `organic_common.spire_elements`/`chain_elements` (calcul automatique de la densité nécessaire) plutôt que rustiné asset par asset.
+- **Sol bosselé en « bulles de plastique »** : une grille dense de petites bosses sans base pleine dessous ne fusionne jamais en dalle continue — corrigé en revenant à une seule masse large et plate, avec juste quelques bosses par-dessus pour l'irrégularité de surface.
+- **Cadrage vignette cassé pour les objets suspendus** : `hamlet_common.render_preview` supposait qu'un objet est posé au sol (centre = `dims.z/2`) — une stalactite suspendue (base réelle en hauteur) se retrouvait hors cadre. Corrigé pour utiliser le vrai centre de la bounding box world-space ; sans régression pour les objets posés au sol (hameau/siège).
+- **Coins de cubes tournés qui plongent sous le sol** : des accessoires durs (gravats, arêtes cassées) tournés aléatoirement sur X/Y peuvent faire dépasser un coin sous z=0 même si leur centre est à la demi-hauteur pile — marge de sécurité ajoutée.
+- **Métaballe trop plate pour sa résolution → export vide** : `shore_water_ripple` avait une épaisseur réelle (rayon × size_z) plus petite que le pas de résolution des métaballes, donnant 0 vertex à l'export — corrigé en gardant l'épaisseur nettement au-dessus de la résolution.
+
+Intégration en jeu (poser ces assets dans les tunnels/lacs du Sprint 26 de `sprintreflecion.md`) reste hors scope, comme convenu — dépend de l'avancement du système de relief lui-même.
+
 ## Objectif
 
 Troisième salve d'assets après « hameau maison » (`hamlet_*.glb`, 40) et « siège du hameau » (`siege_*.glb`, 40), toutes deux en style primitives dures (cube/cylindre/cône). Celle-ci change délibérément de technique de modélisation : **style organique par métaballes fusionnées**, comme le prototype `scripts/blender/proto_creature62_fox_organic.py` (Option B du rapport qualité créatures) plutôt que l'assemblage de primitives à facettes. Les silhouettes rocheuses/naturelles y gagnent en rondeur crédible — une roche de rivière lissée par l'eau ou une stalactite n'ont pas la même lecture en cubes qu'en volumes fusionnés.

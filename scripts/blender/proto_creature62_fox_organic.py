@@ -343,31 +343,34 @@ def renard_organique():
             key_rot("Tail", f, (math.radians(sway), 0, 0))
 
     def flip(key_rot, key_loc):
-        # Saut périlleux — v4 : la tête est à ~1,74 unité du pivot de
-        # rotation (l'articulation de `Body`) — à 90°/270° de bascule, une
-        # tête non repliée pointe donc tout droit vers le bas et perce le
-        # sol de plus d'1 unité, mesuré avec un script de vérification
-        # (min Z de tous les vertices sur chaque frame du clip, cf. note de
-        # session) : v3 réduisait juste l'amplitude visuelle sans jamais
-        # vérifier le sol, insuffisant. Ici on combine :
-        # 1) un vrai saut (arc vertical nettement plus haut) ;
-        # 2) tête ET queue repliées vers le corps pendant la bascule
-        #    (translation locale vers l'arrière, comme un animal qui
-        #    rentre la tête pour une culbute) — réduit le rayon balayé
-        #    plutôt que de compter uniquement sur la hauteur.
+        # Saut périlleux — v6 : v5 (translation retirée, rotation sur
+        # `Body`) montrait ENCORE une pointe/membrane étirée au rendu.
+        # Cause réelle, différente de ce que je pensais : c'est le classique
+        # « effet nœud papillon » (candy-wrapper) du skinning linéaire —
+        # `Body` tourne de 190°+ autour de SA PROPRE articulation, tandis
+        # que `Tail`/`Head` (poids mélangés avec Body près de leur base)
+        # héritent de cette rotation via un AUTRE pivot (leur propre
+        # articulation). Un vertex à poids mixte est interpolé entre deux
+        # matrices « tourner de ~190° » mais autour de DEUX POINTS
+        # DIFFÉRENTS — leur moyenne n'est pas une rotation rigide, elle
+        # s'effondre en pointe. La rotation seule (sans translation) ne
+        # suffit donc pas à l'éviter si elle est posée sur `Body`.
+        # Fix : tourner `Root` (le vrai parent commun, au-dessus de Body)
+        # à la place. Body/Head/Tail/Legs héritent alors TOUS de la MÊME
+        # rotation autour du MÊME pivot (celui de Root) ; Tail/Legs n'ajoutent
+        # plus qu'un petit angle LOCAL en plus (±20-35°) — un différentiel
+        # bien plus proche de ce qu'un skinning linéaire encaisse sans
+        # collapse (comparable à Idle/Walk/Jump qui n'ont jamais ce souci).
         f0, f_crouch, f_launch, f_apex, f_fall, f_land, f_end = 1, 6, 12, 18, 24, 28, 34
         for f, deg in ((f0, 0), (f_crouch, -10), (f_launch, 80),
                        (f_apex, 190), (f_fall, 290), (f_land, 350), (f_end, 360)):
-            key_rot("Body", f, (math.radians(deg), 0, 0))
-        for f, dz in ((f0, 0.0), (f_crouch, -0.04), (f_launch, 0.55),
-                      (f_apex, 0.78), (f_fall, 0.55), (f_land, -0.04), (f_end, 0.0)):
-            key_loc("Body", f, (0, dz, 0))
-        for f, tuck in ((f0, 0.0), (f_crouch, -0.20), (f_launch, -0.62),
-                        (f_apex, -0.75), (f_fall, -0.62), (f_land, -0.20), (f_end, 0.0)):
-            key_loc("Head", f, (0, tuck, 0))
-        for f, tuck in ((f0, 0.0), (f_crouch, -0.14), (f_launch, -0.45),
-                        (f_apex, -0.55), (f_fall, -0.45), (f_land, -0.14), (f_end, 0.0)):
-            key_loc("Tail", f, (0, tuck, 0))
+            key_rot("Root", f, (math.radians(deg), 0, 0))
+        # Root pointe vers +Z (tête (0,0,0) → queue (0,0,0.35)) : son axe Y
+        # local EST l'axe Z monde (sondé empiriquement) — élévation directe
+        # en case Y, positive, contrairement à `Body` (case Z, négative).
+        for f, up in ((f0, 0.0), (f_crouch, 0.18), (f_launch, 1.80),
+                      (f_apex, 2.20), (f_fall, 1.80), (f_land, 0.16), (f_end, 0.0)):
+            key_loc("Root", f, (0, up, 0))
         for leg in LEGS4:
             for f, a in ((f0, 0), (f_crouch, -12), (f_launch, 22),
                          (f_apex, -24), (f_fall, -16), (f_land, 20), (f_end, 0)):
@@ -384,13 +387,26 @@ def renard_organique():
         # Lacet (tourne) + roulis (penche dans le virage) posés en un seul
         # appel par frame : deux `key_rot("Body", f, ...)` séparés à la même
         # frame s'écraseraient l'un l'autre (chaque appel fixe les 3 axes).
+        # Roulis retiré (testé à 8° puis 2°, encore trop) : combiné au
+        # lacet + au pas de la patte, même un roulis modeste faisait
+        # plonger la patte avant sous le sol à mi-virage (vérifié par
+        # échantillonnage du mesh, cf. note de session — même contrôle que
+        # pour Flip). Lacet pur, sans tangage/roulis parasite.
         f0, f1, f2, f3, f_end = 1, 8, 16, 24, 32
-        for f, yaw, lean in ((f0, 0, 0), (f1, 55, -8), (f2, 115, 8),
-                              (f3, 165, -4), (f_end, 180, 0)):
-            key_rot("Body", f, (math.radians(lean), 0, math.radians(yaw)))
-        for f, dz in ((f0, 0.0), (f1, 0.03), (f2, -0.02), (f3, 0.03), (f_end, 0.0)):
-            key_loc("Body", f, (0, dz, 0))
-        swing = math.radians(18)
+        for f, yaw in ((f0, 0), (f1, 55), (f2, 115), (f3, 165), (f_end, 180)):
+            key_rot("Body", f, (0, 0, math.radians(yaw)))
+        # Petite marge de sécurité verticale (case Z, en négatif = vers le
+        # haut, cf. sondage d'axes dans `flip`) : même sans roulis, l'axe Z
+        # local de `Body` n'est qu'approximativement vertical (~3,5° d'écart
+        # mesuré) — sur un lacet de 180°, cet écart suffit à faire plonger
+        # une patte de quelques centimètres sous le sol (vérifié). f0 reste
+        # à 0 pour matcher la pose de repos au raccord d'entrée ; f_end
+        # GARDE la marge (contrairement à un premier essai à 0) — à 180°
+        # de lacet, ce n'est plus la même orientation que le repos (yaw=0),
+        # donc rien ne garantit sa marge au sol sans la garder explicitement.
+        for f, up in ((f0, 0.0), (f1, 0.12), (f2, 0.12), (f3, 0.12), (f_end, 0.12)):
+            key_loc("Body", f, (0, 0, -up))
+        swing = math.radians(12)
         for f, s in ((f0, 0), (f1, swing), (f2, -swing), (f3, swing), (f_end, 0)):
             key_rot("LegFL", f, (s, 0, 0))
             key_rot("LegBR", f, (s, 0, 0))
@@ -412,8 +428,11 @@ def renard_organique():
         # (60°/foulée) : boucle parfaite, la pose de la frame finale
         # (patte, lacet=360°) est identique à la frame de départ (lacet=0°).
         cycles, per_cycle = 3, 24
-        swing = math.radians(25)
-        lean = math.radians(6)  # roulis constant, penché vers l'intérieur du virage
+        swing = math.radians(18)
+        # Roulis retiré (testé à 6° puis 2°, encore trop) — même correction
+        # que Turn : combiné au lacet + au pas, un roulis fait plonger des
+        # pattes sous le sol à certains angles (vérifié par échantillonnage).
+        lean = 0.0
         for i in range(cycles * 2 + 1):  # 0..6 -> frames 1,13,25,...,73
             f = 1 + i * (per_cycle // 2)
             s = swing if i % 2 == 0 else -swing
@@ -426,9 +445,20 @@ def renard_organique():
             key_rot("Head", f, (nod, 0, 0))
             sway = 0.35 if i % 2 == 0 else -0.35
             key_rot("Tail", f, (0, 0, sway))
-        for i in range(cycles * 4 + 1):  # frames 1,7,13,...,73 (bob 2x/foulée)
+        # Bob (case Y) + marge verticale (case Z, en négatif = vers le haut)
+        # posés en UN SEUL appel par frame : deux boucles `key_loc("Body")`
+        # séparées sur des frames qui se recoupent s'écraseraient l'une
+        # l'autre (même piège que le roulis/lacet de `turn`, corrigé plus
+        # haut). La marge Z compense l'axe Z local de `Body`, pas
+        # parfaitement vertical (~3,5°) — sur un tour complet ça suffit à
+        # faire plonger une patte sous le sol (vérifié par échantillonnage).
+        # Nulle aux deux bouts (i=0/12) pour boucler sur la pose de repos.
+        steps = cycles * 4
+        for i in range(steps + 1):  # frames 1,7,13,...,73
             f = 1 + i * (per_cycle // 4)
-            key_loc("Body", f, (0, 0.05 if i % 2 else 0.0, 0))
+            bob = 0.05 if i % 2 else 0.0
+            up = 0.0 if i in (0, steps) else 0.10
+            key_loc("Body", f, (0, bob, -up))
 
     def bake_clip(clip, keyer):
         ad = arm.animation_data_create()

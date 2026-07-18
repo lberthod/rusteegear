@@ -83,7 +83,7 @@ def gen_steep_bank():
         h = rng.uniform(1.2, 1.7)
         r = 0.32
         elements.append(((x, rng.uniform(-0.06, 0.06), h * 0.5), r, (1.0, 1.0, h / r), 1.3))
-    organic_core("BergeAbrupte", elements, stone, resolution=0.06, ground_guard=0.02)
+    organic_core("BergeAbrupte", elements, stone, resolution=0.075, ground_guard=0.02)
     export("shore_steep_bank.glb")
 
 
@@ -107,7 +107,7 @@ def gen_natural_basin():
         x, y = ring_radius * math.cos(a), ring_radius * math.sin(a)
         r = block_r + rng.uniform(-0.015, 0.015)
         elements.append(((x, y, 0.10), r, (1.0, 1.0, 0.9), 1.3))
-    organic_core("Rebord", elements, stone, resolution=0.02, ground_guard=0.02)
+    organic_core("Rebord", elements, stone, resolution=0.032, ground_guard=0.02)
     water_elems = [((0, 0, 0.05), 0.30, (1.0, 1.0, 0.06), 1.3)]
     organic_core("Eau", water_elems, water, resolution=0.02, ground_guard=0.0)
     export("shore_natural_basin.glb")
