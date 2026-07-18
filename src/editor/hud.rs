@@ -207,7 +207,7 @@ pub(super) fn hud_anchor(
                 ui.painter().rect_stroke(
                     rect,
                     4.0,
-                    egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 210, 90)),
+                    egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 210, 90)),
                     egui::StrokeKind::Outside,
                 );
             });
@@ -642,7 +642,7 @@ pub(super) fn crosshair(
         egui::Order::Foreground,
         egui::Id::new("hud_crosshair"),
     ));
-    let stroke = Stroke::new(1.5, Color32::from_white_alpha(200));
+    let stroke = Stroke::new(1.5_f32, Color32::from_white_alpha(200));
     const GAP: f32 = 5.0;
     const LEN: f32 = 7.0;
     painter.line_segment(
@@ -730,7 +730,7 @@ pub(super) fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
     painter.rect_stroke(
         bg,
         4.0,
-        Stroke::new(1.5, Color32::from_white_alpha(120)),
+        Stroke::new(1.5_f32, Color32::from_white_alpha(120)),
         egui::StrokeKind::Inside,
     );
 }
@@ -965,7 +965,11 @@ pub(super) fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
         egui::Order::Foreground,
         egui::Id::new("touch_feedback"),
     ));
-    painter.circle_stroke(p, 24.0, Stroke::new(3.0, Color32::from_white_alpha(150)));
+    painter.circle_stroke(
+        p,
+        24.0,
+        Stroke::new(3.0_f32, Color32::from_white_alpha(150)),
+    );
     painter.circle_filled(p, 7.0, Color32::from_white_alpha(90));
 }
 
@@ -1068,7 +1072,7 @@ pub(super) fn mobile_overlay(
                 painter.circle_stroke(
                     center,
                     radius,
-                    Stroke::new(2.0, Color32::from_white_alpha(120)),
+                    Stroke::new(2.0_f32, Color32::from_white_alpha(120)),
                 );
                 let mut knob = center;
                 if let Some(p) = resp.interact_pointer_pos() {

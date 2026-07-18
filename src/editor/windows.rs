@@ -332,7 +332,7 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
             painter.rect_stroke(
                 rect,
                 4.0,
-                egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_gray(80)),
                 egui::StrokeKind::Inside,
             );
             // Bornes du monde (contour), pour situer le cadrage courant.
@@ -343,7 +343,7 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
             painter.rect_stroke(
                 world_rect,
                 0.0,
-                egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_gray(60)),
                 egui::StrokeKind::Inside,
             );
 
@@ -370,7 +370,7 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
                 let p = world_to_screen(x, z);
                 if rect.contains(p) {
                     painter.circle_filled(p, 5.0, egui::Color32::from_rgb(90, 160, 240));
-                    painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+                    painter.circle_stroke(p, 5.0, egui::Stroke::new(1.5_f32, egui::Color32::WHITE));
                 }
             }
 
@@ -407,13 +407,13 @@ pub(super) fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
     painter.rect_stroke(
         rect.expand(6.0),
         22.0,
-        Stroke::new(10.0, Color32::from_rgb(20, 20, 24)),
+        Stroke::new(10.0_f32, Color32::from_rgb(20, 20, 24)),
         egui::StrokeKind::Outside,
     );
     painter.rect_stroke(
         rect,
         16.0,
-        Stroke::new(1.5, Color32::from_white_alpha(40)),
+        Stroke::new(1.5_f32, Color32::from_white_alpha(40)),
         egui::StrokeKind::Inside,
     );
     // Encoche centrale en haut.
@@ -870,7 +870,7 @@ pub(super) fn multiplayer_window(
                         egui::TextEdit::singleline(chat_input)
                             .hint_text("Message…")
                             .desired_width(180.0)
-                            .char_limit(crate::net::firebase::MAX_CHAT_LEN),
+                            .char_limit(crate::app::network_client::MAX_CHAT_LEN),
                     );
                     let can_send = has_firebase_account
                         && !chat_input.trim().is_empty()

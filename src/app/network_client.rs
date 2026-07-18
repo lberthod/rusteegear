@@ -158,7 +158,7 @@ pub(super) struct ReconnectState {
     /// canal + `try_recv` que les imports glTF ou les requêtes IA (cf.
     /// `net::client::native`). Inutile sur wasm : `connect` n'y bloque
     /// jamais, l'échec différé arrive par `is_alive()`.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     pending: Option<std::sync::mpsc::Receiver<Result<crate::net::client::NetClient, String>>>,
 }
 
@@ -194,6 +194,11 @@ pub struct LeaderboardLine {
     pub name: String,
     pub score: u32,
 }
+
+/// Copie universelle de `net::firebase::MAX_CHAT_LEN` (mêmes raisons que
+/// `ChatLine`/`LeaderboardLine`) : l'UI de chat (`editor::windows`) affiche
+/// cette limite même sur les cibles où `net::firebase` n'existe pas.
+pub(crate) const MAX_CHAT_LEN: usize = 240;
 
 #[cfg(not(target_os = "ios"))]
 impl AppState {
@@ -1451,6 +1456,15 @@ mod tests {
     use super::*;
     #[cfg(feature = "net_tests")]
     use crate::app::multiplayer::NetworkInput;
+
+    #[test]
+    fn max_chat_len_stays_in_sync_with_net_firebase() {
+        assert_eq!(
+            MAX_CHAT_LEN,
+            crate::net::firebase::MAX_CHAT_LEN,
+            "copie universelle (cf. sa doc) désynchronisée de la source"
+        );
+    }
     #[cfg(feature = "net_tests")]
     use crate::net::protocol::EntityDelta;
     #[cfg(feature = "net_tests")]

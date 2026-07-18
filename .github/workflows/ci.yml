@@ -122,5 +122,23 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # aarch64-linux-android n'a pas de linker C par défaut sur le runner :
+      # même NDK/API que `packaging/android_env.sh` (dev local), juste le
+      # préfixe `linux-x86_64` du toolchain prébuilt au lieu de `darwin-x86_64`.
+      - name: Installer le NDK Android
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --install "ndk;28.2.13676358" --sdk_root="$ANDROID_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Configurer le linker Android (API 26 — cf. packaging/android_env.sh)
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          TC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "CC_aarch64_linux_android=$TC/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TC/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+
       - name: Build lib pour ${{ matrix.target }}
         run: cargo build --lib --target ${{ matrix.target }}
