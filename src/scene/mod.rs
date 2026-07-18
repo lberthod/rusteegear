@@ -3409,4 +3409,197 @@ mod tests {
             );
         }
     }
+
+    /// Préfixes de noms du décor ambiant intégré (faune 27-61 + flore/objets des
+    /// packs Blender headless générés en 2026-07) : partagés entre l'outil de
+    /// synchro et son garde-fou compagnon ci-dessous. Aucun ne recoupe
+    /// « Créature » (combat, `MMORPG_CREATURES`) ni les préfixes déjà utilisés
+    /// par le décor historique (`NATURE_DECOR`/`VILLAGE_PROPS`/`MONSTER_DECOR`) —
+    /// ni, surtout, « Faune » : déjà utilisé par `hameau_gdd_demo()`
+    /// (`Faune {n} {cluster}-{poses}`, cf. `faune_scatter`), présent dans la
+    /// scène déjà embarquée. Un run avec « Faune » comme préfixe ici a
+    /// effectivement retiré 119 de ces objets sans les réinjecter (la source de
+    /// vérité de cet outil est `Scene::mmorpg_demo`, qui ne les contient pas) —
+    /// détecté par `git diff` avant tout commit, corrigé en renommant en
+    /// « Errant » ci-dessous.
+    const AMBIENT_DECOR_PREFIXES: &[&str] = &[
+        "Errant ",
+        "Arbre exotique",
+        "Mobilier du hameau",
+        "Rocher moussu",
+        "Sous-bois exotique",
+        "Fleur des prés",
+        "Culture ",
+        "Rive du lac",
+        "Décor du hameau",
+        "Établi d'armes",
+        "Étal des vivres",
+        "Coin trésor",
+        "Table d'apothicaire",
+    ];
+
+    /// OUTIL (portée : décor ambiant ajouté à `Scene::mmorpg_demo` — faune 27-61
+    /// non combattante + flore/objets complémentaires), pas une preuve (lancé
+    /// explicitement : `cargo test sync_embedded_scene_ambient_decor_from_the_demo
+    /// -- --ignored --nocapture`). Même patron que
+    /// `sync_embedded_scene_creatures_from_the_demo` (retire puis réinjecte les
+    /// objets du préfixe visé, réécrit leurs imports en `bundle://m{i}_<fichier>`,
+    /// préserve tout le reste), en PUREMENT ADDITIF sur `assets/bundle/` :
+    /// contrairement aux deux outils existants (qui supposent leurs fichiers déjà
+    /// bundlés), celui-ci copie et compresse zstd chaque fichier réellement
+    /// nouveau — jamais de suppression, jamais de renumérotation des entrées déjà
+    /// présentes dans `assets/player_scene.json` (la numérotation continue après
+    /// la dernière entrée `imported` existante).
+    #[test]
+    #[ignore = "outil : réécrit assets/player_scene.json et copie/compresse dans assets/bundle/, à lancer explicitement"]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_embedded_scene_ambient_decor_from_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let mut embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::mmorpg_demo();
+
+        // Idempotent : un second run retire d'abord toute instance issue d'un
+        // run précédent avant de réinjecter celles de la démo (pas de doublons).
+        embedded
+            .objects
+            .retain(|o| !AMBIENT_DECOR_PREFIXES.iter().any(|p| o.name.starts_with(p)));
+
+        let to_add: Vec<&SceneObject> = demo
+            .objects
+            .iter()
+            .filter(|o| AMBIENT_DECOR_PREFIXES.iter().any(|p| o.name.starts_with(p)))
+            .collect();
+        assert!(
+            !to_add.is_empty(),
+            "la démo doit contenir le nouveau décor ambiant (faune 27-61, flore, objets)"
+        );
+
+        let bundle_dir =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/bundle"));
+        std::fs::create_dir_all(bundle_dir).expect("assets/bundle/ doit exister");
+
+        // Indice d'import démo → indice d'import embarqué : réutilise une entrée
+        // déjà présente si le même fichier y est déjà référencé (dédoublonnage,
+        // p. ex. `nature_tree.glb` déjà embarqué par un autre outil), sinon crée
+        // une entrée neuve en continuant la numérotation.
+        let mut index_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut next_index = embedded.imported.len() as u32;
+        for obj in &to_add {
+            let MeshKind::Imported(demo_idx) = obj.mesh else {
+                continue;
+            };
+            if index_map.contains_key(&demo_idx) {
+                continue;
+            }
+            let demo_path = demo.imported[demo_idx as usize].path.clone();
+            let file = std::path::Path::new(&demo_path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .expect("nom de fichier d'import")
+                .to_string();
+            let embedded_idx = match embedded
+                .imported
+                .iter()
+                .position(|m| m.path.ends_with(&file))
+            {
+                Some(i) => i as u32,
+                None => {
+                    let key = format!("m{next_index}_{file}");
+                    let bundle_path = bundle_dir.join(&key);
+                    if !bundle_path.exists() {
+                        let data = std::fs::read(&demo_path)
+                            .unwrap_or_else(|e| panic!("lecture de {demo_path} : {e}"));
+                        // Même appel que `editor::export::copy_to_bundle` — un seul
+                        // frame zstd niveau par défaut, décompressé par
+                        // `assets::bundle_bytes` à la lecture.
+                        let compressed =
+                            zstd::stream::encode_all(data.as_slice(), 0).expect("compression zstd");
+                        std::fs::write(&bundle_path, compressed)
+                            .unwrap_or_else(|e| panic!("écriture de {key} : {e}"));
+                    }
+                    embedded.imported.push(ImportedMesh {
+                        path: format!("{}{key}", crate::assets::SCHEME),
+                        ..Default::default()
+                    });
+                    let idx = next_index;
+                    next_index += 1;
+                    idx
+                }
+            };
+            index_map.insert(demo_idx, embedded_idx);
+        }
+
+        let n_added = to_add.len();
+        for obj in to_add {
+            let mut clone = obj.clone();
+            if let MeshKind::Imported(demo_idx) = clone.mesh {
+                clone.mesh = MeshKind::Imported(index_map[&demo_idx]);
+            }
+            embedded.objects.push(clone);
+        }
+
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&embedded).expect("sérialisation"),
+        )
+        .expect("écriture de player_scene.json");
+        println!(
+            "player_scene.json : décor ambiant synchronisé ({n_added} objets ajoutés, {} imports au total)",
+            embedded.imported.len()
+        );
+    }
+
+    /// Garde-fou compagnon de `sync_embedded_scene_ambient_decor_from_the_demo` :
+    /// le décor ambiant (faune 27-61 + flore/objets) doit être présent et
+    /// résolu dans la scène embarquée après synchronisation — même logique que
+    /// `the_embedded_scene_creatures_match_the_demo`/
+    /// `the_embedded_scene_resolves_its_bundle_creatures`, étendue aux nouveaux
+    /// préfixes.
+    #[test]
+    fn the_embedded_scene_ambient_decor_matches_the_demo() {
+        let embedded = Scene::embedded_player();
+        let demo = Scene::mmorpg_demo();
+
+        let demo_names: std::collections::BTreeSet<&str> = demo
+            .objects
+            .iter()
+            .filter(|o| AMBIENT_DECOR_PREFIXES.iter().any(|p| o.name.starts_with(p)))
+            .map(|o| o.name.as_str())
+            .collect();
+        assert!(
+            !demo_names.is_empty(),
+            "la démo doit contenir le nouveau décor ambiant"
+        );
+        let sync_hint = "lancer `cargo test sync_embedded_scene_ambient_decor_from_the_demo \
+             -- --ignored --nocapture`";
+        for name in &demo_names {
+            assert!(
+                embedded.objects.iter().any(|o| o.name == *name),
+                "« {name} » absent de la scène embarquée — {sync_hint}"
+            );
+        }
+        for o in embedded
+            .objects
+            .iter()
+            .filter(|o| AMBIENT_DECOR_PREFIXES.iter().any(|p| o.name.starts_with(p)))
+        {
+            let MeshKind::Imported(i) = o.mesh else {
+                continue;
+            };
+            let m = embedded.imported.get(i as usize).unwrap_or_else(|| {
+                panic!(
+                    "« {} » référence un import {i} absent — {sync_hint}",
+                    o.name
+                )
+            });
+            assert!(
+                !m.data.vertices.is_empty(),
+                "mesh embarqué « {} » (objet « {} ») non résolu (clé absente d'assets/bundle/ ?) \
+                 — {sync_hint}",
+                m.path,
+                o.name
+            );
+        }
+    }
 }

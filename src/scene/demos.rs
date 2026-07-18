@@ -2588,6 +2588,114 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             }
         }
 
+        // --- Faune ambiante (créatures 27-61, packs générés Blender headless) ----
+        // Purement décorative : même pipeline d'import + `creature_wander_script`
+        // que `MMORPG_CREATURES` ci-dessus (elles errent, évitent les murs, jouent
+        // Idle/Walk), mais SANS `Combat` ni morsure — ni tuable, ni dangereuse.
+        // Préfixe de nom « Errant » (ni « Créature », réservé à
+        // `MMORPG_CREATURES`/ses outils de synchro, ni « Faune », déjà pris par
+        // `hameau_gdd_demo()` — cf. son bloc « Faune ambiante »
+        // `gen_menagerie_pack*.py` et ses noms `Faune {n} {cluster}-{poses}` de
+        // `faune_scatter`, présents dans la scène déjà embarquée : un préfixe
+        // partagé aurait fait retirer ce décor-là par erreur, constaté à
+        // l'exécution de l'outil de synchro avant ce correctif).
+        //
+        // Table data-driven (fichier, spawn) plutôt que 35 blocs de champs répétés
+        // (même choix que `MMORPG_CREATURES`) : cap initial et déphasage du
+        // méandre dérivés de l'index pour que deux instances ne partent jamais
+        // dans le même sens (cf. la doc de `creature_wander_script` sur ce bug).
+        // Couche de collision : 5 bits partagés en rotation (27..31, pas un bit
+        // par créature comme `MMORPG_CREATURES` — u32 ne peut décaler que jusqu'à
+        // 31) ; deux errantes qui partagent un bit s'ignorent mutuellement au
+        // raycast (se traversent), acceptable pour du décor sans aucun garde-fou
+        // dessus, cf. le commentaire de doc sur `ray_mask`.
+        const MMORPG_AMBIENT_FAUNA_SPAWNS: &[(&str, f32, f32)] = &[
+            // Forêt nord-est (x resserré sur 9..20 pour rester à l'écart du
+            // second hameau fortifié de `VILLAGE_PROPS`, x 23..35).
+            ("creature27.glb", 10.0, -10.0),
+            ("creature28.glb", 14.0, -14.0),
+            ("creature29.glb", 18.0, -18.0),
+            ("creature30.glb", 10.0, -18.0),
+            ("creature31.glb", 14.0, -24.0),
+            ("creature32.glb", 18.0, -28.0),
+            ("creature33.glb", 10.0, -28.0),
+            ("creature34.glb", 14.0, -32.0),
+            ("creature35.glb", 18.0, -12.0),
+            ("creature36.glb", 10.0, -32.0),
+            // Prairie centrale.
+            ("creature37.glb", -6.0, -8.0),
+            ("creature38.glb", 0.0, -6.0),
+            ("creature39.glb", 4.0, -2.0),
+            ("creature40.glb", -4.0, 2.0),
+            ("creature41.glb", 2.0, 6.0),
+            ("creature42.glb", -8.0, 4.0),
+            // Rives du lac et des rivières (x = -30/-31, à l'ouest des plans
+            // d'eau et de leurs berges).
+            ("creature43.glb", -31.0, -30.0),
+            ("creature44.glb", -31.0, -20.0),
+            ("creature45.glb", -30.0, 0.0),
+            ("creature46.glb", -31.0, 20.0),
+            ("creature47.glb", -30.0, 30.0),
+            ("creature48.glb", -22.0, 16.0),
+            // Rizières en damier (sud-ouest).
+            ("creature49.glb", -8.0, 25.0),
+            ("creature50.glb", -2.0, 26.0),
+            ("creature51.glb", 4.0, 28.0),
+            ("creature52.glb", -6.0, 32.0),
+            ("creature53.glb", 2.0, 33.0),
+            // Promontoire rocheux (est).
+            ("creature54.glb", 22.0, 4.0),
+            ("creature55.glb", 26.0, 6.0),
+            ("creature56.glb", 30.0, 8.0),
+            ("creature57.glb", 24.0, 12.0),
+            ("creature58.glb", 32.0, 14.0),
+            // Lisières diverses (complètent la répartition par biome).
+            ("creature59.glb", 25.0, -5.0),
+            ("creature60.glb", 15.0, -5.0),
+            ("creature61.glb", 20.0, -30.0),
+        ];
+        for (i, &(file, x, z)) in MMORPG_AMBIENT_FAUNA_SPAWNS.iter().enumerate() {
+            let n = i + 27;
+            let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), file);
+            match crate::scene::import::load_gltf(&path) {
+                Ok((data, aabb_min, aabb_max)) => {
+                    let mut mesh = ImportedMesh {
+                        path: path.clone(),
+                        data,
+                        aabb_min,
+                        aabb_max,
+                        ..Default::default()
+                    };
+                    mesh.load_skinning();
+                    let mesh_index = imported.len() as u32;
+                    let name = format!("Errant {n}");
+                    let prefix = format!("faune{n}_");
+                    let mut fauna =
+                        demo_obj(&name, MeshKind::Imported(mesh_index), Vec3::new(x, 0.0, z));
+                    fauna.transform = fauna.transform.with_scale(Vec3::splat(0.35));
+                    fauna.animation = Some(AnimationState {
+                        clip: "Idle".into(),
+                        ..Default::default()
+                    });
+                    fauna.physics = PhysicsKind::Kinematic;
+                    let layer_bit = 27 + (i as u32 % 5);
+                    fauna.collision_layer = 1 << layer_bit;
+                    let heading0 = (i as f32 * 47.0).rem_euclid(360.0);
+                    let phase = i as f32 * 0.833;
+                    fauna.script = creature_wander_script(
+                        half,
+                        &prefix,
+                        !(1_u32 << layer_bit),
+                        heading0,
+                        phase,
+                    );
+                    objects.push(fauna);
+                    imported.push(mesh);
+                }
+                Err(e) => log::error!("Errant {n} MMORPG ({path}) : {e}"),
+            }
+        }
+
         // --- Décor « nature » : la carte 72×72 devient un petit monde ------------
         // Biomes (nord = -Z) : prairie centrale autour du spawn joueur, forêt
         // dense au nord-est (deux clairières habitées), lac et rivières à
@@ -5263,6 +5371,356 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 );
             }
         }
+
+        // --- Flore complémentaire + objets décoratifs (packs générés Blender
+        //     headless, gen_creature_pack*.py / gen_nature_pack*.py) ------------
+        // Contrairement à `scatter`/`scatter_clustered` (tirage aléatoire avec
+        // remise dans une liste de fichiers), chaque fichier ci-dessous doit
+        // apparaître AU MOINS une fois dans la scène (sinon un asset généré
+        // resterait inutilisé) : `scatter_each` place chaque fichier de la liste
+        // exactement une fois, avec le même rejet de zones aménagées / spawns /
+        // chevauchement de solides que `scatter`, mais sans tirage avec remise.
+        #[allow(clippy::too_many_arguments)]
+        fn scatter_each(
+            rng: &mut crate::runtime::rng::Rng,
+            poser: &mut Poser<'_>,
+            solid_spots: &mut Vec<(f32, f32)>,
+            spawns: &[(f32, f32)],
+            exclusions: &[&[Rect]],
+            files: &[&'static str],
+            prefix: &str,
+            rect: Rect,
+            scale: (f32, f32),
+            solide: bool,
+        ) {
+            for &file in files {
+                let mut placed = false;
+                for _ in 0..4000 {
+                    let x = rng.next_range(rect.0, rect.2);
+                    let z = rng.next_range(rect.1, rect.3);
+                    if exclusions
+                        .iter()
+                        .flat_map(|g| g.iter())
+                        .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                    {
+                        continue;
+                    }
+                    let d2 = |(sx, sz): (f32, f32)| (sx - x) * (sx - x) + (sz - z) * (sz - z);
+                    if spawns.iter().any(|&s| d2(s) < 16.0) {
+                        continue;
+                    }
+                    if solide && solid_spots.iter().any(|&s| d2(s) < 6.25) {
+                        continue;
+                    }
+                    let s = rng.next_range(scale.0, scale.1);
+                    let yaw = rng.next_range(0.0, 360.0);
+                    let short = file
+                        .trim_start_matches("nature_")
+                        .trim_start_matches("item_")
+                        .trim_end_matches(".glb");
+                    poser(
+                        &format!("{prefix} {short}"),
+                        file,
+                        x,
+                        z,
+                        s,
+                        yaw,
+                        solide,
+                        None,
+                    );
+                    if solide {
+                        solid_spots.push((x, z));
+                    }
+                    placed = true;
+                    break;
+                }
+                if !placed {
+                    log::error!("« {prefix} » : impossible de placer {file} sans chevauchement");
+                }
+            }
+        }
+
+        // A) Arbres exotiques (packs faune d'Asie / fantastique / marin, décor
+        //    végétal) : forêt nord-est, solides comme les arbres existants.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &[
+                "nature_apple_tree.glb",
+                "nature_bamboo.glb",
+                "nature_birch.glb",
+                "nature_cherry_blossom.glb",
+                "nature_cypress.glb",
+                "nature_dead_tree.glb",
+                "nature_ginkgo.glb",
+                "nature_hazel.glb",
+                "nature_magnolia.glb",
+                "nature_maple_autumn.glb",
+                "nature_oak.glb",
+                "nature_olive.glb",
+                "nature_palm.glb",
+                "nature_pine_parasol.glb",
+                "nature_plum.glb",
+                "nature_poplar.glb",
+                "nature_sequoia.glb",
+                "nature_tree_windswept.glb",
+            ],
+            "Arbre exotique",
+            // Pas `foret` (déjà saturé à ~69 % de sa surface utile par les
+            // arbres/sapins/souches du scatter existant, au-delà du seuil de
+            // remplissage aléatoire (« jamming ») pour un rejet à ≥ 2,5 m —
+            // 300 tirages par fichier n'y trouvaient plus jamais de place,
+            // constaté par comptage direct). Bosquet complémentaire au
+            // sud-est de la forêt, hors rizières (x max 9) et hors hameau/
+            // promontoire (`EXCL_ZONES_AMENAGEES`), quasi vierge de décor
+            // solide.
+            (9.0, 20.0, 35.5, 35.5),
+            (0.85, 1.2),
+            true,
+        );
+        // B) Mobilier villageois (fontaine, meule, puits à poulie, balançoire,
+        //    topiaire, tonnelle glycine…) : posé dans le hameau lui-même (zone
+        //    aménagée non exclue ici), à ≥ 2,5 m de tout autre solide déjà posé
+        //    à la main dans `NATURE_DECOR`/`VILLAGE_PROPS`.
+        let excl_hameau_only: &[&[Rect]] = &[EXCL_EAU_ROUTES];
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "nature_fountain.glb",
+                "nature_well_pulley.glb",
+                "nature_grindstone.glb",
+                "nature_hay_roller.glb",
+                "nature_potters_wheel.glb",
+                "nature_wheelbarrow.glb",
+                "nature_swing_bench.glb",
+                "nature_topiary.glb",
+                "nature_vine_trellis.glb",
+                "nature_wisteria_arch.glb",
+                "nature_sundial.glb",
+                "nature_birdhouse.glb",
+            ],
+            "Mobilier du hameau",
+            (1.0, 2.0, 21.0, 23.0),
+            (0.9, 1.1),
+            true,
+        );
+        // C) Rochers moussus de bord de lac (moss_boulder/mossy_log) : rive
+        //    ouest du lac. Pas le rect exact de la « Berge du lac » (aplat
+        //    sable) : ce rect est LUI-MÊME une entrée d'`EXCL_EAU_ROUTES`, donc
+        //    100 % des tirages y étaient rejetés (constaté : 0/2 placés).
+        //    Juste à l'ouest, hors de tout aplat eau/route/berge.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &["nature_moss_boulder.glb", "nature_mossy_log.glb"],
+            "Rocher moussu",
+            (-30.0, -4.0, -26.0, 8.0),
+            (0.9, 1.2),
+            true,
+        );
+        // D) Sous-bois exotique (non solide : champignons, houx, ronces,
+        //    girouettes/oriflammes de prière plantées au sol).
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &[
+                "nature_giant_mushroom.glb",
+                "nature_mushrooms.glb",
+                "nature_holly.glb",
+                "nature_bramble.glb",
+                "nature_mast_flag.glb",
+                "nature_prayer_flags.glb",
+            ],
+            "Sous-bois exotique",
+            foret,
+            (0.85, 1.2),
+            false,
+        );
+        // E) Fleurs des prés (non solides) : prairie centrale.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &[
+                "nature_daisies.glb",
+                "nature_irises.glb",
+                "nature_lavender.glb",
+                "nature_sunflowers.glb",
+                "nature_sunflowers_sway.glb",
+                "nature_thistle.glb",
+                "nature_windsock.glb",
+            ],
+            "Fleur des prés",
+            prairie,
+            (0.85, 1.3),
+            false,
+        );
+        // F) Cultures complémentaires (non solides) : bande des rizières,
+        //    exclusions restreintes à l'eau/aux routes (comme le riz existant)
+        //    pour pouvoir tomber DANS les bassins.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_riz,
+            &[
+                "nature_cabbages.glb",
+                "nature_carrots.glb",
+                "nature_corn.glb",
+                "nature_pumpkins.glb",
+                "nature_tomatoes.glb",
+                "nature_wheat.glb",
+                "nature_wheat_sway.glb",
+            ],
+            "Culture",
+            (-11.0, 23.0, 9.0, 35.0),
+            (0.85, 1.25),
+            false,
+        );
+        // G) Rives du lac et des rivières (non solides) : roseaux/nénuphars
+        //    existants complétés par saules, bambou et barque flottante.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "nature_cattails.glb",
+                "nature_reeds_sway.glb",
+                "nature_willow.glb",
+                "nature_willow_sway.glb",
+                "nature_boat_bob.glb",
+                "nature_bamboo_sway.glb",
+            ],
+            "Rive du lac",
+            (-30.0, -14.0, -10.0, 16.0),
+            (0.85, 1.2),
+            false,
+        );
+        // H) Petit décor du hameau (non solide) : lanterne suspendue, buisson à
+        //    baies.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &["nature_lantern_hanging.glb", "nature_berry_bush.glb"],
+            "Décor du hameau",
+            (1.0, 2.0, 21.0, 23.0),
+            (0.9, 1.1),
+            false,
+        );
+
+        // I) Objets décoratifs (`item_*`, packs générés) : PURE décor visuel,
+        //    aucune mécanique de ramassage (pas d'`ItemPickup`, à ne pas
+        //    confondre avec `MMORPG_ITEMS` plus bas) — regroupés en petites
+        //    scènes cohérentes posées au sol près du hameau, non solides,
+        //    petite échelle.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_axe.glb",
+                "item_bow.glb",
+                "item_hammer.glb",
+                "item_shield.glb",
+                "item_sword.glb",
+                "item_ball.glb",
+                "item_bomb.glb",
+            ],
+            "Établi d'armes",
+            (13.0, 5.0, 16.0, 7.0),
+            (0.3, 0.4),
+            false,
+        );
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_apple.glb",
+                "item_bread.glb",
+                "item_carrot.glb",
+                "item_cheese.glb",
+                "item_egg.glb",
+                "item_fish.glb",
+                "item_meat.glb",
+                "item_mushroom.glb",
+                "item_berry.glb",
+            ],
+            // Pas « Étal du marché » : déjà pris par `VILLAGE_PROPS` (« Étal du
+            // marché 1/2 », `village_market_stand_*`) — un préfixe partagé
+            // ferait retirer/réinjecter ces deux landmarks par erreur dans
+            // l'outil de synchro du décor ambiant (cf. `AMBIENT_DECOR_PREFIXES`
+            // dans `scene::mod`).
+            "Étal des vivres",
+            (16.5, 7.5, 19.5, 9.5),
+            (0.3, 0.4),
+            false,
+        );
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_coin.glb",
+                "item_gem.glb",
+                "item_crown.glb",
+                "item_ring.glb",
+                "item_star.glb",
+            ],
+            "Coin trésor",
+            (6.5, 5.0, 9.0, 6.5),
+            (0.3, 0.4),
+            false,
+        );
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_potion.glb",
+                "item_mana.glb",
+                "item_scroll.glb",
+                "item_book.glb",
+                "item_feather.glb",
+                "item_heart.glb",
+                "item_key.glb",
+                "item_lantern.glb",
+                "item_pouch.glb",
+            ],
+            "Table d'apothicaire",
+            (3.0, 5.5, 6.0, 6.5),
+            (0.3, 0.4),
+            false,
+        );
 
         // Objets d'inventaire (cf. `ItemPickup`) à trouver en explorant, posés
         // sur la narration de chaque biome : potions devant la Cabane 1 et aux
