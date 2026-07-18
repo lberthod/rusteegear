@@ -323,7 +323,23 @@ impl Physics {
                     &imported_points()?,
                 )?))
             };
-            // Forme explicite si demandée, sinon déduite du mesh.
+            // Forme explicite si demandée, sinon déduite du mesh. `MeshKind::Terrain`
+            // reste un `cuboid()` plat ici (comme l'ancien `MeshKind::Plane` qu'il
+            // remplace, Sprint 24 de `sprintreflecion.md`) : ne rien changer au
+            // comportement du sol sur la quasi-totalité de la carte MMORPG,
+            // strictement plate. Le relief obtient un collider heightfield
+            // **additionnel**, restreint à sa seule bande non plate et inséré juste
+            // après (cf. `terrain_hill_collider` plus bas) — deux colliders sur le
+            // même corps plutôt qu'un seul heightfield global couvrant toute la carte :
+            // un unique heightfield global cassait
+            // `mmorpg_creature_never_gets_stuck_walking_into_a_wall` (créature figée
+            // 43 % du temps alors qu'elle ne s'approche jamais de la bande de
+            // collines) — le `KinematicCharacterController` des créatures/du joueur se
+            // comporte différemment contre un heightfield composite que contre un
+            // simple cuboid, même parfaitement plat. Restreindre le heightfield à la
+            // bande ouest (jamais traversée par le contenu existant, cf. la doc de
+            // `gfx::mesh::mmorpg_terrain_local_height`) élimine cette interaction
+            // partout ailleurs.
             let collider = match obj.collider_shape {
                 ColliderShape::Box => cuboid(),
                 ColliderShape::Sphere => ball(),
@@ -348,6 +364,22 @@ impl Physics {
                         ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(0.01))
                             .translation(center)
                     }
+                    // Dalle plate fine (demi-hauteur 0.02 × échelle Y), PAS `cuboid()` :
+                    // `he`/`center` viennent de `scene.local_aabb(MeshKind::Terrain)`,
+                    // volontairement élargi à ±2.2 en Y (`scene::queries::local_aabb`)
+                    // pour englober le relief réel des collines — un `cuboid()` naïf sur
+                    // cette AABB donnerait un pavé de 4,4 m de haut au lieu d'un sol fin,
+                    // ce qui a fait échouer `mmorpg_creature_never_gets_stuck_walking_
+                    // into_a_wall` (créature en collision avec un bloc culminant à
+                    // y=+2,2 m au lieu du sol plat attendu à y≈0). Le VRAI relief passe
+                    // par le collider heightfield additionnel inséré juste après
+                    // l'insertion de ce collider principal (cf. plus bas).
+                    MeshKind::Terrain => ColliderBuilder::cuboid(
+                        he.x.abs().max(0.01),
+                        (0.02 * t.scale.y).abs().max(0.005),
+                        he.z.abs().max(0.01),
+                    )
+                    .translation(Vector::new(center.x, 0.0, center.z)),
                     _ => cuboid(),
                 },
             }
@@ -371,6 +403,54 @@ impl Physics {
             .build();
             let collider_handle = colliders.insert_with_parent(collider, handle, &mut bodies);
             collider_owner.insert(collider_handle, i);
+
+            // Relief solide additionnel (Sprint 24/25 de `sprintreflecion.md`, Phase K) :
+            // un second collider heightfield, restreint à la bande ouest non plate (cf.
+            // le commentaire du match `ColliderShape::Auto` ci-dessus et la doc de
+            // `gfx::mesh::MMORPG_HILL_STRIP_X_LOCAL`), attaché au MÊME corps que le
+            // collider principal (`cuboid` plat). Échantillonne EXACTEMENT
+            // `gfx::mesh::mmorpg_terrain_local_height` — la même fonction que le
+            // maillage visuel — pour que sol visuel et sol solide coïncident dans
+            // cette bande (sinon un joueur/une créature qui s'y aventure flotterait ou
+            // s'enterrerait selon l'endroit). `PhysicsKind::Static` uniquement (comme
+            // `TriMesh` : un heightfield n'a pas de propriétés de masse définies pour
+            // un corps dynamique) — un `MeshKind::Terrain` dynamique n'a de toute façon
+            // qu'un `cuboid()` plat (cf. ci-dessus), pas de relief du tout.
+            if obj.mesh == MeshKind::Terrain && !is_dynamic {
+                use crate::gfx::mesh::{
+                    MMORPG_HILL_STRIP_RES, MMORPG_HILL_STRIP_X_LOCAL, mmorpg_terrain_local_height,
+                };
+                let (x_lo, x_hi) = MMORPG_HILL_STRIP_X_LOCAL;
+                let (res_x, res_z) = MMORPG_HILL_STRIP_RES;
+                // `heights[(i,j)]` : ligne `i` = axe Z (pleine étendue de l'objet),
+                // colonne `j` = axe X (restreinte à `[x_lo,x_hi]`) — convention
+                // `parry3d::shape::HeightField::new` (vérifiée dans les sources de la
+                // dépendance, cf. le commentaire de `gfx::mesh::MMORPG_HILL_STRIP_X_LOCAL`).
+                let heights =
+                    Array2::from_fn((res_z + 1) as usize, (res_x + 1) as usize, |i, j| {
+                        let x = x_lo + (x_hi - x_lo) * (j as f32 / res_x as f32);
+                        let z = i as f32 / res_z as f32 - 0.5;
+                        mmorpg_terrain_local_height(x, z)
+                    });
+                let strip_width = (x_hi - x_lo) * t.scale.x;
+                let strip_center_x = (x_lo + x_hi) * 0.5 * t.scale.x;
+                let hill_collider = ColliderBuilder::heightfield_with_flags(
+                    heights,
+                    Vector::new(strip_width, t.scale.y, t.scale.z),
+                    HeightFieldFlags::FIX_INTERNAL_EDGES,
+                )
+                .translation(Vector::new(strip_center_x, 0.0, 0.0))
+                .restitution(0.0)
+                .friction(0.6)
+                .collision_groups(InteractionGroups::new(
+                    Group::from_bits_truncate(obj.collision_layer),
+                    Group::from_bits_truncate(obj.collision_mask),
+                    InteractionTestMode::And,
+                ))
+                .build();
+                let hill_handle = colliders.insert_with_parent(hill_collider, handle, &mut bodies);
+                collider_owner.insert(hill_handle, i);
+            }
 
             if is_dynamic {
                 dynamic.push((i, handle));
@@ -1188,6 +1268,89 @@ mod tests {
             y > -1.5,
             "le rocher (ConvexHull, dynamique) doit se poser sur le sol, pas le \
              traverser (y={y})"
+        );
+    }
+
+    /// Sprint 24 (Phase K, `sprintreflecion.md`) : un objet dynamique lâché
+    /// au-dessus de la bande de collines du sol `MeshKind::Terrain` doit tomber
+    /// et se stabiliser à une hauteur cohérente avec
+    /// `gfx::mesh::mmorpg_terrain_local_height` — ni la traverser (creux
+    /// physique absent), ni léviter dessus (relief visuel sans collider
+    /// correspondant). Même structure que `floor_and_falling_rock`, avec un sol
+    /// `MeshKind::Terrain` (échelle 72×1×72, comme `Scene::mmorpg_demo`) au lieu
+    /// d'un `MeshKind::Cube` plat.
+    fn terrain_hill_and_falling_ball() -> Scene {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Terrain,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(72.0, 1.0, 72.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        // Mur ouest, comme dans `Scene::mmorpg_demo` : la bande de collines
+        // penche vers x=-36 (cf. sa doc) — sans ce mur, une balle qui roule dessus
+        // continue indéfiniment dans le vide au-delà de la carte, ce qui ne
+        // prouverait rien sur le collider du relief lui-même (constaté : sans ce
+        // mur, la balle sortait de la carte et tombait à l'infini).
+        scene.objects.push(SceneObject {
+            name: "Mur Ouest".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            transform: crate::scene::Transform::from_pos(Vec3::new(-36.0, 0.9, 0.0))
+                .with_scale(Vec3::new(0.5, 1.8, 72.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            name: "Balle".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            // x=-35.25, z=0 : au cœur (plus haut point) de la bande de collines
+            // (cf. la doc de `mmorpg_terrain_local_height`), lâchée bien au-dessus
+            // du relief maximal (~1,3 m).
+            transform: crate::scene::Transform::from_pos(Vec3::new(-35.25, 6.0, 0.0))
+                .with_scale(Vec3::splat(0.4)),
+            physics: PhysicsKind::Dynamic,
+            ..Default::default()
+        });
+        scene
+    }
+
+    #[test]
+    fn a_dynamic_body_settles_on_the_terrain_hill_at_the_right_height() {
+        let mut scene = terrain_hill_and_falling_ball();
+        let mut phys = Physics::build(&scene);
+        for _ in 0..300 {
+            phys.step(1.0 / 60.0, &mut scene);
+        }
+        let ball = &scene.objects[2];
+        let radius = 0.2; // scale.splat(0.4) × demi-AABB locale de Sphere (0.5)
+        // Hauteur attendue au point où la balle s'est RÉELLEMENT arrêtée (pas au
+        // point de lâcher) : la bande de collines a une pente, la balle a pu
+        // rouler avant de se stabiliser — c'est la relation hauteur-sol/position
+        // qui doit tenir, pas une position figée.
+        let expected_ground = crate::gfx::mesh::mmorpg_terrain_local_height(
+            ball.transform.position.x / 72.0,
+            ball.transform.position.z / 72.0,
+        );
+        let y = ball.transform.position.y;
+        assert!(
+            y > expected_ground - 0.3,
+            "la balle a traversé le relief du terrain (y={y}, sol attendu \
+             ≈{expected_ground})"
+        );
+        assert!(
+            y < expected_ground + radius + 1.0,
+            "la balle lévite au-dessus du relief (y={y}, sol attendu ≈{expected_ground})"
+        );
+        // La balle a pu rouler hors de la bande de collines (étroite, ~1,5 m de
+        // large) jusqu'au sol plat environnant (cuboid fin, y≈0) — dans les deux
+        // cas, elle doit s'être arrêtée près de sa hauteur de sol locale, pas être
+        // tombée à travers vers le vide (`y` très négatif, preuve d'absence de
+        // collider sous elle).
+        assert!(
+            y > -1.0,
+            "la balle est tombée bien en dessous de tout sol connu (y={y})"
         );
     }
 

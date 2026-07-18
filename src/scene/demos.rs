@@ -2032,7 +2032,15 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
     /// rapport à l'autre (fantômes réseau, cf. `app::network_client`).
     pub fn mmorpg_demo() -> Self {
         let half = Self::MMORPG_HALF;
-        let mut sol = demo_obj("Sol", MeshKind::Plane, Vec3::new(0.0, 0.0, 0.0));
+        // Sprint 24 (Phase K, `sprintreflecion.md`) : `MeshKind::Terrain` remplace
+        // l'ancien `MeshKind::Plane` plat — relief réel (collines) sur la marge
+        // ouest de la carte, nul (y≈0, tolérance sub-centimétrique) partout où le
+        // hameau/la forêt/l'eau/les rizières/la route sont déjà placés à la main
+        // ci-dessous (cf. `gfx::mesh::mmorpg_terrain_local_height` pour le détail
+        // du découpage en zones). Échelle X/Z = 2×`half` pour couvrir toute la
+        // carte 72×72 m ; échelle Y = 1.0 (découplée) car la fonction de hauteur
+        // renvoie déjà des mètres directement, pas un facteur à re-multiplier.
+        let mut sol = demo_obj("Sol", MeshKind::Terrain, Vec3::new(0.0, 0.0, 0.0));
         sol.transform = sol
             .transform
             .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
@@ -9764,5 +9772,81 @@ mod tests {
              coût de rendu skinné payé pour rien si ce nombre est non nul (voir \
              « sprint B otpimsaiton10h.md », section audit)"
         );
+    }
+
+    /// Sprint 24 (Phase K, `sprintreflecion.md`) : le sol de `mmorpg_demo` doit
+    /// désormais avoir un vrai relief à un endroit (pas juste un `MeshKind::Plane`
+    /// plat renommé), MAIS rester quasi plat (tolérance sub-centimétrique) sous
+    /// tout le contenu placé à la main — des centaines d'objets (décor,
+    /// créatures, murs d'eau, ponts) supposent un sol à y≈0 et n'ont pas été
+    /// repositionnés par ce sprint.
+    #[test]
+    fn mmorpg_terrain_has_real_relief_but_stays_flat_under_placed_content() {
+        use crate::gfx::mesh::mmorpg_terrain_local_height;
+
+        let scene = Scene::mmorpg_demo();
+        let sol = scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Sol")
+            .expect("la démo doit avoir un sol");
+        assert!(
+            matches!(sol.mesh, MeshKind::Terrain),
+            "le sol doit utiliser MeshKind::Terrain (relief réel), pas MeshKind::Plane"
+        );
+        // Échelle Y découplée (=1.0) : la fonction de hauteur renvoie déjà des
+        // mètres, cf. la doc de `mmorpg_terrain_local_height`.
+        assert!(
+            (sol.transform.scale.y - 1.0).abs() < 1e-6,
+            "scale.y doit rester 1.0 (hauteur déjà en mètres, pas un facteur à \
+             re-multiplier) — obtenu {}",
+            sol.transform.scale.y
+        );
+
+        // 1) Du relief significatif existe bel et bien quelque part (bande de
+        // collines à l'ouest, cf. sa doc) — sinon ce ne serait qu'un plan plat
+        // sous un autre nom.
+        let half = Scene::MMORPG_HALF;
+        let mut max_abs_height = 0.0_f32;
+        let mut iz = -half;
+        while iz <= half {
+            // Pas fin (0,25 m) en X : la bande de collines est étroite
+            // (~1,5 m de large, cf. la doc de `mmorpg_terrain_local_height`) — un
+            // pas de 2 m la sauterait complètement (elle tombe exactement entre
+            // deux échantillons).
+            let mut ix = -half;
+            while ix <= half {
+                let h = mmorpg_terrain_local_height(ix / (2.0 * half), iz / (2.0 * half));
+                max_abs_height = max_abs_height.max(h.abs());
+                ix += 0.25;
+            }
+            iz += 2.0;
+        }
+        assert!(
+            max_abs_height > 0.5,
+            "aucun relief significatif trouvé sur la carte (max observé {max_abs_height} m)"
+        );
+
+        // 2) Sous tout objet déjà placé à la main (hors murs de pourtour et sol
+        // lui-même), le relief doit rester quasi nul — sinon des objets se
+        // retrouveraient enterrés/flottants sans avoir été repositionnés.
+        for o in &scene.objects {
+            if o.name == "Sol" || o.name.starts_with("Mur ") {
+                continue;
+            }
+            let x = o.transform.position.x;
+            let z = o.transform.position.z;
+            if x.abs() > half || z.abs() > half {
+                continue;
+            }
+            let h = mmorpg_terrain_local_height(x / (2.0 * half), z / (2.0 * half));
+            assert!(
+                h.abs() < 0.05,
+                "« {} » en ({x:.1}, {z:.1}) : le sol sous cet objet placé à la main \
+                 doit rester quasi plat (obtenu {h:.3} m) — le découpage en zones de \
+                 `mmorpg_terrain_local_height` doit exclure cette position",
+                o.name
+            );
+        }
     }
 }
