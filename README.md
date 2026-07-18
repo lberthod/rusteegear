@@ -41,9 +41,9 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 - [📄 Licence](#licence)
 
 > Détail sprint par sprint (source de vérité, à jour en continu) :
-> **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**. Reprise du projet par un
+> **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)**. Reprise du projet par un
 > nouveau développeur : **[GDD_MMORPG.md](GDD_MMORPG.md)** (vision/état) puis
-> **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (détail).
+> **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)** (détail).
 
 ---
 
@@ -240,7 +240,7 @@ RusteeGear est jouable **à plusieurs, en ligne**, sur un mode manches façon
 « Call of Zombies » avec plusieurs objectifs (Vagues / Survie / Escorte /
 Boss), des classes de joueur et un contrat quotidien — un chantier séparé du
 moteur solo, suivi sprint par sprint dans
-**[SPRINT_MMORPG.md](SPRINT_MMORPG.md)**. Trois décisions de scope, prises
+**[SPRINT_MMORPG.md](docs/SPRINT_MMORPG.md)**. Trois décisions de scope, prises
 dès le départ :
 
 - **Échelle visée** : des salons de **2 à 16 joueurs**, pas un MMO à monde
@@ -395,7 +395,7 @@ APK Android) s'y **connectent automatiquement** au lancement — deux appareils
 se voient bouger, sauter et combattre en ligne. L'overlay Multijoueur permet
 de se déconnecter ou de pointer vers un autre serveur (ex. localhost pendant
 le développement). Historique sprint par sprint :
-[SPRINT_MMORPG.md](SPRINT_MMORPG.md) puis [SPRINTNETWORK.md](SPRINTNETWORK.md)
+[SPRINT_MMORPG.md](docs/SPRINT_MMORPG.md) puis [SPRINTNETWORK.md](docs/SPRINTNETWORK.md)
 (latence & qualité du déplacement en ligne).
 
 ### Limites connues (assumées, documentées dans le code)
@@ -439,10 +439,10 @@ le développement). Historique sprint par sprint :
 | **P** — Audio (bus/panning/streaming, randomisation), HUD déclaratif, manettes + remapping, hot-reload, snapping + profiler GPU, crash log + rustdoc | 104 → 113 | ✅ (106/107 non numérotés, tampons non utilisés) |
 | **P2** — Dette, sécurité & accessibilité (découpage god-modules, audit unwrap/panic, rate limiting réseau, wizard éditeur non-dev, doc « créateur de jeu », WSS obligatoire) | 113a → 113f | ✅ |
 | **Q** — Web, la vitrine (wasm32/WebGPU, assets & audio web, multijoueur navigateur) | 114 → 117 | ✅ (117 : reste à activer Pages une fois dans les réglages GitHub — non automatisable) |
-| **S** — Extensions quasi-gratuites (audio confort, forces de vent, pipeline assets, Zstd, outillage éditeur, noyau versioning/RNG) | 121 → 135 | 🟢 (121/125/126/127/131 ✅ ; 128/130 partiels — profilers et abilities reportés ; 94/135 examinés et sciemment sautés, cf. [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md#phase-s)) |
+| **S** — Extensions quasi-gratuites (audio confort, forces de vent, pipeline assets, Zstd, outillage éditeur, noyau versioning/RNG) | 121 → 135 | 🟢 (121/125/126/127/131 ✅ ; 128/130 partiels — profilers et abilities reportés ; 94/135 examinés et sciemment sautés, cf. [ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md#phase-s)) |
 
-> Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
-> Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
+> Récap propre + **logique des prochains sprints** : **[SPRINTS.md](docs/SPRINTS.md)**.
+> Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)**
 > (c'est la source de vérité sur l'avancement — ce tableau n'en est qu'un résumé).
 
 ### Plateformes — état honnête
@@ -538,8 +538,8 @@ ne dépend pas du GPU, ce qui a rendu le portage mobile direct **et** permet à
 headless (aucune duplication de logique entre l'éditeur desktop et le
 serveur). Le rendu repose sur `wgpu` (Metal / Vulkan / DX12 / WebGPU) — la clé
 de la portabilité.
-Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (moteur),
-**[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** (multijoueur).
+Détails et journal : **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)** (moteur),
+**[SPRINT_MMORPG.md](docs/SPRINT_MMORPG.md)** (multijoueur).
 
 ---
 
@@ -549,22 +549,22 @@ Détails et journal : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (moteur),
 Le projet a été construit par **sprints incrémentaux**, un commit par étape validée.
 L'historique propre et la **logique des prochains sprints** vivent dans :
 
-- **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** — **source de vérité**, à jour en continu :
+- **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)** — **source de vérité**, à jour en continu :
   détail par sprint (objectif · tâches · fichiers · livrable), pour le moteur solo
   **et** le multijoueur (numérotation indépendante, cf. la section dédiée dans ce fichier).
-- **[SPRINTS.md](SPRINTS.md)** — récap historique des sprints 0→44 (Phases A→H), figé.
-- **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)** —
+- **[SPRINTS.md](docs/SPRINTS.md)** — récap historique des sprints 0→44 (Phases A→H), figé.
+- **[SPRINT_MMORPG.md](docs/SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](docs/SPRINTNETWORK.md)** —
   chantier **multijoueur en ligne** en détail, cf.
   **[Multijoueur en ligne](#multijoueur)** plus haut.
-- **[auditGDD10h.md](auditGDD10h.md)** / **[sprint10audit.md](sprint10audit.md)** — écart
+- **[auditGDD10h.md](docs/auditGDD10h.md)** / **[sprint10audit.md](docs/sprint10audit.md)** — écart
   GDD ↔ code (modes de manche, classes, contrat du jour, archétypes) et son plan de sprints.
-- **[optimisation3D.Analys.md](optimisation3D.Analys.md)** /
-  **[sprintoptimation3daudit10h.md](sprintoptimation3daudit10h.md)** — écart perf ↔ code
+- **[optimisation3D.Analys.md](docs/optimisation3D.Analys.md)** /
+  **[sprintoptimation3daudit10h.md](docs/sprintoptimation3daudit10h.md)** — écart perf ↔ code
   (capacité skinnée, culling, LOD, compression texture) et son plan de sprints.
-- **[reflexion.md](reflexion.md)** / **[sprintreflecion.md](sprintreflecion.md)** — validation,
+- **[reflexion.md](docs/reflexion.md)** / **[sprintreflecion.md](docs/sprintreflecion.md)** — validation,
   coordination et déploiement en aval des deux plans ci-dessus.
 
-**Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
+**Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)) :
 audio bus/panning/streaming (104) et randomisation pitch/volume (108),
 maintenabilité `app`/tests système + `docs/architecture.md` (105a-1/2/3), widgets
 de HUD déclaratifs sérialisés dans la scène (109), manettes + remapping via
@@ -583,7 +583,7 @@ s'automatise pas depuis un fichier de workflow). Limitations connues : le
 scripting Lua reste inerte sur wasm32, la musique/ambiance en flux n'est pas
 encore portée sur le web (`kira::sound::streaming` exclut ce target), et les
 meshes à animation squelettale ne s'affichent pas (limite de bind groups
-WebGPU) — détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
+WebGPU) — détail dans [ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md).
 
 **Terminé — Phase P2, dette/sécurité/accessibilité** (113a→113f) : découpage
 des god-modules `app/mod.rs` et `scene/mod.rs` en sous-modules < 2000 lignes
@@ -595,7 +595,7 @@ obligatoire derrière HTTPS pour le client web via un sous-domaine Caddy dédié
 (113f).
 
 **En cours — Phase S, extensions quasi-gratuites** (121→135, cf.
-[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md#phase-s)) :
+[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md#phase-s)) :
 mixeur audio complet — reverb/EQ/limiteur, ducking, musique adaptative deux
 couches (121) ; forces de zone — vent sur les triggers existants, buoyancy
 hors scope (125) ; pipeline assets — presets qualité par plateforme, graphe
@@ -611,7 +611,7 @@ juillet 2026 avec l'espoir d'en isoler une tranche sûre à livrer sans le
 slotmap complet — conclusion honnête : les deux items ne se séparent pas
 proprement, resauté en connaissance de cause plutôt que de forcer un
 refactor à risque (détail du raisonnement dans
-[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md#sprint-135)).
+[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md#sprint-135)).
 Restent ⬜ : post-effets HDR (122), SSAO (123), variants de shaders (124),
 terrain sculpté (129), particules (132), ombres cascadées (133), IK deux-os
 (134). Puis R (WebXR).

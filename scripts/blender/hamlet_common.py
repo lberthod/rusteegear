@@ -37,7 +37,7 @@ rng = random.Random(20260718)  # reproductible, même graine que gen_stone_pack.
 # Palette commune — figée une fois pour tout le pack hameau maison. Reprend
 # TELLES QUELLES les teintes bois/pierre/toit/chaume déjà utilisées par
 # gen_nature_pack.py (le hameau existant et son décor doivent se répondre,
-# règle « une teinte par système » de ANALYSE_DESIGN_VISUEL.md §3) et ajoute
+# règle « une teinte par système » de docs/ANALYSE_DESIGN_VISUEL.md §3) et ajoute
 # uniquement les teintes propres au mobilier/aux bâtiments (tissu, métal,
 # paille de botte). Règle : ≤ 3 teintes par objet, aucune texture.
 # ---------------------------------------------------------------------------
