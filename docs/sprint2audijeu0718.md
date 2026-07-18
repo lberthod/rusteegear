@@ -1,0 +1,359 @@
+# RusteeGear — Sprint 2 (18 juillet 2026) — finalisation des priorités restantes
+
+> Suite de [AUDIT_JEU_2026-07-18.md](AUDIT_JEU_2026-07-18.md) (Phases A→I, sprint 1). Les Phases
+> A, B, C, D, E, F, G y sont **✅ terminées et vérifiées** (tests + relectures). Ce document couvre
+> ce qui reste réellement ouvert au 18 juillet au soir : Phase H (écran de fin de manche) et Phase I
+> (accessibilité) du plan précédent, plus 5 nouvelles phases pour les points de dette/écarts non
+> encore planifiés (catalogue d'UI, ramassage d'arme réseau, instrumentation de mesure, audio,
+> sécurité `firebase_uid`, tests éditeur, CI goldens GPU).
+>
+> Convention identique aux documents précédents : un sprint ≈ 1 à 3 jours, avec
+> **Objectif · Tâches · Fichiers · Livrable vérifiable · Risques**. Lettrage des phases poursuivi à
+> partir de J (A→I déjà pris par `AUDIT_JEU_2026-07-18.md` §14).
+
+---
+
+## 🧭 Vue d'ensemble — blocs de phases sans AUCUN fichier partagé
+
+Contrairement à une première estimation trop optimiste, ces 9 phases se recoupent beaucoup sur les
+fichiers. Le tableau ci-dessous liste l'ensemble exact des fichiers de chaque phase (union de tous
+ses sprints) — c'est la base de tout ce qui suit, pas une approximation :
+
+| Phase | Fichiers (union de tous les sprints) |
+|---|---|
+| **J** | `src/net/protocol.rs`, `src/bin/server.rs`, `src/editor/hud.rs`, `src/editor/mod.rs` |
+| **K** | `src/app/settings.rs`, `src/editor/windows.rs`, `src/editor/hud.rs`, `src/gfx/renderer.rs`, `src/gfx/camera.rs` |
+| **L** | `src/editor/windows.rs`, `src/editor/hud.rs`, `src/net/protocol.rs`, `src/net/firebase.rs`, `src/app/network_client.rs` |
+| **M** | `src/app/multiplayer.rs`, `src/app/simulation.rs`, `src/net/protocol.rs`, `src/bin/server.rs` |
+| **N** | `src/app/mod.rs`, `src/bin/server.rs`, `src/net/firebase.rs` |
+| **O** | `src/runtime/sfx.rs`, `src/app/network_client.rs`, `src/app/simulation.rs` |
+| **P** | `src/bin/server.rs`, `src/net/protocol.rs`, `src/net/firebase.rs` |
+| **Q** | `src/editor/hud.rs`, `src/editor/menus.rs`, `src/editor/windows.rs` |
+| **R** | Configuration CI uniquement (`.github/workflows/*.yml`) — **aucun fichier source**, compatible avec toutes les autres à tout moment |
+
+**Verdict** : `L` partage un fichier avec **six** des huit autres phases (tout sauf R) — elle ne peut
+jamais tourner en même temps que quasiment personne. `J` partage avec cinq. `M`, `N`, `P` se bloquent
+mutuellement deux à deux (`server.rs`/`protocol.rs`/`firebase.rs` communs) — un vrai triangle à trois
+sommets qui, à lui seul, impose au moins 3 créneaux différents. Il est donc **faux** de dire que J, L,
+M, N (ou davantage) peuvent démarrer les 4 en même temps — vous aviez raison de le relever.
+
+### Les 5 blocs — dans cet ordre, chacun attend que le précédent soit fini et mergé
+
+| Bloc | Phases dedans (aucune ne partage de fichier avec une autre du même bloc) | Fichiers touchés par ce bloc | Doit attendre la fin de |
+|---|---|---|---|
+| **1** | **L**, **R** | `windows.rs`, `hud.rs`, `protocol.rs`, `firebase.rs`, `network_client.rs` (+ CI config, sans rapport) | — (démarre tout de suite) |
+| **2** | **J**, **O** | `protocol.rs`, `server.rs`, `hud.rs`, `editor/mod.rs`, `sfx.rs`, `network_client.rs`, `simulation.rs` | **Bloc 1** (J reprend `hud.rs`/`protocol.rs` juste libérés par L) |
+| **3** | **M**, **Q** | `multiplayer.rs`, `simulation.rs`, `protocol.rs`, `server.rs`, `hud.rs`, `menus.rs`, `windows.rs` | **Bloc 2** (M reprend `protocol.rs`/`server.rs` juste libérés par J ; Q reprend `hud.rs`/`windows.rs`) |
+| **4** | **K**, **N** | `settings.rs`, `windows.rs`, `hud.rs`, `renderer.rs`, `camera.rs`, `app/mod.rs`, `server.rs`, `firebase.rs` | **Bloc 3** (K reprend `windows.rs`/`hud.rs` juste libérés par Q ; N reprend `server.rs` juste libéré par M) |
+| **5** | **P** (seule) | `server.rs`, `protocol.rs`, `firebase.rs` | **Bloc 4** (reprend `server.rs`/`firebase.rs` juste libérés par N) |
+
+**R peut démarrer n'importe quand, y compris avant le Bloc 1** — elle ne touche aucun fichier source,
+posée au Bloc 1 seulement parce qu'elle n'a besoin d'attendre rien.
+
+### Pourquoi cet ordre précis (pas un autre)
+
+- **L en tout premier, seule (avec R)** : c'est la phase la plus « connectée » du lot (elle touche
+  cinq fichiers que quatre autres phases veulent aussi toucher) — la sortir du chemin en premier
+  libère le plus de monde d'un coup.
+- **J juste après, avec O** : une fois L partie, J ne se recoupe plus qu'avec O — qui ne partage
+  justement rien avec J (`sfx.rs`/`network_client.rs`/`simulation.rs` vs
+  `protocol.rs`/`server.rs`/`hud.rs`/`mod.rs`). J ne peut être casée avec aucune autre phase que O.
+- **M et Q ensuite** : M ne peut tourner qu'une fois J et L parties (elle reprend `protocol.rs` et
+  `server.rs`) ; Q ne peut tourner qu'une fois L et J parties (elle reprend `hud.rs`/`windows.rs`). M
+  et Q ne partagent rien entre elles → même bloc.
+- **K et N ensuite** : K ne peut tourner qu'une fois L (`windows.rs`), J (`hud.rs`) et Q
+  (`hud.rs`/`windows.rs`) parties. N ne peut tourner qu'une fois L (`firebase.rs`), J (`server.rs`) et
+  M (`server.rs`) parties. K et N ne partagent rien entre elles → même bloc.
+- **P toute seule, en dernier** : elle partage `server.rs` avec J/M/N et `firebase.rs`/`protocol.rs`
+  avec L/M/N — la dernière à devoir attendre tout le monde, et personne du Sprint 2 ne reste à lui
+  associer une fois M et N passées.
+
+C'est un minimum strict compte tenu des recoupements réels : impossible de faire tenir ces 9 phases
+en moins de 5 créneaux successifs sans qu'au moins deux instances touchent le même fichier au même
+moment.
+
+### `PROTOCOL_VERSION` : un seul bump, au bon moment
+
+`src/net/protocol.rs` est touché par L (Bloc 1), J (Bloc 2), M (Bloc 3) et P (Bloc 5) — dans cet
+ordre précis grâce aux blocs ci-dessus, donc **jamais deux en même temps**. Mais chacune ajoute
+potentiellement des champs à des messages réseau : ne faire bumper `PROTOCOL_VERSION` qu'une seule
+fois, par la **dernière** phase à toucher ce fichier (P, Bloc 5) plutôt qu'à chaque bloc — sinon
+quatre bumps successifs le même jour compliquent inutilement le déploiement couplé client/VPS (cf.
+mémoire de session « Audit réseau 2026-07 »). Les blocs 1 à 4 qui touchent `protocol.rs` doivent
+committer leurs champs sans toucher à la constante de version ; P s'en charge en dernier.
+
+---
+
+<a id="phase-j"></a>
+## PHASE J — Écran de fin de manche détaillé (indépendante)
+
+### Sprint 1 — Résumé par joueur (frags/assists/XP)
+**Objectif** : remplacer la bannière minimale par un résumé conforme au §9.2/§17.4 du GDD.
+- [ ] Étendre l'événement de fin de manche (`GameEvent::Win`/`Lose`, `src/net/protocol.rs`) pour
+  transporter un résumé par joueur — déjà calculé côté serveur (`network_player_score`,
+  `network_player_assists`, `src/bin/server.rs`), juste jamais poussé au client sous cette forme.
+- [ ] Afficher une ligne par joueur (nom, frags, assists, XP gagnée) sur l'écran Gagné/Perdu
+  (`src/editor/hud.rs`), à la place de la bannière texte seule actuelle.
+- **Fichiers** : `src/net/protocol.rs`, `src/bin/server.rs`, `src/editor/hud.rs`.
+- **Livrable** : un salon de test à 2+ joueurs affiche, à la fin de la manche, une ligne par joueur
+  avec ses frags/assists/XP — pas seulement « Gagné !```/```Perdu ! ».
+- **Risques** : bump de `PROTOCOL_VERSION` si le format d'événement change — coordonner avec L/M/P
+  (voir Frictions ci-dessus) pour un seul bump groupé.
+
+### Sprint 2 — Contrat du jour et bannière de vague
+**Objectif** : combler les deux autres surfaces manquantes du §17.2 (contrat rempli, bannière de
+vague au changement de manche).
+- [ ] Afficher `GameEvent::WaveStart` (déjà envoyé, `protocol.rs:350`) en bannière courte à l'écran —
+  rien ne l'affiche aujourd'hui côté UI.
+- [ ] Afficher la complétion du contrat du jour (déjà calculée, `AppState::contract_completed`) en
+  fin de manche, à côté du résumé du Sprint 1.
+- **Fichiers** : `src/editor/hud.rs`, `src/editor/mod.rs`.
+- **Livrable** : une manche qui change révèle une bannière visible ; un contrat rempli s'affiche à la
+  fin de la manche qui l'a complété.
+- **Risques** : dépend du Sprint 1 pour rester cohérent visuellement (même zone d'écran).
+
+---
+
+<a id="phase-k"></a>
+## PHASE K — Accessibilité minimale (dépendance théorique sur A, déjà levée)
+
+### Sprint 1 — Taille HUD et réduction des secousses
+**Objectif** : options minimales du §16.6 (taille HUD, réduction de screen-shake).
+- [ ] Champs `hud_scale: f32`/`reduce_shake: bool` dans `Settings` (`src/app/settings.rs`), exposés à
+  la fois dans `settings_window` (éditeur) et `player_settings_window`/`settings_essentials`
+  (mode Player — réutiliser le mécanisme déjà commun aux deux, posé par la Phase A).
+- [ ] Appliquer `hud_scale` aux tailles de police/tailles de widgets dans `src/editor/hud.rs` ;
+  appliquer `reduce_shake` en atténuant/désactivant `camera_shake_offset`
+  (`src/app/simulation.rs`)/`view_proj_shaken` (`src/gfx/camera.rs`).
+- **Fichiers** : `src/app/settings.rs`, `src/editor/{windows,hud}.rs`, `src/gfx/{renderer,camera}.rs`.
+- **Livrable** : les deux options changent visiblement le rendu, testées comme les autres réglages
+  persistés (round-trip `save`/`load`, sur le modèle des tests de la Phase A Sprint 1).
+- **Risques** : partage `src/editor/hud.rs` avec J et Q — coordonner l'ordre de merge (cf.
+  Frictions). Comme ces réglages vivent dans la même fenêtre que Firebase/manette (Phase A), ils
+  héritent automatiquement de la disponibilité en mode `--player`/mobile — aucun risque de retomber
+  dans le trou documenté au §12 de l'audit précédent.
+
+### Sprint 2 — Mode daltonien minimal
+**Objectif** : ne plus faire reposer un signal de gameplay uniquement sur la couleur.
+- [ ] Audit des couleurs porteuses de sens (silhouettes de classe §10.3, alertes HUD) + alternative
+  non-couleur (forme, icône) pour au moins les cas critiques (vie basse, allié à terre, cible
+  verrouillée).
+- **Fichiers** : `src/editor/hud.rs`, `src/gfx/renderer.rs` (teintes de silhouette).
+- **Risques** : effort le plus flou de cette liste — cadrer d'abord ce qui est réellement porteur de
+  sens avant de coder, plutôt que d'ajouter des icônes partout.
+
+---
+
+<a id="phase-l"></a>
+## PHASE L — Compléments du catalogue d'interface (§17) (indépendante)
+
+### Sprint 1 — Fenêtre Multijoueur : onglets et présence en ligne
+**Objectif** : combler le trou signalé au §5 de l'audit — `multiplayer_window()` est une seule liste
+scrollable, et `list_online_players`/`set_presence` (déjà backés par Firebase,
+`src/net/firebase.rs:500-541`) ne sont jamais affichés.
+- [ ] Découper `multiplayer_window()` (`src/editor/windows.rs`) en sections claires (onglets egui ou
+  sections rétractables) : Connexion/Classe, Salon (chat existant), Classement, **Présence en ligne**
+  (nouveau — liste des joueurs connectés au salon, via `list_online_players`).
+- **Fichiers** : `src/editor/windows.rs`.
+- **Livrable** : la fenêtre Multijoueur affiche qui est en ligne dans le salon courant, dans une
+  section dédiée et lisible séparément du chat.
+- **Risques** : ne pas casser le chat/mute déjà fonctionnels (Phase F de `sprint10audit.md`) — pur
+  réarrangement d'UI, pas de changement de logique réseau attendu.
+
+### Sprint 2 — Marqueur allié hors-écran
+**Objectif** : compléter `ally_down_banner()` (déjà existant, `hud.rs:861`) avec une indication de
+direction pour un allié à terre hors du champ de vision.
+- [ ] Calculer la direction écran (flèche/indicateur de bord) vers l'allié à terre le plus proche,
+  sur le modèle des indicateurs hors-écran standards (projection de la position 3D sur les bords du
+  viewport 2D).
+- **Fichiers** : `src/editor/hud.rs`.
+- **Livrable** : un allié à terre hors champ affiche une flèche indiquant sa direction, en plus de la
+  bannière texte déjà existante.
+- **Risques** : lisibilité en combat dense — plafonner à un seul marqueur (l'allié le plus proche),
+  pas un par allié à terre.
+
+### Sprint 3 — Détail frags/assists au HUD
+**Objectif** : `kills_hud()` (`hud.rs:271`) n'affiche qu'un compteur `kills: u32` — ajouter le détail
+assists déjà calculé côté serveur.
+- [ ] Étendre l'affichage pour montrer frags et assists séparément (ex. « 3 💀 · 2 🤝 »).
+- **Fichiers** : `src/editor/hud.rs`, `src/app/network_client.rs` (si le champ assists du joueur local
+  n'est pas encore répliqué côté client — à vérifier avant de coder, peut déjà exister via
+  `network_player_assists`).
+- **Livrable** : le HUD distingue visuellement frags et assists.
+- **Risques** : aucun de notable — extension d'un widget déjà existant.
+
+---
+
+<a id="phase-m"></a>
+## PHASE M — `WeaponPickup` réseau (indépendante)
+
+### Sprint 1 — Synchronisation du ramassage d'arme entre joueurs réseau
+**Objectif** : le ramassage d'arme (`WeaponPickup`, aujourd'hui donjon solo uniquement,
+`src/app/simulation.rs:510-522`) doit se propager aux autres joueurs du salon.
+- [ ] Nouveau message réseau (`ClientMsg`/`GameEvent`, `src/net/protocol.rs`) signalant qu'un joueur a
+  ramassé une arme à une position/objet donné ; le serveur valide (l'objet existe, n'a pas déjà été
+  ramassé) et diffuse aux autres clients du salon pour qu'ils masquent le pickup et, si pertinent,
+  reflètent l'équipement du joueur qui l'a ramassé (au moins visuellement, pas nécessairement son
+  arsenal complet).
+- **Fichiers** : `src/app/multiplayer.rs`, `src/app/simulation.rs`, `src/net/protocol.rs`,
+  `src/bin/server.rs`.
+- **Livrable** : deux clients connectés au même salon voient tous deux un pickup disparaître dès
+  qu'un des deux le ramasse (pas seulement celui qui l'a ramassé).
+- **Risques** : bump de `PROTOCOL_VERSION` (coordonner avec J/L/P, cf. Frictions) ; valider
+  côté serveur pour respecter la règle d'or anti-triche (§5.7 du GDD, déjà vérifiée tenue ailleurs) —
+  ne pas faire confiance à la position/l'identité de pickup envoyée par le client sans vérification.
+
+---
+
+<a id="phase-n"></a>
+## PHASE N — Instrumentation `favorite_weapon` (indépendante)
+
+### Sprint 1 — Persister l'arme favorite par joueur
+**Objectif** : le GDD (§11, §13 tension 5) cite `favorite_weapon` comme « instrument de mesure
+gratuit déjà persisté » pour trancher la tension « l'Éclair est-il strictement meilleur ? » — cette
+donnée n'existe pas dans le code, l'affirmation du GDD était fausse.
+- [ ] Compter, côté serveur, l'arme la plus utilisée par joueur sur une manche (ou une fenêtre de
+  temps) et la persister dans `PlayerProgress` (`src/net/firebase.rs`), au même titre que
+  `last_contract_day`.
+- **Fichiers** : `src/app/mod.rs` (compteur par arme, sur le modèle de `player_down_count`), `src/bin/server.rs`
+  (calcul en fin de manche), `src/net/firebase.rs` (`PlayerProgress::favorite_weapon`, champ additif
+  rétrocompatible).
+- **Livrable** : `PlayerProgress::favorite_weapon` reflète l'arme la plus utilisée par le joueur,
+  vérifiable en base Firebase après une manche de test.
+- **Risques** : ne pas confondre « arme équipée en fin de manche » avec « arme la plus utilisée » —
+  vraiment compter les tirs/dégâts par arme, pas juste l'état final. Décision de scope à trancher
+  avant de coder : compteur de tirs, de dégâts, ou de frags par arme (le GDD ne précise pas lequel).
+
+---
+
+<a id="phase-o"></a>
+## PHASE O — Audio manquant (indépendante)
+
+### Sprint 1 — Son dédié « allié à terre » et « éveil de créature »
+**Objectif** : combler les rangs 2 et 3 de la priorité §10.4 du GDD, déjà documentés comme non
+couverts par le GDD lui-même.
+- [ ] Nouvelle variante `Sfx::AllyDown` (`src/runtime/sfx.rs`), jouée à la place de `Sfx::Lose` côté
+  client quand la bannière `ally_down_banner` s'affiche pour un **allié** (pas soi-même) —
+  `src/app/network_client.rs:934-937`.
+- [ ] Nouvelle variante `Sfx::CreatureWake`, jouée au moment où une créature `Furtive` sort de son
+  état endormi (`src/app/simulation.rs:1251-1256`, aujourd'hui aucun appel `sfx::play` à ce site).
+- **Fichiers** : `src/runtime/sfx.rs`, `src/app/network_client.rs`, `src/app/simulation.rs`.
+- **Livrable** : un allié à terre déclenche un son distinct de la propre défaite du joueur ; une
+  créature Furtive qui s'éveille émet un son perceptible.
+- **Risques** : aucun de notable — extension additive de l'enum `Sfx`, pas de changement de logique
+  de jeu.
+
+---
+
+<a id="phase-p"></a>
+## PHASE P — Authentification `firebase_uid` (indépendante, sécurité)
+
+### Sprint 1 — Vérification de token côté serveur
+**Objectif** : aujourd'hui, `firebase_uid` (`ClientMsg::Join`) n'est validé que sur la forme
+(charset, `protocol.rs:62`), jamais sur l'authenticité — un client modifié peut réclamer un uid
+arbitraire et créditer la progression d'autrui.
+- [ ] Le client envoie un ID token Firebase (obtenu après authentification) en plus de l'uid ; le
+  serveur vérifie ce token auprès de Firebase (endpoint de vérification côté Admin SDK ou appel REST
+  équivalent) avant d'associer les gains de la manche à cet uid.
+- **Fichiers** : `src/net/protocol.rs` (nouveau champ), `src/net/firebase.rs` (vérification),
+  `src/bin/server.rs` (rejet si le token ne correspond pas à l'uid déclaré).
+- **Livrable** : un client qui envoie un uid sans token valide correspondant ne voit pas sa
+  progression créditée (test simulant un uid usurpé).
+- **Risques** : dépendance réseau supplémentaire vers Firebase à chaque connexion (latence, panne) —
+  prévoir un repli explicite (jouer en "invité" sans progression persistée) plutôt qu'un blocage dur
+  de la connexion si la vérification échoue pour une raison technique (pas d'usurpation).
+
+### Sprint 2 — Déploiement couplé
+**Objectif** : ce changement de protocole nécessite un déploiement VPS + client synchronisé (comme
+documenté dans la mémoire de session « Procédure de déploiement VPS » et « Audit réseau 2026-07 »).
+- [ ] Bump `PROTOCOL_VERSION`, suivre la procédure de déploiement couplé existante.
+- **Fichiers** : selon la procédure standard déjà documentée.
+- **Risques** : point déjà identifié comme risque opérationnel dans les audits précédents (rien
+  n'automatise le bump couplé) — suivre la procédure manuelle à la lettre.
+
+---
+
+<a id="phase-q"></a>
+## PHASE Q — Tests de l'UI éditeur (indépendante, dette pure)
+
+### Sprint 1 — `windows.rs` (le mieux loti, seulement 2 tests aujourd'hui)
+**Objectif** : couvrir au moins la logique non-UI extractible (validation de champs, calculs) de
+`windows.rs`, sans nécessairement tester le rendu egui lui-même.
+- [ ] Identifier les fonctions pures dans `windows.rs` (ex. formatage, validation d'entrée) et les
+  tester isolément.
+- **Fichiers** : `src/editor/windows.rs`.
+- **Livrable** : couverture de test en hausse mesurable sur ce fichier.
+- **Risques** : ne pas essayer de tester le rendu egui pixel par pixel — se concentrer sur la logique.
+
+### Sprint 2 — `hud.rs` (0 test aujourd'hui, ~1064 lignes)
+**Objectif** : idem, sur les fonctions de calcul (ex. `damage_vignette` intensité, positions de
+widgets) plutôt que le rendu.
+- **Fichiers** : `src/editor/hud.rs`.
+- **Risques** : partage ce fichier avec J et K (cf. Frictions) — faire ce sprint **avant** J/K pour
+  poser un filet de non-régression sur lequel elles pourront s'appuyer, ou après si elles sont déjà
+  mergées (coordination, pas blocage).
+
+### Sprint 3 — `menus.rs` (0 test aujourd'hui, ~623 lignes)
+**Objectif** : idem.
+- **Fichiers** : `src/editor/menus.rs`.
+- **Risques** : aucun de notable, fichier le moins disputé de ce sprint.
+
+---
+
+<a id="phase-r"></a>
+## PHASE R — CI goldens avec GPU (indépendante, filet de sécurité)
+
+### Sprint 1 — Job CI optionnel avec GPU
+**Objectif** : les goldens de rendu (`golden_render.rs`, `golden_skinning.rs`) sont sautés en CI
+(pas de GPU sur `ubuntu-latest`) — une régression de shader passe la CI au vert aujourd'hui.
+- [x] Ajouter un job CI optionnel (runner macOS avec Metal, ou self-hosted avec GPU) qui lance les
+  tests goldens et publie le résultat comme informatif (pas bloquant au départ, pour éviter un flake
+  qui bloquerait tout le monde avant d'être éprouvé). **Déjà livré** : job `golden`
+  (`.github/workflows/ci.yml`, `runs-on: macos-latest`, lance
+  `cargo test --test golden_render --test golden_skinning`) — introduit au commit `48ae056`
+  (« CI : tests réseau à sockets réels et goldens GPU sur macOS ») avant ce sprint, vérifié présent
+  et fonctionnel le 18 juillet 2026 (audité via `gh run list`/`gh api` : 15 exécutions consécutives
+  sur `main`, l'étape « Tests goldens » elle-même en `success`, pas seulement le job masqué).
+- [x] **Durci le 18 juillet 2026** : `continue-on-error: true` retiré (`.github/workflows/ci.yml`)
+  après avoir confirmé les 15 runs verts consécutifs ci-dessus — le job bloque désormais la CI comme
+  les autres.
+- **Fichiers** : configuration CI (`.github/workflows/*.yml`).
+- **Livrable** : un job CI visible qui tourne les goldens sur un vrai GPU à chaque push, désormais
+  bloquant. ✅
+- **Risques** : coût/disponibilité d'un runner GPU — cadrer le budget avant de s'engager sur un
+  runner self-hosted permanent. Un futur run rouge bloquera maintenant toute la CI (plus de filet
+  informatif) : si le GPU des runners GitHub dérive du GPU local ayant produit les goldens au-delà
+  de la tolérance (`CHANNEL_TOLERANCE`/`MAX_DIFFERING_RATIO`, `tests/golden_render.rs`), régénérer
+  les références (`UPDATE_GOLDEN=1`) plutôt que de rétablir `continue-on-error`.
+
+---
+
+## ✅ Définition de « terminé » par phase
+
+| Phase | Terminée quand |
+|---|---|
+| J | Résumé par joueur + bannière de vague + contrat rempli visibles en fin/pendant de manche |
+| K | Taille HUD et réduction de secousses fonctionnelles et testées ; mode daltonien minimal pour vie/allié à terre/cible |
+| L | Fenêtre Multijoueur sectionnée avec présence en ligne ; marqueur allié hors-écran ; détail frags/assists au HUD |
+| M | Un ramassage d'arme par un joueur réseau est visible par les autres joueurs du même salon |
+| N | `PlayerProgress::favorite_weapon` alimenté et vérifiable en base |
+| O | Son dédié pour allié à terre et éveil de créature |
+| P | `firebase_uid` vérifié par token, déploiement couplé effectué |
+| Q | `hud.rs`/`menus.rs`/`windows.rs` ont chacun une couverture de test non nulle sur leur logique extractible |
+| R | Job CI GPU des goldens visible et fonctionnel (même informatif) |
+
+## 📌 Conseils d'exécution
+
+- **Suivre les 5 blocs dans l'ordre indiqué en tête de document** (L+R → J+O → M+Q → K+N → P) — c'est
+  la seule séquence qui garantit qu'aucun fichier n'est jamais touché par deux instances en même
+  temps. Ne pas démarrer un bloc avant que le précédent soit **fini et mergé**, pas seulement
+  « presque fini ».
+- Un seul bump de `PROTOCOL_VERSION`, porté par **P** (dernière phase du dernier bloc à toucher
+  `protocol.rs`) — les blocs 1 à 4 ajoutent leurs champs sans toucher la constante de version.
+- Si les ressources sont limitées et qu'il faut choisir où investir en premier plutôt que de dérouler
+  les 5 blocs dans l'ordre : **J** a l'impact joueur le plus direct (écran de fin de manche) et
+  **P** l'impact sécurité le plus fort si la progression prend de la valeur — mais l'un comme l'autre
+  restent contraints par leur bloc (J ne peut pas démarrer avant la fin de L ; P ne peut démarrer
+  qu'en tout dernier).
+- R (CI goldens GPU) est la seule phase réellement libre de tout ordre — à glisser dans n'importe
+  quel creux, y compris avant le Bloc 1, puisqu'elle ne touche aucun fichier source du dépôt.

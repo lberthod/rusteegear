@@ -73,14 +73,14 @@ jobs:
 
   # Goldens de rendu sur macOS : les runners Apple Silicon ont un GPU Metal,
   # contrairement à ubuntu-latest où ces tests sont sautés faute de GPU.
-  # `continue-on-error: true` car le GPU des runners n'est pas identique au GPU
-  # local qui a produit les goldens : une divergence de pixels au-delà de la
-  # tolérance est possible. Le job est d'abord informatif — à durcir (retirer
-  # le continue-on-error) après quelques runs verts.
+  # Durci (Phase R, `sprint2audijeu0718.md`) : 15 runs verts consécutifs sur
+  # `main` observés avant de retirer `continue-on-error` — le job était
+  # informatif depuis son introduction (commit 48ae056) le temps de vérifier
+  # que le GPU des runners ne divergeait pas assez du GPU local (qui a produit
+  # les goldens) pour dépasser la tolérance de `assert_matches_golden`.
   golden:
     name: Goldens de rendu (macOS/Metal)
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
