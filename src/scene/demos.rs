@@ -6707,108 +6707,125 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // --- Remparts : 4 pans, porte principale (brèche 5 m) au milieu de
         // chacun, 2 brèches diagonales secondaires (coins Nord-Est/Sud-Ouest,
         // en ne construisant pas les 5 derniers mètres des deux pans qui s'y
-        // rejoignent).
-        const WALL_H: f32 = 3.0;
-        const WALL_T: f32 = 0.6;
+        // rejoignent). Habillés avec le pack siège (creation3DBlendersuite.md
+        // / docs/integration_siege_scene.md) plutôt que des `box_seg` plats — même
+        // périmètre exact (HALF/GATE_HALF/TRIM inchangés, donc `in_corridor`
+        // et les couloirs de vague restent valides), juste le rendu change.
         const GATE_HALF: f32 = 2.5;
         const TRIM: f32 = 5.0;
-        const WALL_COLOR: [f32; 3] = [0.34, 0.33, 0.36];
-        box_seg(
-            &mut objects,
-            "Rempart Nord Ouest",
-            -HALF,
-            -GATE_HALF,
-            -HALF,
-            -HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Nord Est",
-            GATE_HALF,
-            HALF - TRIM,
-            -HALF,
-            -HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Est Nord",
-            HALF,
-            HALF,
-            -HALF + TRIM,
-            -GATE_HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Est Sud",
-            HALF,
-            HALF,
-            GATE_HALF,
-            HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Sud Ouest",
-            -HALF + TRIM,
-            -GATE_HALF,
-            HALF,
-            HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Sud Est",
-            GATE_HALF,
-            HALF,
-            HALF,
-            HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Ouest Nord",
-            -HALF,
-            -HALF,
-            -HALF,
-            -GATE_HALF,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
-        box_seg(
-            &mut objects,
-            "Rempart Ouest Sud",
-            -HALF,
-            -HALF,
-            GATE_HALF,
-            HALF - TRIM,
-            1.5,
-            WALL_H,
-            WALL_T,
-            WALL_COLOR,
-        );
+        const MODULE_LEN: f32 = 4.0; // largeur de siege_wall_segment.glb
+
+        #[allow(clippy::too_many_arguments)]
+        fn poser_scaled(
+            objects: &mut Vec<SceneObject>,
+            imported: &mut Vec<ImportedMesh>,
+            name: &str,
+            file: &'static str,
+            x: f32,
+            z: f32,
+            scale: Vec3,
+            yaw_deg: f32,
+            solide: bool,
+        ) {
+            let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), file);
+            let mesh_index = match imported.iter().position(|m| m.path == path) {
+                Some(i) => i as u32,
+                None => match crate::scene::import::load_gltf(&path) {
+                    Ok((data, aabb_min, aabb_max)) => {
+                        let mut mesh = ImportedMesh {
+                            path,
+                            data,
+                            aabb_min,
+                            aabb_max,
+                            ..Default::default()
+                        };
+                        mesh.load_skinning();
+                        imported.push(mesh);
+                        (imported.len() - 1) as u32
+                    }
+                    Err(e) => {
+                        log::error!("{name} ({file}) : {e}");
+                        return;
+                    }
+                },
+            };
+            let mut deco = demo_obj(name, MeshKind::Imported(mesh_index), Vec3::new(x, 0.0, z));
+            deco.transform = deco.transform.with_scale(scale);
+            if yaw_deg != 0.0 {
+                deco.transform.rotation = glam::Quat::from_rotation_y(yaw_deg.to_radians());
+            }
+            if solide {
+                deco.physics = PhysicsKind::Static;
+                deco.collider_shape = crate::runtime::physics::ColliderShape::TriMesh;
+            }
+            objects.push(deco);
+        }
+
+        // Répète siege_wall_segment.glb sur la longueur exacte d'un pan (mise
+        // à l'échelle X non uniforme si la longueur ne divise pas rond par
+        // MODULE_LEN — appliquée en espace local avant la rotation de yaw,
+        // cf. convention `poser`/hamlet_common : échelle avant rotation).
+        #[allow(clippy::too_many_arguments)]
+        fn wall_run(
+            objects: &mut Vec<SceneObject>,
+            imported: &mut Vec<ImportedMesh>,
+            label: &str,
+            x0: f32,
+            x1: f32,
+            z0: f32,
+            z1: f32,
+            yaw_deg: f32,
+        ) {
+            let dx = x1 - x0;
+            let dz = z1 - z0;
+            let total = (dx * dx + dz * dz).sqrt();
+            if total < 0.5 {
+                return;
+            }
+            let n = (total / MODULE_LEN).round().max(1.0) as usize;
+            let seg_len = total / n as f32;
+            let x_scale = seg_len / MODULE_LEN;
+            for i in 0..n {
+                let t = (i as f32 + 0.5) / n as f32;
+                let x = x0 + dx * t;
+                let z = z0 + dz * t;
+                poser_scaled(
+                    objects,
+                    imported,
+                    &format!("{label} {}", i + 1),
+                    "siege_wall_segment.glb",
+                    x,
+                    z,
+                    Vec3::new(x_scale, 1.0, 1.0),
+                    yaw_deg,
+                    true,
+                );
+            }
+        }
+
+        wall_run(&mut objects, &mut imported, "Rempart Nord Ouest", -HALF, -GATE_HALF, -HALF, -HALF, 0.0);
+        wall_run(&mut objects, &mut imported, "Rempart Nord Est", GATE_HALF, HALF - TRIM, -HALF, -HALF, 0.0);
+        wall_run(&mut objects, &mut imported, "Rempart Est Nord", HALF, HALF, -HALF + TRIM, -GATE_HALF, 90.0);
+        wall_run(&mut objects, &mut imported, "Rempart Est Sud", HALF, HALF, GATE_HALF, HALF, 90.0);
+        wall_run(&mut objects, &mut imported, "Rempart Sud Ouest", -HALF + TRIM, -GATE_HALF, HALF, HALF, 0.0);
+        wall_run(&mut objects, &mut imported, "Rempart Sud Est", GATE_HALF, HALF, HALF, HALF, 0.0);
+        wall_run(&mut objects, &mut imported, "Rempart Ouest Nord", -HALF, -HALF, -HALF, -GATE_HALF, 90.0);
+        wall_run(&mut objects, &mut imported, "Rempart Ouest Sud", -HALF, -HALF, GATE_HALF, HALF - TRIM, 90.0);
+
+        // Tours d'angle aux 2 coins pleins (Nord-Ouest/Sud-Est) ; les coins
+        // Nord-Est/Sud-Ouest restent des brèches ouvertes (cf. TRIM ci-dessus).
+        poser(&mut objects, &mut imported, "Tour Nord-Ouest", "siege_tower.glb", -HALF, -HALF, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Tour Sud-Est", "siege_tower.glb", HALF, HALF, 1.0, 0.0, true);
+
+        // Portes : GATE_W (siege_gate_*) = 5.0 = 2×GATE_HALF, aucune
+        // re-échelle nécessaire. Nord/Sud fermées, Est/Ouest embrasées — les
+        // deux variantes doivent être présentes dans la carte (l'état réel
+        // « embrasé » au signal de vague reste un chantier de gameplay
+        // séparé, cf. docs/integration_siege_scene.md « hors scope »).
+        poser(&mut objects, &mut imported, "Porte Nord", "siege_gate_closed.glb", 0.0, -HALF, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Porte Sud", "siege_gate_closed.glb", 0.0, HALF, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Porte Est", "siege_gate_burning.glb", HALF, 0.0, 1.0, 90.0, true);
+        poser(&mut objects, &mut imported, "Porte Ouest", "siege_gate_burning.glb", -HALF, 0.0, 1.0, 90.0, true);
 
         // --- Chemin de ronde (hauteur ~2,2 m), longe l'intérieur des 4 murs,
         // mêmes brèches diagonales que les remparts (pas de coupure au droit
@@ -6867,7 +6884,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Marches du rempart Nord-Ouest",
-            "hamlet_stairs.glb",
+            "siege_rampart_stairs.glb",
             -HALF + 2.0,
             -HALF + 4.0,
             1.1,
@@ -6878,7 +6895,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             &mut objects,
             &mut imported,
             "Marches du rempart Sud-Est",
-            "hamlet_stairs.glb",
+            "siege_rampart_stairs.glb",
             HALF - 2.0,
             HALF - 4.0,
             1.1,
@@ -6886,19 +6903,83 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             true,
         );
 
-        // --- Place centrale : feu communal, chaudron, gazebo, beffroi +
-        // girouette, lucioles en cercle.
+        // --- Dressing complémentaire des remparts/portes (pack siège) :
+        // bastions à mi-pan, module de créneau en filler sur les tours,
+        // chemin de ronde décoratif + torches sur le parapet, poterne à la
+        // brèche Sud-Ouest, herse/caisse/pieux/bannière à la porte Nord,
+        // boulets en tas près de la porte Est, chariot de braises sur le
+        // chemin entre la porte Nord et la place.
+        poser(&mut objects, &mut imported, "Bastion Nord", "siege_bastion.glb", 0.0, -HALF, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Bastion Sud", "siege_bastion.glb", 0.0, HALF, 1.0, 180.0, true);
+        poser(&mut objects, &mut imported, "Module de créneau Nord-Ouest", "siege_crenel_module.glb", -HALF + 1.0, -HALF - 0.3, 1.0, 0.0, false);
+        poser(&mut objects, &mut imported, "Module de créneau Sud-Est", "siege_crenel_module.glb", HALF - 1.0, HALF + 0.3, 1.0, 180.0, false);
+        for (i, (x, z, yaw)) in [
+            (-HALF + 6.0_f32, -HALF + 1.0_f32, 0.0_f32),
+            (HALF - 6.0, -HALF + 1.0, 0.0),
+            (HALF - 1.0, -HALF + 6.0, 90.0),
+            (HALF - 1.0, HALF - 6.0, 90.0),
+            (HALF - 6.0, HALF - 1.0, 180.0),
+            (-HALF + 6.0, HALF - 1.0, 180.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Torche de rempart {}", i + 1),
+                "siege_rampart_torch.glb",
+                x,
+                z,
+                1.0,
+                yaw,
+                false,
+            );
+        }
+        poser(&mut objects, &mut imported, "Chemin de ronde décoratif Nord", "siege_rampart_walk.glb", -6.0, -HALF + 1.1, 1.0, 0.0, false);
+        poser(&mut objects, &mut imported, "Poterne Sud-Ouest", "siege_postern.glb", -HALF + 2.0, HALF - 2.0, 1.0, 135.0, true);
+        poser(&mut objects, &mut imported, "Herse de la porte Nord", "siege_portcullis.glb", 0.0, -HALF + 0.4, 1.0, 0.0, false);
+        poser(&mut objects, &mut imported, "Caisse de réserve de la porte Nord", "siege_reserve_crate.glb", 1.6, -HALF + 1.5, 1.0, 10.0, true);
+        poser(&mut objects, &mut imported, "Rangée de pieux de la porte Nord", "siege_stake_row.glb", -1.5, -HALF + 2.5, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Bannière de vague Nord", "siege_wave_banner.glb", -3.0, -HALF + 0.6, 1.0, 0.0, false);
+        poser(&mut objects, &mut imported, "Bannière de vague Sud", "siege_wave_banner.glb", 3.0, HALF - 0.6, 1.0, 180.0, false);
+        poser(&mut objects, &mut imported, "Corne d'alerte Nord", "siege_alert_horn.glb", -2.2, -HALF + 0.5, 1.0, 0.0, false);
+        poser(&mut objects, &mut imported, "Corne d'alerte Sud", "siege_alert_horn.glb", 2.2, HALF - 0.5, 1.0, 180.0, false);
+        poser(&mut objects, &mut imported, "Panneau directionnel Est", "siege_rampart_signpost.glb", HALF - 3.0, -3.0, 1.0, 90.0, true);
+        for (i, (dx, dz)) in [(0.0_f32, 0.0_f32), (0.3, 0.25), (-0.25, 0.2)].into_iter().enumerate() {
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Boulet {}", i + 1),
+                "siege_cannonball.glb",
+                HALF - 2.0 + dx,
+                -2.0 + dz,
+                1.0,
+                0.0,
+                true,
+            );
+        }
+        poser(&mut objects, &mut imported, "Chariot de braises", "siege_ember_cart.glb", 0.0, -12.0, 1.0, 0.0, true);
+
+        // --- Place centrale : brasero communal (pack siège, remplace le feu
+        // de camp générique — pièce signature de la place, cf.
+        // creation3DBlendersuite.md), chaudron, gazebo, beffroi + girouette,
+        // lucioles en cercle, dressing de mode (bannière/fanion/trophées).
         poser(
             &mut objects,
             &mut imported,
             "Feu communal",
-            "hamlet_bonfire.glb",
+            "siege_communal_brazier.glb",
             0.0,
             0.0,
             1.2,
             0.0,
             false,
         );
+        poser(&mut objects, &mut imported, "Bannière de mode de la place", "siege_mode_banner.glb", -2.0, 4.5, 1.0, 20.0, false);
+        poser(&mut objects, &mut imported, "Fanion de la place", "siege_team_pennant.glb", 2.0, 4.5, 1.0, -20.0, false);
+        poser(&mut objects, &mut imported, "Trophée de fin de manche", "siege_round_trophy.glb", 0.0, 3.5, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Portail de fin", "siege_end_portal.glb", 0.0, 6.0, 1.0, 180.0, true);
         poser(
             &mut objects,
             &mut imported,
@@ -6989,6 +7070,17 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 x,
                 z,
                 [0.85, 0.25, 0.2],
+            );
+            poser(
+                &mut objects,
+                &mut imported,
+                &format!("Marqueur de zone {label}"),
+                "siege_ground_marker.glb",
+                x,
+                z,
+                1.0,
+                az,
+                false,
             );
         }
 
@@ -8156,12 +8248,56 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             );
         }
 
+        // --- Lande environnante (pack siège, creation3DBlendersuite.md) :
+        // décor dispersé dans l'anneau extérieur, en évitant les zones déjà
+        // nommées (îlots r=13-20, camp de chasseurs ~(14-20,45-51), mare aux
+        // nénuphars ~(41-49,-43 à -49), prairies, verger (28.3,28.3)) — au
+        // meilleur effort, pas un compactage garanti sans chevauchement.
+        const LANDE: &[(&str, f32, f32, f32)] = &[
+            ("Rocher de lande", -38.0, 5.0, 0.0),
+            ("Rocher de lande 2", 36.0, -20.0, 40.0),
+            ("Arbre mort tourmenté", -34.0, -25.0, 20.0),
+            ("Ossements épars", -30.0, 12.0, 60.0),
+            ("Menhir de lande", 38.0, 8.0, 0.0),
+            ("Broussaille épineuse", -40.0, -8.0, 0.0),
+            ("Broussaille épineuse 2", 30.0, -32.0, 90.0),
+            ("Mare stagnante", -36.0, 24.0, 0.0),
+            ("Ravine de terrain", -25.0, -36.0, 30.0),
+            ("Poteau de bannière en ruine", 34.0, 30.0, 0.0),
+            ("Cairn de guerre", -20.0, 38.0, 0.0),
+            ("Touffe de brume basse", -32.0, -18.0, 0.0),
+            ("Touffe de brume basse 2", 20.0, -40.0, 0.0),
+        ];
+        for (name, x, z, yaw) in LANDE {
+            let file = match *name {
+                "Rocher de lande" | "Rocher de lande 2" => "siege_moor_rock.glb",
+                "Arbre mort tourmenté" => "siege_dead_tree.glb",
+                "Ossements épars" => "siege_scattered_bones.glb",
+                "Menhir de lande" => "siege_menhir.glb",
+                "Broussaille épineuse" | "Broussaille épineuse 2" => "siege_thorny_scrub.glb",
+                "Mare stagnante" => "siege_stagnant_pond.glb",
+                "Ravine de terrain" => "siege_ravine.glb",
+                "Poteau de bannière en ruine" => "siege_ruined_banner_post.glb",
+                "Cairn de guerre" => "siege_war_cairn.glb",
+                _ => "siege_low_mist.glb",
+            };
+            poser(&mut objects, &mut imported, name, file, *x, *z, 1.0, *yaw, file != "siege_low_mist.glb");
+        }
+
+        // --- Aînée de la lande (boss, GDD §4) : autel de mise en scène + cage
+        // du chef, dans une clairière dégagée de la lande (loin du camp de
+        // chasseurs/mare/prairies/verger). Tas de trophées près du camp de
+        // chasseurs (mode Survie).
+        poser(&mut objects, &mut imported, "Autel de l'Aînée", "siege_elder_altar.glb", 42.4, 42.4, 1.0, 0.0, true);
+        poser(&mut objects, &mut imported, "Cage du chef", "siege_chief_cage.glb", 45.4, 40.4, 1.0, -30.0, true);
+        poser(&mut objects, &mut imported, "Tas de trophées du camp", "siege_trophy_pile.glb", 22.0, 44.0, 1.0, 0.0, false);
+
         // Les Braises (GDD §2.1) sont la fiction du jeu : « c'est [le feu
         // communal] qui attire les hordes ». La charte (§10.1 « au centre,
         // les braises ; au loin, le danger », §10.2 orange = système
         // feu/joueur) exige que ce soit le point chaud/saturé le plus
         // lisible de la carte — jusqu'ici posé comme n'importe quel décor
-        // inerte (pas d'émissif), cf. SPRINT3D_AUDIT_GAMEDESIGN.md §1.1.
+        // inerte (pas d'émissif), cf. docs/SPRINT3D_AUDIT_GAMEDESIGN.md §1.1.
         if let Some(feu) = objects.iter_mut().find(|o| o.name == "Feu communal") {
             feu.emissive = 1.2;
         }
