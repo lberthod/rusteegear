@@ -1217,7 +1217,10 @@ impl AppState {
                     // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
                     // ne poursuit pas (et n'a de toute façon pas de corps physique tant
                     // qu'il est masqué, cf. le filtre `visible` dans `Physics::build`).
-                    if obj.ai_chaser.is_none() || !obj.visible {
+                    let Some(chaser) = obj.ai_chaser.as_ref() else {
+                        continue;
+                    };
+                    if !obj.visible {
                         continue;
                     }
                     let (target_i, dist_sq) = candidate_targets
@@ -1250,7 +1253,7 @@ impl AppState {
                     // appliquée en toute circonstance (pas seulement en réseau, cf.
                     // `FURTIVE_DETECT_RANGE`) — c'est ce délai court qui permet au
                     // contre-jeu « l'Éclaireur la déclenche de loin » d'exister aussi solo.
-                    if obj.ai_chaser.as_ref().unwrap().archetype == crate::scene::Archetype::Furtive
+                    if chaser.archetype == crate::scene::Archetype::Furtive
                         && dist_sq > FURTIVE_DETECT_RANGE * FURTIVE_DETECT_RANGE
                     {
                         phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);

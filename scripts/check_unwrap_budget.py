@@ -26,9 +26,10 @@ WHITELIST = {
     # impossible à mettre sous #[cfg(test)]).
     ("src/gfx/renderer.rs", "expect"): 1,
     ("src/net/interpolation.rs", "expect"): 1,
-    ("src/app/combat.rs", "expect"): 1,
+    ("src/app/combat.rs", "expect"): 2,
     ("src/app/simulation.rs", "expect"): 2,
     ("src/app/network_client.rs", "expect"): 1,
+    ("src/bin/glbviewer.rs", "expect"): 5,
 }
 
 

@@ -267,6 +267,10 @@ impl WindowGpu {
     async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
+        // Les 3 `expect` ci-dessous couvrent l'initialisation GPU au lancement de
+        // cet outil (`resumed()`, appelé une seule fois) : sans surface/adaptateur/
+        // device, l'outil n'a rien à afficher — pas de mode dégradé sensé, même
+        // raison que l'unique `expect` déjà whitelisté dans `gfx/renderer.rs`.
         let surface = instance
             .create_surface(window)
             .expect("création de la surface impossible");
@@ -556,8 +560,7 @@ impl Viewer {
             && d_distance.abs() < 0.005
             && d_yaw.abs() < 0.001
             && d_pitch.abs() < 0.001;
-        if settled {
-            let goal = self.camera_goal.take().unwrap();
+        if settled && let Some(goal) = self.camera_goal.take() {
             let cam = &mut self.state.camera;
             cam.target = goal.target;
             cam.distance = goal.distance;
@@ -598,7 +601,9 @@ impl Viewer {
         // jamais régénéré tant qu'aucun nouveau glyphe n'apparaît) — sortir
         // en cours de frame *après* avoir construit l'UI perdrait ce delta
         // pour de bon et l'atlas de polices ne s'afficherait plus jamais.
-        let gpu = self.gpu.as_mut().unwrap();
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
         use wgpu::CurrentSurfaceTexture as C;
         let frame = match gpu.surface.get_current_texture() {
             C::Success(t) | C::Suboptimal(t) => t,
@@ -651,9 +656,13 @@ impl Viewer {
         // complet, incompatible avec un emprunt de `self.gpu` tenu jusqu'à la
         // phase de peinture plus bas. `frame`/`view`/`encoder` sont des
         // valeurs possédées, indépendantes de cet emprunt.
-        let egui = self.egui.as_mut().unwrap();
-        let scene_renderer = self.scene_renderer.as_mut().unwrap();
-        let thumb_renderer = self.thumb_renderer.as_mut().unwrap();
+        let (Some(egui), Some(scene_renderer), Some(thumb_renderer)) = (
+            self.egui.as_mut(),
+            self.scene_renderer.as_mut(),
+            self.thumb_renderer.as_mut(),
+        ) else {
+            return;
+        };
 
         let (vw, vh) = self.viewport_size;
         let pixels =
@@ -1036,8 +1045,9 @@ impl Viewer {
         }
 
         // Phase 3 : peindre `full_output` sur la surface acquise plus haut.
-        let gpu = self.gpu.as_mut().unwrap();
-        let egui = self.egui.as_mut().unwrap();
+        let (Some(gpu), Some(egui)) = (self.gpu.as_mut(), self.egui.as_mut()) else {
+            return;
+        };
 
         egui.winit_state
             .handle_platform_output(&window, full_output.platform_output.clone());
@@ -1113,6 +1123,9 @@ impl ApplicationHandler for Viewer {
 
         let gpu = pollster::block_on(WindowGpu::new(window.clone()));
         let egui = Egui::new(&gpu.device, gpu.config.format, &window);
+        // Même raison que les `expect` de `WindowGpu::new` ci-dessus : partagent le
+        // même `device` déjà obtenu avec succès, un échec ici ne serait pas
+        // transitoire — pas de mode dégradé sensé pour un outil de visualisation.
         let scene_renderer = pollster::block_on(Renderer::new_headless(1280, 800))
             .expect("initialisation du renderer headless impossible");
         // Renderer distinct pour les vignettes de repli (cf. sa doc sur le
