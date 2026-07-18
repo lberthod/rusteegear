@@ -31,7 +31,7 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 - [🦀 Pourquoi Rust ?](#pourquoi-rust)
 - [⚖️ From scratch sur Rust — et pas sur Bevy ?](#from-scratch-vs-bevy)
 - [🎮 Fonctionnalités (disponibles aujourd'hui)](#fonctionnalites)
-- [🌐 Multijoueur en ligne (chantier en cours)](#multijoueur)
+- [🌐 Multijoueur en ligne](#multijoueur)
 - [🗓️ Historique & avancement](#historique)
 - [🚀 Démarrage rapide](#demarrage-rapide)
 - [🎨 Créer son premier jeu](#creer-son-jeu)
@@ -234,12 +234,14 @@ set_health(0..1)                       -- barre de vie du HUD
 ---
 
 <a id="multijoueur"></a>
-## 🌐 Multijoueur en ligne (chantier en cours)
+## 🌐 Multijoueur en ligne
 
-RusteeGear commence à devenir jouable **à plusieurs, en ligne**, sur le mode
-manches « Call of Zombies » — un chantier séparé du moteur solo, suivi sprint
-par sprint dans **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)**. Trois décisions de
-scope, prises dès le départ :
+RusteeGear est jouable **à plusieurs, en ligne**, sur un mode manches façon
+« Call of Zombies » avec plusieurs objectifs (Vagues / Survie / Escorte /
+Boss), des classes de joueur et un contrat quotidien — un chantier séparé du
+moteur solo, suivi sprint par sprint dans
+**[SPRINT_MMORPG.md](SPRINT_MMORPG.md)**. Trois décisions de scope, prises
+dès le départ :
 
 - **Échelle visée** : des salons de **2 à 16 joueurs**, pas un MMO à monde
   persistant (qui demanderait du sharding de zones et une infra bien plus
@@ -248,11 +250,10 @@ scope, prises dès le départ :
   par un **serveur de jeu Rust autoritaire**, jamais par les clients — anti-
   triche de base, chaque client ne fait qu'envoyer ses entrées et afficher
   l'état reçu.
-- **Firebase Realtime Database en backend annexe seulement** (comptes,
-  inventaire persistant, chat, classement — pas encore implémenté). Firebase
-  RTDB n'a pas d'autorité serveur ni de SDK Rust natif : inadapté au transport
-  temps réel du gameplay (position, coups), qui passe par un vrai serveur
-  WebSocket.
+- **Firebase Realtime Database en backend annexe** (comptes, chat de salon
+  avec rafraîchissement automatique, classement) — pas d'autorité serveur ni
+  de SDK Rust natif côté Firebase, donc inadapté au transport temps réel du
+  gameplay (position, coups), qui passe par un vrai serveur WebSocket.
 
 ### Comment ça marche
 
@@ -322,9 +323,25 @@ scope, prises dès le départ :
   client avance déjà localement le temps de tout `AnimationState`, local ou
   distant) et poussé dans `AnimationState::set_clip()` sur les fantômes, avec
   le même fondu enchaîné qu'en solo.
-- **Frags individualisés** : un compteur de monstres vaincus par joueur,
-  diffusé à tous dans le `Snapshot` — brique de progression/compétition
-  pensée pour un futur mode MMORPG (cf. GDD_MMORPG.md).
+- **Frags individualisés + assists** : un compteur de monstres vaincus par
+  joueur, diffusé à tous dans le `Snapshot`, plus des assists pour qui blesse
+  une cible achevée par un autre joueur (même XP qu'un frag, sans double
+  comptage) — XP calibrée sur l'économie visée par
+  [GDD_MMORPG.md](GDD_MMORPG.md) §8.3 (participation dominante, victoire en
+  bonus fixe).
+- **Classes de joueur** (Assaut / Éclaireur / Soutien) : choisies avant de
+  rejoindre (fenêtre Multijoueur), modulent vitesse/dégâts/soin ; le Soutien
+  peut réanimer un allié à 0 PV en canalisant Soin sur lui.
+- **Modes de manche** au-delà de Vagues : **Survie** (chrono, les vagues
+  rebouclent jusqu'à la fin), **Escorte** (protéger un convoi jusqu'à sa
+  destination) et **Boss** — sélectionnables dans la fenêtre Multijoueur, un
+  seul mode par salon pour toute sa durée de vie.
+- **Contrat du jour** : un objectif quotidien (même graine pour tous, dérivée
+  de la date UTC) qui donne un bonus d'XP distinct du score de manche normal.
+- **Terrain à relief réel** sur une partie de la carte MMORPG (collines,
+  bassin intégré à un contrefort, tunnel statique) — collider heightfield
+  dédié, restreint aux zones vérifiées libres de tout contenu placé à la main
+  pour ne pas casser la navigation des créatures.
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 
@@ -386,13 +403,13 @@ le développement). Historique sprint par sprint :
 - Pas de dégâts joueur-contre-joueur : la boule de feu traverse les autres
   joueurs (la vie est individualisée depuis le Sprint 80, mais le PvP reste
   un choix de design à part — sur demande seulement, cf. GDD_MMORPG.md §12).
-- Pas de réanimation d'un allié à 0 PV : la mort est un statut de spectateur
-  permanent pour le reste de la manche (décision assumée, Sprint 80).
-- Pas de rôles/classes : tous les joueurs partagent le même profil (le soin
-  coopératif est universel, pas réservé à une classe « Soutien »).
-- Pas de sélection de salon dans l'UI : la fenêtre Multijoueur rejoint
-  toujours le salon partagé par défaut, même si le serveur en gère plusieurs
-  depuis le Sprint 82.
+- Pas de sélecteur de mode réseau à la création d'un salon multi-parties
+  isolées : le code de salon (`ClientMsg::Join::lobby`) et le sélecteur de
+  mode de manche existent (fenêtre Multijoueur), mais rien n'empêche encore
+  deux groupes de choisir par erreur le même code — une gestion de salons
+  publics/privés reste à faire si le besoin se confirme.
+- Le menu pause (Échap, en Play/Player) ne propose que Reprendre/Redémarrer :
+  pas encore d'écran de paramètres in-game complet (volume, sensibilité).
 
 ---
 
@@ -539,6 +556,13 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 - **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)** —
   chantier **multijoueur en ligne** en détail, cf.
   **[Multijoueur en ligne](#multijoueur)** plus haut.
+- **[auditGDD10h.md](auditGDD10h.md)** / **[sprint10audit.md](sprint10audit.md)** — écart
+  GDD ↔ code (modes de manche, classes, contrat du jour, archétypes) et son plan de sprints.
+- **[optimisation3D.Analys.md](optimisation3D.Analys.md)** /
+  **[sprintoptimation3daudit10h.md](sprintoptimation3daudit10h.md)** — écart perf ↔ code
+  (capacité skinnée, culling, LOD, compression texture) et son plan de sprints.
+- **[reflexion.md](reflexion.md)** / **[sprintreflecion.md](sprintreflecion.md)** — validation,
+  coordination et déploiement en aval des deux plans ci-dessus.
 
 **Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
 audio bus/panning/streaming (104) et randomisation pitch/volume (108),

@@ -671,7 +671,7 @@ pour isoler la source d'un problème éventuel.
 ---
 
 <a id="phase-n"></a>
-## PHASE N — Nettoyer `README.md` (dépend de L + M, et de I/J/K si livrées)
+## PHASE N — Nettoyer `README.md` (dépend de L + M, et de I/J/K si livrées) — ✅ terminé (18 juillet 2026)
 
 > Constat de la Section 13 de `reflexion.md` : le nettoyage n'a de sens qu'une fois le déploiement
 > (Phase M) fait, pour décrire ce qui est réellement en ligne — le faire plus tôt produirait un
@@ -683,28 +683,33 @@ pour isoler la source d'un problème éventuel.
 > à vérifier contre les liens morts déjà traités par la Phase D, portée initialement limitée à
 > `GDD_MMORPG.md`).
 
-### Sprint 27 — Relecture section par section, contre l'état réel du code
+### Sprint 27 — Relecture section par section, contre l'état réel du code — ✅ terminé (18 juillet 2026)
 **Objectif** : un README qui décrit l'état effectivement déployé, sans réécriture globale.
-- [ ] § Limites connues (`README.md:384-395`) : retirer « Pas de rôles/classes » (livré) ; retirer
-  « Pas de sélection de salon dans l'UI » **seulement si** la Phase I est livrée ; vérifier chaque
-  ligne restante contre le code (grep avant d'affirmer, même discipline que ce document).
-- [ ] § Multijoueur en ligne (`README.md:237`) : relire le titre/l'intro « chantier en cours » à la
-  lumière de ce qui est réellement stabilisé (assists, modes de manche, roster, chat, mute).
-- [ ] § Fonctionnalités disponibles (`README.md:163`) : ajouter les modes Survie/Escorte/Boss, le
-  contrat du jour, les archétypes de créatures, et — si livrées — le menu pause (Phase J) et le
-  relief de terrain (Phase K).
-- [ ] § La suite — analyse & sprints (`README.md:530`) : vérifier que les liens pointent vers les
-  documents actuels (`auditGDD10h.md`/`sprint10audit.md`/`optimisation3D.Analys.md`/
-  `sprintoptimation3daudit10h.md`/`reflexion.md`/`sprintreflecion.md`), aucun lien mort vers un
-  fichier déjà supprimé que la Phase D n'aurait pas couvert (portée initiale limitée à
-  `GDD_MMORPG.md`).
+- [x] § Limites connues (`README.md:384-395`) : retiré « Pas de rôles/classes » (livré, Phase E de
+  `sprint10audit.md`), « Pas de réanimation d'un allié à 0 PV » (livré, `update_network_revive`
+  vérifié dans `src/app/health.rs`) et « Pas de sélection de salon dans l'UI » (livré, Phase I).
+  Ajouté 2 limites réelles à jour : pas de gestion de salons publics/privés (le code de salon
+  existe mais rien n'empêche une collision de codes), et le menu pause n'a pas d'écran de
+  paramètres (volume/sensibilité), juste Reprendre/Redémarrer.
+- [x] § Multijoueur en ligne (`README.md:237`) : titre passé de « (chantier en cours) » à
+  « Multijoueur en ligne » (TOC + ancre), intro réécrite pour citer les modes de manche/classes/
+  contrat du jour, mention Firebase chat/classement passée de « pas encore implémenté » à livré
+  (vérifié : `post_chat_message`/`get_top_leaderboard` dans `src/net/firebase.rs`).
+- [x] § « Comment ça marche » (liste à puces, pas la section « Fonctionnalités » générique qui est
+  solo-only) : ajouté assists, classes de joueur, modes de manche (Survie/Escorte/Boss), contrat du
+  jour, terrain à relief réel — chaque affirmation vérifiée contre le code avant d'être écrite (ex.
+  `can_revive()`, `PlayerClass::ALL`).
+- [x] § La suite — analyse & sprints (`README.md:530`) : ajouté les 3 paires de documents
+  (`auditGDD10h.md`/`sprint10audit.md`, `optimisation3D.Analys.md`/
+  `sprintoptimation3daudit10h.md`, `reflexion.md`/`sprintreflecion.md`) ; aucun lien mort trouvé
+  (grep `AUDIT|GAMEDESIGN|HANDOFF` sur `README.md` : 0 résultat, déjà nettoyé par la Phase D).
 - **Fichiers** : `README.md`.
 - **Livrable** : README relu section par section, chaque affirmation vérifiée contre le code au
   moment du nettoyage, aucun lien mort.
-- **Risques** : démarrer ce sprint avant que L + M soient vertes — le document serait à refaire
-  dès le prochain déploiement ; ne pas retirer une limite listée tant que la phase qui la lève
-  n'est pas elle-même confirmée livrée (ex. ne pas retirer « pas de sélection de salon » si I n'est
-  pas faite).
+- **Risques matérialisés** : une première rédaction du bullet « menu pause » contredisait
+  elle-même ce qui vient d'être livré (affirmait « pas déclenché à la demande hors défaite » alors
+  que Échap le déclenche bien indépendamment de la défaite depuis le Sprint 22) — repéré et
+  corrigé avant commit, pas après.
 
 ---
 
