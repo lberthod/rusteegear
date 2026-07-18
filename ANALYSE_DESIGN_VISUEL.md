@@ -2,11 +2,11 @@
 
 > Analyse critique menée le 15 juillet 2026 sur l'état réel du jeu :
 > `assets/player_scene.json` (carte embarquée), `src/gfx/renderer.rs`
-> (pipeline de rendu), `src/app/*` (interactions), et les documents
-> [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md) /
-> [GAMEDESIGN_MMORPG.md](GAMEDESIGN_MMORPG.md). Complète ces derniers sur un
-> angle qu'ils ne couvrent pas : **l'identité visuelle et la lisibilité** du
-> jeu, pas seulement ses mécaniques.
+> (pipeline de rendu), `src/app/*` (interactions), et le
+> [GDD_MMORPG.md](GDD_MMORPG.md) (qui a depuis absorbé les documents de
+> design en ligne d'origine). Complète ce dernier sur un angle qu'il ne
+> couvrait pas encore à l'époque : **l'identité visuelle et la lisibilité**
+> du jeu, pas seulement ses mécaniques.
 
 ---
 

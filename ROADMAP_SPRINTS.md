@@ -10,7 +10,7 @@
 
 Retour : **[README.md](README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap figé 0→44) ·
 **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)**
-(détail multijoueur) · **[HANDOFF.md](HANDOFF.md)** (reprise du projet).
+(détail multijoueur).
 
 ---
 
@@ -711,7 +711,7 @@ contrôles tactiles + scripts Lua, aperçu mobile jouable, génération IA (scri
 > Numérotation **indépendante** du tronc solo ci-dessus (continue à 50 là où le solo
 > s'arrêtait à 49) ; détail complet des sprints dans **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)**
 > (50-65, puis 80/82) et **[SPRINTNETWORK.md](SPRINTNETWORK.md)** (66-79, suite directe de
-> [AUDIT_LATENCE_MULTIJOUEUR.md](AUDIT_LATENCE_MULTIJOUEUR.md)). Cette section résume ce qui
+> l'audit latence du 12 juillet 2026). Cette section résume ce qui
 > est **réalisé** ; elle ne remplace pas les documents source.
 >
 > **Scope verrouillé (2026-07-07)** : petit multi en ligne, **2–16 joueurs par salon**
@@ -822,7 +822,7 @@ Fenêtre Multijoueur → section Classement, branchée sur le backend du Sprint 
 
 ### Suite directe : latence & qualité du mode en ligne (66 → 79)
 
-> Après [AUDIT_LATENCE_MULTIJOUEUR.md](AUDIT_LATENCE_MULTIJOUEUR.md) (2026-07-12) : chaque
+> Après l'audit latence du 2026-07-12 : chaque
 > sprint corrige un symptôme **mesuré en jeu réel** (vidéo, VPS), pas anticipé.
 
 #### Sprint 66 — Lissage de la réconciliation du joueur local ✅ FAIT

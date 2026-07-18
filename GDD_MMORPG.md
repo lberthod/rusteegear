@@ -3,10 +3,10 @@
 > **Nature de ce document.** GDD classique et autonome du jeu MMORPG-léger
 > tournant sur RusteeGear : concept, univers, boucles de jeu, systèmes,
 > game feel, level design, direction artistique. Il donne au jeu une
-> identité de *jeu* (nom, ton, fiction), là où
-> [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md) et
-> [GAMEDESIGN_MMORPG.md](GAMEDESIGN_MMORPG.md) sont des documents
-> d'audit/priorisation (quoi construire ensuite, dans quel ordre), et
+> identité de *jeu* (nom, ton, fiction), là où les anciens documents
+> d'audit/priorisation GAMEDESIGN_EN_LIGNE.md et GAMEDESIGN_MMORPG.md
+> (supprimés, absorbés ici — voir historique git) posaient quoi construire
+> ensuite, dans quel ordre, et
 > [ANALYSE_DESIGN_VISUEL.md](ANALYSE_DESIGN_VISUEL.md) une analyse critique
 > ponctuelle (15 juillet) dont les constats sont intégrés ici. En cas de
 > conflit sur une valeur d'équilibrage ou un état d'avancement, le code et
@@ -51,8 +51,9 @@ l'état réel de la scène, détail au §14) : rendre le danger perceptible
 (feedback des dégâts subis), réparer la parité mobile (boutons tactiles
 perdus), et **réunifier les deux jeux** — le contenu riche (hameau,
 ménagerie de 45 monstres) vit dans une démo d'éditeur que le serveur ne
-sert pas, pendant que la carte en ligne ne joue aucune vague et que l'XP
-rend les paliers ~100× trop lents (§5.5, §8.3, tension n°7).
+sert pas, pendant que la carte en ligne ne joue aucune vague (§5.5, tension
+n°7) — le barème d'XP, lui, a été recalibré (§8.3) et n'est plus le chantier
+ouvert qu'il était.
 
 ---
 
@@ -77,7 +78,7 @@ et chaque manche est une nuit à tenir, ensemble. Votre personnage, lui,
 traverse les nuits : il gagne de l'expérience, débloque ses armes, se fait
 un nom au classement.
 
-**Fantasme joueur (le test des trois piliers, cf. GAMEDESIGN_MMORPG.md §2).**
+**Fantasme joueur (le test des trois piliers).**
 « Mon personnage progresse à chaque manche, il a un rôle que mon groupe
 reconnaît, et je reviens demain parce que quelque chose m'attend. »
 
@@ -178,7 +179,7 @@ devient sociale.
 
 ### 3.4 Boucle de retour (jour après jour) — le pilier « rendez-vous »
 
-- **Contrat du jour** (GAMEDESIGN_MMORPG.md §3.5) : un défi global dérivé de
+- **Contrat du jour** : un défi global dérivé de
   la date (seed = jour UTC, calculé identiquement par serveur et clients),
   récompensé une fois par compte et par jour. Habillage fiction :
   *« l'Almanach du Hameau »* — chaque jour, une page, un défi.
@@ -222,9 +223,10 @@ enjeu réseau. Trois garanties de conception le rendent suffisant :
 
 ## 4. Structure d'une nuit : les modes de manche
 
-Un salon choisit son objectif à la création (`RoundObjective`,
-GAMEDESIGN_MMORPG.md §3.4). Même squelette réseau pour tous ; seule la
-condition de victoire change.
+Un salon choisit son objectif à la création (`RoundObjective`, cf. Phase C
+de [sprint10audit.md](sprint10audit.md#phase-c) — abstraction encore à
+poser, seul le mode Vagues existe aujourd'hui). Même squelette réseau pour
+tous ; seule la condition de victoire change.
 
 | Mode | Nom fiction | Règle | État |
 |---|---|---|---|
@@ -618,15 +620,19 @@ groupe 2 Flammes + 1 Feu follet + 1 Foyer survit là où 4 Flammes échouent.
 
 ### 8.3 L'économie de l'XP — les maths du rendez-vous
 
-**Constat sur l'implémentation actuelle** (à corriger, c'est le point le
-plus désaligné du jeu par rapport à son propre design) : l'XP créditée en
-fin de manche est le *score de salon*, soit **1 point par monstre vaincu**
-— une nuit typique en rapporte ~20 — avec `XP_PER_LEVEL = 1000`. Le premier
-palier (niv. 3 = 2 000 XP) demanderait donc **~100 nuits**, soit ~25
-soirées ; le niveau 10, plus de 400 nuits. La promesse « encore 2 manches
-et j'ai le Boulet » est mathématiquement impossible : la progression existe
-techniquement mais est **imperceptible à l'échelle d'une vie de joueur** —
-deux ordres de grandeur d'écart entre l'intention et les nombres.
+**Constat historique** (corrigé depuis — cf. commit *Audit gameplay : mort
+partagée, classement individuel, XP calibrée, classes légères*) : l'XP
+créditée en fin de manche était le *score de salon*, soit **1 point par
+monstre vaincu** — une nuit typique en rapportait ~20 — avec
+`XP_PER_LEVEL = 1000`. Le premier palier (niv. 3 = 2 000 XP) aurait
+demandé **~100 nuits**, soit ~25 soirées ; le niveau 10, plus de 400
+nuits. La promesse « encore 2 manches et j'ai le Boulet » était
+mathématiquement impossible : la progression existait techniquement mais
+restait **imperceptible à l'échelle d'une vie de joueur** — deux ordres
+de grandeur d'écart entre l'intention et les nombres. **État réel** :
+`round_xp` (`src/bin/server.rs`) applique désormais exactement le barème
+cible ci-dessous, garde anti-AFK incluse ; seul le terme *assist* reste à
+0 en attendant sa détection ([Phase B, sprint 4](sprint10audit.md#phase-b)).
 
 **Économie cible.** On fixe d'abord le *rythme vécu*, puis on en dérive les
 valeurs (et non l'inverse) :
@@ -768,11 +774,15 @@ donne du corps à tous les Veilleurs sans un clip de plus.
 
 ### 10.4 Audio (direction minimale)
 
-Aucun système audio riche n'existe encore ; quand il arrive, l'ordre de
-priorité est celui du feedback, pas de l'ambiance : 1) dégâts subis, 2)
-allié à terre, 3) éveil de créature proche, 4) tir/impact, 5) fin de vague,
-6) ambiance de nuit. Un jeu muet mais aux 5 premiers sons justes est
-meilleur qu'une bande-son complète sans eux.
+**État réel** : le système existe (`src/runtime/audio.rs` — moteur `kira`,
+ducking musique/SFX, spatialisation, streaming musical ; `src/runtime/sfx.rs`
+— bips synthétisés en mémoire, sans fichier requis) et couvre déjà les
+premiers rangs de la priorité de feedback : `Sfx::Hit` (dégât subis),
+`Sfx::Defeat`, `Sfx::WaveStart`. L'ordre de priorité visé reste la référence
+pour toute extension : 1) dégâts subis, 2) allié à terre, 3) éveil de
+créature proche, 4) tir/impact, 5) fin de vague, 6) ambiance de nuit — les
+rangs 2 et 3 (allié à terre, éveil) ne sont pas encore couverts. Un jeu aux
+5 premiers sons justes vaut mieux qu'une bande-son complète sans eux.
 
 ---
 
@@ -805,7 +815,8 @@ Deux garde-fous méthodologiques hérités des audits :
 
 ## 12. Ce que ce jeu n'est pas (exclusions fermes)
 
-Reconduites de GAMEDESIGN_EN_LIGNE.md §4 et GAMEDESIGN_MMORPG.md §3.7 :
+Exclusions reconduites (héritées des anciens documents d'audit, désormais
+supprimés — voir historique git) :
 
 - Pas de monde persistant partagé entre salons (pas de sharding, pas de
   base distribuée) — un salon est une nuit, jetable.
@@ -879,22 +890,27 @@ d'alerte :
 |---|---|
 | Vie individuelle, spectateur, défaite de salon | ✅ En jeu |
 | IA poursuite + plafond 2 chasseresses + rayon d'éveil | ✅ En jeu |
-| 3 armes à distance, mêlée, soin universel (H) | ✅ En jeu (⚠️ boutons tactiles perdus par la scène ré-exportée — régression bloquante, cf. AUDIT_GAMEPLAY_2026-07-16.md §2) |
+| 3 armes à distance, mêlée, soin universel (H) | ✅ En jeu (⚠️ régression tactile scène ré-exportée signalée le 16 juillet — vérifier l'état courant dans ROADMAP_SPRINTS.md avant de s'y fier) |
 | Multi-salons par code | ✅ Backend (UI de saisie à brancher) |
-| Frags individuels diffusés | ✅ Backend (HUD à brancher) |
-| Comptes, XP, classement, chat (Firebase) | ✅ En jeu (classement = score de salon, à basculer sur la contribution individuelle, §8.2 ; **économie d'XP ~100× trop lente pour les paliers**, barème cible au §8.3) |
+| Frags individuels diffusés | ✅ En jeu (colonne 💀 du roster HUD, `hud.rs:535`) |
+| Comptes, XP, classement (contribution individuelle), chat (Firebase) | ✅ En jeu (classement individuel livré, `network_player_score` ; barème d'XP recalibré, `round_xp`, §8.3 — seuls les assists manquent encore, cf. Phase B de [sprint10audit.md](sprint10audit.md#phase-b)) |
 | Décor hameau + ménagerie animée + héroïne fée | ⚠️ Dans la démo d'éditeur (`mmorpg_demo`), **pas dans la scène que le serveur sert** — tension n°7 ; faune paisible encore inutilisée, §7.3 |
 | Système de vagues (`Combat::wave`) | ✅ Codé et testé, **mais la carte livrée est toute à `wave: 0`, 1 PV** — aucune vague réelle, pas de chef à 3 PV pour le Boulet (§5.5) |
-| Roster HUD, sélection de salon UI | 🔜 Priorité 1 (GAMEDESIGN_MMORPG.md §4) |
-| Classes, réanimation Soutien | 🔜 Priorité 2 |
-| Paliers, XP par contribution, assists | 🔜 Priorité 3 |
-| Modes Survie / Boss / Escorte | 🔜 Priorité 4 |
-| Contrat du jour, couleur de braise | 🔜 Priorités 5-6 |
-| Feedback dégâts subis, affordances, charte (§6, §10) | 🔜 À planifier — non couvert par la feuille de route actuelle |
+| Roster HUD (barres de vie, frags, spectateur grisé) | ✅ En jeu (`hud.rs:463-609`, branché depuis `editor/mod.rs`) |
+| Sélecteur de classe UI | 🔜 Phase A, sprint 3 ([sprint10audit.md](sprint10audit.md#phase-a)) |
+| Réanimation Soutien (§8.1) | 🔜 **Non planifiée** — absente des 14 sprints de `sprint10audit.md`, à ajouter à un plan futur |
+| Assists (XP, canal de reconnaissance) | 🔜 [Phase B, sprint 4](sprint10audit.md#phase-b) — la formule (`XP_PER_FRAG_OR_ASSIST`) existe déjà, seule la détection manque |
+| Modes Survie / Boss / Escorte | 🔜 [Phase C, sprints 5-8](sprint10audit.md#phase-c) |
+| Contrat du jour | 🔜 [Phase D, sprint 9](sprint10audit.md#phase-d) (dépend de la phase C) |
+| Archétypes de créatures (Traqueuse/Meute/Colosse/Furtive) | 🔜 [Phase E, sprints 10-11](sprint10audit.md#phase-e) |
+| Salon multijoueur (chat) & mute local | ✅ En jeu ([Phase F, sprints 12-13](sprint10audit.md#phase-f), terminé 2026-07-18) — chat + rafraîchissement automatique, mute local persisté (`src/app/settings.rs::muted_players`) |
+| Feedback dégâts subis (vignette, recul caméra, diagnostic de mort), affordances, charte (§6, §10) | 🔜 [Phase A, sprints 1-2](sprint10audit.md#phase-a) |
+| Audio (dégâts subis, défaite, fin de vague) | ✅ En jeu (`src/runtime/audio.rs`, `src/runtime/sfx.rs`) — allié à terre et éveil de créature encore muets, §10.4 |
 
 La séquence de livraison et ses dépendances sont pilotées par
-[GAMEDESIGN_MMORPG.md](GAMEDESIGN_MMORPG.md) §4 et
-[SPRINT_MMORPG.md](SPRINT_MMORPG.md) — ce tableau n'est qu'une photographie.
+[SPRINT_MMORPG.md](SPRINT_MMORPG.md) (chantier réseau) et
+[sprint10audit.md](sprint10audit.md) (écarts gameplay/GDD, phases A-G) —
+ce tableau n'est qu'une photographie.
 
 ---
 
@@ -959,7 +975,7 @@ mécanique :
 | Sacrifice de DPS (soigner au lieu de tirer) | assists au même rang que les frags | 🔜 §8.2 |
 | Prise de risque (kiter, réanimer sous pression) | réanimation créditée en assist ; le kiting reste sous-compté | ⚠️ trou connu, cf. ci-dessous |
 | Constance (revenir chaque jour) | contrat du jour, `last_contract_day` | 🔜 §3.4 |
-| Endurance (finir une nuit perdue) | XP de participation — la défaite paie | 🔜 §8.3 |
+| Endurance (finir une nuit perdue) | XP de participation — la défaite paie | ✅ `round_xp`, garde anti-AFK incluse (§8.3) |
 | Apprentissage (lire les archétypes, le triangle d'armes) | payé en performance, pas en points — c'est voulu (compétence intrinsèque) | ✅ par design |
 
 **Trou assumé** : l'effort de *diversion* (le Feu follet qui promène un
@@ -1273,20 +1289,21 @@ GDD est dimensionné pour être maintenu en solo — c'est la vraie contrainte
 
 État vérifié : l'écriture du chat exige un compte (`auth != null`), le
 transport a un rate-limit (déconnexion au-delà d'un budget de trames/s),
-pseudo et code de salon sont validés côté serveur. Il manque, par ordre
-d'urgence :
+pseudo et code de salon sont validés côté serveur. **Mute local livré**
+(Phase F, sprint 13, `sprint10audit.md`, 2026-07-18) : masquer les messages
+d'un joueur pour soi — côté client (`Settings::muted_players`,
+`src/app/settings.rs`), désamorce 90 % des incidents d'un chat de salon entre
+inconnus, prérequis avant toute mise en avant publique du chat désormais
+posé. Il manque encore, par ordre d'urgence :
 
-1. **Mute local** : masquer les messages d'un joueur pour soi — côté
-   client, coût minimal, désamorce 90 % des incidents d'un chat de salon
-   entre inconnus. Prérequis avant toute mise en avant publique du chat.
-2. **Longueur et cadence des messages** plafonnées côté serveur (le
+1. **Longueur et cadence des messages** plafonnées côté serveur (le
    rate-limit réseau ne couvre pas le spam Firebase).
-3. **Pas de modération de contenu automatisée** (hors de portée solo,
+2. **Pas de modération de contenu automatisée** (hors de portée solo,
    assumé) — en compensation : le chat reste *de salon* (on y est entre
    gens qui ont partagé un code, pas dans un canal mondial), et le pseudo
    est le seul contenu libre visible hors salon (classement) — il doit
    donc passer par la même validation de charset que le reste.
-4. **Griefing gameplay** : impossible par construction (pas de dégâts
+3. **Griefing gameplay** : impossible par construction (pas de dégâts
    entre joueurs, pas de collision punitive, pas d'objets volables) — le
    seul vecteur restant est l'AFK, traité au §8.3. À re-vérifier à chaque
    mécanique nouvelle : « un joueur hostile peut-il s'en servir contre son

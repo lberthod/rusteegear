@@ -42,7 +42,8 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 
 > Détail sprint par sprint (source de vérité, à jour en continu) :
 > **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**. Reprise du projet par un
-> nouveau développeur : **[HANDOFF.md](HANDOFF.md)**.
+> nouveau développeur : **[GDD_MMORPG.md](GDD_MMORPG.md)** (vision/état) puis
+> **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (détail).
 
 ---
 
@@ -302,7 +303,7 @@ scope, prises dès le départ :
   et chaque mise à mort atteint tous les écrans (`GameEvent::Defeated` :
   son + flash immédiats).
 - **Vie individualisée, monstres qui poursuivent vraiment, soin coopératif**
-  (`src/app/health.rs`, Sprint 80 — voir [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md)) :
+  (`src/app/health.rs`, Sprint 80 — voir [GDD_MMORPG.md](GDD_MMORPG.md)) :
   chaque joueur réseau a désormais sa propre vie (plus un champ unique par
   salon) — un joueur peut mourir (spectateur, objet masqué) sans mettre fin
   à la manche pour les autres, tant qu'il en reste un debout. Les monstres
@@ -323,7 +324,7 @@ scope, prises dès le départ :
   le même fondu enchaîné qu'en solo.
 - **Frags individualisés** : un compteur de monstres vaincus par joueur,
   diffusé à tous dans le `Snapshot` — brique de progression/compétition
-  pensée pour un futur mode MMORPG (cf. GAMEDESIGN_EN_LIGNE.md).
+  pensée pour un futur mode MMORPG (cf. GDD_MMORPG.md).
 
 ### Un déplacement fluide, en solo comme en ligne (audit 2026-07-12/13)
 
@@ -384,8 +385,7 @@ le développement). Historique sprint par sprint :
 
 - Pas de dégâts joueur-contre-joueur : la boule de feu traverse les autres
   joueurs (la vie est individualisée depuis le Sprint 80, mais le PvP reste
-  un choix de design à part, cf. GAMEDESIGN_EN_LIGNE.md §3.7 — sur demande
-  seulement).
+  un choix de design à part — sur demande seulement, cf. GDD_MMORPG.md §12).
 - Pas de réanimation d'un allié à 0 PV : la mort est un statut de spectateur
   permanent pour le reste de la manche (décision assumée, Sprint 80).
 - Pas de rôles/classes : tous les joueurs partagent le même profil (le soin
@@ -427,7 +427,6 @@ le développement). Historique sprint par sprint :
 > Récap propre + **logique des prochains sprints** : **[SPRINTS.md](SPRINTS.md)**.
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**
 > (c'est la source de vérité sur l'avancement — ce tableau n'en est qu'un résumé).
-> Reprise du projet par un nouveau développeur : **[HANDOFF.md](HANDOFF.md)**.
 
 ### Plateformes — état honnête
 
@@ -540,7 +539,6 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
 - **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)** —
   chantier **multijoueur en ligne** en détail, cf.
   **[Multijoueur en ligne](#multijoueur)** plus haut.
-- **[HANDOFF.md](HANDOFF.md)** — reprise du projet par un nouveau développeur.
 
 **Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)) :
 audio bus/panning/streaming (104) et randomisation pitch/volume (108),

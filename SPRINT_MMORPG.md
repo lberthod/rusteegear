@@ -698,7 +698,7 @@ jamais relié à une UI).
   (pas estimés) confirmant une large marge à 16 joueurs (voir sa section) —
   aucune optimisation réseau nécessaire à cette échelle.
 
-- **2026-07-07 — Audit du chantier multijoueur ([AUDIT_MMORPG.md](AUDIT_MMORPG.md)).**
+- **2026-07-07 — Audit du chantier multijoueur (AUDIT_MMORPG.md, depuis supprimé — voir historique git).**
   Revue critique post-Sprint 61. Un bug réel trouvé et corrigé : un second
   `Join` du même client (rejeu réseau, bug client, trame forgée) créait un
   objet fantôme simulé indéfiniment sans jamais nettoyer le premier
@@ -711,7 +711,6 @@ jamais relié à une UI).
   `current_thread` dédié (thread de fond qui le `block_on` en continu) au lieu
   d'un runtime multi-thread complet par connexion — mesuré : 30 threads OS au
   total pour le test de charge à 16 joueurs, contre plus de 150 estimés avant.
-  Détail complet : [AUDIT_MMORPG.md](AUDIT_MMORPG.md).
 
 - **2026-07-07 — Sprint 63 (hors plan, demandé par l'utilisateur).** Câblage
   réel de `NetClient` dans l'éditeur (fenêtre Multijoueur + `poll_network`),
@@ -728,8 +727,9 @@ jamais relié à une UI).
   seul peut le faire, cet environnement n'a pas d'affichage).
 
 ### Sprint 80 — Vie individualisée, IA multi-cibles, soin coopératif ✅ FAIT
-Traduction en code de [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md) §3.1/
-§3.2/§3.4/§3.6, dans l'ordre de priorité qu'il recommandait.
+Traduction en code de GAMEDESIGN_EN_LIGNE.md §3.1/
+§3.2/§3.4/§3.6 (doc depuis supprimé, contenu absorbé par GDD_MMORPG.md),
+dans l'ordre de priorité qu'il recommandait.
 
 **§3.1 — Vie individualisée (nouveau `src/app/health.rs`).**
 `AppState::network_health: HashMap<PlayerId, f32>` remplace, côté
@@ -793,7 +793,7 @@ propres.
 `src/lib.rs`, `assets/player_scene.json`, `examples/*.rs`.
 
 ### Sprint 82 — Multi-salons ✅ FAIT
-Traduction de [GAMEDESIGN_EN_LIGNE.md](GAMEDESIGN_EN_LIGNE.md) §3.3. Choisi
+Traduction de GAMEDESIGN_EN_LIGNE.md §3.3 (doc depuis supprimé). Choisi
 en priorité (parmi les axes restants) parce qu'il ne touche que
 `src/bin/server.rs`/`src/net/*` — aucun risque de collision avec la session
 parallèle qui travaillait au même moment sur `src/editor/mod.rs`/
