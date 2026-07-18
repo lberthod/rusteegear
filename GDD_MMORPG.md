@@ -195,7 +195,7 @@ existants, et jouable en une seule nuit) :
 | *Nuit blanche* — gagnez sans qu'aucun Veilleur ne tombe | aucun `PlayerDown` sur la manche gagnée | prudence collective, le Foyer brille |
 | *À l'aube juste* — gagnez une Horde en moins de 8 min | horodatage de manche | agressivité, la Flamme brille |
 | *La lande garde ses morts* — gagnez sans réanimation | compteur d'assists de réanimation = 0 | tension inversée : le filet est interdit |
-| *Main de braise* — 10 frags en mêlée seule | frags par source (contact vs projectile) | prise de risque au contact |
+| *Main de braise* — 10 frags à l'attaque de base seule (sans arme à distance équipée) | frags par arme active au moment du coup | prise de risque à courte portée |
 | *Le troupeau compte sur vous* — gagnez une Escorte convoi > 50 % PV | PV du convoi en fin de manche | protection, le Feu follet détourne |
 | *Sobriété* — gagnez sans ramasser d'arme au sol | compteur de `WeaponPickup` | fidélité à son arme (et à son palier) |
 
@@ -254,7 +254,16 @@ tous ; seule la condition de victoire change.
 
 ### 5.1 Arsenal du Veilleur
 
-- **Mêlée** : attaque à préparation (`attack_windup`), mode Simple ou Zone.
+- **Attaque de base** (étiquetée « mêlée » aux contrôles, §18.2 — la courte
+  portée et le geste de préparation, pas un chemin de dégâts séparé) :
+  préparation (`attack_windup`) puis résolution en mode Simple (missile
+  homing verrouillé sur la cible la plus proche à portée — même voie de
+  résolution que les trois armes à distance ci-dessous, `AttackProjectile`
+  dans `src/app/combat.rs`, sans coup de contact instantané) ou Zone (dégâts
+  instantanés à tout ce qui est à portée, réservé au Marteau côté démo solo
+  — `WEAPONS`, `src/scene/mod.rs`). Décision Phase E (2026-07-18) : pas de
+  résolution à contact direct prévue tant qu'un besoin de gameplay concret
+  ne le justifie pas — le missile homing à courte portée en tient lieu.
 - **Trois armes à distance** (visée dans la direction du regard), valeurs
   réelles de `RANGED_WEAPONS` :
 
@@ -872,15 +881,23 @@ d'alerte :
    silencieusement qu'elle a cassé les boutons tactiles). Signal : tout
    ré-export de scène passe par les tests garde-fous *et* une nuit de
    validation jouée.
-7. **La scène servie et la scène vitrine divergent** (§5.5) : le contenu
-   riche (hameau 72 m, ménagerie de 45 monstres) s'accumule dans
-   `Scene::mmorpg_demo()` côté éditeur, pendant que le serveur sert la
-   scène embarquée, plus pauvre et actuellement cassée au tactile. Chaque
-   sprint « décor » qui enrichit la démo sans toucher la scène servie
-   creuse l'écart. Signal : si un joueur en ligne ne peut pas croiser un
-   monstre de la ménagerie, le sprint qui l'a ajouté n'a pas livré du
-   *jeu*, il a livré de l'éditeur. Réponse : le pipeline d'authoring doit
-   converger vers **une seule carte source de vérité** (la scène servie).
+7. **La scène servie et la scène vitrine divergent** (§5.5) — **substantiellement
+   résolue (Phase B, `docs/AUDIT_JEU_2026-07-18.md#phase-b`, 2026-07-18)** : le
+   décor du siège (remparts/tours/portes), 26 créatures et la faune neutre
+   sont désormais dans `assets/player_scene.json` (la scène que le serveur
+   sert), et un test non-`#[ignore]`
+   (`the_embedded_scene_decor_and_wildlife_match_the_demo`, `src/scene/mod.rs`)
+   empêche une régression silencieuse comme celle déjà subie sur les
+   créatures. Réserve non résolue : les fonctions de resynchro
+   (`sync_embedded_scene_hameau_from_the_demo` et consorts) restent
+   `#[ignore]`, donc manuelles, et les règles géométriques du §7.2 (sondes
+   IA, ≤8 s d'un espace ouvert, 16 spawns) ne sont testées que sur
+   `Scene::mmorpg_demo()`, jamais relues depuis le JSON exporté — un écart
+   pourrait donc encore s'y loger sans que la CI le voie. Signal : si un
+   joueur en ligne ne peut pas croiser un monstre de la ménagerie, ou si
+   l'agencement géométrique diverge entre démo et scène servie, le
+   problème n'est plus « absence de décor » mais « absence de garde-fou
+   sur ces deux points précis ».
 
 ---
 
@@ -894,7 +911,7 @@ d'alerte :
 | Multi-salons par code | ✅ Backend (UI de saisie à brancher) |
 | Frags individuels diffusés | ✅ En jeu (colonne 💀 du roster HUD, `hud.rs:535`) |
 | Comptes, XP, classement (contribution individuelle), chat (Firebase) | ✅ En jeu (classement individuel livré, `network_player_score` ; barème d'XP recalibré, `round_xp`, §8.3 ; assists livrés aussi, cf. ligne dédiée ci-dessous) |
-| Décor hameau + ménagerie animée + héroïne fée | ⚠️ Dans la démo d'éditeur (`mmorpg_demo`), **pas dans la scène que le serveur sert** — tension n°7 toujours ouverte ; faune paisible encore inutilisée, §7.3 |
+| Décor hameau + ménagerie animée + héroïne fée | ✅ Dans la scène servie (`assets/player_scene.json` : remparts/tours/portes, 26 créatures, faune neutre) **et** verrouillé par test non-`#[ignore]` (`the_embedded_scene_decor_and_wildlife_match_the_demo`, `src/scene/mod.rs:3587`, Phase B Sprint 1, `docs/AUDIT_JEU_2026-07-18.md#phase-b`, 2026-07-18) — tension n°7 substantiellement résolue ; réserve : les fonctions de resynchro (`sync_embedded_scene_hameau_from_the_demo` et consorts) restent manuelles (`#[ignore]`), et les règles géométriques du §7.2 ne sont testées que sur `mmorpg_demo()`, pas relues depuis le JSON exporté |
 | Système de vagues (`Combat::wave`) | ✅ Codé et testé, **et la carte livrée porte désormais de vraies vagues** (`assets/player_scene.json` : `wave` 1 à 4, `hp` jusqu'à 3 sur certaines créatures) — plus le `wave: 0`/1 PV uniforme constaté précédemment |
 | Roster HUD (barres de vie, frags, spectateur grisé) | ✅ En jeu (`hud.rs:463-609`, branché depuis `editor/mod.rs`) |
 | Sélecteur de classe UI | ✅ En jeu (fenêtre Multijoueur desktop, `src/editor/windows.rs:684-730`, `ComboBox` câblé à `PlayerClass` ; l'overlay tactile mobile reste volontairement sans sélecteur, Assaut par défaut) — [sprint10audit.md](docs/sprint10audit.md#phase-a) Sprint 3, checkbox non cochée mais code livré |

@@ -123,7 +123,11 @@ pub(super) fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
 /// la caméra de simulation (suivi joueur, IA, réseau) reste intacte.
 impl AppState {
     pub(crate) fn camera_shake_offset(&self) -> Vec3 {
-        if self.camera_shake <= 0.0 {
+        // PHASE I Sprint 1 (accessibilité, §16.6) : `Settings::reduce_shake`,
+        // copié dans `self.reduce_shake` (même patron que `music_volume`) —
+        // coupe le recul caméra sans toucher `camera_shake`, dont d'autres
+        // systèmes (flash de dégâts) restent indépendants.
+        if self.reduce_shake || self.camera_shake <= 0.0 {
             return Vec3::ZERO;
         }
         let forward = (self.camera.target - self.camera.eye()).normalize_or_zero();
@@ -398,6 +402,7 @@ impl AppState {
             self.score = 0;
             self.game_events.clear();
             self.trigger_prev.clear();
+            self.furtive_awake.clear();
             self.lua_vars.clear();
             self.respawn_queue.clear();
             self.inventory.clear();
@@ -649,6 +654,11 @@ impl AppState {
         // lire, conforme à GDD §16.3 « les bannières d'événement durent < 2 s »).
         if self.ally_down_flash > 0.0 {
             self.ally_down_flash = (self.ally_down_flash - dt * 0.75).max(0.0);
+        }
+        // Décroissance de la bannière de vague (Phase H, Sprint 2, ~2,5 s : un
+        // peu plus longue que `ally_down_flash`, moins urgente à lire).
+        if self.wave_banner_flash > 0.0 {
+            self.wave_banner_flash = (self.wave_banner_flash - dt * 0.4).max(0.0);
         }
         // Décroissance de l'effet d'attaque (~0,33 s) : rétrécit l'ancre `is_attack_fx`
         // jusqu'à disparition, puis la remasque pour ne pas polluer le prochain coup.
@@ -1213,6 +1223,12 @@ impl AppState {
                 // (indice dans `candidate_targets`, pas la position elle-même : sert
                 // au plafond ci-dessous).
                 let mut by_target: HashMap<usize, Vec<(usize, f32)>> = HashMap::new();
+                // Éveils `Furtive` à signaler ce tick (Phase O Sprint 1,
+                // `sprint2audijeu0718.md`) : indices qui viennent de franchir la portée
+                // d'éveil, collectés ici plutôt qu'appliqués en direct dans la boucle
+                // (qui emprunte `self.scene.objects`) — `self.furtive_awake`/`self.audio`
+                // sont mis à jour juste après, une fois la boucle terminée.
+                let mut newly_awake_furtives: Vec<usize> = Vec::new();
                 for (idx, obj) in self.scene.objects.iter().enumerate() {
                     // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
                     // ne poursuit pas (et n'a de toute façon pas de corps physique tant
@@ -1259,7 +1275,26 @@ impl AppState {
                         phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
                         continue;
                     }
+                    // Transition endormie → active (Phase O Sprint 1) : ce tick est le
+                    // premier où cette `Furtive` passe les deux gardes ci-dessus — pas
+                    // de ré-armement si le joueur ressort puis revient à portée (une
+                    // fois éveillée, elle le reste pour le reste de la partie, comme
+                    // `trigger_prev` pour les triggers de zone).
+                    if chaser.archetype == crate::scene::Archetype::Furtive
+                        && !self.furtive_awake.contains(&idx)
+                    {
+                        newly_awake_furtives.push(idx);
+                    }
                     by_target.entry(target_i).or_default().push((idx, dist_sq));
+                }
+                // Un son perceptible par éveil (Phase O Sprint 1) : appliqué après la
+                // boucle ci-dessus (qui emprunte `self.scene.objects`), pas dedans.
+                for idx in newly_awake_furtives {
+                    self.furtive_awake.insert(idx);
+                    crate::runtime::sfx::play(
+                        &mut self.audio,
+                        crate::runtime::sfx::Sfx::CreatureWake,
+                    );
                 }
                 // Plafond de chasseurs actifs par cible : sans lui, TOUS les monstres
                 // visibles convergent au même instant sur l'unique joueur présent (le cas
@@ -1446,6 +1481,28 @@ mod tests {
         assert!(
             second < first,
             "le pas doit décroître (1er={first}, 2e={second})"
+        );
+    }
+
+    /// PHASE I Sprint 1 (accessibilité §16.6) : `reduce_shake` coupe le recul
+    /// caméra à zéro même avec `camera_shake` au pic, sans le remettre à zéro
+    /// lui-même (d'autres systèmes, ex. le flash de dégâts, en dépendent
+    /// indépendamment — cf. la doc de `camera_shake_offset`).
+    #[test]
+    fn camera_shake_offset_is_zero_when_reduce_shake_is_set() {
+        let mut app = AppState::new();
+        app.camera_shake = 1.0;
+        app.reduce_shake = false;
+        // `t=0` annulerait le jitter sinusoïdal indépendamment de `reduce_shake`
+        // (sin(0) = 0) — un instant non nul isole bien la cause testée ici.
+        app.time = 1.0;
+        assert_ne!(app.camera_shake_offset(), Vec3::ZERO);
+
+        app.reduce_shake = true;
+        assert_eq!(app.camera_shake_offset(), Vec3::ZERO);
+        assert_eq!(
+            app.camera_shake, 1.0,
+            "reduce_shake ne doit pas muter camera_shake"
         );
     }
 

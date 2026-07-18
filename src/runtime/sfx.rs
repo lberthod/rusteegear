@@ -19,6 +19,15 @@ pub enum Sfx {
     /// signal, une manche démarre silencieusement — mauvais pour la lisibilité d'un
     /// mode par vagues où le joueur doit sentir la montée en tension.
     WaveStart,
+    /// Un **allié** réseau tombe à 0 PV (Phase O Sprint 1, `sprint2audijeu0718.md`,
+    /// GDD §10.4 rang 2) — distinct de `Lose` (notre propre défaite) : jusqu'ici les
+    /// deux jouaient le même son, indiscernables à l'oreille alors que l'un exige
+    /// une réaction (aller réanimer) et l'autre non (on est déjà spectateur).
+    AllyDown,
+    /// Une créature `Archetype::Furtive` sort de son état endormi (Phase O Sprint 1,
+    /// GDD §10.4 rang 3, GDD_MMORPG.md §5.4) — jusqu'ici muet, aucun signal ne
+    /// distinguait une embuscade qui s'active d'un monstre resté immobile.
+    CreatureWake,
 }
 
 impl Sfx {
@@ -31,6 +40,8 @@ impl Sfx {
             Sfx::Hit => "sfx:hit",
             Sfx::Defeat => "sfx:defeat",
             Sfx::WaveStart => "sfx:wave_start",
+            Sfx::AllyDown => "sfx:ally_down",
+            Sfx::CreatureWake => "sfx:creature_wake",
         }
     }
 
@@ -49,6 +60,14 @@ impl Sfx {
                 &[(220.0, 0.12), (330.0, 0.12), (220.0, 0.12), (330.0, 0.18)],
                 0.3,
             ),
+            // Trois tons descendants (contre les deux de `Lose`) : assez proche pour
+            // rester dans la même famille « mauvaise nouvelle », assez distinct pour
+            // ne pas se confondre avec notre propre défaite (GDD §10.4 rang 2).
+            Sfx::AllyDown => (&[(392.0, 0.1), (294.0, 0.1), (220.0, 0.16)], 0.28),
+            // Sting bref et montant (l'inverse de la descente ci-dessus) : signale une
+            // menace qui s'active, pas une perte — distinct de `WaveStart` (sirène à
+            // deux tons alternés) et de `Hit` (un seul coup sourd grave).
+            Sfx::CreatureWake => (&[(260.0, 0.05), (420.0, 0.05), (560.0, 0.07)], 0.24),
         }
     }
 }
@@ -154,6 +173,8 @@ mod tests {
             Sfx::Hit,
             Sfx::Defeat,
             Sfx::WaveStart,
+            Sfx::AllyDown,
+            Sfx::CreatureWake,
         ] {
             let (segs, vol) = s.segments();
             assert!(synth_wav(segs, vol).len() > 44);
@@ -173,6 +194,28 @@ mod tests {
                 "volume hors bornes : {volume}"
             );
         }
+    }
+
+    /// Livrable de Phase O Sprint 1 (`sprint2audijeu0718.md`) : un allié à terre doit
+    /// se distinguer de notre propre défaite, et un éveil de créature de toute autre
+    /// alerte déjà existante — sinon les deux resteraient indiscernables à l'oreille
+    /// malgré des clés/enums distinctes.
+    #[test]
+    fn ally_down_and_creature_wake_are_acoustically_distinct_from_related_sfx() {
+        assert_ne!(Sfx::AllyDown.key(), Sfx::Lose.key());
+        assert_ne!(
+            synth_wav(Sfx::AllyDown.segments().0, Sfx::AllyDown.segments().1),
+            synth_wav(Sfx::Lose.segments().0, Sfx::Lose.segments().1)
+        );
+        assert_ne!(Sfx::CreatureWake.key(), Sfx::WaveStart.key());
+        assert_ne!(Sfx::CreatureWake.key(), Sfx::Hit.key());
+        assert_ne!(
+            synth_wav(
+                Sfx::CreatureWake.segments().0,
+                Sfx::CreatureWake.segments().1
+            ),
+            synth_wav(Sfx::Hit.segments().0, Sfx::Hit.segments().1)
+        );
     }
 
     /// Livrable du Sprint 108 : « dix pas d'affilée ne sonnent plus

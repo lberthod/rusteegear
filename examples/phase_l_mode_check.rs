@@ -30,8 +30,8 @@ fn check_mode(url: &str, objective: RoundObjective, lobby: &str, watch_secs: u64
             Ok(ServerMsg::Event(GameEvent::RoundObjective { objective: o })) => {
                 got_objective_echo = Some(RoundObjective::from_u8(o));
             }
-            Ok(ServerMsg::Event(GameEvent::Win)) => got_win = true,
-            Ok(ServerMsg::Event(GameEvent::Lose)) => got_lose = true,
+            Ok(ServerMsg::Event(GameEvent::Win { .. })) => got_win = true,
+            Ok(ServerMsg::Event(GameEvent::Lose { .. })) => got_lose = true,
             Ok(ServerMsg::Snapshot(_)) => snapshots += 1,
             _ => {}
         }

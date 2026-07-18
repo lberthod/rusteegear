@@ -322,7 +322,13 @@ mod tests {
         // `wave_system_reveals_next_wave_then_wins_on_the_last`). Le joueur ne bouge
         // jamais dans ce test (aucune entrée de mouvement) : le missile doit donc
         // parcourir toute la longueur du donjon pour la salle 3 (~20 m) — budget de
-        // boucle large pour laisser le temps au missile homing d'arriver.
+        // boucle large pour laisser le temps au missile homing d'arriver. Depuis
+        // `Archetype::hp_multiplier` (GDD_MMORPG.md §5.4), le Squelette (Furtive) de
+        // la salle 2 encaisse 2 PV et l'Ogre (Colosse) de la salle 3 en encaisse 4
+        // (contre 1 PV chacun avant) : plusieurs allers-retours de missile sont
+        // désormais nécessaires par salle, pas un seul — 400 frames (au lieu de 100)
+        // couvrent large ce cas, `attack_cooldown = 0.0` ci-dessous permettant de
+        // retirer un missile dès que le précédent se résout.
         let mut app = AppState::new();
         app.load_roguelike_demo();
         for o in &mut app.scene.objects {
@@ -356,7 +362,7 @@ mod tests {
 
         app.input_state.attack = true;
         for wave in 1..=3u32 {
-            for _ in 0..100 {
+            for _ in 0..400 {
                 app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
                 app.advance_play();
                 if app.wave > wave || app.has_won() {

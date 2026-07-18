@@ -181,36 +181,87 @@ vague au changement de manche).
 **Objectif** : combler le trou signalé au §5 de l'audit — `multiplayer_window()` est une seule liste
 scrollable, et `list_online_players`/`set_presence` (déjà backés par Firebase,
 `src/net/firebase.rs:500-541`) ne sont jamais affichés.
-- [ ] Découper `multiplayer_window()` (`src/editor/windows.rs`) en sections claires (onglets egui ou
+- [x] Découper `multiplayer_window()` (`src/editor/windows.rs`) en sections claires (onglets egui ou
   sections rétractables) : Connexion/Classe, Salon (chat existant), Classement, **Présence en ligne**
-  (nouveau — liste des joueurs connectés au salon, via `list_online_players`).
-- **Fichiers** : `src/editor/windows.rs`.
-- **Livrable** : la fenêtre Multijoueur affiche qui est en ligne dans le salon courant, dans une
-  section dédiée et lisible séparément du chat.
+  (nouveau — liste des joueurs connectés au salon, via `list_online_players`). Fait : nouvelle
+  section « Présence en ligne » ajoutée après Classement dans `multiplayer_window`
+  (`src/editor/windows.rs`), alimentée par `AppState::online_players` (`request_refresh_online_players`/
+  `poll_online_players`, `src/app/network_client.rs`) et un heartbeat périodique
+  (`request_presence_heartbeat` → `net::firebase::set_presence`), même politique
+  d'auto-rafraîchissement que le chat (`AUTO_PRESENCE_REFRESH_INTERVAL`, `src/editor/mod.rs`).
+  **Correction du 18 juillet 2026 (auto-audit)** : le heartbeat tourne désormais sur un minuteur
+  **indépendant** de la fenêtre Multijoueur (`mp_last_presence_heartbeat`, distinct de
+  `mp_last_presence_refresh`) — la première version le liait à `panels.multiplayer` ouvert, comme le
+  chat ; or fermer cette fenêtre en pleine partie faisait disparaître le joueur de la présence après
+  `PRESENCE_TIMEOUT_MS` (15 s, `net::firebase`) alors qu'il jouait toujours. Le heartbeat tourne
+  maintenant tant qu'un compte est connecté (`has_firebase_account`) et Firebase configuré, fenêtre
+  ouverte ou non ; seul le rafraîchissement de la **liste** reste gaté par la fenêtre (inutile de la
+  réinterroger quand personne ne la regarde). **Écart assumé par rapport au libellé de l'objectif** :
+  `list_online_players`
+  (`net::firebase.rs:500-541`) lit `/presence/<uid>`, une présence **globale par compte**, pas
+  filtrée par salon (la RTDB ne garde pas trace du salon dans ce nœud) — la section affiche donc « qui
+  a un compte connecté et actif », pas strictement « qui est dans ce salon ». Un vrai filtre par salon
+  demanderait un nouveau nœud RTDB `lobbies/<code>/presence` (hors scope de ce sprint, pur
+  réarrangement d'UI annoncé).
+- **Fichiers** : `src/editor/windows.rs`, `src/editor/mod.rs`, `src/app/mod.rs`,
+  `src/app/network_client.rs`, `src/gfx/renderer.rs` (au-delà de `windows.rs` seul annoncé — le
+  déclaratif Firebase existait déjà mais n'était appelé nulle part, il fallait le brancher de bout en
+  bout pour qu'une liste non vide s'affiche).
+- **Livrable** : la fenêtre Multijoueur affiche qui est en ligne (présence de compte, cf. écart
+  ci-dessus) dans une section dédiée et lisible séparément du chat. ✅
 - **Risques** : ne pas casser le chat/mute déjà fonctionnels (Phase F de `sprint10audit.md`) — pur
-  réarrangement d'UI, pas de changement de logique réseau attendu.
+  réarrangement d'UI, pas de changement de logique réseau attendu. Confirmé sans régression
+  (`cargo test --all-targets` : 589 passés, `cargo test --features net_tests` : 613 passés).
 
 ### Sprint 2 — Marqueur allié hors-écran
 **Objectif** : compléter `ally_down_banner()` (déjà existant, `hud.rs:861`) avec une indication de
 direction pour un allié à terre hors du champ de vision.
-- [ ] Calculer la direction écran (flèche/indicateur de bord) vers l'allié à terre le plus proche,
+- [x] Calculer la direction écran (flèche/indicateur de bord) vers l'allié à terre le plus proche,
   sur le modèle des indicateurs hors-écran standards (projection de la position 3D sur les bords du
-  viewport 2D).
-- **Fichiers** : `src/editor/hud.rs`.
+  viewport 2D). Fait : `AppState::nearest_downed_ally_position` (`src/app/mod.rs`, filtre `health <=
+  0.0`, plus proche du joueur local) + `offscreen_edge_position`/flèche triangulaire dans
+  `ally_down_banner` (`src/editor/hud.rs`) — projection via la vraie `Mat4::view_proj()` de la
+  caméra (pas une approximation d'angle), avec le cas `w <= 0` (allié derrière la caméra) géré par
+  inversion de signe, technique standard d'indicateur hors-écran. Câblage `ally_marker: Option<(Mat4,
+  Vec3)>` à travers `editor::run`/`run_player_overlay`/`build_ui` depuis `gfx/renderer.rs`. 4 tests
+  (`offscreen_edge_position_*`, `nearest_downed_ally_position_ignores_ghosts_still_alive`).
+- **Fichiers** : `src/editor/hud.rs`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/gfx/renderer.rs`.
 - **Livrable** : un allié à terre hors champ affiche une flèche indiquant sa direction, en plus de la
-  bannière texte déjà existante.
-- **Risques** : lisibilité en combat dense — plafonner à un seul marqueur (l'allié le plus proche),
-  pas un par allié à terre.
+  bannière texte déjà existante. ✅
+- **Risques** : lisibilité en combat dense — plafonné à un seul marqueur (l'allié le plus proche,
+  `nearest_downed_ally_position` ne renvoie qu'une position), pas un par allié à terre. Le marqueur
+  ne s'affiche que pendant la fenêtre `ally_down_flash > 0` (même déclencheur que la bannière
+  texte) — pas d'état persistant séparé à maintenir.
 
 ### Sprint 3 — Détail frags/assists au HUD
 **Objectif** : `kills_hud()` (`hud.rs:271`) n'affiche qu'un compteur `kills: u32` — ajouter le détail
 assists déjà calculé côté serveur.
-- [ ] Étendre l'affichage pour montrer frags et assists séparément (ex. « 3 💀 · 2 🤝 »).
-- **Fichiers** : `src/editor/hud.rs`, `src/app/network_client.rs` (si le champ assists du joueur local
-  n'est pas encore répliqué côté client — à vérifier avant de coder, peut déjà exister via
-  `network_player_assists`).
-- **Livrable** : le HUD distingue visuellement frags et assists.
-- **Risques** : aucun de notable — extension d'un widget déjà existant.
+- [x] Étendre l'affichage pour montrer frags et assists séparément (ex. « 3 💀 · 2 🤝 »). Fait :
+  `kills_hud` (`src/editor/hud.rs`) prend désormais `assists: u32` et affiche
+  `locale::kills_and_assists` (icônes seules, pas de traduction — cf. sa doc). **Vérifié avant de
+  coder, comme prévu par le risque annoncé** : `network_player_assists` (`app::multiplayer`) existait
+  déjà côté serveur mais son résultat n'était jamais diffusé — `EntityDelta` (`src/net/protocol.rs`)
+  n'avait qu'un champ `kills`, pas `assists`. A donc fallu répliquer la même chaîne que `kills` :
+  nouveau champ `EntityDelta::assists: Option<u32>` (`#[serde(default)]`), peuplé dans
+  `network_snapshot` (`src/app/multiplayer.rs`) depuis `network_assists` (déjà tenu à jour par
+  `credit_assists_on_kill`, rien à changer côté calcul), puis lu côté client
+  (`RemotePlayer::assists`/`AppState::net_local_assists`/`displayed_assist_count`,
+  `src/app/network_client.rs`). Pas de bump de `PROTOCOL_VERSION` (`src/net/protocol.rs`, actuellement
+  6) : convention du Bloc 1 de ce document — un seul bump groupé, porté par la Phase P en dernier.
+- **Fichiers** : `src/editor/hud.rs`, `src/app/network_client.rs`, `src/app/locale.rs` (nouveau
+  `kills_and_assists`, l'ancien `kills(locale, u32)` devenu mort a été supprimé plutôt que laissé
+  inutilisé), `src/net/protocol.rs`, `src/app/multiplayer.rs`, `src/app/mod.rs`, `src/gfx/renderer.rs`
+  (au-delà de `hud.rs`/`network_client.rs` annoncés — la réplication réseau live n'existait pas du
+  tout, seul le résumé de fin de manche (`RoundPlayerSummary::assists`, Phase J) transportait déjà un
+  total assists, mais pas en continu pendant la manche).
+- **Livrable** : le HUD distingue visuellement frags et assists. ✅ Nouveau test
+  `network_snapshot_reports_each_players_live_assist_count` (`src/app/multiplayer.rs`) prouve la
+  diffusion en direct ; `cargo test --features net_tests` (613 passés, dont le test à sockets réels
+  `two_connected_clients_see_the_same_creature_position_kill_and_bite_damage`) confirme le round-trip
+  bincode sur un vrai socket.
+- **Risques** : aucun de notable — extension d'un widget déjà existant. Confirmé : `cargo clippy
+  --all-targets -- -D warnings`, `cargo fmt --all --check` et `python3 scripts/check_unwrap_budget.py`
+  tous au vert après ce sprint.
 
 ---
 
@@ -262,16 +313,47 @@ donnée n'existe pas dans le code, l'affirmation du GDD était fausse.
 ### Sprint 1 — Son dédié « allié à terre » et « éveil de créature »
 **Objectif** : combler les rangs 2 et 3 de la priorité §10.4 du GDD, déjà documentés comme non
 couverts par le GDD lui-même.
-- [ ] Nouvelle variante `Sfx::AllyDown` (`src/runtime/sfx.rs`), jouée à la place de `Sfx::Lose` côté
+- [x] Nouvelle variante `Sfx::AllyDown` (`src/runtime/sfx.rs`), jouée à la place de `Sfx::Lose` côté
   client quand la bannière `ally_down_banner` s'affiche pour un **allié** (pas soi-même) —
-  `src/app/network_client.rs:934-937`.
-- [ ] Nouvelle variante `Sfx::CreatureWake`, jouée au moment où une créature `Furtive` sort de son
+  `src/app/network_client.rs:934-937`. Fait : trois tons descendants (392/294/220 Hz), distincts de
+  `Lose` (330/247 Hz) — même famille « mauvaise nouvelle », signature acoustique différente
+  (vérifié par test, cf. Livrable).
+- [x] Nouvelle variante `Sfx::CreatureWake`, jouée au moment où une créature `Furtive` sort de son
   état endormi (`src/app/simulation.rs:1251-1256`, aujourd'hui aucun appel `sfx::play` à ce site).
-- **Fichiers** : `src/runtime/sfx.rs`, `src/app/network_client.rs`, `src/app/simulation.rs`.
+  Fait : sting bref et montant (260/420/560 Hz). La difficulté réelle n'était pas le son lui-même
+  mais **détecter la transition** endormie → active (le code existant ne fait que recalculer chaque
+  frame « à portée ou pas », sans mémoire d'état) : nouveau registre `AppState::furtive_awake`
+  (`HashSet<usize>`, `src/app/mod.rs`), rempli au premier tick où une `Furtive` franchit
+  `FURTIVE_DETECT_RANGE`, jamais réarmé ensuite (éveillée une fois = éveillée pour le reste de la
+  partie, même politique que `trigger_prev`) — vidé à `restart_game`
+  (`src/app/persistence.rs`) et à l'entrée en Play (`src/app/simulation.rs`, même sites que
+  `trigger_prev.clear()`). Les indices nouvellement éveillés sont collectés dans un `Vec` local
+  pendant la boucle de pilotage des chasseurs (qui emprunte `self.scene.objects`), puis appliqués
+  (`furtive_awake.insert` + `sfx::play`) juste après — évite tout conflit d'emprunt avec
+  `self.audio`/`self.furtive_awake`.
+- **Fichiers** : `src/runtime/sfx.rs`, `src/app/network_client.rs`, `src/app/simulation.rs`,
+  `src/app/mod.rs` (nouveau champ `furtive_awake`), `src/app/persistence.rs` (reset à `restart_game`,
+  au-delà des trois fichiers annoncés — nécessaire pour que l'éveil de la scène d'origine puisse se
+  resignaler après un « Rejouer »).
 - **Livrable** : un allié à terre déclenche un son distinct de la propre défaite du joueur ; une
-  créature Furtive qui s'éveille émet un son perceptible.
+  créature Furtive qui s'éveille émet un son perceptible. ✅ Tests :
+  `ally_down_and_creature_wake_are_acoustically_distinct_from_related_sfx` (`src/runtime/sfx.rs` —
+  clés ET WAV générés distincts, pas seulement les enums) et
+  `a_furtive_is_marked_awake_exactly_once_when_it_crosses_its_wake_radius` (`src/app/mod.rs` —
+  aucun éveil enregistré tant qu'endormie, exactement un éveil enregistré après franchissement,
+  jamais dupliqué sur les ticks suivants).
 - **Risques** : aucun de notable — extension additive de l'enum `Sfx`, pas de changement de logique
-  de jeu.
+  de jeu. Confirmé : `cargo test --all-targets` (592 passés), `cargo clippy --all-targets -- -D
+  warnings`, `cargo fmt --all --check`, `check_unwrap_budget.py` tous au vert après ce sprint.
+  **Auto-audit (18 juillet 2026)** : limite mineure assumée, pas corrigée — `furtive_awake` n'est
+  jamais réarmé pour un objet donné (cf. sa doc), donc une `Furtive` déjà éveillée puis **vaincue et
+  respawnée** (`Combat::respawn_delay > 0`) ne rejouerait pas `Sfx::CreatureWake` à son second éveil.
+  Sans impact sur le contenu actuel : les créatures de vague (dont l'archétype `Furtive` utilisé,
+  `scene::demos.rs`, « Squelette ») ont `respawn_delay = 0.0` (vérifié dans `demos.rs` — `combat.rs`
+  ne remet en file que si `respawn_delay > 0.0`), donc jamais respawnées ; à revisiter seulement si
+  une future scène équipe une `Furtive` d'un vrai respawn. Le comportement de poursuite lui-même
+  (indépendant de `furtive_awake`, piloté uniquement par la distance à chaque frame) n'est pas
+  affecté — c'est uniquement le signal sonore du second éveil qui manquerait.
 
 ---
 

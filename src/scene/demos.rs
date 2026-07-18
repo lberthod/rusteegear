@@ -1901,6 +1901,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: f32,
             color: [f32; 3],
             archetype: Archetype,
+            /// PV de base, avant `Archetype::hp_multiplier` (GDD_MMORPG.md §5.4).
+            hp: u32,
         }
         const RODEUR: Kind = Kind {
             label: "Rôdeur",
@@ -1909,6 +1911,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: 0.7,
             color: [0.35, 0.55, 0.25],
             archetype: Archetype::Traqueuse,
+            hp: 2,
         };
         const COUREUR: Kind = Kind {
             label: "Coureur",
@@ -1917,6 +1920,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: 0.55,
             color: [0.75, 0.8, 0.2],
             archetype: Archetype::Meute,
+            hp: 2,
         };
         const BRUTE: Kind = Kind {
             label: "Brute",
@@ -1925,6 +1929,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: 1.3,
             color: [0.45, 0.08, 0.25],
             archetype: Archetype::Colosse,
+            hp: 2,
         };
         // (manche, profils de cette manche) — la difficulté monte : plus de monstres,
         // puis des profils plus dangereux introduits progressivement.
@@ -1969,6 +1974,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 m.combat = Some(Combat {
                     attackable: true,
                     wave,
+                    // PV différenciés par archétype (GDD_MMORPG.md §5.4), cf.
+                    // `Archetype::hp_multiplier`.
+                    hp: ((k.hp as f32) * k.archetype.hp_multiplier())
+                        .round()
+                        .max(1.0) as u32,
                     ..Default::default()
                 });
                 // Pas de réapparition : un monstre vaincu reste mort pour la manche
@@ -8846,6 +8856,8 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: f32,
             color: [f32; 3],
             archetype: Archetype,
+            /// PV de base, avant `Archetype::hp_multiplier` (GDD_MMORPG.md §5.4).
+            hp: u32,
         }
         const GOBELIN: Kind = Kind {
             label: "Gobelin",
@@ -8854,6 +8866,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: 0.6,
             color: [0.35, 0.6, 0.3],
             archetype: Archetype::Meute,
+            hp: 2,
         };
         const SQUELETTE: Kind = Kind {
             label: "Squelette",
@@ -8862,6 +8875,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: 0.85,
             color: [0.75, 0.72, 0.65],
             archetype: Archetype::Furtive,
+            hp: 2,
         };
         const OGRE: Kind = Kind {
             label: "Ogre",
@@ -8870,6 +8884,7 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             scale: 1.4,
             color: [0.4, 0.15, 0.15],
             archetype: Archetype::Colosse,
+            hp: 2,
         };
         // Décalage du monstre par rapport au centre de sa salle : loin du point d'entrée
         // du joueur — son spawn pour la salle 1 (sinon le Gobelin apparaissait pile sur
@@ -8900,6 +8915,11 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             m.combat = Some(Combat {
                 attackable: true,
                 wave,
+                // PV différenciés par archétype (GDD_MMORPG.md §5.4), cf.
+                // `Archetype::hp_multiplier`.
+                hp: ((k.hp as f32) * k.archetype.hp_multiplier())
+                    .round()
+                    .max(1.0) as u32,
                 ..Default::default()
             });
             m.respawn_delay = 0.0;

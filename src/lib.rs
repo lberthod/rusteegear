@@ -239,13 +239,21 @@ impl App {
         inp.gamepad_turn = (gp.turn + gp.look_x).clamp(-1.0, 1.0);
         inp.gamepad_thrust = gp.thrust;
         inp.gamepad_pitch = gp.look_y;
-        // Bascules sur front montant (Start = fenêtre Multijoueur, Select =
-        // masquer le HUD) — routées vers l'éditeur via le renderer, seul accès.
+        // Bascules sur front montant (Select = masquer le HUD) — routées vers
+        // l'éditeur via le renderer, seul accès. Start : fenêtre Multijoueur en
+        // éditeur desktop, mais overlay Paramètres minimal en mode Player (Sprint
+        // 2, config hors éditeur) — `mobile_multiplayer_overlay` du mode Player
+        // est un panneau toujours affiché, indépendant de `panels.multiplayer`,
+        // donc ce bouton y est libre pour un autre usage.
         if gp.menu
             && !self.gamepad_menu_was_held
             && let Some(r) = self.renderer.as_mut()
         {
-            r.toggle_multiplayer_window();
+            if self.state.player {
+                r.toggle_player_settings();
+            } else {
+                r.toggle_multiplayer_window();
+            }
         }
         if gp.hud
             && !self.gamepad_hud_was_held
@@ -571,6 +579,16 @@ impl ApplicationHandler for App {
                         // Menu pause (Phase J de `sprintreflecion.md`) : sans effet
                         // hors Play (garde dans `toggle_pause`).
                         KeyCode::Escape => self.state.toggle_pause(),
+                        // Overlay Paramètres minimal du mode Player (Sprint 2, config
+                        // hors éditeur) — équivalent clavier du bouton Start de la
+                        // manette, pour tester `--player` sur une machine sans
+                        // manette branchée. Gardé par `self.state.player` : `Tab`
+                        // reste sans effet particulier en éditeur desktop.
+                        KeyCode::Tab if self.state.player => {
+                            if let Some(r) = self.renderer.as_mut() {
+                                r.toggle_player_settings();
+                            }
+                        }
                         _ => {}
                     }
                 }

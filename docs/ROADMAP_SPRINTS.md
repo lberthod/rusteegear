@@ -40,6 +40,7 @@ Retour : **[README.md](../README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap f
 - [🥽 Phase R — WebXR (118→120)](#phase-r)
 - [✅ Définition de « terminé » par phase](#definition-termine)
 - [📌 Conseils d'exécution](#conseils)
+- [🎯 Jalon « preuve du fun » (GDD §18.6)](#jalon-preuve-du-fun)
 
 ---
 
@@ -3161,6 +3162,41 @@ Draco), qui compresse les sommets eux-mêmes.
 2. **Garder le mode Player (Sprint 14) comme cible de test** mobile — pas l'éditeur complet.
 3. **Tester sur device tôt** (Sprint 16) : les surprises GPU/cycle de vie viennent du matériel réel.
 4. Avancer **une plateforme à la fois**.
+
+---
+
+<a id="jalon-preuve-du-fun"></a>
+## 🎯 Jalon « preuve du fun » (GDD §18.6, vertical slice)
+
+> Suivi ajouté le 18 juillet 2026 (`docs/AUDIT_JEU_2026-07-18.md` §3, Phase C Sprint 1) — avant cette
+> entrée, le jalon n'apparaissait nulle part dans la feuille de route. Critère de réussite unique
+> (GDD §18.6) : une session VPS à 3-4 joueurs où la composition du groupe change le résultat **et**
+> où chacun peut raconter sa nuit sans regarder les chiffres. Tant que tous les critères ci-dessous
+> ne sont pas ✅, le jalon n'est pas atteint — ne pas étendre le périmètre (contrats, paliers,
+> Escorte, couleurs) avant.
+
+| Critère (GDD `GDD_MMORPG.md:1330-1336`) | État (2026-07-18, revérifié à la clôture Phase C Sprint 2) |
+|---|---|
+| Scène servie unifiée (tension n°7 résolue) | ✅ Oui, avec réserve — décor du siège/faune/créatures dans `assets/player_scene.json` **et** verrouillés par test non-`#[ignore]` (`the_embedded_scene_decor_and_wildlife_match_the_demo`, Phase B Sprint 1, `docs/AUDIT_JEU_2026-07-18.md#phase-b`) ; réserve non résolue : fonctions de resynchro manuelles (`#[ignore]`) et règles géométriques §7.2 non relues depuis le JSON exporté (GDD §13 tension 7 mise à jour en conséquence) |
+| Vagues avec chef `_evolved` | ✅ Oui — 4 vagues, chef sur modèle `monster_dragon_evolved.glb` à 3 PV. Le « casting par archétype » n'est **pas** un prérequis de ce critère : Phase B Sprint 2 (`docs/AUDIT_JEU_2026-07-18.md#phase-b`) a établi que les 26 créatures de `mmorpg_demo()` n'ont jamais de composant `AiChaser` (mouvement 100 % scripté Lua, 11 styles de patrouille) — appliquer `Archetype` n'y aurait aucun effet de jeu et casserait les PV exacts déjà verrouillés par `mmorpg_demo_waves_follow_the_gdd_authoring_rules`. Décision produit : reporté hors périmètre (ticket de suivi documenté dans l'audit), pas un critère manquant |
+| PV par archétype câblés | ✅ Oui — `Archetype::hp_multiplier()` câblé (Phase D, `docs/AUDIT_JEU_2026-07-18.md#phase-d`, 2026-07-18) |
+| 3 classes jouables | ✅ |
+| Roster/vie à l'écran | ✅ |
+| Boutons tactiles réparés | ✅ (régression du 16 juillet résolue) |
+| Feedback de dégâts subis | ✅ |
+| Écran de fin | ⚠️ Partiel — bannière Gagné/Perdu + bouton Rejouer présents (`hud.rs:770-808,930`, satisfait la lettre du GDD §18.6 qui ne demande que « l'écran de fin »), mais pas le résumé par joueur (frags/assists/XP) du §9.2/§17.4 — Phase H (`docs/AUDIT_JEU_2026-07-18.md#phase-h`) non démarrée |
+
+**Clôture (Phase C Sprint 2, 2026-07-18)** : B (décor servi verrouillé — le volet « archétypes
+appliqués » de l'intitulé initial s'est révélé non applicable, cf. ligne ci-dessus), D (PV par
+archétype) et E (mêlée tranchée) sont toutes les trois terminées et mergées ; chaque ligne du
+tableau a été revérifiée individuellement (pas une impression générale) et `GDD_MMORPG.md` §14 et
+§13 (tension 7) ont été mis à jour en conséquence.
+
+**Verdict : le jalon n'est pas encore déclaré atteint.** 7 des 8 critères sont ✅ ; seul « Écran de
+fin » reste ⚠️ Partiel (pas de résumé par joueur). Tant que la Phase H n'est pas livrée, la « Nuit de
+référence » du §18.6 n'est pas complète au sens de son intention (« chacun peut raconter sa nuit »
+inclut typiquement ce que l'écran de fin lui montre) — ne pas cocher ce jalon avant que Phase H soit
+au moins à son Sprint 1 (résumé par joueur).
 
 ---
 

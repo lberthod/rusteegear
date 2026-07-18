@@ -224,10 +224,12 @@ pub(super) fn weapon_hud(
     offset: &mut [f32; 2],
     draggable: bool,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     let base = egui::pos2(area.center().x, area.bottom() - 24.0);
-    let box_size = egui::vec2(320.0, 44.0);
+    let box_size = egui::vec2(320.0, 44.0) * scale;
     let center = hud_anchor(ctx, "hud_weapon", base, offset, box_size, draggable);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -240,17 +242,17 @@ pub(super) fn weapon_hud(
     let bg = egui::Rect::from_center_size(center, box_size);
     painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
     painter.text(
-        center + egui::vec2(0.0, -10.0),
+        center + egui::vec2(0.0, -10.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::weapon_label(locale, label),
-        FontId::proportional(16.0),
+        FontId::proportional(16.0 * scale),
         Color32::from_rgb(255, 170, 80),
     );
     painter.text(
-        center + egui::vec2(0.0, 10.0),
+        center + egui::vec2(0.0, 10.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::fire_hint(locale),
-        FontId::proportional(11.0),
+        FontId::proportional(11.0 * scale),
         Color32::from_white_alpha(180),
     );
 }
@@ -268,20 +270,24 @@ pub(super) fn weapon_hud(
 /// `y=56`, ~30 px de haut une fois repliée) — `y=112` garde une vraie marge
 /// en dessous (cf. docs/audits/editor.md pour le premier réglage qui la
 /// chevauchait encore).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn kills_hud(
     ctx: &egui::Context,
     area: egui::Rect,
     kills: u32,
+    assists: u32,
     offset: &mut [f32; 2],
     draggable: bool,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     // Boîte alignée à droite avec une marge fixe (8 px) plutôt que centrée sur un
     // point à distance fixe du bord : centrer débordait de ~55 px au-delà de `area`
     // (donc par-dessus l'Inspecteur en mode Édition), la largeur de la boîte n'étant
     // pas prise en compte dans le calcul du centre.
-    let box_size = egui::vec2(150.0, 30.0);
+    let box_size = egui::vec2(150.0, 30.0) * scale;
     let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
     let pos = hud_anchor(ctx, "hud_kills", base, offset, box_size, draggable);
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -290,11 +296,15 @@ pub(super) fn kills_hud(
     ));
     let bg = egui::Rect::from_center_size(pos, box_size);
     painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
+    // Détail frags/assists (Phase L Sprint 3, `sprint2audijeu0718.md`) : les
+    // deux valeurs séparées plutôt qu'un seul total — un assist n'est pas un
+    // frag (cf. `app::multiplayer::credit_assists_on_kill`), la contribution
+    // en solo (jamais d'assist) reste lisible telle quelle (« 0 🤝 »).
     painter.text(
         pos,
         Align2::CENTER_CENTER,
-        crate::app::locale::kills(locale, kills),
-        FontId::proportional(18.0),
+        crate::app::locale::kills_and_assists(locale, kills, assists),
+        FontId::proportional(18.0 * scale),
         Color32::from_rgb(255, 170, 130),
     );
 }
@@ -439,6 +449,15 @@ pub(super) fn item_inventory_panel(
 /// premier snapshot, frags, soi-même ?)`.
 pub type RosterEntry = (String, Option<f32>, Option<u32>, bool);
 
+/// Pourcentage de vie affiché à côté de la mini barre du roster (PHASE I
+/// Sprint 2, accessibilité §16.6) : repère non-couleur pour la même
+/// information que le remplissage vert/jaune/rouge de `multiplayer_roster_panel`
+/// — indispensable pour un joueur daltonien à qui les trois teintes peuvent se
+/// confondre. `h` attendu déjà borné à `0.0..=1.0` par l'appelant.
+pub(super) fn health_percent_label(h: f32) -> String {
+    format!("{}%", (h * 100.0).round() as i32)
+}
+
 /// Classement à afficher dans `multiplayer_roster_panel` : trié par frags
 /// décroissants (le tri est stable, donc à égalité l'ordre d'origine — soi
 /// d'abord — est conservé), frags inconnus comptés 0.
@@ -508,6 +527,11 @@ pub(super) fn multiplayer_roster_panel(
                             Color32::from_rgb(220, 90, 80)
                         };
                         ui.painter().rect_filled(fill, 2.0, color);
+                        // PHASE I Sprint 2 (accessibilité §16.6, colorblind) : la
+                        // couleur vert/jaune/rouge de la barre n'est ici que
+                        // décorative — le pourcentage numérique porte la même
+                        // information indépendamment de la teinte perçue.
+                        ui.small(health_percent_label(h));
                     }
                     // Spectateur (0 PV, GDD §5.3/§9.1) : grisé — jamais la
                     // seule information (le nom et la barre de vie vide le
@@ -557,6 +581,7 @@ pub(super) fn hud_preview_overlays(
     selected_weapon: usize,
     actions: &mut UiActions,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
     let drag = preview.reposition;
     if preview.weapon_hud {
@@ -567,13 +592,14 @@ pub(super) fn hud_preview_overlays(
             &mut hud_layout.weapon_hud,
             drag,
             locale,
+            scale,
         );
     }
     if preview.kills {
-        kills_hud(ctx, area, 3, &mut hud_layout.kills, drag, locale);
+        kills_hud(ctx, area, 3, 1, &mut hud_layout.kills, drag, locale, scale);
     }
     if preview.crosshair {
-        crosshair(ctx, area, &mut hud_layout.crosshair, drag);
+        crosshair(ctx, area, &mut hud_layout.crosshair, drag, scale);
     }
     if preview.weapon_inventory {
         weapon_inventory_panel(
@@ -628,40 +654,42 @@ pub(super) fn crosshair(
     area: egui::Rect,
     offset: &mut [f32; 2],
     draggable: bool,
+    scale: f32,
 ) {
     use egui::{Color32, Stroke};
+    let scale = clamp_hud_scale(scale);
     let c = hud_anchor(
         ctx,
         "hud_crosshair",
         area.center(),
         offset,
-        egui::vec2(24.0, 24.0),
+        egui::vec2(24.0, 24.0) * scale,
         draggable,
     );
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_crosshair"),
     ));
-    let stroke = Stroke::new(1.5_f32, Color32::from_white_alpha(200));
-    const GAP: f32 = 5.0;
-    const LEN: f32 = 7.0;
+    let stroke = Stroke::new(1.5_f32 * scale, Color32::from_white_alpha(200));
+    let gap = 5.0 * scale;
+    let len = 7.0 * scale;
     painter.line_segment(
-        [egui::pos2(c.x - GAP - LEN, c.y), egui::pos2(c.x - GAP, c.y)],
+        [egui::pos2(c.x - gap - len, c.y), egui::pos2(c.x - gap, c.y)],
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(c.x + GAP, c.y), egui::pos2(c.x + GAP + LEN, c.y)],
+        [egui::pos2(c.x + gap, c.y), egui::pos2(c.x + gap + len, c.y)],
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(c.x, c.y - GAP - LEN), egui::pos2(c.x, c.y - GAP)],
+        [egui::pos2(c.x, c.y - gap - len), egui::pos2(c.x, c.y - gap)],
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(c.x, c.y + GAP), egui::pos2(c.x, c.y + GAP + LEN)],
+        [egui::pos2(c.x, c.y + gap), egui::pos2(c.x, c.y + gap + len)],
         stroke,
     );
-    painter.circle_filled(c, 1.5, Color32::from_white_alpha(230));
+    painter.circle_filled(c, 1.5 * scale, Color32::from_white_alpha(230));
 }
 
 pub(super) fn wave_hud(
@@ -670,7 +698,9 @@ pub(super) fn wave_hud(
     scene: &Scene,
     wave: u32,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
+    let scale = clamp_hud_scale(scale);
     if wave == 0 {
         return;
     }
@@ -695,36 +725,47 @@ pub(super) fn wave_hud(
         egui::Id::new("hud_wave"),
     ));
     painter.text(
-        egui::pos2(area.center().x, area.top() + 22.0),
+        egui::pos2(area.center().x, area.top() + 22.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::wave(locale, wave, max_wave),
-        FontId::proportional(22.0),
+        FontId::proportional(22.0 * scale),
         Color32::from_rgb(230, 120, 90),
     );
     painter.text(
-        egui::pos2(area.center().x, area.top() + 44.0),
+        egui::pos2(area.center().x, area.top() + 44.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::remaining(locale, remaining as u32),
-        FontId::proportional(14.0),
+        FontId::proportional(14.0 * scale),
         Color32::from_white_alpha(200),
     );
 }
 
+/// Borne `Settings::hud_scale` à une plage sûre (au cas où un `settings.json`
+/// écrit à la main ou par une future version sort de la plage `0.6..=2.0` du
+/// curseur des Paramètres) : les fonctions de dessin du HUD ci-dessous
+/// appellent toutes cette fonction en entrée plutôt que de faire confiance à
+/// la valeur brute.
+pub(super) fn clamp_hud_scale(scale: f32) -> f32 {
+    scale.clamp(0.5, 3.0)
+}
+
 /// Barre de vie du HUD (haut de la zone de jeu), pilotée par `set_health` côté script.
-pub(super) fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
+pub(super) fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32, scale: f32) {
     use egui::{Color32, Stroke};
+    let scale = clamp_hud_scale(scale);
     let h = h.clamp(0.0, 1.0);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_health"),
     ));
-    let w = (area.width() * 0.4).min(220.0);
+    let w = (area.width() * 0.4).min(220.0) * scale;
+    let bar_h = 16.0 * scale;
     let bg = egui::Rect::from_min_size(
         egui::pos2(area.left() + 20.0, area.top() + 16.0),
-        egui::vec2(w, 16.0),
+        egui::vec2(w, bar_h),
     );
     painter.rect_filled(bg, 4.0, Color32::from_black_alpha(140));
-    let fill = egui::Rect::from_min_size(bg.min, egui::vec2(w * h, 16.0));
+    let fill = egui::Rect::from_min_size(bg.min, egui::vec2(w * h, bar_h));
     let col = Color32::from_rgb(((1.0 - h) * 220.0) as u8 + 30, (h * 200.0) as u8 + 30, 50);
     painter.rect_filled(fill, 4.0, col);
     painter.rect_stroke(
@@ -737,6 +778,7 @@ pub(super) fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32) {
 
 /// HUD des collectibles (haut-droite) : « ⭐ ramassés / total », et bannière « Gagné ! »
 /// quand tout est ramassé.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn collectibles_hud(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -745,8 +787,10 @@ pub(super) fn collectibles_hud(
     time: Option<f32>,
     score: u32,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_collectibles"),
@@ -756,22 +800,22 @@ pub(super) fn collectibles_hud(
         pos,
         Align2::RIGHT_CENTER,
         format!("⭐ {collected} / {total}"),
-        FontId::proportional(20.0),
+        FontId::proportional(20.0 * scale),
         Color32::from_rgb(255, 220, 90),
     );
     painter.text(
-        egui::pos2(area.right() - 20.0, area.top() + 42.0),
+        egui::pos2(area.right() - 20.0, area.top() + 42.0 * scale),
         Align2::RIGHT_CENTER,
         format!("🏆 {score}"),
-        FontId::proportional(16.0),
+        FontId::proportional(16.0 * scale),
         Color32::from_rgb(150, 220, 255),
     );
     if let Some(t) = time {
         painter.text(
-            egui::pos2(area.right() - 20.0, area.top() + 64.0),
+            egui::pos2(area.right() - 20.0, area.top() + 64.0 * scale),
             Align2::RIGHT_CENTER,
             format!("⏱ {t:.1}s"),
-            FontId::proportional(16.0),
+            FontId::proportional(16.0 * scale),
             Color32::from_white_alpha(200),
         );
     }
@@ -781,7 +825,7 @@ pub(super) fn collectibles_hud(
             area.center(),
             Align2::CENTER_CENTER,
             msg,
-            FontId::proportional(40.0),
+            FontId::proportional(40.0 * scale),
             Color32::from_rgb(120, 230, 140),
         );
     }
@@ -792,8 +836,10 @@ pub(super) fn lose_banner(
     ctx: &egui::Context,
     area: egui::Rect,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_lose"),
@@ -802,7 +848,7 @@ pub(super) fn lose_banner(
         area.center(),
         Align2::CENTER_CENTER,
         crate::app::locale::lost(locale),
-        FontId::proportional(44.0),
+        FontId::proportional(44.0 * scale),
         Color32::from_rgb(230, 90, 80),
     );
 }
@@ -818,8 +864,10 @@ pub(super) fn defeated_banner(
     area: egui::Rect,
     cause: Option<crate::net::protocol::DeathCause>,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_defeated"),
@@ -828,7 +876,7 @@ pub(super) fn defeated_banner(
         area.center(),
         Align2::CENTER_CENTER,
         crate::app::locale::defeated_spectator(locale),
-        FontId::proportional(36.0),
+        FontId::proportional(36.0 * scale),
         Color32::from_rgb(230, 90, 80),
     );
     // Diagnostic de mort (Sprint 2, `sprint10audit.md`, GDD §16.5) : cause
@@ -836,21 +884,21 @@ pub(super) fn defeated_banner(
     // ne pas concurrencer visuellement le titre (36pt) ni le sous-texte (15pt).
     let waiting_y = if let Some(c) = cause {
         painter.text(
-            egui::pos2(area.center().x, area.center().y + 34.0),
+            egui::pos2(area.center().x, area.center().y + 34.0 * scale),
             Align2::CENTER_CENTER,
             crate::app::locale::death_cause(locale, c.kind, c.distinct_attackers),
-            FontId::proportional(18.0),
+            FontId::proportional(18.0 * scale),
             Color32::from_white_alpha(230),
         );
-        area.center().y + 60.0
+        area.center().y + 60.0 * scale
     } else {
-        area.center().y + 34.0
+        area.center().y + 34.0 * scale
     };
     painter.text(
         egui::pos2(area.center().x, waiting_y),
         Align2::CENTER_CENTER,
         crate::app::locale::waiting_next_round(locale),
-        FontId::proportional(15.0),
+        FontId::proportional(15.0 * scale),
         Color32::from_white_alpha(200),
     );
 }
@@ -866,20 +914,71 @@ pub(super) fn ally_down_banner(
     area: egui::Rect,
     intensity: f32,
     locale: crate::app::locale::Locale,
+    scale: f32,
+    marker: Option<(glam::Mat4, glam::Vec3)>,
 ) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_ally_down"),
     ));
     let alpha = (230.0 * intensity.clamp(0.0, 1.0)) as u8;
     painter.text(
-        egui::pos2(area.center().x, area.top() + 48.0),
+        egui::pos2(area.center().x, area.top() + 48.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::ally_down(locale),
-        FontId::proportional(22.0),
+        FontId::proportional(22.0 * scale),
         Color32::from_rgba_unmultiplied(230, 90, 80, alpha),
     );
+    if let Some((view_proj, world_pos)) = marker
+        && let Some(edge) = offscreen_edge_position(area, view_proj * world_pos.extend(1.0))
+    {
+        let dir = (edge - area.center()).normalized();
+        let size = 16.0 * scale;
+        let side = egui::vec2(-dir.y, dir.x) * size * 0.6;
+        let back = edge - dir * size * 1.6;
+        painter.add(egui::Shape::convex_polygon(
+            vec![edge, back + side, back - side],
+            Color32::from_rgba_unmultiplied(230, 90, 80, alpha),
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
+/// Point sur le bord de `area` (marge de 28 px) dans la direction de
+/// `clip` (position homogène caméra, `Mat4::project_point`-like avant
+/// division par `w`), ou `None` si `clip` tombe déjà à l'écran — plafonné à
+/// un seul marqueur (l'appelant ne fournit que l'allié le plus proche, cf.
+/// `AppState::nearest_downed_ally_position`), pas un par allié à terre
+/// (lisibilité en combat dense, Phase L Sprint 2 risques). Technique
+/// standard d'indicateur hors-écran : un point derrière la caméra (`w <=
+/// 0`) a un signe de projection inversé, on inverse `x`/`y` pour rester du
+/// bon côté visuellement plutôt que de le laisser apparaître à l'opposé.
+fn offscreen_edge_position(area: egui::Rect, clip: glam::Vec4) -> Option<egui::Pos2> {
+    let (x, y) = if clip.w <= 0.0 {
+        (-clip.x, -clip.y)
+    } else {
+        let ndc_x = clip.x / clip.w;
+        let ndc_y = clip.y / clip.w;
+        if ndc_x.abs() <= 1.0 && ndc_y.abs() <= 1.0 {
+            return None;
+        }
+        (clip.x, clip.y)
+    };
+    // NDC Y vers le haut, écran egui Y vers le bas.
+    let dir = egui::vec2(x, -y);
+    if dir.length_sq() < 1e-6 {
+        return None;
+    }
+    let dir = dir.normalized();
+    let margin = 28.0;
+    let half = egui::vec2(
+        (area.width() / 2.0 - margin).max(1.0),
+        (area.height() / 2.0 - margin).max(1.0),
+    );
+    let scale = (half.x / dir.x.abs().max(1e-6)).min(half.y / dir.y.abs().max(1e-6));
+    Some(area.center() + dir * scale)
 }
 
 /// Menu pause (Phase J, `sprintreflecion.md`) : titre + deux boutons
@@ -891,36 +990,45 @@ pub(super) fn pause_menu(
     ctx: &egui::Context,
     area: egui::Rect,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) -> (bool, bool) {
     use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_pause_title"),
     ));
     painter.text(
-        egui::pos2(area.center().x, area.center().y - 60.0),
+        egui::pos2(area.center().x, area.center().y - 60.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::pause_title(locale),
-        FontId::proportional(36.0),
+        FontId::proportional(36.0 * scale),
         Color32::WHITE,
     );
     let mut resume_clicked = false;
     let mut restart_clicked = false;
+    let btn_size = [170.0 * scale, 46.0 * scale];
     egui::Area::new("pause_resume_btn".into())
-        .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y - 10.0))
+        .fixed_pos(egui::pos2(
+            area.center().x - 85.0 * scale,
+            area.center().y - 10.0 * scale,
+        ))
         .show(ctx, |ui| {
             let label = crate::app::locale::resume_button_label(locale);
-            let btn = egui::Button::new(egui::RichText::new(label).size(20.0));
-            if ui.add_sized([170.0, 46.0], btn).clicked() {
+            let btn = egui::Button::new(egui::RichText::new(label).size(20.0 * scale));
+            if ui.add_sized(btn_size, btn).clicked() {
                 resume_clicked = true;
             }
         });
     egui::Area::new("pause_restart_btn".into())
-        .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y + 46.0))
+        .fixed_pos(egui::pos2(
+            area.center().x - 85.0 * scale,
+            area.center().y + 46.0 * scale,
+        ))
         .show(ctx, |ui| {
             let label = crate::app::locale::restart_button_label(locale, false);
-            let btn = egui::Button::new(egui::RichText::new(label).size(20.0));
-            if ui.add_sized([170.0, 46.0], btn).clicked() {
+            let btn = egui::Button::new(egui::RichText::new(label).size(20.0 * scale));
+            if ui.add_sized(btn_size, btn).clicked() {
                 restart_clicked = true;
             }
         });
@@ -934,14 +1042,19 @@ pub(super) fn restart_button(
     area: egui::Rect,
     won: bool,
     locale: crate::app::locale::Locale,
+    scale: f32,
 ) -> bool {
+    let scale = clamp_hud_scale(scale);
     let mut clicked = false;
     let label = crate::app::locale::restart_button_label(locale, won);
     egui::Area::new("restart_btn".into())
-        .fixed_pos(egui::pos2(area.center().x - 85.0, area.center().y + 40.0))
+        .fixed_pos(egui::pos2(
+            area.center().x - 85.0 * scale,
+            area.center().y + 40.0 * scale,
+        ))
         .show(ctx, |ui| {
-            let btn = egui::Button::new(egui::RichText::new(label).size(20.0));
-            if ui.add_sized([170.0, 46.0], btn).clicked() {
+            let btn = egui::Button::new(egui::RichText::new(label).size(20.0 * scale));
+            if ui.add_sized([170.0 * scale, 46.0 * scale], btn).clicked() {
                 clicked = true;
             }
         });
@@ -1125,5 +1238,164 @@ pub(super) fn mobile_overlay(
                     }
                 }
             });
+    }
+}
+
+/// Écran de fin de manche détaillé (Phase H, Sprint 1, GDD §9.2/§17.4) :
+/// titre Gagné/Perdu, une ligne par joueur (`AppState::round_summary`, reçu
+/// via `GameEvent::Win`/`Lose`), et la bannière de Contrat du jour rempli
+/// (Sprint 2) si `contract_label` est renseigné. Distinct de `lose_banner`
+/// (texte fixe, sans détail par joueur) : celle-ci reste utilisée par les
+/// démos solo sans salon réseau (`AppState::round_summary` vide dans ce cas,
+/// `editor::mod` n'appelle donc cette fonction qu'en multijoueur).
+pub(super) fn round_summary_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    won: bool,
+    summary: &[crate::net::protocol::RoundPlayerSummary],
+    contract_label: Option<&str>,
+    locale: crate::app::locale::Locale,
+    scale: f32,
+) {
+    use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_round_summary"),
+    ));
+    let title_color = if won {
+        Color32::from_rgb(120, 230, 140)
+    } else {
+        Color32::from_rgb(230, 90, 80)
+    };
+    painter.text(
+        egui::pos2(area.center().x, area.top() + area.height() * 0.28),
+        Align2::CENTER_CENTER,
+        crate::app::locale::round_outcome_title(locale, won),
+        FontId::proportional(40.0 * scale),
+        title_color,
+    );
+    let mut y = area.top() + area.height() * 0.28 + 46.0 * scale;
+    for player in summary {
+        painter.text(
+            egui::pos2(area.center().x, y),
+            Align2::CENTER_CENTER,
+            crate::app::locale::round_summary_row(
+                locale,
+                &player.name,
+                player.frags,
+                player.assists,
+                player.xp,
+            ),
+            FontId::proportional(18.0 * scale),
+            Color32::from_white_alpha(230),
+        );
+        y += 26.0 * scale;
+    }
+    if let Some(label) = contract_label {
+        painter.text(
+            egui::pos2(area.center().x, y + 14.0 * scale),
+            Align2::CENTER_CENTER,
+            crate::app::locale::contract_completed(locale, label),
+            FontId::proportional(18.0 * scale),
+            Color32::from_rgb(255, 220, 90),
+        );
+    }
+}
+
+/// Bannière brève (haut de l'écran, sous le HUD de vie/vagues — GDD §17.2)
+/// annonçant une nouvelle vague, déclenchée par `GameEvent::WaveStart`.
+/// Même mécanisme de décroissance que `ally_down_banner` (`intensity` piloté
+/// par `AppState::wave_banner_flash`).
+pub(super) fn wave_start_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    wave: u32,
+    intensity: f32,
+    locale: crate::app::locale::Locale,
+    scale: f32,
+) {
+    use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_wave_start"),
+    ));
+    let alpha = (230.0 * intensity.clamp(0.0, 1.0)) as u8;
+    painter.text(
+        egui::pos2(area.center().x, area.top() + 96.0 * scale),
+        Align2::CENTER_CENTER,
+        crate::app::locale::wave_start_banner(locale, wave),
+        FontId::proportional(28.0 * scale),
+        Color32::from_rgba_unmultiplied(255, 220, 90, alpha),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PHASE I Sprint 2 (accessibilité, colorblind) : le pourcentage doit
+    /// rester lisible et cohérent aux trois bornes de teinte de la mini barre
+    /// du roster (vert >50 %, jaune 25-50 %, rouge <=25 %) — la valeur
+    /// numérique est le repère non-couleur, elle ne doit jamais dépendre de
+    /// laquelle de ces trois bandes `h` tombe dedans.
+    #[test]
+    fn health_percent_label_matches_the_three_color_tiers() {
+        assert_eq!(health_percent_label(1.0), "100%");
+        assert_eq!(health_percent_label(0.8), "80%");
+        assert_eq!(health_percent_label(0.5), "50%");
+        assert_eq!(health_percent_label(0.3), "30%");
+        assert_eq!(health_percent_label(0.1), "10%");
+        assert_eq!(health_percent_label(0.0), "0%");
+    }
+
+    /// `clamp_hud_scale` protège les fonctions de dessin du HUD contre une
+    /// valeur `Settings::hud_scale` hors de la plage `0.6..=2.0` du curseur
+    /// des Paramètres (fichier édité à la main, ancienne valeur invalide...).
+    #[test]
+    fn clamp_hud_scale_bounds_extreme_values() {
+        assert_eq!(clamp_hud_scale(1.0), 1.0);
+        assert_eq!(clamp_hud_scale(0.0), 0.5);
+        assert_eq!(clamp_hud_scale(100.0), 3.0);
+    }
+
+    /// Marqueur allié hors-écran (Phase L Sprint 2) : un allié déjà visible
+    /// (au centre du frustum) ne doit produire aucun marqueur — la bannière
+    /// texte seule suffit, cf. les risques listés dans
+    /// `sprint2audijeu0718.md` (ne pas surcharger l'écran).
+    #[test]
+    fn offscreen_edge_position_is_none_when_the_point_is_on_screen() {
+        let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let clip = glam::Vec4::new(0.2, 0.1, 0.5, 1.0);
+        assert!(offscreen_edge_position(area, clip).is_none());
+    }
+
+    /// Un allié loin sur la droite (hors du frustum, `w > 0`) doit produire
+    /// un marqueur sur le bord droit de `area`, pas au centre ni sur un bord
+    /// vertical opposé.
+    #[test]
+    fn offscreen_edge_position_clamps_to_the_right_edge_when_far_to_the_right() {
+        let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let clip = glam::Vec4::new(5.0, 0.0, 0.5, 1.0);
+        let pos = offscreen_edge_position(area, clip).expect("hors écran attendu");
+        // Bord droit moins la marge de 28 px (cf. `offscreen_edge_position`) : le
+        // marqueur reste inséré dans `area`, pas collé au tout dernier pixel.
+        assert!((pos.x - (area.right() - 28.0)).abs() < 1.0);
+        assert!((pos.y - area.center().y).abs() < 1.0);
+    }
+
+    /// Un allié derrière la caméra (`w <= 0`) doit rester du bon côté visuel
+    /// (le signe de `x`/`y` s'inverse à la division par `w` négatif) —
+    /// technique standard d'indicateur hors-écran, cf. la doc de la fonction.
+    #[test]
+    fn offscreen_edge_position_flips_points_behind_the_camera() {
+        let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        // Un point dont la coordonnée homogène `x` est positive mais `w`
+        // négatif (derrière la caméra) doit apparaître à GAUCHE, pas à
+        // droite comme le signe brut de `x` le suggérerait.
+        let clip = glam::Vec4::new(5.0, 0.0, 0.5, -1.0);
+        let pos = offscreen_edge_position(area, clip).expect("hors écran attendu");
+        assert!((pos.x - (area.left() + 28.0)).abs() < 1.0);
     }
 }

@@ -17,8 +17,8 @@ use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
     damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
     item_inventory_panel, kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel,
-    pause_menu, restart_button, scene_has_ranged_weapon, touch_feedback, wave_hud, weapon_hud,
-    weapon_inventory_panel,
+    pause_menu, restart_button, round_summary_banner, scene_has_ranged_weapon, touch_feedback,
+    wave_hud, wave_start_banner, weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -145,6 +145,19 @@ pub struct Editor {
     /// `None` tant qu'aucun n'a encore eu lieu cette session, pour forcer le
     /// tout premier dès que la fenêtre Multijoueur s'ouvre.
     mp_last_chat_refresh: Option<crate::time_compat::Instant>,
+    /// Dernier rafraîchissement automatique de la présence en ligne + dernier
+    /// heartbeat envoyé (Phase L Sprint 1, `sprint2audijeu0718.md`) — même
+    /// politique que `mp_last_chat_refresh` ci-dessus.
+    mp_last_presence_refresh: Option<crate::time_compat::Instant>,
+    /// Dernier heartbeat de présence envoyé (Phase L Sprint 1, correction du
+    /// 18 juillet 2026, `sprint2audijeu0718.md`) — **distinct** de
+    /// `mp_last_presence_refresh` : le heartbeat doit tourner tant qu'un
+    /// compte est connecté, que la fenêtre Multijoueur soit ouverte ou non
+    /// (sinon un joueur qui la ferme en pleine partie disparaît de la liste
+    /// des autres après `PRESENCE_TIMEOUT_MS`, alors qu'il joue toujours) ;
+    /// le rafraîchissement de la liste, lui, reste inutile hors de cette
+    /// fenêtre (personne ne la regarde).
+    mp_last_presence_heartbeat: Option<crate::time_compat::Instant>,
 }
 
 /// Intervalle minimal entre deux rafraîchissements automatiques du chat de
@@ -152,6 +165,11 @@ pub struct Editor {
 /// pas spammer Firebase à chaque frame tant que la fenêtre Multijoueur reste
 /// ouverte.
 const AUTO_CHAT_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Intervalle minimal entre deux rafraîchissements automatiques de la
+/// présence en ligne (Phase L Sprint 1) — même durée que le chat, pour la
+/// même raison (réactivité vs. ne pas spammer Firebase).
+const AUTO_PRESENCE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// Réglages du panneau « 👁 Aperçu HUD » : quels overlays de jeu (réticule,
 /// inventaire, joueurs…) prévisualiser en mode Édition, sans passer par Play —
@@ -358,6 +376,18 @@ pub struct UiActions {
     pub refresh_chat: Option<String>,
     /// Fenêtre Multijoueur : « Rafraîchir le classement » demandé.
     pub refresh_leaderboard: bool,
+    /// Fenêtre Multijoueur, section Présence en ligne : rafraîchissement de la
+    /// liste demandé (clic ou auto-refresh, Phase L Sprint 1).
+    pub refresh_online_players: bool,
+    /// Heartbeat de présence à envoyer ce frame (compte connecté + auto-refresh
+    /// périodique, Phase L Sprint 1) — distinct de `refresh_online_players` :
+    /// celui-ci **écrit** `presence/<uid>`, l'autre le **lit**. Minuteur
+    /// **indépendant** (correction du 18 juillet 2026) : tourne tant qu'un
+    /// compte est connecté, que la fenêtre Multijoueur soit ouverte ou non —
+    /// sinon la fermer en pleine partie faisait disparaître le joueur de la
+    /// présence après `PRESENCE_TIMEOUT_MS` (`net::firebase`) alors qu'il
+    /// jouait toujours.
+    pub presence_heartbeat: bool,
     /// « Aligner au sol » : pose la base de la sélection sur y = 0.
     pub align_ground: bool,
     /// « Réinitialiser transform » : remet rotation/échelle par défaut.
@@ -386,6 +416,10 @@ pub struct UiActions {
     pub sfx_volume: Option<f32>,
     /// Fenêtre Paramètres : langue du texte runtime changée (Sprint 130).
     pub locale: Option<crate::app::locale::Locale>,
+    /// Fenêtre Paramètres : réduction du screen-shake changée (PHASE I Sprint 1,
+    /// accessibilité §16.6) — `hud_scale` n'a pas besoin de ce détour, lu
+    /// directement depuis `Settings` aux points de dessin du HUD.
+    pub reduce_shake: Option<bool>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
     /// Réordonnancement par glisser-déposer dans la hiérarchie : `(index source, index cible)`.
@@ -504,6 +538,8 @@ impl Editor {
             hud_image_cache: HudImageCache::default(),
             crash_log_text,
             mp_last_chat_refresh: None,
+            mp_last_presence_refresh: None,
+            mp_last_presence_heartbeat: None,
         }
     }
 
@@ -525,6 +561,17 @@ impl Editor {
     /// de vie) n'est jamais masquée.
     pub fn toggle_play_hud(&mut self) {
         self.panels.hud_hidden = !self.panels.hud_hidden;
+    }
+
+    /// Ouvre/ferme l'overlay Paramètres minimal du mode Player (Sprint 2, config
+    /// hors éditeur) — bouton Start de la manette ou touche Tab, uniquement en
+    /// mode `--player`/mobile (cf. `App::recompute_action_buttons`). Réutilise le
+    /// même indicateur `panels.settings` que la fenêtre Paramètres complète de
+    /// l'éditeur desktop : les deux chemins (`run` et `run_player_overlay`) sont
+    /// mutuellement exclusifs par frame (cf. `Renderer::render`), donc aucun
+    /// conflit d'état entre les deux usages de ce champ.
+    pub fn toggle_player_settings(&mut self) {
+        self.panels.settings = !self.panels.settings;
     }
 
     /// Panneau « 📊 Profiler FPS » ouvert ? Lu par `Renderer::render` (Sprint 112)
@@ -559,6 +606,7 @@ impl Editor {
         hud_health: Option<f32>,
         damage_flash: f32,
         ally_down_flash: f32,
+        ally_marker: Option<(glam::Mat4, glam::Vec3)>,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -573,10 +621,16 @@ impl Editor {
         defeated: bool,
         death_cause: Option<crate::net::protocol::DeathCause>,
         kills: u32,
+        assists: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
         item_inventory: &[(crate::scene::ItemKind, u32)],
         roster: &[RosterEntry],
+        round_summary: Option<&[crate::net::protocol::RoundPlayerSummary]>,
+        round_summary_won: bool,
+        round_contract_label: Option<&str>,
+        wave_banner_flash: f32,
+        wave_banner_wave: u32,
         locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
@@ -584,8 +638,11 @@ impl Editor {
         let mut actions = UiActions::default();
         let mp_server_url = &mut self.mp_server_url;
         let mp_name = &mut self.mp_name;
+        let settings = &mut self.settings;
+        let settings_open = &mut self.panels.settings;
         let output = self.ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
+            let hud_scale = settings.hud_scale;
             let area = play_area_rect(ctx.content_rect(), device_preview, device_portrait);
             if device_preview {
                 device_bezel(ctx, area);
@@ -595,16 +652,16 @@ impl Editor {
                 damage_vignette(ctx, area, damage_flash);
             }
             if ally_down_flash > 0.0 {
-                ally_down_banner(ctx, area, ally_down_flash, locale);
+                ally_down_banner(ctx, area, ally_down_flash, locale, hud_scale, ally_marker);
             }
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
-                health_bar(ctx, area, h);
+                health_bar(ctx, area, h, hud_scale);
             }
             // Décalages persistés dans la scène (Scene::hud_layout) : pas de
             // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
             let mut layout = scene.hud_layout;
-            wave_hud(ctx, area, scene, wave, locale);
+            wave_hud(ctx, area, scene, wave, locale, hud_scale);
             weapon_hud(
                 ctx,
                 area,
@@ -612,16 +669,26 @@ impl Editor {
                 &mut layout.weapon_hud,
                 false,
                 locale,
+                hud_scale,
             );
             // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
             // affiché en Play, contrairement au score de `collectibles_hud` juste en
             // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
             // multijoueur n'en a pas — cf. docs/audits/editor.md pour l'absence de
             // score en ligne que ce HUD dédié corrige).
-            kills_hud(ctx, area, kills, &mut layout.kills, false, locale);
+            kills_hud(
+                ctx,
+                area,
+                kills,
+                assists,
+                &mut layout.kills,
+                false,
+                locale,
+                hud_scale,
+            );
             multiplayer_roster_panel(ctx, area, roster, &mut layout.roster, false, locale);
             if scene_has_ranged_weapon(scene) {
-                crosshair(ctx, area, &mut layout.crosshair, false);
+                crosshair(ctx, area, &mut layout.crosshair, false, hud_scale);
                 weapon_inventory_panel(
                     ctx,
                     area,
@@ -642,17 +709,31 @@ impl Editor {
                 &mut actions,
             );
             if let Some((c, t)) = scene.collectibles() {
-                collectibles_hud(ctx, area, c, t, game_time, score, locale);
+                collectibles_hud(ctx, area, c, t, game_time, score, locale, hud_scale);
             }
-            if lost {
-                lose_banner(ctx, area, locale);
+            // Écran de fin de manche détaillé (Phase H, Sprint 1) : prioritaire
+            // sur `lose_banner`/le texte minimal de `collectibles_hud` dès
+            // qu'un salon réseau a diffusé un résumé — sinon (démo solo, pas
+            // de salon) on retombe sur les bannières historiques ci-dessous.
+            if let Some(summary) = round_summary {
+                round_summary_banner(
+                    ctx,
+                    area,
+                    round_summary_won,
+                    summary,
+                    round_contract_label,
+                    locale,
+                    hud_scale,
+                );
+            } else if lost {
+                lose_banner(ctx, area, locale, hud_scale);
             } else if defeated {
-                defeated_banner(ctx, area, death_cause, locale);
+                defeated_banner(ctx, area, death_cause, locale, hud_scale);
             } else if paused {
                 // Menu pause (Phase J, `sprintreflecion.md`) : exclusif avec les
                 // bannières de fin de manche ci-dessus, jamais simultané en pratique
                 // (`AppState::toggle_pause` ne s'arme qu'en Play actif).
-                let (resume_clicked, restart_clicked) = pause_menu(ctx, area, locale);
+                let (resume_clicked, restart_clicked) = pause_menu(ctx, area, locale, hud_scale);
                 if resume_clicked {
                     *resume = true;
                 }
@@ -660,8 +741,22 @@ impl Editor {
                     *restart = true;
                 }
             }
+            if wave_banner_flash > 0.0 {
+                wave_start_banner(
+                    ctx,
+                    area,
+                    wave_banner_wave,
+                    wave_banner_flash,
+                    locale,
+                    hud_scale,
+                );
+            }
             // Fin de partie (gagné/perdu) : bouton « Rejouer » in-game (essentiel sur APK).
-            if (won || lost) && restart_button(ctx, area, won, locale) {
+            // `round_summary_won` prime sur `won` (local, pensé pour un joueur
+            // solo) dès qu'un résumé de salon réseau est présent.
+            let round_over = won || lost || round_summary.is_some();
+            let round_display_won = round_summary.map_or(won, |_| round_summary_won);
+            if round_over && restart_button(ctx, area, round_display_won, locale, hud_scale) {
                 *restart = true;
             }
             if mobile.any() {
@@ -680,6 +775,9 @@ impl Editor {
                 net_connected,
                 &mut actions,
             );
+            if *settings_open {
+                windows::player_settings_window(ctx, settings_open, settings, &mut actions);
+            }
             let values = HudWidgetValues {
                 health: hud_health.unwrap_or(1.0),
                 score,
@@ -719,6 +817,7 @@ impl Editor {
         hud_health: Option<f32>,
         damage_flash: f32,
         ally_down_flash: f32,
+        ally_marker: Option<(glam::Mat4, glam::Vec3)>,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -730,14 +829,21 @@ impl Editor {
         chat_messages: &[crate::app::network_client::ChatLine],
         has_firebase_account: bool,
         leaderboard: &[crate::app::network_client::LeaderboardLine],
+        online_players: &[String],
         weapon_label: &str,
         defeated: bool,
         death_cause: Option<crate::net::protocol::DeathCause>,
         kills: u32,
+        assists: u32,
         weapon_inventory: &[(&str, [f32; 3])],
         selected_weapon: usize,
         item_inventory: &[(crate::scene::ItemKind, u32)],
         roster: &[RosterEntry],
+        round_summary: Option<&[crate::net::protocol::RoundPlayerSummary]>,
+        round_summary_won: bool,
+        round_contract_label: Option<&str>,
+        wave_banner_flash: f32,
+        wave_banner_wave: u32,
         minimap: &crate::app::MinimapData,
         locale: crate::app::locale::Locale,
     ) -> (egui::FullOutput, UiActions) {
@@ -786,6 +892,7 @@ impl Editor {
                 hud_health,
                 damage_flash,
                 ally_down_flash,
+                ally_marker,
                 game_time,
                 score,
                 lost,
@@ -817,14 +924,21 @@ impl Editor {
                 chat_messages,
                 has_firebase_account,
                 leaderboard,
+                online_players,
                 weapon_label,
                 defeated,
                 death_cause,
                 kills,
+                assists,
                 weapon_inventory,
                 selected_weapon,
                 item_inventory,
                 roster,
+                round_summary,
+                round_summary_won,
+                round_contract_label,
+                wave_banner_flash,
+                wave_banner_wave,
                 minimap,
                 hud_preview,
                 hud_image_cache,
@@ -855,6 +969,52 @@ impl Editor {
             if due {
                 actions.refresh_chat = Some(self.mp_lobby_code.clone());
                 self.mp_last_chat_refresh = Some(now);
+            }
+        }
+
+        // Rafraîchissement automatique de la liste de présence (Phase L
+        // Sprint 1, `sprint2audijeu0718.md`) : même politique que le chat
+        // ci-dessus — inutile hors de la fenêtre Multijoueur, personne ne la
+        // regarde.
+        if actions.refresh_online_players {
+            self.mp_last_presence_refresh = Some(crate::time_compat::Instant::now());
+        } else if self.panels.multiplayer
+            && !self.settings.firebase_api_key.trim().is_empty()
+            && !self.settings.firebase_database_url.trim().is_empty()
+        {
+            let now = crate::time_compat::Instant::now();
+            let due = self
+                .mp_last_presence_refresh
+                .is_none_or(|last| now.duration_since(last) >= AUTO_PRESENCE_REFRESH_INTERVAL);
+            if due {
+                actions.refresh_online_players = true;
+                self.mp_last_presence_refresh = Some(now);
+            }
+        }
+
+        // Heartbeat de présence (correction du 18 juillet 2026, audit Phase L
+        // Sprint 1) : **indépendant** de la fenêtre Multijoueur — contrairement
+        // au rafraîchissement de la liste ci-dessus, un heartbeat qui
+        // s'arrêterait à la fermeture de cette fenêtre ferait disparaître un
+        // joueur toujours en partie de la liste des autres après
+        // `PRESENCE_TIMEOUT_MS` (`net::firebase`, 15 s). Tourne tant qu'un
+        // compte est connecté et Firebase configuré, quelle que soit la
+        // fenêtre ouverte — `request_presence_heartbeat` reste un no-op sans
+        // compte, `has_firebase_account` évite juste de spawn un thread pour
+        // rien en attendant.
+        if actions.presence_heartbeat {
+            self.mp_last_presence_heartbeat = Some(crate::time_compat::Instant::now());
+        } else if has_firebase_account
+            && !self.settings.firebase_api_key.trim().is_empty()
+            && !self.settings.firebase_database_url.trim().is_empty()
+        {
+            let now = crate::time_compat::Instant::now();
+            let due = self
+                .mp_last_presence_heartbeat
+                .is_none_or(|last| now.duration_since(last) >= AUTO_PRESENCE_REFRESH_INTERVAL);
+            if due {
+                actions.presence_heartbeat = true;
+                self.mp_last_presence_heartbeat = Some(now);
             }
         }
 
@@ -933,6 +1093,7 @@ fn build_ui(
     hud_health: Option<f32>,
     damage_flash: f32,
     ally_down_flash: f32,
+    ally_marker: Option<(glam::Mat4, glam::Vec3)>,
     game_time: Option<f32>,
     score: u32,
     lost: bool,
@@ -964,14 +1125,21 @@ fn build_ui(
     chat_messages: &[crate::app::network_client::ChatLine],
     has_firebase_account: bool,
     leaderboard: &[crate::app::network_client::LeaderboardLine],
+    online_players: &[String],
     weapon_label: &str,
     defeated: bool,
     death_cause: Option<crate::net::protocol::DeathCause>,
     kills: u32,
+    assists: u32,
     weapon_inventory: &[(&str, [f32; 3])],
     selected_weapon: usize,
     item_inventory: &[(crate::scene::ItemKind, u32)],
     roster: &[RosterEntry],
+    round_summary: Option<&[crate::net::protocol::RoundPlayerSummary]>,
+    round_summary_won: bool,
+    round_contract_label: Option<&str>,
+    wave_banner_flash: f32,
+    wave_banner_wave: u32,
     minimap: &crate::app::MinimapData,
     hud_preview: &mut HudPreview,
     hud_image_cache: &mut HudImageCache,
@@ -1007,6 +1175,7 @@ fn build_ui(
         chat_messages,
         has_firebase_account,
         leaderboard,
+        online_players,
         actions,
     );
     // Fenêtre « Générer une scène (IA) ».
@@ -1034,7 +1203,7 @@ fn build_ui(
     windows::prefab_delete_confirm_popup(root.ctx(), panels, actions);
 
     // Fenêtre flottante « Build & Export ».
-    export.ui(root.ctx(), scene);
+    export.ui(root.ctx(), scene, settings);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
     tool_windows(
         root.ctx(),
@@ -1087,7 +1256,7 @@ fn build_ui(
     }
     // « Run Device » (toolbar) : build Android + installation sur le téléphone branché.
     if actions.run_device {
-        export.run_on_device(scene);
+        export.run_on_device(scene, settings);
     }
     // « Paramètres projet » (menu Fichier) : ouvre aussi la fenêtre Paramètres.
     if actions.open_settings {
@@ -2003,6 +2172,7 @@ fn build_ui(
 
     // Cadre « téléphone » + contrôles tactiles, confinés à la zone de jeu.
     let play_rect = play_area_rect(central, *device_preview, *device_portrait);
+    let hud_scale = settings.hud_scale;
     if *device_preview {
         device_bezel(root.ctx(), play_rect);
         touch_feedback(root.ctx(), play_rect);
@@ -2011,10 +2181,17 @@ fn build_ui(
         damage_vignette(root.ctx(), play_rect, damage_flash);
     }
     if *playing && ally_down_flash > 0.0 {
-        ally_down_banner(root.ctx(), play_rect, ally_down_flash, locale);
+        ally_down_banner(
+            root.ctx(),
+            play_rect,
+            ally_down_flash,
+            locale,
+            hud_scale,
+            ally_marker,
+        );
     }
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
-        health_bar(root.ctx(), play_rect, h);
+        health_bar(root.ctx(), play_rect, h, hud_scale);
     }
     if *playing && !panels.hud_hidden {
         // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
@@ -2022,7 +2199,7 @@ fn build_ui(
         // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous. Le bloc
         // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
         // la vignette de dégâts et la barre de vie, au-dessus, jamais.
-        wave_hud(root.ctx(), play_rect, scene, wave, locale);
+        wave_hud(root.ctx(), play_rect, scene, wave, locale, hud_scale);
         weapon_hud(
             root.ctx(),
             play_rect,
@@ -2030,14 +2207,17 @@ fn build_ui(
             &mut scene.hud_layout.weapon_hud,
             false,
             locale,
+            hud_scale,
         );
         kills_hud(
             root.ctx(),
             play_rect,
             kills,
+            assists,
             &mut scene.hud_layout.kills,
             false,
             locale,
+            hud_scale,
         );
         multiplayer_roster_panel(
             root.ctx(),
@@ -2053,6 +2233,7 @@ fn build_ui(
                 play_rect,
                 &mut scene.hud_layout.crosshair,
                 false,
+                hud_scale,
             );
             weapon_inventory_panel(
                 root.ctx(),
@@ -2084,18 +2265,55 @@ fn build_ui(
             selected_weapon,
             actions,
             locale,
+            hud_scale,
         );
     }
     if *playing && let Some((c, t)) = scene.collectibles() {
-        collectibles_hud(root.ctx(), play_rect, c, t, game_time, score, locale);
+        collectibles_hud(
+            root.ctx(),
+            play_rect,
+            c,
+            t,
+            game_time,
+            score,
+            locale,
+            hud_scale,
+        );
     }
-    if *playing && lost {
-        lose_banner(root.ctx(), play_rect, locale);
+    if *playing && let Some(summary) = round_summary {
+        round_summary_banner(
+            root.ctx(),
+            play_rect,
+            round_summary_won,
+            summary,
+            round_contract_label,
+            locale,
+            hud_scale,
+        );
+    } else if *playing && lost {
+        lose_banner(root.ctx(), play_rect, locale, hud_scale);
     } else if *playing && defeated {
-        defeated_banner(root.ctx(), play_rect, death_cause, locale);
+        defeated_banner(root.ctx(), play_rect, death_cause, locale, hud_scale);
+    }
+    if *playing && wave_banner_flash > 0.0 {
+        wave_start_banner(
+            root.ctx(),
+            play_rect,
+            wave_banner_wave,
+            wave_banner_flash,
+            locale,
+            hud_scale,
+        );
     }
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
-    if *playing && (won || lost) && restart_button(root.ctx(), play_rect, won, locale) {
+    // `round_summary_won` prime sur `won` (local, pensé pour un joueur solo)
+    // dès qu'un résumé de salon réseau est présent.
+    let round_over = won || lost || round_summary.is_some();
+    let round_display_won = round_summary.map_or(won, |_| round_summary_won);
+    if *playing
+        && round_over
+        && restart_button(root.ctx(), play_rect, round_display_won, locale, hud_scale)
+    {
         actions.restart = true;
     }
     if *playing && scene.mobile.any() {

@@ -792,6 +792,10 @@ impl AppState {
                     visible: o.visible,
                     health: self.network_health.get(&id).copied(),
                     kills: Some(self.network_kills.get(&id).copied().unwrap_or(0)),
+                    // Phase L Sprint 3 (`sprint2audijeu0718.md`) : même politique que
+                    // `kills` ci-dessus — jusqu'ici calculé (`network_assists`) mais
+                    // jamais diffusé, le HUD ne pouvait afficher que les frags.
+                    assists: Some(self.network_assists.get(&id).copied().unwrap_or(0)),
                     anim_clip: o
                         .animation
                         .as_ref()
@@ -826,6 +830,7 @@ impl AppState {
                 visible: o.visible,
                 health: None,
                 kills: None,
+                assists: None,
                 anim_clip: o
                     .animation
                     .as_ref()
@@ -1369,6 +1374,35 @@ mod tests {
         let indices: Vec<u32> = snap.entities.iter().map(|e| e.index).collect();
         assert!(indices.contains(&(a as u32)));
         assert!(indices.contains(&(b as u32)));
+    }
+
+    /// Phase L Sprint 3 (`sprint2audijeu0718.md`) : `network_assists` était déjà
+    /// calculé (`credit_assists_on_kill`) mais jamais diffusé — le HUD des
+    /// autres clients ne pouvait afficher que les frags. Preuve que
+    /// `EntityDelta::assists` reflète bien le compteur serveur, comme `kills`.
+    #[test]
+    fn network_snapshot_reports_each_players_live_assist_count() {
+        let mut app = app_with_zombies_demo();
+        app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        app.network_assists.insert(1, 2);
+
+        let snap = app.network_snapshot(1);
+        let entity = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .expect("le joueur 1 doit apparaître dans le snapshot");
+        assert_eq!(entity.assists, Some(2));
+
+        // Joueur 2, sans assist : `Some(0)`, pas `None` — même politique que
+        // `kills` (`Some` pour toute entité-joueur, cf. la doc du champ).
+        let entity_b = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(2))
+            .expect("le joueur 2 doit apparaître dans le snapshot");
+        assert_eq!(entity_b.assists, Some(0));
     }
 
     #[test]

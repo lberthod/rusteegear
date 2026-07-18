@@ -84,58 +84,80 @@ impl AppState {
             .unwrap_or(0)
     }
 
-    /// Initialise le système de manches (cf. `Combat::wave`) : révèle la manche 1,
-    /// masque les suivantes. Sans effet si la scène n'a aucun monstre à manches
-    /// (`self.wave` reste à 0) — appelée avant `Physics::build` (à l'entrée en Play et
-    /// au redémarrage) pour que les monstres masqués n'aient pas de corps rigide créé
-    /// inutilement (cf. le filtre `visible` dans `Physics::build`).
+    /// Nombre de manches consécutives révélées simultanément (Phase G, GDD §5.5/§18.5 :
+    /// « la difficulté scale par le *nombre*, pas par les stats ») — dérivé de
+    /// `network_player_count`, déjà tenu à jour côté serveur par
+    /// `spawn_network_player`/`forget_network_player` (`bin/server.rs::Room`). 1 pour
+    /// un salon solo/duo (comportement historique inchangé, une seule manche visible à
+    /// la fois) ; davantage à mesure que le salon grossit, pour étaler la menace sur
+    /// plusieurs fronts plutôt que de gonfler les PV d'un adversaire unique.
+    pub(super) fn wave_window(&self) -> u32 {
+        (self.network_player_count() as u32).max(1).div_ceil(2)
+    }
+
+    /// Initialise le système de manches (cf. `Combat::wave`) : révèle la manche 1 (et,
+    /// selon `wave_window`, les suivantes si le salon compte assez de joueurs), masque
+    /// le reste. Sans effet si la scène n'a aucun monstre à manches (`self.wave` reste
+    /// à 0) — appelée avant `Physics::build` (à l'entrée en Play et au redémarrage)
+    /// pour que les monstres masqués n'aient pas de corps rigide créé inutilement
+    /// (cf. le filtre `visible` dans `Physics::build`).
     pub(super) fn init_waves(&mut self) {
         let max = self.max_wave();
         self.wave = if max > 0 { 1 } else { 0 };
         if max == 0 {
             return;
         }
+        let last = (self.wave + self.wave_window() - 1).min(max);
         for o in &mut self.scene.objects {
             if let Some(c) = &o.combat
                 && c.wave > 0
             {
-                o.visible = c.wave == self.wave;
+                o.visible = c.wave >= self.wave && c.wave <= last;
             }
         }
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::WaveStart);
     }
 
-    /// Fait progresser le système de manches : la manche courante vidée (plus aucun
-    /// monstre visible qui lui appartient) révèle la suivante, jusqu'à la dernière ⇒
-    /// victoire. Reconstruit la physique après avoir révélé une manche (les nouveaux
-    /// monstres visibles ont besoin d'un corps rigide, absent tant qu'ils étaient masqués).
+    /// Fait progresser le système de manches : la fenêtre de manches courante
+    /// (`self.wave` à `self.wave + wave_window() - 1`, cf. `wave_window`) vidée — plus
+    /// aucun monstre visible qui lui appartient — révèle la fenêtre suivante, jusqu'à
+    /// la dernière manche ⇒ victoire. Reconstruit la physique après avoir révélé une
+    /// manche (les nouveaux monstres visibles ont besoin d'un corps rigide, absent
+    /// tant qu'ils étaient masqués).
     pub(super) fn update_waves(&mut self) {
         if self.wave == 0 {
             return;
         }
-        let wave = self.wave;
+        let max = self.max_wave();
+        let last = (self.wave + self.wave_window() - 1).min(max);
         let remaining = self
             .scene
             .objects
             .iter()
-            .filter(|o| o.visible && o.combat.as_ref().is_some_and(|c| c.wave == wave))
+            .filter(|o| {
+                o.visible
+                    && o.combat
+                        .as_ref()
+                        .is_some_and(|c| c.wave >= self.wave && c.wave <= last)
+            })
             .count();
         if remaining > 0 {
             return;
         }
-        let max = self.max_wave();
-        if self.wave >= max {
+        if last >= max {
             if self.win_time.is_none() {
                 self.win_time = Some(self.time);
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
             }
             return;
         }
-        self.wave += 1;
-        let next = self.wave;
+        self.wave = last + 1;
+        let next_last = (self.wave + self.wave_window() - 1).min(max);
+        let next_first = self.wave;
         for o in &mut self.scene.objects {
             if let Some(c) = &o.combat
-                && c.wave == next
+                && c.wave >= next_first
+                && c.wave <= next_last
             {
                 o.visible = true;
             }
@@ -227,22 +249,29 @@ impl AppState {
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Win);
             return;
         }
-        let wave = self.wave;
+        let max = self.max_wave();
+        let last = (self.wave + self.wave_window() - 1).min(max);
         let remaining = self
             .scene
             .objects
             .iter()
-            .filter(|o| o.visible && o.combat.as_ref().is_some_and(|c| c.wave == wave))
+            .filter(|o| {
+                o.visible
+                    && o.combat
+                        .as_ref()
+                        .is_some_and(|c| c.wave >= self.wave && c.wave <= last)
+            })
             .count();
         if remaining > 0 {
             return;
         }
-        let max = self.max_wave();
-        self.wave = if self.wave >= max { 1 } else { self.wave + 1 };
-        let next = self.wave;
+        self.wave = if last >= max { 1 } else { last + 1 };
+        let next_first = self.wave;
+        let next_last = (self.wave + self.wave_window() - 1).min(max);
         for o in &mut self.scene.objects {
             if let Some(c) = &o.combat
-                && c.wave == next
+                && c.wave >= next_first
+                && c.wave <= next_last
             {
                 o.visible = true;
             }
@@ -454,5 +483,97 @@ impl AppState {
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::multiplayer::PlayerClass;
+    use crate::scene::{Combat, Controller, MeshKind, Scene, SceneObject};
+
+    /// Gabarit pilotable (requis par `AppState::spawn_network_player`) + 2 manches de
+    /// 2 monstres chacune, pour observer `wave_window` sans dépendre d'une démo réelle.
+    fn scene_with_two_waves() -> Scene {
+        let mut joueur = SceneObject {
+            name: "Joueur".into(),
+            mesh: MeshKind::Cube,
+            controller: Some(Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let monster = |wave: u32, name: &str| {
+            let mut m = SceneObject {
+                name: name.into(),
+                mesh: MeshKind::Sphere,
+                combat: Some(Combat {
+                    attackable: true,
+                    wave,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            m.color = [1.0; 3];
+            m
+        };
+        Scene {
+            objects: vec![
+                joueur,
+                monster(1, "Monstre 1a"),
+                monster(1, "Monstre 1b"),
+                monster(2, "Monstre 2a"),
+                monster(2, "Monstre 2b"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// Phase G, Sprint 1 (GDD §5.5/§18.5) : « la difficulté scale par le nombre, pas
+    /// par les stats » — un salon à 4 joueurs doit révéler plus d'ennemis simultanément
+    /// qu'un salon à 1 joueur, à scène de manches identique.
+    #[test]
+    fn wave_window_scales_with_active_player_count() {
+        let mut solo = AppState::new();
+        solo.scene = scene_with_two_waves();
+        solo.spawn_network_player(1, PlayerClass::Assault)
+            .expect("gabarit pilotable présent");
+        solo.init_waves();
+        let solo_visible = solo
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && o.combat.is_some())
+            .count();
+        assert_eq!(
+            solo_visible, 2,
+            "salon à 1 joueur : seule la manche 1 (2 monstres) est révélée"
+        );
+
+        let mut squad = AppState::new();
+        squad.scene = scene_with_two_waves();
+        for id in 1..=4 {
+            squad
+                .spawn_network_player(id, PlayerClass::Assault)
+                .expect("gabarit pilotable présent");
+        }
+        squad.init_waves();
+        let squad_visible = squad
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && o.combat.is_some())
+            .count();
+        assert_eq!(
+            squad_visible, 4,
+            "salon à 4 joueurs : les 2 manches (4 monstres) sont révélées d'un coup"
+        );
+
+        assert!(
+            squad_visible > solo_visible,
+            "la difficulté doit scaler par le nombre de joueurs actifs"
+        );
     }
 }

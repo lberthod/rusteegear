@@ -27,11 +27,16 @@ pub fn fire_hint(locale: Locale) -> &'static str {
     }
 }
 
-pub fn kills(locale: Locale, kills: u32) -> String {
-    match locale {
-        Locale::Fr => format!("💀 Frags : {kills}"),
-        Locale::En => format!("💀 Kills: {kills}"),
-    }
+/// Frags + assists détaillés (Phase L Sprint 3, `sprint2audijeu0718.md`,
+/// GDD §8.3) : `kills_hud` (`editor/hud.rs`) n'affichait jusqu'ici que le
+/// compteur de frags de `kills` ci-dessus — un assist (dégât porté sur un
+/// monstre achevé par un autre joueur) n'est pas visible séparément alors
+/// qu'il est déjà calculé côté serveur (`app::multiplayer::network_assists`).
+pub fn kills_and_assists(_locale: Locale, kills: u32, assists: u32) -> String {
+    // Icônes seules (💀/🤝) plutôt qu'un libellé traduit : contrairement aux
+    // autres textes du HUD, aucun mot ne se traduit ici, donc pas de branche
+    // par langue à maintenir.
+    format!("💀 {kills} · 🤝 {assists}")
 }
 
 /// Suffixe « (équipée) » dans l'inventaire d'armes.
@@ -104,6 +109,49 @@ pub fn ally_down(locale: Locale) -> &'static str {
     }
 }
 
+/// Titre de l'écran de fin de manche détaillé (Phase H, Sprint 1, GDD §9.2/
+/// §17.4) — `round_summary_banner`, distinct du `won`/`lost` minimal
+/// existant (celui-ci reste utilisé par les démos solo sans salon réseau).
+pub fn round_outcome_title(locale: Locale, won: bool) -> &'static str {
+    match (locale, won) {
+        (Locale::Fr, true) => "🎉 Manche gagnée !",
+        (Locale::Fr, false) => "💀 Manche perdue",
+        (Locale::En, true) => "🎉 Round won!",
+        (Locale::En, false) => "💀 Round lost",
+    }
+}
+
+/// Ligne de résumé d'un joueur (Phase H, Sprint 1) : « Loïc — 3 frags, 1
+/// assist, +245 XP ».
+pub fn round_summary_row(locale: Locale, name: &str, frags: u32, assists: u32, xp: u32) -> String {
+    match locale {
+        Locale::Fr => format!("{name} — {frags} frag(s), {assists} assist(s), +{xp} XP"),
+        Locale::En => format!("{name} — {frags} frag(s), {assists} assist(s), +{xp} XP"),
+    }
+}
+
+/// Bannière « Contrat du jour rempli » (Phase H, Sprint 2, GDD §3.4/§3.5) —
+/// le montant (`XP_CONTRACT`, `bin/server.rs`) est dupliqué ici pour
+/// l'affichage : le serveur ne renvoie que l'identité du contrat rempli
+/// (`GameEvent::Win::contract`), pas son XP (crédité côté Firebase, pas
+/// forcément pour ce compte s'il l'a déjà réclamé aujourd'hui).
+pub fn contract_completed(locale: Locale, label: &str) -> String {
+    match locale {
+        Locale::Fr => format!("📜 Contrat du jour rempli : {label} (+250 XP)"),
+        Locale::En => format!("📜 Daily contract completed: {label} (+250 XP)"),
+    }
+}
+
+/// Bannière brève de nouvelle vague (Phase H, Sprint 2, GDD §17.2), distincte
+/// de `wave` (HUD permanent haut d'écran) — celle-ci s'affiche au centre et
+/// s'efface après quelques secondes (`AppState::wave_banner_flash`).
+pub fn wave_start_banner(locale: Locale, wave: u32) -> String {
+    match locale {
+        Locale::Fr => format!("🧟 Vague {wave} !"),
+        Locale::En => format!("🧟 Wave {wave}!"),
+    }
+}
+
 /// Résumé lisible d'une `net::protocol::DeathCause` (Sprint 2,
 /// `sprint10audit.md`, GDD §16.5 : « Encerclé — 2 Traqueuses ») — affiché sous
 /// `defeated_spectator` tant qu'on reste spectateur. Un seul agresseur du même
@@ -165,7 +213,8 @@ mod tests {
             weapon_label(Locale::En, "Dague")
         );
         assert_ne!(fire_hint(Locale::Fr), fire_hint(Locale::En));
-        assert_ne!(kills(Locale::Fr, 3), kills(Locale::En, 3));
+        // `kills_and_assists` exclu volontairement : icônes seules (💀/🤝),
+        // aucun mot traduit — cf. sa doc.
         assert_ne!(
             equipped_suffix(Locale::Fr, "Arc"),
             equipped_suffix(Locale::En, "Arc")
@@ -210,8 +259,9 @@ mod tests {
     fn interpolated_values_are_preserved_regardless_of_locale() {
         assert!(weapon_label(Locale::Fr, "Marteau").contains("Marteau"));
         assert!(weapon_label(Locale::En, "Marteau").contains("Marteau"));
-        assert!(kills(Locale::Fr, 42).contains("42"));
-        assert!(kills(Locale::En, 42).contains("42"));
+        assert!(kills_and_assists(Locale::Fr, 42, 7).contains("42"));
+        assert!(kills_and_assists(Locale::Fr, 42, 7).contains('7'));
+        assert!(kills_and_assists(Locale::En, 42, 7).contains("42"));
         assert!(wave(Locale::En, 3, 7).contains('3') && wave(Locale::En, 3, 7).contains('7'));
         assert!(remaining(Locale::En, 5).contains('5'));
     }

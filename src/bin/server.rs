@@ -32,7 +32,7 @@ use motor3derust::net::firebase::{
     self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
 };
 use motor3derust::net::protocol::{
-    ClientMsg, DEFAULT_LOBBY, GameEvent, PlayerId, ServerMsg, valid_join_fields,
+    ClientMsg, DEFAULT_LOBBY, GameEvent, PlayerId, RoundPlayerSummary, ServerMsg, valid_join_fields,
 };
 use motor3derust::net::server_loop::NetServer;
 
@@ -526,6 +526,41 @@ fn round_xp(frags_and_assists: u32, active: bool, won: bool) -> u32 {
     XP_PARTICIPATION + XP_PER_FRAG_OR_ASSIST * frags_and_assists + victory_bonus
 }
 
+/// Résumé par joueur diffusé avec `GameEvent::Win`/`Lose` (Phase H, Sprint 1,
+/// GDD §9.2/§17.4) : mêmes sources que `award_progress` (frags/assists,
+/// même garde anti-AFK), mais sans le bonus de Contrat du jour — celui-ci
+/// dépend de la progression Firebase par compte (`last_contract_day`), pas
+/// connue ici sans un aller-retour réseau supplémentaire, et reste affiché à
+/// part côté client (cf. `GameEvent::Win::contract`).
+fn round_summary(
+    app: &AppState,
+    lobby: &Lobby,
+    ids: &[PlayerId],
+    activity: &HashMap<PlayerId, PlayerActivity>,
+    won: bool,
+) -> Vec<RoundPlayerSummary> {
+    ids.iter()
+        .map(|&id| {
+            let frags = network_player_score(app, id);
+            let assists = network_player_assists(app, id);
+            let moved = activity.get(&id).map(|a| a.distance).unwrap_or(0.0);
+            let active = frags > 0 || assists > 0 || moved >= ACTIVITY_DISTANCE_THRESHOLD;
+            let name = lobby
+                .names
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| format!("Joueur {id}"));
+            RoundPlayerSummary {
+                player_id: id,
+                name,
+                frags,
+                assists,
+                xp: round_xp(frags + assists, active, won),
+            }
+        })
+        .collect()
+}
+
 /// Crédite l'XP de la manche à chaque joueur réseau connu de Firebase, selon
 /// `round_xp` (participation + frags/assists + bonus de victoire, garde
 /// anti-AFK incluse), plus `XP_CONTRACT` si `contract` est le contrat du jour
@@ -706,6 +741,24 @@ fn main() {
 
             if room.app.wave != room.last_wave {
                 log::info!("[{code}] Manche {} révélée", room.app.wave);
+                // Diffuse la bannière de vague (Phase H, Sprint 2, GDD §17.2) :
+                // jusqu'ici `GameEvent::WaveStart` n'était jamais émis par le
+                // serveur, seulement testé au niveau transport
+                // (`net::server_loop`) — le client n'avait donc aucun moyen de
+                // savoir qu'une nouvelle vague venait d'être révélée, sinon en
+                // comparant lui-même deux snapshots. `wave == 0` = scène sans
+                // système de manches (cf. doc de `AppState::wave`), rien à
+                // annoncer dans ce cas.
+                if room.app.wave > 0
+                    && let Some(net) = &net
+                {
+                    net.send_to_many(
+                        &room.connected_ids(),
+                        &ServerMsg::Event(GameEvent::WaveStart {
+                            wave: room.app.wave,
+                        }),
+                    );
+                }
                 room.last_wave = room.app.wave;
             }
             if room.app.score() != room.last_score {
@@ -737,6 +790,23 @@ fn main() {
                         "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
                     );
                 }
+                // Contrat du jour (Phase D, Sprint 9) : uniquement sur une
+                // victoire *décidée* — jamais une défaite, jamais un arrêt de
+                // sécurité (`timed_out`, qui n'implique `decided` que si
+                // `has_won()` l'est aussi, cf. la définition de `decided`
+                // ci-dessus). `day` recalculé à chaque manche décidée plutôt
+                // que mémorisé sur `Room` : un contrat commencé la veille et
+                // terminé après minuit ne doit pas être crédité comme celui
+                // d'hier (GDD §3.4 : le contrat du jour est celui du jour où
+                // la manche se termine, pas celui où elle a commencé). Calculé
+                // *avant* la diffusion `GameEvent::Win`/`Lose` ci-dessous : le
+                // client a besoin de savoir si ce contrat est rempli (Phase H,
+                // Sprint 2), pas seulement Firebase (`award_progress`).
+                let day = day_number(SystemTime::now());
+                let contract = (decided && room.app.has_won())
+                    .then(|| Contract::of_day(day))
+                    .filter(|&c| room.app.contract_completed(c, room.started.elapsed()))
+                    .map(|c| (c, day));
                 // Diffuse la fin de manche décidée (Phase L, `sprintreflecion.md` —
                 // trouvé en vérifiant mécaniquement le mode Escorte : jusqu'ici
                 // `GameEvent::Win`/`Lose` n'étaient jamais envoyés, seulement
@@ -749,28 +819,27 @@ fn main() {
                 // réelle, cf. la définition de `decided` ci-dessus) ; avant
                 // `room.restart()` pour que l'événement parte encore vers les
                 // joueurs de la manche qui vient de se terminer, pas la suivante.
+                // Résumé par joueur (Phase H, Sprint 1) : mêmes frags/assists
+                // que ceux crédités juste après par `award_progress`.
                 if decided && let Some(net) = &net {
+                    let ids = room.connected_ids();
+                    let summary = round_summary(
+                        &room.app,
+                        &room.lobby,
+                        &ids,
+                        &room.activity,
+                        room.app.has_won(),
+                    );
                     let event = if room.app.has_won() {
-                        GameEvent::Win
+                        GameEvent::Win {
+                            summary,
+                            contract: contract.map(|(c, _)| c.to_u8()),
+                        }
                     } else {
-                        GameEvent::Lose
+                        GameEvent::Lose { summary }
                     };
-                    net.send_to_many(&room.connected_ids(), &ServerMsg::Event(event));
+                    net.send_to_many(&ids, &ServerMsg::Event(event));
                 }
-                // Contrat du jour (Phase D, Sprint 9) : uniquement sur une
-                // victoire *décidée* — jamais une défaite, jamais un arrêt de
-                // sécurité (`timed_out`, qui n'implique `decided` que si
-                // `has_won()` l'est aussi, cf. la définition de `decided`
-                // ci-dessus). `day` recalculé à chaque manche décidée plutôt
-                // que mémorisé sur `Room` : un contrat commencé la veille et
-                // terminé après minuit ne doit pas être crédité comme celui
-                // d'hier (GDD §3.4 : le contrat du jour est celui du jour où
-                // la manche se termine, pas celui où elle a commencé).
-                let day = day_number(SystemTime::now());
-                let contract = (decided && room.app.has_won())
-                    .then(|| Contract::of_day(day))
-                    .filter(|&c| room.app.contract_completed(c, room.started.elapsed()))
-                    .map(|c| (c, day));
                 award_progress(
                     &firebase,
                     &room.lobby,

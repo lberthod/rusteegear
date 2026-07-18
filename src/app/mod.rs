@@ -255,6 +255,14 @@ pub struct AppState {
     /// y être revenu — plutôt que de la déduire uniquement de `obj.triggered` qui ne
     /// dit que « en contact maintenant », jamais « vient de cesser de l'être ».
     trigger_prev: std::collections::HashSet<usize>,
+    /// Créatures `Archetype::Furtive` déjà réveillées (Phase O Sprint 1,
+    /// `sprint2audijeu0718.md`, GDD §5.4) : indices d'objets pour lesquels
+    /// `Sfx::CreatureWake` a déjà été joué, pour ne le jouer **qu'une fois**
+    /// par éveil — sans cette mémoire, le son rejouerait à chaque frame tant
+    /// que le joueur reste à portée (`FURTIVE_DETECT_RANGE`), pas seulement
+    /// au moment de la transition endormie → active. Même politique que
+    /// `trigger_prev` ci-dessus (vidé à `restart_game`/à l'entrée en Play).
+    furtive_awake: std::collections::HashSet<usize>,
     /// Variables de script persistantes, lues/écrites en Lua via
     /// `save.get("clé")`/`save.set("clé", valeur)` — contrairement à `game_events`,
     /// ne se vide jamais toute seule : c'est l'état que `runtime::savegame::SaveGame`
@@ -293,6 +301,10 @@ pub struct AppState {
     /// coup (secousse brève) — même déclencheurs que `damage_flash`, décroissance
     /// séparée pour pouvoir ajuster l'un sans l'autre (Sprint 1, `sprint10audit.md`).
     pub camera_shake: f32,
+    /// Coupe le recul caméra calculé par `camera_shake_offset` sans toucher
+    /// `camera_shake` lui-même — persisté dans `Settings::reduce_shake`
+    /// (PHASE I Sprint 1, accessibilité §16.6).
+    pub reduce_shake: bool,
     /// Intensité (1 = pic, décroît vers 0) de la bannière « allié à terre »,
     /// déclenchée par `GameEvent::PlayerDown` d'un **autre** joueur réseau
     /// (GDD §5.3 : « la mort d'un allié est un événement de groupe » — jusqu'ici
@@ -306,6 +318,27 @@ pub struct AppState {
     /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
     /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
     pub attack_flash: f32,
+    /// Résumé par joueur de la dernière manche réseau décidée (Phase H,
+    /// Sprint 1, GDD §9.2/§17.4), reçu via `GameEvent::Win`/`Lose`
+    /// (`network_client::handle_server_msg`) — `None` avant la première
+    /// manche décidée ou après `restart_game`. Affiché par
+    /// `editor::hud::round_summary_banner` tant que présent.
+    pub round_summary: Option<Vec<crate::net::protocol::RoundPlayerSummary>>,
+    /// Issue de `round_summary` : `true` si diffusé par `GameEvent::Win`,
+    /// `false` par `GameEvent::Lose` — sans signification si `round_summary`
+    /// est `None`.
+    pub round_summary_won: bool,
+    /// Libellé du Contrat du jour rempli par la manche de `round_summary`
+    /// (`GameEvent::Win::contract`, GDD §3.4/§3.5), `None` si aucun contrat
+    /// n'a été rempli ou sur une défaite.
+    pub round_contract_label: Option<&'static str>,
+    /// Intensité (1 = pic, décroît vers 0) de la bannière de vague (Phase H,
+    /// Sprint 2, GDD §17.2), déclenchée par `GameEvent::WaveStart` — même
+    /// mécanisme que `ally_down_flash`.
+    pub wave_banner_flash: f32,
+    /// Numéro de la vague annoncée par la dernière `GameEvent::WaveStart`
+    /// reçue, affiché tant que `wave_banner_flash > 0`.
+    pub wave_banner_wave: u32,
     /// Manche courante (1-based) d'un système de vagues (cf. `Combat::wave`) ; 0 = pas
     /// de système de manches dans la scène courante (les autres démos). Toutes les
     /// cibles de la manche courante vaincues ⇒ manche suivante révélée ; dernière
@@ -518,6 +551,10 @@ pub struct AppState {
     /// du dernier `Snapshot`. `None` hors ligne ou avant le premier snapshot.
     #[cfg(not(target_os = "ios"))]
     net_local_kills: Option<u32>,
+    /// Assists individualisés connus du joueur local (Phase L Sprint 3,
+    /// `sprint2audijeu0718.md`, GDD §8.3) — même principe que `net_local_kills`.
+    #[cfg(not(target_os = "ios"))]
+    net_local_assists: Option<u32>,
     /// Historique court (~1 s) des positions **prédites** du joueur local, une par
     /// frame (cf. `apply_local_network_position`). La position renvoyée par le
     /// serveur est en retard d'une latence aller-retour + un tick : la comparer à la
@@ -601,6 +638,16 @@ pub struct AppState {
     leaderboard_busy: bool,
     leaderboard_tx: std::sync::mpsc::Sender<Result<Vec<network_client::LeaderboardLine>, String>>,
     leaderboard_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::LeaderboardLine>, String>>,
+    /// Derniers `uid` en ligne connus (dernier `request_refresh_online_players`
+    /// réussi, cf. `net::firebase::list_online_players` — Phase L Sprint 1,
+    /// `sprint2audijeu0718.md`). Présence globale par compte Firebase, pas
+    /// filtrée par salon : la RTDB ne garde pas trace du salon dans
+    /// `presence/<uid>`, seulement le dernier heartbeat.
+    pub online_players: Vec<String>,
+    /// Une requête de présence (rafraîchissement ou heartbeat) est en cours.
+    online_players_busy: bool,
+    online_players_tx: std::sync::mpsc::Sender<Result<Vec<String>, String>>,
+    online_players_rx: std::sync::mpsc::Receiver<Result<Vec<String>, String>>,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations/rotations au gizmo s'alignent sur un pas
@@ -802,6 +849,7 @@ impl AppState {
         let (firebase_tx, firebase_rx) = channel();
         let (chat_tx, chat_rx) = channel();
         let (leaderboard_tx, leaderboard_rx) = channel();
+        let (online_players_tx, online_players_rx) = channel();
         // Volumes musique/SFX (Sprint 104) : lus une fois ici plutôt qu'attendre
         // que l'utilisateur ouvre la fenêtre Paramètres et bouge un slider —
         // `Editor` (qui possède `Settings`) et `AppState` (qui possède `Audio`)
@@ -867,6 +915,7 @@ impl AppState {
             score: 0,
             game_events: Vec::new(),
             trigger_prev: std::collections::HashSet::new(),
+            furtive_awake: std::collections::HashSet::new(),
             lua_vars: std::collections::HashMap::new(),
             respawn_queue: Vec::new(),
             inventory: Vec::new(),
@@ -879,9 +928,15 @@ impl AppState {
             bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
             damage_flash: 0.0,
             camera_shake: 0.0,
+            reduce_shake: initial_settings.reduce_shake,
             ally_down_flash: 0.0,
             death_cause: None,
             attack_flash: 0.0,
+            round_summary: None,
+            round_summary_won: false,
+            round_contract_label: None,
+            wave_banner_flash: 0.0,
+            wave_banner_wave: 0,
             wave: 0,
             objective: multiplayer::RoundObjective::default(),
             player_down_count: 0,
@@ -928,6 +983,8 @@ impl AppState {
             #[cfg(not(target_os = "ios"))]
             net_local_kills: None,
             #[cfg(not(target_os = "ios"))]
+            net_local_assists: None,
+            #[cfg(not(target_os = "ios"))]
             net_local_history: std::collections::VecDeque::new(),
             #[cfg(not(target_os = "ios"))]
             net_last_input_sent: None,
@@ -950,6 +1007,10 @@ impl AppState {
             leaderboard_busy: false,
             leaderboard_tx,
             leaderboard_rx,
+            online_players: Vec::new(),
+            online_players_busy: false,
+            online_players_tx,
+            online_players_rx,
             show_grid: true,
             snap: false,
             snap_modifier: false,
@@ -1111,6 +1172,12 @@ impl AppState {
     /// Langue du texte runtime (Sprint 130, persistée dans `Settings::locale`).
     pub fn set_locale(&mut self, l: locale::Locale) {
         self.locale = l;
+    }
+
+    /// Réduction du screen-shake (PHASE I Sprint 1, persistée dans
+    /// `Settings::reduce_shake`).
+    pub fn set_reduce_shake(&mut self, v: bool) {
+        self.reduce_shake = v;
     }
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
@@ -1322,6 +1389,25 @@ impl AppState {
             creatures,
             bounds,
         }
+    }
+
+    /// Position monde de l'allié réseau à terre (vie <= 0, même seuil que
+    /// `is_online_client`/`PlayerDown`) le plus proche du joueur local — pour
+    /// le marqueur de direction hors-écran de `ally_down_banner` (Phase L
+    /// Sprint 2, `sprint2audijeu0718.md`). `None` si aucun joueur local
+    /// positionné ou aucun allié à terre : dans ce cas l'appelant n'affiche
+    /// que la bannière texte, comme avant ce sprint.
+    pub fn nearest_downed_ally_position(&self) -> Option<Vec3> {
+        let player_pos = self.player_position()?;
+        self.remote_players
+            .values()
+            .filter(|rp| rp.health.is_some_and(|h| h <= 0.0))
+            .filter_map(|rp| self.scene.objects.get(rp.scene_index))
+            .map(|o| o.transform.position)
+            .min_by(|a, b| {
+                a.distance_squared(player_pos)
+                    .total_cmp(&b.distance_squared(player_pos))
+            })
     }
 }
 
@@ -2770,6 +2856,81 @@ mod tests {
             "éveillée, la Furtive doit avancer plus vite qu'une Traqueuse standard : \
              {furtive_awake} <= {traqueuse}"
         );
+    }
+
+    /// Phase O Sprint 1 (`sprint2audijeu0718.md`, GDD §10.4 rang 3) : `Sfx::CreatureWake`
+    /// doit être signalé exactement une fois par éveil, au tick où la Furtive franchit
+    /// `FURTIVE_DETECT_RANGE` — pas à chaque frame tant qu'elle reste éveillée, et pas du
+    /// tout tant qu'elle reste endormie. `furtive_awake` (le registre qui pilote ce
+    /// signal, cf. sa doc) est la seule sortie observable ici sans mocker `Audio`.
+    #[test]
+    fn a_furtive_is_marked_awake_exactly_once_when_it_crosses_its_wake_radius() {
+        let sol = crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(60.0, 1.0, 60.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        let joueur = crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // 7 m : hors FURTIVE_DETECT_RANGE (5 m) — endormie au départ.
+        let chaser = crate::scene::SceneObject {
+            name: "Furtive".into(),
+            mesh: crate::scene::MeshKind::Sphere,
+            transform: crate::scene::Transform::from_pos(Vec3::new(7.0, 0.5, 0.0)),
+            ai_chaser: Some(crate::scene::AiChaser {
+                speed: 3.0,
+                archetype: crate::scene::Archetype::Furtive,
+            }),
+            ..Default::default()
+        };
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene {
+            objects: vec![sol, joueur, chaser],
+            ..Default::default()
+        };
+        app.playing = true;
+        for _ in 0..10 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert!(
+            app.furtive_awake.is_empty(),
+            "endormie hors de portée, aucun éveil ne doit être enregistré : {:?}",
+            app.furtive_awake
+        );
+
+        // Rapproche-la manuellement sous FURTIVE_DETECT_RANGE (3 m) puis avance : elle
+        // doit franchir la portée d'éveil et être enregistrée exactement une fois.
+        app.scene.objects[2].transform.position = Vec3::new(3.0, 0.5, 0.0);
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert_eq!(
+            app.furtive_awake,
+            std::collections::HashSet::from([2]),
+            "la Furtive doit être marquée éveillée après être entrée dans sa portée"
+        );
+
+        // D'autres ticks éveillée ne doivent pas dupliquer l'entrée (un `HashSet` ne le
+        // permettrait de toute façon pas, mais confirme qu'aucun autre indice n'est
+        // ajouté par erreur au passage).
+        for _ in 0..30 {
+            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        assert_eq!(app.furtive_awake, std::collections::HashSet::from([2]));
     }
 
     /// GDD_MMORPG.md §5.4 : les 4 archétypes doivent être « distinguables en Play »

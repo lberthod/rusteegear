@@ -177,6 +177,21 @@ pub fn bundle_bytes(key: &str) -> Option<Vec<u8>> {
     decompress(compressed)
 }
 
+/// Nom du fichier `assets/bundle/…` où l'export embarque un `settings.json` par défaut
+/// (Sprint 3 de PHASE A, config hors éditeur) : `editor::export::ExportPanel::start` l'écrit
+/// juste avant de lancer la compilation — même patron que la scène embarquée
+/// (`assets/player_scene.json`), donc figé dans `BUNDLE` à la compilation comme le reste. Texte
+/// brut (JSON), pas compressé zstd comme `bundle_bytes` : ce n'est pas un asset importé via
+/// `copy_to_bundle`, juste deux champs qu'on écrit nous-mêmes à l'export.
+pub const DEFAULT_SETTINGS_FILE: &str = "default_settings.json";
+
+/// Contenu JSON du `settings.json` par défaut embarqué à l'export (Sprint 3), ou `None` si ce
+/// build n'en a pas reçu un — export sans clé Firebase renseignée, ou binaire compilé en dehors
+/// du panneau Build & Export (`cargo build` direct en développement, cas le plus courant).
+pub fn default_settings_json() -> Option<&'static str> {
+    BUNDLE.get_file(DEFAULT_SETTINGS_FILE)?.contents_utf8()
+}
+
 /// Décompression zstd pure Rust (`ruzstd`, pas de bindings C) : doit rester
 /// compilable et correcte sur `wasm32-unknown-unknown`, où le player web lit aussi
 /// ses assets embarqués (Sprint 115).
@@ -253,13 +268,14 @@ pub fn set_android_data_dir(path: PathBuf) {
     let _ = ANDROID_DATA_DIR.set(path);
 }
 
-/// Dossier des données utilisateur (`user://`) : sur Android, celui posé par
-/// `set_android_data_dir` (`None` s'il n'a pas encore été appelé — ne devrait pas
-/// arriver après `android_main`, mais pas de panique pour autant, juste un save
-/// silencieusement indisponible) ; ailleurs, `~/.motor3derust/save/`, à côté du
-/// dossier `assets/` mais distinct (données écrites par le jeu, pas importées par
-/// l'éditeur).
-pub fn user_dir() -> Option<PathBuf> {
+/// Dossier racine des données applicatives, par plateforme : sur Android, celui
+/// posé par `set_android_data_dir` (`None` s'il n'a pas encore été appelé — ne
+/// devrait pas arriver après `android_main` ; pas de `$HOME` là-bas) ; ailleurs,
+/// `~/.motor3derust/`. Base commune à `user_dir()` et à `app::settings::
+/// Settings::path()` — un seul point de résolution par plateforme pour toute
+/// donnée persistée hors assets de scène (`assets_dir()` reste séparé : c'est
+/// un sous-dossier desktop-only, jamais résolu sur Android).
+pub fn app_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "android")]
     {
         ANDROID_DATA_DIR.get().cloned()
@@ -267,7 +283,22 @@ pub fn user_dir() -> Option<PathBuf> {
     #[cfg(not(target_os = "android"))]
     {
         let home = std::env::var("HOME").ok()?;
-        Some(PathBuf::from(home).join(".motor3derust").join("save"))
+        Some(PathBuf::from(home).join(".motor3derust"))
+    }
+}
+
+/// Dossier des données utilisateur (`user://`) : sur Android, `app_data_dir()`
+/// directement (pas de sous-dossier — l'app dispose déjà d'un dossier isolé par le
+/// système) ; ailleurs, `app_data_dir()/save/`, à côté de `assets/` mais distinct
+/// (données écrites par le jeu, pas importées par l'éditeur).
+pub fn user_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        app_data_dir()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Some(app_data_dir()?.join("save"))
     }
 }
 

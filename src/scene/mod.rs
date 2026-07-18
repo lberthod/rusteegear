@@ -555,6 +555,20 @@ impl Archetype {
             Archetype::Furtive => 1.5,
         }
     }
+
+    /// Multiplicateur appliqué au `hp` de base d'un prefab (GDD_MMORPG.md §5.4) :
+    /// Meute encaisse moins (compensé par le nombre et la vitesse), Colosse
+    /// encaisse beaucoup plus (silhouette massive, contact fort) — Furtive n'est
+    /// pas décrite avec des PV particuliers dans le GDD, donc standard comme
+    /// Traqueuse.
+    pub fn hp_multiplier(self) -> f32 {
+        match self {
+            Archetype::Traqueuse => 1.0,
+            Archetype::Meute => 0.6,
+            Archetype::Colosse => 1.8,
+            Archetype::Furtive => 1.0,
+        }
+    }
 }
 
 /// Composant optionnel : IA qui **poursuit activement le joueur** (contrairement aux
@@ -1417,6 +1431,30 @@ pub fn notifies_crossed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pendant côté PV de `creature_archetypes_produce_visibly_different_chase_speeds`
+    /// (`src/app/mod.rs`) : `hp_multiplier` doit, comme `speed_multiplier`, produire
+    /// un `hp` final différent pour deux créatures de même `hp` de base mais
+    /// d'archétype différent (GDD_MMORPG.md §5.4 — Meute PV réduits, Colosse PV
+    /// élevés).
+    #[test]
+    fn creature_archetypes_produce_visibly_different_hp() {
+        let base_hp = 10u32;
+        let final_hp = |archetype: Archetype| -> u32 {
+            ((base_hp as f32) * archetype.hp_multiplier()).round() as u32
+        };
+        let meute = final_hp(Archetype::Meute);
+        let traqueuse = final_hp(Archetype::Traqueuse);
+        let colosse = final_hp(Archetype::Colosse);
+        assert!(
+            meute < traqueuse,
+            "la Meute doit avoir moins de PV que la Traqueuse : {meute} >= {traqueuse}"
+        );
+        assert!(
+            traqueuse < colosse,
+            "le Colosse doit avoir plus de PV que la Traqueuse : {traqueuse} >= {colosse}"
+        );
+    }
 
     /// Intégration bout en bout : un `SceneObject.animation` fait bouger un
     /// mesh skinné à travers `Renderer::render_scene_headless`, pas seulement les briques
@@ -3533,6 +3571,45 @@ mod tests {
                 (e_wave, e_hp),
                 (wave, hp),
                 "(wave, hp) de « {name} » : {sync_hint}"
+            );
+        }
+    }
+
+    /// Garde-fou décor (Phase B, Sprint 1) : le même trou de synchro démo ↔
+    /// scène servie que `the_embedded_scene_creatures_match_the_demo`, mais
+    /// pour le décor du siège (remparts/tours) et la faune, jamais couvert.
+    /// Source de vérité du décor : `Scene::hameau_gdd_demo()` (cf.
+    /// `sync_embedded_scene_hameau_from_the_demo` ci-dessus), pas
+    /// `mmorpg_demo()` qui ne porte que les créatures/vagues. Comparaison
+    /// **pure** (aucune réécriture du fichier) : multiset des noms d'objets
+    /// « Rempart… »/« Tour … »/« Faune… », des deux côtés.
+    #[test]
+    fn the_embedded_scene_decor_and_wildlife_match_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::hameau_gdd_demo();
+
+        fn names<'a>(scene: &'a Scene, prefix: &str) -> std::collections::BTreeSet<&'a str> {
+            scene
+                .objects
+                .iter()
+                .filter(|o| o.name.starts_with(prefix))
+                .map(|o| o.name.as_str())
+                .collect()
+        }
+        let sync_hint = "décor/faune désynchronisés entre la démo et la scène servie — \
+             ré-exporter assets/player_scene.json";
+        for prefix in ["Rempart", "Tour ", "Faune"] {
+            let demo_names = names(&demo, prefix);
+            let embedded_names = names(&embedded, prefix);
+            assert!(
+                !demo_names.is_empty(),
+                "la démo MMORPG doit contenir des objets « {prefix}… »"
+            );
+            assert_eq!(
+                demo_names, embedded_names,
+                "objets « {prefix}… » : {sync_hint}"
             );
         }
     }

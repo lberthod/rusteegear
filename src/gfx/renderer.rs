@@ -1110,6 +1110,14 @@ impl Renderer {
         }
     }
 
+    /// Bascule l'overlay Paramètres minimal du mode Player (bouton Start de la
+    /// manette ou touche Tab, en mode `--player`/mobile — Sprint 2) — même relais.
+    pub fn toggle_player_settings(&mut self) {
+        if let Some(e) = self.editor.as_mut() {
+            e.toggle_player_settings();
+        }
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();
@@ -1689,10 +1697,14 @@ impl Renderer {
                 let weapon_label = app.selected_weapon_label();
                 let defeated = app.is_locally_defeated();
                 let kills = app.displayed_kill_count();
+                let assists = app.displayed_assist_count();
                 let weapon_inventory = app.ranged_weapon_display_info();
                 let selected_weapon = app.selected_weapon();
                 let item_inventory = app.inventory_items().to_vec();
                 let roster = app.multiplayer_roster();
+                let ally_marker = app
+                    .nearest_downed_ally_position()
+                    .map(|p| (app.camera.view_proj(), p));
                 let (output, actions) = editor.run_player_overlay(
                     &window,
                     &app.scene,
@@ -1702,6 +1714,7 @@ impl Renderer {
                     app.hud_health,
                     app.damage_flash,
                     app.ally_down_flash,
+                    ally_marker,
                     game_time,
                     score,
                     lost,
@@ -1716,10 +1729,16 @@ impl Renderer {
                     defeated,
                     app.death_cause,
                     kills,
+                    assists,
                     &weapon_inventory,
                     selected_weapon,
                     &item_inventory,
                     &roster,
+                    app.round_summary.as_deref(),
+                    app.round_summary_won,
+                    app.round_contract_label,
+                    app.wave_banner_flash,
+                    app.wave_banner_wave,
                     app.locale,
                 );
                 if let Some(i) = actions.select_weapon {
@@ -1755,11 +1774,15 @@ impl Renderer {
             let weapon_label = app.selected_weapon_label();
             let defeated = app.is_locally_defeated();
             let kills = app.displayed_kill_count();
+            let assists = app.displayed_assist_count();
             let weapon_inventory = app.ranged_weapon_display_info();
             let selected_weapon = app.selected_weapon();
             let item_inventory = app.inventory_items().to_vec();
             let roster = app.multiplayer_roster();
             let minimap = app.minimap_data();
+            let ally_marker = app
+                .nearest_downed_ally_position()
+                .map(|p| (app.camera.view_proj(), p));
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -1777,6 +1800,7 @@ impl Renderer {
                 app.hud_health,
                 app.damage_flash,
                 app.ally_down_flash,
+                ally_marker,
                 game_time,
                 score,
                 lost,
@@ -1788,14 +1812,21 @@ impl Renderer {
                 &app.chat_messages,
                 has_firebase_account,
                 &app.leaderboard,
+                &app.online_players,
                 weapon_label,
                 defeated,
                 app.death_cause,
                 kills,
+                assists,
                 &weapon_inventory,
                 selected_weapon,
                 &item_inventory,
                 &roster,
+                app.round_summary.as_deref(),
+                app.round_summary_won,
+                app.round_contract_label,
+                app.wave_banner_flash,
+                app.wave_banner_wave,
                 &minimap,
                 app.locale,
             );
@@ -1924,6 +1955,20 @@ impl Renderer {
                     10,
                 );
             }
+            if actions.refresh_online_players {
+                let settings = editor.settings();
+                app.request_refresh_online_players(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                );
+            }
+            if actions.presence_heartbeat {
+                let settings = editor.settings();
+                app.request_presence_heartbeat(
+                    settings.firebase_api_key.clone(),
+                    settings.firebase_database_url.clone(),
+                );
+            }
             if actions.align_ground {
                 app.align_to_ground();
             }
@@ -1976,6 +2021,9 @@ impl Renderer {
             }
             if let Some(l) = actions.locale {
                 app.set_locale(l);
+            }
+            if let Some(v) = actions.reduce_shake {
+                app.set_reduce_shake(v);
             }
             if let Some(down) = actions.move_in_list {
                 app.move_selected_in_list(down);

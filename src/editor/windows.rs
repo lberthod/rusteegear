@@ -424,8 +424,8 @@ pub(super) fn device_bezel(ctx: &egui::Context, rect: egui::Rect) {
     painter.rect_filled(notch, 7.0, Color32::from_rgb(20, 20, 24));
 }
 
-/// Fenêtre « Paramètres » : clé API DeepSeek, volumes audio (persistés à
-/// chaque modification).
+/// Fenêtre « Paramètres » (éditeur complet) : clé API DeepSeek, puis la partie
+/// commune avec le mode Player (cf. `settings_essentials`).
 pub(super) fn settings_window(
     ctx: &egui::Context,
     panels: &mut Panels,
@@ -496,101 +496,157 @@ pub(super) fn settings_window(
 
             ui.add_space(12.0);
             ui.separator();
-            ui.heading("Multijoueur — comptes (Firebase)");
-            ui.label("Clé API Web Firebase");
-            let resp_fb_key = ui.add(
-                egui::TextEdit::singleline(&mut settings.firebase_api_key)
-                    .password(true)
-                    .hint_text("AIza…")
-                    .desired_width(280.0),
-            );
-            if resp_fb_key.lost_focus() || resp_fb_key.changed() {
-                settings.save();
-            }
-            ui.label("URL Realtime Database");
-            let resp_fb_url = ui.add(
-                egui::TextEdit::singleline(&mut settings.firebase_database_url)
-                    .hint_text("https://xxx-default-rtdb.firebaseio.com")
-                    .desired_width(280.0),
-            );
-            if resp_fb_url.lost_focus() || resp_fb_url.changed() {
-                settings.save();
-            }
-            ui.label(
-                if settings.firebase_api_key.trim().is_empty()
-                    || settings.firebase_database_url.trim().is_empty()
-                {
-                    "❌ Configuration incomplète : comptes multijoueur désactivés"
-                } else {
-                    "✅ Configuration enregistrée"
-                },
-            );
-            ui.small(
-                "Clé publique par conception côté Firebase — la sécurité vient des règles \
-                 de la Realtime Database, pas du secret de cette clé (cf. SPRINT_MMORPG.md).",
-            );
-
-            ui.add_space(12.0);
-            ui.separator();
-            ui.heading("Audio");
-            ui.label("Musique / ambiance");
-            if ui
-                .add(egui::Slider::new(&mut settings.music_volume, 0.0..=1.0))
-                .drag_stopped()
-            {
-                settings.save();
-                actions.music_volume = Some(settings.music_volume);
-            }
-            ui.label("Effets sonores");
-            if ui
-                .add(egui::Slider::new(&mut settings.sfx_volume, 0.0..=1.0))
-                .drag_stopped()
-            {
-                settings.save();
-                actions.sfx_volume = Some(settings.sfx_volume);
-            }
-
-            ui.add_space(12.0);
-            ui.separator();
-            ui.heading("🌐 Langue (jeu)");
-            ui.small("Texte affiché en Play (HUD) — pas l'éditeur, qui reste en français.");
-            ui.horizontal(|ui| {
-                use crate::app::locale::Locale;
-                let mut changed = false;
-                changed |= ui
-                    .selectable_value(&mut settings.locale, Locale::Fr, "Français")
-                    .changed();
-                changed |= ui
-                    .selectable_value(&mut settings.locale, Locale::En, "English")
-                    .changed();
-                if changed {
-                    settings.save();
-                    actions.locale = Some(settings.locale);
-                }
-            });
-
-            ui.add_space(12.0);
-            ui.separator();
-            ui.heading("🎮 Manette");
-            ui.small(
-                "Stick gauche : déplacement « tank » (même axes que A/D/W/S). \
-                 Stick droit : visée (horizontal) et tangage caméra (vertical). \
-                 Boutons ci-dessous, remappables sur toute manette branchée \
-                 (Xbox/PlayStation/Switch Pro — noms génériques par position).",
-            );
-            let mut changed = false;
-            changed |= gamepad_binding_row(ui, "Saut", &mut settings.gamepad.jump);
-            changed |= gamepad_binding_row(ui, "Attaque", &mut settings.gamepad.attack);
-            changed |= gamepad_binding_row(ui, "Tir", &mut settings.gamepad.fire);
-            changed |= gamepad_binding_row(ui, "Soin", &mut settings.gamepad.heal);
-            changed |= gamepad_binding_row(ui, "Changer d'arme", &mut settings.gamepad.weapon);
-            changed |= gamepad_binding_row(ui, "Fenêtre Multijoueur", &mut settings.gamepad.menu);
-            changed |= gamepad_binding_row(ui, "Masquer le HUD", &mut settings.gamepad.hud);
-            if changed {
-                settings.save();
-            }
+            settings_essentials(ui, settings, actions);
         });
     panels.settings = open;
+}
+
+/// Partie de la fenêtre Paramètres commune à l'éditeur complet
+/// (`settings_window`) et à l'overlay minimal du mode Player
+/// (`player_settings_window`) : Firebase (comptes multijoueur), audio, langue,
+/// manette. Exclut la section IA (clé DeepSeek), éditeur seulement — le joueur
+/// en `--player`/mobile n'a pas accès à la génération de scripts Lua.
+fn settings_essentials(
+    ui: &mut egui::Ui,
+    settings: &mut crate::app::settings::Settings,
+    actions: &mut super::UiActions,
+) {
+    ui.heading("Multijoueur — comptes (Firebase)");
+    ui.label("Clé API Web Firebase");
+    let resp_fb_key = ui.add(
+        egui::TextEdit::singleline(&mut settings.firebase_api_key)
+            .password(true)
+            .hint_text("AIza…")
+            .desired_width(280.0),
+    );
+    if resp_fb_key.lost_focus() || resp_fb_key.changed() {
+        settings.save();
+    }
+    ui.label("URL Realtime Database");
+    let resp_fb_url = ui.add(
+        egui::TextEdit::singleline(&mut settings.firebase_database_url)
+            .hint_text("https://xxx-default-rtdb.firebaseio.com")
+            .desired_width(280.0),
+    );
+    if resp_fb_url.lost_focus() || resp_fb_url.changed() {
+        settings.save();
+    }
+    ui.label(
+        if settings.firebase_api_key.trim().is_empty()
+            || settings.firebase_database_url.trim().is_empty()
+        {
+            "❌ Configuration incomplète : comptes multijoueur désactivés"
+        } else {
+            "✅ Configuration enregistrée"
+        },
+    );
+    ui.small(
+        "Clé publique par conception côté Firebase — la sécurité vient des règles \
+         de la Realtime Database, pas du secret de cette clé (cf. SPRINT_MMORPG.md).",
+    );
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading("Audio");
+    ui.label("Musique / ambiance");
+    if ui
+        .add(egui::Slider::new(&mut settings.music_volume, 0.0..=1.0))
+        .drag_stopped()
+    {
+        settings.save();
+        actions.music_volume = Some(settings.music_volume);
+    }
+    ui.label("Effets sonores");
+    if ui
+        .add(egui::Slider::new(&mut settings.sfx_volume, 0.0..=1.0))
+        .drag_stopped()
+    {
+        settings.save();
+        actions.sfx_volume = Some(settings.sfx_volume);
+    }
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading("♿ Accessibilité");
+    ui.label("Taille du HUD");
+    if ui
+        .add(egui::Slider::new(&mut settings.hud_scale, 0.6..=2.0))
+        .drag_stopped()
+    {
+        settings.save();
+    }
+    if ui
+        .checkbox(
+            &mut settings.reduce_shake,
+            "Réduire les secousses de caméra",
+        )
+        .changed()
+    {
+        settings.save();
+        actions.reduce_shake = Some(settings.reduce_shake);
+    }
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading("🌐 Langue (jeu)");
+    ui.small("Texte affiché en Play (HUD) — pas l'éditeur, qui reste en français.");
+    ui.horizontal(|ui| {
+        use crate::app::locale::Locale;
+        let mut changed = false;
+        changed |= ui
+            .selectable_value(&mut settings.locale, Locale::Fr, "Français")
+            .changed();
+        changed |= ui
+            .selectable_value(&mut settings.locale, Locale::En, "English")
+            .changed();
+        if changed {
+            settings.save();
+            actions.locale = Some(settings.locale);
+        }
+    });
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading("🎮 Manette");
+    ui.small(
+        "Stick gauche : déplacement « tank » (même axes que A/D/W/S). \
+         Stick droit : visée (horizontal) et tangage caméra (vertical). \
+         Boutons ci-dessous, remappables sur toute manette branchée \
+         (Xbox/PlayStation/Switch Pro — noms génériques par position).",
+    );
+    let mut changed = false;
+    changed |= gamepad_binding_row(ui, "Saut", &mut settings.gamepad.jump);
+    changed |= gamepad_binding_row(ui, "Attaque", &mut settings.gamepad.attack);
+    changed |= gamepad_binding_row(ui, "Tir", &mut settings.gamepad.fire);
+    changed |= gamepad_binding_row(ui, "Soin", &mut settings.gamepad.heal);
+    changed |= gamepad_binding_row(ui, "Changer d'arme", &mut settings.gamepad.weapon);
+    changed |= gamepad_binding_row(ui, "Fenêtre Multijoueur", &mut settings.gamepad.menu);
+    changed |= gamepad_binding_row(ui, "Masquer le HUD", &mut settings.gamepad.hud);
+    if changed {
+        settings.save();
+    }
+}
+
+/// Overlay Paramètres minimal pour le mode Player (`--player`/mobile/web) : même
+/// contenu que `settings_essentials` (Firebase, audio, langue, manette), sans la
+/// section IA de l'éditeur — permet de configurer un compte Firebase et la
+/// manette sans jamais ouvrir l'éditeur complet (Sprint 2, config hors éditeur).
+/// Ouverture/fermeture : bouton Start de la manette ou touche Tab (cf.
+/// `Editor::toggle_player_settings`, `App::recompute_action_buttons`).
+pub(super) fn player_settings_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    settings: &mut crate::app::settings::Settings,
+    actions: &mut super::UiActions,
+) {
+    egui::Window::new("⚙  Paramètres")
+        .id(egui::Id::new("player_settings"))
+        .open(open)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
+        .show(ctx, |ui| {
+            settings_essentials(ui, settings, actions);
+        });
 }
 
 /// Une ligne de remapping manette : libellé d'action + menu déroulant des boutons
@@ -703,6 +759,7 @@ pub(super) fn multiplayer_window(
     chat_messages: &[crate::app::network_client::ChatLine],
     has_firebase_account: bool,
     leaderboard: &[crate::app::network_client::LeaderboardLine],
+    online_players: &[String],
     actions: &mut UiActions,
 ) {
     let mut open = panels.multiplayer;
@@ -930,6 +987,36 @@ pub(super) fn multiplayer_window(
                     });
                 if ui.button("🔄  Rafraîchir le classement").clicked() {
                     actions.refresh_leaderboard = true;
+                }
+
+                // Section « Présence en ligne » (Phase L Sprint 1,
+                // `sprint2audijeu0718.md`) : `list_online_players`/`set_presence`
+                // (déjà backés par Firebase, `net/firebase.rs`) n'étaient jusqu'ici
+                // jamais affichés. Présence globale par compte (pas filtrée par
+                // salon, cf. doc du champ `AppState::online_players`) — le heartbeat
+                // et le rafraîchissement automatique tournent tant que cette
+                // fenêtre reste ouverte (`editor::mod`).
+                ui.add_space(12.0);
+                ui.separator();
+                ui.heading("Présence en ligne");
+                if !has_firebase_account {
+                    ui.small(
+                        "Connecte-toi à un compte pour apparaître dans la liste \
+                         (le heartbeat de présence nécessite un compte).",
+                    );
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        if online_players.is_empty() {
+                            ui.small("Aucun joueur en ligne pour l'instant.");
+                        }
+                        for uid in online_players {
+                            ui.label(format!("🟢 {uid}"));
+                        }
+                    });
+                if ui.button("🔄  Rafraîchir la présence").clicked() {
+                    actions.refresh_online_players = true;
                 }
             }
         });

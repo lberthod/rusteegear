@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 
 use crate::app::build_config::{BuildConfig, RenderQuality};
+use crate::app::settings::Settings;
 use crate::scene::Scene;
 
 /// Racine du projet, figée à la compilation : les scripts `packaging/*.sh` y résident,
@@ -118,7 +119,7 @@ impl ExportPanel {
 
     /// Démarre un export en arrière-plan (un seul à la fois).
     /// Valide la config, l'incrémente/persiste, écrit la scène à embarquer, puis build.
-    fn start(&mut self, target: Target, scene: &Scene) {
+    fn start(&mut self, target: Target, scene: &Scene, settings: &Settings) {
         self.log.clear();
         if let Err(e) = self.config.validate() {
             self.log.push(format!("❌ Config invalide : {e}"));
@@ -144,6 +145,15 @@ impl ExportPanel {
                     .push(format!("❌ Impossible d'embarquer la scène : {e}"));
                 return;
             }
+        }
+
+        // Sprint 3 (PHASE A, config hors éditeur) : embarque la config Firebase courante dans
+        // le bundle, pour qu'un `.app`/APK exporté fonctionne sans saisie manuelle (cf.
+        // `app::settings::Settings::load`, `assets::default_settings_json`).
+        let bundle_dir = std::path::Path::new(PROJECT_ROOT).join("assets/bundle");
+        if bake_default_settings_at(&bundle_dir, settings) {
+            self.log
+                .push("✓ Config Firebase courante embarquée (settings.json par défaut).".into());
         }
 
         // Incrémente le numéro de build et persiste la config.
@@ -172,14 +182,14 @@ impl ExportPanel {
 
     /// Toolbar « Run Device » : ouvre le panneau, force l'installation sur appareil
     /// et lance un build Android (si l'appareil/adb sont prêts).
-    pub fn run_on_device(&mut self, scene: &Scene) {
+    pub fn run_on_device(&mut self, scene: &Scene, settings: &Settings) {
         self.open = true;
         if self.running.is_some() {
             return; // un build est déjà en cours
         }
         self.install_device = true;
         if self.adb_available {
-            self.start(Target::Android, scene);
+            self.start(Target::Android, scene, settings);
         } else {
             self.log
                 .push("❌ Aucun appareil Android détecté (adb). Branche un téléphone.".into());
@@ -215,7 +225,7 @@ impl ExportPanel {
     }
 
     /// Construit la fenêtre egui (à appeler chaque frame avec le contexte).
-    pub fn ui(&mut self, ctx: &egui::Context, scene: &Scene) {
+    pub fn ui(&mut self, ctx: &egui::Context, scene: &Scene, settings: &Settings) {
         // Récupère les lignes de log produites par le thread de build.
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
@@ -461,7 +471,7 @@ impl ExportPanel {
                 ui.strong("⚙  Actions");
                 let targets = [Target::Macos, Target::Android, Target::Ios, Target::Web];
                 for t in targets {
-                    self.card(ui, t, scene);
+                    self.card(ui, t, scene, settings);
                 }
 
                 let busy = self.running.is_some() || !self.queue.is_empty();
@@ -480,7 +490,7 @@ impl ExportPanel {
                         .on_hover_text("Build Android + installation sur le téléphone (adb)")
                         .clicked()
                     {
-                        self.run_on_device(scene);
+                        self.run_on_device(scene, settings);
                     }
                     // Logcat de l'appareil (diagnostic crash mobile).
                     if ui
@@ -518,11 +528,11 @@ impl ExportPanel {
         // Avance la file « Tout exporter » : démarre la cible suivante dès que libre.
         if self.running.is_none() && !self.queue.is_empty() {
             let next = self.queue.remove(0);
-            self.start(next, scene);
+            self.start(next, scene, settings);
         }
     }
 
-    fn card(&mut self, ui: &mut egui::Ui, target: Target, scene: &Scene) {
+    fn card(&mut self, ui: &mut egui::Ui, target: Target, scene: &Scene, settings: &Settings) {
         let prereq = self.prereq(target);
         let busy = self.running.is_some();
         let mut launch = false;
@@ -578,7 +588,7 @@ impl ExportPanel {
             }
         }
         if launch {
-            self.start(target, scene);
+            self.start(target, scene, settings);
         }
     }
 }
@@ -874,6 +884,37 @@ fn copy_to_bundle(
     Ok(Some(format!("{}{key}", crate::assets::SCHEME)))
 }
 
+/// Écrit (ou retire) `<bundle_dir>/default_settings.json` selon la config Firebase courante
+/// (Sprint 3 de PHASE A, config hors éditeur) — lu au premier lancement par `Settings::load`
+/// via `assets::default_settings_json`. Renvoie `true` si un fichier a été écrit (utilisé par
+/// l'appelant pour logger). Paramétré par `bundle_dir` pour rester testable sans toucher au
+/// vrai `assets/bundle/` du dépôt (même patron que `copy_to_bundle`).
+///
+/// Retire le fichier plutôt que d'écrire une config vide si Firebase n'est pas configuré :
+/// `assets/bundle/` est régénéré à chaque export mais jamais vidé entre deux, donc un export
+/// sans clé après un export avec clé laisserait sinon une clé désormais retirée par
+/// l'utilisateur traîner, embarquée à son insu dans le prochain build.
+fn bake_default_settings_at(bundle_dir: &std::path::Path, settings: &Settings) -> bool {
+    let path = bundle_dir.join(crate::assets::DEFAULT_SETTINGS_FILE);
+    if settings.firebase_api_key.trim().is_empty()
+        || settings.firebase_database_url.trim().is_empty()
+    {
+        let _ = std::fs::remove_file(&path);
+        return false;
+    }
+    let baked = serde_json::json!({
+        "firebase_api_key": settings.firebase_api_key,
+        "firebase_database_url": settings.firebase_database_url,
+    });
+    let Ok(json) = serde_json::to_string_pretty(&baked) else {
+        return false;
+    };
+    if std::fs::create_dir_all(bundle_dir).is_err() {
+        return false;
+    }
+    std::fs::write(&path, json).is_ok()
+}
+
 /// Compression zstd (niveau par défaut) — jamais appelée en pratique sur wasm32
 /// (l'éditeur n'y tourne pas), mais `editor::export` est compilé pour toutes les
 /// cibles (`pub mod editor` inconditionnel dans `src/lib.rs`) : repli sans
@@ -984,6 +1025,37 @@ mod tests {
             std::env::temp_dir().join(format!("rusteegear_export_test_{:x}", hasher.finish()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Sprint 3 (PHASE A, config hors éditeur) : une config Firebase renseignée est
+    /// embarquée telle quelle, et redevient absente du bundle si l'utilisateur vide la clé
+    /// avant un export suivant — pas de clé retirée qui traînerait embarquée à son insu.
+    #[test]
+    fn bake_default_settings_writes_firebase_fields_and_removes_them_once_cleared() {
+        let dir = temp_dir("bake_default_settings");
+        let mut settings = Settings {
+            firebase_api_key: "AIzaTest".to_string(),
+            firebase_database_url: "https://x-default-rtdb.firebaseio.com".to_string(),
+            ..Settings::default()
+        };
+
+        assert!(bake_default_settings_at(&dir, &settings));
+        let path = dir.join(crate::assets::DEFAULT_SETTINGS_FILE);
+        let json = std::fs::read_to_string(&path).expect("fichier écrit");
+        assert!(json.contains("AIzaTest"));
+        assert!(json.contains("x-default-rtdb.firebaseio.com"));
+        // Le JSON écrit doit rester lisible par `Settings` (mêmes défauts `#[serde(default)]`
+        // que le reste du fichier réel — cf. `an_old_settings_file_without_gamepad_field_
+        // loads_with_default_bindings` côté `app::settings`).
+        let parsed: Settings = serde_json::from_str(&json).expect("JSON valide pour Settings");
+        assert_eq!(parsed.firebase_api_key, "AIzaTest");
+
+        settings.firebase_api_key.clear();
+        assert!(!bake_default_settings_at(&dir, &settings));
+        assert!(
+            !path.exists(),
+            "clé Firebase vidée : le settings.json par défaut doit être retiré du bundle"
+        );
     }
 
     #[test]

@@ -41,6 +41,7 @@ impl AppState {
         self.score = 0;
         self.game_events.clear();
         self.trigger_prev.clear();
+        self.furtive_awake.clear();
         self.lua_vars.clear();
         self.respawn_queue.clear();
         self.inventory.clear();
@@ -50,6 +51,9 @@ impl AppState {
         self.ally_down_flash = 0.0;
         self.death_cause = None;
         self.attack_flash = 0.0;
+        self.round_summary = None;
+        self.round_contract_label = None;
+        self.wave_banner_flash = 0.0;
         self.attack_cooldown_remaining = 0.0;
         self.attack_projectile = None;
         self.attack_charge = None;

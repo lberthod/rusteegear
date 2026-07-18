@@ -187,6 +187,7 @@ mod tests {
             health: None,
             anim_clip: String::new(),
             kills: None,
+            assists: None,
         }
     }
 

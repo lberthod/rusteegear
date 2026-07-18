@@ -34,6 +34,18 @@ pub struct Settings {
     /// `runtime::audio::Audio::set_sfx_volume`).
     #[serde(default = "default_volume")]
     pub sfx_volume: f32,
+    /// Échelle des éléments HUD peints directement (barre de vie, indicateur de
+    /// vague, HUD d'arme, frags, réticule, bannières) — PHASE I Sprint 1 (GDD
+    /// §16.6, accessibilité minimale). 1.0 = taille actuelle ; ne change que la
+    /// taille du texte/des jauges, jamais leur position à l'écran.
+    #[serde(default = "default_hud_scale")]
+    pub hud_scale: f32,
+    /// Réduit à zéro l'amplitude du recul caméra (screen-shake, cf.
+    /// `AppState::camera_shake_offset`) déclenché à l'encaissement d'un coup —
+    /// PHASE I Sprint 1 (§16.6), pour les joueurs sensibles au mouvement de
+    /// caméra.
+    #[serde(default)]
+    pub reduce_shake: bool,
     /// Remapping manette (Sprint 110) : quel bouton `gilrs` déclenche chaque action.
     #[serde(default)]
     pub gamepad: GamepadBindings,
@@ -102,6 +114,10 @@ fn default_volume() -> f32 {
     1.0
 }
 
+fn default_hud_scale() -> f32 {
+    1.0
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -112,6 +128,8 @@ impl Default for Settings {
             firebase_database_url: String::new(),
             music_volume: default_volume(),
             sfx_volume: default_volume(),
+            hud_scale: default_hud_scale(),
+            reduce_shake: false,
             gamepad: GamepadBindings::default(),
             locale: crate::app::locale::Locale::default(),
             muted_players: Vec::new(),
@@ -120,31 +138,70 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Chemin du fichier de réglages : `app_data_dir()/settings.json`, par
+    /// plateforme (cf. `assets::app_data_dir` — Android via `set_android_data_dir`,
+    /// sinon `~/.motor3derust/`, comme avant ce Sprint 1 côté desktop). Avant ce
+    /// Sprint, cette fonction résolvait `$HOME` en dur : sur Android (où `$HOME`
+    /// n'existe pas), elle renvoyait toujours `None`, donc `load()`/`save()`
+    /// dégradaient silencieusement en no-op — le joueur mobile perdait tout
+    /// réglage (Firebase, manette, volumes) à chaque redémarrage.
     fn path() -> Option<PathBuf> {
-        let home = std::env::var("HOME").ok()?;
-        Some(
-            PathBuf::from(home)
-                .join(".motor3derust")
-                .join("settings.json"),
-        )
+        Some(crate::assets::app_data_dir()?.join("settings.json"))
     }
 
-    /// Charge les réglages depuis le disque, ou les valeurs par défaut.
+    /// Charge les réglages depuis le disque ; à défaut de fichier existant, ceux embarqués à
+    /// l'export (Sprint 3 de PHASE A — `assets::default_settings_json`, clé Firebase pré-remplie
+    /// pour un `.app`/APK qui fonctionne sans saisie manuelle), ou sinon les valeurs par défaut.
     pub fn load() -> Self {
-        Self::path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+        let Some(p) = Self::path() else {
+            return Self::from_bundled_defaults();
+        };
+        if p.exists() {
+            return Self::load_from(&p);
+        }
+        let defaults = Self::from_bundled_defaults();
+        // Persisté seulement si l'export a réellement embarqué une config par défaut : sinon
+        // (développement, aucun `default_settings.json` dans le bundle), premier lancement
+        // silencieux comme avant ce Sprint 3 — pas d'écriture avant un `save()` explicite.
+        if crate::assets::default_settings_json().is_some() {
+            defaults.save_to(&p);
+        }
+        defaults
+    }
+
+    /// Réglages d'un premier lancement : ceux embarqués à l'export s'il y en a (JSON partiel —
+    /// seuls les champs Firebase sont écrits par `editor::export`, le reste retombe sur les
+    /// `#[serde(default)]` de cette struct), sinon `Settings::default()`.
+    fn from_bundled_defaults() -> Self {
+        crate::assets::default_settings_json()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Comme `load`, mais avec un chemin de fichier explicite (isolation des
+    /// tests — même patron que `assets::read_user_bytes_at`).
+    fn load_from(path: &std::path::Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
     }
 
-    /// Persiste les réglages (crée `~/.motor3derust/` au besoin).
+    /// Persiste les réglages (crée le dossier parent au besoin).
     pub fn save(&self) {
-        let Some(p) = Self::path() else { return };
-        if let Some(dir) = p.parent() {
+        if let Some(p) = Self::path() {
+            self.save_to(&p);
+        }
+    }
+
+    /// Comme `save`, mais avec un chemin de fichier explicite (isolation des
+    /// tests — même patron que `assets::write_user_bytes_at`).
+    fn save_to(&self, path: &std::path::Path) {
+        if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(p, json);
+            let _ = std::fs::write(path, json);
         }
     }
 
@@ -246,6 +303,42 @@ mod tests {
         assert!(settings.muted_players.is_empty());
     }
 
+    /// PHASE I Sprint 1 : un `settings.json` antérieur (sans `hud_scale`/
+    /// `reduce_shake`) doit continuer à charger, avec l'échelle HUD à 1.0 et le
+    /// screen-shake non réduit — même garde-fou que les tests ci-dessus pour
+    /// les champs ajoutés par des sprints ultérieurs.
+    #[test]
+    fn an_old_settings_file_without_accessibility_fields_loads_with_defaults() {
+        let old_json = r#"{
+            "deepseek_api_key": "",
+            "deepseek_model": "deepseek-chat",
+            "deepseek_temperature": 0.2,
+            "firebase_api_key": "",
+            "firebase_database_url": "",
+            "music_volume": 0.8,
+            "sfx_volume": 0.8
+        }"#;
+        let settings: Settings = serde_json::from_str(old_json)
+            .expect("un ancien settings.json sans champs d'accessibilité doit rester lisible");
+        assert_eq!(settings.hud_scale, 1.0);
+        assert!(!settings.reduce_shake);
+    }
+
+    /// PHASE I Sprint 1 : `hud_scale`/`reduce_shake` survivent à un aller-retour
+    /// JSON, même patron que le test volume ci-dessus.
+    #[test]
+    fn hud_scale_and_reduce_shake_round_trip() {
+        let settings = Settings {
+            hud_scale: 1.5,
+            reduce_shake: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("sérialisable");
+        let back: Settings = serde_json::from_str(&json).expect("désérialisable");
+        assert_eq!(back.hud_scale, 1.5);
+        assert!(back.reduce_shake);
+    }
+
     /// `mute_player`/`unmute_player` : ajoutent/retirent sans doublon, sans
     /// toucher `$HOME` (pas de `save()` observable ici, juste l'état en mémoire).
     #[test]
@@ -261,5 +354,58 @@ mod tests {
         assert_eq!(settings.muted_players.len(), 1);
         settings.muted_players.retain(|m| m != "Grosse Bertha");
         assert!(!settings.is_muted("Grosse Bertha"));
+    }
+
+    /// Dossier temporaire unique par test (pas de mutation de `$HOME`/état
+    /// global — même patron que `assets::tests::temp_assets_dir`).
+    fn temp_settings_path(tag: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "motor3derust_settings_test_{tag}_{:?}",
+            std::thread::current().id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("settings.json")
+    }
+
+    /// Sprint 1 (config hors éditeur) : `save_to`/`load_from` doivent faire un
+    /// aller-retour fidèle sur un répertoire simulé, sans toucher au vrai
+    /// `$HOME`/dossier de données de la machine — c'est ce chemin explicite que
+    /// `path()` emprunte désormais aussi sur Android via `assets::app_data_dir`
+    /// (avant ce sprint, `path()` résolvait `$HOME` en dur et renvoyait `None`
+    /// sur Android, dégradant `load()`/`save()` en no-op silencieux).
+    #[test]
+    fn save_to_then_load_from_round_trips_on_a_simulated_directory() {
+        let path = temp_settings_path("round_trip");
+        let settings = Settings {
+            firebase_api_key: "AIzaTest".to_string(),
+            firebase_database_url: "https://xxx-default-rtdb.firebaseio.com".to_string(),
+            gamepad: GamepadBindings {
+                menu: "LeftTrigger".to_string(),
+                ..GamepadBindings::default()
+            },
+            ..Settings::default()
+        };
+        settings.save_to(&path);
+
+        let loaded = Settings::load_from(&path);
+        assert_eq!(loaded.firebase_api_key, "AIzaTest");
+        assert_eq!(
+            loaded.firebase_database_url,
+            "https://xxx-default-rtdb.firebaseio.com"
+        );
+        assert_eq!(loaded.gamepad.menu, "LeftTrigger");
+    }
+
+    /// `load_from` sur un fichier absent (première utilisation) renvoie les
+    /// valeurs par défaut plutôt que de paniquer — même garde-fou que
+    /// `Settings::load()` côté disque réel.
+    #[test]
+    fn load_from_a_missing_file_returns_defaults() {
+        let path = temp_settings_path("missing");
+        let _ = std::fs::remove_file(&path);
+        let loaded = Settings::load_from(&path);
+        assert_eq!(loaded.firebase_api_key, "");
+        assert_eq!(loaded.gamepad, GamepadBindings::default());
     }
 }

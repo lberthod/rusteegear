@@ -32,7 +32,14 @@ pub type PlayerId = u32;
 /// fois arbitré par le salon (premier `Join` gagnant, cf. `Lobby::objective`) ;
 /// sans ce sens retour, un client restait sur son défaut `Vagues` local alors
 /// que le salon tournait en `Survie`.
-pub const PROTOCOL_VERSION: u32 = 5;
+/// v6 (Phase H, Sprint 1 — écran de fin de manche détaillé, GDD §9.2/§17.4) :
+/// `GameEvent::Win`/`Lose` gagnent un résumé par joueur (`Vec<RoundPlayerSummary>`,
+/// frags/assists/XP déjà calculés côté serveur mais jusqu'ici jamais renvoyés
+/// au client), `Win` gagne en plus `contract: Option<u8>` (contrat du jour
+/// rempli par cette manche, cf. `Contract::to_u8`) — sans quoi le client
+/// n'avait aucun moyen d'afficher un détail de manche, seulement la bannière
+/// minimale pilotée par sa propre simulation locale.
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
@@ -316,6 +323,15 @@ pub struct EntityDelta {
     /// signal social/compétitif en coopératif.
     #[serde(default)]
     pub kills: Option<u32>,
+    /// Assists individualisés (Phase L Sprint 3, `sprint2audijeu0718.md` — GDD
+    /// §8.3) : nombre de fois où **ce** joueur a porté un dégât à un monstre
+    /// achevé par un autre joueur peu après (cf.
+    /// `AppState::network_player_assists`/`credit_assists_on_kill`), distinct
+    /// de `kills` ci-dessus (jamais incrémentés pour la même mise à mort). Même
+    /// politique que `kills` : `Some` uniquement pour les entités-joueur,
+    /// diffusé à tous.
+    #[serde(default)]
+    pub assists: Option<u32>,
 }
 
 /// Type d'agresseur à l'origine des derniers dégâts reçus avant une mort
@@ -343,9 +359,24 @@ pub struct DeathCause {
     pub distinct_attackers: u8,
 }
 
+/// Résumé d'un joueur en fin de manche (Phase H, Sprint 1, GDD §9.2/§17.4) :
+/// frags/assists déjà calculés côté serveur (`network_player_score`/
+/// `network_player_assists`, `bin/server.rs`), XP gagnée cette manche selon
+/// le même barème que `award_progress` (`round_xp`) — un calcul dupliqué,
+/// pas partagé, `round_xp` restant privé à `bin/server.rs` et ce module ne
+/// dépendant pas de ce binaire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoundPlayerSummary {
+    pub player_id: PlayerId,
+    pub name: String,
+    pub frags: u32,
+    pub assists: u32,
+    pub xp: u32,
+}
+
 /// Évènement ponctuel de gameplay, distinct d'un `Snapshot` (état continu) : le
 /// client peut y réagir une fois (son, flash HUD) sans avoir à comparer deux états.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GameEvent {
     WaveStart {
         wave: u32,
@@ -353,8 +384,17 @@ pub enum GameEvent {
     Defeated {
         index: u32,
     },
-    Win,
-    Lose,
+    /// Manche gagnée (Phase H, Sprint 1) : `summary` un par joueur connecté du
+    /// salon, `contract` le contrat du jour rempli par cette manche s'il y en
+    /// a un (`Contract::to_u8`, `None` sinon — jamais rempli sur une défaite,
+    /// cf. `Lose` qui n'a donc pas ce champ).
+    Win {
+        summary: Vec<RoundPlayerSummary>,
+        contract: Option<u8>,
+    },
+    Lose {
+        summary: Vec<RoundPlayerSummary>,
+    },
     /// Un joueur réseau vient de tomber à 0 PV (cf. `app::health`,
     /// GAMEDESIGN_EN_LIGNE.md §3.1) : devient spectateur pour le reste de la
     /// manche (objet masqué, entrées ignorées côté serveur). Diffusé une fois,
@@ -548,6 +588,7 @@ mod tests {
                     health: Some(0.75),
                     anim_clip: String::new(),
                     kills: Some(3),
+                    assists: Some(1),
                 },
                 EntityDelta {
                     index: 7,
@@ -558,6 +599,7 @@ mod tests {
                     health: None,
                     anim_clip: String::new(),
                     kills: None,
+                    assists: None,
                 },
             ],
         }));
@@ -567,8 +609,25 @@ mod tests {
     fn server_msg_event_round_trips() {
         round_trip(ServerMsg::Event(GameEvent::WaveStart { wave: 2 }));
         round_trip(ServerMsg::Event(GameEvent::Defeated { index: 5 }));
-        round_trip(ServerMsg::Event(GameEvent::Win));
-        round_trip(ServerMsg::Event(GameEvent::Lose));
+        round_trip(ServerMsg::Event(GameEvent::Win {
+            summary: vec![RoundPlayerSummary {
+                player_id: 1,
+                name: "Loïc".to_string(),
+                frags: 3,
+                assists: 1,
+                xp: 245,
+            }],
+            contract: Some(2),
+        }));
+        round_trip(ServerMsg::Event(GameEvent::Lose {
+            summary: vec![RoundPlayerSummary {
+                player_id: 1,
+                name: "Loïc".to_string(),
+                frags: 0,
+                assists: 0,
+                xp: 150,
+            }],
+        }));
         round_trip(ServerMsg::Event(GameEvent::PlayerDown {
             player_id: 7,
             cause: Some(DeathCause {
@@ -605,6 +664,7 @@ mod tests {
                 health: Some(0.9),
                 anim_clip: String::new(),
                 kills: Some(i),
+                assists: Some(i / 2),
             })
             .collect();
         let snapshot = ServerMsg::Snapshot(Snapshot {

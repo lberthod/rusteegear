@@ -55,6 +55,9 @@ pub struct RemotePlayer {
     /// GAMEDESIGN_EN_LIGNE.md) — même provenance que `health` : lus tels
     /// quels du dernier `Snapshot`, `None` tant qu'aucun n'est arrivé.
     pub kills: Option<u32>,
+    /// Assists individualisés (Phase L Sprint 3, `sprint2audijeu0718.md`, GDD
+    /// §8.3) — même provenance que `kills` ci-dessus.
+    pub assists: Option<u32>,
 }
 
 /// Fraction de l'écart comblée à chaque appel de `apply_local_network_position`
@@ -311,6 +314,7 @@ impl AppState {
         self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
         self.net_local_health = None;
         self.net_local_kills = None;
+        self.net_local_assists = None;
         self.net_local_history.clear();
         self.net_last_input_sent = None;
         // Plus de snapshots à venir : oublie les projectiles serveur et masque le
@@ -372,6 +376,17 @@ impl AppState {
         }
     }
 
+    /// Assists à afficher au HUD (Phase L Sprint 3, `sprint2audijeu0718.md`,
+    /// GDD §8.3) — même principe que `displayed_kill_count` : 0 en solo (pas
+    /// d'assist possible sans coéquipier).
+    pub fn displayed_assist_count(&self) -> u32 {
+        if self.is_connected() {
+            self.net_local_assists.unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     /// Liste des joueurs de la partie en ligne pour le HUD (GAMEDESIGN_EN_LIGNE.md
     /// §3.4 — identité, vie et frags des autres joueurs affichées) : `(nom, vie
     /// 0..1 ou `None` avant le premier snapshot, frags, soi-même ?)`. Vide si
@@ -402,6 +417,7 @@ impl AppState {
             self.poll_firebase();
             self.poll_chat();
             self.poll_leaderboard();
+            self.poll_online_players();
         }
         // Reconnexion automatique en cours : fait avancer la machine à états
         // (résultat d'une tentative en vol, lancement de la suivante au terme
@@ -894,12 +910,14 @@ impl AppState {
                     if Some(pid) == self.net_player_id {
                         self.net_local_health = e.health;
                         self.net_local_kills = e.kills;
+                        self.net_local_assists = e.assists;
                         self.net_local_interp.push(e, now);
                         continue;
                     }
                     let default_name = format!("Joueur {pid}");
                     let rp = self.ensure_remote_player(pid, &default_name);
                     rp.health = e.health;
+                    rp.assists = e.assists;
                     rp.kills = e.kills;
                     rp.interp.push(e, now);
                 }
@@ -934,7 +952,11 @@ impl AppState {
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 } else {
                     self.ally_down_flash = 1.0;
-                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+                    // Phase O Sprint 1 (`sprint2audijeu0718.md`, GDD §10.4 rang 2) : un
+                    // allié à terre doit sonner différemment de notre propre défaite
+                    // (`Sfx::Lose` ci-dessus) — jusqu'ici les deux branches jouaient le
+                    // même son, aucun moyen de distinguer les deux événements à l'oreille.
+                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::AllyDown);
                 }
             }
             // Mode de manche arbitré par le salon (Phase C, `sprint10audit.md`) :
@@ -949,7 +971,30 @@ impl AppState {
             ServerMsg::Event(crate::net::protocol::GameEvent::RoundObjective { objective }) => {
                 self.objective = crate::app::multiplayer::RoundObjective::from_u8(objective);
             }
-            ServerMsg::Event(_) => {}
+            // Fin de manche détaillée (Phase H, Sprint 1, GDD §9.2/§17.4) :
+            // jusqu'ici `Win`/`Lose` tombaient dans le catch-all ci-dessous,
+            // la bannière restant pilotée uniquement par notre simulation
+            // locale (`has_won()`/`is_room_lost()`). Mémorisé pour
+            // `editor::hud::round_summary_banner`, tant que la manche
+            // suivante ne l'a pas remplacé (`restart_game`).
+            ServerMsg::Event(crate::net::protocol::GameEvent::Win { summary, contract }) => {
+                self.round_summary = Some(summary);
+                self.round_summary_won = true;
+                self.round_contract_label =
+                    contract.map(|c| crate::app::multiplayer::Contract::from_u8(c).label());
+            }
+            ServerMsg::Event(crate::net::protocol::GameEvent::Lose { summary }) => {
+                self.round_summary = Some(summary);
+                self.round_summary_won = false;
+                self.round_contract_label = None;
+            }
+            // Bannière de vague (Phase H, Sprint 2, GDD §17.2) : jusqu'ici
+            // jamais émis par la boucle de jeu (`bin/server.rs`), donc jamais
+            // reçu ici — tombait aussi dans le catch-all.
+            ServerMsg::Event(crate::net::protocol::GameEvent::WaveStart { wave }) => {
+                self.wave_banner_flash = 1.0;
+                self.wave_banner_wave = wave;
+            }
             // Rejet **fatal** (version de protocole incompatible…) : on affiche
             // la raison et on n'insiste JAMAIS — désarmer la reconnexion
             // automatique est essentiel, sinon le client re-tenterait en boucle
@@ -1009,6 +1054,7 @@ impl AppState {
                     interp: crate::net::interpolation::RemoteEntity::default(),
                     health: None,
                     kills: None,
+                    assists: None,
                 },
             );
         }
@@ -1316,6 +1362,66 @@ impl AppState {
             }
         }
     }
+
+    /// Rafraîchit la liste des `uid` en ligne (Phase L Sprint 1,
+    /// `sprint2audijeu0718.md` — lecture publique de `/presence`, ne nécessite
+    /// pas de compte connecté). Sans effet si une requête est déjà en cours.
+    pub fn request_refresh_online_players(&mut self, api_key: String, database_url: String) {
+        if self.online_players_busy {
+            return;
+        }
+        self.online_players_busy = true;
+        let tx = self.online_players_tx.clone();
+        std::thread::spawn(move || {
+            let config = crate::net::firebase::FirebaseConfig {
+                api_key,
+                database_url,
+            };
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let _ = tx.send(crate::net::firebase::list_online_players(&config, now_ms));
+        });
+    }
+
+    /// Applique le résultat d'une requête de présence en attente, s'il y en a un.
+    fn poll_online_players(&mut self) {
+        while let Ok(result) = self.online_players_rx.try_recv() {
+            self.online_players_busy = false;
+            match result {
+                Ok(uids) => self.online_players = uids,
+                Err(e) => log::warn!("Présence : requête échouée : {e}"),
+            }
+        }
+    }
+
+    /// Envoie le heartbeat de présence (`net::firebase::set_presence`) pour le
+    /// compte Firebase connecté (Phase L Sprint 1) : sans effet si aucun
+    /// compte n'est connecté (`firebase_id_token` absent) — la partie peut
+    /// rester anonyme, cf. `firebase_uid`. Fire-and-forget, comme
+    /// `request_send_chat_message` : pas de suivi de résultat, un heartbeat
+    /// manqué se rattrape au suivant.
+    pub fn request_presence_heartbeat(&mut self, api_key: String, database_url: String) {
+        let (Some(uid), Some(id_token)) =
+            (self.firebase_uid.clone(), self.firebase_id_token.clone())
+        else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let config = crate::net::firebase::FirebaseConfig {
+                api_key,
+                database_url,
+            };
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if let Err(e) = crate::net::firebase::set_presence(&config, &uid, &id_token, now_ms) {
+                log::warn!("Présence : heartbeat échoué : {e}");
+            }
+        });
+    }
 }
 
 /// Récupère les messages d'un salon et les convertit en `ChatLine`
@@ -1379,6 +1485,10 @@ impl AppState {
         self.score()
     }
 
+    pub fn displayed_assist_count(&self) -> u32 {
+        0
+    }
+
     pub(super) fn poll_network(&mut self) {}
 
     pub(super) fn apply_local_network_position(&mut self) {}
@@ -1437,6 +1547,10 @@ impl AppState {
         _limit: usize,
     ) {
     }
+
+    pub fn request_refresh_online_players(&mut self, _api_key: String, _database_url: String) {}
+
+    pub fn request_presence_heartbeat(&mut self, _api_key: String, _database_url: String) {}
 }
 
 #[cfg(all(
@@ -1615,6 +1729,93 @@ mod tests {
             app.objective,
             crate::app::multiplayer::RoundObjective::Survie
         );
+    }
+
+    /// Phase H, Sprint 1 (écran de fin de manche détaillé, GDD §9.2/§17.4) :
+    /// `GameEvent::Win` doit remplir `round_summary`/`round_summary_won`/
+    /// `round_contract_label` — avant ce fix, ces événements tombaient dans
+    /// le catch-all `ServerMsg::Event(_) => {}`, aucune donnée n'était jamais
+    /// mémorisée côté client.
+    #[test]
+    fn win_event_stores_the_round_summary_and_contract() {
+        use crate::net::protocol::RoundPlayerSummary;
+
+        let mut app = AppState::new();
+        assert!(app.round_summary.is_none());
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::Win {
+                summary: vec![RoundPlayerSummary {
+                    player_id: 1,
+                    name: "Loïc".to_string(),
+                    frags: 3,
+                    assists: 1,
+                    xp: 245,
+                }],
+                contract: Some(crate::app::multiplayer::Contract::AubeJuste.to_u8()),
+            },
+        ));
+
+        assert!(app.round_summary_won);
+        assert_eq!(
+            app.round_summary.as_deref(),
+            Some(
+                [RoundPlayerSummary {
+                    player_id: 1,
+                    name: "Loïc".to_string(),
+                    frags: 3,
+                    assists: 1,
+                    xp: 245,
+                }]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            app.round_contract_label,
+            Some(crate::app::multiplayer::Contract::AubeJuste.label())
+        );
+    }
+
+    /// Symétrique : `GameEvent::Lose` mémorise le résumé mais jamais de
+    /// contrat (une défaite ne remplit jamais de Contrat du jour, GDD §3.4).
+    #[test]
+    fn lose_event_stores_the_round_summary_without_a_contract() {
+        use crate::net::protocol::RoundPlayerSummary;
+
+        let mut app = AppState::new();
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::Lose {
+                summary: vec![RoundPlayerSummary {
+                    player_id: 1,
+                    name: "Loïc".to_string(),
+                    frags: 0,
+                    assists: 0,
+                    xp: 150,
+                }],
+            },
+        ));
+
+        assert!(!app.round_summary_won);
+        assert!(app.round_summary.is_some());
+        assert!(app.round_contract_label.is_none());
+    }
+
+    /// Phase H, Sprint 2 (bannière de vague, GDD §17.2) : `GameEvent::WaveStart`
+    /// doit armer `wave_banner_flash` (décroissance par frame côté
+    /// `advance_play`) avec le numéro de vague annoncé — jusqu'ici jamais
+    /// émis par la boucle serveur, ce message n'avait donc aucun effet observable.
+    #[test]
+    fn wave_start_event_arms_the_wave_banner() {
+        let mut app = AppState::new();
+        assert_eq!(app.wave_banner_flash, 0.0);
+
+        app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+            crate::net::protocol::GameEvent::WaveStart { wave: 3 },
+        ));
+
+        assert_eq!(app.wave_banner_flash, 1.0);
+        assert_eq!(app.wave_banner_wave, 3);
     }
 
     /// Sprint 2 (`sprint10audit.md`) : la cause de mort reçue du serveur doit
@@ -1863,6 +2064,45 @@ mod tests {
             player_pos.distance(ghost_pos) > 0.5,
             "le joueur local doit être bloqué par le fantôme réseau, pas se superposer avec \
              lui — joueur={player_pos:?}, fantôme={ghost_pos:?}"
+        );
+    }
+
+    /// Marqueur allié hors-écran (Phase L Sprint 2, `sprint2audijeu0718.md`) :
+    /// `nearest_downed_ally_position` doit ignorer un fantôme encore en vie
+    /// et ne renvoyer que le plus proche parmi ceux à 0 PV — même scène
+    /// minimale (sol + joueur pilotable) que le test de blocage physique
+    /// ci-dessus, deux fantômes réseau plutôt qu'un.
+    #[test]
+    fn nearest_downed_ally_position_ignores_ghosts_still_alive() {
+        let mut app = AppState::new();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::ZERO),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            visible: true,
+            ..Default::default()
+        });
+
+        let near = app.ensure_remote_player(1, "Bob");
+        let near_ghost = near.scene_index;
+        near.health = Some(1.0);
+        app.scene.objects[near_ghost].transform.position = glam::Vec3::new(2.0, 0.0, 0.0);
+        app.scene.objects[near_ghost].visible = true;
+
+        let far = app.ensure_remote_player(2, "Carla");
+        let far_ghost = far.scene_index;
+        far.health = Some(0.0);
+        app.scene.objects[far_ghost].transform.position = glam::Vec3::new(5.0, 0.0, 0.0);
+        app.scene.objects[far_ghost].visible = true;
+
+        assert_eq!(
+            app.nearest_downed_ally_position(),
+            Some(glam::Vec3::new(5.0, 0.0, 0.0)),
+            "Bob est plus proche mais debout (1.0 PV) — seule Carla (0 PV) doit ressortir"
         );
     }
 
@@ -2133,6 +2373,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2175,6 +2416,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2230,6 +2472,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2249,6 +2492,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2291,6 +2535,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2337,6 +2582,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2395,6 +2641,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
@@ -2517,6 +2764,7 @@ mod tests {
                     health: None,
                     anim_clip: String::new(),
                     kills: None,
+                    assists: None,
                 },
                 Instant::now(),
             );
@@ -2624,6 +2872,7 @@ mod tests {
                 health: None,
                 anim_clip: String::new(),
                 kills: None,
+                assists: None,
             },
             Instant::now(),
         );
