@@ -6082,6 +6082,20 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             objects.push(item);
         }
 
+        // Les Braises (GDD §2.1) sont la fiction du jeu : « c'est [le feu
+        // communal] qui attire les hordes ». La charte (§10.1 « au centre,
+        // les braises ; au loin, le danger », §10.2 orange = système
+        // feu/joueur) exige que ce soit le point chaud/saturé le plus
+        // lisible de la carte — jusqu'ici posé comme n'importe quel décor
+        // inerte (pas d'émissif). Marquage a posteriori (pas de champ
+        // couleur/émissif sur `DemoDecor`, partagé par ~150 entrées neutres)
+        // plutôt qu'une extension de la table pour deux objets seulement.
+        for name in ["Feu du hameau", "Feu de camp"] {
+            if let Some(feu) = objects.iter_mut().find(|o| o.name == name) {
+                feu.emissive = 1.2;
+            }
+        }
+
         Scene {
             objects,
             imported,
@@ -6110,6 +6124,24 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                     color: [1.0, 0.75, 0.4],
                     intensity: 1.1,
                     range: 12.0,
+                    ..PointLight::default()
+                },
+                // Les Braises (GDD §2.1/§10.1) : le feu communal du hameau
+                // (forge/scierie, x≈28/z≈-29) est hors de portée des deux
+                // lampes ci-dessus — il n'avait aucune source de lumière
+                // propre alors qu'il est la fiction centrale du jeu.
+                PointLight {
+                    position: [28.0, 1.2, -29.0],
+                    color: [1.0, 0.55, 0.15],
+                    intensity: 1.6,
+                    range: 14.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [19.0, 1.0, -6.0],
+                    color: [1.0, 0.6, 0.2],
+                    intensity: 0.9,
+                    range: 8.0,
                     ..PointLight::default()
                 },
             ],
@@ -7917,6 +7949,16 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 i as f32 * 40.0,
                 false,
             );
+        }
+
+        // Les Braises (GDD §2.1) sont la fiction du jeu : « c'est [le feu
+        // communal] qui attire les hordes ». La charte (§10.1 « au centre,
+        // les braises ; au loin, le danger », §10.2 orange = système
+        // feu/joueur) exige que ce soit le point chaud/saturé le plus
+        // lisible de la carte — jusqu'ici posé comme n'importe quel décor
+        // inerte (pas d'émissif), cf. SPRINT3D_AUDIT_GAMEDESIGN.md §1.1.
+        if let Some(feu) = objects.iter_mut().find(|o| o.name == "Feu communal") {
+            feu.emissive = 1.2;
         }
 
         Scene {

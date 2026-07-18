@@ -3608,4 +3608,85 @@ mod tests {
             );
         }
     }
+
+    /// OUTIL, pas une preuve (lancé explicitement : `cargo test
+    /// sync_embedded_scene_pickups_from_the_demo -- --ignored --nocapture`) :
+    /// `Scene::mmorpg_demo` définit des `ItemPickup` (potions, baies, clé,
+    /// gemme — `MMORPG_ITEMS`) qu'aucun des trois outils `sync_embedded_scene_*`
+    /// existants ne reporte sur la scène servie (le remplacement d'environnement
+    /// vient de `hameau_gdd_demo`, qui n'en définit aucun ; le décor ambiant ne
+    /// filtre que les préfixes de `AMBIENT_DECOR_PREFIXES`) — audité dans
+    /// SPRINT3D_AUDIT_GAMEDESIGN.md §4 : la carte servie n'avait donc **aucun**
+    /// objet à ramasser, contredisant GDD_MMORPG.md §5.1/§15.4/§17.1. Ces objets
+    /// utilisent des meshes primitifs (`Sphere`/`Capsule`, cf. `DemoItem` dans
+    /// `demos.rs`) : aucun import/bundle à gérer, contrairement aux deux autres
+    /// outils. Idempotent : retire d'abord toute instance déjà synchronisée
+    /// (marquée par `item_pickup.is_some()`) avant de réinjecter celles de la
+    /// démo.
+    #[test]
+    #[ignore = "outil : réécrit assets/player_scene.json, à lancer explicitement"]
+    fn sync_embedded_scene_pickups_from_the_demo() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/player_scene.json");
+        let json = std::fs::read_to_string(path).expect("player_scene.json lisible");
+        let mut embedded: Scene = serde_json::from_str(&json).expect("player_scene.json valide");
+        let demo = Scene::mmorpg_demo();
+
+        embedded.objects.retain(|o| o.item_pickup.is_none());
+        let to_add: Vec<&SceneObject> = demo
+            .objects
+            .iter()
+            .filter(|o| o.item_pickup.is_some())
+            .collect();
+        assert!(
+            !to_add.is_empty(),
+            "la démo doit contenir des `ItemPickup` (GDD §5.1/§15.4)"
+        );
+        for obj in &to_add {
+            assert!(
+                matches!(obj.mesh, MeshKind::Sphere | MeshKind::Capsule),
+                "« {} » : cet outil ne gère que des meshes primitifs, pas d'import à \
+                 bundler (ajouter la gestion d'import si un futur pickup en a besoin)",
+                obj.name
+            );
+        }
+        let n_added = to_add.len();
+        for obj in to_add {
+            embedded.objects.push(obj.clone());
+        }
+
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&embedded).expect("sérialisation"),
+        )
+        .expect("écriture de player_scene.json");
+        println!("player_scene.json : {n_added} objets ramassables synchronisés");
+    }
+
+    /// Garde-fou compagnon de `sync_embedded_scene_pickups_from_the_demo`.
+    #[test]
+    fn the_embedded_scene_has_item_pickups_from_the_demo() {
+        let embedded = Scene::embedded_player();
+        let demo = Scene::mmorpg_demo();
+        let demo_names: std::collections::BTreeSet<&str> = demo
+            .objects
+            .iter()
+            .filter(|o| o.item_pickup.is_some())
+            .map(|o| o.name.as_str())
+            .collect();
+        assert!(
+            !demo_names.is_empty(),
+            "la démo doit contenir des `ItemPickup`"
+        );
+        let sync_hint = "lancer `cargo test sync_embedded_scene_pickups_from_the_demo \
+             -- --ignored --nocapture`";
+        for name in &demo_names {
+            assert!(
+                embedded
+                    .objects
+                    .iter()
+                    .any(|o| o.name == *name && o.item_pickup.is_some()),
+                "« {name} » absent (ou sans `item_pickup`) de la scène embarquée — {sync_hint}"
+            );
+        }
+    }
 }
