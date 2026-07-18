@@ -5,7 +5,7 @@
 > avec **Objectif · Tâches · Fichiers · Livrable vérifiable · Risques**.
 > On ne démarre un sprint que si le précédent **de la même phase** est « vert ».
 
-Retour : **[auditGDD10h.md](auditGDD10h.md)** (constat) · **[GDD_MMORPG.md](GDD_MMORPG.md)** (cible) ·
+Retour : **[auditGDD10h.md](auditGDD10h.md)** (constat) · **[GDD_MMORPG.md](../GDD_MMORPG.md)** (cible) ·
 **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)** (plan moteur global).
 
 ---

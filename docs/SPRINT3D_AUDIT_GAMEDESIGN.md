@@ -3,7 +3,7 @@
 > Audit mené le 18 juillet 2026 sur l'état **réellement servi** du jeu
 > (`assets/player_scene.json`, chargé par l'éditeur et par le client — ce
 > sont les deux captures d'écran qui ont déclenché cet audit), comparé à
-> [GDD_MMORPG.md](GDD_MMORPG.md) et à
+> [GDD_MMORPG.md](../GDD_MMORPG.md) et à
 > [ANALYSE_DESIGN_VISUEL.md](ANALYSE_DESIGN_VISUEL.md). Sources inspectées :
 > `assets/player_scene.json` (790 objets, 241 meshes importés, lu et
 > compté programmatiquement — pas d'estimation), `src/scene/demos.rs`

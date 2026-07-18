@@ -8,7 +8,7 @@
 
 État de départ : **MVP complet**.
 
-Retour : **[README.md](README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap figé 0→44) ·
+Retour : **[README.md](../README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap figé 0→44) ·
 **[SPRINT_MMORPG.md](SPRINT_MMORPG.md)** / **[SPRINTNETWORK.md](SPRINTNETWORK.md)**
 (détail multijoueur).
 
@@ -360,7 +360,7 @@ Retour : **[README.md](README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap fig�
 > sont en place (cœur), mais plusieurs nouveautés n'ont **jamais été exécutées de bout
 > en bout** (cf. audit Phase E) et certains demi-sprints restent à finir. Cette phase
 > sécurise d'abord la reprise (validation + tests), puis termine l'édition, le rendu et
-> la distribution. Lire **[README.md](README.md)** et
+> la distribution. Lire **[README.md](../README.md)** et
 > **[packaging/EXPORT.md](packaging/EXPORT.md)** avant de démarrer.
 
 ### Sprint 28 — Prise en main & validation de bout en bout 🟢 (validé desktop)

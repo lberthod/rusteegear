@@ -7,7 +7,7 @@
 > On ne démarre un sprint que si le précédent **de la même phase** est « vert ».
 
 Retour : **[optimisation3D.Analys.md](optimisation3D.Analys.md)** (constat) ·
-**[GDD_MMORPG.md](GDD_MMORPG.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
+**[GDD_MMORPG.md](../GDD_MMORPG.md)** · **[ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md)**.
 
 ---
 
