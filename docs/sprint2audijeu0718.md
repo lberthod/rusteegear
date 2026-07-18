@@ -89,28 +89,58 @@ committer leurs champs sans toucher à la constante de version ; P s'en charge e
 
 ### Sprint 1 — Résumé par joueur (frags/assists/XP)
 **Objectif** : remplacer la bannière minimale par un résumé conforme au §9.2/§17.4 du GDD.
-- [ ] Étendre l'événement de fin de manche (`GameEvent::Win`/`Lose`, `src/net/protocol.rs`) pour
+- [x] Étendre l'événement de fin de manche (`GameEvent::Win`/`Lose`, `src/net/protocol.rs`) pour
   transporter un résumé par joueur — déjà calculé côté serveur (`network_player_score`,
   `network_player_assists`, `src/bin/server.rs`), juste jamais poussé au client sous cette forme.
-- [ ] Afficher une ligne par joueur (nom, frags, assists, XP gagnée) sur l'écran Gagné/Perdu
-  (`src/editor/hud.rs`), à la place de la bannière texte seule actuelle.
-- **Fichiers** : `src/net/protocol.rs`, `src/bin/server.rs`, `src/editor/hud.rs`.
+  **Déjà livré** (sous l'étiquette « Phase H, Sprint 1 » dans les commentaires de code, écrite avant
+  ce document) : `GameEvent::Win { summary, contract }`/`Lose { summary }` transportent
+  `Vec<RoundPlayerSummary>` (`player_id`, `name`, `frags`, `assists`, `xp`,
+  `src/net/protocol.rs:369`), peuplé côté serveur par `round_summary()` (`src/bin/server.rs:535`,
+  mêmes sources que `award_progress`) et diffusé à `room.connected_ids()` juste avant
+  `award_progress` (`src/bin/server.rs:822-838`). `PROTOCOL_VERSION` **non** bumpé (reste à 6, cf. la
+  convention d'un seul bump groupé par P en fin de Bloc 5).
+- [x] Afficher une ligne par joueur (nom, frags, assists, XP gagnée) sur l'écran Gagné/Perdu
+  (`src/editor/hud.rs`), à la place de la bannière texte seule actuelle. **Déjà livré** :
+  `round_summary_banner()` (`src/editor/hud.rs:1251`), une ligne par joueur via
+  `locale::round_summary_row`, appelée depuis les deux points d'affichage (aperçu mobile
+  `run_player_overlay` et vue Play de l'éditeur `run()`, `src/editor/mod.rs`). Côté client,
+  `GameEvent::Win`/`Lose` alimentent `AppState::round_summary`/`round_summary_won`/
+  `round_contract_label` (`src/app/network_client.rs:976-990`).
+- **Fichiers** : `src/net/protocol.rs`, `src/bin/server.rs`, `src/editor/hud.rs`,
+  `src/app/network_client.rs`, `src/app/mod.rs`, `src/editor/mod.rs`, `src/app/locale.rs` (au-delà des
+  trois fichiers annoncés — la diffusion réseau + le stockage côté client n'existaient pas non plus).
 - **Livrable** : un salon de test à 2+ joueurs affiche, à la fin de la manche, une ligne par joueur
-  avec ses frags/assists/XP — pas seulement « Gagné !```/```Perdu ! ».
+  avec ses frags/assists/XP — pas seulement « Gagné !```/```Perdu ! ». ✅ Vérifié le 18 juillet 2026 :
+  `cargo test --lib` (590 passés, dont `win_event_stores_the_round_summary_and_contract`,
+  `lose_event_stores_the_round_summary_without_a_contract`), `cargo clippy --lib -- -D warnings` et
+  `rustfmt --check` propres sur les fichiers listés.
 - **Risques** : bump de `PROTOCOL_VERSION` si le format d'événement change — coordonner avec L/M/P
-  (voir Frictions ci-dessus) pour un seul bump groupé.
+  (voir Frictions ci-dessus) pour un seul bump groupé. Non déclenché ici (format ajouté avant que ce
+  document ne fixe la convention, mais compatible avec elle : aucun bump n'a eu lieu).
 
 ### Sprint 2 — Contrat du jour et bannière de vague
 **Objectif** : combler les deux autres surfaces manquantes du §17.2 (contrat rempli, bannière de
 vague au changement de manche).
-- [ ] Afficher `GameEvent::WaveStart` (déjà envoyé, `protocol.rs:350`) en bannière courte à l'écran —
-  rien ne l'affiche aujourd'hui côté UI.
-- [ ] Afficher la complétion du contrat du jour (déjà calculée, `AppState::contract_completed`) en
-  fin de manche, à côté du résumé du Sprint 1.
-- **Fichiers** : `src/editor/hud.rs`, `src/editor/mod.rs`.
+- [x] Afficher `GameEvent::WaveStart` (déjà envoyé, `protocol.rs:350`) en bannière courte à l'écran —
+  rien ne l'affiche aujourd'hui côté UI. **Déjà livré** : le serveur émet désormais
+  `GameEvent::WaveStart { wave }` dès que `room.app.wave` change (`src/bin/server.rs:742-761`,
+  `wave == 0` exclu — scène sans système de manches) ; côté client, `wave_start_banner()`
+  (`src/editor/hud.rs:1309`) l'affiche, piloté par `AppState::wave_banner_flash`/`wave_banner_wave`
+  (décroissance par frame, même mécanisme que `ally_down_flash`).
+- [x] Afficher la complétion du contrat du jour (déjà calculée, `AppState::contract_completed`) en
+  fin de manche, à côté du résumé du Sprint 1. **Déjà livré** : le serveur calcule le contrat rempli
+  *avant* la diffusion de `GameEvent::Win` (`src/bin/server.rs:800-809`, uniquement sur victoire) et
+  le transporte dans `GameEvent::Win::contract` ; `round_summary_banner()` l'affiche sous les lignes
+  de joueurs si `contract_label` est renseigné (`src/editor/hud.rs:1295-1303`).
+- **Fichiers** : `src/editor/hud.rs`, `src/editor/mod.rs`, `src/bin/server.rs`, `src/net/protocol.rs`
+  (au-delà des deux fichiers annoncés — la diffusion serveur elle-même faisait partie du travail, pas
+  seulement l'affichage).
 - **Livrable** : une manche qui change révèle une bannière visible ; un contrat rempli s'affiche à la
-  fin de la manche qui l'a complété.
-- **Risques** : dépend du Sprint 1 pour rester cohérent visuellement (même zone d'écran).
+  fin de la manche qui l'a complété. ✅ Vérifié le 18 juillet 2026 :
+  `wave_start_event_arms_the_wave_banner` passe, `cargo test --lib` (590 passés).
+- **Risques** : dépend du Sprint 1 pour rester cohérent visuellement (même zone d'écran). Confirmé
+  cohérent : les deux bannières partagent le même mécanisme de décroissance par `intensity` et sont
+  rendues dans la même zone `play_rect`/`area`.
 
 ---
 
