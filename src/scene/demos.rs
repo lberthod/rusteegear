@@ -6803,29 +6803,161 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             }
         }
 
-        wall_run(&mut objects, &mut imported, "Rempart Nord Ouest", -HALF, -GATE_HALF, -HALF, -HALF, 0.0);
-        wall_run(&mut objects, &mut imported, "Rempart Nord Est", GATE_HALF, HALF - TRIM, -HALF, -HALF, 0.0);
-        wall_run(&mut objects, &mut imported, "Rempart Est Nord", HALF, HALF, -HALF + TRIM, -GATE_HALF, 90.0);
-        wall_run(&mut objects, &mut imported, "Rempart Est Sud", HALF, HALF, GATE_HALF, HALF, 90.0);
-        wall_run(&mut objects, &mut imported, "Rempart Sud Ouest", -HALF + TRIM, -GATE_HALF, HALF, HALF, 0.0);
-        wall_run(&mut objects, &mut imported, "Rempart Sud Est", GATE_HALF, HALF, HALF, HALF, 0.0);
-        wall_run(&mut objects, &mut imported, "Rempart Ouest Nord", -HALF, -HALF, -HALF, -GATE_HALF, 90.0);
-        wall_run(&mut objects, &mut imported, "Rempart Ouest Sud", -HALF, -HALF, GATE_HALF, HALF - TRIM, 90.0);
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Nord Ouest",
+            -HALF,
+            -GATE_HALF,
+            -HALF,
+            -HALF,
+            0.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Nord Est",
+            GATE_HALF,
+            HALF - TRIM,
+            -HALF,
+            -HALF,
+            0.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Est Nord",
+            HALF,
+            HALF,
+            -HALF + TRIM,
+            -GATE_HALF,
+            90.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Est Sud",
+            HALF,
+            HALF,
+            GATE_HALF,
+            HALF,
+            90.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Sud Ouest",
+            -HALF + TRIM,
+            -GATE_HALF,
+            HALF,
+            HALF,
+            0.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Sud Est",
+            GATE_HALF,
+            HALF,
+            HALF,
+            HALF,
+            0.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Ouest Nord",
+            -HALF,
+            -HALF,
+            -HALF,
+            -GATE_HALF,
+            90.0,
+        );
+        wall_run(
+            &mut objects,
+            &mut imported,
+            "Rempart Ouest Sud",
+            -HALF,
+            -HALF,
+            GATE_HALF,
+            HALF - TRIM,
+            90.0,
+        );
 
         // Tours d'angle aux 2 coins pleins (Nord-Ouest/Sud-Est) ; les coins
         // Nord-Est/Sud-Ouest restent des brèches ouvertes (cf. TRIM ci-dessus).
-        poser(&mut objects, &mut imported, "Tour Nord-Ouest", "siege_tower.glb", -HALF, -HALF, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Tour Sud-Est", "siege_tower.glb", HALF, HALF, 1.0, 0.0, true);
+        poser(
+            &mut objects,
+            &mut imported,
+            "Tour Nord-Ouest",
+            "siege_tower.glb",
+            -HALF,
+            -HALF,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Tour Sud-Est",
+            "siege_tower.glb",
+            HALF,
+            HALF,
+            1.0,
+            0.0,
+            true,
+        );
 
         // Portes : GATE_W (siege_gate_*) = 5.0 = 2×GATE_HALF, aucune
         // re-échelle nécessaire. Nord/Sud fermées, Est/Ouest embrasées — les
         // deux variantes doivent être présentes dans la carte (l'état réel
         // « embrasé » au signal de vague reste un chantier de gameplay
         // séparé, cf. docs/integration_siege_scene.md « hors scope »).
-        poser(&mut objects, &mut imported, "Porte Nord", "siege_gate_closed.glb", 0.0, -HALF, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Porte Sud", "siege_gate_closed.glb", 0.0, HALF, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Porte Est", "siege_gate_burning.glb", HALF, 0.0, 1.0, 90.0, true);
-        poser(&mut objects, &mut imported, "Porte Ouest", "siege_gate_burning.glb", -HALF, 0.0, 1.0, 90.0, true);
+        poser(
+            &mut objects,
+            &mut imported,
+            "Porte Nord",
+            "siege_gate_closed.glb",
+            0.0,
+            -HALF,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Porte Sud",
+            "siege_gate_closed.glb",
+            0.0,
+            HALF,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Porte Est",
+            "siege_gate_burning.glb",
+            HALF,
+            0.0,
+            1.0,
+            90.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Porte Ouest",
+            "siege_gate_burning.glb",
+            -HALF,
+            0.0,
+            1.0,
+            90.0,
+            true,
+        );
 
         // --- Chemin de ronde (hauteur ~2,2 m), longe l'intérieur des 4 murs,
         // mêmes brèches diagonales que les remparts (pas de coupure au droit
@@ -6909,10 +7041,50 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
         // brèche Sud-Ouest, herse/caisse/pieux/bannière à la porte Nord,
         // boulets en tas près de la porte Est, chariot de braises sur le
         // chemin entre la porte Nord et la place.
-        poser(&mut objects, &mut imported, "Bastion Nord", "siege_bastion.glb", 0.0, -HALF, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Bastion Sud", "siege_bastion.glb", 0.0, HALF, 1.0, 180.0, true);
-        poser(&mut objects, &mut imported, "Module de créneau Nord-Ouest", "siege_crenel_module.glb", -HALF + 1.0, -HALF - 0.3, 1.0, 0.0, false);
-        poser(&mut objects, &mut imported, "Module de créneau Sud-Est", "siege_crenel_module.glb", HALF - 1.0, HALF + 0.3, 1.0, 180.0, false);
+        poser(
+            &mut objects,
+            &mut imported,
+            "Bastion Nord",
+            "siege_bastion.glb",
+            0.0,
+            -HALF,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Bastion Sud",
+            "siege_bastion.glb",
+            0.0,
+            HALF,
+            1.0,
+            180.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Module de créneau Nord-Ouest",
+            "siege_crenel_module.glb",
+            -HALF + 1.0,
+            -HALF - 0.3,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Module de créneau Sud-Est",
+            "siege_crenel_module.glb",
+            HALF - 1.0,
+            HALF + 0.3,
+            1.0,
+            180.0,
+            false,
+        );
         for (i, (x, z, yaw)) in [
             (-HALF + 6.0_f32, -HALF + 1.0_f32, 0.0_f32),
             (HALF - 6.0, -HALF + 1.0, 0.0),
@@ -6936,17 +7108,120 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 false,
             );
         }
-        poser(&mut objects, &mut imported, "Chemin de ronde décoratif Nord", "siege_rampart_walk.glb", -6.0, -HALF + 1.1, 1.0, 0.0, false);
-        poser(&mut objects, &mut imported, "Poterne Sud-Ouest", "siege_postern.glb", -HALF + 2.0, HALF - 2.0, 1.0, 135.0, true);
-        poser(&mut objects, &mut imported, "Herse de la porte Nord", "siege_portcullis.glb", 0.0, -HALF + 0.4, 1.0, 0.0, false);
-        poser(&mut objects, &mut imported, "Caisse de réserve de la porte Nord", "siege_reserve_crate.glb", 1.6, -HALF + 1.5, 1.0, 10.0, true);
-        poser(&mut objects, &mut imported, "Rangée de pieux de la porte Nord", "siege_stake_row.glb", -1.5, -HALF + 2.5, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Bannière de vague Nord", "siege_wave_banner.glb", -3.0, -HALF + 0.6, 1.0, 0.0, false);
-        poser(&mut objects, &mut imported, "Bannière de vague Sud", "siege_wave_banner.glb", 3.0, HALF - 0.6, 1.0, 180.0, false);
-        poser(&mut objects, &mut imported, "Corne d'alerte Nord", "siege_alert_horn.glb", -2.2, -HALF + 0.5, 1.0, 0.0, false);
-        poser(&mut objects, &mut imported, "Corne d'alerte Sud", "siege_alert_horn.glb", 2.2, HALF - 0.5, 1.0, 180.0, false);
-        poser(&mut objects, &mut imported, "Panneau directionnel Est", "siege_rampart_signpost.glb", HALF - 3.0, -3.0, 1.0, 90.0, true);
-        for (i, (dx, dz)) in [(0.0_f32, 0.0_f32), (0.3, 0.25), (-0.25, 0.2)].into_iter().enumerate() {
+        poser(
+            &mut objects,
+            &mut imported,
+            "Chemin de ronde décoratif Nord",
+            "siege_rampart_walk.glb",
+            -6.0,
+            -HALF + 1.1,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Poterne Sud-Ouest",
+            "siege_postern.glb",
+            -HALF + 2.0,
+            HALF - 2.0,
+            1.0,
+            135.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Herse de la porte Nord",
+            "siege_portcullis.glb",
+            0.0,
+            -HALF + 0.4,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Caisse de réserve de la porte Nord",
+            "siege_reserve_crate.glb",
+            1.6,
+            -HALF + 1.5,
+            1.0,
+            10.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Rangée de pieux de la porte Nord",
+            "siege_stake_row.glb",
+            -1.5,
+            -HALF + 2.5,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Bannière de vague Nord",
+            "siege_wave_banner.glb",
+            -3.0,
+            -HALF + 0.6,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Bannière de vague Sud",
+            "siege_wave_banner.glb",
+            3.0,
+            HALF - 0.6,
+            1.0,
+            180.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Corne d'alerte Nord",
+            "siege_alert_horn.glb",
+            -2.2,
+            -HALF + 0.5,
+            1.0,
+            0.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Corne d'alerte Sud",
+            "siege_alert_horn.glb",
+            2.2,
+            HALF - 0.5,
+            1.0,
+            180.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Panneau directionnel Est",
+            "siege_rampart_signpost.glb",
+            HALF - 3.0,
+            -3.0,
+            1.0,
+            90.0,
+            true,
+        );
+        for (i, (dx, dz)) in [(0.0_f32, 0.0_f32), (0.3, 0.25), (-0.25, 0.2)]
+            .into_iter()
+            .enumerate()
+        {
             poser(
                 &mut objects,
                 &mut imported,
@@ -6959,7 +7234,17 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 true,
             );
         }
-        poser(&mut objects, &mut imported, "Chariot de braises", "siege_ember_cart.glb", 0.0, -12.0, 1.0, 0.0, true);
+        poser(
+            &mut objects,
+            &mut imported,
+            "Chariot de braises",
+            "siege_ember_cart.glb",
+            0.0,
+            -12.0,
+            1.0,
+            0.0,
+            true,
+        );
 
         // --- Place centrale : brasero communal (pack siège, remplace le feu
         // de camp générique — pièce signature de la place, cf.
@@ -6976,10 +7261,50 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             0.0,
             false,
         );
-        poser(&mut objects, &mut imported, "Bannière de mode de la place", "siege_mode_banner.glb", -2.0, 4.5, 1.0, 20.0, false);
-        poser(&mut objects, &mut imported, "Fanion de la place", "siege_team_pennant.glb", 2.0, 4.5, 1.0, -20.0, false);
-        poser(&mut objects, &mut imported, "Trophée de fin de manche", "siege_round_trophy.glb", 0.0, 3.5, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Portail de fin", "siege_end_portal.glb", 0.0, 6.0, 1.0, 180.0, true);
+        poser(
+            &mut objects,
+            &mut imported,
+            "Bannière de mode de la place",
+            "siege_mode_banner.glb",
+            -2.0,
+            4.5,
+            1.0,
+            20.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Fanion de la place",
+            "siege_team_pennant.glb",
+            2.0,
+            4.5,
+            1.0,
+            -20.0,
+            false,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Trophée de fin de manche",
+            "siege_round_trophy.glb",
+            0.0,
+            3.5,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Portail de fin",
+            "siege_end_portal.glb",
+            0.0,
+            6.0,
+            1.0,
+            180.0,
+            true,
+        );
         poser(
             &mut objects,
             &mut imported,
@@ -8281,16 +8606,56 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
                 "Cairn de guerre" => "siege_war_cairn.glb",
                 _ => "siege_low_mist.glb",
             };
-            poser(&mut objects, &mut imported, name, file, *x, *z, 1.0, *yaw, file != "siege_low_mist.glb");
+            poser(
+                &mut objects,
+                &mut imported,
+                name,
+                file,
+                *x,
+                *z,
+                1.0,
+                *yaw,
+                file != "siege_low_mist.glb",
+            );
         }
 
         // --- Aînée de la lande (boss, GDD §4) : autel de mise en scène + cage
         // du chef, dans une clairière dégagée de la lande (loin du camp de
         // chasseurs/mare/prairies/verger). Tas de trophées près du camp de
         // chasseurs (mode Survie).
-        poser(&mut objects, &mut imported, "Autel de l'Aînée", "siege_elder_altar.glb", 42.4, 42.4, 1.0, 0.0, true);
-        poser(&mut objects, &mut imported, "Cage du chef", "siege_chief_cage.glb", 45.4, 40.4, 1.0, -30.0, true);
-        poser(&mut objects, &mut imported, "Tas de trophées du camp", "siege_trophy_pile.glb", 22.0, 44.0, 1.0, 0.0, false);
+        poser(
+            &mut objects,
+            &mut imported,
+            "Autel de l'Aînée",
+            "siege_elder_altar.glb",
+            42.4,
+            42.4,
+            1.0,
+            0.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Cage du chef",
+            "siege_chief_cage.glb",
+            45.4,
+            40.4,
+            1.0,
+            -30.0,
+            true,
+        );
+        poser(
+            &mut objects,
+            &mut imported,
+            "Tas de trophées du camp",
+            "siege_trophy_pile.glb",
+            22.0,
+            44.0,
+            1.0,
+            0.0,
+            false,
+        );
 
         // Les Braises (GDD §2.1) sont la fiction du jeu : « c'est [le feu
         // communal] qui attire les hordes ». La charte (§10.1 « au centre,
