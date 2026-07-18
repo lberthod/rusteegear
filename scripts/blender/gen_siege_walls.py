@@ -24,6 +24,8 @@ import math
 import os
 import sys
 
+import bpy
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hamlet_common import (  # noqa: E402
     METAL_DARK,
@@ -40,6 +42,7 @@ from hamlet_common import (  # noqa: E402
     reset_scene,
     stone_coursing,
 )
+from siege_anim_common import FLAME_PATTERNS, build_prop, weight, weight_remaining  # noqa: E402
 
 WALL_H = 3.0
 WALL_T = 0.6
@@ -135,7 +138,10 @@ def gen_tower():
 def _gate_body(prefix, door_mat, burning):
     """Corps commun aux deux portes (fermée/embrasée) — même géométrie de
     jambages/linteau/vantaux/créneau, seul le matériau des vantaux (et l'ajout
-    de flammes) change selon `burning`."""
+    de flammes) change selon `burning`. Animé (addendum
+    creationAnimation3DBlendersuite.md) : Root + VantailGauche + VantailDroit
+    (+ Flamme1/Flamme2 pour la variante embrasée), les vantaux pivotent depuis
+    le jambage (charnière verticale)."""
     stone = mat("pierre", STONE)
     stone_dark = mat("pierre_sombre", STONE_DARK)
     metal_dark = mat("ferrure", METAL_DARK)
@@ -145,36 +151,76 @@ def _gate_body(prefix, door_mat, burning):
         cube(f"{prefix}Jambage{sx}", stone,
              (sx * (opening_w / 2 + jamb_w / 2), 0, WALL_H / 2), (jamb_w, WALL_T, WALL_H))
     cube(f"{prefix}Linteau", stone_dark, (0, 0, WALL_H - 0.15), (GATE_W, WALL_T * 1.05, 0.3))
-    for sx in (-1, 1):
-        cube(f"{prefix}Vantail{sx}", door_mat,
-             (sx * opening_w / 4, 0.08, (WALL_H - 0.3) / 2), (opening_w / 2 * 0.96, 0.12, WALL_H - 0.3))
-    for sx in (-1, 1):
+    door_objs = {}
+    animated_objs = []  # tout objet déjà pondéré à un os non-Root (à exclure de weight_remaining)
+    for sx, bone in ((-1, "VantailGauche"), (1, "VantailDroit")):
+        leaf = cube(f"{prefix}Vantail{sx}", door_mat,
+                     (sx * opening_w / 4, 0.08, (WALL_H - 0.3) / 2), (opening_w / 2 * 0.96, 0.12, WALL_H - 0.3))
+        weight(leaf, bone)
+        animated_objs.append(leaf)
         for i in range(3):
             z = 0.4 + i * 0.9
-            cube(f"{prefix}Ferrure{sx}_{i}", metal_dark,
-                 (sx * opening_w / 4, 0.15, z), (opening_w / 2 * 0.8, 0.03, 0.08))
+            f = cube(f"{prefix}Ferrure{sx}_{i}", metal_dark,
+                       (sx * opening_w / 4, 0.15, z), (opening_w / 2 * 0.8, 0.03, 0.08))
+            weight(f, bone)
+            animated_objs.append(f)
+        door_objs[bone] = leaf
     crenellations(prefix, stone_dark, GATE_W, MERLON_N, WALL_H, depth=WALL_T, merlon_h=MERLON_H)
+    flame_objs = {}
     if burning:
         fire = mat("flamme", (0.85, 0.35, 0.10), emission=2.2)
-        for i, (x, z, r) in enumerate([(-0.9, WALL_H - 0.6, 0.28), (0.7, WALL_H - 0.4, 0.24),
-                                        (0.0, WALL_H - 0.9, 0.22), (1.3, WALL_H - 0.9, 0.20)]):
-            blob(f"{prefix}Flamme{i}", fire, (x, 0.1, z), radius=r, squash=1.6, jitter=0.04)
+        clusters = {"Flamme1": [(-0.9, WALL_H - 0.6, 0.28), (0.0, WALL_H - 0.9, 0.22)],
+                    "Flamme2": [(0.7, WALL_H - 0.4, 0.24), (1.3, WALL_H - 0.9, 0.20)]}
+        for bone, spots in clusters.items():
+            objs = []
+            for i, (x, z, r) in enumerate(spots):
+                b = blob(f"{prefix}{bone}_{i}", fire, (x, 0.1, z), radius=r, squash=1.6, jitter=0.04)
+                weight(b, bone)
+                animated_objs.append(b)
+                objs.append(b)
+            flame_objs[bone] = objs
+    bones = {"VantailGauche": ("Root", (-opening_w / 2, 0, 0), (-opening_w / 2, 0, 0.3)),
+             "VantailDroit": ("Root", (opening_w / 2, 0, 0), (opening_w / 2, 0, 0.3))}
+    if burning:
+        bones["Flamme1"] = ("Root", (-0.45, 0.1, WALL_H - 0.7), (-0.45, 0.1, WALL_H - 0.5))
+        bones["Flamme2"] = ("Root", (1.0, 0.1, WALL_H - 0.6), (1.0, 0.1, WALL_H - 0.4))
+    weight_remaining(animated_objs)
+    return bones, door_objs, flame_objs
+
+
+def _gate_door_keyer(key_rot, key_loc, key_scale, flame_bones):
+    """Idle 40f : vantaux fermés (0°) -> ouverts (±75°) -> refermés, boucle
+    parfaite (pose identique aux frames 1 et 40). Flammes (porte embrasée) :
+    tremblement d'échelle déphasé entre les deux foyers (motifs distincts,
+    tous deux à l'échelle 1.0 aux frames 1 et 40 pour fermer la boucle)."""
+    for f, a in ((1, 0), (20, 75), (40, 0)):
+        key_rot("VantailGauche", f, (0, 0, math.radians(a)))
+        key_rot("VantailDroit", f, (0, 0, math.radians(-a)))
+    for i, bone in enumerate(flame_bones):
+        for f, s in FLAME_PATTERNS[i % len(FLAME_PATTERNS)]:
+            key_scale(bone, f, (s, s, s))
 
 
 def gen_gate_closed():
     """Porte de rempart fermée : vantaux de bois clos, ferrures — entrée
-    principale du hameau."""
-    _gate_body("PorteF_", mat("bois_sombre", WOOD_DARK), burning=False)
-    export("siege_gate_closed.glb")
+    principale du hameau. Animée (addendum) : les 2 vantaux pivotent depuis
+    leur jambage (charnière verticale)."""
+    bones, door_objs, _ = _gate_body("PorteF_", mat("bois_sombre", WOOD_DARK), burning=False)
+    parts = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    build_prop("siege_gate_closed", parts, bones, "Idle",
+                lambda kr, kl, ks: _gate_door_keyer(kr, kl, ks, []))
 
 
 def gen_gate_burning():
     """Variante « signal de vague » (§17.5) : mêmes vantaux, matériau
     assombri + flammes émissives (vignette uniquement, cf. charte — l'émissif
-    glTF est ignoré par le moteur, un vrai feu en jeu se règle côté scène)."""
+    glTF est ignoré par le moteur, un vrai feu en jeu se règle côté scène).
+    Animée : vantaux + tremblement des flammes (Flamme1/Flamme2)."""
     charred = mat("bois_calcine", (0.12, 0.09, 0.07))
-    _gate_body("PorteB_", charred, burning=True)
-    export("siege_gate_burning.glb")
+    bones, door_objs, flame_objs = _gate_body("PorteB_", charred, burning=True)
+    parts = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    build_prop("siege_gate_burning", parts, bones, "Idle",
+                lambda kr, kl, ks: _gate_door_keyer(kr, kl, ks, list(flame_objs.keys())))
 
 
 ASSETS = [

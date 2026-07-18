@@ -7,8 +7,11 @@
 #
 # Sortie : assets/models/siege_*.glb.
 
+import math
 import os
 import sys
+
+import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hamlet_common import (  # noqa: E402
@@ -23,6 +26,7 @@ from hamlet_common import (  # noqa: E402
     mat,
     reset_scene,
 )
+from siege_anim_common import build_prop, weight, weight_remaining  # noqa: E402
 
 WALL_H = 3.0
 WALL_T = 0.6
@@ -78,18 +82,31 @@ def gen_rampart_stairs():
 
 def gen_postern():
     """Poterne : petite porte secondaire discrète (0,9×1,7 m), vantail
-    unique — contraste volontaire avec la porte principale (siege_gate_*)."""
+    unique — contraste volontaire avec la porte principale (siege_gate_*).
+    Animée (addendum creationAnimation3DBlendersuite.md) : Root + Vantail,
+    le battant pivote depuis le jambage gauche (charnière verticale)."""
     stone = mat("pierre", STONE)
     wood_dark = mat("bois_sombre", WOOD_DARK)
     metal_dark = mat("ferrure", METAL_DARK)
     w, h = 0.9, 1.7
     jamb_w = 0.16
+    hinge_x = -(w / 2 - jamb_w)
     for sx in (-1, 1):
         cube(f"Jambage{sx}", stone, (sx * (w / 2 - jamb_w / 2), 0, h / 2), (jamb_w, WALL_T, h))
     cube("Linteau", stone, (0, 0, h + 0.08), (w, WALL_T * 1.05, 0.16))
-    cube("Vantail", wood_dark, (0, 0.06, (h - 0.16) / 2), (w - jamb_w * 2 - 0.04, 0.1, h - 0.16))
-    cube("Poignee", metal_dark, (w / 2 - jamb_w - 0.1, 0.12, (h - 0.16) / 2), (0.05, 0.05, 0.14))
-    export("siege_postern.glb")
+    leaf = cube("Vantail", wood_dark, (0, 0.06, (h - 0.16) / 2), (w - jamb_w * 2 - 0.04, 0.1, h - 0.16))
+    weight(leaf, "Vantail")
+    handle = cube("Poignee", metal_dark, (w / 2 - jamb_w - 0.1, 0.12, (h - 0.16) / 2), (0.05, 0.05, 0.14))
+    weight(handle, "Vantail")
+    bones = {"Vantail": ("Root", (hinge_x, 0, 0), (hinge_x, 0, 0.3))}
+    weight_remaining([leaf, handle])
+
+    def keyer(key_rot, key_loc, key_scale):
+        for f, a in ((1, 0), (15, 80), (30, 0)):
+            key_rot("Vantail", f, (0, 0, math.radians(a)))
+
+    parts = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    build_prop("siege_postern", parts, bones, "Idle", keyer)
 
 
 def gen_bastion():
