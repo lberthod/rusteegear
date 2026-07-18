@@ -361,7 +361,7 @@ Retour : **[README.md](../README.md)** · **[SPRINTS.md](SPRINTS.md)** (récap f
 > en bout** (cf. audit Phase E) et certains demi-sprints restent à finir. Cette phase
 > sécurise d'abord la reprise (validation + tests), puis termine l'édition, le rendu et
 > la distribution. Lire **[README.md](../README.md)** et
-> **[packaging/EXPORT.md](packaging/EXPORT.md)** avant de démarrer.
+> **[packaging/EXPORT.md](../packaging/EXPORT.md)** avant de démarrer.
 
 ### Sprint 28 — Prise en main & validation de bout en bout 🟢 (validé desktop)
 **Objectif** : exécuter réellement ce qui a été codé « en vert » et poser des filets.
