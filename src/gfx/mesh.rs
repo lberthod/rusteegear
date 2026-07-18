@@ -403,6 +403,25 @@ pub const MMORPG_HILL_STRIP_X_LOCAL: (f32, f32) = (-0.5, -0.46);
 /// étroite) qu'en X (2,9 m de large seulement, cf. `MMORPG_HILL_STRIP_X_LOCAL`).
 pub const MMORPG_HILL_STRIP_RES: (u32, u32) = (6, 96);
 
+/// Bornes locales (x ET z, contrairement à `MMORPG_HILL_STRIP_X_LOCAL` qui ne
+/// restreint qu'en X) du petit bassin du Sprint 26 (Phase K,
+/// `sprintreflecion.md`) — seul autre endroit où `mmorpg_terrain_local_height`
+/// renvoie une valeur non nulle. Poche libre (≥3 m de tout décor/spawn placé à
+/// la main, y compris le semis procédural « Arbre du sud »/prairie élargie de
+/// `demos.rs`) trouvée juste à l'est de la bande de collines existante (dont
+/// le relief retombe déjà à 0 dès x=-34,5) : x∈[-34,-30] m, z∈[3,5;8,5] m —
+/// coordonnées vérifiées par balayage numérique de tout `NATURE_DECOR`/
+/// `VILLAGE_PROPS`/`MONSTER_DECOR`/`MMORPG_HALTES`/`MMORPG_CREATURES`/
+/// `MMORPG_AMBIENT_FAUNA_SPAWNS`/`EXCL_*`/rects de semis de `demos.rs`. Utilisé
+/// par `runtime::physics::Physics::build` pour un second collider heightfield
+/// additionnel, restreint (x ET z) à cette seule poche.
+pub const MMORPG_MOUND_X_LOCAL: (f32, f32) = (-34.3 / 72.0, -30.2 / 72.0);
+pub const MMORPG_MOUND_Z_LOCAL: (f32, f32) = (3.5 / 72.0, 8.5 / 72.0);
+/// Résolution (quads) du patch restreint : petite poche (~4×5 m), une
+/// résolution modeste suffit (contrairement à la bande de collines, longue et
+/// étroite).
+pub const MMORPG_MOUND_RES: (u32, u32) = (8, 10);
+
 /// Résolution de grille (quads par côté) du maillage `MeshKind::Terrain` — partagée
 /// par le maillage visuel (`terrain()`) et le collider heightfield physique
 /// (`runtime::physics::Physics::build`, cas `MeshKind::Terrain`), qui DOIT
@@ -528,44 +547,66 @@ pub fn mmorpg_terrain_local_height(x: f32, z: f32) -> f32 {
     // Retombée avant les murs Nord/Sud (0 dès z=±36).
     let z_wall_taper = band_gate(-33.0, 33.0, 3.0, wz);
     let gate = x_gate * road_cut * z_wall_taper;
-    if gate <= 0.0 {
-        return 0.0;
-    }
-
-    // Sprint 25 (Phase K) : deux caractères de relief distincts DANS la même
-    // bande plutôt qu'une deuxième zone géographique séparée — le balayage de
-    // TOUT le contenu placé à la main (`NATURE_DECOR`/`MONSTER_DECOR`/
-    // `VILLAGE_PROPS`/`MMORPG_AMBIENT_FAUNA_SPAWNS`/`MMORPG_CREATURES`/
-    // `water_rects`/`EXCL_*` de `demos.rs`) n'a trouvé, à ≥3 m de marge, AUCUNE
-    // zone géographiquement séparée : le pourtour ouest est déjà saturé par la
-    // faune riveraine (`creature43`..`creature48`, x≈-30/-31, de z=-30 à
-    // z=30 quasiment sans trou), le nord (z<-30) et le coin NE sont couverts
-    // par la haie/rangée de décor et le promontoire, et les 4 coins de la
-    // carte ne sont PAS libres pour autant : le coin SO (x<-28, z>28) contient
-    // justement `creature47` (x=-30, z=30). Élargir la bande existante ou en
-    // ajouter une seconde aurait donc reproduit exactement le piège déjà
-    // documenté (une marge « évidente » qui chevauche en fait un spawn). On
-    // se limite donc à varier la fréquence/amplitude À L'INTÉRIEUR de la bande
-    // ouest du Sprint 24, coupée net au niveau de la route principale (déjà
-    // ramenée à 0 par `road_cut` entre z=9 et z=19) : au nord (`wz < 12`,
-    // z=12 tombe en plein milieu de cette coupure, donc le changement de
-    // formule est invisible — `gate`/`n` y valent déjà 0 des deux côtés),
-    // colline douce basse fréquence/amplitude pleine ; au sud, relief plus
-    // accidenté (fréquences plus hautes, quatrième terme ajouté) avec la même
-    // somme de coefficients (=1.0) pour ne jamais dépasser `AMP` non plus.
-    let n = if wz < 12.0 {
-        // Nord (prairie/rivière nord) : une seule bosse large et douce.
-        0.65 * (wx * 0.10 + 1.3).sin() * (wz * 0.08).cos()
-            + 0.35 * (wx * 0.05 - wz * 0.06 + 2.1).sin()
+    let west_h = if gate <= 0.0 {
+        0.0
     } else {
-        // Sud (vers la rizière/rivière sud) : relief plus accidenté, davantage
-        // de bosses rapprochées (fréquences ~2-3x plus hautes qu'au nord).
-        0.35 * (wx * 0.30 + 1.3).sin() * (wz * 0.24).cos()
-            + 0.25 * (wx * 0.45 - wz * 0.38 + 2.1).sin()
-            + 0.25 * (wx * 0.65 + wz * 0.55).sin()
-            + 0.15 * (wx * 0.95 - wz * 0.85 + 0.5).sin()
+        // Sprint 25 (Phase K) : deux caractères de relief distincts DANS la
+        // même bande plutôt qu'une deuxième zone géographique séparée — le
+        // balayage de TOUT le contenu placé à la main (`NATURE_DECOR`/
+        // `MONSTER_DECOR`/`VILLAGE_PROPS`/`MMORPG_AMBIENT_FAUNA_SPAWNS`/
+        // `MMORPG_CREATURES`/`water_rects`/`EXCL_*` de `demos.rs`) n'a trouvé,
+        // à ≥3 m de marge, AUCUNE zone géographiquement séparée pour ÉLARGIR
+        // cette bande précise : le pourtour ouest est déjà saturé par la
+        // faune riveraine (`creature43`..`creature48`, x≈-30/-31, de z=-30 à
+        // z=30 quasiment sans trou), le nord (z<-30) et le coin NE sont
+        // couverts par la haie/rangée de décor et le promontoire, et les 4
+        // coins de la carte ne sont PAS libres pour autant : le coin SO
+        // (x<-28, z>28) contient justement `creature47` (x=-30, z=30).
+        // Élargir la bande existante ou en ajouter une seconde À CET ENDROIT
+        // aurait donc reproduit exactement le piège déjà documenté (une marge
+        // « évidente » qui chevauche en fait un spawn). On se limite donc ICI
+        // à varier la fréquence/amplitude À L'INTÉRIEUR de la bande ouest du
+        // Sprint 24, coupée net au niveau de la route principale (déjà
+        // ramenée à 0 par `road_cut` entre z=9 et z=19) : au nord (`wz < 12`,
+        // z=12 tombe en plein milieu de cette coupure, donc le changement de
+        // formule est invisible — `gate`/`n` y valent déjà 0 des deux côtés),
+        // colline douce basse fréquence/amplitude pleine ; au sud, relief plus
+        // accidenté (fréquences plus hautes, quatrième terme ajouté) avec la
+        // même somme de coefficients (=1.0) pour ne jamais dépasser `AMP` non
+        // plus. Le Sprint 26 (bassin ci-dessous) a lui trouvé une poche
+        // libre DIFFÉRENTE, juste à l'est de cette bande.
+        let n = if wz < 12.0 {
+            // Nord (prairie/rivière nord) : une seule bosse large et douce.
+            0.65 * (wx * 0.10 + 1.3).sin() * (wz * 0.08).cos()
+                + 0.35 * (wx * 0.05 - wz * 0.06 + 2.1).sin()
+        } else {
+            // Sud (vers la rizière/rivière sud) : relief plus accidenté,
+            // davantage de bosses rapprochées (fréquences ~2-3x plus hautes
+            // qu'au nord).
+            0.35 * (wx * 0.30 + 1.3).sin() * (wz * 0.24).cos()
+                + 0.25 * (wx * 0.45 - wz * 0.38 + 2.1).sin()
+                + 0.25 * (wx * 0.65 + wz * 0.55).sin()
+                + 0.15 * (wx * 0.95 - wz * 0.85 + 0.5).sin()
+        };
+        AMP * gate * n
     };
-    AMP * gate * n
+
+    // Sprint 26 (Phase K) : petit bassin intégré à un contrefort du relief,
+    // dans la poche libre `MMORPG_MOUND_X_LOCAL`/`MMORPG_MOUND_Z_LOCAL`
+    // (x∈[-34,-30], z∈[3,5;8,5] en mètres monde) — juste à l'est de la bande
+    // de collines ci-dessus (dont le relief retombe déjà à 0 dès x=-34,5,
+    // donc AUCUN chevauchement possible avec `west_h`). Simple bosse (pas de
+    // variation de fréquence comme ci-dessus : la poche est trop petite pour
+    // que ça se voie) — plateau en X et en Z avec retombée douce en bord de
+    // poche des deux côtés, pour que la rive du petit lac posé dans
+    // `Scene::mmorpg_demo` (juste au sud du plateau, côté z croissant) suive
+    // une pente réelle plutôt qu'un plan d'eau sur du plat.
+    const AMP_MOUND: f32 = 0.9;
+    let mound_x_gate = band_gate(-33.5, -31.0, 0.8, wx);
+    let mound_z_gate = band_gate(5.0, 7.0, 1.5, wz);
+    let mound_h = AMP_MOUND * mound_x_gate * mound_z_gate;
+
+    west_h + mound_h
 }
 
 /// Terrain : grille 1×1 (plan XZ) subdivisée avec un relief doux procédural.

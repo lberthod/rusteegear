@@ -450,6 +450,50 @@ impl Physics {
                 .build();
                 let hill_handle = colliders.insert_with_parent(hill_collider, handle, &mut bodies);
                 collider_owner.insert(hill_handle, i);
+
+                // Sprint 26 (Phase K, `sprintreflecion.md`) : troisième
+                // collider heightfield sur le même corps, restreint cette
+                // fois EN X **ET** EN Z (contrairement à celui juste
+                // au-dessus, restreint uniquement en X) — le petit bassin du
+                // Sprint 26 n'occupe qu'une poche bornée dans les deux axes
+                // (`gfx::mesh::MMORPG_MOUND_X_LOCAL`/`MMORPG_MOUND_Z_LOCAL`),
+                // pas une bande traversant toute la carte comme la bande de
+                // collines ci-dessus. Même principe : échantillonne
+                // EXACTEMENT `mmorpg_terrain_local_height`, `Static`
+                // uniquement.
+                use crate::gfx::mesh::{
+                    MMORPG_MOUND_RES, MMORPG_MOUND_X_LOCAL, MMORPG_MOUND_Z_LOCAL,
+                };
+                let (mx_lo, mx_hi) = MMORPG_MOUND_X_LOCAL;
+                let (mz_lo, mz_hi) = MMORPG_MOUND_Z_LOCAL;
+                let (mres_x, mres_z) = MMORPG_MOUND_RES;
+                let mound_heights =
+                    Array2::from_fn((mres_z + 1) as usize, (mres_x + 1) as usize, |i, j| {
+                        let x = mx_lo + (mx_hi - mx_lo) * (j as f32 / mres_x as f32);
+                        let z = mz_lo + (mz_hi - mz_lo) * (i as f32 / mres_z as f32);
+                        mmorpg_terrain_local_height(x, z)
+                    });
+                let mound_width = (mx_hi - mx_lo) * t.scale.x;
+                let mound_depth = (mz_hi - mz_lo) * t.scale.z;
+                let mound_center_x = (mx_lo + mx_hi) * 0.5 * t.scale.x;
+                let mound_center_z = (mz_lo + mz_hi) * 0.5 * t.scale.z;
+                let mound_collider = ColliderBuilder::heightfield_with_flags(
+                    mound_heights,
+                    Vector::new(mound_width, t.scale.y, mound_depth),
+                    HeightFieldFlags::FIX_INTERNAL_EDGES,
+                )
+                .translation(Vector::new(mound_center_x, 0.0, mound_center_z))
+                .restitution(0.0)
+                .friction(0.6)
+                .collision_groups(InteractionGroups::new(
+                    Group::from_bits_truncate(obj.collision_layer),
+                    Group::from_bits_truncate(obj.collision_mask),
+                    InteractionTestMode::And,
+                ))
+                .build();
+                let mound_handle =
+                    colliders.insert_with_parent(mound_collider, handle, &mut bodies);
+                collider_owner.insert(mound_handle, i);
             }
 
             if is_dynamic {

@@ -3004,6 +3004,115 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             }
         }
 
+        // 1 bis) Sprint 26 (Phase K, `sprintreflecion.md`) : petit bassin
+        //    intégré à un contrefort du relief existant (`gfx::mesh::
+        //    mmorpg_terrain_local_height`, zone `MMORPG_MOUND_X_LOCAL`/
+        //    `MMORPG_MOUND_Z_LOCAL`) — PAS un retrofit du lac historique
+        //    ci-dessus (`water_rects`), qui reste posé sur un sol resté plat
+        //    à dessein (des centaines de placements en dépendent, cf. la doc
+        //    de `mmorpg_terrain_local_height`). Zone (x∈[-34,-30],
+        //    z∈[3,5;8,5]) vérifiée numériquement libre de tout décor/spawn
+        //    placé à la main à ≥3 m près (`NATURE_DECOR`/`VILLAGE_PROPS`/
+        //    `MONSTER_DECOR`/`MMORPG_HALTES`/`MMORPG_CREATURES`/
+        //    `MMORPG_AMBIENT_FAUNA_SPAWNS`/`EXCL_*`), y compris du semis
+        //    procédural le plus proche (« Arbre du sud », x∈[22,34] z∈[30,35],
+        //    seule autre poche libre trouvée côté sud-est de la carte — trop
+        //    loin pour interférer ici) : juste à l'est de la bande de
+        //    collines existante, dont le relief retombe déjà à 0 dès
+        //    x=-34,5. Rive nord du bassin (z≈7, contre le contrefort) suit
+        //    donc une pente réelle du terrain ; rive sud (z≈8,5, côté champ
+        //    ouvert) reste sur du plat, comme n'importe quelle berge. Murs
+        //    invisibles sur les 4 côtés — même principe que les « Mur d'eau »
+        //    ci-dessus, mais un seul rectangle isolé (pas de pont à
+        //    ménager) : pas besoin de l'algorithme de rastérisation par
+        //    union, 4 plaques statiques suffisent.
+        {
+            const SE_LAKE: (f32, f32, f32, f32) = (-33.5, 7.0, -31.0, 8.5); // (x0,z0,x1,z1)
+            let (x0, z0, x1, z1) = SE_LAKE;
+            let (cx, cz) = ((x0 + x1) * 0.5, (z0 + z1) * 0.5);
+            let mut p = demo_obj(
+                "Bassin du contrefort",
+                MeshKind::Plane,
+                Vec3::new(cx, 0.02, cz),
+            );
+            p.transform = p.transform.with_scale(Vec3::new(x1 - x0, 1.0, z1 - z0));
+            p.color = eau_sombre;
+            p.roughness = 0.08;
+            p.metallic = 0.15;
+            objects.push(p);
+
+            let wall_h = 1.8;
+            let thick = 0.4;
+            let mut bassin_wall = |name: &str, pos: Vec3, scale: Vec3| {
+                let mut w = demo_obj(name, MeshKind::Cube, pos);
+                w.transform = w.transform.with_scale(scale);
+                w.physics = PhysicsKind::Static;
+                w.visible = false;
+                objects.push(w);
+            };
+            bassin_wall(
+                "Mur bassin Nord",
+                Vec3::new(cx, wall_h * 0.5, z0),
+                Vec3::new(x1 - x0 + thick, wall_h, thick),
+            );
+            bassin_wall(
+                "Mur bassin Sud",
+                Vec3::new(cx, wall_h * 0.5, z1),
+                Vec3::new(x1 - x0 + thick, wall_h, thick),
+            );
+            bassin_wall(
+                "Mur bassin Ouest",
+                Vec3::new(x0, wall_h * 0.5, cz),
+                Vec3::new(thick, wall_h, z1 - z0 + thick),
+            );
+            bassin_wall(
+                "Mur bassin Est",
+                Vec3::new(x1, wall_h * 0.5, cz),
+                Vec3::new(thick, wall_h, z1 - z0 + thick),
+            );
+        }
+
+        // Tunnel/surplomb (Sprint 26) : passage praticable sous un arceau
+        // statique — géométrie non-heightmap à dessein, un heightmap XZ→Y ne
+        // représente pas un surplomb (cf. l'objectif du sprint dans
+        // `sprintreflecion.md`) — posé sur du sol resté PLAT (hors de toute
+        // zone de relief : x∈[-34.2,-31.0] est à l'ouest de
+        // `MMORPG_MOUND_X_LOCAL`, qui commence à x=-30,2, donc `mound_h` y
+        // est nul ; la bande de collines historique est, elle, nulle dès
+        // x=-34,5). Même poche libre que le bassin ci-dessus mais décalée en
+        // Z (couloir x∈[-34.4,-30.8] z∈[-8.8,-2.8], vérifié libre
+        // séparément) : deux piliers encadrant un passage de 2 m de large,
+        // surmontés d'un toit — tous statiques, le sol sous le passage garde
+        // son collider dalle plate habituel (aucun trou de collision).
+        {
+            let pillar_y = 1.1;
+            let pillar_h = 2.2;
+            let z_center = -5.75;
+            let z_len = 5.1;
+            let mut arche = |name: &str, pos: Vec3, scale: Vec3| {
+                let mut c = demo_obj(name, MeshKind::Cube, pos);
+                c.transform = c.transform.with_scale(scale);
+                c.physics = PhysicsKind::Static;
+                c.color = [0.5, 0.48, 0.44];
+                objects.push(c);
+            };
+            arche(
+                "Pilier tunnel Ouest",
+                Vec3::new(-33.9, pillar_y, z_center),
+                Vec3::new(0.6, pillar_h, z_len),
+            );
+            arche(
+                "Pilier tunnel Est",
+                Vec3::new(-31.3, pillar_y, z_center),
+                Vec3::new(0.6, pillar_h, z_len),
+            );
+            arche(
+                "Toit tunnel",
+                Vec3::new(-32.6, pillar_y + pillar_h * 0.5 + 0.2, z_center),
+                Vec3::new(3.2, 0.4, z_len),
+            );
+        }
+
         // 2) Meshes glb générés par Blender headless (gen_nature_pack.py pour
         //    les statiques, gen_nature_animated.py pour les riggés). `solide` →
         //    corps statique avec collider `TriMesh` (silhouette exacte : les
@@ -9363,6 +9472,58 @@ mod tests {
         }
     }
 
+    /// Sprint 26 (Phase K, `sprintreflecion.md`) : même preuve d'étanchéité
+    /// que `mmorpg_water_is_sealed_all_the_way_around_including_next_to_bridges`
+    /// ci-dessus, mais pour le petit bassin du contrefort — depuis 4 points
+    /// de départ (nord, contre la pente qui monte vers la colline ; sud, côté
+    /// champ ouvert ; est et ouest), un joueur piloté droit vers le centre du
+    /// bassin pendant 15 s simulées ne doit jamais entrer dans son
+    /// rectangle.
+    #[test]
+    fn mmorpg_se_bassin_is_sealed_all_the_way_around() {
+        let bassin: (f32, f32, f32, f32) = (-33.5, 7.0, -31.0, 8.5);
+        let target = Vec3::new(
+            (bassin.0 + bassin.2) / 2.0,
+            0.0,
+            (bassin.1 + bassin.3) / 2.0,
+        );
+        let starts: &[(f32, f32)] = &[
+            (-32.25, 5.5),  // nord, contre la pente du contrefort
+            (-32.25, 10.0), // sud, côté champ ouvert
+            (-34.5, 7.75),  // ouest
+            (-30.3, 7.75),  // est
+        ];
+        for &(sx, sz) in starts {
+            let mut scene = Scene::mmorpg_demo();
+            let idx = scene
+                .objects
+                .iter()
+                .position(|o| o.name == "Joueur")
+                .unwrap();
+            scene.objects[idx].transform.position = Vec3::new(sx, 1.0, sz);
+            let mut phys = crate::runtime::physics::Physics::build(&scene);
+            let dt = 1.0 / 60.0;
+            for _ in 0..900 {
+                let pos = scene.objects[idx].transform.position;
+                let dir = Vec3::new(target.x - pos.x, 0.0, target.z - pos.z);
+                let d = (dir.x * dir.x + dir.z * dir.z).sqrt();
+                let (vx, vz) = if d > 0.05 {
+                    (dir.x / d * 4.5, dir.z / d * 4.5)
+                } else {
+                    (0.0, 0.0)
+                };
+                phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+                phys.step(dt, &mut scene);
+            }
+            let p = scene.objects[idx].transform.position;
+            assert!(
+                !(p.x >= bassin.0 && p.x <= bassin.2 && p.z >= bassin.1 && p.z <= bassin.3),
+                "depuis ({sx},{sz}), le joueur est entré dans le bassin {bassin:?} \
+                 (position finale={p:?}) — brèche dans le mur"
+            );
+        }
+    }
+
     /// Contre-épreuve des précédentes : les deux ponts restent bien les
     /// passages laissés dans les murs d'eau resserrés (ouverture ~3 m, cf.
     /// `GRID`/`bridge_gaps`) — un joueur parti de chaque rive, piloté vers
@@ -9830,8 +9991,17 @@ mod tests {
         // 2) Sous tout objet déjà placé à la main (hors murs de pourtour et sol
         // lui-même), le relief doit rester quasi nul — sinon des objets se
         // retrouveraient enterrés/flottants sans avoir été repositionnés.
+        // Exception délibérée (Sprint 26, Phase K) : le petit bassin du
+        // contrefort et ses murs invisibles sont posés À DESSEIN sur/contre
+        // une pente réelle (`MMORPG_MOUND_X_LOCAL`/`MMORPG_MOUND_Z_LOCAL`,
+        // cf. leur doc) — exactement l'inverse de cette règle, vérifié à part
+        // par `mmorpg_se_bassin_is_sealed_all_the_way_around`.
         for o in &scene.objects {
-            if o.name == "Sol" || o.name.starts_with("Mur ") {
+            if o.name == "Sol"
+                || o.name.starts_with("Mur ")
+                || o.name == "Bassin du contrefort"
+                || o.name.starts_with("Mur bassin")
+            {
                 continue;
             }
             let x = o.transform.position.x;
