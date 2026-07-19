@@ -50,6 +50,14 @@ jobs:
           ndk-version: r28
       - name: Installer cargo-apk
         run: cargo install cargo-apk
+      - name: Installer la plateforme Android SDK (target_sdk_version, Cargo.toml)
+        # Sprint 2 (audit du 19 juillet 2026) : le SDK préinstallé sur le runner
+        # n'a pas toujours la plateforme visée par target_sdk_version — cargo-apk
+        # échoue alors avec « Platform NN is not installed ». Même pattern que
+        # l'installation du NDK dans le job cross-build de ci.yml.
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --install "platforms;android-33" --sdk_root="$ANDROID_HOME"
       - name: Build .apk
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
