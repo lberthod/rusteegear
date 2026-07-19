@@ -20,15 +20,22 @@ import glob
 # doit soit être supprimée (durcie en Result/let-else), soit ajoutée ici avec la
 # même justification en commentaire dans le code.
 WHITELIST = {
-    ("src/gfx/renderer.rs", "unwrap"): 1,
+    # `chunks_exact(8)` garantit des tranches de 8 octets, la conversion ne peut
+    # jamais échouer — anciennement src/gfx/renderer.rs, déplacé en 9.2.5.
+    ("src/gfx/renderer/post_process.rs", "unwrap"): 1,
     # render_skinned_test : `slot 0 < MAX_SKINNED_INSTANCES, toujours valide`
     # (helper de test public — utilisé par tests/golden_skinning.rs, donc
-    # impossible à mettre sous #[cfg(test)]).
-    ("src/gfx/renderer.rs", "expect"): 1,
+    # impossible à mettre sous #[cfg(test)]). Anciennement src/gfx/renderer.rs,
+    # déplacé en 9.2.3.
+    ("src/gfx/renderer/shadows.rs", "expect"): 1,
     ("src/net/interpolation.rs", "expect"): 1,
     ("src/app/combat.rs", "expect"): 2,
     ("src/app/simulation.rs", "expect"): 2,
     ("src/app/network_client.rs", "expect"): 1,
+    # `spawn` (console) : `last_mut()` juste après avoir vérifié
+    # `scene.objects.len() > before`, l'objet tout juste ajouté existe donc
+    # toujours. Pré-existant, hors scope Sprint 9.
+    ("src/app/console.rs", "expect"): 1,
     ("src/bin/glbviewer.rs", "expect"): 5,
 }
 
@@ -89,9 +96,23 @@ def find_test_ranges(lines):
     return ranges
 
 
+def is_dedicated_test_file(path):
+    """Fichier de test extrait via `#[cfg(test)] #[path = "..."] mod tests;`
+    (Sprint 9, découpage des monolithes) : le corps du module vit dans un
+    fichier séparé, sans wrapper `mod tests { ... }` à l'intérieur — donc
+    invisible à `find_test_ranges`, qui ne regarde que dans le fichier
+    courant. Convention du dépôt : ces fichiers s'appellent `tests.rs` ou
+    `*_tests.rs`, et rien d'autre ne suit ce nom — tout leur contenu est du
+    code de test par construction."""
+    name = path.rsplit("/", 1)[-1]
+    return name == "tests.rs" or name.endswith("_tests.rs")
+
+
 def scan(path):
     with open(path, encoding="utf-8") as f:
         lines = f.read().split("\n")
+    if is_dedicated_test_file(path):
+        return {"unwrap": [], "expect": [], "panic": []}
     test_ranges = find_test_ranges(lines)
 
     def in_test(idx):
