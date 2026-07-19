@@ -70,6 +70,8 @@ cargo test --all-targets        # doit passer même sans sockets après le Sprin
 | 6 | Migrer First Game | Moyen | Très élevé |
 | 7 | Sécuriser les sauvegardes | Moyen | Élevé |
 | 8 | Tester avec des personnes extérieures | Faible | Décisif |
+| 9 | Vérifier le canvas web (11.1, à glisser quand on veut) | Très faible | Moyen |
+| 10 | Après la bêta : découpage des monolithes (S9), undo inspecteur (S10), web (S11) | Moyen | Élevé |
 
 ---
 
@@ -221,6 +223,9 @@ et démarre sur une installation propre, et `git status` reste vierge (aucun
   ```
 
   `format` contrôlé (erreur lisible si supérieur au connu), `build` optionnel.
+  Champs prévus pour plus tard (déclarés dès le format 1 mais optionnels) : identité
+  du jeu pour l'export, dossier `assets/` par projet, index d'assets
+  (`.rusteegear/asset-index.json`) — voir « cible long terme » en fin de sprint.
 - **3.2 — Chargement et validation** : `ProjectManifest::load(dir)` cherche
   `project.rusteegear.json` dans le dossier ; erreurs en français et actionnables
   (fichier manquant, JSON invalide avec ligne, scène principale introuvable). Utiliser
@@ -240,6 +245,28 @@ et démarre sur une installation propre, et `git status` reste vierge (aucun
   `format` inconnu refusé avec message lisible, `main_scene: "../évasion.json"`
   refusé, manifeste absent → erreur claire, ouverture d'un projet minimal fixture →
   scène chargée.
+
+### Cible long terme (hors périmètre du sprint, à garder en tête)
+
+Le modèle complet visé — un projet = un répertoire autonome, déplaçable et
+versionnable :
+
+```text
+mon-jeu/
+├── project.rusteegear.json      (identité, scène de démarrage, export)
+├── scenes/
+├── assets/{models,audio,textures}/   (assets PAR projet, plus le dossier global)
+├── prefabs/
+├── scripts/
+├── build/build-config.json
+└── .rusteegear/asset-index.json      (références stables)
+```
+
+Avec, en transition : support conservé des scènes seules et du dossier global
+`~/.motor3derust/assets`, plus une commande « Convertir en projet » qui copie les
+assets référencés dans le projet. Ce sprint ne livre que le manifeste et l'ouverture ;
+la migration des assets est un chantier ultérieur, documenté dans
+[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 
 ### Terminé quand
 
@@ -453,6 +480,162 @@ retours sont triés et adressés.
 
 ---
 
+# Sprints complémentaires (issus du second retour, vérifiés)
+
+Trois chantiers supplémentaires retenus après tri (voir la section « Second retour »
+de [AnalyseAudit12h24.md](AnalyseAudit12h24.md)). Ils ne bloquent pas la bêta
+extérieure (Sprint 8) mais deviennent prioritaires juste après — sauf 11.1 qui peut
+se glisser à tout moment.
+
+---
+
+## Sprint 9 — Découper les fichiers monolithes
+
+**Objectif** : ramener chaque module à une seule raison de changer, par extraction
+mécanique, **sans réécriture ni changement de comportement**.
+
+### État des lieux vérifié (`wc -l`)
+
+| Fichier | Lignes |
+|---|---:|
+| [src/scene/demos.rs](../src/scene/demos.rs) | 10 820 |
+| [src/app/mod.rs](../src/app/mod.rs) | 4 393 |
+| [src/scene/mod.rs](../src/scene/mod.rs) | 4 016 |
+| [src/gfx/renderer.rs](../src/gfx/renderer.rs) | 3 432 |
+| [src/app/network_client.rs](../src/app/network_client.rs) | 3 228 |
+| [src/app/simulation.rs](../src/app/simulation.rs) | 3 050 |
+
+### Sous-phases
+
+- **9.1 — `scene/demos.rs` d'abord** (le pire, et le plus mécanique) : le convertir
+  en dossier `scene/demos/` (`mod.rs` réexportant tout à l'identique, puis
+  `controller.rs`, `gameplay.rs`, et un sous-dossier `mmorpg/` — terrain, village,
+  créatures, vagues, validation). Un commit par extraction ; `pub(crate)` et
+  réexports pour ne casser aucun chemin d'import.
+- **9.2 — `gfx/renderer.rs`** : dossier `gfx/renderer/` — ressources, frame,
+  synchro scène, ombres, post-process, UI. Attention au piège n° 3 du guide (les
+  goldens sont sensibles aux changements de shader : ici on ne touche **pas** aux
+  shaders, seulement au découpage Rust ; si un golden bouge, c'est un signal d'erreur).
+- **9.3 — `app/mod.rs` et `scene/mod.rs`** : extraire d'abord ce qui est déjà
+  thématique (le modèle de données de scène vs ses migrations vs sa logique de jeu).
+  S'arrêter quand chaque fichier repasse sous ~1 500 lignes ; ne pas viser la pureté.
+- **9.4 — Garde-fou** : après chaque extraction, la vérification standard du guide,
+  plus `cargo test --features net_tests` une fois à la fin. Zéro diff de comportement
+  attendu ; tout test golden ou visuel qui change invalide l'extraction.
+
+### Terminé quand
+
+Aucun fichier de `src/` ne dépasse ~4 000 lignes (cible ~1 500 pour les nouveaux
+modules), la suite complète passe, et `git log` montre des extractions atomiques
+relisibles une par une.
+
+---
+
+## Sprint 10 — Undo complet des éditions d'inspecteur
+
+**Objectif** : tout ce qui modifie la scène depuis l'éditeur est annulable.
+
+### État des lieux vérifié
+
+- L'undo structurel existe : `push_undo` dans
+  [app/selection.rs](../src/app/selection.rs) (créations, suppressions, duplications,
+  gizmo…).
+- **Aucun `push_undo` dans `src/editor/`** : les champs d'inspecteur (couleur, script,
+  physique, collider, lumières…) ne sont pas annulables — ils sont seulement détectés
+  comme « dirty » par l'empreinte `ui_scene_fingerprint()`
+  ([app/persistence.rs:202](../src/app/persistence.rs)).
+
+### Sous-phases
+
+- **10.1 — Regroupement par interaction** : ne PAS pousser un undo par variation de
+  slider. Utiliser le cycle d'interaction egui (`drag_started`/`drag_stopped`,
+  `gained_focus`/`lost_focus`) : capturer l'état de l'objet au **début** de
+  l'interaction, pousser une seule entrée d'undo à la **fin** si la valeur a changé.
+  L'infrastructure d'undo existante (snapshot de scène via `push_undo`) peut suffire —
+  commencer par « snapshot au début d'interaction » avant d'introduire un
+  `EditCommand` granulaire ; n'introduire les commandes fines que si les snapshots
+  s'avèrent trop lourds en mémoire.
+- **10.2 — Couverture systématique** : passer en revue les panneaux d'inspecteur
+  ([editor/windows.rs](../src/editor/windows.rs)) et brancher le mécanisme 10.1 sur
+  chaque champ éditable (transform textuel, couleur, script, physique, trigger,
+  lumières, contrôleur…).
+- **10.3 — Import GLB transactionnel** : l'import copie l'asset
+  (`import_to_assets`, [assets.rs:387](../src/assets.rs)) puis crée l'objet. Grouper
+  en une transaction : l'annulation supprime l'objet, et ne retire l'asset du
+  catalogue que s'il vient d'être importé et n'est référencé nulle part ailleurs.
+- **10.4 — Tests-preuves** : éditer une couleur → undo → couleur d'origine ;
+  glisser un slider (plusieurs frames) → **une seule** entrée d'undo ; import GLB →
+  undo → ni objet ni asset orphelin ; undo/redo symétriques.
+
+### Terminé quand
+
+N'importe quelle édition faite dans l'inspecteur revient à l'état antérieur par
+Ctrl+Z (prouvé par tests), avec une entrée d'undo par interaction, pas par frame.
+
+---
+
+## Sprint 11 — Web : parité minimale crédible
+
+**Objectif** : qu'un jeu exporté web ne surprenne pas son créateur.
+
+### État des lieux vérifié
+
+- **Lua portable : déjà largement traité** — [LUA_PORTABLE.md](LUA_PORTABLE.md)
+  (mlua natif vs rilua web), API moteur portée à l'identique
+  (`scripting.rs`/`scripting_web.rs`), tests différentiels existants
+  (`cargo test official_scripts_match`).
+- **Canvas : problème NON confirmé** — [packaging/web/index.html](../packaging/web/index.html)
+  donne au canvas `width:100%; height:100%` et le wasm embarque un `ResizeObserver`
+  (winit web). Reproduire avant de corriger.
+- **Musique en streaming : absente sur web, confirmé** —
+  [runtime/audio.rs](../src/runtime/audio.rs) : `kira::sound::streaming` en natif,
+  `StreamingHandles = ()` en cfg wasm (la musique est chargée entière).
+
+### Sous-phases
+
+- **11.1 — Vérifier le redimensionnement du canvas** (rapide, faisable à tout
+  moment) : `./packaging/build_web.sh`, servir `packaging/web/`, redimensionner la
+  fenêtre et vérifier taille physique × `devicePixelRatio`. Si le bug est réel :
+  brancher le recalcul sur l'évènement de resize et appeler le resize du renderer.
+  S'il ne l'est pas : le noter dans l'analyse et fermer le point.
+- **11.2 — Validation « Lua portable » à l'export Web** : au moment de l'export web
+  ([editor/export.rs](../src/editor/export.rs)), passer les scripts de la scène au
+  crible du sous-ensemble documenté dans [LUA_PORTABLE.md](LUA_PORTABLE.md) ;
+  avertissement précis par script fautif (nom de l'objet + API non portable). Les
+  tests différentiels existants servent d'oracle pour la liste des API garanties.
+- **11.3 — Musique en flux sur web** (priorité moyenne, en dernier) : chemin séparé
+  du système SFX, via `HTMLAudioElement` ou Web Audio streaming, derrière la même API
+  `play_music_streaming_gain`. Test manuel dans deux navigateurs.
+
+### Terminé quand
+
+Le comportement du canvas est établi (corrigé ou disculpé), un export web d'une scène
+au script non portable produit un avertissement nommant l'API en cause, et une
+musique longue démarre sans télécharger le fichier entier.
+
+---
+
+## Backlog explicite (décisions : ne PAS en faire des sprints)
+
+Consigné pour éviter que ces sujets reviennent par réflexe généraliste :
+
+- **GLB étendu (textures PBR, normal maps, multi-matériaux)** : la spécialisation
+  `base_color_factor` ([scene/import.rs:52](../src/scene/import.rs)) est un choix
+  cohérent avec la charte graphique maison. Seule action retenue, peu coûteuse et
+  faisable dans n'importe quel sprint : **avertissements d'import** listant les
+  propriétés de matériau ignorées. Le sous-ensemble complet (baseColorTexture →
+  metallicRoughness → normal → émissive, espaces colorimétriques, multi-primitives)
+  ne se justifie que si « importer des assets de marketplace » devient un objectif
+  produit.
+- **WebGL en secours de WebGPU** : refusé — un deuxième chemin de rendu coûte plus
+  qu'il ne rapporte. À la place : page de compatibilité claire quand WebGPU est
+  absent (peut se glisser dans le Sprint 11 si trivial).
+- **Migration complète des assets vers le projet** (`assets/` par projet +
+  `asset-index.json` + « Convertir en projet ») : cible long terme du Sprint 3,
+  planifiée après la bêta.
+
+---
+
 ## Vue d'ensemble et dépendances
 
 ```text
@@ -464,6 +647,9 @@ Sprint 3 (manifeste) → Sprint 4 (gestionnaire) → Sprint 5 (migration First G
 Sprint 6 (sauvegardes sûres, indépendant de 3-5) ; Sprint 7 (serveur local, indépendant)
                             ▼
 Sprint 8 (bêta extérieure — exige au minimum 2, idéalement 2+5+6)
+                            ▼
+Après la bêta : Sprint 9 (monolithes) ; Sprint 10 (undo inspecteur) ; Sprint 11 (web)
+                (11.1 canvas = micro-vérification, faisable à tout moment)
 ```
 
 - Sprints 1, 2, 6, 7 sont indépendants entre eux et de la chaîne 3→4→5.

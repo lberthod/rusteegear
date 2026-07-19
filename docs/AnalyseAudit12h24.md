@@ -342,6 +342,70 @@ Pour une bêta d'éditeur, c'est plus important qu'ajouter de nouveaux assets.
 
 ---
 
+## Second retour — dette technique et limites produit (analyse et tri)
+
+Un second retour a soulevé six points. Chacun a été vérifié sur le dépôt ; le tri
+ci-dessous distingue la dette réelle des limites produit acceptables. Principe
+directeur retenu : **ne pas transformer RusteeGear en moteur généraliste par réflexe.**
+
+### 1. Fichiers trop volumineux — ✅ confirmé, dette réelle
+
+Mesuré (`wc -l`) : [scene/demos.rs](../src/scene/demos.rs) **10 820 lignes**,
+[app/mod.rs](../src/app/mod.rs) 4 393, [scene/mod.rs](../src/scene/mod.rs) 4 016,
+[gfx/renderer.rs](../src/gfx/renderer.rs) 3 432 (puis `network_client.rs` 3 228,
+`simulation.rs` 3 050). Le vrai signal n'est pas la taille mais le nombre de raisons
+différentes de modifier le même fichier (conflits Git, revues difficiles, compilation
+incrémentale). → **Sprint 9** : découpage par extraction mécanique, module par module,
+sans réécriture.
+
+### 2. Absence de vrai concept de projet — ✅ confirmé, déjà au plan
+
+C'est le blocage n° 1 de cet audit (Sprints 3-5). Le second retour enrichit le modèle
+cible : assets **par projet** (et non seulement `~/.motor3derust/assets` global),
+index d'assets (`.rusteegear/asset-index.json`), compatibilité temporaire des scènes
+seules, et commande « Convertir en projet ». Intégré au Sprint 3 (élargi) — la
+migration complète des assets vers le projet reste un chantier assumé comme ultérieur.
+
+### 3. Undo/redo incomplet — ✅ confirmé, angle mort réel
+
+Vérifié : `push_undo` n'existe que dans [app/selection.rs](../src/app/selection.rs)
+(créations/suppressions/déplacements structurels) ; **aucun appel dans `src/editor/`**.
+Les éditions d'inspecteur (couleur, script, physique, collider…) marquent `scene_dirty`
+via l'empreinte `ui_scene_fingerprint()` mais ne sont **pas annulables**. Pour un
+testeur extérieur, un Ctrl+Z qui ne rend pas sa couleur d'origine mine la confiance.
+→ **Sprint 10** : commandes d'édition avec regroupement des interactions de slider,
+transaction pour l'import GLB.
+
+### 4. Pipeline GLB spécialisé — 🟡 nuancé, choix produit assumé
+
+Confirmé : l'import ne lit que `base_color_factor`
+([scene/import.rs:52](../src/scene/import.rs)). Mais c'est **cohérent avec la charte
+graphique maison** (palette de couleurs simples, budget shaders/mémoire, parité
+desktop/mobile/WebGPU) — et l'expérience passée a montré que la compression de
+textures n'avait aucune cible réelle dans la scène. Décision : **backlog**, pas de
+sprint. Seule action peu coûteuse retenue : des avertissements d'import précis quand
+un matériau contient des propriétés ignorées (textures, normal maps, multi-matériaux).
+
+### 5. Web limité — 🟡 partiellement déjà traité, un point à vérifier
+
+- **Sous-ensemble Lua** : largement **déjà traité** — [LUA_PORTABLE.md](LUA_PORTABLE.md)
+  documente mlua (natif) vs rilua (web), l'API moteur est portée à l'identique
+  (`scripting.rs`/`scripting_web.rs`) et des **tests différentiels existent**
+  (`cargo test official_scripts_match`). Reste utile : une validation « Lua portable »
+  au moment de l'export Web avec erreurs nommant l'API incompatible. → Sprint 11.
+- **Canvas non redimensionnable** : **non confirmé.** Le shell web
+  ([packaging/web/index.html](../packaging/web/index.html)) donne au canvas
+  `width:100%; height:100%` et le wasm embarque un `ResizeObserver` (backend web de
+  winit). À reproduire dans un navigateur avant toute correction. → Sprint 11 (d'abord
+  vérifier).
+- **Musique en streaming absente sur le web** : confirmé —
+  [runtime/audio.rs](../src/runtime/audio.rs) utilise `kira::sound::streaming` en
+  natif mais `StreamingHandles = ()` en cfg wasm. Priorité moyenne. → Sprint 11.
+- **WebGPU obligatoire** : assumé comme choix produit. Pas de second chemin de rendu
+  WebGL ; une page de compatibilité claire suffit. → backlog.
+
+---
+
 ## Conclusion
 
 À 12 h 24, RusteeGear est dans son meilleur état observé jusqu'ici : dépôt propre,
