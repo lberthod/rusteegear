@@ -3,17 +3,28 @@
 //! GPU — exécutable en CI), puis pilote l'application via de vraies requêtes TCP
 //! JSON-lines, comme le ferait le client `pilot` ou un agent : éval Lua, Play,
 //! inspection d'état/scène, injection d'entrées, gestion d'erreur.
+//!
+//! Les tests qui ouvrent un socket sont derrière la feature `net_tests`, comme
+//! les tests réseau de `src/bin/server.rs` : certains environnements (runners
+//! CI restreints, sandboxes) interdisent même le bind loopback, et
+//! `cargo test --all-targets` doit passer partout. Couverture complète :
+//! `cargo test --features net_tests --test pilot_bridge` (job CI `net-tests`).
 
+#[cfg(feature = "net_tests")]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(feature = "net_tests")]
 use std::net::TcpStream;
+#[cfg(feature = "net_tests")]
 use std::time::{Duration, Instant};
 
 use motor3derust::app::AppState;
+#[cfg(feature = "net_tests")]
 use motor3derust::pilot::PilotServer;
 
 /// Fait tourner la boucle applicative (drainage pilot + pas de simulation) sur ce
 /// thread pendant que `client` s'exécute sur un autre, puis renvoie son résultat.
 /// Borne dure de 30 s : un pont cassé doit faire échouer le test, pas le geler.
+#[cfg(feature = "net_tests")]
 fn drive<T: Send + 'static>(
     app: &mut AppState,
     server: &PilotServer,
@@ -38,6 +49,7 @@ fn drive<T: Send + 'static>(
 
 /// Envoie une ligne JSON, lit la ligne de réponse, la parse — le protocole exact
 /// du pont, sans passer par le binaire client.
+#[cfg(feature = "net_tests")]
 fn ask(
     reader: &mut BufReader<TcpStream>,
     writer: &mut TcpStream,
@@ -49,12 +61,14 @@ fn ask(
     serde_json::from_str(&line).expect("réponse JSON valide")
 }
 
+#[cfg(feature = "net_tests")]
 fn connect(addr: std::net::SocketAddr) -> (BufReader<TcpStream>, TcpStream) {
     let stream = TcpStream::connect(addr).expect("connexion au pont");
     let reader = BufReader::new(stream.try_clone().expect("clone du flux"));
     (reader, stream)
 }
 
+#[cfg(feature = "net_tests")]
 #[test]
 fn pilot_bridge_drives_lua_play_scene_and_inputs_over_tcp() {
     let mut app = AppState::new();
@@ -124,6 +138,7 @@ fn pilot_bridge_drives_lua_play_scene_and_inputs_over_tcp() {
 /// Audit C1 (gestion d'erreur Lua) : une erreur de script doit revenir au client
 /// en clair (`ok: false` + message), la connexion doit survivre, et une requête
 /// malformée ne doit ni tuer le pont ni l'application.
+#[cfg(feature = "net_tests")]
 #[test]
 fn pilot_bridge_reports_lua_errors_and_survives_malformed_requests() {
     let mut app = AppState::new();
@@ -164,6 +179,7 @@ fn pilot_bridge_reports_lua_errors_and_survives_malformed_requests() {
 /// relire, cadrer la caméra, lancer le Play, avancer 30 pas déterministes,
 /// interroger le joueur, blesser un monstre, supprimer, annuler — le tout par
 /// de vraies requêtes TCP, sans GPU.
+#[cfg(feature = "net_tests")]
 #[test]
 fn pilot_bridge_full_editing_and_gameplay_session() {
     let mut app = AppState::new();
@@ -246,6 +262,7 @@ fn pilot_bridge_full_editing_and_gameplay_session() {
 /// Pilot v2 — options et chargement de démos par le pont : les volumes ne
 /// paniquent pas sans périphérique audio, les toggles UI headless répondent une
 /// erreur explicite, et `demo zombies` remplace bien la scène.
+#[cfg(feature = "net_tests")]
 #[test]
 fn pilot_bridge_options_and_demo_loading() {
     let mut app = AppState::new();
@@ -279,6 +296,20 @@ fn pilot_bridge_options_and_demo_loading() {
     assert!(
         state["result"]["objects"].as_u64().unwrap() > 0,
         "la démo zombies doit peupler la scène : {state}"
+    );
+}
+
+/// Sécurité (Sprint 1, audit du 19 juillet 2026) : le pont ne doit écouter que
+/// sur la boucle locale — jamais exposé au réseau, quel que soit le port
+/// demandé. On lit l'adresse réellement liée, pas celle de la doc.
+#[cfg(feature = "net_tests")]
+#[test]
+fn pilot_bridge_listens_only_on_localhost() {
+    let server = PilotServer::start(0, None).expect("démarrage du pont");
+    assert_eq!(
+        server.local_addr.ip(),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        "le pont doit être lié à 127.0.0.1 exclusivement"
     );
 }
 

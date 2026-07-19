@@ -157,7 +157,18 @@ client (pilot, nc, agent)          thread pilot-accept        thread principal (
 Code : [`src/pilot.rs`](../src/pilot.rs) (serveur + dispatch),
 [`src/bin/pilot.rs`](../src/bin/pilot.rs) (client CLI),
 [`tests/pilot_bridge.rs`](../tests/pilot_bridge.rs) (test d'intégration TCP
-headless, sans GPU — tourne en CI).
+headless, sans GPU).
+
+Les tests TCP sont derrière la feature `net_tests` (comme les tests réseau) :
+la suite standard `cargo test --all-targets` passe même là où le bind loopback
+est interdit ; la couverture complète se lance avec
+
+```bash
+cargo test --features net_tests --test pilot_bridge
+```
+
+(exécuté en CI par le job `net-tests`). Les tests déterministes sans socket
+(`advance_steps_*`) restent dans la suite standard.
 
 ## Sécurité
 

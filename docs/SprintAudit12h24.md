@@ -75,9 +75,34 @@ cargo test --all-targets        # doit passer même sans sockets après le Sprin
 
 ---
 
-## Sprint 1 — Stabiliser Pilot
+## Sprint 1 — Stabiliser Pilot ✅ TERMINÉ (19 juillet 2026)
 
 **Objectif** : rendre la suite standard indépendante des permissions réseau.
+
+### Résultat
+
+Livré le 19 juillet 2026. Ce qui a été fait, sous-phase par sous-phase :
+
+- **1.1 ✅** Les 4 tests TCP de `tests/pilot_bridge.rs` (et les helpers
+  `drive`/`ask`/`connect` + imports associés) sont gatés
+  `#[cfg(feature = "net_tests")]` — feature existante réutilisée, comme recommandé.
+- **1.2 ✅** Les 2 tests `advance_steps_*` restent dans la suite standard.
+- **1.3 ✅** Aucun nouveau job CI : le job `net-tests` couvre déjà
+  `tests/pilot_bridge.rs` ; commentaire ajouté dans `ci.yml` (au-dessus de l'étape
+  « Tests avec sockets réels »).
+- **1.4 ✅** Nouveau test `pilot_bridge_listens_only_on_localhost` (gaté) : l'adresse
+  réellement liée est `127.0.0.1`. Le test « désactivé sans `--pilot` ni env »
+  existait déjà dans `src/lib.rs` (tests de `pilot_port_requested`, l.1100-1122) —
+  rien à ajouter.
+- **1.5 ✅** [PILOT.md](PILOT.md) : section « Code » complétée (gate `net_tests`,
+  commande de lancement, job CI) ; la section « Sécurité » documentait déjà
+  l'opt-in et l'écoute locale.
+
+Preuves : `cargo test --test pilot_bridge` → 2 tests (suite standard, compile sans
+warning) ; `cargo test --features net_tests --test pilot_bridge` → **7 tests verts**
+(4 TCP + localité + 2 purs) ; `cargo test --all-targets` → **654 passés, 0 échec** ;
+`cargo fmt --check` et `cargo clippy --all-targets -- -D warnings` verts dans les
+deux configurations.
 
 ### État des lieux vérifié
 

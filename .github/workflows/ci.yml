@@ -68,6 +68,9 @@ jobs:
             libx11-dev libxkbcommon-dev libwayland-dev \
             libasound2-dev libudev-dev pkg-config
 
+      # Couvre aussi les tests TCP du pont Pilot (tests/pilot_bridge.rs),
+      # gatés `net_tests` pour la même raison que le réseau : certains
+      # environnements interdisent même le bind loopback.
       - name: Tests avec sockets réels
         run: cargo test --features net_tests
 
