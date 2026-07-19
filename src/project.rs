@@ -1,8 +1,8 @@
 //! Manifeste de projet (Sprint 3, audit du 19 juillet 2026) : jusqu'ici RusteeGear
-//! n'ouvrait que des fichiers de scène isolés (`examples/first_game/scene.json`),
-//! sans savoir qu'un dossier constitue un « jeu ». `ProjectManifest` donne un point
-//! d'entrée explicite (`project.rusteegear.json`) qui déclare la scène de démarrage
-//! d'un projet.
+//! n'ouvrait que des fichiers de scène JSON isolés, sans savoir qu'un dossier
+//! constitue un « jeu ». `ProjectManifest` donne un point d'entrée explicite
+//! (`project.rusteegear.json`) qui déclare la scène de démarrage d'un projet
+//! (par exemple `examples/first_game`, migré au Sprint 5).
 //!
 //! Périmètre de ce sprint : le manifeste et son ouverture uniquement. Les assets
 //! restent résolus comme avant (dossier global `assets::assets_dir()`, schémas

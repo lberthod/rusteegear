@@ -17,10 +17,12 @@ avec l'éditeur. Elle contient exactement :
 Plus une lumière directionnelle et une lumière ponctuelle bleutée au-dessus du
 cube tournant.
 
-## Ouvrir la scène
+## Ouvrir le projet
 
 1. Lancer l'éditeur : `cargo run --profile dev-fast`
-2. Menu **📂 Ouvrir…** → sélectionner `examples/first_game/scene.json`
+2. Menu **📂 Ouvrir un projet…** → sélectionner le dossier `examples/first_game`
+   (son manifeste `project.rusteegear.json` déclare `scenes/main.scene.json`
+   comme scène de démarrage)
 3. Cliquer **Play** — déplacer le joueur, ramasser les 3 pièces dorées.
 
 ## À propos des scripts
@@ -39,7 +41,10 @@ l'inspecteur, relancer Play.
 
 - La scène n'utilise que des primitives (aucun asset externe) : elle s'ouvre
   depuis n'importe quel clone du dépôt, sans import préalable.
-- Le format est un `Scene` JSON standard (`"version": 2`) — le même que
-  produit **💾 Enregistrer sous…**. Ce dossier est un dossier de **données** :
+- Depuis le Sprint 4 (19 juillet 2026), ce dossier est un vrai **projet**
+  RusteeGear : `project.rusteegear.json` déclare `scenes/main.scene.json`
+  comme scène de démarrage. `scenes/main.scene.json` reste un `Scene` JSON
+  standard (`"version": 2`) — le même format que produit
+  **💾 Enregistrer sous…**. Ce dossier reste un dossier de **données** :
   Cargo ne le compile pas (aucun fichier `.rs`).
 - Tutoriel pas-à-pas : `docs/FIRST_GAME.md` à la racine du dépôt.

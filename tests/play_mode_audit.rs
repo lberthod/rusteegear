@@ -1,7 +1,8 @@
 //! Audit Play/Pause/Stop (Phase C1, sprint.19matin.md) : les règles que le
 //! tutoriel FIRST_GAME.md et la doc MENTAL_MODEL.md promettent au testeur
 //! externe, prouvées sur la vraie boucle de simulation (`advance_play`,
-//! headless) et sur la scène exemple `examples/first_game/scene.json`.
+//! headless) et sur la scène de démarrage du projet exemple
+//! `examples/first_game` (`scenes/main.scene.json`).
 //!
 //! Rappel du contrat (src/app/simulation.rs, transitions Edit <-> Play) :
 //! - Play  : snapshot de `scene.objects`, construction de la physique ;
@@ -17,7 +18,8 @@ use motor3derust::scene::Scene;
 
 fn first_game() -> Scene {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/first_game");
-    Scene::load(path.join("scene.json").to_str().unwrap()).expect("scene.json charge")
+    Scene::load(path.join("scenes/main.scene.json").to_str().unwrap())
+        .expect("scenes/main.scene.json charge")
 }
 
 /// Une frame de simulation avec un vrai dt > 0 (`last_frame` est privé : on

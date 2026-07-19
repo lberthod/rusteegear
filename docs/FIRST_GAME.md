@@ -1,14 +1,14 @@
 # Ton premier objet animé — tutoriel de 10 minutes
 
 Prérequis : avoir suivi [QUICKSTART.md](../QUICKSTART.md) (éditeur lancé,
-scène `examples/first_game/scene.json` ouverte). Chaque étape nomme le
+projet `examples/first_game` ouvert). Chaque étape nomme le
 bouton/menu exact tel qu'il apparaît dans l'éditeur.
 
 ## Étape 1 — Ouvrir le projet exemple
 
-Menu **📂 Ouvrir…** → `examples/first_game/scene.json`. Tu vois : un sol vert,
-une capsule orange (le joueur), trois caisses, un cube bleuté qui a un script,
-une zone jaune, trois pièces dorées.
+Menu **📂 Ouvrir un projet…** → dossier `examples/first_game`. Tu vois : un
+sol vert, une capsule orange (le joueur), trois caisses, un cube bleuté qui a
+un script, une zone jaune, trois pièces dorées.
 
 ## Étape 2 — Ajouter un cube
 
@@ -58,7 +58,7 @@ Play** — les pièces ramassées réapparaissent, tout ce que tu as modifié
 Menu **💾 Enregistrer sous…** → choisis un emplacement, par exemple
 `~/Documents/ma_premiere_scene.json`. Rouvre-la avec **📂 Ouvrir…** pour
 vérifier : ton cube et son script sont dedans. Ne sauvegarde pas par-dessus
-`examples/first_game/scene.json` — garde l'exemple intact.
+`examples/first_game/scenes/main.scene.json` — garde l'exemple intact.
 
 ## Étape 10 (option) — Aller plus loin
 

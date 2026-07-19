@@ -514,9 +514,54 @@ ne signale que le défaut pré-existant hors périmètre de `console.rs:135`
 
 ---
 
-## Sprint 5 — Migrer First Game
+## Sprint 5 — Migrer First Game ✅ TERMINÉ (19 juillet 2026)
 
 **Objectif** : First Game devient le premier vrai projet RusteeGear.
+
+### Résultat
+
+- **5.1 ✅** — Restructuration via `git mv` (historique préservé) :
+  `examples/first_game/scene.json` → `scenes/main.scene.json`, plus
+  `project.rusteegear.json` ({"format":1,"name":"First Game","main_scene":
+  "scenes/main.scene.json"}). `scripts/`, `README.md`, `preview.png`
+  inchangés. Pas de `build.json` : aucun consommateur, le manifeste le déclare
+  optionnel (Sprint 3).
+- **5.2 ✅** — `example_dir()`/`load_scene()` de
+  [tests/first_game_example.rs](../tests/first_game_example.rs) pointent sur
+  `scenes/main.scene.json` ; 5ᵉ test ajouté
+  (`first_game_opens_as_a_project_via_its_manifest`) : `AppState::open_project`
+  sur le dossier pose `current_project` (nom, racine, `main_scene_path`
+  résolu) et charge la scène — le même chemin que suivrait un vrai joueur
+  via le menu.
+- **5.3 ✅** — [QUICKSTART.md](../QUICKSTART.md) §4,
+  [FIRST_GAME.md](FIRST_GAME.md) (prérequis, Étape 1, avertissement Étape 9),
+  [examples/first_game/README.md](../examples/first_game/README.md) et
+  [TEST_SCENARIO.md](TEST_SCENARIO.md) réécrits en « 📂 Ouvrir un projet… →
+  dossier `examples/first_game` ».
+- **5.4 ✅** — Vérification transverse : le grep a débordé du périmètre
+  attendu et trouvé **deux bugs réels non anticipés par le plan**, pas
+  seulement des mentions documentaires :
+  - [tests/play_mode_audit.rs](../tests/play_mode_audit.rs) chargeait en dur
+    `examples/first_game/scene.json` (7 tests Play/Pause/Stop auraient échoué
+    à la prochaine exécution) ;
+  - [examples/gen_first_game_preview.rs](../examples/gen_first_game_preview.rs)
+    (générateur de `preview.png`) faisait de même.
+
+  Les deux sont corrigés. Restent, volontairement non modifiées : les mentions
+  dans `docs/AnalyseAudit12h24.md`, ce fichier (états des lieux/sous-phases
+  ci-dessus, et la commande grep elle-même) et `docs/sprint.19matin.md` — ce
+  sont des documents d'audit/de sprint **historiques**, décrivant l'état
+  d'avant ce sprint ou citant littéralement la commande de vérification ;
+  aucun n'est une instruction qu'un utilisateur ou la CI suit réellement.
+
+### Vérifications
+
+`cargo test --test first_game_example` (5 passés) et
+`cargo test --test play_mode_audit` (7 passés, avec le chemin corrigé) ;
+`cargo test --all-targets` (632 passés, 0 échec, 9 ignorés) ; `cargo build
+--example gen_first_game_preview` ; fmt/clippy stricts verts ; budget unwrap
+propre (seul le défaut pré-existant hors périmètre de `console.rs:135`
+subsiste, signalé au Sprint 2).
 
 ### État des lieux vérifié
 

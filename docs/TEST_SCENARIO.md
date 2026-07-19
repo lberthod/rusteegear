@@ -20,7 +20,7 @@ Avant de signaler quoi que ce soit, jette un œil à
 | --- | --- | --- | --- |
 | 1 | **Installer** : suivre [QUICKSTART.md](../QUICKSTART.md) §1-2 (rustup, clone, `./scripts/doctor.sh`) | doctor : « Environnement prêt » | < 10 min |
 | 2 | **Compiler + lancer** : `cargo run --profile dev-fast` | Console : `RusteeGear 0.1.0` puis `GPU : …` ; l'éditeur s'ouvre sur le hameau | 1ʳᵉ compilation ~5-10 min (normal) ; lancements suivants < 30 s |
-| 3 | **Ouvrir le projet exemple** : 📂 Ouvrir… → `examples/first_game/scene.json` | La scène de la [preview](../examples/first_game/preview.png) : sol vert, capsule orange, 3 caisses, cube bleuté, zone jaune, 3 pièces | < 30 s |
+| 3 | **Ouvrir le projet exemple** : 📂 Ouvrir un projet… → dossier `examples/first_game` | La scène de la [preview](../examples/first_game/preview.png) : sol vert, capsule orange, 3 caisses, cube bleuté, zone jaune, 3 pièces | < 30 s |
 | 4 | **Importer un GLB** : 📥 Importer glTF… → `assets/models/creature.glb` (dans le clone) | Une créature apparaît dans la scène et dans la hiérarchie | < 2 min |
 | 5 | **La placer + collider** : gizmo (W) pour la poser au sol ; Inspecteur → physique **Statique** | L'objet a un collider (le Joueur bute dessus en Play) | < 3 min |
 | 6 | **Ajouter un objet scripté** : Ajouter → 🧊 Cube, puis Inspecteur → Script (Lua) : `obj.ry = obj.ry + 45 * dt` (ou coller `examples/scripts/rotate.lua`) | — | < 5 min |

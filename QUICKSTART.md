@@ -45,8 +45,8 @@ et l'éditeur s'ouvre sur la scène de démonstration (le hameau du jeu).
 
 ## 4. Ouvrir le projet exemple
 
-1. Menu **📂 Ouvrir…**
-2. Sélectionner `examples/first_game/scene.json` (dans le dossier cloné)
+1. Menu **📂 Ouvrir un projet…**
+2. Sélectionner le dossier `examples/first_game` (dans le dossier cloné)
 3. Cliquer **Play**
 
 ## 5. Jouer

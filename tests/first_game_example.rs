@@ -13,9 +13,9 @@ fn example_dir() -> std::path::PathBuf {
 }
 
 fn load_scene() -> Scene {
-    let path = example_dir().join("scene.json");
+    let path = example_dir().join("scenes/main.scene.json");
     Scene::load(path.to_str().unwrap())
-        .expect("examples/first_game/scene.json doit charger via le vrai chargeur")
+        .expect("examples/first_game/scenes/main.scene.json doit charger via le vrai chargeur")
 }
 
 #[test]
@@ -177,6 +177,31 @@ fn effective_lines(script: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with("--"))
         .map(str::to_string)
         .collect()
+}
+
+/// Sprint 5 (audit du 19 juillet 2026) : First Game est maintenant un vrai
+/// projet RusteeGear (`project.rusteegear.json`), plus seulement un fichier de
+/// scène isolé — il doit s'ouvrir par `AppState::open_project`, exactement
+/// comme un projet créé par l'assistant « Nouveau projet » (Sprint 4).
+#[test]
+fn first_game_opens_as_a_project_via_its_manifest() {
+    let mut app = motor3derust::app::AppState::new();
+    let count = app
+        .open_project(&example_dir())
+        .expect("examples/first_game doit s'ouvrir comme un projet");
+
+    let project = app
+        .current_project
+        .as_ref()
+        .expect("open_project doit poser current_project");
+    assert_eq!(project.name, "First Game");
+    assert_eq!(project.root, example_dir());
+    assert_eq!(
+        project.main_scene_path,
+        example_dir().join("scenes/main.scene.json")
+    );
+    assert_eq!(count, app.scene.objects.len());
+    assert!(!app.scene.objects.is_empty());
 }
 
 #[test]

@@ -15,8 +15,8 @@ const HEIGHT: u32 = 480;
 
 fn main() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/first_game");
-    let scene =
-        Scene::load(dir.join("scene.json").to_str().unwrap()).expect("scene.json doit charger");
+    let scene = Scene::load(dir.join("scenes/main.scene.json").to_str().unwrap())
+        .expect("scenes/main.scene.json doit charger");
 
     let mut renderer = pollster::block_on(Renderer::new_headless(WIDTH, HEIGHT))
         .expect("GPU requis pour générer la preview (même contrainte que les goldens)");
