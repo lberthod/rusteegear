@@ -2026,6 +2026,35 @@ impl Renderer {
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
             }
+            // Serveur local (Sprint 7) : démarrer puis auto-connecter l'hôte
+            // (7.4), avec les mêmes pseudo/classe/salon/mode que le bouton
+            // « Se connecter » enverrait — sauf pseudo vide, auquel cas on
+            // laisse l'utilisateur cliquer lui-même une fois renseigné.
+            if actions.start_local_server {
+                match editor.start_local_server() {
+                    Ok(addr) => {
+                        let url = format!("ws://{addr}");
+                        let (url, name, class, room, objective) =
+                            editor.multiplayer_connect_params(&url);
+                        if name.trim().is_empty() {
+                            log::info!(
+                                "Serveur local démarré sur {addr} — renseigne un pseudo puis \
+                                 clique ▶ Se connecter."
+                            );
+                        } else {
+                            app.connect_to_server_as(&url, &name, class, &room, objective);
+                        }
+                    }
+                    Err(e) => log::error!("Démarrage du serveur local échoué : {e}"),
+                }
+            }
+            if actions.stop_local_server {
+                editor.stop_local_server();
+                // Le serveur auquel on était peut-être connecté vient de
+                // disparaître : la connexion cliente doit suivre, pas rester
+                // affichée comme active vers un process mort.
+                app.disconnect_from_server();
+            }
             if let Some((email, password)) = actions.firebase_sign_in {
                 let settings = editor.settings();
                 app.request_firebase_sign_in(

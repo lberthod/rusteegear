@@ -41,37 +41,87 @@ use crate::scene::{MeshKind, Scene, Transform};
 /// l'exécutable courant : pas de section `[[bin]]` dans `Cargo.toml` (les
 /// deux sont découverts depuis `src/bin/*.rs`), donc les deux atterrissent
 /// dans le même dossier `target/{debug,release}/`.
-pub fn launch_glb_viewer() {
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("Chemin de l'exécutable de l'éditeur introuvable : {e}");
-            return;
-        }
-    };
-    let Some(dir) = exe.parent() else {
-        log::error!("Dossier de l'exécutable de l'éditeur introuvable");
-        return;
-    };
+/// Chemin d'un binaire compilé à côté de l'exécutable courant de l'éditeur :
+/// pas de section `[[bin]]` dans `Cargo.toml` (tous découverts depuis
+/// `src/bin/*.rs`), donc `glbviewer`/`server` atterrissent dans le même
+/// dossier `target/{debug,release}/` que l'éditeur lui-même. `Err` nomme la
+/// commande de build à lancer si le binaire n'existe pas encore.
+fn sibling_binary_path(name: &str) -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("exécutable de l'éditeur introuvable : {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or("dossier de l'exécutable de l'éditeur introuvable")?;
+    sibling_binary_path_in(dir, name)
+}
+
+/// Logique de `sibling_binary_path`, à dossier explicite — testable sans
+/// dépendre de l'emplacement réel de `target/{debug,release}/` (l'exécutable
+/// d'un test vit dans `target/<profil>/deps/`, pas à côté des binaires
+/// nommés exactement, cf. `tests/local_server.rs`).
+fn sibling_binary_path_in(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, String> {
     let bin_name = if cfg!(windows) {
-        "glbviewer.exe"
+        format!("{name}.exe")
     } else {
-        "glbviewer"
+        name.to_string()
     };
     let path = dir.join(bin_name);
     if !path.exists() {
-        log::error!(
-            "{} introuvable — compiler d'abord avec `cargo build --bin glbviewer`",
+        return Err(format!(
+            "{} introuvable — compiler d'abord avec `cargo build --bin {name}`",
             path.display()
-        );
-        return;
+        ));
     }
+    Ok(path)
+}
+
+/// Lance `glbviewer` (`src/bin/glbviewer.rs`) comme processus séparé — sa
+/// propre fenêtre wgpu/egui pour parcourir/prévisualiser `assets/models/`,
+/// indépendante de celle de l'éditeur. Pas d'intégration multi-fenêtre dans la
+/// boucle winit existante (`App` de `src/lib.rs` ne gère qu'une seule
+/// surface/un seul `Renderer`) : un binaire à part reste la façon la plus
+/// simple et la plus sûre d'offrir une « nouvelle fenêtre » de gestion des
+/// `.glb` sans toucher au rendu principal.
+pub fn launch_glb_viewer() {
+    let path = match sibling_binary_path("glbviewer") {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("{e}");
+            return;
+        }
+    };
     // `glbviewer` lit `assets/models/` en chemin relatif (cf. `MODELS_DIR` dans
     // src/bin/glbviewer.rs) : hérite du répertoire courant de l'éditeur sans le
     // changer explicitement, comme celui-ci hérite du sien au lancement.
     match std::process::Command::new(&path).spawn() {
         Ok(_) => log::info!("Gestionnaire GLB lancé ({})", path.display()),
         Err(e) => log::error!("Lancement de {} impossible : {e}", path.display()),
+    }
+}
+
+/// Attend jusqu'à `timeout` qu'un port TCP local accepte des connexions,
+/// avec de courtes pauses entre les essais (Sprint 7, 7.4) — utilisé après le
+/// démarrage du serveur local pour ne tenter l'auto-connexion qu'une fois le
+/// port réellement à l'écoute, plutôt que de lancer une connexion vouée à
+/// l'échec dans le même souffle que le `spawn()`. Bloque le thread appelant :
+/// acceptable ici, c'est une action utilisateur ponctuelle et bornée (≤ 2 s),
+/// pas un chemin appelé chaque frame.
+fn wait_for_tcp_port(addr: &str, timeout: std::time::Duration) -> bool {
+    use std::net::ToSocketAddrs;
+    let Ok(Some(socket_addr)) = addr.to_socket_addrs().map(|mut it| it.next()) else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if std::net::TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_millis(200))
+            .is_ok()
+        {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -158,6 +208,24 @@ pub struct Editor {
     /// le rafraîchissement de la liste, lui, reste inutile hors de cette
     /// fenêtre (personne ne la regarde).
     mp_last_presence_heartbeat: Option<crate::time_compat::Instant>,
+    /// Processus du serveur local lancé depuis la fenêtre Multijoueur
+    /// (Sprint 7) — `None` si aucun n'a été démarré cette session, ou après
+    /// `stop_local_server`. Tué automatiquement à la fermeture de l'éditeur
+    /// (cf. `impl Drop for Editor`) : jamais de processus orphelin.
+    local_server: Option<std::process::Child>,
+    /// Adresse (`127.0.0.1:PORT`) du serveur local démarré, pour l'affichage
+    /// et le bouton « Copier l'adresse ». Cohérent avec `local_server` (posé
+    /// ensemble, effacé ensemble).
+    local_server_addr: Option<String>,
+}
+
+impl Drop for Editor {
+    /// Sprint 7 : un serveur local oublié en arrière-plan après avoir fermé
+    /// l'éditeur serait un processus fantôme qui garde le port occupé (et
+    /// tourne pour rien) — `stop_local_server` tue et attend le process.
+    fn drop(&mut self) {
+        self.stop_local_server();
+    }
 }
 
 /// Intervalle minimal entre deux rafraîchissements automatiques du chat de
@@ -412,6 +480,10 @@ pub struct UiActions {
     )>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
     pub disconnect_from_server: bool,
+    /// Fenêtre Multijoueur : « Démarrer un serveur local » demandé (Sprint 7).
+    pub start_local_server: bool,
+    /// Fenêtre Multijoueur : « Arrêter le serveur local » demandé (Sprint 7).
+    pub stop_local_server: bool,
     /// Widgets HUD `Button` cliqués ce frame (leur champ `action`) — à transmettre à
     /// `AppState::push_hud_event` (délivrés aux scripts via `on_event("hud:<action>")`).
     pub hud_clicks: Vec<String>,
@@ -596,6 +668,8 @@ impl Editor {
             mp_last_chat_refresh: None,
             mp_last_presence_refresh: None,
             mp_last_presence_heartbeat: None,
+            local_server: None,
+            local_server_addr: None,
         }
     }
 
@@ -616,6 +690,94 @@ impl Editor {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         self.settings.record_recent_project(name, root, now);
+    }
+
+    /// Adresse locale par défaut du serveur lancé par l'éditeur (Sprint 7) —
+    /// même port par défaut que `src/bin/server.rs::DEFAULT_ADDR`.
+    const LOCAL_SERVER_ADDR: &'static str = "127.0.0.1:7777";
+
+    pub(crate) fn local_server_is_running(&self) -> bool {
+        self.local_server.is_some()
+    }
+
+    pub(crate) fn local_server_pid(&self) -> Option<u32> {
+        self.local_server.as_ref().map(std::process::Child::id)
+    }
+
+    pub(crate) fn local_server_address(&self) -> Option<&str> {
+        self.local_server_addr.as_deref()
+    }
+
+    /// Démarre `src/bin/server.rs` en processus enfant (Sprint 7, 7.1),
+    /// écoutant sur [`Self::LOCAL_SERVER_ADDR`]. Attend jusqu'à 2 s que le
+    /// port accepte avant de renvoyer, pour que l'appelant puisse enchaîner
+    /// une auto-connexion (7.4) sans lancer une tentative vouée à l'échec.
+    /// Refuse un second démarrage tant qu'un serveur local tourne déjà.
+    pub(crate) fn start_local_server(&mut self) -> Result<String, String> {
+        if self.local_server.is_some() {
+            return Err("un serveur local tourne déjà".to_string());
+        }
+        let path = sibling_binary_path("server")?;
+        let child = std::process::Command::new(&path)
+            .env("RUSTEEGEAR_SERVER_ADDR", Self::LOCAL_SERVER_ADDR)
+            .spawn()
+            .map_err(|e| format!("lancement de {} impossible : {e}", path.display()))?;
+        log::info!(
+            "Serveur local lancé (PID {}) sur {}",
+            child.id(),
+            Self::LOCAL_SERVER_ADDR
+        );
+        self.local_server = Some(child);
+        self.local_server_addr = Some(Self::LOCAL_SERVER_ADDR.to_string());
+        // Reflète l'adresse dans le champ de connexion — cohérent avec
+        // l'auto-connexion (7.4) qui utilise cette même adresse.
+        self.mp_server_url = format!("ws://{}", Self::LOCAL_SERVER_ADDR);
+        if !wait_for_tcp_port(Self::LOCAL_SERVER_ADDR, std::time::Duration::from_secs(2)) {
+            log::warn!(
+                "Serveur local : le port {} n'a pas répondu sous 2 s — il peut être encore \
+                 en train de démarrer, réessaie de te connecter dans un instant.",
+                Self::LOCAL_SERVER_ADDR
+            );
+        }
+        Ok(Self::LOCAL_SERVER_ADDR.to_string())
+    }
+
+    /// Paramètres de connexion courants de la fenêtre Multijoueur (pseudo,
+    /// classe, salon, mode), avec `server_url` substitué — pour l'auto-
+    /// connexion de l'hôte après `start_local_server` (Sprint 7, 7.4) : mêmes
+    /// valeurs que celles envoyées par le bouton « Se connecter ».
+    pub(crate) fn multiplayer_connect_params(
+        &self,
+        server_url: &str,
+    ) -> (
+        String,
+        String,
+        crate::app::multiplayer::PlayerClass,
+        String,
+        crate::app::multiplayer::RoundObjective,
+    ) {
+        (
+            server_url.to_string(),
+            self.mp_name.clone(),
+            self.mp_class,
+            self.mp_room_code.clone(),
+            self.mp_objective,
+        )
+    }
+
+    /// Arrête le serveur local (Sprint 7, 7.1) — sans effet si aucun ne
+    /// tourne. `kill()` + `wait()` (pas juste `kill()`) : réclamer le process
+    /// évite un zombie tant que l'éditeur tourne encore.
+    pub(crate) fn stop_local_server(&mut self) {
+        let Some(mut child) = self.local_server.take() else {
+            return;
+        };
+        self.local_server_addr = None;
+        if let Err(e) = child.kill() {
+            log::warn!("arrêt du serveur local : {e}");
+        }
+        let _ = child.wait();
+        log::info!("Serveur local arrêté.");
     }
 
     /// Ouvre/ferme la fenêtre Multijoueur — bouton Start de la manette
@@ -946,6 +1108,12 @@ impl Editor {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
 
+        // Sprint 7 : lu avant les emprunts `&mut self.<champ>` ci-dessous (des
+        // méthodes `&self` sur des champs disjoints n'évitent pas un conflit
+        // d'emprunt une fois que `self` est fragmenté en `&mut` locaux).
+        let local_server_running = self.local_server_is_running();
+        let local_server_pid = self.local_server_pid();
+        let local_server_addr = self.local_server_address().map(str::to_string);
         let export = &mut self.export;
         let hier_filter = &mut self.hier_filter;
         let hier_new_group = &mut self.hier_new_group;
@@ -1046,6 +1214,9 @@ impl Editor {
                 has_project,
                 confirm_close_project,
                 pending_autosave_recovery,
+                local_server_running,
+                local_server_pid,
+                local_server_addr.clone(),
             );
         });
 
@@ -1256,6 +1427,10 @@ fn build_ui(
     confirm_close_project: bool,
     // Autosave à proposer en restauration (Sprint 6, `AppState::pending_autosave_recovery`).
     pending_autosave_recovery: Option<&std::path::Path>,
+    // Serveur local lancé depuis la fenêtre Multijoueur (Sprint 7).
+    local_server_running: bool,
+    local_server_pid: Option<u32>,
+    local_server_addr: Option<String>,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -1286,6 +1461,9 @@ fn build_ui(
         leaderboard,
         online_players,
         actions,
+        local_server_running,
+        local_server_pid,
+        local_server_addr.as_deref(),
     );
     // Fenêtre « Générer une scène (IA) ».
     ai_scene_window(
@@ -2659,5 +2837,77 @@ mod tests {
             .map(|(name, _, _, _)| name.as_str())
             .collect();
         assert_eq!(ordered, ["Alice", "Vous", "Chloé", "Bob"]);
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-sibling-binary")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("création du dossier de test");
+        dir
+    }
+
+    /// Sprint 7 : un dossier sans le binaire attendu doit être refusé avec un
+    /// message actionnable (nom du binaire + commande de build), pas un
+    /// `panic` ni une erreur bas niveau opaque.
+    #[test]
+    fn sibling_binary_path_in_reports_a_clear_error_when_missing() {
+        let dir = temp_dir("binaire-absent");
+        let err = sibling_binary_path_in(&dir, "server").expect_err("binaire absent");
+        assert!(err.contains("server"), "message obtenu : {err}");
+        assert!(
+            err.contains("cargo build --bin server"),
+            "message obtenu : {err}"
+        );
+    }
+
+    #[test]
+    fn sibling_binary_path_in_finds_an_existing_file() {
+        let dir = temp_dir("binaire-present");
+        let bin_name = if cfg!(windows) {
+            "server.exe"
+        } else {
+            "server"
+        };
+        std::fs::write(dir.join(bin_name), b"faux binaire").unwrap();
+        let found = sibling_binary_path_in(&dir, "server").expect("le binaire doit être trouvé");
+        assert_eq!(found, dir.join(bin_name));
+    }
+
+    /// Sprint 7 (7.4) : `wait_for_tcp_port` doit détecter un port qui accepte
+    /// déjà des connexions, sans attendre tout le timeout demandé.
+    #[test]
+    fn wait_for_tcp_port_detects_an_already_listening_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("liaison de test");
+        let addr = listener.local_addr().unwrap().to_string();
+        // Le listener doit rester vivant pendant l'appel — sinon le port
+        // pourrait ne plus accepter entre le bind et la vérification.
+        let started = std::time::Instant::now();
+        assert!(wait_for_tcp_port(&addr, std::time::Duration::from_secs(5)));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "un port déjà à l'écoute doit être détecté sans attendre le timeout complet"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    fn wait_for_tcp_port_gives_up_after_the_timeout_on_a_closed_port() {
+        // Port choisi puis immédiatement libéré : personne n'écoute dessus.
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("liaison de sonde");
+        let addr = probe.local_addr().unwrap().to_string();
+        drop(probe);
+
+        let started = std::time::Instant::now();
+        assert!(!wait_for_tcp_port(
+            &addr,
+            std::time::Duration::from_millis(300)
+        ));
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(300),
+            "doit attendre au moins le timeout demandé avant d'abandonner"
+        );
     }
 }

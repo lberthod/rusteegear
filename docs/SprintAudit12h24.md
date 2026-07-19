@@ -695,9 +695,65 @@ test), et un crash ne fait perdre au pire que l'intervalle d'autosave.
 
 ---
 
-## Sprint 7 — Serveur local depuis l'éditeur
+## Sprint 7 — Serveur local depuis l'éditeur ✅ TERMINÉ (19 juillet 2026)
 
 **Objectif** : le multijoueur local sans ligne de commande.
+
+### Résultat
+
+- **7.1 ✅** — `Editor::start_local_server`/`stop_local_server`
+  ([editor/mod.rs](../src/editor/mod.rs)) lancent/arrêtent `src/bin/server.rs`
+  en processus enfant via `std::process::Command`, localisé à côté de
+  l'exécutable de l'éditeur (nouvelle fonction `sibling_binary_path`,
+  factorisée depuis `launch_glb_viewer` qui faisait déjà ce calcul pour
+  `glbviewer`). `RUSTEEGEAR_SERVER_ADDR=127.0.0.1:7777` transmis en variable
+  d'environnement (aucun changement du binaire serveur lui-même). `impl Drop
+  for Editor` appelle `stop_local_server` : fermer l'éditeur tue le serveur,
+  jamais de processus orphelin.
+- **7.2 ✅** — La fenêtre Multijoueur affiche « 🟢 En cours (PID N) —
+  adresse » ou le bouton de démarrage selon l'état. Nombre de joueurs :
+  **scope réduit** — plutôt que dupliquer un chemin de données serveur→UI
+  séparé, un renvoi vers le tableau des joueurs existant (visible une fois
+  connecté), déjà à jour en temps réel.
+- **7.3 ✅** — Bouton « 📋 Copier l'adresse » (`ui.ctx().copy_text`), incluant
+  le code de partie en texte lisible si renseigné (`ws://…` puis
+  `Code de partie : …` sur une seconde ligne — pas encodé dans l'URL, pour ne
+  pas fragiliser le champ « Adresse » qui n'attend qu'une URL WebSocket nue).
+- **7.4 ✅** — Après démarrage réussi, `wait_for_tcp_port` (jusqu'à 2 s,
+  bloquant — action ponctuelle et bornée, pas un chemin par frame) attend que
+  le port accepte, puis auto-connexion directe
+  (`AppState::connect_to_server_as`) avec le pseudo/classe/salon/mode déjà
+  saisis dans la fenêtre ; si le pseudo est vide, un message invite
+  simplement à cliquer « Se connecter » une fois renseigné plutôt que de
+  connecter avec un nom vide.
+- **7.5 ✅** — Découverte en explorant le code : le champ **« Code de
+  partie »** de la fenêtre Multijoueur ([windows.rs:1162](../src/editor/windows.rs))
+  correspondait déjà exactement à ce que 7.5 demandait (`ClientMsg::Join::lobby`,
+  repli sur `DEFAULT_LOBBY` si vide) — introduit dès le Sprint 20, avant cet
+  audit. Rien à ajouter côté protocole ; seule l'inclusion dans l'adresse
+  copiée (7.3) était manquante.
+- **7.6 ✅** — `Editor` a besoin d'un contexte egui/wgpu réel (ne se construit
+  pas headless), donc pas testable directement. Deux niveaux de tests à la
+  place : 4 tests unitaires (`sibling_binary_path_in`, `wait_for_tcp_port`,
+  logique pure, dossier/ports explicites) dans
+  [editor/mod.rs](../src/editor/mod.rs), et 2 tests d'intégration gatés
+  `net_tests` dans [tests/local_server.rs](../tests/local_server.rs) qui
+  **spawnent le vrai binaire `server` compilé**, un vrai client s'y connecte
+  (`NetClient::connect_to_lobby`), puis vérifient qu'après arrêt un second
+  serveur peut reprendre le même port (preuve qu'aucun processus n'est resté
+  orphelin dessus).
+
+### Vérifications
+
+`cargo test --lib editor::` (23 passés, dont les 4 nouveaux) ;
+`cargo test --test local_server --features net_tests` (2 passés) ;
+`cargo test --all-targets` (649 passés) et `--features net_tests` (673
+passés), 0 échec ; fmt/clippy stricts verts (avec et sans `net_tests`) ;
+budget unwrap propre (seul le défaut pré-existant hors périmètre de
+`console.rs:135` subsiste) ; `cargo check --target wasm32-unknown-unknown` et
+`--target aarch64-apple-ios` compilent sans erreur (le nouveau code n'est
+gaté par aucun `#[cfg]` de plateforme — `std::process`/`std::net` compilent
+partout, même si les lancer n'aurait de sens que sur desktop).
 
 ### État des lieux vérifié
 

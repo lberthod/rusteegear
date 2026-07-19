@@ -1129,6 +1129,10 @@ pub(super) fn multiplayer_window(
     leaderboard: &[crate::app::network_client::LeaderboardLine],
     online_players: &[String],
     actions: &mut UiActions,
+    // Serveur local lancé depuis cette même fenêtre (Sprint 7).
+    local_server_running: bool,
+    local_server_pid: Option<u32>,
+    local_server_addr: Option<&str>,
 ) {
     let mut open = panels.multiplayer;
     egui::Window::new("🌐  Multijoueur")
@@ -1212,11 +1216,49 @@ pub(super) fn multiplayer_window(
             } else {
                 net_status
             });
-            ui.add_space(6.0);
-            ui.small(
-                "Lance d'abord un serveur (`cargo run --bin server`), puis connecte-toi \
-                 depuis chaque instance de l'éditeur/du player avec la même adresse.",
-            );
+            ui.add_space(12.0);
+            ui.separator();
+            ui.heading("Serveur local");
+            if local_server_running {
+                ui.label(format!(
+                    "🟢  En cours (PID {}) — {}",
+                    local_server_pid
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "?".to_string()),
+                    local_server_addr.unwrap_or("?")
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("⏹  Arrêter le serveur").clicked() {
+                        actions.stop_local_server = true;
+                    }
+                    if ui.button("📋  Copier l'adresse").clicked()
+                        && let Some(addr) = local_server_addr
+                    {
+                        let room = room_code.trim();
+                        let text = if room.is_empty() {
+                            format!("ws://{addr}")
+                        } else {
+                            format!("ws://{addr}\nCode de partie : {room}")
+                        };
+                        ui.ctx().copy_text(text);
+                    }
+                });
+                ui.small(
+                    "Le nombre de joueurs connectés apparaît dans le tableau des joueurs \
+                     une fois toi-même connecté (bouton ▶ Se connecter ci-dessus, avec \
+                     l'adresse copiée).",
+                );
+            } else {
+                if ui.button("▶  Démarrer un serveur local").clicked() {
+                    actions.start_local_server = true;
+                }
+                ui.small(
+                    "Lance un serveur sur cette machine (127.0.0.1:7777, accessible \
+                     uniquement depuis cette machine) — pratique pour tester le \
+                     multijoueur avec plusieurs instances de l'éditeur/du player en local, \
+                     sans ouvrir de terminal.",
+                );
+            }
 
             ui.add_space(12.0);
             ui.separator();
