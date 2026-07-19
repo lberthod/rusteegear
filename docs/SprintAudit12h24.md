@@ -157,26 +157,57 @@ cargo test --features net_tests --test pilot_bridge     # 6 tests dans un env av
 
 ---
 
-## Sprint 2 — Corriger et tester la Release 🟡 EN COURS (19 juillet 2026)
+## Sprint 2 — Corriger et tester la Release ✅ TERMINÉ POUR L'ESSENTIEL (19 juillet 2026)
 
 **Objectif** : une Release GitHub alpha téléchargeable et lançable.
 
-### Résultat partiel
+### Résultat
 
 - **2.1 ✅** — `release.yml` corrigé : une étape « Renommer le livrable » copie
   `RusteeGear.dmg` (ce que produit réellement `build_dmg.sh` en mode normal) vers
   `RusteeGear-Editor-${{ github.ref_name }}.dmg`, qui est ensuite attaché à la
   Release. Fini le nom `Motor3DeRust.dmg` qui n'existait jamais.
-- **2.2 ✅** — Décision confirmée : alpha.1 livre l'éditeur seul ; le Player
-  First Game est reporté (voir sous-phase 2.2 ci-dessous), non bloquant.
-- **2.3/2.4 ⏸ en attente d'accord explicite** — créer et pousser un tag `v*`
-  déclenche la CI et publie une **vraie Release GitHub publique** avec des
-  binaires attachés : action visible et difficile à annuler, donc non faite sans
-  confirmation explicite en chat (voir garde-fous des actions à risque). `git tag
-  -l 'v*'` confirme qu'aucun tag n'existe encore sur ce dépôt.
-- Vérifié au passage : `APP_VERSION` dérivé de `v0.1.0-alpha.1` donne
-  `0.1.0-alpha.1` (strip du `v`), un semver Cargo valide — le job Android ne
-  cassera pas sur ce tag.
+- **2.2 ✅** — Décision confirmée : alpha livre l'éditeur seul ; le Player
+  First Game reste reporté, non bloquant.
+- **2.3 ✅** — Trois tags poussés successivement (voir « Incident découvert » ci-
+  dessous) : **`v0.1.0-alpha.3`** est la Release finale et entièrement verte.
+- **2.4 ⏸ non fait** — le DMG n'a pas été téléchargé/monté/lancé sur une machine
+  propre depuis cette session (pas d'accès à un Mac « propre » depuis cet
+  environnement). Reste une vérification manuelle à faire avant le Sprint 8.
+
+### ⚠ Incident découvert et corrigé en cours de route
+
+`v0.1.0-alpha.1` (premier tag pushé) a réussi côté macOS mais **le job Android a
+échoué** — pas à cause de ce sprint, mais de deux régressions **pré-existantes**
+sur `main`, introduites par le commit `413e8fb9` (pont Pilot) et jamais
+détectées (`cross-build` iOS/Android était rouge sur `main` avant même de
+commencer ce sprint) :
+
+1. **`Platform 33 is not installed`** — le SDK Android du runner n'a jamais la
+   plateforme visée par `target_sdk_version = 33` (Cargo.toml) préinstallée.
+   Corrigé : étape `sdkmanager --install "platforms;android-33"` ajoutée dans
+   `release.yml` avant `cargo-apk` (même schéma que le NDK dans `ci.yml`).
+2. **`cannot find module pilot` (E0433/E0425/E0609)** — `pub fn run()` dans
+   [src/lib.rs](../src/lib.rs) n'excluait que `wasm32`, alors que le module
+   `pilot` (et le champ `App::pilot`) excluent en plus iOS et Android. Le bloc
+   qui démarre le pont dans `run()` référençait donc `pilot::…` sur des cibles
+   où ce module n'existe pas — cassait silencieusement `cargo build --lib`
+   pour `aarch64-apple-ios` et `aarch64-linux-android` depuis l'introduction du
+   pont. Corrigé par un `#[cfg(not(any(target_os = "ios", target_os =
+   "android")))]` sur ce bloc, **validé sur `main`** via le job `cross-build`
+   normal de `ci.yml` (les deux cibles passent au vert) avant de retagger, pour
+   éviter de multiplier les Releases publiques en essai-erreur.
+
+Résultat : `v0.1.0-alpha.2` a le nouveau DMG (fix SDK) mais l'APK échoue encore
+(bug n° 2, découvert après coup) ; `v0.1.0-alpha.3` a les deux artefacts verts.
+`v0.1.0-alpha.1` et `.2` restent publiées sur GitHub (tags immuables, pas
+supprimés) mais **`v0.1.0-alpha.3` est la référence** pour la suite (Sprint 8).
+
+**Reste en dette, hors périmètre de ce sprint** : `Budget unwrap/expect/panic`
+(job `ci.yml`) échoue toujours sur `main` — un `.expect()` non whitelisté dans
+[src/app/console.rs:135](../src/app/console.rs) (`instantiate_prefab`), sans
+rapport avec Pilot. Non corrigé ici (scope), à traiter dans un sprint dédié ou
+en passant lors d'un prochain sprint qui touche ce fichier.
 
 ### État des lieux vérifié
 

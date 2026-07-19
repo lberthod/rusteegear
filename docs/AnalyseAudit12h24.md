@@ -45,6 +45,19 @@ deux cas **en mieux** :
    (opt-in `--pilot` / `RUSTEEGEAR_PILOT`, décodé par `pilot_port_requested()`
    [lib.rs:869](../src/lib.rs)). Il reste à le prouver par un test, pas à l'implémenter.
 
+3. **« État qualité : tout au vert » (tableau ci-dessous) → vrai seulement pour la
+   suite locale, pas pour la CI complète.** Découvert en exécutant le Sprint 2 : le
+   pont Pilot introduit par `413e8fb9` a cassé silencieusement `cross-build`
+   iOS/Android sur `main` (`pub fn run()` dans [lib.rs](../src/lib.rs) référençait
+   le module `pilot` sans exclure ces deux cibles, alors que `pilot` lui-même les
+   exclut) — rouge depuis son introduction, jamais remarqué faute de vérifier la
+   matrice CI complète pendant l'audit initial (seuls `fmt`/`clippy`/`test`
+   locaux avaient été lancés). Corrigé au Sprint 2, détail dans
+   [SprintAudit12h24.md](SprintAudit12h24.md). Un second défaut, sans rapport et
+   non corrigé (hors périmètre), subsiste : un `.expect()` non budgété dans
+   [console.rs:135](../src/app/console.rs) fait échouer le job « Budget
+   unwrap/expect/panic ».
+
 ---
 
 ## État Git
