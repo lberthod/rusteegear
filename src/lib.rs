@@ -919,6 +919,14 @@ pub fn run() {
     let mut app = make_app(player);
     // Pont de pilotage externe (opt-in explicite : éval Lua = exécution de code
     // arbitraire — jamais actif sans demande, et annoncé en clair dans les logs).
+    // `run()` compile pour toute cible non-wasm32 (donc aussi iOS/Android), mais
+    // le module `pilot` lui-même exclut en plus iOS/Android (`pub mod pilot`,
+    // plus haut) — sans ce gate, `cargo build` pour ces cibles échoue avec
+    // « cannot find module `pilot` » (régression découverte lors du Sprint 2,
+    // audit du 19 juillet 2026 : cassait les cross-builds iOS/Android de la CI
+    // et le job Android de la Release, tous silencieusement rouges depuis
+    // l'introduction du pont).
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     if let Some(port) = pilot_port_requested(
         std::env::args(),
         std::env::var("RUSTEEGEAR_PILOT").ok().as_deref(),
