@@ -368,6 +368,9 @@ impl Renderer {
             if actions.load_escorte {
                 app.load_escorte_demo();
             }
+            if actions.load_survie {
+                app.load_survie_demo();
+            }
             if actions.restart {
                 restart = true;
             }

@@ -22,8 +22,8 @@ pub(super) fn script_key(src: &str) -> u64 {
 pub(crate) use crate::scene::canonical_euler_xyz;
 
 /// Exécute le chunk Lua **déjà compilé** d'un objet : expose `obj` (x,y,z,
-/// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped), `dt`, `time` et `input`, puis relit
-/// les champs modifiés.
+/// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped, touch_started, touching,
+/// touch_ended), `dt`, `time` et `input`, puis relit les champs modifiés.
 #[allow(clippy::too_many_arguments)] // contexte d'exécution d'un script : champs distincts
 pub(super) fn run_script(
     lua: &Lua,
@@ -35,6 +35,9 @@ pub(super) fn run_script(
     time: f32,
     input: &PlayerInput,
     tapped: bool,
+    touch_started: bool,
+    touching: bool,
+    touch_ended: bool,
     triggered: bool,
     events_in: &[String],
     events_out: &mut Vec<String>,
@@ -64,6 +67,9 @@ pub(super) fn run_script(
     obj.set("g", color[1])?;
     obj.set("b", color[2])?;
     obj.set("tapped", tapped)?;
+    obj.set("touch_started", touch_started)?;
+    obj.set("touching", touching)?;
+    obj.set("touch_ended", touch_ended)?;
     obj.set("triggered", triggered)?;
     // `obj.exited` : symétrique de `triggered` — vrai le tick où le
     // contact avec cette zone `trigger` vient de cesser (cf. `AppState::trigger_prev`
@@ -566,6 +572,9 @@ mod tests {
             &input,
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -618,6 +627,9 @@ mod tests {
             0.016,
             0.0,
             &input,
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -673,6 +685,9 @@ mod tests {
             &input,
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -702,6 +717,9 @@ mod tests {
             0.016,
             0.0,
             &empty,
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -742,6 +760,9 @@ mod tests {
             0.016,
             0.0,
             &PlayerInput::default(),
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -791,6 +812,9 @@ mod tests {
             0.016,
             0.0,
             &PlayerInput::default(),
+            false,
+            false,
+            false,
             false,
             false,
             &["score:3".to_string()],
@@ -844,6 +868,9 @@ mod tests {
             0.016,
             0.0,
             &PlayerInput::default(),
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -907,6 +934,9 @@ mod tests {
             0.016,
             0.0,
             &PlayerInput::default(),
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -976,6 +1006,9 @@ mod tests {
             &PlayerInput::default(),
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -1023,6 +1056,9 @@ mod tests {
             &PlayerInput::default(),
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -1060,6 +1096,9 @@ mod tests {
             0.016,
             0.0,
             &PlayerInput::default(),
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -1126,6 +1165,9 @@ mod tests {
             &PlayerInput::default(),
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -1166,6 +1208,9 @@ mod tests {
             0.0,
             &input,
             false,
+            false,
+            false,
+            false,
             true,
             &[],
             &mut Vec::new(),
@@ -1194,6 +1239,9 @@ mod tests {
             &input,
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -1209,6 +1257,118 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
+    }
+
+    /// Exécute `run_script` avec seulement `touch_started`/`touching`/`touch_ended`
+    /// pilotables (tous les autres signaux à faux) — factorise le bruit des tests du
+    /// cycle de vie du toucher ci-dessous.
+    #[allow(clippy::too_many_arguments)]
+    fn run_touch(
+        lua: &Lua,
+        func: &mlua::Function,
+        t: &mut Transform,
+        col: &mut [f32; 3],
+        touch_started: bool,
+        touching: bool,
+        touch_ended: bool,
+    ) {
+        run_script(
+            lua,
+            func,
+            t,
+            col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            touch_started,
+            touching,
+            touch_ended,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn obj_touch_started_is_true_only_the_frame_it_is_passed() {
+        // `obj.touch_started` ne doit refléter que ce que `run_script` reçoit ce
+        // tick-là — vrai au premier appel (`touch_started=true`), faux ensuite même
+        // si `touching=true` continue (presse toujours maintenue).
+        let lua = Lua::new();
+        let src = "if obj.touch_started then obj.x = obj.x + 1 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+
+        run_touch(&lua, &func, &mut t, &mut col, true, true, false);
+        assert_eq!(t.position.x, 1.0);
+
+        // Presse toujours maintenue, mais ce n'est plus la frame de départ.
+        run_touch(&lua, &func, &mut t, &mut col, false, true, false);
+        assert_eq!(
+            t.position.x, 1.0,
+            "touch_started ne doit pas rester vrai au-delà de la première frame"
+        );
+    }
+
+    #[test]
+    fn obj_touching_stays_true_across_frames_until_the_press_ends() {
+        // `obj.touching` doit rester vrai tant que la presse est maintenue
+        // (plusieurs frames de suite), puis retomber à faux dès qu'on ne la
+        // passe plus — indépendamment de `touch_started`/`touch_ended`.
+        let lua = Lua::new();
+        let src = "if obj.touching then obj.y = obj.y + 1 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+
+        run_touch(&lua, &func, &mut t, &mut col, true, true, false);
+        assert_eq!(t.position.y, 1.0);
+        run_touch(&lua, &func, &mut t, &mut col, false, true, false);
+        assert_eq!(t.position.y, 2.0);
+        run_touch(&lua, &func, &mut t, &mut col, false, true, false);
+        assert_eq!(
+            t.position.y, 3.0,
+            "la presse maintenue doit compter à chaque frame"
+        );
+
+        // Presse relâchée : `touching` retombe à faux, plus d'incrément.
+        run_touch(&lua, &func, &mut t, &mut col, false, false, true);
+        assert_eq!(t.position.y, 3.0);
+    }
+
+    #[test]
+    fn obj_touch_ended_is_true_exactly_on_the_release_frame() {
+        // `obj.touch_ended` ne doit être vrai que le tick du relâché, pas avant
+        // (presse en cours) ni après (déjà retombé à faux ailleurs).
+        let lua = Lua::new();
+        let src = "if obj.touch_ended then obj.z = obj.z + 1 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+
+        // Presse en cours : `touch_ended` doit être faux.
+        run_touch(&lua, &func, &mut t, &mut col, true, true, false);
+        assert_eq!(t.position.z, 0.0);
+        // Relâché ce tick.
+        run_touch(&lua, &func, &mut t, &mut col, false, false, true);
+        assert_eq!(t.position.z, 1.0);
+        // Tick suivant : `touch_ended` n'est exposé qu'une frame.
+        run_touch(&lua, &func, &mut t, &mut col, false, false, false);
+        assert_eq!(t.position.z, 1.0);
     }
 
     /// `canonical_euler_xyz` : sur un yaw pur, `ry` doit porter l'angle entier

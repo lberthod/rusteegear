@@ -236,6 +236,10 @@ impl AppState {
                     self.load_escorte_demo();
                     "démo escorte chargée".into()
                 }
+                Some("survie") => {
+                    self.load_survie_demo();
+                    "démo survie chargée".into()
+                }
                 Some("components") => {
                     self.load_components_demo();
                     "démo composants chargée".into()
@@ -246,7 +250,7 @@ impl AppState {
                 }
                 other => format!(
                     "usage : demo <nom> — mmorpg, gameplay, controleur, tower, temple, zombies, \
-                     mobile, roguelike, brawl, boss, escorte, components, hameau{}",
+                     mobile, roguelike, brawl, boss, escorte, survie, components, hameau{}",
                     other
                         .map(|o| format!(" (reçu : « {o} »)"))
                         .unwrap_or_default()

@@ -546,6 +546,9 @@ fn script_setting_obj_anim_starts_a_crossfade() {
         &PlayerInput::default(),
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -595,6 +598,9 @@ fn script_leaving_obj_anim_untouched_does_not_reset_clip() {
         &PlayerInput::default(),
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -636,6 +642,9 @@ fn script_reacts_to_tap_and_changes_color() {
         &input,
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -662,6 +671,9 @@ fn script_reacts_to_tap_and_changes_color() {
         0.0,
         &input,
         true,
+        false,
+        false,
+        false,
         false,
         &[],
         &mut Vec::new(),
@@ -700,6 +712,9 @@ fn script_reacts_to_trigger() {
         &input,
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -724,6 +739,9 @@ fn script_reacts_to_trigger() {
         0.016,
         0.0,
         &input,
+        false,
+        false,
+        false,
         false,
         true,
         &[],
@@ -767,6 +785,9 @@ fn script_reads_tilt() {
         &input,
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -802,6 +823,9 @@ fn script_sets_health() {
         0.016,
         0.0,
         &input,
+        false,
+        false,
+        false,
         false,
         false,
         &[],
@@ -842,6 +866,9 @@ fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
         &input,
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -867,6 +894,9 @@ fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
         0.016,
         0.0,
         &input,
+        false,
+        false,
+        false,
         false,
         false,
         &[],
@@ -898,6 +928,9 @@ fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
             0.016,
             0.0,
             &input,
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -953,6 +986,9 @@ fn controller_demo_enemy_scripts_compile_and_patrol() {
             &input,
             false,
             false,
+            false,
+            false,
+            false,
             &[],
             &mut Vec::new(),
             &[],
@@ -978,6 +1014,9 @@ fn controller_demo_enemy_scripts_compile_and_patrol() {
             0.016,
             1.0,
             &input,
+            false,
+            false,
+            false,
             false,
             false,
             &[],
@@ -2533,6 +2572,9 @@ fn controller_demo_lava_boil_script_preserves_collision_scale() {
         &input,
         false,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -2579,6 +2621,9 @@ fn script_can_request_vibration() {
         &input,
         true,
         false,
+        false,
+        false,
+        false,
         &[],
         &mut Vec::new(),
         &[],
@@ -2619,6 +2664,9 @@ fn script_can_request_reverb() {
         0.016,
         0.0,
         &input,
+        false,
+        false,
+        false,
         false,
         true,
         &[],
@@ -2741,6 +2789,33 @@ fn pausing_freezes_the_survie_timer() {
     app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(app.time > 170.0, "le chrono doit repartir après la reprise");
+}
+
+/// `touch_state_of` (Inspecteur, indicateurs live à côté de « Tactile
+/// (cliquable) ») : reflète exactement `touch_started_obj`/`touched_obj`/
+/// `touch_ended_obj`, un seul à la fois vrai ici (frames distinctes en vrai
+/// jeu, mais la méthode ne fait que projeter l'état courant sans hypothèse
+/// de mutuelle exclusivité).
+#[test]
+fn touch_state_of_reflects_started_touching_and_ended_independently() {
+    let mut app = AppState::new();
+    assert_eq!(app.touch_state_of(0), (false, false, false));
+
+    app.touch_started_obj = Some(0);
+    assert_eq!(app.touch_state_of(0), (true, false, false));
+    assert_eq!(
+        app.touch_state_of(1),
+        (false, false, false),
+        "un autre index ne doit rien voir allumé"
+    );
+
+    app.touch_started_obj = None;
+    app.touched_obj = Some(0);
+    assert_eq!(app.touch_state_of(0), (false, true, false));
+
+    app.touched_obj = None;
+    app.touch_ended_obj = Some(0);
+    assert_eq!(app.touch_state_of(0), (false, false, true));
 }
 
 #[test]

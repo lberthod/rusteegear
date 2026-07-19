@@ -871,6 +871,9 @@ impl AppState {
         let net_check_now = Instant::now();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             let just_tapped = self.tapped_obj == Some(idx);
+            let touch_started = self.touch_started_obj == Some(idx);
+            let touching = self.touched_obj == Some(idx);
+            let touch_ended = self.touch_ended_obj == Some(idx);
             // Vibration Feedback : retour haptique quand l'objet est tapé.
             if obj.vibrate_on_tap > 0 && just_tapped {
                 vibrations.push(obj.vibrate_on_tap as f32);
@@ -948,6 +951,9 @@ impl AppState {
                     time,
                     &self.input_state,
                     tapped,
+                    touch_started,
+                    touching,
+                    touch_ended,
                     triggered.contains(&idx),
                     &events_in,
                     &mut events_out,
@@ -1009,6 +1015,9 @@ impl AppState {
                     time,
                     &self.input_state,
                     tapped,
+                    touch_started,
+                    touching,
+                    touch_ended,
                     triggered.contains(&idx),
                     &events_in,
                     &mut events_out,
@@ -1065,6 +1074,8 @@ impl AppState {
         self.hud_health = health;
         // Le tap n'est exposé qu'une frame.
         self.tapped_obj = None;
+        self.touch_started_obj = None;
+        self.touch_ended_obj = None;
         // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
         for ms in vibrations {
             crate::runtime::vibrate(ms);

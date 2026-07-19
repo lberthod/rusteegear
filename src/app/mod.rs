@@ -235,6 +235,18 @@ pub struct AppState {
     pub input_state: PlayerInput,
     /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
     tapped_obj: Option<usize>,
+    /// Objet sous presse actuellement maintenue (du PointerDown au PointerUp) —
+    /// pour `obj.touching` côté script. Contrairement à `tapped_obj` (vrai une
+    /// seule frame au relâché, seulement pour un tap net sans glissé), reste
+    /// `Some` sur toute la durée de la presse, quelle que soit la position
+    /// courante du curseur.
+    touched_obj: Option<usize>,
+    /// Une seule frame : l'objet vient de recevoir la presse qui commence
+    /// (`obj.touch_started`).
+    touch_started_obj: Option<usize>,
+    /// Une seule frame : la presse démarrée sur cet objet vient de se terminer
+    /// (`obj.touch_ended`), qu'elle se relâche dessus ou après un glissé.
+    touch_ended_obj: Option<usize>,
     /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
     sim_accumulator: f32,
     /// Multiplicateur du temps simulé : 1.0 = normal, 0 = figé, &gt;1 = accéléré.
@@ -936,6 +948,9 @@ impl AppState {
             locale: initial_settings.locale,
             input_state: PlayerInput::default(),
             tapped_obj: None,
+            touched_obj: None,
+            touch_started_obj: None,
+            touch_ended_obj: None,
             sim_accumulator: 0.0,
             time_scale: 1.0,
             step_requested: false,
@@ -1365,6 +1380,18 @@ impl AppState {
     /// de pilotage (`crate::pilot`, verbe `player`).
     pub fn player_position(&self) -> Option<Vec3> {
         self.player_object().map(|o| o.transform.position)
+    }
+
+    /// État live du cycle de vie du toucher pour un objet (touch_started,
+    /// touching, touch_ended) — pour les indicateurs de l'Inspecteur, en
+    /// Play/Pause, à côté de « Tactile (cliquable) ». Cf. `picking::handle_input`
+    /// pour ce qui pose ces trois champs.
+    pub fn touch_state_of(&self, idx: usize) -> (bool, bool, bool) {
+        (
+            self.touch_started_obj == Some(idx),
+            self.touched_obj == Some(idx),
+            self.touch_ended_obj == Some(idx),
+        )
     }
 
     /// Données pour la mini-carte (overlay HUD/éditeur) : positions (x, z, plan

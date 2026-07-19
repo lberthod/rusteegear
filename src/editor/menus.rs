@@ -34,124 +34,166 @@ pub(super) fn menu_fichier(
         // actions fichier ; la scène MMORPG (scène centrale du projet, chargée au
         // démarrage) est en tête pour pouvoir la recharger facilement.
         ui.menu_button("🎬  Démos", |ui| {
-            if ui
-                .button("🌐  Démo MMORPG (scène centrale, multijoueur PC ↔ mobile)")
-                .on_hover_text(
-                    "La scène chargée au démarrage de l'éditeur : hameau, ménagerie de créatures, \
-                     joueur pilotable (joystick + saut), pensée pour voir un client desktop et un \
-                     APK se déplacer l'un par rapport à l'autre",
-                )
-                .clicked()
-            {
-                actions.load_mmorpg = true;
-                ui.close();
-            }
-            if ui
-                .button("🎮  Démo mobile (jouable)")
-                .on_hover_text("Charge une scène : joystick + bouton Saut + personnage scripté")
-                .clicked()
-            {
-                actions.load_demo = true;
-                ui.close();
-            }
-            if ui
-                .button("🎯  Démo gameplay (complète)")
-                .on_hover_text("Joystick + gyroscope + saut + zone de danger + barre de vie + tap")
-                .clicked()
-            {
-                actions.load_gameplay = true;
-                ui.close();
-            }
-            if ui
-                .button("🕹  Démo contrôleur (joystick + saut, sans script)")
-                .on_hover_text(
-                    "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor",
-                )
-                .clicked()
-            {
-                actions.load_controller = true;
-                ui.close();
-            }
-            if ui
-                .button("🗼  Démo Tour d'ascension (platforming)")
-                .on_hover_text(
-                    "Style différent : grimpe la tour en spirale, aucune arme ni combat, éviter le vide",
-                )
-                .clicked()
-            {
-                actions.load_tower = true;
-                ui.close();
-            }
-            if ui
-                .button("🏃  Démo Course infinie (style Temple Run)")
-                .on_hover_text(
-                    "Course automatique + changement de voie + saut : esquive les obstacles, ramasse les pièces",
-                )
-                .clicked()
-            {
-                actions.load_temple_run = true;
-                ui.close();
-            }
-            if ui
-                .button("🧩  Scène exemple (composants Controller/Audio/Combat)")
-                .on_hover_text(
-                    "Référence minimale : un objet par composant optionnel, pas un niveau de jeu",
-                )
-                .clicked()
-            {
-                actions.load_components_demo = true;
-                ui.close();
-            }
-            if ui
-                .button("🧟  Démo Vagues de zombies (local, sans réseau)")
-                .on_hover_text(
-                    "Manches de monstres (Rôdeur/Coureur/Brute) qui poursuivent le joueur, style Call of Zombies",
-                )
-                .clicked()
-            {
-                actions.load_ai_duel = true;
-                ui.close();
-            }
-            if ui
-                .button("🗡  Démo Donjon (roguelike, 3 salles)")
-                .on_hover_text(
-                    "3 salles à vider une à une (porte fermée jusqu'à la précédente vidée), arme de départ tirée au sort",
-                )
-                .clicked()
-            {
-                actions.load_roguelike = true;
-                ui.close();
-            }
-            if ui
-                .button("🥊  Démo Duel (façon Tekken/Smash Bros)")
-                .on_hover_text(
-                    "Arène flottante, un rival à plusieurs coups avant de tomber, ring out possible (le vide sous l'arène est mortel)",
-                )
-                .clicked()
-            {
-                actions.load_brawl = true;
-                ui.close();
-            }
-            if ui
-                .button("👑  Démo Boss (mode Boss)")
-                .on_hover_text(
-                    "Arène fermée, un adversaire unique à PV massifs et contact doublé (RoundObjective::Boss)",
-                )
-                .clicked()
-            {
-                actions.load_boss = true;
-                ui.close();
-            }
-            if ui
-                .button("🛒  Démo Escorte (mode Escorte)")
-                .on_hover_text(
-                    "Convoi lent à mener d'un bout à l'autre d'un couloir, ciblé en priorité par les créatures (RoundObjective::Escorte)",
-                )
-                .clicked()
-            {
-                actions.load_escorte = true;
-                ui.close();
-            }
+            ui.menu_button("⭐  Commencer", |ui| {
+                if ui
+                    .button("⭐  Premier jeu")
+                    .on_hover_text(
+                        "Ouvre le projet tutoriel `examples/first_game` : sol, joueur pilotable, \
+                         caisses, cube tournant scripté, zone d'éveil, pièces à ramasser — la \
+                         meilleure porte d'entrée pour découvrir l'éditeur",
+                    )
+                    .clicked()
+                {
+                    let path =
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/first_game");
+                    actions.open_project_path = Some(path.to_string_lossy().into_owned());
+                    ui.close();
+                }
+                if ui
+                    .button("🌐  Démo MMORPG (scène centrale, multijoueur PC ↔ mobile)")
+                    .on_hover_text(
+                        "La scène chargée au démarrage de l'éditeur : hameau, ménagerie de créatures, \
+                         joueur pilotable (joystick + saut), pensée pour voir un client desktop et un \
+                         APK se déplacer l'un par rapport à l'autre",
+                    )
+                    .clicked()
+                {
+                    actions.load_mmorpg = true;
+                    ui.close();
+                }
+            });
+            ui.menu_button("🎮  Jeux jouables", |ui| {
+                if ui
+                    .button("🧟  Zombies (local, sans réseau)")
+                    .on_hover_text(
+                        "Manches de monstres (Rôdeur/Coureur/Brute) qui poursuivent le joueur, style Call of Zombies",
+                    )
+                    .clicked()
+                {
+                    actions.load_ai_duel = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🗡  Donjon (roguelike, 3 salles)")
+                    .on_hover_text(
+                        "3 salles à vider une à une (porte fermée jusqu'à la précédente vidée), arme de départ tirée au sort",
+                    )
+                    .clicked()
+                {
+                    actions.load_roguelike = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🗼  Tour d'ascension (platforming)")
+                    .on_hover_text(
+                        "Style différent : grimpe la tour en spirale, aucune arme ni combat, éviter le vide",
+                    )
+                    .clicked()
+                {
+                    actions.load_tower = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🏃  Course infinie (style Temple Run)")
+                    .on_hover_text(
+                        "Course automatique + changement de voie + saut : esquive les obstacles, ramasse les pièces",
+                    )
+                    .clicked()
+                {
+                    actions.load_temple_run = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🥊  Duel (façon Tekken/Smash Bros)")
+                    .on_hover_text(
+                        "Arène flottante, un rival à plusieurs coups avant de tomber, ring out possible (le vide sous l'arène est mortel)",
+                    )
+                    .clicked()
+                {
+                    actions.load_brawl = true;
+                    ui.close();
+                }
+            });
+            ui.menu_button("🌐  Modes multijoueur", |ui| {
+                if ui
+                    .button("🧟  Vagues (RoundObjective::Vagues)")
+                    .on_hover_text(
+                        "Manches successives jusqu'à la dernière vidée — mode par défaut des salons multijoueur",
+                    )
+                    .clicked()
+                {
+                    actions.load_ai_duel = true;
+                    ui.close();
+                }
+                if ui
+                    .button("❤  Survie (RoundObjective::Survie)")
+                    .on_hover_text(
+                        "Vagues qui recommencent en boucle une fois la dernière vidée : survivre le plus longtemps possible plutôt que gagner à la dernière manche",
+                    )
+                    .clicked()
+                {
+                    actions.load_survie = true;
+                    ui.close();
+                }
+                if ui
+                    .button("👑  Boss (RoundObjective::Boss)")
+                    .on_hover_text(
+                        "Arène fermée, un adversaire unique à PV massifs et contact doublé (RoundObjective::Boss)",
+                    )
+                    .clicked()
+                {
+                    actions.load_boss = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🛒  Escorte (RoundObjective::Escorte)")
+                    .on_hover_text(
+                        "Convoi lent à mener d'un bout à l'autre d'un couloir, ciblé en priorité par les créatures (RoundObjective::Escorte)",
+                    )
+                    .clicked()
+                {
+                    actions.load_escorte = true;
+                    ui.close();
+                }
+            });
+            ui.menu_button("🧰  Exemples techniques", |ui| {
+                if ui
+                    .button("🕹  Contrôleur (joystick + saut, sans script)")
+                    .on_hover_text(
+                        "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor",
+                    )
+                    .clicked()
+                {
+                    actions.load_controller = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🎮  Mobile (jouable)")
+                    .on_hover_text("Charge une scène : joystick + bouton Saut + personnage scripté")
+                    .clicked()
+                {
+                    actions.load_demo = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🎯  Gameplay/API (complète)")
+                    .on_hover_text("Joystick + gyroscope + saut + zone de danger + barre de vie + tap")
+                    .clicked()
+                {
+                    actions.load_gameplay = true;
+                    ui.close();
+                }
+                if ui
+                    .button("🧩  Composants (Controller/Audio/Combat)")
+                    .on_hover_text(
+                        "Référence minimale : un objet par composant optionnel, pas un niveau de jeu",
+                    )
+                    .clicked()
+                {
+                    actions.load_components_demo = true;
+                    ui.close();
+                }
+            });
         });
         ui.separator();
         if ui

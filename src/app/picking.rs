@@ -22,6 +22,20 @@ impl AppState {
         match event {
             InputEvent::PointerDown { pan } => {
                 self.press_cursor = self.last_cursor;
+                // Cycle de vie du toucher (obj.touch_started/touching/touch_ended, cf. script
+                // Lua) : indépendant du gizmo d'édition, évalué avant toute anticipation de
+                // glissé/pan/orbite — y compris en aperçu mobile (`device_preview`), où c'est
+                // justement le geste qu'on veut capturer.
+                if self.playing
+                    && !self.paused
+                    && !pan
+                    && let Some((cx, cy)) = self.last_cursor
+                    && let Some(i) = self.pick(cx, cy)
+                    && self.scene.objects[i].tappable
+                {
+                    self.touched_obj = Some(i);
+                    self.touch_started_obj = Some(i);
+                }
                 // Aperçu mobile : on joue au tactile, pas d'édition (ni gizmo, ni sélection).
                 if self.device_preview {
                     self.dragging = true;
@@ -107,6 +121,11 @@ impl AppState {
                 self.dragging = true;
             }
             InputEvent::PointerUp => {
+                // La presse démarrée sur cet objet (`touched_obj`) se termine ce frame,
+                // qu'elle se relâche dessus ou après un glissé (onTouchEnd).
+                if let Some(i) = self.touched_obj.take() {
+                    self.touch_ended_obj = Some(i);
+                }
                 if self.active_axis.take().is_some() {
                     self.drag_light = None;
                     self.press_cursor = None;
@@ -122,13 +141,19 @@ impl AppState {
                     (self.press_cursor, self.last_cursor),
                     (Some((px, py)), Some((cx, cy))) if (px - cx).hypot(py - cy) < 4.0
                 );
-                // En mode Play : un tap sur un objet « tactile » le notifie à son script.
+                // En mode Play : un tap sur un objet « tactile » le notifie à son script
+                // (obj.tapped) — mais un objet avec une action au tap sans script
+                // (`tap_action != None`, ex. « Changer de couleur ») doit réagir même sans
+                // cocher « Tactile (cliquable) », sinon le sélecteur de l'inspecteur choisit
+                // une action qui ne se déclenche jamais (seul `Hide` y échappait déjà via le
+                // ramassage par proximité de `Scene::collect_at`).
                 if self.playing
                     && !self.paused
                     && tap
                     && let Some((cx, cy)) = self.last_cursor
                     && let Some(i) = self.pick(cx, cy)
-                    && self.scene.objects[i].tappable
+                    && (self.scene.objects[i].tappable
+                        || self.scene.objects[i].tap_action != crate::scene::TapAction::None)
                 {
                     self.tapped_obj = Some(i);
                 }
@@ -812,6 +837,207 @@ mod tests {
             app.selection,
             Some(0),
             "tap centre en Pause doit sélectionner comme en édition"
+        );
+    }
+
+    /// `tap_action` (Changer de couleur / Grandir / Réapparaître) doit se déclencher
+    /// au clic même sans cocher « Tactile (cliquable) » — sinon le sélecteur de
+    /// l'inspecteur propose des actions qui ne se produisent jamais en Play
+    /// (cf. `TapAction::Hide`, seul à échapper à `tappable` via `Scene::collect_at`).
+    fn tap_object_without_tappable(app: &mut AppState) {
+        use std::time::{Duration, Instant};
+        app.playing = true;
+        app.paused = false;
+        if app.play_snapshot.is_empty() {
+            app.play_snapshot = app.scene.objects.clone();
+        }
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.handle_input(InputEvent::PointerUp);
+        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.advance_play();
+    }
+
+    #[test]
+    fn change_color_tap_action_fires_without_tappable_checked() {
+        use crate::scene::{MeshKind, SceneObject, TapAction};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            tap_action: TapAction::ChangeColor,
+            tappable: false,
+            color: [1.0, 1.0, 1.0],
+            ..Default::default()
+        });
+        let before = app.scene.objects[0].color;
+        tap_object_without_tappable(&mut app);
+        assert_ne!(
+            app.scene.objects[0].color, before,
+            "Changer de couleur doit s'appliquer au tap, tappable décoché ou non"
+        );
+    }
+
+    #[test]
+    fn grow_tap_action_fires_without_tappable_checked() {
+        use crate::scene::{MeshKind, SceneObject, TapAction};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            tap_action: TapAction::Grow,
+            tappable: false,
+            ..Default::default()
+        });
+        let before = app.scene.objects[0].transform.scale;
+        tap_object_without_tappable(&mut app);
+        assert!(
+            app.scene.objects[0].transform.scale.x > before.x,
+            "Grandir doit agrandir l'objet au tap, tappable décoché ou non (avant {before:?}, \
+             après {:?})",
+            app.scene.objects[0].transform.scale
+        );
+    }
+
+    #[test]
+    fn respawn_tap_action_fires_without_tappable_checked() {
+        use crate::scene::{MeshKind, SceneObject, TapAction, Transform};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            tap_action: TapAction::Respawn,
+            tappable: false,
+            ..Default::default()
+        });
+        // Snapshot d'entrée en Play pris à l'origine (cf. `tap_object_without_tappable`),
+        // puis l'objet dérive avant le tap — comme un objet poussé par la physique ou
+        // déplacé par un script — pour que « Réapparaître au départ » ait un effet
+        // observable distinct de « rien ne bouge ». `was_playing = true` évite que le
+        // prochain `advance_play` (dans le tap ci-dessous) ne détecte une (fausse)
+        // transition Edit → Play et n'écrase ce snapshot avec la position dérivée.
+        app.playing = true;
+        app.play_snapshot = app.scene.objects.clone();
+        app.was_playing = true;
+        app.playing = false;
+        let drifted = Vec3::new(3.0, 0.0, 0.0);
+        app.scene.objects[0].transform = Transform::from_pos(drifted);
+        // Vise la caméra sur la position dérivée pour que le rayon au centre de
+        // l'écran touche encore l'objet (le picking suit la caméra, pas l'inverse).
+        app.camera.target = drifted;
+        tap_object_without_tappable(&mut app);
+        assert!(
+            app.scene.objects[0].transform.position.length() < 1e-4,
+            "Réapparaître au départ doit ramener l'objet à sa position de spawn (position \
+             obtenue : {:?})",
+            app.scene.objects[0].transform.position
+        );
+    }
+
+    /// `obj.touch_started` : un `PointerDown` seul (sans `PointerUp`) sur un objet
+    /// tactile doit suffire à faire réagir son script dès le prochain
+    /// `advance_play`, sans attendre la fin de la presse.
+    #[test]
+    fn obj_touch_started_reacts_to_a_pointer_down_alone() {
+        use crate::scene::{MeshKind, SceneObject};
+        use std::time::{Duration, Instant};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            tappable: true,
+            script: "if obj.touch_started then obj.x = 1 end".into(),
+            ..Default::default()
+        });
+        app.playing = true;
+        app.paused = false;
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(
+            app.scene.objects[0].transform.position.x, 1.0,
+            "obj.touch_started doit être vrai dès le premier advance_play qui suit \
+             le PointerDown, même sans PointerUp"
+        );
+    }
+
+    /// `obj.touching` : reste vrai tant que la presse est maintenue, sur plusieurs
+    /// `advance_play` d'affilée — pas juste au premier tick.
+    #[test]
+    fn obj_touching_stays_true_across_several_frames_while_the_press_is_held() {
+        use crate::scene::{MeshKind, SceneObject};
+        use std::time::{Duration, Instant};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            tappable: true,
+            script: "if obj.touching then obj.y = 2 end".into(),
+            ..Default::default()
+        });
+        app.playing = true;
+        app.paused = false;
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+
+        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(app.scene.objects[0].transform.position.y, 2.0);
+
+        // Toujours pressé (pas de PointerUp) : `touching` doit rester vrai.
+        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(
+            app.scene.objects[0].transform.position.y, 2.0,
+            "obj.touching doit rester vrai sur plusieurs frames tant que la presse dure"
+        );
+    }
+
+    /// `obj.touch_ended` : ne doit devenir vrai qu'au `PointerUp`, pas avant.
+    #[test]
+    fn obj_touch_ended_only_fires_after_pointer_up() {
+        use crate::scene::{MeshKind, SceneObject};
+        use std::time::{Duration, Instant};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            tappable: true,
+            script: "if obj.touch_ended then obj.z = 3 end".into(),
+            ..Default::default()
+        });
+        app.playing = true;
+        app.paused = false;
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerDown { pan: false });
+
+        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert_eq!(
+            app.scene.objects[0].transform.position.z, 0.0,
+            "presse encore en cours : touch_ended ne doit pas s'être déclenché"
+        );
+
+        app.handle_input(InputEvent::PointerUp);
+        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.advance_play();
+        assert!(
+            (app.scene.objects[0].transform.position.z - 3.0).abs() < 1e-4,
+            "le relâché doit déclencher touch_ended au tick qui suit (z={})",
+            app.scene.objects[0].transform.position.z
         );
     }
 }

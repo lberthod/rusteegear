@@ -240,6 +240,25 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Charge la démo « Survie » (mode `RoundObjective::Survie`) : réutilise la scène
+    /// `Scene::zombies_demo` (mêmes vagues de monstres) mais avec `objective` posé sur
+    /// `Survie` pour que `AppState::update_survie` (cf. `app::combat`) fasse recommencer
+    /// les vagues en boucle une fois la dernière vidée, plutôt que de s'arrêter à la
+    /// victoire — but : survivre `SURVIE_DURATION_SECS` plutôt que vider une dernière manche.
+    pub fn load_survie_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::zombies_demo();
+        self.objective = crate::app::multiplayer::RoundObjective::Survie;
+        self.imported_dirty = true;
+        self.hud_health = None;
+        self.damage_flash = 0.0;
+        self.camera_shake = 0.0;
+        self.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
     /// Charge la scène **exemple** des composants optionnels (cf. `Scene::components_demo`) :
     /// Controller/AudioSource/Combat, un seul chacun, pour référence rapide (pas un niveau).
     pub fn load_components_demo(&mut self) {

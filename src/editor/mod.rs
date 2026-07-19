@@ -459,6 +459,9 @@ pub struct UiActions {
     pub load_boss: bool,
     /// « Démo Escorte » (mode `RoundObjective::Escorte`) : convoi à mener à destination.
     pub load_escorte: bool,
+    /// « Démo Survie » (mode `RoundObjective::Survie`) : vagues qui recommencent en
+    /// boucle une fois la dernière vidée, survivre le plus longtemps possible.
+    pub load_survie: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// Inventaire d'armes (cf. `weapon_inventory_panel`) : arme choisie par le
@@ -2100,28 +2103,20 @@ fn build_ui(
                                 );
                             });
                         }
+                        // `tap_action`/`TapAction` (actions intégrées sans script — Hide,
+                        // ChangeColor…) et les indicateurs live du toucher ont été retirés de
+                        // l'Inspecteur à la demande de l'utilisateur (19 juillet 2026) : tout
+                        // se code en Lua désormais, plus de ComboBox ici. Le champ `tap_action`
+                        // reste côté moteur pour les scènes déjà déployées qui l'utilisent (ex.
+                        // `examples/first_game`, « Pièce 1/2/3 » en Hide) — juste plus éditable
+                        // depuis ce panneau.
                         ui.checkbox(&mut obj.tappable, "👆 Tactile (cliquable)")
                             .on_hover_text(
-                                "En Play, un tap dessus expose obj.tapped au script (ex. couleur)",
+                                "En Play, un tap dessus expose obj.tapped/obj.touch_started/ \
+                                 obj.touching/obj.touch_ended au script (panneau Script ci-dessous)",
                             );
-                        if obj.tappable {
-                            ui.horizontal(|ui| {
-                                ui.label("Action au tap");
-                                use crate::scene::TapAction as Ta;
-                                egui::ComboBox::from_id_salt(("tap_action", i))
-                                    .selected_text(obj.tap_action.label())
-                                    .show_ui(ui, |ui| {
-                                        for a in Ta::ALL {
-                                            ui.selectable_value(&mut obj.tap_action, a, a.label());
-                                        }
-                                    });
-                            })
-                            .response
-                            .on_hover_text("Comportement sans script quand on tape l'objet");
-                        }
                         // Objet d'inventaire (cf. `ItemPickup`) : la case pose/retire le
-                        // composant, la sorte et la quantité ne s'affichent que posé —
-                        // même esprit que « Action au tap » juste au-dessus.
+                        // composant, la sorte et la quantité ne s'affichent que posé.
                         let mut is_item = obj.item_pickup.is_some();
                         ui.checkbox(&mut is_item, "🧺 Objet à ramasser")
                             .on_hover_text(
@@ -2361,7 +2356,9 @@ fn build_ui(
                         ui.collapsing("Script (Lua)", |ui| {
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
-                                 obj.r/g/b, obj.tapped, obj.triggered, dt, time, input.jx/jy, input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1)",
+                                 obj.r/g/b, obj.tapped, obj.touch_started, obj.touching, \
+                                 obj.touch_ended, obj.triggered, dt, time, input.jx/jy, \
+                                 input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1)",
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut obj.script)
