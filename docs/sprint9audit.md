@@ -1,0 +1,370 @@
+# RusteeGear — Sprint 9 : découper les fichiers monolithes (sous-phases détaillées)
+
+> Développe le brief Sprint 9 (« ramener chaque module à une seule raison de changer, par
+> extraction mécanique, sans réécriture ni changement de comportement ») en sous-phases par
+> fichier et par sous-fichier, avec lignes réelles relevées le 2026-07-19.
+> Convention identique à [sprint10audit.md](sprint10audit.md) / [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md) :
+> un sprint ≈ 1 à 3 jours, **Objectif · Tâches · Fichiers · Livrable vérifiable · Risques**,
+> **un commit par extraction**, on ne démarre une sous-phase que si la précédente est verte.
+
+---
+
+## État des lieux mesuré (2026-07-19)
+
+| Fichier | Lignes (brief) | Lignes (mesurées) | Delta |
+|---|---|---|---|
+| `src/scene/demos.rs` | 10 820 | 10 820 | = |
+| `src/app/mod.rs` | 4 393 | 4 415 | +22 |
+| `src/scene/mod.rs` | 4 016 | 4 016 | = |
+| `src/gfx/renderer.rs` | 3 432 | 3 526 | +94 |
+| `src/app/network_client.rs` | 3 228 | 3 228 | = |
+| `src/app/simulation.rs` | 3 050 | 3 050 | = |
+
+Léger delta sur `app/mod.rs` et `renderer.rs` (travail récent), rien qui change le diagnostic.
+
+## Diagnostic clé : la moitié du problème, c'est `mod tests`
+
+Avant de toucher à la logique, un relevé structurel (`grep` des `impl`/`fn`/`mod tests` de
+premier niveau) montre que **4 des 6 fichiers sont majoritairement des tests inline** :
+
+| Fichier | Ligne où commence `mod tests` | Lignes de tests | % du fichier |
+|---|---|---|---|
+| `app/mod.rs` | 1653 | ~2 762 | **63 %** |
+| `scene/mod.rs` | 1432 | ~2 584 | **64 %** |
+| `app/network_client.rs` | 1560 | ~1 668 | **52 %** |
+| `app/simulation.rs` | 1499 | ~1 551 | **51 %** |
+| `gfx/renderer.rs` | 3129 | ~397 | 11 % |
+| `scene/demos.rs` | 9867 | ~953 | 9 % |
+
+**Conséquence pour l'ordonnancement du sprint** : sortir `mod tests` dans un fichier frère
+(`#[path = "..."] mod tests;`) est l'extraction la **plus mécanique et la moins risquée
+possible** (aucune ligne de logique déplacée, juste le bloc de tests tel quel), et elle suffit
+à elle seule à ramener **4 fichiers sur 6 sous la barre des ~1 500 lignes visée** :
+
+| Fichier | Lignes hors tests | Sous ~1 500 après ce seul déplacement ? |
+|---|---|---|
+| `scene/mod.rs` | ~1 431 | ✅ oui, directement |
+| `app/simulation.rs` | ~1 498 | ✅ oui, directement |
+| `app/network_client.rs` | ~1 559 | ≈ oui (léger dépassement) |
+| `app/mod.rs` | ~1 652 | ≈ oui (léger dépassement) |
+| `gfx/renderer.rs` | ~3 129 | ❌ non, nécessite le découpage 9.2 |
+| `scene/demos.rs` | ~9 867 | ❌ non, nécessite le découpage 9.1 |
+
+→ On ajoute donc une **phase 9.0** (nouvelle, en tête) qui traite ce quick win sur les 6
+fichiers avant d'attaquer le travail plus fin sur `demos.rs` et `renderer.rs`, seuls fichiers
+qui exigent un vrai découpage de logique.
+
+---
+
+## Ordre de traitement recommandé
+
+```
+9.0  Extraction de mod tests (6 fichiers, 6 commits indépendants) ─ prérequis, quasi gratuit
+  │
+  ├─► 9.1  scene/demos.rs   (10 820 → dossier scene/demos/)   ─ le plus gros, le plus mécanique
+  ├─► 9.2  gfx/renderer.rs  (3 526 → dossier gfx/renderer/)   ─ attention piège shaders/goldens
+  ├─► 9.3  app/mod.rs       (trim optionnel, ~1 500 déjà après 9.0)
+  ├─► 9.4  scene/mod.rs     (terminé dès 9.0, rien d'obligatoire en plus)
+  ├─► 9.5  app/network_client.rs (trim optionnel, ~1 500 déjà après 9.0)
+  └─► 9.6  app/simulation.rs     (terminé dès 9.0, rien d'obligatoire en plus)
+
+9.7  Garde-fou final (cargo test --features net_tests, goldens, relecture git log)
+```
+
+9.1 et 9.2 n'ont aucune dépendance l'un envers l'autre et peuvent être menés en parallèle
+(sessions différentes) une fois 9.0 vert. 9.3 à 9.6 sont indépendants entre eux et de 9.1/9.2.
+
+---
+
+## 9.0 — Extraction de `mod tests` (les 6 fichiers)
+
+**Objectif** : sortir chaque bloc `mod tests { ... }` inline dans un fichier frère, sans toucher
+une seule ligne de test, via l'attribut `#[path]` (pas besoin de convertir le fichier en dossier
+`mod.rs` pour ça — Rust autorise un chemin de module arbitraire).
+
+**Technique** (identique pour les 6, un commit par fichier) :
+1. Couper le bloc `mod tests { ... }` (avec son `#[cfg(test)]`) du fichier source, coller tel
+   quel dans `src/<chemin>_tests.rs` (ex. `src/app/network_client_tests.rs`), en retirant
+   l'enveloppe `mod tests { }` externe (le fichier devient le corps du module).
+2. Remplacer dans le fichier source par :
+   `#[cfg(test)]\n#[path = "network_client_tests.rs"]\nmod tests;`
+3. `cargo test --lib <module>::tests` pour vérifier que les tests sont toujours découverts et
+   passent à l'identique.
+
+| Sous-phase | Fichier source | Nouveau fichier | Lignes déplacées |
+|---|---|---|---|
+| 9.0.1 | `src/scene/mod.rs` | `src/scene/mod_tests.rs` | ~2 584 |
+| 9.0.2 | `src/app/mod.rs` | `src/app/mod_tests.rs` | ~2 762 |
+| 9.0.3 | `src/app/network_client.rs` | `src/app/network_client_tests.rs` | ~1 668 |
+| 9.0.4 | `src/app/simulation.rs` | `src/app/simulation_tests.rs` | ~1 551 |
+| 9.0.5 | `src/gfx/renderer.rs` | `src/gfx/renderer_tests.rs` | ~397 |
+| 9.0.6 | `src/scene/demos.rs` | `src/scene/demos_tests.rs` | ~953 |
+
+> 9.0.5 et 9.0.6 sont refaits par la suite en 9.1/9.2 (le fichier devient un dossier, donc le
+> fichier de tests migre encore une fois vers `.../tests.rs`) — mais les faire dès 9.0 donne un
+> point de repère vert immédiat et découple le risque « tests » du risque « re-découpage du
+> dossier ».
+
+**Livrable vérifiable** : `cargo test` inchangé (même nombre de tests, même résultat),
+`wc -l` sur chaque fichier source montre la baisse attendue.
+**Risques** : quasi nul — copier-coller mécanique, aucune ligne de logique de production
+touchée.
+
+---
+
+## 9.1 — `scene/demos.rs` (10 820 lignes → `scene/demos/`)
+
+Relevé structurel de `impl Scene { ... }` (ligne 934 à 9867, ~8 933 lignes = 82 % du fichier) :
+
+| Méthode | Lignes | Taille |
+|---|---|---|
+| `controller_demo` / `controller_level` | 937 – 1394 | ~458 |
+| `tower_demo` | 1395 – 1541 | ~147 |
+| `temple_run_demo` | 1542 – 1725 | ~184 |
+| `components_demo` | 1726 – 1807 | ~82 |
+| `zombies_demo` | 1808 – 2042 | ~235 |
+| **`mmorpg_demo`** | 2043 – 6454 | **~4 412** ⚠️ le vrai monstre |
+| **`hameau_gdd_demo`** | 6455 – 8969 | **~2 515** ⚠️ deuxième monstre |
+| `roguelike_demo` | 8970 – 9289 | ~320 |
+| `brawl_demo` | 9290 – 9412 | ~123 |
+| `boss_demo` | 9413 – 9528 | ~116 |
+| `escorte_demo` | 9529 – 9637 | ~109 |
+| `gameplay_demo` / `embedded_player` / `demo` / `mobile_demo` | 9638 – 9866 | ~229 |
+
+Plus, avant `impl Scene` : les scripts de créatures (`creature_bite_script` … `creature_turret_script`,
+lignes 258–906, ~650 lignes) et `import_single_model` (907–933).
+
+### 9.1.1 — Scaffolding du dossier
+
+**Tâches** : créer `src/scene/demos/mod.rs` qui déclare les sous-modules et **réexporte tout à
+l'identique** (`pub use` des mêmes symboles publics qu'aujourd'hui), pour ne casser aucun
+`use crate::scene::demos::...` existant. Aucune ligne de logique déplacée à cette étape — juste
+la coquille + un premier sous-module trivial pour valider le pattern.
+**Fichiers** : `src/scene/demos/mod.rs` (nouveau), `src/scene/demos.rs` supprimé (contenu migré
+progressivement dans les sous-phases suivantes).
+**Livrable vérifiable** : `cargo build` toujours vert, chemins d'import inchangés.
+**Risques** : faible — erreurs de visibilité (`pub(crate)` vs `pub`) à surveiller si des items
+étaient `pub(super)` implicitement.
+
+### 9.1.2 — Scripts de créatures et import
+
+**Tâches** : déplacer `creature_bite_script` … `creature_turret_script` + `import_single_model`
+(258–933, ~675 lignes) vers `demos/creature_scripts.rs`.
+**Livrable vérifiable** : `cargo test` (tests qui exercent ces scripts, ex. patrouille/attaque
+de créature) inchangé.
+
+### 9.1.3 — Démos courtes et indépendantes
+
+**Tâches** : une extraction par démo, chacune dans son propre fichier, chacune un commit :
+
+| Sous-phase | Fichier cible | Contenu |
+|---|---|---|
+| 9.1.3.a | `demos/controller.rs` | `controller_demo`, `controller_level` |
+| 9.1.3.b | `demos/tower.rs` | `tower_demo` |
+| 9.1.3.c | `demos/temple_run.rs` | `temple_run_demo` |
+| 9.1.3.d | `demos/components.rs` | `components_demo` |
+| 9.1.3.e | `demos/zombies.rs` | `zombies_demo` |
+| 9.1.3.f | `demos/roguelike.rs` | `roguelike_demo` |
+| 9.1.3.g | `demos/brawl.rs` | `brawl_demo` |
+| 9.1.3.h | `demos/boss.rs` | `boss_demo` |
+| 9.1.3.i | `demos/escorte.rs` | `escorte_demo` |
+| 9.1.3.j | `demos/misc.rs` | `gameplay_demo`, `embedded_player`, `demo`, `mobile_demo` |
+
+Chacune reste un `impl Scene { pub fn xxx_demo() -> Self { ... } }` complet et autonome dans son
+fichier — Rust autorise plusieurs blocs `impl Scene` répartis sur plusieurs fichiers du même
+crate, donc c'est un copier-coller pur, sans changement de signature ni de corps.
+**Livrable vérifiable** : chaque commit compile seul ; `cargo test` vert après chaque commit.
+**Risques** : faible, sauf si une démo référence une fonction locale (`fn` imbriquée) définie
+dans une autre démo — vérifier au `cargo build` qui signalera l'import manquant immédiatement.
+
+### 9.1.4 — `mmorpg_demo` (~4 412 lignes) : lecture préalable
+
+**Tâches** : avant de couper, lire la fonction en entier pour repérer les coupures sûres — il
+n'y a **aucun commentaire de section** dans le code actuel (vérifié), donc les frontières
+thématiques (terrain / village / créatures / vagues) doivent être identifiées à la lecture,
+pas devinées. Repérer aussi l'état partagé entre « sections » : `rng`, compteurs d'index, trois
+fonctions locales `scatter` (l. 5209), `scatter_clustered` (l. 5271), `scatter_each` (l. 5858),
+qui sont probablement utilisées par plusieurs sections (décor, forêt, village) et doivent devenir
+des fonctions partagées plutôt que dupliquées.
+**Livrable** : note de découpage (peut être un commentaire de PR, pas un fichier permanent)
+listant les plages de lignes retenues et les dépendances croisées trouvées.
+**Risques** : c'est l'étape qui protège tout le reste — sauter la lecture et couper à l'aveugle
+est le principal risque de régression comportementale de tout le sprint.
+
+### 9.1.5 — `mmorpg_demo` : découpage mécanique
+
+**Tâches**, une fois les coupures validées en 9.1.4, créer `demos/mmorpg/` :
+- `mmorpg/mod.rs` — `pub fn mmorpg_demo() -> Scene` orchestrateur : appelle les fonctions de
+  construction dans le même ordre qu'aujourd'hui et assemble le `Vec<SceneObject>` final à
+  l'identique (le pattern attendu est `objects.extend(build_terrain()); objects.extend(build_village()); ...` —
+  **l'ordre d'ajout dans le vecteur doit rester strictement identique**, certains tests/golden
+  peuvent dépendre d'un ordre d'itération stable).
+- `mmorpg/scatter.rs` — les 3 fonctions `scatter`/`scatter_clustered`/`scatter_each`, rendues
+  `pub(super)`.
+- `mmorpg/terrain.rs`, `mmorpg/village.rs`, `mmorpg/creatures.rs`, `mmorpg/waves.rs`,
+  `mmorpg/decor.rs` (ou tout autre découpage validé en 9.1.4) — chacune une fonction
+  `pub(super) fn build_xxx(...) -> Vec<SceneObject>` (ou `fn build_xxx(objects: &mut Vec<SceneObject>, ...)`
+  si l'accumulation en place est plus fidèle au code actuel).
+- Un commit par fichier extrait, dans l'ordre où les sections apparaissent dans la fonction
+  d'origine (le premier commit extrait la première section, etc.) — ça garde chaque commit
+  petit et relisible individuellement.
+**Livrable vérifiable** : après chaque commit, `cargo test` sur les tests `mmorpg_demo_*`
+existants (ils sont nombreux, voir 9.1.7) doit rester vert à l'identique.
+**Risques** : le risque principal identifié en 9.1.4 (état partagé entre sections) ; sinon,
+risque de sur-découpage — ne pas descendre sous des fichiers de ~200-300 lignes juste pour la
+forme, viser des fichiers thématiquement cohérents.
+
+### 9.1.6 — `hameau_gdd_demo` (~2 515 lignes) : même traitement
+
+**Tâches** : même méthode qu'en 9.1.4/9.1.5 — lecture préalable pour repérer les coupures,
+puis dossier `demos/hameau_gdd/` (`mod.rs` orchestrateur + fichiers thématiques, ex. fort,
+village, créatures, décor). Le commentaire de tête de la fonction (l. 4376-4412) indique déjà
+que les créatures sont « reprises telles quelles de `mmorpg_demo()` » — vérifier si un partage
+de code avec `demos/mmorpg/creatures.rs` est possible sans changer le comportement, sinon
+dupliquer sciemment plutôt que factoriser à ce stade (une factorisation est un changement de
+structure, pas une extraction mécanique — hors scope du sprint 9).
+**Risques** : identiques à 9.1.5, en plus petit.
+
+### 9.1.7 — Tests
+
+**Tâches** : les tests `mmorpg_demo_*`, `mmorpg_map_*`, `mmorpg_water_*`, etc. (l. 9867-10820,
+déjà extraits en `demos_tests.rs` par 9.0.6) doivent migrer vers `demos/tests.rs`. Vu qu'ils
+testent surtout `mmorpg_demo()` et `hameau_gdd_demo()` par leur sortie publique (`Scene`), ils
+peuvent rester groupés dans un seul fichier de tests plutôt que d'être éclatés par sous-module —
+ce sont des tests de bout en bout de chaque démo, pas des tests unitaires de `build_terrain`.
+**Livrable vérifiable** : `cargo test` — même liste de tests, même résultat.
+
+---
+
+## 9.2 — `gfx/renderer.rs` (3 526 lignes → `gfx/renderer/`)
+
+Relevé structurel de `impl Renderer { ... }` (ligne 421 à 3129, ~2 708 lignes) :
+
+| Groupe thématique | Méthodes | Lignes | Taille |
+|---|---|---|---|
+| **Ressources** | `new(...)` (constructeur), `resize`, `ensure_debug_capacity` | 421 – 746 | ~326 |
+| **Ombres / skinning** | `write_joint_matrices`, `prepare_skinned_draws`, `skinned_dropped_count`, `draw_skinned_objects`, `draw_skinned_shadows`, `render_skinned_test` | 747 – 1086 | ~340 |
+| **UI** | `on_ui_event`, `settings`, `toggle_multiplayer_window`, `toggle_play_hud`, `toggle_player_settings`, `toggle_player_map` | 1087 – 1131 | ~45 |
+| **Synchro scène** | `sync_objects`, `resolve_mesh`, `sync_imported`, `sync_textures`, `write_uniforms` | 1132 – 1439 | ~308 |
+| **Post-process** | `render_bloom`, `tonemap`, `read_gpu_pass_timings`, `gpu_profiler_info` | 1440 – 1652 | ~213 |
+| **Frame** ⚠️ | `render` (fonction unique) | 1653 – 2747 | **~1 095** |
+| **Headless / capture** | `render_scene_headless`, `screenshot_png`, `finish_and_read_rgba` | 2748 – 3128 | ~381 |
+
+Plus les définitions de types en tête de fichier (`GizmoVertex`, `PointLightU`, `BloomUniform`,
+`InstanceDraw`, `GpuProfiler`, struct `Renderer`, lignes 34–420, ~390 lignes).
+
+> **Piège n°3 du guide** (goldens sensibles aux changements de shader) : ce sprint ne touche
+> **aucun** shader ni ordre de passes, seulement l'emplacement du code Rust. Si un test golden
+> ou visuel change après une extraction 9.2, c'est un signal d'erreur (comportement modifié par
+> inadvertance), pas une mise à jour de golden à accepter.
+
+### 9.2.1 — Types
+
+**Tâches** : déplacer `GizmoVertex`, `PointLightU`, `BloomUniform`, `InstanceDraw`,
+`GpuProfiler` + struct `Renderer` (34–420) vers `renderer/types.rs`.
+**Fichiers** : `src/gfx/renderer/types.rs`.
+
+### 9.2.2 — Ressources (init/resize)
+
+**Tâches** : extraire `new`, `resize`, `ensure_debug_capacity` vers `renderer/resources.rs`.
+
+### 9.2.3 — Ombres / skinning
+
+**Tâches** : extraire le groupe skinning/ombres (747–1086) vers `renderer/shadows.rs`.
+
+### 9.2.4 — Synchro scène
+
+**Tâches** : extraire `sync_objects`, `resolve_mesh`, `sync_imported`, `sync_textures`,
+`write_uniforms` (1132–1439) vers `renderer/sync.rs`.
+
+### 9.2.5 — Post-process
+
+**Tâches** : extraire `render_bloom`, `tonemap`, `read_gpu_pass_timings`, `gpu_profiler_info`
+(1440–1652) vers `renderer/post_process.rs`.
+
+### 9.2.6 — UI (petit, à faire au fil de l'eau)
+
+**Tâches** : extraire les 6 méthodes UI (1087–1131, ~45 lignes) vers `renderer/ui.rs` — assez
+petit pour être fait dans le même commit que 9.2.4 ou 9.2.5 si ça simplifie l'ordre.
+
+### 9.2.7 — Frame (`render`, ~1 095 lignes)
+
+**Tâches** : déplacer `render()` telle quelle vers `renderer/frame.rs`, **sans la sous-découper**
+en sous-fonctions. C'est délibéré : `render()` orchestre les passes dans un ordre précis
+(shadow → main → bloom → tonemap → UI) et la re-router en plusieurs méthodes est un changement
+de structure de contrôle, pas une extraction mécanique de fichier — donc hors scope du sprint 9,
+et exactement le genre de changement qui peut faire bouger un golden sans bug réel. À noter
+comme candidat pour un sprint dédié si `frame.rs` reste jugée trop grosse plus tard.
+**Livrable vérifiable** : diff du golden de rendu = zéro pixel changé.
+
+### 9.2.8 — Headless / capture
+
+**Tâches** : extraire `render_scene_headless`, `screenshot_png`, `finish_and_read_rgba`
+(2748–3128) vers `renderer/headless.rs`.
+
+### 9.2.9 — Tests
+
+**Tâches** : les tests déjà sortis en 9.0.5 (`renderer_tests.rs`) migrent vers
+`renderer/tests.rs`.
+
+**Livrable vérifiable global 9.2** : `cargo test`, et une vérification visuelle des goldens
+(`UPDATE_GOLDEN` **interdit** pour ce sprint — tout diff de golden est un bug à corriger, pas à
+accepter).
+
+---
+
+## 9.3 — `app/mod.rs` (trim optionnel)
+
+Après 9.0.2 (tests sortis), il reste ~1 652 lignes : struct `AppState` (184–795, ~611 lignes de
+champs), `GizmoMode`/`DebugView` (796–873), `impl AppState` (874–1511, ~638 lignes de méthodes),
+puis `MinimapPoint`/`MinimapDecorKind`/`MinimapDecor`/`MinimapCreature`/`MinimapData` +
+`classify_decor`/`thin_decor` (1512–1639, ~128 lignes).
+
+**Tâches (optionnel, mais peu coûteux)** : extraire le bloc minimap (1512–1639) vers
+`src/app/minimap.rs` — thématiquement distinct (données d'affichage de la mini-carte) et
+suffisant pour repasser sous ~1 500 lignes.
+**Livrable vérifiable** : `cargo test`.
+**Risques** : nul — bloc déjà autonome (pas de dépendance vers le reste du fichier au-delà des
+imports).
+
+## 9.4 — `scene/mod.rs`
+
+Après 9.0.1 (tests sortis), il reste ~1 431 lignes de modèle de données pur (structs/enums avec
+leurs `derive`/`Default`/valeurs par défaut serde) — **déjà sous la cible de ~1 500 lignes**.
+**Tâches** : aucune obligatoire. Optionnel si on veut regrouper thématiquement (types de
+transform/mesh vs types de gameplay/combat vs conteneur `Scene`/`Sky`/`Light`) — à ne faire que
+si un besoin de lisibilité se fait sentir plus tard, pas requis pour clore le sprint.
+
+## 9.5 — `app/network_client.rs` (trim optionnel)
+
+Après 9.0.3 (tests sortis), il reste ~1 559 lignes : structs `RemotePlayer`/`NetConnState`/
+`ChatLine`/`LeaderboardLine` (42–206, ~165 lignes) + plusieurs blocs `impl AppState` (207–1559)
+pour la connexion, le protocole, le chat.
+**Tâches (optionnel)** : extraire les structs de types (42–206) vers `network_client/types.rs`
+pour repasser franchement sous ~1 500 lignes. Pas de découpage supplémentaire nécessaire.
+
+## 9.6 — `app/simulation.rs`
+
+Après 9.0.4 (tests sortis), il reste ~1 498 lignes — **déjà sous la cible**. Aucune tâche
+obligatoire.
+
+---
+
+## 9.7 — Garde-fou final
+
+**Tâches** :
+1. Après chaque extraction individuelle (toutes sous-phases ci-dessus) : vérification standard
+   du guide (`cargo build`, `cargo test` du module touché, `cargo clippy`).
+2. Une fois 9.0 à 9.6 terminées : `cargo test --features net_tests` complet, une seule fois.
+3. Vérification golden/visuelle sur `gfx/renderer.rs` (9.2) — zéro diff attendu.
+4. Relecture de `git log` : chaque extraction doit apparaître comme un commit atomique,
+   relisible indépendamment (diff = déplacement de lignes, pas de réécriture).
+
+**Terminé quand** :
+- Aucun fichier de `src/` ne dépasse ~4 000 lignes, cible ~1 500 pour les nouveaux modules issus
+  du découpage (exception assumée : `renderer/frame.rs` ~1 095 lignes en une seule fonction,
+  volontairement non re-découpée — cf. 9.2.7).
+- La suite complète passe (`cargo test --features net_tests`).
+- Zéro diff de comportement : aucun golden, aucun test visuel, aucun test réseau n'a changé de
+  résultat.
+- `git log` montre des extractions atomiques relisibles une par une, dans l'ordre 9.0 → 9.6.
