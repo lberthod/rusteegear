@@ -239,16 +239,19 @@ modifiable par une seule personne.
 **🎮 Mini-jeu jouable — _sans écrire une ligne de script_**
 - **Personnage pilotable** (Input Receiver) : corps dynamique piloté au **joystick**, **collisions** avec le décor, rotations bloquées.
 - **Saut** sur bouton tactile (gravité, retombe au sol), **vitesse** et **hauteur** réglables ; **caméra qui suit**.
-- **Actions au tap** (sans Lua) : changer de couleur, **ramasser**, grandir, réapparaître au départ.
-- **Boucle de jeu complète** : **collectibles** (gemmes tournantes) avec **score ⭐**, **chrono ⏱**, **« 🎉 Gagné en X.Xs ! »** ; **zones mortelles 💀** → **« Perdu ! »**.
+- **Boucle de jeu complète** : **collectibles** (gemmes tournantes) avec **score ⭐**, **chrono ⏱**, **« 🎉 Gagné en X.Xs ! »** ; contact avec le joueur → script Lua (`obj.triggered`), ex. `damage(999)` pour une zone mortelle.
 - Démo prête à jouer (`Fichier → Démo contrôleur`) + scène **JSON pré-générée** ([assets/examples/demo_controleur.json](assets/examples/demo_controleur.json)).
 
-**API de script Lua** (`mlua`, chunks compilés en cache)
+**API de script Lua** (`mlua` natif + backend `rilua` sur wasm32, chunks compilés en cache)
 ```lua
 -- Lecture/écriture par objet :
 obj.x/y/z   obj.rx/ry/rz   obj.sx/sy/sz   obj.r/g/b
-obj.tapped      -- touché au doigt cette frame
-obj.triggered   -- le joueur est entré dans la zone (trigger)
+obj.tapped         -- clic/tap net (press+release sans glisser) sur l'objet, cette frame
+obj.touch_started  -- la presse vient de commencer sur cet objet, cette frame
+obj.touching       -- presse maintenue sur cet objet (du down au up, même si le curseur bouge)
+obj.touch_ended    -- la presse démarrée sur cet objet vient de se terminer, cette frame
+obj.triggered      -- le joueur est entré en contact avec la zone (case « Zone de déclenchement »)
+obj.exited         -- le joueur vient de quitter le contact
 obj.anim = "run"  -- change le clip joué (objets skinnés), fondu enchaîné automatique
 -- Globales :
 dt, time
@@ -256,7 +259,16 @@ input.jx, input.jy, input.btn.<nom>   -- joystick + boutons tactiles
 tilt.x, tilt.y                         -- gyroscope (flèches sur desktop)
 vibrate(ms)                            -- retour haptique
 set_health(0..1)                       -- barre de vie du HUD
+damage(v)                              -- vie -= v (vie à 0 = défaite)
+add_item(kind, n)                      -- ajoute au sac du joueur ("potion"/"baie"/"cle"/"gemme")
+spawn(prefab_ref, x, y, z)             -- instancie un prefab enregistré à une position
 ```
+`obj.tapped`/`touch_started`/`touching`/`touch_ended` nécessitent la case « 👆 Tactile
+(cliquable) » cochée ; `obj.triggered`/`obj.exited` nécessitent « 🎯 Zone de
+déclenchement ». Les anciennes actions sans script (« Action au tap »,
+« Zone mortelle », « Objet à ramasser ») ont été retirées de l'Inspecteur au
+profit de ces variables — `damage(999)` ou `obj:destroy()` sur `obj.triggered`
+les remplacent directement.
 
 **Mobile**
 - **Aperçu device** (cadre téléphone, portrait/paysage) façon simulateur tactile.
@@ -276,7 +288,11 @@ set_health(0..1)                       -- barre de vie du HUD
 
 **Outils** — Console (logs), Profiler FPS + mémoire + **GPU** (timestamp queries par passe, draw calls), **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système, **journal de crash** (consultation/copie volontaire, aucun envoi automatique), **hot-reload** des assets retouchés en cours d'édition, **snap** position/rotation au gizmo (Ctrl pour inverser ponctuellement), **pont de pilotage externe** (`--pilot` : console/Lua/captures par TCP local, cf. [docs/PILOT.md](docs/PILOT.md)).
 
-**Démos** — `Fichier → Démo mobile`, `Démo gameplay` (toute l'API scriptée) et **`Démo contrôleur`** (joueur jouable au joystick + saut + collisions, **sans script**).
+**Démos** — `Fichier → 🎬 Démos`, regroupées en 4 sous-menus : **⭐ Commencer**
+(Premier jeu, tutoriel reproductible dans `examples/first_game/` ; Démo
+MMORPG), **🎮 Jeux jouables** (Zombies, Donjon, Tour, Course infinie, Duel),
+**🌐 Modes multijoueur** (Vagues, Survie, Boss, Escorte) et **🧰 Exemples
+techniques** (Contrôleur, Mobile, Gameplay/API, Composants).
 
 ---
 
