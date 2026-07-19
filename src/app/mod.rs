@@ -183,9 +183,13 @@ impl PlayerInput {
 pub struct AppState {
     pub scene: Scene,
     /// Projet ouvert (Sprint 3, manifeste `project.rusteegear.json`), posé par
-    /// `open_project`/`open_project_blocking`. `None` en mode « scène seule »
+    /// `open_project`/`create_project`. `None` en mode « scène seule »
     /// (comportement historique, toujours supporté) — cf. `crate::project`.
     pub current_project: Option<crate::project::ProjectRoot>,
+    /// Confirmation de fermeture de projet en attente (Sprint 4) : même esprit
+    /// que `confirm_quit`, mais pour « Fermer le projet » plutôt que quitter
+    /// l'application — posé par `request_close_project` si `scene_dirty`.
+    pub confirm_close_project: bool,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1087,6 +1091,7 @@ impl AppState {
             ai_scene_rx,
             ai_scene_replace: true,
             current_project: None,
+            confirm_close_project: false,
         }
     }
 

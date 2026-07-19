@@ -2133,16 +2133,17 @@ pub(super) fn crash_log_window(
     panels.crash_log = open;
 }
 
-/// Fenêtre « Nouveau projet » guidée (Sprint 113d) : au lieu de partir directement
-/// d'une scène nue, propose un choix de template — la marche d'entrée d'un
-/// utilisateur qui ne code pas. Chaque carte déclenche **exactement** l'action déjà
-/// câblée par l'entrée de menu équivalente dans `menus::menu_fichier`
-/// (`actions.new_scene`/`load_controller`/`load_ai_duel`, consommées dans
-/// `gfx::renderer::render`) : aucune logique de chargement de scène n'est
-/// réimplémentée ici, juste une présentation guidée en avant-plan.
+/// Fenêtre « Nouveau projet » (Sprint 113d, formulaire complet depuis le
+/// Sprint 4) : nom + emplacement + template créent un vrai projet sur disque
+/// (`AppState::create_project`, dossier + manifeste + scène de démarrage),
+/// pas seulement une scène en mémoire — la marche d'entrée d'un utilisateur
+/// qui ne code pas. Propose aussi les projets récents (`Settings::
+/// existing_recent_projects`) pour rouvrir sans repasser par le sélecteur de
+/// fichier.
 pub(super) fn new_project_wizard_window(
     ctx: &egui::Context,
     panels: &mut Panels,
+    settings: &crate::app::settings::Settings,
     actions: &mut UiActions,
 ) {
     let mut open = panels.new_project_wizard;
@@ -2150,50 +2151,115 @@ pub(super) fn new_project_wizard_window(
     egui::Window::new("✨  Nouveau projet")
         .open(&mut open)
         .resizable(false)
-        .default_width(340.0)
+        .default_width(380.0)
         .show(ctx, |ui| {
-            ui.label("Comment démarrer ?");
-            ui.add_space(8.0);
-            if ui
-                .add_sized([320.0, 36.0], egui::Button::new("📄  Scène vide"))
-                .on_hover_text(
-                    "Repart de zéro, sans aucun objet — pour construire son propre niveau.",
-                )
-                .clicked()
-            {
-                actions.new_scene = true;
-                close_after = true;
-            }
-            if ui
-                .add_sized([320.0, 36.0], egui::Button::new("🕹  Démo contrôleur"))
-                .on_hover_text(
-                    "Joueur pilotable au joystick, saut sur bouton, collisions avec le décor — \
-                     un bon point de départ pour explorer les contrôles sans écrire de script.",
-                )
-                .clicked()
-            {
-                actions.load_controller = true;
-                close_after = true;
-            }
-            if ui
-                .add_sized([320.0, 36.0], egui::Button::new("⚔  Niveau de combat"))
-                .on_hover_text(
-                    "Manches de monstres qui poursuivent le joueur (style Call of Zombies) — \
-                     pour explorer combat/vagues/vie sans repartir de zéro.",
-                )
-                .clicked()
-            {
-                actions.load_ai_duel = true;
-                close_after = true;
-            }
+            ui.label("Nom du projet :");
+            ui.text_edit_singleline(&mut panels.new_project_name);
             ui.add_space(4.0);
-            ui.small(
-                "D'autres démos (donjon, duel, course, MMORPG…) restent disponibles dans \
-                 le menu Fichier → Démos.",
-            );
+            ui.horizontal(|ui| {
+                ui.label("Emplacement :");
+                let label = panels
+                    .new_project_location
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(non choisi)".to_string());
+                ui.add(egui::Label::new(egui::RichText::new(label).monospace()).truncate());
+                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+                if ui.button("📁  Choisir…").clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                {
+                    panels.new_project_location = Some(dir);
+                }
+            });
+            ui.add_space(8.0);
+
+            let name = panels.new_project_name.trim().to_string();
+            let ready = if name.is_empty() {
+                None
+            } else {
+                panels
+                    .new_project_location
+                    .clone()
+                    .map(|location| (name.clone(), location))
+            };
+            match ready {
+                None => {
+                    ui.small("Choisis un nom et un emplacement pour créer le projet.");
+                }
+                Some((name, location)) => {
+                    ui.label("Modèle de départ :");
+                    if ui
+                        .add_sized([340.0, 32.0], egui::Button::new("📄  Scène vide"))
+                        .on_hover_text(
+                            "Repart de zéro, sans aucun objet — pour construire son propre niveau.",
+                        )
+                        .clicked()
+                    {
+                        actions.create_project = Some(super::NewProjectRequest {
+                            name: name.clone(),
+                            location: location.clone(),
+                            template: crate::project::ProjectTemplate::Empty,
+                        });
+                        close_after = true;
+                    }
+                    if ui
+                        .add_sized([340.0, 32.0], egui::Button::new("🕹  Démo contrôleur"))
+                        .on_hover_text(
+                            "Joueur pilotable au joystick, saut sur bouton, collisions avec le \
+                             décor — un bon point de départ pour explorer les contrôles sans \
+                             écrire de script.",
+                        )
+                        .clicked()
+                    {
+                        actions.create_project = Some(super::NewProjectRequest {
+                            name: name.clone(),
+                            location: location.clone(),
+                            template: crate::project::ProjectTemplate::Controller,
+                        });
+                        close_after = true;
+                    }
+                    if ui
+                        .add_sized([340.0, 32.0], egui::Button::new("⚔  Niveau de combat"))
+                        .on_hover_text(
+                            "Manches de monstres qui poursuivent le joueur (style Call of \
+                             Zombies) — pour explorer combat/vagues/vie sans repartir de zéro.",
+                        )
+                        .clicked()
+                    {
+                        actions.create_project = Some(super::NewProjectRequest {
+                            name,
+                            location,
+                            template: crate::project::ProjectTemplate::CombatDemo,
+                        });
+                        close_after = true;
+                    }
+                }
+            }
+
+            let recents = settings.existing_recent_projects();
+            if !recents.is_empty() {
+                ui.separator();
+                ui.label("Projets récents :");
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        for recent in &recents {
+                            if ui
+                                .selectable_label(false, &recent.name)
+                                .on_hover_text(&recent.path)
+                                .clicked()
+                            {
+                                actions.open_project_path = Some(recent.path.clone());
+                                close_after = true;
+                            }
+                        }
+                    });
+            }
         });
     if close_after {
         open = false;
+        panels.new_project_name.clear();
+        panels.new_project_location = None;
     }
     panels.new_project_wizard = open;
 }

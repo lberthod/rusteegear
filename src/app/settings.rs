@@ -2,7 +2,7 @@
 //! génération de scripts Lua par IA, et config Firebase pour les comptes
 //! multijoueur. Stockés dans `~/.motor3derust/settings.json`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +57,25 @@ pub struct Settings {
     /// joueur muté ici continue de voir ses messages chez les autres.
     #[serde(default)]
     pub muted_players: Vec<String>,
+    /// Projets récemment ouverts (Sprint 4), le plus récent en premier —
+    /// plafonné à [`Settings::MAX_RECENT_PROJECTS`]. Affiché dans le sous-menu
+    /// Fichier → Projets récents et l'assistant « Nouveau projet ».
+    #[serde(default)]
+    pub recent_projects: Vec<RecentProject>,
+}
+
+/// Une entrée de la liste MRU (`Settings::recent_projects`).
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub struct RecentProject {
+    /// Nom déclaré par le manifeste au moment de la dernière ouverture (peut
+    /// devenir périmé si le manifeste est renommé depuis — pas grave, juste
+    /// un libellé d'affichage).
+    pub name: String,
+    /// Chemin du dossier racine du projet.
+    pub path: String,
+    /// Horodatage Unix (secondes) de la dernière ouverture — sert uniquement
+    /// à trier la liste, jamais affiché brut à l'utilisateur.
+    pub last_opened_unix_secs: u64,
 }
 
 /// Table de remapping manette → action, persistée et éditable dans les paramètres
@@ -133,6 +152,7 @@ impl Default for Settings {
             gamepad: GamepadBindings::default(),
             locale: crate::app::locale::Locale::default(),
             muted_players: Vec::new(),
+            recent_projects: Vec::new(),
         }
     }
 }
@@ -225,6 +245,50 @@ impl Settings {
         if self.muted_players.len() != before {
             self.save();
         }
+    }
+
+    /// Nombre maximal d'entrées conservées dans `recent_projects` (Sprint 4).
+    pub const MAX_RECENT_PROJECTS: usize = 10;
+
+    /// Logique pure d'insertion, séparée de `record_recent_project` pour rester
+    /// testable sans déclencher `save()` (qui touche `$HOME` — même patron que
+    /// `mute_player`/ses tests, cf. plus bas).
+    fn upsert_recent_project(&mut self, name: &str, root: &Path, now_unix_secs: u64) {
+        let path = root.to_string_lossy().into_owned();
+        self.recent_projects.retain(|p| p.path != path);
+        self.recent_projects.insert(
+            0,
+            RecentProject {
+                name: name.to_string(),
+                path,
+                last_opened_unix_secs: now_unix_secs,
+            },
+        );
+        self.recent_projects.truncate(Self::MAX_RECENT_PROJECTS);
+    }
+
+    /// Enregistre `root` en tête des projets récents et persiste immédiatement.
+    /// Une réouverture du même chemin le remonte en tête plutôt que de
+    /// dupliquer l'entrée. `now_unix_secs` est passé par l'appelant (plutôt que
+    /// lu ici via `SystemTime::now()`) pour rester testable sans horloge réelle.
+    pub fn record_recent_project(&mut self, name: &str, root: &Path, now_unix_secs: u64) {
+        self.upsert_recent_project(name, root, now_unix_secs);
+        self.save();
+    }
+
+    /// Projets récents dont le manifeste existe encore sur disque — un dossier
+    /// supprimé, déplacé ou sur un volume débranché depuis la dernière
+    /// ouverture est ignoré silencieusement plutôt que de proposer une entrée
+    /// qui échouerait à l'ouverture (Sprint 4).
+    pub fn existing_recent_projects(&self) -> Vec<&RecentProject> {
+        self.recent_projects
+            .iter()
+            .filter(|p| {
+                Path::new(&p.path)
+                    .join(crate::project::MANIFEST_FILE)
+                    .exists()
+            })
+            .collect()
     }
 }
 
@@ -407,5 +471,66 @@ mod tests {
         let loaded = Settings::load_from(&path);
         assert_eq!(loaded.firebase_api_key, "");
         assert_eq!(loaded.gamepad, GamepadBindings::default());
+    }
+
+    /// `upsert_recent_project` (Sprint 4) : la réouverture d'un projet déjà
+    /// présent le remonte en tête sans dupliquer l'entrée — pas de `save()`
+    /// ici, même patron que `mute_player_is_idempotent...` ci-dessus.
+    #[test]
+    fn upsert_recent_project_moves_a_known_path_to_the_front_without_duplicating() {
+        let mut settings = Settings::default();
+        settings.upsert_recent_project("Jeu A", std::path::Path::new("/tmp/a"), 100);
+        settings.upsert_recent_project("Jeu B", std::path::Path::new("/tmp/b"), 200);
+        assert_eq!(settings.recent_projects.len(), 2);
+        assert_eq!(settings.recent_projects[0].name, "Jeu B");
+
+        // Rouvrir A le remonte en tête, sans ajouter de troisième entrée.
+        settings.upsert_recent_project("Jeu A", std::path::Path::new("/tmp/a"), 300);
+        assert_eq!(settings.recent_projects.len(), 2);
+        assert_eq!(settings.recent_projects[0].name, "Jeu A");
+        assert_eq!(settings.recent_projects[0].last_opened_unix_secs, 300);
+    }
+
+    #[test]
+    fn upsert_recent_project_caps_at_max_recent_projects() {
+        let mut settings = Settings::default();
+        for i in 0..(Settings::MAX_RECENT_PROJECTS + 5) {
+            settings.upsert_recent_project(
+                &format!("Jeu {i}"),
+                &std::path::PathBuf::from(format!("/tmp/jeu-{i}")),
+                i as u64,
+            );
+        }
+        assert_eq!(
+            settings.recent_projects.len(),
+            Settings::MAX_RECENT_PROJECTS
+        );
+        // Le plus récemment ajouté (dernier de la boucle) doit rester en tête.
+        assert_eq!(
+            settings.recent_projects[0].name,
+            format!("Jeu {}", Settings::MAX_RECENT_PROJECTS + 4)
+        );
+    }
+
+    /// `existing_recent_projects` ignore silencieusement les dossiers dont le
+    /// manifeste n'est plus sur disque (supprimé/déplacé depuis).
+    #[test]
+    fn existing_recent_projects_filters_out_vanished_manifests() {
+        let dir = std::env::temp_dir().join("motor3derust-test-existing-recent-projects");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(crate::project::MANIFEST_FILE), "{}").unwrap();
+
+        let mut settings = Settings::default();
+        settings.upsert_recent_project("Encore là", &dir, 1);
+        settings.upsert_recent_project(
+            "Disparu",
+            std::path::Path::new("/inexistant/nulle-part"),
+            2,
+        );
+
+        let existing = settings.existing_recent_projects();
+        assert_eq!(existing.len(), 1);
+        assert_eq!(existing[0].name, "Encore là");
     }
 }

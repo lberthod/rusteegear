@@ -3,15 +3,23 @@
 //! démos, réglages rapides (gizmo, physique). Extrait de `editor/mod.rs`.
 
 use crate::app::GizmoMode;
+use crate::app::settings::RecentProject;
 use crate::scene::{MeshKind, Scene};
 
 use super::{Panels, UiActions, export};
 
 /// Menu « Fichier » : sauvegarde, ouverture, import, export.
+///
+/// `has_project` (Sprint 4) grise « Fermer le projet »/« Dupliquer »/« Révéler
+/// dans le Finder » quand aucun projet n'est ouvert. `recents` (déjà filtrée
+/// des chemins disparus par `Settings::existing_recent_projects`) alimente le
+/// sous-menu « Projets récents ».
 pub(super) fn menu_fichier(
     ui: &mut egui::Ui,
     export: &mut export::ExportPanel,
     actions: &mut UiActions,
+    has_project: bool,
+    recents: Vec<&RecentProject>,
 ) {
     ui.menu_button("Fichier", |ui| {
         if ui
@@ -193,6 +201,42 @@ pub(super) fn menu_fichier(
             }
             ui.close();
         }
+        if ui
+            .button("📂  Ouvrir un projet…")
+            .on_hover_text("Choisir directement le dossier d'un projet, sans passer par son manifeste")
+            .clicked()
+        {
+            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                actions.open_project_path = Some(dir.to_string_lossy().into_owned());
+            }
+            ui.close();
+        }
+        if !recents.is_empty() {
+            ui.menu_button("🕘  Projets récents", |ui| {
+                for recent in &recents {
+                    if ui.button(&recent.name).on_hover_text(&recent.path).clicked() {
+                        actions.open_project_path = Some(recent.path.clone());
+                        ui.close();
+                    }
+                }
+            });
+        }
+        ui.add_enabled_ui(has_project, |ui| {
+            if ui.button("🗂  Fermer le projet").clicked() {
+                actions.close_project = true;
+                ui.close();
+            }
+            if ui.button("🧬  Dupliquer le projet").clicked() {
+                actions.duplicate_project = true;
+                ui.close();
+            }
+            #[cfg(target_os = "macos")]
+            if ui.button("🔍  Révéler dans le Finder").clicked() {
+                actions.reveal_project_in_finder = true;
+                ui.close();
+            }
+        });
         ui.separator();
         if ui.button("📥  Importer glTF…").clicked() {
             #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]

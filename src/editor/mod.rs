@@ -235,10 +235,14 @@ struct Panels {
     /// le menu Aide. Écran **volontaire** : rien n'est envoyé nulle part depuis ici,
     /// juste consultation/copie/suppression locale (cf. doc de `crash_log`).
     crash_log: bool,
-    /// Fenêtre « Nouveau projet » guidée (Sprint 113d) : choix d'un template
-    /// (scène vide / démo contrôleur / niveau de combat) plutôt que de partir
-    /// directement d'une scène nue.
+    /// Fenêtre « Nouveau projet » guidée (Sprint 113d, formulaire complet
+    /// depuis le Sprint 4) : nom + emplacement + template génèrent un vrai
+    /// projet sur disque plutôt que de partir directement d'une scène nue.
     new_project_wizard: bool,
+    /// Champs du formulaire ci-dessus, persistés entre les frames tant que la
+    /// fenêtre reste ouverte (Sprint 4).
+    new_project_name: String,
+    new_project_location: Option<std::path::PathBuf>,
     /// Fenêtre « Ajouter un objet » simplifiée (Sprint 113d) : cartes avec icône
     /// pour les actions les plus courantes du menu Ajouter, en avant-plan plutôt
     /// que dans un sous-menu.
@@ -308,6 +312,16 @@ pub struct StatusInfo<'a> {
     pub skinned_dropped: u32,
 }
 
+/// Demande de création de projet posée par l'assistant « Nouveau projet »
+/// (Sprint 4) — `name`/`location` viennent des champs du formulaire, `template`
+/// du bouton cliqué.
+#[derive(Clone, Debug)]
+pub struct NewProjectRequest {
+    pub name: String,
+    pub location: std::path::PathBuf,
+    pub template: crate::project::ProjectTemplate,
+}
+
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
 #[derive(Default)]
 pub struct UiActions {
@@ -317,10 +331,25 @@ pub struct UiActions {
     pub save_path: Option<String>,
     /// « Ouvrir » : chemin JSON choisi.
     pub load_path: Option<String>,
-    /// « Ouvrir » un projet (Sprint 3) : chemin de son
-    /// `project.rusteegear.json`, choisi depuis le même sélecteur que
-    /// `load_path`.
+    /// « Ouvrir » un projet (Sprint 3/4) : soit le chemin de son
+    /// `project.rusteegear.json` (sélecteur générique « 📂 Ouvrir… »), soit
+    /// directement son dossier racine (« 📂 Ouvrir un projet… », projets
+    /// récents) — les deux formes sont distinguées à la consommation en
+    /// comparant le nom de fichier à `project::MANIFEST_FILE`.
     pub open_project_path: Option<String>,
+    /// Assistant « Nouveau projet » (Sprint 4) : demande de création complète
+    /// (dossier + template + manifeste), posée par `windows::new_project_wizard_window`.
+    pub create_project: Option<NewProjectRequest>,
+    /// « Fermer le projet » (menu Fichier) — passe par `AppState::request_close_project`,
+    /// qui gère lui-même la confirmation si `scene_dirty`.
+    pub close_project: bool,
+    pub close_project_save: bool,
+    pub close_project_discard: bool,
+    pub close_project_cancel: bool,
+    /// « Dupliquer le projet » (menu Fichier, Sprint 4).
+    pub duplicate_project: bool,
+    /// « Révéler dans le Finder » (menu Fichier, macOS uniquement, Sprint 4).
+    pub reveal_project_in_finder: bool,
     pub import: Option<String>,
     pub add: Option<MeshKind>,
     pub delete: Option<usize>,
@@ -571,6 +600,18 @@ impl Editor {
     /// à partir de la config sans dupliquer l'état.
     pub fn settings(&self) -> &crate::app::settings::Settings {
         &self.settings
+    }
+
+    /// Enregistre un projet dans les récents et persiste immédiatement
+    /// (Sprint 4) — appelé après toute ouverture ou création réussie
+    /// (`gfx::renderer`, seul endroit qui a à la fois `Editor` et
+    /// `AppState::current_project` disponibles).
+    pub(crate) fn note_recent_project(&mut self, name: &str, root: &std::path::Path) {
+        let now = crate::time_compat::SystemTime::now()
+            .duration_since(crate::time_compat::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.settings.record_recent_project(name, root, now);
     }
 
     /// Ouvre/ferme la fenêtre Multijoueur — bouton Start de la manette
@@ -891,6 +932,10 @@ impl Editor {
         locale: crate::app::locale::Locale,
         // Modale « modifications non sauvegardées » à afficher (cf. `AppState::confirm_quit`).
         confirm_quit: bool,
+        // Sprint 4 : un projet est ouvert (cf. `AppState::current_project`).
+        has_project: bool,
+        // Modale de fermeture de projet à afficher (cf. `AppState::confirm_close_project`).
+        confirm_close_project: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -992,6 +1037,8 @@ impl Editor {
                 &mut actions,
                 locale,
                 confirm_quit,
+                has_project,
+                confirm_close_project,
             );
         });
 
@@ -1194,6 +1241,12 @@ fn build_ui(
     actions: &mut UiActions,
     locale: crate::app::locale::Locale,
     confirm_quit: bool,
+    // Sprint 4 : un projet (pas seulement une scène) est actuellement ouvert
+    // — grise/dégrise « Fermer le projet », « Dupliquer », « Révéler dans le
+    // Finder ».
+    has_project: bool,
+    // Confirmation de fermeture de projet en attente (`AppState::confirm_close_project`).
+    confirm_close_project: bool,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -1237,7 +1290,7 @@ fn build_ui(
         actions,
     );
     // Fenêtre « Nouveau projet » guidée (Sprint 113d).
-    windows::new_project_wizard_window(root.ctx(), panels, actions);
+    windows::new_project_wizard_window(root.ctx(), panels, settings, actions);
     // Fenêtre « Ajouter un objet » simplifiée (Sprint 113d).
     windows::add_object_cards_window(root.ctx(), panels, scene, actions);
     optimize_window(root.ctx(), panels, scene, actions);
@@ -1283,7 +1336,13 @@ fn build_ui(
     // --- Barre de menus (style application de bureau) ---
     egui::Panel::top("menubar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
-            menu_fichier(ui, export, actions);
+            menu_fichier(
+                ui,
+                export,
+                actions,
+                has_project,
+                settings.existing_recent_projects(),
+            );
             menu_edition(ui, selection, actions);
             menu_ajouter(ui, scene, *selection, actions);
             menu_outils(ui, gizmo_mode, export, panels, actions);
@@ -2431,6 +2490,38 @@ fn build_ui(
         // Échap ou clic hors de la modale = Annuler.
         if resp.should_close() {
             actions.quit_cancel = true;
+        }
+    }
+
+    // Modale « modifications non sauvegardées » avant de fermer un projet
+    // (Sprint 4) — même mécanisme que `confirm_quit` ci-dessus, mais l'action
+    // suivante est de revenir à l'état sans projet, pas de quitter
+    // l'application (des champs et boutons distincts, pour ne jamais risquer
+    // de faire quitter l'app en fermant simplement un projet).
+    if confirm_close_project {
+        let resp =
+            egui::Modal::new(egui::Id::new("confirm-close-project")).show(root.ctx(), |ui| {
+                ui.set_max_width(360.0);
+                ui.heading("Modifications non sauvegardées");
+                ui.label(
+                    "La scène a été modifiée depuis la dernière sauvegarde. \
+                 Que faire avant de fermer le projet ?",
+                );
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("💾  Enregistrer et fermer").clicked() {
+                        actions.close_project_save = true;
+                    }
+                    if ui.button("🚪  Fermer sans enregistrer").clicked() {
+                        actions.close_project_discard = true;
+                    }
+                    if ui.button("Annuler").clicked() {
+                        actions.close_project_cancel = true;
+                    }
+                });
+            });
+        if resp.should_close() {
+            actions.close_project_cancel = true;
         }
     }
 

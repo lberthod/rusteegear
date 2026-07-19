@@ -1847,6 +1847,8 @@ impl Renderer {
                 &minimap,
                 app.locale,
                 app.confirm_quit,
+                app.current_project.is_some(),
+                app.confirm_close_project,
             );
             if app.ui_scene_fingerprint() != ui_fingerprint_before {
                 app.scene_dirty = true;
@@ -1872,11 +1874,85 @@ impl Renderer {
             if let Some(path) = actions.load_path {
                 app.load_from(&path);
             }
-            if let Some(manifest_path) = actions.open_project_path {
-                let manifest_path = std::path::Path::new(&manifest_path);
-                let dir = manifest_path.parent().unwrap_or(manifest_path);
-                if let Err(e) = app.open_project(dir) {
-                    log::error!("Ouverture du projet échouée : {e}");
+            if let Some(picked_path) = actions.open_project_path {
+                // Accepte soit le manifeste (sélecteur générique « Ouvrir… »,
+                // Sprint 3), soit directement le dossier racine du projet
+                // (« Ouvrir un projet… », projets récents — Sprint 4).
+                let picked = std::path::Path::new(&picked_path);
+                let dir = if picked.file_name().and_then(|n| n.to_str())
+                    == Some(crate::project::MANIFEST_FILE)
+                {
+                    picked.parent().unwrap_or(picked)
+                } else {
+                    picked
+                };
+                match app.open_project(dir) {
+                    Ok(_) => {
+                        if let Some(project) = &app.current_project {
+                            editor.note_recent_project(&project.name, &project.root);
+                        }
+                    }
+                    Err(e) => log::error!("Ouverture du projet échouée : {e}"),
+                }
+            }
+            if let Some(req) = actions.create_project {
+                match app.create_project(&req.location, &req.name, req.template) {
+                    Ok(_) => {
+                        if let Some(project) = &app.current_project {
+                            editor.note_recent_project(&project.name, &project.root);
+                        }
+                    }
+                    Err(e) => log::error!("Création du projet échouée : {e}"),
+                }
+            }
+            if actions.close_project {
+                app.request_close_project();
+            }
+            // Réponses à la modale « modifications non sauvegardées » de
+            // fermeture de projet (Sprint 4) — mêmes noms que la modale de
+            // Quitter, cf. plus bas.
+            if actions.close_project_cancel {
+                app.confirm_close_project = false;
+            }
+            if actions.close_project_discard {
+                app.close_project();
+            }
+            if actions.close_project_save {
+                if let Some(project) = app.current_project.clone() {
+                    let path = project.main_scene_path.to_string_lossy().into_owned();
+                    app.save_to(&path);
+                    // `save_to` ne baisse `scene_dirty` que sur succès : en cas
+                    // d'échec, on reste ouvert plutôt que de fermer en perdant
+                    // la scène — même garde que `quit_save`.
+                    if !app.scene_dirty {
+                        app.close_project();
+                    }
+                } else {
+                    app.confirm_close_project = false;
+                }
+            }
+            if actions.duplicate_project {
+                match app.duplicate_project() {
+                    Ok(dst) => log::info!("Projet dupliqué dans {}", dst.display()),
+                    Err(e) => log::error!("Duplication du projet échouée : {e}"),
+                }
+            }
+            if actions.reveal_project_in_finder
+                && let Some(project) = &app.current_project
+            {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open")
+                        .arg("-R")
+                        .arg(&project.root)
+                        .spawn();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    log::info!(
+                        "Révéler dans le Finder n'est disponible que sur macOS ({})",
+                        project.root.display()
+                    );
                 }
             }
             if let Some(path) = actions.import {

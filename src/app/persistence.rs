@@ -274,8 +274,114 @@ impl AppState {
         self.current_project = Some(crate::project::ProjectRoot {
             name: manifest.name,
             root: dir.to_path_buf(),
+            main_scene_path: scene_path,
         });
         Ok(count)
+    }
+
+    /// Crée un projet (Sprint 4) : dossier `<location>/<nom assaini>/`, peuplé
+    /// d'un template en mémoire puis sauvegardé comme scène de démarrage, plus
+    /// son manifeste. Termine en rouvrant le projet fraîchement créé (réutilise
+    /// `open_project` — pose `current_project`, évite de dupliquer cette
+    /// logique). Refuse d'écraser un dossier déjà existant : un nom de projet
+    /// en collision doit être choisi explicitement par l'utilisateur, jamais
+    /// mélangé silencieusement avec un contenu préexistant.
+    pub fn create_project(
+        &mut self,
+        location: &std::path::Path,
+        name: &str,
+        template: crate::project::ProjectTemplate,
+    ) -> Result<std::path::PathBuf, String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("le nom du projet ne peut pas être vide".to_string());
+        }
+        let root = location.join(crate::project::sanitize_folder_name(trimmed));
+        if root.exists() {
+            return Err(format!(
+                "{} existe déjà — choisis un autre nom ou un autre emplacement",
+                root.display()
+            ));
+        }
+        std::fs::create_dir_all(root.join("scenes"))
+            .map_err(|e| format!("création du dossier de projet impossible : {e}"))?;
+        std::fs::create_dir_all(root.join("scripts"))
+            .map_err(|e| format!("création du dossier de scripts impossible : {e}"))?;
+
+        match template {
+            crate::project::ProjectTemplate::Empty => self.new_scene(),
+            crate::project::ProjectTemplate::Controller => self.load_controller_demo(),
+            crate::project::ProjectTemplate::CombatDemo => self.load_zombies_demo(),
+        }
+
+        let main_scene = "scenes/main.scene.json";
+        let scene_path = root.join(main_scene);
+        self.scene
+            .save(scene_path.to_str().ok_or("chemin de projet non UTF-8")?)
+            .map_err(|e| format!("écriture de la scène de démarrage impossible : {e}"))?;
+
+        let manifest = crate::project::ProjectManifest {
+            format: 1,
+            name: trimmed.to_string(),
+            main_scene: main_scene.to_string(),
+            build: None,
+        };
+        manifest.write(&root)?;
+
+        self.open_project(&root)?;
+        Ok(root)
+    }
+
+    /// Ferme le projet ouvert : revient à l'état « sans projet » (scène vide),
+    /// sans jamais perdre de modifications non sauvegardées en silence — cf.
+    /// `request_close_project`, qui vérifie `scene_dirty` avant d'appeler ceci.
+    pub fn close_project(&mut self) {
+        self.current_project = None;
+        self.new_scene();
+        self.confirm_close_project = false;
+    }
+
+    /// Demande la fermeture du projet courant (Sprint 4). Si la scène a des
+    /// modifications non sauvegardées, ouvre la confirmation
+    /// (`confirm_close_project`, même esprit que `request_quit`/`confirm_quit`
+    /// mais pour fermer le projet plutôt que l'application entière) au lieu de
+    /// fermer directement. Sans effet si aucun projet n'est ouvert.
+    pub fn request_close_project(&mut self) {
+        if self.current_project.is_none() {
+            return;
+        }
+        if self.scene_dirty {
+            self.confirm_close_project = true;
+        } else {
+            self.close_project();
+        }
+    }
+
+    /// Duplique le projet ouvert dans un dossier `<nom> copie` (même parent),
+    /// avec un manifeste renommé — le projet ouvert dans l'éditeur n'est pas
+    /// affecté (pas de bascule automatique sur la copie, comme un « Dupliquer »
+    /// de Finder). Erreur si aucun projet n'est ouvert ou si la destination
+    /// existe déjà.
+    pub fn duplicate_project(&mut self) -> Result<std::path::PathBuf, String> {
+        let project = self
+            .current_project
+            .clone()
+            .ok_or("aucun projet ouvert à dupliquer")?;
+        let new_name = format!("{} copie", project.name);
+        let parent = project
+            .root
+            .parent()
+            .ok_or("le projet n'a pas de dossier parent")?;
+        let dst = parent.join(crate::project::sanitize_folder_name(&new_name));
+        if dst.exists() {
+            return Err(format!("{} existe déjà", dst.display()));
+        }
+        crate::project::copy_dir_recursive(&project.root, &dst)?;
+
+        let mut manifest = crate::project::ProjectManifest::load(&dst)?;
+        manifest.name = new_name;
+        manifest.write(&dst)?;
+        Ok(dst)
     }
 
     /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).

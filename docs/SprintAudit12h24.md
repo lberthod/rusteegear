@@ -401,9 +401,75 @@ tests de `tests/project_manifest.rs` passent dans la suite standard.
 
 ---
 
-## Sprint 4 — Gestionnaire de projets
+## Sprint 4 — Gestionnaire de projets ✅ TERMINÉ (19 juillet 2026)
 
 **Objectif** : le cycle de vie complet d'un projet depuis l'éditeur.
+
+### Résultat
+
+- **4.1 ✅** — Le wizard « Nouveau projet »
+  ([windows.rs](../src/editor/windows.rs)) est un vrai formulaire : nom + bouton
+  « Choisir… » (`rfd::FileDialog::pick_folder`) + les 3 templates existants,
+  désormais routés vers `AppState::create_project(location, name, template)`
+  ([app/persistence.rs](../src/app/persistence.rs)) plutôt que de peupler juste
+  la scène en mémoire. `create_project` crée `<location>/<nom assaini>/`
+  (`project::sanitize_folder_name`, remplace les caractères interdits par `_`),
+  applique le template (`new_scene`/`load_controller_demo`/`load_zombies_demo`,
+  réutilisés tels quels), sauvegarde la scène résultante dans
+  `scenes/main.scene.json`, écrit le manifeste, puis appelle `open_project` en
+  interne (pose `current_project`, pas de logique dupliquée). Refuse d'écraser
+  un dossier déjà existant.
+- **4.2 ✅** — Menu Fichier : « 📂 Ouvrir un projet… » (sélecteur de dossier
+  direct, sans passer par le manifeste) et « 🗂 Fermer le projet »
+  ([menus.rs](../src/editor/menus.rs)). `open_project_path` accepte maintenant
+  soit un chemin de manifeste soit un dossier direct (distingué à la
+  consommation). `AppState::request_close_project` vérifie `scene_dirty` :
+  fermeture immédiate si propre, sinon pose `confirm_close_project` — modale
+  dédiée « Enregistrer et fermer / Fermer sans enregistrer / Annuler »
+  ([editor/mod.rs](../src/editor/mod.rs)), **volontairement distincte** de la
+  modale `confirm_quit`/`should_quit` existante (même style, mais des champs
+  séparés : réutiliser telle quelle celle de Quitter aurait risqué de faire
+  quitter l'application entière en fermant simplement un projet). La branche
+  « Enregistrer et fermer » sauvegarde vers `ProjectRoot::main_scene_path`
+  (nouveau champ, résolu une fois à l'ouverture), pas vers le chemin de
+  quick-save par défaut.
+- **4.3 ✅** — `Settings::recent_projects`
+  ([app/settings.rs](../src/app/settings.rs)), plafonné à
+  `MAX_RECENT_PROJECTS = 10`, dédoublonné (rouvrir un projet connu le remonte en
+  tête). `existing_recent_projects()` filtre silencieusement les dossiers dont
+  le manifeste n'est plus sur disque. Affiché dans le sous-menu Fichier →
+  Projets récents et dans le wizard. Enregistré par `Editor::note_recent_project`
+  (méthode `pub(crate)`, seul endroit — `gfx::renderer` — qui a à la fois
+  `Editor` et `AppState::current_project` disponibles) après toute
+  création/ouverture réussie.
+- **4.4 ✅** — « 🧬 Dupliquer le projet » (`AppState::duplicate_project`, copie
+  récursive `project::copy_dir_recursive` vers `<original> copie`, manifeste
+  renommé, le projet ouvert dans l'éditeur n'est pas affecté) et
+  « 🔍 Révéler dans le Finder » (gated `#[cfg(target_os = "macos")]`, `open -R`
+  ; message informatif sur les autres plateformes plutôt que de faire
+  disparaître le champ d'action — évite un `-D warnings` sur champ jamais lu
+  côté CI Linux).
+- **4.5 ✅** — 21 tests-preuves : 11 unitaires dans `src/project.rs`
+  (`sanitize_folder_name`, `copy_dir_recursive`, écriture/relecture de
+  manifeste, plus les 7 du Sprint 3), 2 dans `src/app/settings.rs` (MRU :
+  dédoublonnage + plafond + filtrage des chemins disparus) et 10 dans
+  [tests/project_manager.rs](../tests/project_manager.rs) (création par
+  template → manifeste → ouverture, collision refusée, nom vide refusé,
+  fermeture immédiate/avec confirmation/no-op, duplication → manifeste renommé
+  → original intact → double duplication refusée).
+
+### Interprétation du texte du sprint : « la modale existante »
+
+Le texte du sprint dit que « Fermer le projet » doit passer « par la modale
+existante si `scene_dirty` ». Les champs `confirm_quit`/`should_quit` sont
+câblés en dur sur la fermeture de **l'application entière** (boucle
+d'événements) : les réutiliser tels quels pour fermer un projet aurait
+silencieusement fait quitter RusteeGear au lieu de revenir à l'état sans
+projet. Interprétation retenue : réutiliser le **même patron d'UI**
+(`egui::Modal`, mêmes trois boutons Enregistrer/Ne pas enregistrer/Annuler),
+avec un état séparé (`confirm_close_project` + `close_project_save/discard/
+cancel`) pour que les deux confirmations ne puissent jamais se déclencher
+l'une l'autre par erreur.
 
 ### État des lieux vérifié
 
@@ -439,7 +505,12 @@ tests de `tests/project_manifest.rs` passent dans la suite standard.
 ### Terminé quand
 
 On peut créer, ouvrir, fermer, retrouver (récents) et dupliquer un projet sans toucher
-au système de fichiers à la main, tests à l'appui.
+au système de fichiers à la main, tests à l'appui. ✅ Vérifié : `cargo test
+--all-targets` (632 passés, 0 échec, 9 ignorés) et `cargo test --features
+net_tests` (656 passés, 0 échec) ; `cargo fmt --check` et `cargo clippy
+--all-targets -- -D warnings` verts ; `python3 scripts/check_unwrap_budget.py`
+ne signale que le défaut pré-existant hors périmètre de `console.rs:135`
+(Sprint 2).
 
 ---
 

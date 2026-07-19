@@ -52,6 +52,24 @@ pub struct ProjectRoot {
     pub name: String,
     /// Dossier racine du projet (celui qui contient `project.rusteegear.json`).
     pub root: PathBuf,
+    /// Chemin absolu de la scène de démarrage, déjà résolu à l'ouverture — cache
+    /// évitant de recharger/reparser le manifeste juste pour savoir où
+    /// « Enregistrer » doit écrire (cf. `AppState::request_close_project`,
+    /// Sprint 4).
+    pub main_scene_path: PathBuf,
+}
+
+/// Modèle de départ proposé par l'assistant « Nouveau projet » (Sprint 4) — les
+/// trois mêmes templates que l'ancien wizard, désormais utilisés pour peupler la
+/// scène d'un vrai projet plutôt que la scène courante en mémoire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTemplate {
+    /// Scène vide (`AppState::new_scene`).
+    Empty,
+    /// Joueur pilotable, saut, collisions (`AppState::load_controller_demo`).
+    Controller,
+    /// Manches de monstres façon Call of Zombies (`AppState::load_zombies_demo`).
+    CombatDemo,
 }
 
 impl ProjectManifest {
@@ -103,6 +121,70 @@ impl ProjectManifest {
         }
         Ok(resolved)
     }
+
+    /// Sérialise ce manifeste dans `<dir>/project.rusteegear.json` (création du
+    /// projet, ou renommage lors d'une duplication — Sprint 4).
+    pub fn write(&self, dir: &Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("sérialisation du manifeste impossible : {e}"))?;
+        std::fs::write(dir.join(MANIFEST_FILE), json)
+            .map_err(|e| format!("écriture de {} impossible : {e}", MANIFEST_FILE))
+    }
+}
+
+/// Nom de dossier sûr à partir d'un nom de projet tapé librement : les
+/// caractères interdits ou ambigus sur un système de fichiers (séparateurs,
+/// deux-points, jokers…) sont remplacés par `_`, les espaces en bord sont
+/// coupés. Retombe sur `"projet"` si le résultat serait vide (nom composé
+/// uniquement de caractères rejetés).
+pub fn sanitize_folder_name(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() {
+        "projet".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Copie récursivement `src` vers `dst` (qui ne doit pas déjà exister) — pas
+/// d'équivalent dans la bibliothèque standard. Utilisé par la duplication de
+/// projet (Sprint 4) : `std::fs::copy` seul ne descend pas dans les
+/// sous-dossiers (`scenes/`, `scripts/`…).
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("création de {} impossible : {e}", dst.display()))?;
+    let entries = std::fs::read_dir(src)
+        .map_err(|e| format!("lecture de {} impossible : {e}", src.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("lecture de {} impossible : {e}", src.display()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("type de {:?} illisible : {e}", entry.path()))?;
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst_path)?;
+        } else {
+            std::fs::copy(entry.path(), &dst_path).map_err(|e| {
+                format!(
+                    "copie de {} vers {} impossible : {e}",
+                    entry.path().display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -217,5 +299,59 @@ mod tests {
         write_manifest(&dir, "ceci n'est pas du JSON");
         let err = ProjectManifest::load(&dir).expect_err("JSON invalide doit être refusé");
         assert!(err.contains(MANIFEST_FILE), "message obtenu : {err}");
+    }
+
+    #[test]
+    fn writes_and_reloads_a_manifest_round_trip() {
+        let dir = temp_dir("write-round-trip");
+        let manifest = ProjectManifest {
+            format: 1,
+            name: "Écrit puis relu".to_string(),
+            main_scene: "scenes/main.scene.json".to_string(),
+            build: None,
+        };
+        manifest.write(&dir).expect("écriture");
+        let reloaded = ProjectManifest::load(&dir).expect("relecture");
+        assert_eq!(reloaded.name, manifest.name);
+        assert_eq!(reloaded.main_scene, manifest.main_scene);
+    }
+
+    #[test]
+    fn sanitize_folder_name_replaces_unsafe_characters() {
+        assert_eq!(sanitize_folder_name("Mon Jeu"), "Mon Jeu");
+        assert_eq!(
+            sanitize_folder_name("Jeu: éditeur/test"),
+            "Jeu_ éditeur_test"
+        );
+        assert_eq!(sanitize_folder_name("  espaces  "), "espaces");
+    }
+
+    #[test]
+    fn sanitize_folder_name_falls_back_on_an_empty_name() {
+        // Contrairement à un caractère interdit (remplacé par `_`, jamais
+        // supprimé — donc "///" devient "___", un nom non vide), seule une
+        // entrée déjà vide après `trim()` déclenche le repli sur "projet".
+        assert_eq!(sanitize_folder_name(""), "projet");
+        assert_eq!(sanitize_folder_name("   "), "projet");
+        assert_eq!(sanitize_folder_name("///"), "___");
+    }
+
+    #[test]
+    fn copy_dir_recursive_copies_nested_files() {
+        let src = temp_dir("copie-source");
+        std::fs::create_dir_all(src.join("scenes")).unwrap();
+        std::fs::write(src.join("scenes/main.scene.json"), "{}").unwrap();
+        std::fs::write(src.join(MANIFEST_FILE), "{}").unwrap();
+
+        let dst = src.parent().unwrap().join("copie-destination");
+        let _ = std::fs::remove_dir_all(&dst);
+        copy_dir_recursive(&src, &dst).expect("copie récursive");
+
+        assert!(dst.join(MANIFEST_FILE).exists());
+        assert!(dst.join("scenes/main.scene.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(dst.join("scenes/main.scene.json")).unwrap(),
+            "{}"
+        );
     }
 }
