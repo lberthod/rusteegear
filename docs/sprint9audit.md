@@ -1,4 +1,4 @@
-# RusteeGear — Sprint 9 : découper les fichiers monolithes (sous-phases détaillées)
+# RusteeGear — Sprint 9 : découper les fichiers monolithes (sous-phases détaillées) — ✅ TERMINÉ (2026-07-19)
 
 > Développe le brief Sprint 9 (« ramener chaque module à une seule raison de changer, par
 > extraction mécanique, sans réécriture ni changement de comportement ») en sous-phases par
@@ -67,13 +67,15 @@ qui exigent un vrai découpage de logique.
   │
   ├─► 9.1  scene/demos.rs   (9 868 → dossier scene/demos/, 26 fichiers) ─ ✅ FAIT (2026-07-19)
   ├─► 9.2  gfx/renderer.rs  (3 159 → dossier gfx/renderer/, 9 fichiers) ─ ✅ FAIT (2026-07-19)
-  ├─► 9.3  app/mod.rs       (1 654 → trim optionnel vers ~1 500)     ─ ⬜ optionnel
+  ├─► 9.3  app/mod.rs       (1 654 → 1 527)                          ─ ✅ FAIT (2026-07-19)
   ├─► 9.4  scene/mod.rs     (1 433, déjà sous la cible)              ─ ✅ terminé dès 9.0
-  ├─► 9.5  app/network_client.rs (1 561 → trim optionnel vers ~1 500) ─ ⬜ optionnel
+  ├─► 9.5  app/network_client.rs (1 561 → 1 400)                     ─ ✅ FAIT (2026-07-19)
   └─► 9.6  app/simulation.rs     (1 500, pile la cible)              ─ ✅ terminé dès 9.0
 
-9.7  Garde-fou final (cargo test --features net_tests, goldens, relecture git log)
+9.7  Garde-fou final (cargo test --features net_tests, goldens, relecture git log) ─ ✅ FAIT
 ```
+
+**Sprint 9 terminé** (48 commits, 9.0 → 9.7). Voir le bilan chiffré en fin de document.
 
 9.1 et 9.2 n'ont aucune dépendance l'un envers l'autre et peuvent être menés en parallèle
 (sessions différentes) une fois 9.0 vert. 9.3 à 9.6 sont indépendants entre eux et de 9.1/9.2.
@@ -562,7 +564,7 @@ Fichiers finaux `gfx/renderer/` : `frame.rs` 1122, `headless.rs` 387, `tests.rs`
 
 ---
 
-## 9.3 — `app/mod.rs` (trim optionnel)
+## 9.3 — `app/mod.rs` (trim optionnel) — ✅ FAIT (2026-07-19)
 
 Après 9.0.2 (tests sortis, ✅ fait) : **1 654 lignes** confirmées (`wc -l`). Struct `AppState`
 (184–795, ~611 lignes de champs), `GizmoMode`/`DebugView` (796–873), `impl AppState` (874–1511,
@@ -576,6 +578,16 @@ suffisant pour repasser sous ~1 500 lignes.
 **Risques** : nul — bloc déjà autonome (pas de dépendance vers le reste du fichier au-delà des
 imports).
 
+Piège de visibilité (même famille que 9.2.1) trouvé avant d'écrire le code, par relecture des
+usages croisés : `MinimapData`/`MinimapDecorKind`/`MinimapDecor`/`MinimapCreature` sont
+consommées depuis `editor::windows`/`editor::mod` via `crate::app::MinimapData` — un simple
+`use minimap::*;` privé les aurait rendues injoignables à ce chemin une fois déplacées dans
+`app::minimap` (un enfant de `app`). `pub use minimap::*;` dans `mod.rs` les réexporte
+correctement (elles étaient déjà `pub struct`, donc portée inchangée). `classify_decor`/
+`thin_decor` (privées, appelées par `AppState::minimap_data` et par `app::tests`) promues
+`pub(super)`. `app/mod.rs` : 1654 → 1527 lignes. Garde-fou complet : build all-targets, clippy
+propre, 649 tests (dont 15 tests minimap/decor spécifiques).
+
 ## 9.4 — `scene/mod.rs` — ✅ terminé dès 9.0
 
 Après 9.0.1 (tests sortis, ✅ fait) : **1 433 lignes** confirmées (`wc -l`), modèle de données
@@ -585,13 +597,24 @@ cible de ~1 500 lignes**.
 transform/mesh vs types de gameplay/combat vs conteneur `Scene`/`Sky`/`Light`) — à ne faire que
 si un besoin de lisibilité se fait sentir plus tard, pas requis pour clore le sprint.
 
-## 9.5 — `app/network_client.rs` (trim optionnel)
+## 9.5 — `app/network_client.rs` (trim optionnel) — ✅ FAIT (2026-07-19)
 
 Après 9.0.3 (tests sortis, ✅ fait) : **1 561 lignes** confirmées (`wc -l`). Structs
 `RemotePlayer`/`NetConnState`/`ChatLine`/`LeaderboardLine` (42–206, ~165 lignes) + plusieurs
 blocs `impl AppState` (207–1561) pour la connexion, le protocole, le chat.
 **Tâches (optionnel)** : extraire les structs de types (42–206) vers `network_client/types.rs`
 pour repasser franchement sous ~1 500 lignes. Pas de découpage supplémentaire nécessaire.
+
+Extrait via `#[path]` vers `app/network_client_types.rs` (pas de conversion en dossier, trop
+pour 165 lignes) — `RemotePlayer`/`NetConnState`/`ChatLine`/`LeaderboardLine`/`MAX_CHAT_LEN` +
+`ReconnectState`/`reconnect_delay` + 8 const de tuning réseau. Piège de visibilité trouvé cette
+fois **par relecture avant d'écrire le code**, pas par le compilateur : `scene_index`
+(`RemotePlayer`) et `ReconnectState` étaient déjà `pub(super)`/privées dans l'ancien fichier
+plat (portée = « visible dans `app` », consommée par `AppState::remote_player_scene_indices` en
+`app/mod.rs`, le parent de `network_client`) — promues `pub(crate)` avant la première tentative
+de build, qui a compilé du premier coup. `network_client.rs` : 1561 → 1400 lignes. Garde-fou
+complet : build all-targets avec et sans `--features net_tests`, clippy propre, 649 tests (dont
+23 spécifiques à `network_client`).
 
 ## 9.6 — `app/simulation.rs` — ✅ terminé dès 9.0
 
@@ -600,7 +623,7 @@ Aucune tâche obligatoire.
 
 ---
 
-## 9.7 — Garde-fou final
+## 9.7 — Garde-fou final — ✅ FAIT (2026-07-19)
 
 **Tâches** :
 1. Après chaque extraction individuelle (toutes sous-phases ci-dessus) : vérification standard
@@ -610,11 +633,44 @@ Aucune tâche obligatoire.
 4. Relecture de `git log` : chaque extraction doit apparaître comme un commit atomique,
    relisible indépendamment (diff = déplacement de lignes, pas de réécriture).
 
+Exécuté : `cargo build --all-targets --features net_tests` (propre), `cargo clippy --all-targets
+--features net_tests` (0 warning), `cargo test --lib --features net_tests` → **673 passed, 0
+failed, 9 ignored** (24 tests réseau de plus que la baseline 649, tous gagnés par la feature —
+aucun échec), `cargo test --test golden_render --test golden_skinning` → 8 passed, `git status
+--short tests/golden/` vide. `git log 6276fa2..HEAD` : **48 commits**, tous atomiques,
+préfixés `Sprint 9.x.y` ou `Sprint 9 :` pour les mises à jour de plan.
+
 **Terminé quand** :
-- Aucun fichier de `src/` ne dépasse ~4 000 lignes, cible ~1 500 pour les nouveaux modules issus
-  du découpage (exception assumée : `renderer/frame.rs` ~1 095 lignes en une seule fonction,
-  volontairement non re-découpée — cf. 9.2.7).
-- La suite complète passe (`cargo test --features net_tests`).
-- Zéro diff de comportement : aucun golden, aucun test visuel, aucun test réseau n'a changé de
-  résultat.
-- `git log` montre des extractions atomiques relisibles une par une, dans l'ordre 9.0 → 9.6.
+- ✅ Aucun fichier de `src/` ne dépasse ~4 000 lignes (le plus gros hors scope du sprint est
+  `editor/mod.rs` à 2913, jamais touché par ce sprint) ; cible ~1 500 atteinte pour les nouveaux
+  modules issus du découpage, à deux exceptions assumées et documentées : `renderer/frame.rs`
+  (~1 122 lignes en une seule fonction, cf. 9.2.7) et `mmorpg/decor_data.rs` (1 911 lignes, pure
+  donnée, cf. 9.1.5).
+- ✅ La suite complète passe (`cargo test --lib --features net_tests` → 673 passed, 0 failed).
+- ✅ Zéro diff de comportement : aucun golden, aucun test visuel, aucun test réseau n'a changé de
+  résultat sur les 48 commits du sprint.
+- ✅ `git log` montre 48 extractions atomiques relisibles une par une, dans l'ordre 9.0 → 9.7.
+
+### Bilan chiffré du sprint
+
+| Fichier de départ | Lignes avant | Lignes après (fichier « chapeau ») | Fichiers créés |
+|---|---|---|---|
+| `src/scene/demos.rs` | 10 820 | 268 (`demos/mod.rs`) | 26 fichiers, 10 958 lignes au total |
+| `src/gfx/renderer.rs` | 3 555 | 45 (`renderer/mod.rs`) | 9 fichiers, 3 588 lignes au total |
+| `src/app/mod.rs` | 4 415 | 1 527 | + `mod_tests.rs`, `minimap.rs` |
+| `src/scene/mod.rs` | 4 016 | 1 433 | + `mod_tests.rs` |
+| `src/app/network_client.rs` | 3 228 | 1 400 | + `network_client_tests.rs`, `network_client_types.rs` |
+| `src/app/simulation.rs` | 3 050 | 1 500 | + `simulation_tests.rs` |
+
+**Deux classes de piège rencontrées, toutes deux documentées in situ pour un futur sprint
+similaire** :
+1. Un paramètre `&mut Vec<T>` reçu par une fonction doit être lui-même lié `mut` pour permettre
+   un réemprunt `&mut param` en son sein (E0596) — spécifique aux extractions de
+   `hameau_gdd_demo` (9.1.6), corrigeable systématiquement par `cargo clippy --fix`.
+2. `pub(super)` change de portée effective selon la profondeur de nesting : un item déjà
+   `pub(super)` dans un module plat (portée = son parent d'alors) qui migre un niveau plus
+   profond voit cette même portée se rétrécir silencieusement, cassant les usages cross-module
+   qui en dépendaient — rencontré en 9.2.1 (types GPU consommés par `gfx::pipelines`/
+   `gfx::passes`) et en 9.3/9.5 (champs/structs consommés par le module `app` parent). Détecté
+   tantôt par le compilateur (9.2.1, 52 erreurs), tantôt par relecture préalable des usages
+   croisés (9.3, 9.5) — la seconde méthode évite un aller-retour de compilation complet.
