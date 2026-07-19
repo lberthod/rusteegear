@@ -9864,5 +9864,5 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
 }
 
 #[cfg(test)]
-#[path = "demos_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
