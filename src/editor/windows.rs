@@ -272,7 +272,19 @@ pub(super) fn tool_windows(
         .show(ctx, |ui| {
             ui.heading("RusteeGear");
             ui.label("Éditeur 3D en Rust orienté export Android natif.");
-            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label(format!(
+                "Version {} — Developer Preview 1",
+                env!("CARGO_PKG_VERSION")
+            ));
+            // Commit injecté à la release (`RUSTEEGEAR_COMMIT=$(git rev-parse
+            // --short HEAD)` au build du tag, cf. Phase E5 sprint.19matin.md) :
+            // un testeur externe et la doc doivent pouvoir se référer à la même
+            // version exacte. `option_env!` : un `cargo build` local ordinaire
+            // reste possible sans variable, affiché comme build local.
+            ui.label(format!(
+                "Commit : {}",
+                option_env!("RUSTEEGEAR_COMMIT").unwrap_or("build local")
+            ));
             ui.hyperlink_to(
                 "github.com/lberthod/rusteegear",
                 "https://github.com/lberthod/rusteegear",
@@ -793,7 +805,7 @@ pub(super) fn settings_window(
         .open(&mut open)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.heading("IA — génération de scripts");
+            ui.heading("IA — génération de scripts (Experimental)");
             ui.label("Clé API DeepSeek");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut settings.deepseek_api_key)

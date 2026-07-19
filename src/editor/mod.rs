@@ -418,6 +418,13 @@ pub struct UiActions {
     pub delete_prefab: Option<(crate::assets::PrefabScope, String)>,
     /// « Quitter » : ferme l'application.
     pub quit: bool,
+    /// Modale de fermeture (modifications non sauvegardées) : « Enregistrer et
+    /// quitter » — sauvegarde vers l'emplacement par défaut puis ferme si elle réussit.
+    pub quit_save: bool,
+    /// Modale de fermeture : « Quitter sans enregistrer ».
+    pub quit_discard: bool,
+    /// Modale de fermeture : « Annuler » (clic, Échap ou clic hors de la modale).
+    pub quit_cancel: bool,
     /// Menu Outils › « Gestionnaire GLB » : lance `glbviewer` (cf. `launch_glb_viewer`)
     /// dans une fenêtre séparée, pour parcourir/prévisualiser `assets/models/`.
     pub launch_glb_viewer: bool,
@@ -878,6 +885,8 @@ impl Editor {
         wave_banner_wave: u32,
         minimap: &crate::app::MinimapData,
         locale: crate::app::locale::Locale,
+        // Modale « modifications non sauvegardées » à afficher (cf. `AppState::confirm_quit`).
+        confirm_quit: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -978,6 +987,7 @@ impl Editor {
                 crash_log_text,
                 &mut actions,
                 locale,
+                confirm_quit,
             );
         });
 
@@ -1179,6 +1189,7 @@ fn build_ui(
     crash_log_text: &mut Option<String>,
     actions: &mut UiActions,
     locale: crate::app::locale::Locale,
+    confirm_quit: bool,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -2386,6 +2397,37 @@ fn build_ui(
             wave,
         };
         actions.hud_clicks = hud_widgets(root.ctx(), play_rect, scene, &values, hud_image_cache);
+    }
+
+    // Modale de fermeture avec modifications non sauvegardées (Phase C,
+    // `sprint.19matin.md`) : affichée quand la fermeture (croix de la fenêtre ou
+    // Fichier › Quitter) a été demandée alors que la scène est modifiée. Modale
+    // bloquante plutôt que fenêtre : quitter est LA décision de la frame.
+    if confirm_quit {
+        let resp = egui::Modal::new(egui::Id::new("confirm-quit")).show(root.ctx(), |ui| {
+            ui.set_max_width(360.0);
+            ui.heading("Modifications non sauvegardées");
+            ui.label(
+                "La scène a été modifiée depuis la dernière sauvegarde. \
+                 Que faire avant de quitter ?",
+            );
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("💾  Enregistrer et quitter").clicked() {
+                    actions.quit_save = true;
+                }
+                if ui.button("🚪  Quitter sans enregistrer").clicked() {
+                    actions.quit_discard = true;
+                }
+                if ui.button("Annuler").clicked() {
+                    actions.quit_cancel = true;
+                }
+            });
+        });
+        // Échap ou clic hors de la modale = Annuler.
+        if resp.should_close() {
+            actions.quit_cancel = true;
+        }
     }
 
     // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState

@@ -19,6 +19,10 @@ pub mod editor;
 pub mod gfx;
 pub mod log_buffer;
 pub mod net;
+/// Pont de pilotage externe (TCP localhost, opt-in) — desktop uniquement, comme
+/// le hot-reload d'assets : pas de socket serveur sur mobile/web.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub mod pilot;
 pub mod runtime;
 pub mod scene;
 pub mod time_compat;
@@ -81,6 +85,17 @@ struct App {
         notify::RecommendedWatcher,
         std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
     )>,
+
+    // --- pont de pilotage externe (opt-in, cf. `pilot`) ---
+    /// `None` tant que `--pilot`/`RUSTEEGEAR_PILOT` n'a pas été demandé (cas
+    /// normal : aucune surface de commande externe ouverte par défaut).
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    pilot: Option<pilot::PilotServer>,
+    /// Instant du dernier `RedrawRequested` traité — détecte un rendu gelé
+    /// (fenêtre occultée : macOS supprime les redraws) pour que le pont de
+    /// pilotage continue de faire avancer le jeu, cf. `about_to_wait`.
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    last_render: Option<std::time::Instant>,
 }
 
 /// Résout un axe (-1/0/1) à partir de l'état « tenu » des deux touches
@@ -443,6 +458,11 @@ impl ApplicationHandler for App {
         self.renderer = None;
     }
 
+    /// Seul émetteur d'événements utilisateur : le réveil du pont de pilotage
+    /// (`EventLoopProxy`, cf. `run()`). Rien à faire ici — `about_to_wait` suit
+    /// immédiatement et draine les requêtes en attente.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {}
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         #[cfg(target_arch = "wasm32")]
         self.adopt_pending_renderer();
@@ -460,12 +480,25 @@ impl ApplicationHandler for App {
         };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            // Fermeture (croix de la fenêtre) : passe par `request_quit` — avec des
+            // modifications non sauvegardées en éditeur, ça ouvre la confirmation
+            // Enregistrer / Quitter sans enregistrer / Annuler au lieu de quitter
+            // (Phase C, `sprint.19matin.md`) ; sinon on sort immédiatement.
+            WindowEvent::CloseRequested => {
+                self.state.request_quit();
+                if self.state.should_quit {
+                    event_loop.exit();
+                }
+            }
             WindowEvent::Resized(size) => {
                 renderer.resize(size);
                 self.state.set_viewport(size.width, size.height);
             }
             WindowEvent::RedrawRequested => {
+                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+                {
+                    self.last_render = Some(std::time::Instant::now());
+                }
                 renderer.render(&mut self.state);
                 // Fermeture demandée par le menu Fichier → Quitter.
                 if self.state.should_quit {
@@ -696,6 +729,35 @@ impl ApplicationHandler for App {
         self.poll_gamepad();
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         self.poll_asset_hot_reload();
+        // Pont de pilotage : traite les requêtes externes sur ce thread, seul
+        // détenteur légitime de `AppState`/`Renderer` — même modèle de drainage
+        // que `poll_gamepad`/`poll_asset_hot_reload`.
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        if let Some(p) = self.pilot.as_ref() {
+            // Fenêtre occultée/masquée : macOS supprime les redraws, donc
+            // `render()` — qui porte normalement `advance_play` — ne tourne
+            // plus, et la simulation, les chargements asynchrones et le réseau
+            // gèlent alors que le pont répond toujours (constaté à l'audit du
+            // 19 juillet 2026 : `move` sans effet, `scene load` jamais
+            // appliqué, appli derrière le terminal). Quand le rendu est resté
+            // muet plus de 100 ms, on fait avancer le jeu d'ici — **avant** le
+            // drainage, pour que les réponses reflètent l'état frais (imports
+            // appliqués, temps intégré sous les entrées encore tenues).
+            // `advance_play` est à accumulateur de pas fixes sur temps réel :
+            // l'appeler depuis un second site ne double jamais la simulation,
+            // ça partage le même budget de temps écoulé. Note : l'App Nap
+            // étrangle aussi les timers du process — le temps réel reste donc
+            // saccadé fenêtre masquée ; les gestes `move`/`step` du pont
+            // avancent en temps *simulé* (`advance_steps`) précisément pour
+            // rester déterministes dans cet état.
+            let render_stalled = self
+                .last_render
+                .is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(100));
+            if render_stalled {
+                self.state.advance_play();
+            }
+            p.poll(&mut self.state, self.renderer.as_mut());
+        }
         if let Some(renderer) = &self.renderer
             && let Some(window) = &renderer.window
         {
@@ -758,10 +820,25 @@ fn make_app(player: bool) -> App {
         // pseudo à la main des deux côtés avant de pouvoir se voir bouger.
         // Reste un simple point de départ : la fenêtre/overlay Multijoueur
         // permet toujours de se déconnecter et pointer ailleurs.
-        app.state.connect_to_server(
-            crate::app::network_client::DEFAULT_SERVER_URL,
-            &guest_name(),
-        );
+        // `RUSTEEGEAR_OFFLINE=1` (desktop) désactive cette connexion : un player
+        // sans réseau ne doit jamais dépendre du serveur pour être jouable —
+        // pas de variable d'environnement sur wasm32, le web garde l'auto-connexion.
+        #[cfg(not(target_arch = "wasm32"))]
+        let offline = offline_requested(std::env::var("RUSTEEGEAR_OFFLINE").ok().as_deref());
+        #[cfg(target_arch = "wasm32")]
+        let offline = false;
+        if offline {
+            log::info!("Mode hors-ligne (RUSTEEGEAR_OFFLINE) : pas de connexion au serveur.");
+        } else {
+            log::info!(
+                "Connexion au serveur multijoueur par défaut : {} (RUSTEEGEAR_OFFLINE=1 pour jouer hors-ligne)",
+                crate::app::network_client::DEFAULT_SERVER_URL
+            );
+            app.state.connect_to_server(
+                crate::app::network_client::DEFAULT_SERVER_URL,
+                &guest_name(),
+            );
+        }
     } else {
         // L'éditeur s'ouvre directement sur la scène de base du MMORPG
         // (`assets/player_scene.json`, embarquée — la même que jouent le site web
@@ -771,6 +848,38 @@ fn make_app(player: bool) -> App {
         app.state.clear_history();
     }
     app
+}
+
+/// Interprète `RUSTEEGEAR_OFFLINE` (Phase A pré-test externe) : toute valeur
+/// autre que absente ou `"0"` demande le mode hors-ligne. Fonction pure (la
+/// variable est lue par l'appelant) pour rester testable sans muter
+/// l'environnement du process, cf. `assets::override_assets_dir_for_test`
+/// qui suit le même principe.
+#[cfg(not(target_arch = "wasm32"))]
+fn offline_requested(var: Option<&str>) -> bool {
+    matches!(var, Some(v) if v != "0")
+}
+
+/// Interprète la demande de pont de pilotage : `--pilot` (port par défaut),
+/// `--pilot=NNNN`, ou `RUSTEEGEAR_PILOT` (`1`/vide = port par défaut, un nombre =
+/// ce port, `0` = désactivé). Fonction pure sur les arguments/variable passés,
+/// même principe que `offline_requested`. Un port invalide retombe sur le port
+/// par défaut plutôt que d'ignorer la demande en silence.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+fn pilot_port_requested<I: Iterator<Item = String>>(args: I, env: Option<&str>) -> Option<u16> {
+    for arg in args {
+        if arg == "--pilot" {
+            return Some(pilot::DEFAULT_PORT);
+        }
+        if let Some(port) = arg.strip_prefix("--pilot=") {
+            return Some(port.parse().unwrap_or(pilot::DEFAULT_PORT));
+        }
+    }
+    match env {
+        None | Some("0") => None,
+        Some("") | Some("1") => Some(pilot::DEFAULT_PORT),
+        Some(v) => Some(v.parse().unwrap_or(pilot::DEFAULT_PORT)),
+    }
 }
 
 /// Pseudo généré au hasard (« InvitéNNNN ») pour la connexion automatique en
@@ -790,6 +899,10 @@ fn guest_name() -> String {
 pub fn run() {
     crate::log_buffer::install();
     crate::crash_log::install();
+    // Bannière de démarrage (Phase A, sprint.19matin.md) : la première ligne
+    // qu'un nouvel utilisateur lit doit nommer le produit et sa version — le
+    // détail (GPU, scène) suit sur les lignes de log de chaque sous-système.
+    log::info!("RusteeGear {}", env!("CARGO_PKG_VERSION"));
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
         Err(e) => {
@@ -804,6 +917,31 @@ pub fn run() {
         || cfg!(target_os = "ios")
         || cfg!(feature = "player_build");
     let mut app = make_app(player);
+    // Pont de pilotage externe (opt-in explicite : éval Lua = exécution de code
+    // arbitraire — jamais actif sans demande, et annoncé en clair dans les logs).
+    if let Some(port) = pilot_port_requested(
+        std::env::args(),
+        std::env::var("RUSTEEGEAR_PILOT").ok().as_deref(),
+    ) {
+        // Réveil immédiat de la boucle d'événements à chaque requête reçue : au
+        // repos elle dort 60 ms entre deux tours (cf. `about_to_wait`) — sans ce
+        // proxy, chaque commande pilot paierait cette latence.
+        let proxy = event_loop.create_proxy();
+        let waker: pilot::Waker = Box::new(move || {
+            let _ = proxy.send_event(());
+        });
+        match pilot::PilotServer::start(port, Some(waker)) {
+            Ok(server) => {
+                log::info!(
+                    "Pont de pilotage actif sur {} — toute commande locale (console, Lua, \
+                     captures) est acceptée sur ce port.",
+                    server.local_addr
+                );
+                app.pilot = Some(server);
+            }
+            Err(e) => log::error!("{e}"),
+        }
+    }
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Boucle d'événements terminée sur erreur : {e}");
     }
@@ -900,6 +1038,89 @@ mod tests {
             app.state.scene.objects.len(),
             n,
             "annuler au démarrage ne doit rien changer (historique vide)"
+        );
+    }
+
+    #[test]
+    fn first_launch_without_any_user_folder_still_opens_the_embedded_scene() {
+        // Phase A (pré-test externe) : sur une machine vierge, `~/.motor3derust/`
+        // n'existe pas encore — l'éditeur doit s'ouvrir quand même, sur la scène
+        // embarquée, sans paniquer ni exiger un asset de projet. On redirige
+        // `assets_dir()` vers un dossier qui N'EXISTE PAS (pas juste vide) :
+        // c'est exactement l'état d'un premier lancement.
+        let missing = std::env::temp_dir().join(format!(
+            "rusteegear_first_launch_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        assert!(!missing.exists());
+        let _guard = crate::assets::override_assets_dir_for_test(missing.clone());
+
+        let app = make_app(false);
+        assert!(
+            !app.state.scene.objects.is_empty(),
+            "premier lancement : la scène embarquée doit se charger sans dossier utilisateur"
+        );
+        // Le navigateur d'assets doit lister les assets embarqués (bundle://)
+        // sans erreur, même sans dossier projet sur disque.
+        for a in crate::assets::list_assets() {
+            assert!(
+                a.starts_with(crate::assets::SCHEME),
+                "sans dossier projet, seuls les assets embarqués existent (reçu : {a})"
+            );
+        }
+        // Et rien ne doit avoir créé le dossier en douce juste pour démarrer :
+        // le premier lancement est en lecture seule tant qu'on n'importe rien.
+        assert!(
+            !missing.exists(),
+            "démarrer ne doit pas écrire dans le dossier d'assets projet"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn offline_is_requested_by_any_value_except_absent_or_zero() {
+        assert!(!offline_requested(None), "variable absente : en ligne");
+        assert!(
+            !offline_requested(Some("0")),
+            "0 : en ligne (opt-out du opt-out)"
+        );
+        assert!(offline_requested(Some("1")));
+        assert!(
+            offline_requested(Some("true")),
+            "toute autre valeur : hors-ligne"
+        );
+    }
+
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    #[test]
+    fn pilot_port_is_only_requested_explicitly_by_flag_or_env() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Cas normal : jamais actif sans demande explicite.
+        assert_eq!(pilot_port_requested(args(&[]).into_iter(), None), None);
+        assert_eq!(pilot_port_requested(args(&[]).into_iter(), Some("0")), None);
+        // Flag CLI, avec ou sans port.
+        assert_eq!(
+            pilot_port_requested(args(&["--pilot"]).into_iter(), None),
+            Some(pilot::DEFAULT_PORT)
+        );
+        assert_eq!(
+            pilot_port_requested(args(&["--pilot=5000"]).into_iter(), None),
+            Some(5000)
+        );
+        // Port invalide : la demande est honorée quand même, sur le port par défaut.
+        assert_eq!(
+            pilot_port_requested(args(&["--pilot=abc"]).into_iter(), None),
+            Some(pilot::DEFAULT_PORT)
+        );
+        // Variable d'environnement.
+        assert_eq!(
+            pilot_port_requested(args(&[]).into_iter(), Some("1")),
+            Some(pilot::DEFAULT_PORT)
+        );
+        assert_eq!(
+            pilot_port_requested(args(&[]).into_iter(), Some("5001")),
+            Some(5001)
         );
     }
 

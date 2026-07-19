@@ -25,9 +25,14 @@ pub enum Target {
 impl Target {
     fn label(self) -> &'static str {
         match self {
+            // « non re-vérifié » (Phase D5, sprint.19matin.md) : cibles qui
+            // buildent historiquement mais n'ont pas été re-validées pour la
+            // Developer Preview 1 — l'absence de garantie est volontaire et
+            // affichée, cf. docs/KNOWN_LIMITATIONS.md. macOS et Web ont été
+            // re-vérifiés (Phase C6).
             Target::Macos => "macOS · .dmg",
-            Target::Android => "Android · .apk",
-            Target::Ios => "iOS · .ipa",
+            Target::Android => "Android · .apk — non re-vérifié (préversion)",
+            Target::Ios => "iOS · .ipa — non re-vérifié (préversion)",
             Target::Web => "Web · .zip",
         }
     }

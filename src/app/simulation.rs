@@ -270,6 +270,32 @@ impl AppState {
         self.perf_window_worst_sim = self.perf_window_worst_sim.max(d.as_secs_f32());
     }
 
+    /// Avance la simulation d'exactement `n` pas fixes de 1/60 s, immédiatement
+    /// et sans dépendre de l'horloge réelle (contrairement à `advance_play`, qui
+    /// mesure `dt` entre deux frames) — pas-à-pas déterministe du pont de
+    /// pilotage (`crate::pilot`) et de la console (`step <n>`). Ne fait rien
+    /// hors Play : la physique n'est construite qu'à l'entrée en Play (cf. les
+    /// transitions dans `advance_play`), un pas hors Play muterait la scène
+    /// d'édition sans snapshot de restauration. Renvoie `true` si les pas ont
+    /// été exécutés.
+    pub fn advance_steps(&mut self, n: u32) -> bool {
+        if !self.playing {
+            return false;
+        }
+        // Front d'entrée en Play pas encore traité (il vit dans `advance_play`,
+        // porté par la boucle de rendu — qui peut être au ralenti, fenêtre
+        // masquée/occultée) : le déclencher d'abord, sinon les pas simuleraient
+        // sans monde physique (`self.physics` encore `None`) — aucun objet
+        // pilotable ne bougerait (constaté à l'audit du 19 juillet 2026).
+        if !self.was_playing {
+            self.advance_play();
+        }
+        for _ in 0..n {
+            self.sim_step(1.0 / 60.0);
+        }
+        true
+    }
+
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
@@ -949,7 +975,17 @@ impl AppState {
                 let key = scripting::script_key(&obj.script);
                 let func = match self.script_cache.get(&key) {
                     Some(f) => f.clone(),
-                    None => match self.lua.load(&obj.script).into_function() {
+                    // Chunk nommé d'après l'objet : sans ça, mlua nomme le chunk
+                    // d'après le call-site Rust (`src/app/simulation.rs:NNN`) et
+                    // les erreurs Lua deviennent illisibles pour l'utilisateur
+                    // (Phase C5, sprint.19matin.md) — avec, elles se lisent
+                    // « script de « Nom » »:ligne: message ».
+                    None => match self
+                        .lua
+                        .load(&obj.script)
+                        .set_name(format!("script de « {} »", obj.name))
+                        .into_function()
+                    {
                         Ok(f) => {
                             self.script_cache.insert(key, f.clone());
                             f

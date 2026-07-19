@@ -19,7 +19,12 @@ impl Scene {
                     m.aabb_min = min;
                     m.aabb_max = max;
                 }
-                Err(e) => log::error!("Rechargement de {} échoué : {e}", m.path),
+                Err(e) => log::error!(
+                    "Rechargement de {} échoué : {e} — l'objet restera sans géométrie. \
+                     Réimportez le fichier (📥 Importer glTF…) ou replacez-le dans le \
+                     dossier d'assets du projet.",
+                    m.path
+                ),
             }
             m.load_skinning();
         }

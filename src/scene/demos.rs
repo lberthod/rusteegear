@@ -2724,6 +2724,34 @@ obj.r = 0.85 + 0.15 * b; obj.g = 0.22 + 0.18 * b; obj.b = 0.05 + 0.1 * b"
             ("creature59.glb", 25.0, -5.0),
             ("creature60.glb", 15.0, -5.0),
             ("creature61.glb", 20.0, -30.0),
+            // Renard (creature62, jusqu'ici généré mais jamais spawné — cf.
+            // `docs/rapport_qualite_creatures_vs_hyper3d.md`), lisière ouest
+            // de la prairie centrale, à l'écart du lac (`EXCL_EAU_ROUTES`) et
+            // de la halte « Ouest souche/fleurs ».
+            ("creature62.glb", -9.5, -0.5),
+            // Pack savane africaine (creature63-67, `gen_creature_pack63_67.py`),
+            // couloir libre entre rizières (x -11..9, z 23.5..34.5) et
+            // promontoire rocheux (x 20..34, z 2..16) — chaque position
+            // vérifiée à ≥4 m de tout décor/créature/halte déjà posé et de
+            // ses 4 voisines du pack (`EXCL_EAU_ROUTES`/`EXCL_ZONES_AMENAGEES`
+            // exclus par construction).
+            ("creature63.glb", 9.0, 26.0),
+            ("creature64.glb", 16.5, 33.0),
+            ("creature65.glb", 22.0, 25.0),
+            ("creature66.glb", 22.0, 29.0),
+            ("creature67.glb", 22.0, 33.0),
+            // Pack mammifères ronds au corps organique (creature68-72,
+            // `gen_creature_pack68_72_organic.py`, Metaball + Automatic
+            // Weights — cf. `proto_creature62_fox_organic.py`) : hippopotame,
+            // capybara, loutre de mer, koala, marmotte. Dispersés en lisière
+            // ouest/sud-ouest, à ≥4,5 m de tout décor/créature/halte déjà
+            // posé (`EXCL_EAU_ROUTES`/`EXCL_ZONES_AMENAGEES` exclus par
+            // construction).
+            ("creature68.glb", -18.0, -12.0),
+            ("creature69.glb", -23.5, -33.0),
+            ("creature70.glb", -13.5, -13.0),
+            ("creature71.glb", -12.5, 34.0),
+            ("creature72.glb", -21.5, -3.5),
         ];
         for (i, &(file, x, z)) in MMORPG_AMBIENT_FAUNA_SPAWNS.iter().enumerate() {
             let n = i + 27;
@@ -10636,10 +10664,13 @@ mod tests {
         let active_count = skinned.len() - eligible.len();
 
         // Régression : verrouille les comptages mesurés en Sprint 2 (26
-        // créatures `MMORPG_CREATURES` + 35 « Errant N » scriptées = 61
-        // objets skinnés actifs, non éligibles à l'instancing).
+        // créatures `MMORPG_CREATURES` + 46 « Errant N » scriptées = 72
+        // objets skinnés actifs, non éligibles à l'instancing) — mis à jour
+        // après l'ajout de creature62-67 (renard + pack savane africaine) et
+        // creature68-72 (pack organique Metaball) à
+        // `MMORPG_AMBIENT_FAUNA_SPAWNS`.
         assert_eq!(
-            active_count, 61,
+            active_count, 72,
             "objets skinnés actifs (AiChaser ou script non vide) : {active_count} \
              — si ce nombre a changé, la répartition Sprint 2 est à revérifier"
         );

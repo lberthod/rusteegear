@@ -147,7 +147,7 @@ pub(super) fn menu_fichier(
         });
         ui.separator();
         if ui
-            .button("✨  Générer une scène (IA)…")
+            .button("✨  Générer une scène (IA)… — Experimental")
             .on_hover_text("Crée une scène complète depuis une description (DeepSeek)")
             .clicked()
         {
@@ -638,6 +638,21 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
         }
         if ui.button("🩹  Journal de crash").clicked() {
             panels.crash_log = true;
+            ui.close();
+        }
+        // Phase E4 (sprint.19matin.md) : tout le contexte utile à un rapport de
+        // bug en un clic — version/commit/OS/format + derniers logs (bannière et
+        // ligne GPU comprises), dossier personnel anonymisé. À coller tel quel
+        // dans une issue GitHub.
+        if ui
+            .button("📋  Copier le diagnostic")
+            .on_hover_text(
+                "Copie version, commit, OS, GPU et derniers logs — à coller dans une issue",
+            )
+            .clicked()
+        {
+            ui.ctx().copy_text(crate::log_buffer::diagnostic_report());
+            log::info!("Diagnostic copié dans le presse-papiers.");
             ui.close();
         }
         ui.separator();

@@ -195,8 +195,19 @@ pub struct AppState {
     pub fly_cam: bool,
     /// En pause : reste en mode Play mais gèle la simulation (scripts, physique, temps).
     pub paused: bool,
-    /// Demande de fermeture de l'application (menu Fichier → Quitter).
+    /// Demande de fermeture de l'application (menu Fichier → Quitter ou bouton
+    /// de fermeture de la fenêtre, une fois la confirmation passée le cas échéant).
     pub should_quit: bool,
+    /// Scène modifiée depuis la dernière sauvegarde (Phase C, `sprint.19matin.md`).
+    /// Posé par `push_undo` (toute opération annulable) et par la détection
+    /// d'édition de champs UI (cf. `ui_scene_fingerprint`) ; remis à faux par une
+    /// sauvegarde réussie, un chargement de scène et `clear_history` (démarrage).
+    /// Approximation assumée : annuler jusqu'à l'état sauvegardé laisse le drapeau posé.
+    pub scene_dirty: bool,
+    /// Confirmation de fermeture en attente : la fermeture a été demandée alors
+    /// que `scene_dirty` est posé — l'éditeur affiche la modale
+    /// Enregistrer / Quitter sans enregistrer / Annuler au lieu de quitter.
+    pub confirm_quit: bool,
     /// Mode « player » : pas d'éditeur (panneaux egui), démarre en Play.
     pub player: bool,
     /// Langue du texte runtime affiché en Play (Sprint 130) — pas l'éditeur, dont l'UI
@@ -901,6 +912,8 @@ impl AppState {
             fly_cam: false,
             paused: false,
             should_quit: false,
+            scene_dirty: false,
+            confirm_quit: false,
             player: false,
             locale: initial_settings.locale,
             input_state: PlayerInput::default(),
@@ -1205,8 +1218,15 @@ impl AppState {
     }
 
     /// Demande la fermeture de l'application (traitée par la boucle d'événements).
+    /// Si la scène a des modifications non sauvegardées en mode éditeur, ouvre la
+    /// confirmation (`confirm_quit`) au lieu de quitter — le mode player n'édite
+    /// pas la scène, il quitte toujours directement.
     pub fn request_quit(&mut self) {
-        self.should_quit = true;
+        if self.scene_dirty && !self.player {
+            self.confirm_quit = true;
+        } else {
+            self.should_quit = true;
+        }
     }
 
     /// Bascule la caméra libre de l'éditeur (touche G) : permet de survoler toute la
@@ -1285,8 +1305,9 @@ impl AppState {
         self.player_index().map(|i| &self.scene.objects[i])
     }
 
-    /// Indice de l'objet « joueur » : cf. `player_object`.
-    fn player_index(&self) -> Option<usize> {
+    /// Indice de l'objet « joueur » : cf. `player_object`. `pub` depuis le pont
+    /// de pilotage (`crate::pilot`, verbe `player`).
+    pub fn player_index(&self) -> Option<usize> {
         // `o.visible` : exclut un objet masqué (cf. `AppState::despawn_network_player`,
         // ou le gabarit caché par `spawn_network_player` une fois un vrai joueur
         // réseau présent) — sans ce filtre, un gabarit inerte resterait « le
@@ -1318,8 +1339,9 @@ impl AppState {
         // l'IA/les déclencheurs inactifs, pas désigner un objet au hasard.
     }
 
-    /// Position du « joueur » : cf. `player_object`.
-    fn player_position(&self) -> Option<Vec3> {
+    /// Position du « joueur » : cf. `player_object`. `pub` depuis le pont
+    /// de pilotage (`crate::pilot`, verbe `player`).
+    pub fn player_position(&self) -> Option<Vec3> {
         self.player_object().map(|o| o.transform.position)
     }
 

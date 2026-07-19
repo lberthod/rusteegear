@@ -1209,6 +1209,121 @@ mod tests {
             assert!((t_native.rotation.dot(t_web.rotation)).abs() > 1.0 - 1e-5);
         }
 
+        /// Variantes paramétrées de `run_native`/`run_web` pour les scripts
+        /// officiels (`examples/scripts/*.lua`, Phase D2 sprint.19matin.md) :
+        /// mêmes appels, mais `time`, `triggered` et `tagged` pilotables —
+        /// `move_between_points` dépend de `time`, `trigger_door` de
+        /// `obj.triggered`, `simple_enemy` de `find_tag`.
+        #[allow(clippy::too_many_arguments)]
+        fn run_native_at(
+            src: &str,
+            t: &mut Transform,
+            time: f32,
+            triggered: bool,
+            tagged: &[(String, Vec3)],
+        ) {
+            let lua = NativeLua::new();
+            let func = lua.load(src).into_function().unwrap();
+            native::run_script(
+                &lua,
+                &func,
+                t,
+                &mut [1.0; 3],
+                &mut None,
+                0.016,
+                time,
+                &PlayerInput::default(),
+                false,
+                triggered,
+                &[],
+                &mut Vec::new(),
+                tagged,
+                &mut Vec::new(),
+                &mut false,
+                &mut std::collections::HashMap::new(),
+                &mut Vec::new(),
+                &mut None,
+                &mut Vec::new(),
+                false,
+                None,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn run_web_at(
+            src: &str,
+            t: &mut Transform,
+            time: f32,
+            triggered: bool,
+            tagged: &[(String, Vec3)],
+        ) {
+            let mut lua = Lua::new().unwrap();
+            let func = lua.load(src).unwrap();
+            run_script_web(
+                &mut lua,
+                &func,
+                t,
+                &mut [1.0; 3],
+                &mut None,
+                0.016,
+                time,
+                &PlayerInput::default(),
+                false,
+                triggered,
+                &[],
+                &mut Vec::new(),
+                tagged,
+                &mut Vec::new(),
+                &mut false,
+                &mut HashMap::new(),
+                &mut Vec::new(),
+                &mut None,
+                &mut Vec::new(),
+                false,
+                None,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn official_scripts_match_between_backends() {
+            // Les 4 scripts officiels publiés dans `examples/scripts/` doivent
+            // produire le MÊME résultat sur les deux backends — c'est la
+            // garantie que documente docs/LUA_PORTABLE.md. Lus depuis les
+            // fichiers publiés (pas des copies) : impossible de dériver.
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/scripts");
+            let tagged = vec![("joueur".to_string(), Vec3::new(4.0, 0.0, -3.0))];
+            for (file, time, triggered) in [
+                ("rotate.lua", 0.0, false),
+                ("move_between_points.lua", 1.7, false),
+                ("trigger_door.lua", 0.0, true),
+                ("trigger_door.lua", 0.0, false),
+                ("simple_enemy.lua", 0.0, false),
+            ] {
+                let src = std::fs::read_to_string(dir.join(file))
+                    .unwrap_or_else(|e| panic!("{file} illisible : {e}"));
+                let start = Transform::from_pos(Vec3::new(1.0, 1.0, 1.0));
+                let mut t_native = start;
+                let mut t_web = start;
+                run_native_at(&src, &mut t_native, time, triggered, &tagged);
+                run_web_at(&src, &mut t_web, time, triggered, &tagged);
+                assert!(
+                    (t_native.position - t_web.position).length() < 1e-5,
+                    "{file} (time={time}, triggered={triggered}) : positions divergentes \
+                     natif {:?} vs web {:?}",
+                    t_native.position,
+                    t_web.position
+                );
+                assert!(
+                    t_native.rotation.dot(t_web.rotation).abs() > 1.0 - 1e-5,
+                    "{file} : rotations divergentes entre les deux backends"
+                );
+            }
+        }
+
         #[test]
         fn string_and_table_script_matches_between_backends() {
             let src = "local t = {1, 2, 3}\n\

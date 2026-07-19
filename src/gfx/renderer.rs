@@ -487,6 +487,9 @@ impl Renderer {
             .then(|| GpuProfiler::new(&device, queue.get_timestamp_period()));
 
         let backend = format!("{:?}", adapter.get_info().backend);
+        // Ligne de démarrage attendue par un nouvel utilisateur (Phase A,
+        // sprint.19matin.md) : quel GPU et quel backend, une seule ligne.
+        log::info!("GPU : {} ({backend})", adapter.get_info().name);
 
         let (format, alpha_mode) = match &surface {
             Some(s) => {
@@ -1792,6 +1795,11 @@ impl Renderer {
             let ally_marker = app
                 .nearest_downed_ally_position()
                 .map(|p| (app.camera.view_proj(), p));
+            // Détection d'édition de champs UI (Inspecteur…) pour le drapeau
+            // « scène modifiée » : les widgets egui mutent la scène directement,
+            // sans passer par `push_undo` — on compare une empreinte des parties
+            // éditables juste avant/après la construction de l'UI de la frame.
+            let ui_fingerprint_before = app.ui_scene_fingerprint();
             let (full_output, actions) = editor.run(
                 &window,
                 &mut app.scene,
@@ -1838,7 +1846,11 @@ impl Renderer {
                 app.wave_banner_wave,
                 &minimap,
                 app.locale,
+                app.confirm_quit,
             );
+            if app.ui_scene_fingerprint() != ui_fingerprint_before {
+                app.scene_dirty = true;
+            }
             if let Some(kind) = actions.use_item {
                 app.use_item(kind);
             }
@@ -2002,6 +2014,24 @@ impl Renderer {
             }
             if actions.quit {
                 app.request_quit();
+            }
+            // Réponses à la modale « modifications non sauvegardées ».
+            if actions.quit_cancel {
+                app.confirm_quit = false;
+            }
+            if actions.quit_discard {
+                app.confirm_quit = false;
+                app.should_quit = true;
+            }
+            if actions.quit_save {
+                app.confirm_quit = false;
+                app.save();
+                // `save` ne baisse `scene_dirty` que sur succès : en cas d'échec
+                // (disque plein, chemin illisible…), on reste ouvert plutôt que de
+                // quitter en perdant la scène — l'erreur est visible dans la console.
+                if !app.scene_dirty {
+                    app.should_quit = true;
+                }
             }
             if actions.launch_glb_viewer {
                 crate::editor::launch_glb_viewer();
@@ -2652,7 +2682,11 @@ impl Renderer {
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Depth dédiée à la taille demandée (peut différer de `self.depth_view`, qui suit
-        // la taille de la fenêtre en mode interactif).
+        // la taille de la fenêtre en mode interactif). Même sample count que les
+        // pipelines : mono-échantillon via `new_headless` (goldens), mais celui de la
+        // fenêtre quand ce chemin sert de capture depuis un renderer fenêtré
+        // (`screenshot_png`, pont de pilotage) — les pipelines y sont compilés en
+        // MSAA, une cible mono-échantillon ferait échouer la validation wgpu.
         let depth = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("headless_depth"),
             size: wgpu::Extent3d {
@@ -2661,17 +2695,17 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: self.msaa_samples,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
-        // Cible HDR, locale à cet appel — cf. `hdr_view` de `render()`.
-        // Chemin headless : toujours mono-échantillon (`self.msaa_samples == 1`,
-        // cf. `new_impl`), donc pas de cible multisample à gérer ici.
-        let (hdr_view, _) = create_hdr_view(&self.device, width, height, self.msaa_samples);
+        // Cibles HDR, locales à cet appel — cf. `hdr_view`/`msaa_color_view` de
+        // `render()` : `msaa_color_view` n'est `Some` qu'en MSAA (renderer fenêtré).
+        let (hdr_view, msaa_color_view) =
+            create_hdr_view(&self.device, width, height, self.msaa_samples);
         // Chaîne de bloom, locale à cet appel — cf. `bloom_mip_views` de
         // `render()`.
         let bloom_mip_views = create_bloom_mip_views(&self.device, width, height);
@@ -2779,8 +2813,11 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("headless_main_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &hdr_view,
-                    resolve_target: None,
+                    // MSAA : dessine dans la cible multi-échantillonnée et se résout
+                    // vers `hdr_view` — même branchement que la passe principale de
+                    // `render()`, sinon comportement inchangé (goldens mono-échantillon).
+                    view: msaa_color_view.as_ref().unwrap_or(&hdr_view),
+                    resolve_target: msaa_color_view.as_ref().map(|_| &hdr_view),
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -2891,6 +2928,38 @@ impl Renderer {
         );
 
         self.finish_and_read_rgba(encoder, &target, width, height)
+    }
+
+    /// Capture PNG de l'état courant de la scène (pont de pilotage externe, cf.
+    /// `crate::pilot`) : rendu hors-écran via [`Renderer::render_scene_headless`],
+    /// donc disponible aussi depuis un renderer **fenêtré** — la cible offscreen
+    /// hérite alors du format de la surface (BGRA sur macOS/Metal, contrairement
+    /// au RGBA imposé par `new_headless`), d'où le swizzle avant l'écriture PNG.
+    pub fn screenshot_png(
+        &mut self,
+        app: &mut AppState,
+        width: u32,
+        height: u32,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        // `render_scene_headless` consomme `app.debug_lines` (vidées après dessin,
+        // comme `render()`) : on les repose ensuite pour que la frame fenêtrée en
+        // cours ne perde pas ses lignes de debug à cause d'une capture. L'aspect
+        // caméra, lui aussi écrasé, est recalculé par `render()` à chaque frame —
+        // rien à restaurer.
+        let debug_lines = app.debug_lines.clone();
+        let mut pixels = self.render_scene_headless(app, width, height);
+        app.debug_lines = debug_lines;
+        if matches!(
+            self.config.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for px in pixels.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+        }
+        image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8)
+            .map_err(|e| format!("écriture de {} impossible : {e}", path.display()))
     }
 
     /// Copie `target` vers un buffer lisible CPU, soumet `encoder` et attend le résultat —

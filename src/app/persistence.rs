@@ -175,16 +175,46 @@ impl AppState {
     }
 
     /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
-    pub fn save(&self) {
+    pub fn save(&mut self) {
         self.save_to(&scene_path());
     }
 
     /// Sauvegarde la scène en JSON vers un chemin donné (« Enregistrer sous »).
-    pub fn save_to(&self, path: &str) {
+    /// Ne baisse le drapeau « non sauvegardé » (`scene_dirty`) que sur succès :
+    /// après un échec, fermer la fenêtre doit continuer d'alerter.
+    pub fn save_to(&mut self, path: &str) {
         match self.scene.save(path) {
-            Ok(()) => log::info!("Scène sauvegardée dans {path}"),
+            Ok(()) => {
+                self.scene_dirty = false;
+                log::info!("Scène sauvegardée dans {path}");
+            }
             Err(e) => log::error!("Échec sauvegarde : {e}"),
         }
+    }
+
+    /// Empreinte JSON des parties de la scène éditables directement par les widgets
+    /// egui (Inspecteur, éditeur de widgets HUD…), qui mutent la scène sans passer
+    /// par `push_undo`. Comparée juste avant/après la construction de l'UI d'une
+    /// frame pour poser `scene_dirty` sur une édition de champ. Volontairement
+    /// limitée à l'objet sélectionné + aux réglages de scène (pas `objects` entier
+    /// ni `imported`) : les opérations structurelles passent, elles, par `push_undo`,
+    /// et sérialiser toute la scène à chaque frame serait un coût inutile.
+    pub fn ui_scene_fingerprint(&self) -> String {
+        let s = &self.scene;
+        let selected_obj = self.selection.and_then(|i| s.objects.get(i));
+        serde_json::to_string(&(
+            selected_obj,
+            &s.light,
+            &s.sky,
+            &s.point_lights,
+            &s.mobile,
+            s.camera_follow,
+            &s.game_camera,
+            &s.hud_layout,
+            &s.hud_widgets,
+            &s.groups,
+        ))
+        .unwrap_or_default()
     }
 
     /// Charge la scène depuis l'emplacement par défaut.
@@ -198,12 +228,37 @@ impl AppState {
         let tx = self.scene_load_tx.clone();
         let path = path.to_string();
         std::thread::spawn(move || {
-            let res = Scene::load(&path).map_err(|e| e.to_string()).map(|mut s| {
-                s.reload_imported();
-                s
-            });
+            // Erreur enrichie du chemin et d'une piste de réparation (Phase C5,
+            // sprint.19matin.md) : « Échec chargement : expected value » sans le
+            // fichier concerné n'est pas diagnosticable par l'utilisateur.
+            let res = Scene::load(&path)
+                .map_err(|e| {
+                    format!(
+                        "{path} : {e} — le fichier est-il bien une scène JSON \
+                         (produite par 💾 Enregistrer) ? La scène actuelle est conservée."
+                    )
+                })
+                .map(|mut s| {
+                    s.reload_imported();
+                    s
+                });
             let _ = tx.send(res);
         });
+    }
+
+    /// Variante **synchrone** de `load_from`, pour le pont de pilotage
+    /// (`crate::pilot`) : sous App Nap (fenêtre masquée), le thread de fond de
+    /// `load_from` peut être étranglé plusieurs secondes par macOS — un pilote
+    /// externe a besoin d'une réponse « scène chargée » fiable et immédiate
+    /// (~15 ms pour la scène du hameau). Même intégration que `poll_imports`.
+    pub fn load_from_blocking(&mut self, path: &str) -> Result<usize, String> {
+        let mut s = Scene::load(path).map_err(|e| format!("{path} : {e}"))?;
+        s.reload_imported();
+        self.scene = s;
+        self.clear_selection();
+        self.imported_dirty = true;
+        self.scene_dirty = false;
+        Ok(self.scene.objects.len())
     }
 
     /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).
@@ -211,7 +266,17 @@ impl AppState {
         let tx = self.import_tx.clone();
         let p = path.to_string();
         std::thread::spawn(move || {
-            let res = crate::scene::import::load_gltf(&p).map(|(d, mn, mx)| (p.clone(), d, mn, mx));
+            // Même principe que `load_from` (Phase C5) : l'erreur cite le fichier
+            // et une piste — un « Import glTF échoué : invalid magic » sans chemin
+            // ne dit pas quel fichier réessayer.
+            let res = crate::scene::import::load_gltf(&p)
+                .map(|(d, mn, mx)| (p.clone(), d, mn, mx))
+                .map_err(|e| {
+                    format!(
+                        "{p} : {e} — le fichier est-il un .glb/.gltf valide \
+                         (export Blender : glTF 2.0) ? La scène n'a pas été modifiée."
+                    )
+                });
             let _ = tx.send(res);
         });
     }
@@ -231,6 +296,9 @@ impl AppState {
                     self.scene = s;
                     self.clear_selection();
                     self.imported_dirty = true;
+                    // Une scène fraîchement chargée depuis le disque est, par
+                    // définition, identique à sa version sauvegardée.
+                    self.scene_dirty = false;
                 }
                 Err(e) => log::error!("Échec chargement : {e}"),
             }

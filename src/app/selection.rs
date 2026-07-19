@@ -255,6 +255,9 @@ impl AppState {
 
     /// Capture l'état courant de la scène avant une modification (vide la pile redo).
     pub fn push_undo(&mut self) {
+        // Toute opération annulable est une modification de scène : c'est le point
+        // de passage commun qui pose le drapeau « non sauvegardé » (cf. `scene_dirty`).
+        self.scene_dirty = true;
         self.undo_stack
             .push_back(SceneSnapshot::capture(&self.scene));
         if self.undo_stack.len() > 50 {
@@ -265,9 +268,12 @@ impl AppState {
 
     /// Vide l'historique undo/redo — utilisé au démarrage de l'éditeur pour que
     /// la scène d'ouverture ne soit pas « annulable » vers la scène vide interne.
+    /// Repart aussi sur une scène « propre » : la scène d'ouverture vient d'être
+    /// chargée, elle n'a par définition rien de non sauvegardé.
     pub fn clear_history(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.scene_dirty = false;
     }
 
     pub fn undo(&mut self) {
@@ -675,6 +681,67 @@ mod tests {
         assert_eq!(app.scene.point_lights.len(), n0); // lumière retirée par l'undo
         app.redo();
         assert_eq!(app.scene.point_lights.len(), n0 + 1); // ré-ajoutée
+    }
+
+    /// Phase C (`sprint.19matin.md`) : le drapeau « scène modifiée » suit le
+    /// cycle édition → demande de fermeture → sauvegarde → fermeture directe.
+    #[test]
+    fn scene_dirty_suit_edition_sauvegarde_et_fermeture() {
+        let mut app = AppState::new();
+        app.clear_history(); // démarrage éditeur : scène propre
+        assert!(!app.scene_dirty);
+
+        // Sans modification : la fermeture est directe, pas de confirmation.
+        app.request_quit();
+        assert!(app.should_quit);
+        assert!(!app.confirm_quit);
+
+        app.should_quit = false;
+        app.push_undo(); // n'importe quelle opération annulable
+        assert!(app.scene_dirty);
+
+        // Avec modifications : confirmation au lieu de quitter.
+        app.request_quit();
+        assert!(!app.should_quit);
+        assert!(app.confirm_quit);
+        app.confirm_quit = false;
+
+        // Sauvegarde réussie → scène propre, la fermeture redevient directe.
+        let path =
+            std::env::temp_dir().join(format!("rusteegear_dirty_{}.json", std::process::id()));
+        app.save_to(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(!app.scene_dirty);
+        app.request_quit();
+        assert!(app.should_quit);
+        assert!(!app.confirm_quit);
+    }
+
+    /// En mode player (aucune édition de scène, pas de panneaux éditeur pour
+    /// afficher une modale), la fermeture reste immédiate quel que soit le drapeau.
+    #[test]
+    fn request_quit_en_player_ignore_le_drapeau() {
+        let mut app = AppState::new();
+        app.player = true;
+        app.scene_dirty = true;
+        app.request_quit();
+        assert!(app.should_quit);
+        assert!(!app.confirm_quit);
+    }
+
+    /// Une édition de champ type Inspecteur (mutation directe de la scène, sans
+    /// `push_undo`) change l'empreinte UI — le mécanisme par lequel le renderer
+    /// pose `scene_dirty` en comparant l'empreinte avant/après l'UI d'une frame.
+    #[test]
+    fn ui_scene_fingerprint_detecte_une_edition_inspecteur() {
+        let mut app = AppState::new();
+        app.select_single(0);
+        let before = app.ui_scene_fingerprint();
+        app.scene.light.ambient += 0.1;
+        assert_ne!(app.ui_scene_fingerprint(), before, "réglage de scène");
+        let before = app.ui_scene_fingerprint();
+        app.scene.objects[0].transform.position.x += 1.0;
+        assert_ne!(app.ui_scene_fingerprint(), before, "objet sélectionné");
     }
 
     #[test]
