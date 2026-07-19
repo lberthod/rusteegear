@@ -21,10 +21,19 @@ jobs:
         run: cargo install cargo-bundle
       - name: Build .dmg
         run: ./packaging/build_dmg.sh
+      - name: Renommer le livrable
+        # build_dmg.sh en mode normal (aucun OUTPUT_NAME/PLAYER_BUILD) produit
+        # le bundle éditeur RusteeGear.dmg — jamais Motor3DeRust.dmg (Sprint 2,
+        # audit du 19 juillet 2026). Renommé avec le tag pour un livrable
+        # versionné explicite.
+        run: |
+          mkdir -p target/release/bundle/dmg-release
+          cp target/release/bundle/dmg/RusteeGear.dmg \
+             "target/release/bundle/dmg-release/RusteeGear-Editor-${{ github.ref_name }}.dmg"
       - name: Attacher à la Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/dmg/Motor3DeRust.dmg
+          files: target/release/bundle/dmg-release/RusteeGear-Editor-${{ github.ref_name }}.dmg
 
   android:
     name: Build Android .apk

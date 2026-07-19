@@ -157,9 +157,26 @@ cargo test --features net_tests --test pilot_bridge     # 6 tests dans un env av
 
 ---
 
-## Sprint 2 — Corriger et tester la Release
+## Sprint 2 — Corriger et tester la Release 🟡 EN COURS (19 juillet 2026)
 
 **Objectif** : une Release GitHub alpha téléchargeable et lançable.
+
+### Résultat partiel
+
+- **2.1 ✅** — `release.yml` corrigé : une étape « Renommer le livrable » copie
+  `RusteeGear.dmg` (ce que produit réellement `build_dmg.sh` en mode normal) vers
+  `RusteeGear-Editor-${{ github.ref_name }}.dmg`, qui est ensuite attaché à la
+  Release. Fini le nom `Motor3DeRust.dmg` qui n'existait jamais.
+- **2.2 ✅** — Décision confirmée : alpha.1 livre l'éditeur seul ; le Player
+  First Game est reporté (voir sous-phase 2.2 ci-dessous), non bloquant.
+- **2.3/2.4 ⏸ en attente d'accord explicite** — créer et pousser un tag `v*`
+  déclenche la CI et publie une **vraie Release GitHub publique** avec des
+  binaires attachés : action visible et difficile à annuler, donc non faite sans
+  confirmation explicite en chat (voir garde-fous des actions à risque). `git tag
+  -l 'v*'` confirme qu'aucun tag n'existe encore sur ce dépôt.
+- Vérifié au passage : `APP_VERSION` dérivé de `v0.1.0-alpha.1` donne
+  `0.1.0-alpha.1` (strip du `v`), un semver Cargo valide — le job Android ne
+  cassera pas sur ce tag.
 
 ### État des lieux vérifié
 
