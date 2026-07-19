@@ -2115,40 +2115,17 @@ fn build_ui(
                                 "En Play, un tap dessus expose obj.tapped/obj.touch_started/ \
                                  obj.touching/obj.touch_ended au script (panneau Script ci-dessous)",
                             );
-                        // Objet d'inventaire (cf. `ItemPickup`) : la case pose/retire le
-                        // composant, la sorte et la quantité ne s'affichent que posé.
-                        let mut is_item = obj.item_pickup.is_some();
-                        ui.checkbox(&mut is_item, "🧺 Objet à ramasser")
-                            .on_hover_text(
-                                "En Play, marcher dessus l'ajoute au sac du joueur (panneau 👜)",
-                            );
-                        if is_item && obj.item_pickup.is_none() {
-                            obj.item_pickup = Some(crate::scene::ItemPickup {
-                                kind: crate::scene::ItemKind::Potion,
-                                count: 1,
-                            });
-                        } else if !is_item {
-                            obj.item_pickup = None;
-                        }
-                        if let Some(item) = &mut obj.item_pickup {
-                            ui.horizontal(|ui| {
-                                ui.label("Sorte");
-                                egui::ComboBox::from_id_salt(("item_kind", i))
-                                    .selected_text(item.kind.label())
-                                    .show_ui(ui, |ui| {
-                                        for k in crate::scene::ItemKind::ALL {
-                                            ui.selectable_value(&mut item.kind, k, k.label());
-                                        }
-                                    });
-                                ui.label("×");
-                                ui.add(egui::DragValue::new(&mut item.count).range(1..=99))
-                                    .on_hover_text("Quantité ajoutée au sac par ramassage");
-                            });
-                        }
-                        ui.checkbox(&mut obj.deadly, "💀 Zone mortelle")
-                            .on_hover_text(
-                                "En Play, la partie est perdue si le joueur entre dans son AABB",
-                            );
+                        // `obj.item_pickup` (case « Objet à ramasser ») retiré de l'Inspecteur
+                        // (19 juillet 2026, demande utilisateur) : `add_item(kind, n)` en script
+                        // sur `obj.triggered` couvre le même besoin (ajoute au sac du joueur,
+                        // cf. `AppState::add_item`). Le champ reste au moteur pour les scènes
+                        // qui l'utiliseraient déjà en JSON.
+                        // `obj.deadly` (case « Zone mortelle ») retiré de l'Inspecteur (19 juillet
+                        // 2026, demande utilisateur) : `damage(999)` en script sur
+                        // `obj.triggered` reproduit exactement le même résultat visible en solo
+                        // (même flag `self.lost`, même son, même bannière — cf.
+                        // `AppState::sim_step`) sans case dédiée. Le champ reste au moteur pour
+                        // les scènes qui l'utiliseraient déjà en JSON.
                         ui.checkbox(&mut obj.trigger, "🎯 Zone de déclenchement")
                             .on_hover_text(
                                 "En Play, expose obj.triggered au script quand le joueur entre dans sa zone",
@@ -2358,7 +2335,8 @@ fn build_ui(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
                                  obj.r/g/b, obj.tapped, obj.touch_started, obj.touching, \
                                  obj.touch_ended, obj.triggered, dt, time, input.jx/jy, \
-                                 input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1)",
+                                 input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1), \
+                                 add_item(kind, n)",
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut obj.script)

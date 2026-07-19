@@ -704,6 +704,20 @@ impl ItemKind {
         }
     }
 
+    /// Depuis une clé texte ASCII (`add_item("potion", 1)` côté script Lua —
+    /// `src/app/scripting.rs`/`scripting_web.rs`) : insensible à la casse, accents
+    /// ignorés (`cle`/`clé` acceptés tous les deux), `None` si la clé ne
+    /// correspond à rien plutôt qu'un panic/erreur Lua peu clair.
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.to_ascii_lowercase().as_str() {
+            "potion" => Some(ItemKind::Potion),
+            "baie" => Some(ItemKind::Baie),
+            "cle" | "clé" => Some(ItemKind::Cle),
+            "gemme" => Some(ItemKind::Gemme),
+            _ => None,
+        }
+    }
+
     /// Couleur de la pastille HUD — et teinte conseillée pour l'objet posé en
     /// scène (cf. `demos`), pour que le sac reflète ce qu'on a vu au sol.
     pub fn color(self) -> [f32; 3] {

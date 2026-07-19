@@ -853,6 +853,10 @@ impl AppState {
         // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
         // mutable par l'itération ci-dessous.
         let mut spawn_requests: Vec<(String, Vec3)> = Vec::new();
+        // `add_item(kind, n)` : accumulé comme `spawn_requests` — `self.add_item`
+        // exige `&mut self` en entier, incompatible avec l'emprunt de
+        // `self.scene.objects` actif tout le temps de la boucle ci-dessous (`obj`).
+        let mut item_add_requests: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
         // Calculé une fois : `self.scene.objects` est emprunté mutable par
         // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
         // n'y serait pas appelable.
@@ -941,6 +945,7 @@ impl AppState {
                 let tapped = self.tapped_obj == Some(idx);
                 let mut destroy_requested = false;
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
+                let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 if let Err(e) = scripting_web::run_script_web(
                     &mut self.lua_web,
                     &func,
@@ -959,6 +964,7 @@ impl AppState {
                     &mut events_out,
                     &tagged,
                     &mut spawns_this_obj,
+                    &mut item_adds_this_obj,
                     &mut destroy_requested,
                     &mut self.lua_vars,
                     &mut vibrations,
@@ -974,6 +980,7 @@ impl AppState {
                     obj.visible = false;
                 }
                 spawn_requests.extend(spawns_this_obj);
+                item_add_requests.extend(item_adds_this_obj);
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -1005,6 +1012,7 @@ impl AppState {
                 let tapped = self.tapped_obj == Some(idx);
                 let mut destroy_requested = false;
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
+                let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 if let Err(e) = scripting::run_script(
                     &self.lua,
                     &func,
@@ -1023,6 +1031,7 @@ impl AppState {
                     &mut events_out,
                     &tagged,
                     &mut spawns_this_obj,
+                    &mut item_adds_this_obj,
                     &mut destroy_requested,
                     &mut self.lua_vars,
                     &mut vibrations,
@@ -1040,7 +1049,11 @@ impl AppState {
                     obj.visible = false;
                 }
                 spawn_requests.extend(spawns_this_obj);
+                item_add_requests.extend(item_adds_this_obj);
             }
+        }
+        for (kind, n) in item_add_requests {
+            self.add_item(kind, n);
         }
         // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
         // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).

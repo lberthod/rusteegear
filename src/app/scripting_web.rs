@@ -76,6 +76,10 @@ struct ScriptAccum {
     debug_lines: Vec<(Vec3, Vec3, [f32; 3])>,
     events_out: Vec<String>,
     spawn_out: Vec<(String, Vec3)>,
+    /// Demandes `add_item(kind, n)` accumulées (clé texte, nombre), décodées en
+    /// `(ItemKind, u32)` après l'appel via `ItemKind::from_key` — cf.
+    /// `scripting::run_script` (même contrat).
+    item_add: Vec<(String, u32)>,
     received_events: HashSet<String>,
     tagged: Vec<(String, Vec3)>,
     vars: HashMap<String, f64>,
@@ -282,6 +286,13 @@ fn host_spawn(state: &mut LuaState) -> LuaResult<u32> {
     Ok(0)
 }
 
+fn host_add_item(state: &mut LuaState) -> LuaResult<u32> {
+    let kind = arg_str(state, 0)?;
+    let n = arg_num(state, 1)? as u32;
+    ACCUM.with(|a| a.borrow_mut().item_add.push((kind, n)));
+    Ok(0)
+}
+
 fn host_find_tag(state: &mut LuaState) -> LuaResult<u32> {
     let tag = arg_str(state, 0)?;
     let hits: Vec<Vec3> = ACCUM.with(|a| {
@@ -405,9 +416,9 @@ macro_rules! lua_try {
 /// Exécute le chunk Lua **déjà compilé** d'un objet, sur le backend `rilua`.
 /// Symétrique de `scripting::run_script` (même contrat : expose `obj` (x,y,z,
 /// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped/touch_started/touching/touch_ended/
-/// triggered/exited/anim), `dt`, `time`, `input`, `tilt`, puis relit les champs
-/// modifiés) — cf. la doc de module pour ce qui diffère en interne (pas de
-/// fermetures capturantes côté hôte).
+/// triggered/exited/anim), `dt`, `time`, `input`, `tilt`, `add_item(kind, n)`,
+/// puis relit les champs modifiés) — cf. la doc de module pour ce qui diffère
+/// en interne (pas de fermetures capturantes côté hôte).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run_script_web(
     lua: &mut Lua,
@@ -427,6 +438,7 @@ pub(super) fn run_script_web(
     events_out: &mut Vec<String>,
     tagged: &[(String, Vec3)],
     spawn_out: &mut Vec<(String, Vec3)>,
+    item_add_out: &mut Vec<(crate::scene::ItemKind, u32)>,
     destroy_out: &mut bool,
     vars: &mut HashMap<String, f64>,
     vib_out: &mut Vec<f32>,
@@ -516,6 +528,7 @@ pub(super) fn run_script_web(
     lua_try!(lua.register_function("emit", host_emit));
     lua_try!(lua.register_function("on_event", host_on_event));
     lua_try!(lua.register_function("spawn", host_spawn));
+    lua_try!(lua.register_function("add_item", host_add_item));
     lua_try!(lua.register_function("find_tag", host_find_tag));
     lua_try!(lua.register_function("raycast", host_raycast));
     lua_try!(lua.register_function("overlap_sphere", host_overlap_sphere));
@@ -535,6 +548,11 @@ pub(super) fn run_script_web(
         }
         events_out.extend(a.events_out.iter().cloned());
         spawn_out.extend(a.spawn_out.iter().cloned());
+        for (kind, n) in &a.item_add {
+            if let Some(kind) = crate::scene::ItemKind::from_key(kind) {
+                item_add_out.push((kind, *n));
+            }
+        }
         vib_out.extend(a.vib.iter().copied());
         reverb_out.extend(a.reverb.iter().copied());
         *health_out = Some(a.hud);
@@ -602,6 +620,7 @@ mod tests {
     ) -> Result<(), String> {
         let func = lua.load(src).map_err(|e| e.to_string())?;
         let mut spawn_out = Vec::new();
+        let mut item_add_out = Vec::new();
         let mut destroy_out = false;
         let mut vib_out = Vec::new();
         let mut health_out = None;
@@ -624,6 +643,7 @@ mod tests {
             events_out,
             tagged,
             &mut spawn_out,
+            &mut item_add_out,
             &mut destroy_out,
             vars,
             &mut vib_out,
@@ -1025,6 +1045,7 @@ mod tests {
                 &mut Vec::new(),
                 &[],
                 &mut spawn_out,
+                &mut Vec::new(),
                 &mut destroy_out,
                 &mut HashMap::new(),
                 &mut vib_out,
@@ -1081,6 +1102,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut HashMap::new(),
             &mut Vec::new(),
@@ -1119,6 +1141,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut destroy_out,
             &mut HashMap::new(),
@@ -1159,6 +1182,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut spawn_out,
+            &mut Vec::new(),
             &mut false,
             &mut HashMap::new(),
             &mut Vec::new(),
@@ -1173,6 +1197,49 @@ mod tests {
             spawn_out,
             vec![("asset-id://prefab1".to_string(), Vec3::new(1.0, 2.0, 3.0))]
         );
+    }
+
+    #[test]
+    fn add_item_lands_in_item_add_out() {
+        // `add_item("potion", 2)` doit atterrir dans `item_add_out`, décodé en
+        // `(ItemKind, u32)` via `ItemKind::from_key` — même contrat que
+        // `scripting::run_script`.
+        let mut lua = Lua::new().unwrap();
+        let src = "add_item('potion', 2)";
+        let func = lua.load(src).unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut item_add_out = Vec::new();
+        run_script_web(
+            &mut lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut item_add_out,
+            &mut false,
+            &mut HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(item_add_out, vec![(crate::scene::ItemKind::Potion, 2)]);
     }
 
     // -----------------------------------------------------------------------
@@ -1210,6 +1277,7 @@ mod tests {
                 &mut Vec::new(),
                 &[],
                 &mut Vec::new(),
+                &mut Vec::new(),
                 &mut false,
                 &mut std::collections::HashMap::new(),
                 &mut Vec::new(),
@@ -1242,6 +1310,7 @@ mod tests {
                 &[],
                 &mut Vec::new(),
                 &[],
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut false,
                 &mut HashMap::new(),
@@ -1303,6 +1372,7 @@ mod tests {
                 &mut Vec::new(),
                 tagged,
                 &mut Vec::new(),
+                &mut Vec::new(),
                 &mut false,
                 &mut std::collections::HashMap::new(),
                 &mut Vec::new(),
@@ -1342,6 +1412,7 @@ mod tests {
                 &[],
                 &mut Vec::new(),
                 tagged,
+                &mut Vec::new(),
                 &mut Vec::new(),
                 &mut false,
                 &mut HashMap::new(),

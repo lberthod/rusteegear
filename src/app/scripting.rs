@@ -23,7 +23,8 @@ pub(crate) use crate::scene::canonical_euler_xyz;
 
 /// Exécute le chunk Lua **déjà compilé** d'un objet : expose `obj` (x,y,z,
 /// rx,ry,rz en °, sx,sy,sz, r,g,b, tapped, touch_started, touching,
-/// touch_ended), `dt`, `time` et `input`, puis relit les champs modifiés.
+/// touch_ended), `dt`, `time`, `input` et `add_item(kind, n)`, puis relit les
+/// champs modifiés.
 #[allow(clippy::too_many_arguments)] // contexte d'exécution d'un script : champs distincts
 pub(super) fn run_script(
     lua: &Lua,
@@ -43,6 +44,7 @@ pub(super) fn run_script(
     events_out: &mut Vec<String>,
     tagged: &[(String, Vec3)],
     spawn_out: &mut Vec<(String, Vec3)>,
+    item_add_out: &mut Vec<(crate::scene::ItemKind, u32)>,
     destroy_out: &mut bool,
     vars: &mut std::collections::HashMap<String, f64>,
     vib_out: &mut Vec<f32>,
@@ -226,6 +228,20 @@ pub(super) fn run_script(
         Ok(())
     })?;
 
+    // `add_item("potion", 2)` : accumule une demande d'ajout au sac (clé texte,
+    // nombre), appliquée **après** l'appel via `ItemKind::from_key` — une clé
+    // inconnue est ignorée silencieusement (cf. `item_add_out` plus bas), comme
+    // `spawn_out` pour une entrée malformée.
+    let item_add_tbl = lua.create_table()?;
+    let item_add_ref = item_add_tbl.clone();
+    let add_item_fn = lua.create_function(move |lua, (kind, n): (String, u32)| {
+        let entry = lua.create_table()?;
+        entry.set(1, kind)?;
+        entry.set(2, n)?;
+        item_add_ref.push(entry)?;
+        Ok(())
+    })?;
+
     // `find_tag("nom")` : instantané pris **avant** la boucle des scripts
     // (`AppState::sim_step`) — un objet tout juste spawné/détruit ce même tick n'y
     // apparaît donc pas encore/plus, disponible seulement au tick suivant. Ne renvoie
@@ -283,6 +299,7 @@ pub(super) fn run_script(
     g.set("emit", emit)?;
     g.set("on_event", on_event)?;
     g.set("spawn", spawn)?;
+    g.set("add_item", add_item_fn)?;
     g.set("find_tag", find_tag)?;
     g.set("save", save_api)?;
     g.set("debug", debug_api)?;
@@ -368,6 +385,13 @@ pub(super) fn run_script(
         let y: f32 = entry.get("y").unwrap_or(0.0);
         let z: f32 = entry.get("z").unwrap_or(0.0);
         spawn_out.push((prefab, Vec3::new(x, y, z)));
+    }
+    for entry in item_add_tbl.sequence_values::<mlua::Table>().flatten() {
+        let kind: String = entry.get(1).unwrap_or_default();
+        let n: u32 = entry.get(2).unwrap_or(0);
+        if let Some(kind) = crate::scene::ItemKind::from_key(&kind) {
+            item_add_out.push((kind, n));
+        }
     }
 
     for v in vib.sequence_values::<f32>().flatten() {
@@ -579,6 +603,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -636,6 +661,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -692,6 +718,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -725,6 +752,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -768,6 +796,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -820,6 +849,7 @@ mod tests {
             &["score:3".to_string()],
             &mut events_out,
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -876,6 +906,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &tagged,
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -942,6 +973,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut vars,
@@ -1013,6 +1045,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -1063,6 +1096,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -1104,6 +1138,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -1172,6 +1207,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -1216,6 +1252,7 @@ mod tests {
             &mut Vec::new(),
             &[],
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
             &mut Vec::new(),
@@ -1245,6 +1282,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -1289,6 +1327,7 @@ mod tests {
             &[],
             &mut Vec::new(),
             &[],
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut false,
             &mut std::collections::HashMap::new(),
@@ -1369,6 +1408,90 @@ mod tests {
         // Tick suivant : `touch_ended` n'est exposé qu'une frame.
         run_touch(&lua, &func, &mut t, &mut col, false, false, false);
         assert_eq!(t.position.z, 1.0);
+    }
+
+    #[test]
+    fn script_add_item_lands_in_item_add_out() {
+        // `add_item("potion", 2)` doit atterrir dans `item_add_out`, décodé en
+        // `(ItemKind, u32)` via `ItemKind::from_key`.
+        let lua = Lua::new();
+        let src = "add_item('potion', 2)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut item_add_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut item_add_out,
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(item_add_out, vec![(crate::scene::ItemKind::Potion, 2)]);
+    }
+
+    #[test]
+    fn script_add_item_with_unknown_key_adds_nothing() {
+        // Une clé invalide doit être ignorée silencieusement — pas de panique,
+        // pas d'erreur Lua qui casse le script.
+        let lua = Lua::new();
+        let src = "add_item('inconnu', 1)";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut item_add_out = Vec::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut item_add_out,
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(item_add_out.is_empty());
     }
 
     /// `canonical_euler_xyz` : sur un yaw pur, `ry` doit porter l'angle entier
