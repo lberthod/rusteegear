@@ -147,7 +147,7 @@ sortis dans `src/scene/demos_tests.rs`, 952 lignes, via `#[path]` — reste à m
 Plus, avant `impl Scene` : les scripts de créatures (`creature_bite_script` … `creature_turret_script`,
 lignes 258–906, ~650 lignes) et `import_single_model` (907–933).
 
-### 9.1.1 — Scaffolding du dossier
+### 9.1.1 — Scaffolding du dossier — ✅ FAIT (2026-07-19)
 
 **Tâches** : créer `src/scene/demos/mod.rs` qui déclare les sous-modules et **réexporte tout à
 l'identique** (`pub use` des mêmes symboles publics qu'aujourd'hui), pour ne casser aucun
@@ -159,34 +159,52 @@ progressivement dans les sous-phases suivantes).
 **Risques** : faible — erreurs de visibilité (`pub(crate)` vs `pub`) à surveiller si des items
 étaient `pub(super)` implicitement.
 
-### 9.1.2 — Scripts de créatures et import
+Réalisé plus simplement que prévu : renommage pur via `git mv` (`demos.rs` → `demos/mod.rs`,
+`demos_tests.rs` → `demos/tests.rs`, chemin `#[path]` mis à jour), sans réexport nécessaire —
+`pub(crate) mod demos;` dans `scene/mod.rs` résout indifféremment `demos.rs` ou `demos/mod.rs`.
+`cargo build` + `cargo test --lib scene::demos::` verts (17 tests). Un commit.
+
+### 9.1.2 — Scripts de créatures et import — ✅ FAIT (2026-07-19)
 
 **Tâches** : déplacer `creature_bite_script` … `creature_turret_script` + `import_single_model`
 (258–933, ~675 lignes) vers `demos/creature_scripts.rs`.
 **Livrable vérifiable** : `cargo test` (tests qui exercent ces scripts, ex. patrouille/attaque
 de créature) inchangé.
 
-### 9.1.3 — Démos courtes et indépendantes
+Plage réelle 229–932 (704 lignes, la doc de `creature_bite_script` commençait 29 lignes avant
+le `fn`, ratée par l'estimation initiale). Fonctions rendues `pub(super)`, importées dans
+`mod.rs` via `use creature_scripts::*;`. `creature_wander_script` (pub(crate), référencé depuis
+`app::simulation_tests` par le chemin `crate::scene::demos::creature_wander_script`) reste
+délibérément dans `mod.rs`, hors de ce sous-module. `cargo test --lib scene::demos:: app::simulation::`
+verts (17 + 47 tests). Un commit.
+
+### 9.1.3 — Démos courtes et indépendantes — ✅ FAIT (2026-07-19)
 
 **Tâches** : une extraction par démo, chacune dans son propre fichier, chacune un commit :
 
-| Sous-phase | Fichier cible | Contenu |
-|---|---|---|
-| 9.1.3.a | `demos/controller.rs` | `controller_demo`, `controller_level` |
-| 9.1.3.b | `demos/tower.rs` | `tower_demo` |
-| 9.1.3.c | `demos/temple_run.rs` | `temple_run_demo` |
-| 9.1.3.d | `demos/components.rs` | `components_demo` |
-| 9.1.3.e | `demos/zombies.rs` | `zombies_demo` |
-| 9.1.3.f | `demos/roguelike.rs` | `roguelike_demo` |
-| 9.1.3.g | `demos/brawl.rs` | `brawl_demo` |
-| 9.1.3.h | `demos/boss.rs` | `boss_demo` |
-| 9.1.3.i | `demos/escorte.rs` | `escorte_demo` |
-| 9.1.3.j | `demos/misc.rs` | `gameplay_demo`, `embedded_player`, `demo`, `mobile_demo` |
+| Sous-phase | Fichier cible | Contenu | Résultat |
+|---|---|---|---|
+| 9.1.3.a ✅ | `demos/controller.rs` (460 l.) | `controller_demo`, `controller_level` | 10 tests OK |
+| 9.1.3.b ✅ | `demos/tower.rs` (149 l.) | `tower_demo` | 2 tests OK |
+| 9.1.3.c ✅ | `demos/temple_run.rs` (189 l.) | `temple_run_demo` | 1 test OK |
+| 9.1.3.d ✅ | `demos/components.rs` (84 l.) | `components_demo` | 1 test OK |
+| 9.1.3.e ✅ | `demos/zombies.rs` (229 l.) | `zombies_demo` | 2 tests OK |
+| 9.1.3.f ✅ | `demos/roguelike.rs` (323 l.) | `roguelike_demo` | 3 OK + 1 ignoré (flaky préexistant) |
+| 9.1.3.g ✅ | `demos/brawl.rs` (128 l.) | `brawl_demo` | 3 tests OK |
+| 9.1.3.h ✅ | `demos/boss.rs` (122 l.) | `boss_demo` | 2 tests OK |
+| 9.1.3.i ✅ | `demos/escorte.rs` (114 l.) | `escorte_demo` | 5 tests OK |
+| 9.1.3.j ✅ | `demos/misc.rs` (233 l.) | `gameplay_demo`, `embedded_player`, `demo`, `mobile_demo` | suite complète OK |
 
 Chacune reste un `impl Scene { pub fn xxx_demo() -> Self { ... } }` complet et autonome dans son
 fichier — Rust autorise plusieurs blocs `impl Scene` répartis sur plusieurs fichiers du même
-crate, donc c'est un copier-coller pur, sans changement de signature ni de corps.
-**Livrable vérifiable** : chaque commit compile seul ; `cargo test` vert après chaque commit.
+crate, donc c'est un copier-coller pur, sans changement de signature ni de corps. Les fichiers
+extraits en milieu de bloc (roguelike/brawl/boss/escorte/misc, situés après `mmorpg_demo`/
+`hameau_gdd_demo` dans le fichier d'origine) laissent la déclaration `mod xxx;` groupée avec les
+autres en tête de `demos/mod.rs`, et seul le contenu de la méthode est retiré du bloc `impl Scene`
+— celui-ci reste continu autour du trou. Garde-fou final de la sous-phase : `cargo test --lib`
+complet → **649 passed, 0 failed, 9 ignored** (identique à la baseline post-9.0). 10 commits.
+`demos/mod.rs` passe de 9 868 à **7 188 lignes**, ne contenant plus que `MMORPG_HALF`,
+`mmorpg_demo` (~4 412 l.) et `hameau_gdd_demo` (~2 515 l.) — restent 9.1.4 à 9.1.7.
 **Risques** : faible, sauf si une démo référence une fonction locale (`fn` imbriquée) définie
 dans une autre démo — vérifier au `cargo build` qui signalera l'import manquant immédiatement.
 
