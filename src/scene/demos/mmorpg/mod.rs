@@ -12,6 +12,12 @@ use decor_data::*;
 mod decor_terrain;
 
 impl Scene {
+    /// Démo « MMORPG » : arène minimale dédiée au test multijoueur PC ↔ mobile —
+    /// pas de monstres ni de manches (contrairement à `zombies_demo`), juste un
+    /// joueur pilotable (joystick + saut) sur une
+    /// carte simple avec quelques repères visuels statiques, pour voir
+    /// clairement un joueur desktop et un joueur APK se déplacer l'un par
+    /// rapport à l'autre (fantômes réseau, cf. `app::network_client`).
     pub fn mmorpg_demo() -> Self {
         let half = Self::MMORPG_HALF;
         // Sprint 24 (Phase K, `sprintreflecion.md`) : `MeshKind::Terrain` remplace

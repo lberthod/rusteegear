@@ -260,13 +260,6 @@ impl Scene {
     /// SO, hameau et promontoire à l'est.
     pub(crate) const MMORPG_HALF: f32 = 36.0;
 
-    /// Démo « MMORPG » : arène minimale dédiée au test multijoueur PC ↔ mobile —
-    /// pas de monstres ni de manches (contrairement à `zombies_demo`), juste un
-    /// joueur pilotable (joystick + saut) sur une
-    /// carte simple avec quelques repères visuels statiques, pour voir
-    /// clairement un joueur desktop et un joueur APK se déplacer l'un par
-    /// rapport à l'autre (fantômes réseau, cf. `app::network_client`).
-
     /// Démo « Hameau fortifié » (GDD §7 « le hameau est du gameplay », §7.3
     /// « la vie du hameau », §5.4 archétypes de créatures, §10 direction
     /// artistique) — prototypée visuellement dans Blender avant intégration
