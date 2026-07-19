@@ -196,7 +196,8 @@ pub(super) struct GpuProfiler {
 impl GpuProfiler {
     /// Noms des `GPU_PROFILER_MARKS - 1` intervalles, dans l'ordre où `render`
     /// écrit les marqueurs correspondants.
-    pub(super) const PASS_NAMES: [&'static str; 4] = ["Ombres", "Scène", "HDR + Bloom", "UI (egui)"];
+    pub(super) const PASS_NAMES: [&'static str; 4] =
+        ["Ombres", "Scène", "HDR + Bloom", "UI (egui)"];
 
     pub(super) fn new(device: &wgpu::Device, period_ns: f32) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {

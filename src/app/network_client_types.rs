@@ -1,4 +1,3 @@
-
 /// Un autre joueur réseau, affiché comme un objet fantôme dans la scène locale.
 pub struct RemotePlayer {
     pub name: String,
@@ -123,7 +122,8 @@ pub(crate) struct ReconnectState {
     /// `net::client::native`). Inutile sur wasm : `connect` n'y bloque
     /// jamais, l'échec différé arrive par `is_alive()`.
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-    pub(super) pending: Option<std::sync::mpsc::Receiver<Result<crate::net::client::NetClient, String>>>,
+    pub(super) pending:
+        Option<std::sync::mpsc::Receiver<Result<crate::net::client::NetClient, String>>>,
 }
 
 /// État de la connexion multijoueur, pour le HUD et les décisions internes
