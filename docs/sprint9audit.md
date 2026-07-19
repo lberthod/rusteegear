@@ -208,7 +208,7 @@ complet → **649 passed, 0 failed, 9 ignored** (identique à la baseline post-9
 **Risques** : faible, sauf si une démo référence une fonction locale (`fn` imbriquée) définie
 dans une autre démo — vérifier au `cargo build` qui signalera l'import manquant immédiatement.
 
-### 9.1.4 — `mmorpg_demo` (~4 412 lignes) : lecture préalable
+### 9.1.4 — `mmorpg_demo` (~4 412 lignes) : lecture préalable — ✅ FAIT (2026-07-19)
 
 **Tâches** : avant de couper, lire la fonction en entier pour repérer les coupures sûres — il
 n'y a **aucun commentaire de section** dans le code actuel (vérifié), donc les frontières
@@ -222,7 +222,27 @@ listant les plages de lignes retenues et les dépendances croisées trouvées.
 **Risques** : c'est l'étape qui protège tout le reste — sauter la lecture et couper à l'aveugle
 est le principal risque de régression comportementale de tout le sprint.
 
-### 9.1.5 — `mmorpg_demo` : découpage mécanique
+Corrections issues de la lecture réelle (contrairement au premier relevé, il existe bien des
+marqueurs `// --- ... ---`, ratés par le premier grep car indentés à 8 espaces, pas 4) :
+- Un seul accumulateur `objects: Vec<SceneObject>` traverse toute la fonction via `.push()`
+  (jamais `.extend()`), plus `imported: Vec<ImportedMesh>` — le pattern `build_x() -> Vec<...>`
+  envisagé au brief n'existe pas dans le code réel ; chaque section pousse directement dans le
+  même vecteur partagé, donc chaque fonction extraite prend `&mut Vec<SceneObject>` en
+  paramètre plutôt que de retourner un `Vec`.
+- Structure déjà en partie data-driven : `struct DemoCreature` + `const MMORPG_CREATURES`
+  (créatures nommées), et surtout `struct DemoDecor` + 3 `const` (`NATURE_DECOR`/
+  `VILLAGE_PROPS`/`MONSTER_DECOR`) — cf. la mémoire de session sur le piège des 3 tableaux
+  `DemoDecor` et `solid_spots`. Ces tables sont consommées par une closure `poser` qui **capture
+  mutable** `objects`/`imported`/`anim_count`, closure elle-même réutilisée par la section de
+  scatter procédural (`rng`, les 3 `scatter*`) juste après — **`poser` et le scatter procédural
+  ne sont pas séparables** sans transformer la closure en fonction libre (changement de
+  structure plus profond que prévu, laissé de côté pour ce sprint).
+- Découpage réel retenu (murs/repères/vent, créatures nommées, faune ambiante, aplats
+  terrain/eau/voirie séparables ; tables de décor séparables comme pure donnée ; le reste —
+  `poser` + boucle + scatter + expansion prairie + flore + items + convoi + `Scene{}` final —
+  reste groupé dans l'orchestrateur).
+
+### 9.1.5 — `mmorpg_demo` : découpage mécanique — ✅ FAIT (2026-07-19)
 
 **Tâches**, une fois les coupures validées en 9.1.4, créer `demos/mmorpg/` :
 - `mmorpg/mod.rs` — `pub fn mmorpg_demo() -> Scene` orchestrateur : appelle les fonctions de
@@ -244,6 +264,38 @@ existants (ils sont nombreux, voir 9.1.7) doit rester vert à l'identique.
 **Risques** : le risque principal identifié en 9.1.4 (état partagé entre sections) ; sinon,
 risque de sur-découpage — ne pas descendre sous des fichiers de ~200-300 lignes juste pour la
 forme, viser des fichiers thématiquement cohérents.
+
+Réalisé en 7 commits (le pattern `build_x() -> Vec<...>` du brief remplacé par
+`fn add_x(objects: &mut Vec<SceneObject>, ...)`, cf. 9.1.4) :
+
+| Étape | Fichier | Lignes | Contenu |
+|---|---|---|---|
+| 1/6 | `mmorpg/mod.rs` (déplacement initial) | 4378 → | `mmorpg_demo` entier déplacé tel quel avant découpage interne |
+| 2/6 | `mmorpg/terrain.rs` | 76 | murs de pourtour, repères, zone de vent |
+| 3/6 | `mmorpg/creatures.rs` | 513 | `DemoCreature` + `MMORPG_CREATURES` (promus `pub(super)`, y compris le champ `spawn` — nécessaire au scatter procédural resté dans `mod.rs`) + boucle de spawn |
+| 4/6 | `mmorpg/fauna.rs` | 146 | faune ambiante errante (créatures 27-61) |
+| 5/6 | `mmorpg/decor_data.rs` | 1911 | `DemoDecor` (7 champs `pub(super)`) + `NATURE_DECOR`/`VILLAGE_PROPS`/`MONSTER_DECOR`, pure donnée, `use decor_data::*;` dans `mod.rs` (~200 sites d'usage, trop pour qualifier un par un) |
+| 6/6 | `mmorpg/decor_terrain.rs` | 368 | aplats eau/terrain/routes + murs d'eau (partie de « Décor nature » sans dépendance à `poser`/`DemoDecor`) |
+| — | `mmorpg/mod.rs` (final) | **1396** | orchestrateur : init, 4 appels en séquence, `poser` + boucle + scatter procédural + expansion prairie + flore + items + convoi + `Scene{}` final |
+
+**Deux incidents pendant l'extraction, tous deux corrigés avant commit** : un `head -N` mal
+compté a fait disparaître silencieusement l'appel `creatures::add_named_creatures` (étape 4),
+puis un second a fait disparaître `fauna::add_ambient_fauna` (étape 6) — dans les deux cas
+`cargo build` a réussi quand même (un appel de fonction manquant n'est pas une erreur de
+compilation ; seul `dead_code` l'a signalé la seconde fois). Repérés par grep manuel des appels
+d'orchestrateur avant `cargo test`, jamais par la compilation seule — **leçon retenue : après
+toute suppression de plage de lignes par `sed`/`head`, `grep` la liste des appels attendus avant
+de faire confiance à `cargo build`.**
+
+Un doc-comment orphelin (celui de `mmorpg_demo`, resté collé à `MMORPG_HALF` dans
+`demos/mod.rs` au lieu de suivre la fonction déplacée) a aussi été trouvé et corrigé, signalé
+par `clippy::empty_line_after_doc_comments` — `cargo clippy` fait donc partie du garde-fou de
+fin de sous-phase, pas seulement `cargo build`/`cargo test`.
+
+Garde-fou final : `cargo build`, `cargo clippy --lib` (0 warning), `cargo test --lib mmorpg`
+(28 passed) puis suite complète `cargo test --lib` → **649 passed, 0 failed, 9 ignored**
+(identique à la baseline post-9.0). `mmorpg/mod.rs` recule de ~4374 à **1396 lignes**, sous la
+cible de ~1500.
 
 ### 9.1.6 — `hameau_gdd_demo` (~2 515 lignes) : même traitement
 
