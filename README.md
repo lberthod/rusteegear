@@ -35,11 +35,27 @@ ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.
 - [🌐 Multijoueur en ligne](#multijoueur)
 - [🗓️ Historique & avancement](#historique)
 - [🚀 Démarrage rapide](#demarrage-rapide)
+- [🕹️ Pilotage externe (agent / script / CI)](#pilotage-externe)
 - [🎨 Créer son premier jeu](#creer-son-jeu)
 - [🧱 Architecture](#architecture)
 - [🧭 La suite — analyse & sprints](#la-suite)
 - [🛠️ Stack technique](#stack-technique)
 - [📄 Licence](#licence)
+
+> **🚀 Nouveau ici ? Trois documents, dans cet ordre :**
+> 1. **[QUICKSTART.md](QUICKSTART.md)** — lancer l'éditeur et jouer le projet
+>    exemple (5 min hors compilation) ;
+> 2. **[docs/FIRST_GAME.md](docs/FIRST_GAME.md)** — créer ton premier objet
+>    animé (10 min) ;
+> 3. **[docs/MENTAL_MODEL.md](docs/MENTAL_MODEL.md)** — comment le moteur
+>    fonctionne, en une page.
+>
+> Avant de signaler un problème : **[docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)**
+> (matrice de support par plateforme + limites volontaires de la préversion) ;
+> scripts Lua portables natif/web : **[docs/LUA_PORTABLE.md](docs/LUA_PORTABLE.md)**.
+>
+> Les audits et sprints de `docs/` sont l'historique de développement, pas le
+> chemin d'entrée.
 
 > Détail sprint par sprint (source de vérité, à jour en continu) :
 > **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)**. Reprise du projet par un
@@ -258,7 +274,7 @@ set_health(0..1)                       -- barre de vie du HUD
 **IA (DeepSeek)** — clé/modèle/température dans les Paramètres
 - **Générer** ou **optimiser** un script Lua depuis une consigne ; **générer une scène** entière (remplacer/ajouter) ; historique des prompts.
 
-**Outils** — Console (logs), Profiler FPS + mémoire + **GPU** (timestamp queries par passe, draw calls), **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système, **journal de crash** (consultation/copie volontaire, aucun envoi automatique), **hot-reload** des assets retouchés en cours d'édition, **snap** position/rotation au gizmo (Ctrl pour inverser ponctuellement).
+**Outils** — Console (logs), Profiler FPS + mémoire + **GPU** (timestamp queries par passe, draw calls), **Contrôle qualité APK**, **Optimisation mobile** (réduction textures, limite de lumières), Diagnostic système, **journal de crash** (consultation/copie volontaire, aucun envoi automatique), **hot-reload** des assets retouchés en cours d'édition, **snap** position/rotation au gizmo (Ctrl pour inverser ponctuellement), **pont de pilotage externe** (`--pilot` : console/Lua/captures par TCP local, cf. [docs/PILOT.md](docs/PILOT.md)).
 
 **Démos** — `Fichier → Démo mobile`, `Démo gameplay` (toute l'API scriptée) et **`Démo contrôleur`** (joueur jouable au joystick + saut + collisions, **sans script**).
 
@@ -607,6 +623,31 @@ cargo run -- --player           # mode player (scène plein écran)
 | Éditer / supprimer | panneau Inspecteur (droite) |
 | Lancer / arrêter l'animation | ▶ Play / ⏹ Stop |
 | Sauver / charger | 💾 Save / 📂 Load (`~/motor3derust_scene.json`) |
+
+---
+
+<a id="pilotage-externe"></a>
+## 🕹️ Pilotage externe (agent / script / CI)
+
+La fenêtre winit/wgpu n'a pas d'arbre d'accessibilité : aucun outil de contrôle
+d'écran ne peut la piloter. À la place, l'application expose (sur demande
+explicite) un **pont TCP local** qui donne accès à sa sémantique : commandes de
+la Console développeur, éval Lua, inspection de scène, injection d'entrées
+joueur, captures d'écran et logs — pour un agent (Claude), un script d'audit ou
+la CI.
+
+```bash
+cargo run -- --pilot                        # l'application, pont sur 127.0.0.1:4517
+cargo run --bin pilot -- console play       # démarre le mode Play
+cargo run --bin pilot -- lua "return 1+1"   # évalue du Lua dans le moteur vivant
+cargo run --bin pilot -- screenshot /tmp/s.png
+cargo run --bin pilot -- console stop       # scène restaurée
+```
+
+Jamais actif par défaut (l'éval Lua est de l'exécution de code arbitraire),
+localhost uniquement, ~13 ms par commande, testé sans GPU en CI
+(`tests/pilot_bridge.rs`). Protocole JSON-lines, architecture et limites :
+**[docs/PILOT.md](docs/PILOT.md)**.
 
 ---
 

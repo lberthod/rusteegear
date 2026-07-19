@@ -5,6 +5,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Commit affiché dans « À propos » et le diagnostic (Phase E5, sprint.19matin.md) :
+# posé ici pour que tout build distribuable porte son commit exact — un testeur
+# et la doc doivent pouvoir se référer à la même version. Surchargable (CI).
+export RUSTEEGEAR_COMMIT="${RUSTEEGEAR_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo inconnu)}"
+
 # OUTPUT_NAME : nom du fichier de sortie. PLAYER_BUILD=1 : bâtit un player jouable
 # (mode Player + scène embarquée) au lieu de l'éditeur. Tous deux fournis par le panneau Export.
 OUTPUT_NAME="${OUTPUT_NAME:-RusteeGear}"

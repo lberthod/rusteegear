@@ -22,6 +22,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Commit embarqué dans le binaire (« À propos »/diagnostic) — cf. build_dmg.sh.
+export RUSTEEGEAR_COMMIT="${RUSTEEGEAR_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo inconnu)}"
+
 OUTPUT_NAME="${OUTPUT_NAME:-RusteeGear}"
 FEATURES=""
 if [ "${PLAYER_BUILD:-0}" = "1" ]; then
