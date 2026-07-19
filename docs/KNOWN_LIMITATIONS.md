@@ -25,11 +25,17 @@ préversion — les libellés du panneau Export le rappellent.
 
 - **Éditeur macOS uniquement.** Linux/Windows non testés (wgpu/Vulkan devrait
   bâtir, mais rien n'est garanti).
-- **Pas de « système de projet ».** L'unité de travail est la **scène JSON**
-  (Ouvrir/Enregistrer n'importe où) ; les assets importés vivent dans le
-  dossier utilisateur global `~/.motor3derust/assets/`, partagé entre toutes
-  les scènes. Un vrai format de projet est planifié après le premier retour
-  externe.
+- **Système de projet partiel (Sprint 3, 19/07/2026).** Un dossier peut
+  déclarer un manifeste `project.rusteegear.json` (nom + scène de démarrage) et
+  s'ouvrir comme un projet (`AppState::open_project`, menu Fichier › Ouvrir…) ;
+  la scène seule (comportement historique) reste supportée en parallèle. En
+  revanche, les assets d'un projet **ne sont pas isolés** : ils vivent toujours
+  dans le dossier utilisateur global `~/.motor3derust/assets/`, partagé entre
+  tous les projets — pas encore de dossier `assets/` par projet ni d'index
+  d'assets. Pas de gestionnaire de projets (créer/récents/dupliquer, prévu
+  Sprint 4) ni de commande « Convertir en projet » pour migrer une scène seule
+  et ses assets vers un vrai projet autonome. Voir `docs/SprintAudit12h24.md`
+  (Sprint 3, section « cible long terme »).
 - ~~**Fermeture sans alerte.**~~ **Corrigé (19/07/2026)** : fermer la fenêtre
   (ou Fichier › Quitter) avec des modifications non sauvegardées affiche
   désormais une confirmation Enregistrer / Quitter sans enregistrer / Annuler.

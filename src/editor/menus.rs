@@ -171,12 +171,21 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         if ui.button("📂  Ouvrir…").clicked() {
+            // Sprint 3 : une scène seule (comportement historique) et un projet
+            // (son manifeste `project.rusteegear.json`) partagent ce même
+            // sélecteur — `load_path`/`open_project_path` sont distingués au
+            // moment de traiter l'action (cf. `gfx::renderer`), selon le nom du
+            // fichier choisi.
             #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
             if let Some(p) = rfd::FileDialog::new()
-                .add_filter("Scène JSON", &["json"])
+                .add_filter("Projet ou scène RusteeGear", &["json"])
                 .pick_file()
             {
-                actions.load_path = Some(p.to_string_lossy().into_owned());
+                if p.file_name().and_then(|n| n.to_str()) == Some(crate::project::MANIFEST_FILE) {
+                    actions.open_project_path = Some(p.to_string_lossy().into_owned());
+                } else {
+                    actions.load_path = Some(p.to_string_lossy().into_owned());
+                }
             }
             #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
             {

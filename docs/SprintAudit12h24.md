@@ -262,9 +262,61 @@ et démarre sur une installation propre, et `git status` reste vierge (aucun
 
 ---
 
-## Sprint 3 — Manifeste de projet
+## Sprint 3 — Manifeste de projet ✅ TERMINÉ (19 juillet 2026)
 
 **Objectif** : que RusteeGear sache ce qu'est un « projet », pas seulement une scène.
+
+### Résultat
+
+- **3.1 ✅** — Nouveau module [src/project.rs](../src/project.rs) : `ProjectManifest`
+  (serde, `format`/`name`/`main_scene`/`build` optionnel) et `ProjectRoot` (posé sur
+  `AppState::current_project`). `format` contrôlé contre `CURRENT_FORMAT = 1`.
+- **3.2 ✅** — `ProjectManifest::load(dir)` : erreurs en français et actionnables
+  (fichier absent, JSON invalide, `format` trop récent, `name` vide).
+  `resolve_main_scene(dir)` réutilise `assets::safe_join` (`pub(crate)`, déjà
+  accessible) pour refuser tout chemin hors racine, et vérifie l'existence du
+  fichier de scène.
+- **3.3 ✅** — Champ `AppState::current_project: Option<project::ProjectRoot>`
+  ajouté ([app/mod.rs](../src/app/mod.rs)). Pas de nouveau schéma `project://` — la
+  résolution des assets reste inchangée (dossier global), comme prévu par la cible
+  long terme.
+- **3.4 ✅** — `AppState::open_project(dir)` dans
+  [app/persistence.rs](../src/app/persistence.rs) : charge le manifeste, résout et
+  charge la scène de démarrage (réutilise `load_from_blocking`, synchrone —
+  pas besoin du thread de fond de `load_from` pour une action utilisateur
+  délibérée), pose `current_project`. Menu Fichier → « 📂 Ouvrir… »
+  ([menus.rs](../src/editor/menus.rs)) détecte si le fichier choisi est
+  `project.rusteegear.json` et route vers `open_project` (nouvelle action
+  `open_project_path`) plutôt que `load_path`, consommée dans
+  [gfx/renderer.rs](../src/gfx/renderer.rs).
+- **3.5 ✅** — Tests-preuves à deux niveaux : 7 tests unitaires dans
+  `src/project.rs` (validation pure du manifeste) + 3 tests d'intégration dans
+  [tests/project_manifest.rs](../tests/project_manifest.rs) (`AppState::open_project`
+  de bout en bout : ouverture réussie, manifeste absent, `main_scene` évadée).
+- [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) mis à jour : l'entrée « Pas de
+  système de projet » remplacée par une description précise de ce qui existe
+  (manifeste + ouverture) et de ce qui manque encore (assets par projet, gestionnaire,
+  conversion).
+
+### Piège rencontré (à connaître pour les prochains sprints touchant des tests)
+
+`scripts/check_unwrap_budget.py` détecte les modules `#[cfg(test)] mod tests { }`
+par **comptage d'accolades**, pas une vraie analyse syntaxique. Une chaîne de test
+contenant une accolade isolée non appariée (ex. `"{ pas du JSON"`) désynchronise ce
+comptage pour **tout le reste du fichier** : le module de test entier redevient
+« hors tests » et ses `.expect()`/`.unwrap()` internes se retrouvent comptés dans le
+budget de code de production. Repéré via `python3
+scripts/check_unwrap_budget.py` (pas seulement `cargo test`/`clippy`, qui ne
+voient rien d'anormal). Réflexe : éviter les accolades isolées dans les chaînes de
+test, ou les équilibrer explicitement sur la même ligne.
+
+### Vérifications
+
+`cargo test --lib project::` (7 passés), `cargo test --test project_manifest`
+(3 passés), `cargo test --all-targets` (625 passés, 0 échec, 9 ignorés),
+`cargo fmt --check` et `cargo clippy --all-targets -- -D warnings` verts (avec et
+sans `net_tests`), `python3 scripts/check_unwrap_budget.py` : seul le défaut
+pré-existant et hors périmètre de `console.rs:135` (signalé au Sprint 2) subsiste.
 
 ### État des lieux vérifié
 

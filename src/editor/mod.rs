@@ -317,6 +317,10 @@ pub struct UiActions {
     pub save_path: Option<String>,
     /// « Ouvrir » : chemin JSON choisi.
     pub load_path: Option<String>,
+    /// « Ouvrir » un projet (Sprint 3) : chemin de son
+    /// `project.rusteegear.json`, choisi depuis le même sélecteur que
+    /// `load_path`.
+    pub open_project_path: Option<String>,
     pub import: Option<String>,
     pub add: Option<MeshKind>,
     pub delete: Option<usize>,

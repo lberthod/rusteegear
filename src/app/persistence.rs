@@ -261,6 +261,23 @@ impl AppState {
         Ok(self.scene.objects.len())
     }
 
+    /// Ouvre un projet (Sprint 3) : charge et valide
+    /// `<dir>/project.rusteegear.json`, résout sa scène de démarrage, la charge,
+    /// puis pose `current_project`. Synchrone comme `load_from_blocking` — un
+    /// projet s'ouvre sur une action utilisateur déliberée (menu, wizard), pas
+    /// dans un chemin sensible à la latence comme le pont de pilotage ; pas
+    /// besoin du thread de fond de `load_from`.
+    pub fn open_project(&mut self, dir: &std::path::Path) -> Result<usize, String> {
+        let manifest = crate::project::ProjectManifest::load(dir)?;
+        let scene_path = manifest.resolve_main_scene(dir)?;
+        let count = self.load_from_blocking(&scene_path.to_string_lossy())?;
+        self.current_project = Some(crate::project::ProjectRoot {
+            name: manifest.name,
+            root: dir.to_path_buf(),
+        });
+        Ok(count)
+    }
+
     /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).
     pub fn import_gltf(&mut self, path: &str) {
         let tx = self.import_tx.clone();

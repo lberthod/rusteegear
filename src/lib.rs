@@ -23,6 +23,7 @@ pub mod net;
 /// le hot-reload d'assets : pas de socket serveur sur mobile/web.
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub mod pilot;
+pub mod project;
 pub mod runtime;
 pub mod scene;
 pub mod time_compat;

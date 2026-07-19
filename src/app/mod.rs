@@ -182,6 +182,10 @@ impl PlayerInput {
 
 pub struct AppState {
     pub scene: Scene,
+    /// Projet ouvert (Sprint 3, manifeste `project.rusteegear.json`), posé par
+    /// `open_project`/`open_project_blocking`. `None` en mode « scène seule »
+    /// (comportement historique, toujours supporté) — cf. `crate::project`.
+    pub current_project: Option<crate::project::ProjectRoot>,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1082,6 +1086,7 @@ impl AppState {
             ai_scene_tx,
             ai_scene_rx,
             ai_scene_replace: true,
+            current_project: None,
         }
     }
 

@@ -1872,6 +1872,13 @@ impl Renderer {
             if let Some(path) = actions.load_path {
                 app.load_from(&path);
             }
+            if let Some(manifest_path) = actions.open_project_path {
+                let manifest_path = std::path::Path::new(&manifest_path);
+                let dir = manifest_path.parent().unwrap_or(manifest_path);
+                if let Err(e) = app.open_project(dir) {
+                    log::error!("Ouverture du projet échouée : {e}");
+                }
+            }
             if let Some(path) = actions.import {
                 app.import_gltf(&path);
             }
