@@ -1,0 +1,4378 @@
+use super::*;
+
+impl Scene {
+    pub fn mmorpg_demo() -> Self {
+        let half = Self::MMORPG_HALF;
+        // Sprint 24 (Phase K, `sprintreflecion.md`) : `MeshKind::Terrain` remplace
+        // l'ancien `MeshKind::Plane` plat — relief réel (collines) sur la marge
+        // ouest de la carte, nul (y≈0, tolérance sub-centimétrique) partout où le
+        // hameau/la forêt/l'eau/les rizières/la route sont déjà placés à la main
+        // ci-dessous (cf. `gfx::mesh::mmorpg_terrain_local_height` pour le détail
+        // du découpage en zones). Échelle X/Z = 2×`half` pour couvrir toute la
+        // carte 72×72 m ; échelle Y = 1.0 (découplée) car la fonction de hauteur
+        // renvoie déjà des mètres directement, pas un facteur à re-multiplier.
+        let mut sol = demo_obj("Sol", MeshKind::Terrain, Vec3::new(0.0, 0.0, 0.0));
+        sol.transform = sol
+            .transform
+            .with_scale(Vec3::new(2.0 * half, 1.0, 2.0 * half));
+        sol.physics = PhysicsKind::Static;
+        // Vert prairie (l'arène est habillée en coin de campagne, cf. le décor
+        // nature plus bas) — l'ancien gris-vert sombre jurait avec les aplats.
+        sol.color = [0.26, 0.38, 0.21];
+
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        joueur.color = [0.95, 0.6, 0.25];
+        // Tag lu par les scripts de comportement des créatures 12/13/19
+        // (`find_tag("joueur")` — rôdeur qui maintient sa distance, méduse qui
+        // fuit, lanterne qui dérive vers lui) : sans lui, elles retombent sur
+        // leur comportement sans cible (immobiles pour la lanterne).
+        joueur.tag = "joueur".into();
+        joueur.controller = Some(Controller {
+            input: true,
+            move_speed: 4.5,
+            jump_button: "Saut".into(),
+            jump_height: 1.5,
+            ..Default::default()
+        });
+
+        let mut objects = vec![sol, joueur];
+
+        // Murs de pourtour (enferment l'aire de jeu, ne servent qu'à ne pas tomber).
+        let mut wall = |name: &str, pos: Vec3, scale: Vec3| {
+            let mut w = demo_obj(name, MeshKind::Cube, pos);
+            w.transform = w.transform.with_scale(scale);
+            w.physics = PhysicsKind::Static;
+            w.color = [0.3, 0.32, 0.38];
+            objects.push(w);
+        };
+        wall(
+            "Mur Nord",
+            Vec3::new(0.0, 0.9, -half),
+            Vec3::new(2.0 * half, 1.8, 0.5),
+        );
+        wall(
+            "Mur Sud",
+            Vec3::new(0.0, 0.9, half),
+            Vec3::new(2.0 * half, 1.8, 0.5),
+        );
+        wall(
+            "Mur Est",
+            Vec3::new(half, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * half),
+        );
+        wall(
+            "Mur Ouest",
+            Vec3::new(-half, 0.9, 0.0),
+            Vec3::new(0.5, 1.8, 2.0 * half),
+        );
+
+        // Repères visuels statiques (juste pour situer les déplacements, sans danger)
+        // aux quatre coins de la prairie centrale.
+        for (n, (x, z)) in [
+            (-15.0_f32, -15.0),
+            (15.0, -15.0),
+            (-15.0, 15.0),
+            (15.0, 15.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut repere = demo_obj(
+                &format!("Repère {}", n + 1),
+                MeshKind::Cylinder,
+                Vec3::new(x, 0.9, z),
+            );
+            repere.transform = repere.transform.with_scale(Vec3::new(1.0, 1.8, 1.0));
+            repere.physics = PhysicsKind::Static;
+            // Gris-vert mousseux (cohérent avec `nature_rock`/`nature_moss_boulder`,
+            // cf. leurs `baseColorFactor` ~0.44/0.44/0.42 et ~0.30/0.48/0.20) — l'ancien
+            // mauve/lavande ([0.5, 0.45, 0.62]) jurait avec la palette naturelle,
+            // d'autant plus visible que le Repère du coin (-15, 15) tombe juste sur
+            // la rive ouest du lac (capture en jeu : « rocher rose » signalé là).
+            repere.color = [0.42, 0.43, 0.36];
+            objects.push(repere);
+        }
+
+        // Zone de vent (Sprint 125, preuve d'implémentation visible dans une démo
+        // jouée réellement plutôt que seulement en test unitaire) : plate-forme basse
+        // et distinctement teintée (cyan) dans un coin de l'arène — traverser son AABB
+        // pousse tout corps dynamique le long de `wind`, tant qu'il y reste. Pas de
+        // collider (`PhysicsKind::None`) : une zone de vent ne doit rien bloquer,
+        // seulement pousser.
+        // Placée sur le « col venté » entre la prairie centrale et le promontoire
+        // rocheux de l'est.
+        let mut vent = demo_obj("Zone de vent", MeshKind::Cube, Vec3::new(14.0, 0.3, -4.0));
+        vent.transform = vent.transform.with_scale(Vec3::new(8.0, 0.6, 8.0));
+        vent.physics = PhysicsKind::None;
+        vent.trigger = true;
+        vent.wind = Some(Vec3::new(5.0, 0.0, 0.0));
+        vent.color = [0.25, 0.75, 0.85];
+        objects.push(vent);
+
+        // Créatures qui errent (glb rigués/animés, cf. la doc de
+        // `creature_wander_script`) : seule différence avec les repères ci-dessus,
+        // des meshes importés skinnés plutôt que des primitives — chemins disque du
+        // dépôt (pas `bundle://`) car cette démo tourne depuis les sources, jamais
+        // depuis un export packagé. Table data-driven plutôt que dix blocs
+        // copiés-collés (l'historique en comptait cinq avant les créatures 6-10) :
+        // chaque entrée = (nom, fichier, spawn, bit de couche, préfixe de clés
+        // `save`, attaque au contact éventuelle).
+        //
+        // Communs à toutes : échelle 0.35 (les meshes bruts font ~2-3 m de haut,
+        // bbox locale non affectée par l'échelle Blender de l'objet, ignorée par
+        // `import::load_gltf` qui ne lit que les sommets des primitives) ; corps
+        // physique `Kinematic` (ne traversent ni joueur ni murs/objets fixes, cf.
+        // `Physics::resolve_scripted_moves`) ; couche de collision dédiée (bit
+        // propre) pour que leurs sondes raycast s'ignorent elles-mêmes tout en
+        // voyant les autres ; spawns espacés, à bonne distance des murs/repères
+        // (RAY_DIST 3,5 m devant chaque créature doit démarrer dégagé).
+        //
+        // Attaques : au contact (`bite`, cf. `creature_bite_script` — morsure de
+        // la n°1, morsure rapide de la chauve-souris n°6, pincement lourd du crabe
+        // n°7, chacun son tempérament et son `salt` de tirage) ; les attaques à
+        // distance des n°3/8/9/10 sont natives, déclenchées par **nom d'objet**
+        // (cf. `app::creature_attack::RANGED_CREATURE_ATTACKS`), rien à câbler ici.
+        struct DemoCreature {
+            name: &'static str,
+            file: &'static str,
+            spawn: Vec3,
+            layer_bit: u32,
+            prefix: &'static str,
+            /// `Some((cooldown, chance, dégâts, salt))` : attaque au contact.
+            bite: Option<(f32, f32, f32, f32)>,
+            /// Cap initial (degrés) et déphasage du bruit de méandre — cf. la
+            /// doc de `creature_wander_script` sur le bug qu'ils corrigent
+            /// (créatures qui partaient toutes dans la même direction, en bloc
+            /// contre le même mur). Passés à **tous** les générateurs pour un
+            /// type de pointeur de fonction uniforme ; ceux qui n'en ont pas
+            /// l'usage (sentinelle, rôdeur…) les ignorent (`_heading0`/`_phase`).
+            heading0: f32,
+            phase: f32,
+            /// Générateur du script de comportement (patrouille à sondes,
+            /// sentinelle, rôdeur, dérive, artillerie, zigzag…) — signature
+            /// commune (demi-arène, préfixe `save`, masque de sonde, cap
+            /// initial, déphasage), chaque générateur ignore ce dont il n'a
+            /// pas besoin.
+            script: fn(f32, &str, u32, f32, f32) -> String,
+            /// Manche d'apparition (`Combat::wave`, GDD_MMORPG.md §5.5 — la
+            /// dent de scie de « La Horde ») : la vague 1 est l'échauffement
+            /// (errantes inoffensives), les suivantes montent en intensité.
+            /// Règles d'authoring verrouillées par le test
+            /// `mmorpg_demo_waves_follow_the_gdd_authoring_rules` : budget de
+            /// PV strictement croissant par vague, au moins un chef à 3 PV
+            /// dès la vague 2, dernière vague ≥ 4/3 de l'avant-dernière.
+            wave: u32,
+            /// PV (`Combat::hp`) : 1 pour la troupe, 3 pour un « chef » — la
+            /// cible qui justifie le Boulet (GDD §5.5 : « un chef à 3 PV
+            /// tombe d'un coup », sans elle l'arme lourde est objectivement
+            /// inférieure).
+            hp: u32,
+        }
+        const MMORPG_CREATURES: &[DemoCreature] = &[
+            DemoCreature {
+                name: "Créature",
+                file: "creature.glb",
+                spawn: Vec3::new(0.0, 0.0, -4.0),
+                layer_bit: 1,
+                prefix: "creature_",
+                heading0: 0.0,
+                // `phase` décale le méandre du script d'errance (terme
+                // `sin(time*0.35+phase)`, cf. `creature_wander_script`) : à
+                // `phase = 0`, sur 30 s la dérive nette pousse systématiquement
+                // vers le hameau (SE, façades planes abordées en tangente —
+                // 3 rayons d'égale distance, quasi aucun signal d'évitement),
+                // provoquant un arrêt prolongé. Inoffensif sur l'ancienne
+                // arène 24 m (rien à heurter à cette distance), redevenu un
+                // piège sur la carte 72 m. `-π/2` retarde et adoucit le
+                // virage initial : la dérive longe la rizière sud, à
+                // distance de tout décor solide sur les 30 s du test. Preuve :
+                // `mmorpg_creature_never_gets_stuck_walking_into_a_wall`.
+                phase: -std::f32::consts::FRAC_PI_2,
+                bite: Some((2.2, 0.4, 0.12, 12.9898)),
+                script: creature_wander_script,
+                wave: 1,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 2",
+                file: "creature2.glb",
+                spawn: Vec3::new(6.0, 0.0, 2.0),
+                layer_bit: 2,
+                prefix: "creature2_",
+                heading0: 72.0,
+                phase: 0.9,
+                bite: None,
+                script: creature_wander_script,
+                wave: 1,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 3",
+                file: "creature3.glb",
+                spawn: Vec3::new(-6.0, 0.0, 4.0),
+                layer_bit: 3,
+                prefix: "creature3_",
+                heading0: 144.0,
+                phase: 1.8,
+                bite: None,
+                script: creature_wander_script,
+                wave: 1,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 4",
+                file: "creature4.glb",
+                spawn: Vec3::new(-4.0, 0.0, -9.0),
+                layer_bit: 4,
+                prefix: "creature4_",
+                heading0: 216.0,
+                phase: 2.7,
+                bite: None,
+                script: creature_wander_script,
+                wave: 1,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 5",
+                file: "creature5.glb",
+                spawn: Vec3::new(7.0, 0.0, -7.0),
+                layer_bit: 5,
+                prefix: "creature5_",
+                heading0: 288.0,
+                phase: 3.6,
+                bite: None,
+                script: creature_wander_script,
+                wave: 1,
+                hp: 1,
+            },
+            // Chauve-souris : morsure rapide mais faible — harcèle plus qu'elle
+            // ne punit.
+            DemoCreature {
+                name: "Créature 6",
+                file: "creature6.glb",
+                spawn: Vec3::new(20.0, 0.0, -20.0),
+                layer_bit: 6,
+                prefix: "creature6_",
+                heading0: 24.0,
+                phase: 4.5,
+                bite: Some((1.6, 0.5, 0.08, 19.4142)),
+                script: creature_wander_script,
+                wave: 2,
+                hp: 1,
+            },
+            // Crabe : pincement rare mais lourd — l'inverse de la chauve-souris.
+            DemoCreature {
+                name: "Créature 7",
+                file: "creature7.glb",
+                // Berge est du lac, à l'écart du nouveau mur d'eau (le crabe
+                // spawnait auparavant quasi sur le bord du Lac, l:[-26,-12]
+                // z:[-2,10], désormais bordé de murs invisibles).
+                spawn: Vec3::new(-9.0, 0.0, 14.0),
+                layer_bit: 7,
+                prefix: "creature7_",
+                heading0: 96.0,
+                phase: 5.4,
+                bite: Some((3.5, 0.6, 0.18, 27.1828)),
+                script: creature_wander_script,
+                wave: 2,
+                hp: 3,
+            },
+            DemoCreature {
+                name: "Créature 8",
+                file: "creature8.glb",
+                spawn: Vec3::new(24.0, 0.0, 18.0),
+                layer_bit: 8,
+                prefix: "creature8_",
+                heading0: 168.0,
+                phase: 6.3,
+                bite: None,
+                script: creature_wander_script,
+                wave: 3,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 9",
+                file: "creature9.glb",
+                spawn: Vec3::new(-4.0, 0.0, 29.0),
+                layer_bit: 9,
+                prefix: "creature9_",
+                heading0: 240.0,
+                phase: 7.2,
+                bite: None,
+                script: creature_wander_script,
+                wave: 3,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 10",
+                file: "creature10.glb",
+                spawn: Vec3::new(12.0, 0.0, -10.0),
+                layer_bit: 10,
+                prefix: "creature10_",
+                heading0: 312.0,
+                phase: 8.1,
+                bite: None,
+                script: creature_wander_script,
+                wave: 3,
+                hp: 1,
+            },
+            // 11-15 : la génération « qualité supérieure » — attaques à
+            // distance toutes différentes (cf. `creature_attack::AttackStyle`)
+            // et comportements dédiés, cohérents avec leur attaque.
+            DemoCreature {
+                name: "Créature 11",
+                file: "creature11.glb",
+                spawn: Vec3::new(10.0, 0.0, 16.0),
+                layer_bit: 11,
+                prefix: "creature11_",
+                heading0: 48.0,
+                phase: 9.0,
+                bite: None,
+                script: creature_guard_script,
+                wave: 3,
+                hp: 3,
+            },
+            DemoCreature {
+                name: "Créature 12",
+                file: "creature12.glb",
+                spawn: Vec3::new(24.0, 0.0, -14.0),
+                layer_bit: 12,
+                prefix: "creature12_",
+                heading0: 120.0,
+                phase: 9.9,
+                bite: None,
+                script: creature_kite_script,
+                wave: 3,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 13",
+                file: "creature13.glb",
+                spawn: Vec3::new(-19.0, 0.0, 2.0),
+                layer_bit: 13,
+                prefix: "creature13_",
+                heading0: 192.0,
+                phase: 10.8,
+                bite: None,
+                script: creature_drift_script,
+                wave: 3,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 14",
+                file: "creature14.glb",
+                spawn: Vec3::new(-12.0, 0.0, 22.0),
+                layer_bit: 14,
+                prefix: "creature14_",
+                heading0: 264.0,
+                phase: 11.7,
+                bite: None,
+                script: creature_artillery_script,
+                wave: 4,
+                hp: 3,
+            },
+            DemoCreature {
+                name: "Créature 15",
+                file: "creature15.glb",
+                spawn: Vec3::new(-20.5, 0.0, 15.5),
+                layer_bit: 15,
+                prefix: "creature15_",
+                heading0: 336.0,
+                phase: 12.6,
+                bite: None,
+                script: creature_zigzag_script,
+                wave: 4,
+                hp: 1,
+            },
+            // 16-20 : même palier de qualité que 11-15 — attaques et
+            // comportements tout aussi variés, cf. `creature_attack.rs`.
+            DemoCreature {
+                name: "Créature 16",
+                file: "creature16.glb",
+                // Audit gameplay : l'ancien spawn (1.5, 7.5) mettait le cercle de
+                // patrouille (R 3,5) à cheval sur la cabane et le mur nord —
+                // blocages permanents. Est de l'arène, dégagé : rochers, arbres,
+                // repères et murs tous à > 1,5 m du cercle, et hors de la zone
+                // d'errance des créatures 1-5 (un premier essai au centre faisait
+                // s'arrêter la n°1 à chaque passage du griffon devant ses sondes).
+                spawn: Vec3::new(-2.0, 0.0, -18.0),
+                layer_bit: 16,
+                prefix: "creature16_",
+                heading0: 12.0,
+                phase: 13.5,
+                bite: None,
+                script: creature_soar_script,
+                wave: 4,
+                hp: 3,
+            },
+            DemoCreature {
+                name: "Créature 17",
+                file: "creature17.glb",
+                // Audit gameplay : l'ancien spawn (-0.5, -10.5) faisait mordre
+                // l'aile sud du huit (± 1,5 en z) sur le mur — remonté pour que
+                // toute la courbe reste dans l'arène, loin des rochers 2/3.
+                spawn: Vec3::new(-20.0, 0.0, -26.0),
+                layer_bit: 17,
+                prefix: "creature17_",
+                heading0: 84.0,
+                phase: 14.4,
+                bite: None,
+                script: creature_lemniscate_script,
+                wave: 4,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 18",
+                file: "creature18.glb",
+                spawn: Vec3::new(18.0, 0.0, 27.0),
+                layer_bit: 18,
+                prefix: "creature18_",
+                heading0: 156.0,
+                phase: 15.3,
+                bite: None,
+                script: creature_burrow_script,
+                wave: 4,
+                hp: 3,
+            },
+            DemoCreature {
+                name: "Créature 19",
+                file: "creature19.glb",
+                spawn: Vec3::new(19.5, 0.0, 2.5),
+                layer_bit: 19,
+                prefix: "creature19_",
+                heading0: 228.0,
+                phase: 16.2,
+                bite: None,
+                script: creature_hover_script,
+                wave: 4,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 20",
+                file: "creature20.glb",
+                spawn: Vec3::new(26.0, 0.0, 13.0),
+                layer_bit: 20,
+                prefix: "creature20_",
+                heading0: 300.0,
+                phase: 17.1,
+                bite: None,
+                script: creature_turret_script,
+                wave: 3,
+                hp: 3,
+            },
+            DemoCreature {
+                name: "Créature 21",
+                file: "creature21.glb",
+                spawn: Vec3::new(4.0, 0.0, 26.0),
+                layer_bit: 21,
+                prefix: "creature21_",
+                heading0: 12.0,
+                phase: 18.0,
+                bite: None,
+                script: creature_wander_script,
+                wave: 2,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 22",
+                file: "creature22.glb",
+                spawn: Vec3::new(24.0, 0.0, -4.0),
+                layer_bit: 22,
+                prefix: "creature22_",
+                heading0: 84.0,
+                phase: 18.9,
+                bite: None,
+                script: creature_wander_script,
+                wave: 2,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 23",
+                file: "creature23.glb",
+                spawn: Vec3::new(-2.0, 0.0, 22.0),
+                layer_bit: 23,
+                prefix: "creature23_",
+                heading0: 156.0,
+                phase: 19.8,
+                bite: None,
+                script: creature_wander_script,
+                wave: 2,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 24",
+                file: "creature24.glb",
+                spawn: Vec3::new(-14.0, 0.0, -22.0),
+                layer_bit: 24,
+                prefix: "creature24_",
+                heading0: 228.0,
+                phase: 20.7,
+                bite: None,
+                // Pas `creature_burrow_script` : la charge garde un cap constant
+                // pendant 1,1 s, et un corps scripté dont le TriMesh s'est
+                // incrusté dans le sol (chute du 1er tick non arrêtée,
+                // trimesh-vs-trimesh) peut se coincer sur un cap « malchanceux »
+                // (normales de contact des triangles) — gel complet observé sur
+                // ce mesh. Le méandre de wander varie son cap à chaque frame et
+                // se décoince naturellement.
+                script: creature_wander_script,
+                wave: 2,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 25",
+                file: "creature25.glb",
+                spawn: Vec3::new(14.0, 0.0, 26.0),
+                layer_bit: 25,
+                prefix: "creature25_",
+                heading0: 300.0,
+                phase: 21.6,
+                bite: None,
+                script: creature_zigzag_script,
+                wave: 4,
+                hp: 1,
+            },
+            DemoCreature {
+                name: "Créature 26",
+                file: "creature26.glb",
+                spawn: Vec3::new(28.0, 0.0, 26.0),
+                layer_bit: 26,
+                prefix: "creature26_",
+                heading0: 12.0,
+                phase: 22.5,
+                bite: None,
+                script: creature_lemniscate_script,
+                wave: 4,
+                hp: 3,
+            },
+        ];
+
+        let mut imported = Vec::new();
+        for spec in MMORPG_CREATURES {
+            let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), spec.file);
+            match crate::scene::import::load_gltf(&path) {
+                Ok((data, aabb_min, aabb_max)) => {
+                    let mut mesh = ImportedMesh {
+                        path: path.clone(),
+                        data,
+                        aabb_min,
+                        aabb_max,
+                        ..Default::default()
+                    };
+                    mesh.load_skinning();
+                    let mesh_index = imported.len() as u32;
+                    let mut creature =
+                        demo_obj(spec.name, MeshKind::Imported(mesh_index), spec.spawn);
+                    creature.transform = creature.transform.with_scale(Vec3::splat(0.35));
+                    creature.animation = Some(AnimationState {
+                        clip: "Idle".into(),
+                        ..Default::default()
+                    });
+                    creature.physics = PhysicsKind::Kinematic;
+                    creature.collision_layer = 1 << spec.layer_bit;
+                    // Tuable (boule de feu/mêlée) et synchronisée en réseau — même
+                    // pipeline générique que les autres monstres `Combat::attackable`
+                    // (`fireball_impact`/`attack_at`, `AppState::network_snapshot`) :
+                    // rien de spécifique aux créatures scriptées à ajouter côté mise à
+                    // mort, cf. GAMEDESIGN_EN_LIGNE.md et ROADMAP (synchro réseau).
+                    // `wave`/`hp` : la dent de scie de « La Horde » (GDD §5.5),
+                    // cf. les docs de `DemoCreature::wave`/`hp`.
+                    creature.combat = Some(Combat {
+                        attackable: true,
+                        wave: spec.wave,
+                        hp: spec.hp,
+                        ..Default::default()
+                    });
+                    let wander = (spec.script)(
+                        half,
+                        spec.prefix,
+                        !(1_u32 << spec.layer_bit),
+                        spec.heading0,
+                        spec.phase,
+                    );
+                    creature.script = match spec.bite {
+                        Some((cooldown, chance, damage, salt)) => {
+                            // `trigger = true` active la détection de contact
+                            // (`obj.triggered`) nécessaire à l'attaque, sans
+                            // changer son collider (toujours solide).
+                            creature.trigger = true;
+                            // Persisté aussi nativement (`SceneObject::bite`), en plus
+                            // du script Lua ci-dessous : le script pilote la version
+                            // solo, ce champ permet à `app::health` de retrouver
+                            // « quelles créatures mordent » côté réseau sans
+                            // redécouvrir chaque nom en dur (cf. sa doc).
+                            creature.bite = Some(crate::scene::BiteAttack {
+                                cooldown,
+                                chance,
+                                damage,
+                            });
+                            format!(
+                                "{wander}\n{}",
+                                creature_bite_script(spec.prefix, cooldown, chance, damage, salt)
+                            )
+                        }
+                        None => wander,
+                    };
+                    objects.push(creature);
+                    imported.push(mesh);
+                }
+                Err(e) => log::error!("{} MMORPG ({path}) : {e}", spec.name),
+            }
+        }
+
+        // --- Faune ambiante (créatures 27-61, packs générés Blender headless) ----
+        // Purement décorative : même pipeline d'import + `creature_wander_script`
+        // que `MMORPG_CREATURES` ci-dessus (elles errent, évitent les murs, jouent
+        // Idle/Walk), mais SANS `Combat` ni morsure — ni tuable, ni dangereuse.
+        // Préfixe de nom « Errant » (ni « Créature », réservé à
+        // `MMORPG_CREATURES`/ses outils de synchro, ni « Faune », déjà pris par
+        // `hameau_gdd_demo()` — cf. son bloc « Faune ambiante »
+        // `gen_menagerie_pack*.py` et ses noms `Faune {n} {cluster}-{poses}` de
+        // `faune_scatter`, présents dans la scène déjà embarquée : un préfixe
+        // partagé aurait fait retirer ce décor-là par erreur, constaté à
+        // l'exécution de l'outil de synchro avant ce correctif).
+        //
+        // Table data-driven (fichier, spawn) plutôt que 35 blocs de champs répétés
+        // (même choix que `MMORPG_CREATURES`) : cap initial et déphasage du
+        // méandre dérivés de l'index pour que deux instances ne partent jamais
+        // dans le même sens (cf. la doc de `creature_wander_script` sur ce bug).
+        // Couche de collision : 5 bits partagés en rotation (27..31, pas un bit
+        // par créature comme `MMORPG_CREATURES` — u32 ne peut décaler que jusqu'à
+        // 31) ; deux errantes qui partagent un bit s'ignorent mutuellement au
+        // raycast (se traversent), acceptable pour du décor sans aucun garde-fou
+        // dessus, cf. le commentaire de doc sur `ray_mask`.
+        const MMORPG_AMBIENT_FAUNA_SPAWNS: &[(&str, f32, f32)] = &[
+            // Forêt nord-est (x resserré sur 9..20 pour rester à l'écart du
+            // second hameau fortifié de `VILLAGE_PROPS`, x 23..35).
+            ("creature27.glb", 10.0, -10.0),
+            ("creature28.glb", 14.0, -14.0),
+            ("creature29.glb", 18.0, -18.0),
+            ("creature30.glb", 10.0, -18.0),
+            ("creature31.glb", 14.0, -24.0),
+            ("creature32.glb", 18.0, -28.0),
+            ("creature33.glb", 10.0, -28.0),
+            ("creature34.glb", 14.0, -32.0),
+            ("creature35.glb", 18.0, -12.0),
+            ("creature36.glb", 10.0, -32.0),
+            // Prairie centrale.
+            ("creature37.glb", -6.0, -8.0),
+            ("creature38.glb", 0.0, -6.0),
+            ("creature39.glb", 4.0, -2.0),
+            ("creature40.glb", -4.0, 2.0),
+            ("creature41.glb", 2.0, 6.0),
+            ("creature42.glb", -8.0, 4.0),
+            // Rives du lac et des rivières (x = -30/-31, à l'ouest des plans
+            // d'eau et de leurs berges).
+            ("creature43.glb", -31.0, -30.0),
+            ("creature44.glb", -31.0, -20.0),
+            ("creature45.glb", -30.0, 0.0),
+            ("creature46.glb", -31.0, 20.0),
+            ("creature47.glb", -30.0, 30.0),
+            ("creature48.glb", -22.0, 16.0),
+            // Rizières en damier (sud-ouest).
+            ("creature49.glb", -8.0, 25.0),
+            ("creature50.glb", -2.0, 26.0),
+            ("creature51.glb", 4.0, 28.0),
+            ("creature52.glb", -6.0, 32.0),
+            ("creature53.glb", 2.0, 33.0),
+            // Promontoire rocheux (est).
+            ("creature54.glb", 22.0, 4.0),
+            ("creature55.glb", 26.0, 6.0),
+            ("creature56.glb", 30.0, 8.0),
+            ("creature57.glb", 24.0, 12.0),
+            ("creature58.glb", 32.0, 14.0),
+            // Lisières diverses (complètent la répartition par biome).
+            ("creature59.glb", 25.0, -5.0),
+            ("creature60.glb", 15.0, -5.0),
+            ("creature61.glb", 20.0, -30.0),
+            // Renard (creature62, jusqu'ici généré mais jamais spawné — cf.
+            // `docs/rapport_qualite_creatures_vs_hyper3d.md`), lisière ouest
+            // de la prairie centrale, à l'écart du lac (`EXCL_EAU_ROUTES`) et
+            // de la halte « Ouest souche/fleurs ».
+            ("creature62.glb", -9.5, -0.5),
+            // Pack savane africaine (creature63-67, `gen_creature_pack63_67.py`),
+            // couloir libre entre rizières (x -11..9, z 23.5..34.5) et
+            // promontoire rocheux (x 20..34, z 2..16) — chaque position
+            // vérifiée à ≥4 m de tout décor/créature/halte déjà posé et de
+            // ses 4 voisines du pack (`EXCL_EAU_ROUTES`/`EXCL_ZONES_AMENAGEES`
+            // exclus par construction).
+            ("creature63.glb", 9.0, 26.0),
+            ("creature64.glb", 16.5, 33.0),
+            ("creature65.glb", 22.0, 25.0),
+            ("creature66.glb", 22.0, 29.0),
+            ("creature67.glb", 22.0, 33.0),
+            // Pack mammifères ronds au corps organique (creature68-72,
+            // `gen_creature_pack68_72_organic.py`, Metaball + Automatic
+            // Weights — cf. `proto_creature62_fox_organic.py`) : hippopotame,
+            // capybara, loutre de mer, koala, marmotte. Dispersés en lisière
+            // ouest/sud-ouest, à ≥4,5 m de tout décor/créature/halte déjà
+            // posé (`EXCL_EAU_ROUTES`/`EXCL_ZONES_AMENAGEES` exclus par
+            // construction).
+            ("creature68.glb", -18.0, -12.0),
+            ("creature69.glb", -23.5, -33.0),
+            ("creature70.glb", -13.5, -13.0),
+            ("creature71.glb", -12.5, 34.0),
+            ("creature72.glb", -21.5, -3.5),
+        ];
+        for (i, &(file, x, z)) in MMORPG_AMBIENT_FAUNA_SPAWNS.iter().enumerate() {
+            let n = i + 27;
+            let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), file);
+            match crate::scene::import::load_gltf(&path) {
+                Ok((data, aabb_min, aabb_max)) => {
+                    let mut mesh = ImportedMesh {
+                        path: path.clone(),
+                        data,
+                        aabb_min,
+                        aabb_max,
+                        ..Default::default()
+                    };
+                    mesh.load_skinning();
+                    let mesh_index = imported.len() as u32;
+                    let name = format!("Errant {n}");
+                    let prefix = format!("faune{n}_");
+                    let mut fauna =
+                        demo_obj(&name, MeshKind::Imported(mesh_index), Vec3::new(x, 0.0, z));
+                    // Gabarit 0.28..0.45 plutôt qu'une échelle 0.35 fixe pour les 35
+                    // instances (constaté sur une capture en jeu : à taille identique
+                    // et à hauteur d'œil, elles se fondent en points flous indistincts).
+                    // Suite du ratio doré (même famille de trucs que `heading0`/`phase`
+                    // ci-dessous) : distribution à faible discrépance, deux voisines
+                    // n'ont jamais un gabarit presque identique.
+                    let gabarit = 0.28 + 0.17 * (i as f32 * 0.618_034).fract();
+                    fauna.transform = fauna.transform.with_scale(Vec3::splat(gabarit));
+                    fauna.animation = Some(AnimationState {
+                        clip: "Idle".into(),
+                        ..Default::default()
+                    });
+                    fauna.physics = PhysicsKind::Kinematic;
+                    let layer_bit = 27 + (i as u32 % 5);
+                    fauna.collision_layer = 1 << layer_bit;
+                    let heading0 = (i as f32 * 47.0).rem_euclid(360.0);
+                    let phase = i as f32 * 0.833;
+                    fauna.script = creature_wander_script(
+                        half,
+                        &prefix,
+                        !(1_u32 << layer_bit),
+                        heading0,
+                        phase,
+                    );
+                    objects.push(fauna);
+                    imported.push(mesh);
+                }
+                Err(e) => log::error!("Errant {n} MMORPG ({path}) : {e}"),
+            }
+        }
+
+        // --- Décor « nature » : la carte 72×72 devient un petit monde ------------
+        // Biomes (nord = -Z) : prairie centrale autour du spawn joueur, forêt
+        // dense au nord-est (deux clairières habitées), lac et rivières à
+        // l'ouest (deux ponts), rizières en damier au sud-ouest, hameau sur la
+        // route est-ouest et promontoire rocheux à l'est (tour de guet). La
+        // carte reste PLATE : le sol est un `Plane` et les scripts des
+        // créatures ne suivent aucun relief — le « promontoire » est un anneau
+        // de rochers au sol, pas une élévation. Trois couches :
+        //
+        // 1) Aplats de terrain : primitives `Plane`, décalées de quelques
+        //    centimètres en Y (eau < sable < chemins < route) pour éviter le
+        //    z-fighting avec le sol et entre elles. L'eau reste un `Plane`
+        //    (pas de heightmap dans ce moteur), mais désormais bordée de murs
+        //    invisibles (étape 2 ci-dessous) : rivières et lac ne se
+        //    traversent plus à gué, seuls les deux ponts passent.
+        let eau = [0.18, 0.42, 0.65];
+        let eau_sombre = [0.14, 0.34, 0.55];
+        let terre = [0.42, 0.36, 0.26];
+        let vert_riziere = [0.24, 0.44, 0.38];
+        // Surface plus lisse/brillante que le sol : sans reflet d'environnement
+        // réel (le moteur n'a ni alpha ni uniforme de temps, cf. la doc de
+        // `mmorpg_demo`), un `roughness` bas donne un reflet spéculaire net qui
+        // suffit à distinguer l'eau d'un simple aplat de peinture bleue.
+        let mut aplat_eau = |name: &str, pos: Vec3, scale: Vec3, color: [f32; 3]| {
+            let mut p = demo_obj(name, MeshKind::Plane, pos);
+            p.transform = p.transform.with_scale(scale);
+            p.color = color;
+            p.roughness = 0.08;
+            p.metallic = 0.15;
+            objects.push(p);
+        };
+        aplat_eau(
+            "Rivière nord",
+            Vec3::new(-26.0, 0.02, -21.0),
+            Vec3::new(4.0, 1.0, 30.0),
+            eau,
+        );
+        aplat_eau(
+            "Coude de rivière",
+            Vec3::new(-22.0, 0.02, -6.0),
+            Vec3::new(12.0, 1.0, 4.0),
+            eau,
+        );
+        aplat_eau(
+            "Lac",
+            Vec3::new(-19.0, 0.015, 4.0),
+            Vec3::new(14.0, 1.0, 12.0),
+            eau_sombre,
+        );
+        aplat_eau(
+            "Rivière sud",
+            Vec3::new(-16.0, 0.02, 23.0),
+            Vec3::new(4.0, 1.0, 26.0),
+            eau,
+        );
+        let mut aplat = |name: &str, pos: Vec3, scale: Vec3, color: [f32; 3]| {
+            let mut p = demo_obj(name, MeshKind::Plane, pos);
+            p.transform = p.transform.with_scale(scale);
+            p.color = color;
+            objects.push(p);
+        };
+        aplat(
+            "Berge du lac",
+            Vec3::new(-19.0, 0.012, 12.0),
+            Vec3::new(14.0, 1.0, 3.0),
+            [0.72, 0.64, 0.44],
+        );
+        aplat(
+            "Route principale",
+            Vec3::new(0.0, 0.03, 14.0),
+            Vec3::new(2.0 * half, 1.0, 2.2),
+            terre,
+        );
+        aplat(
+            "Chemin du hameau",
+            Vec3::new(10.0, 0.028, 2.0),
+            Vec3::new(2.0, 1.0, 24.0),
+            terre,
+        );
+        aplat(
+            "Chemin du pont nord",
+            Vec3::new(-10.0, 0.028, -10.0),
+            Vec3::new(32.0, 1.0, 1.6),
+            terre,
+        );
+        for (i, (rx, rz)) in [
+            (-8.0_f32, 26.0),
+            (-1.0, 26.0),
+            (-8.0, 32.0),
+            (-1.0, 32.0),
+            (6.0, 29.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            aplat(
+                &format!("Rizière {}", i + 1),
+                Vec3::new(rx, 0.015, rz),
+                Vec3::new(6.0, 1.0, 5.0),
+                vert_riziere,
+            );
+        }
+        // Trois liaisons de voirie qui recousent les biomes entre eux (les
+        // biomes existaient mais on n'y « allait » que hors piste) : un chemin
+        // route → rizières dans l'interstice entre les damiers 1 et 2, le
+        // prolongement du chemin du pont nord vers le promontoire (le chemin
+        // s'arrêtait à x=6, la tour de guet restait hors réseau), et une place
+        // de terre battue autour du puits du hameau. Y : la place (0.031)
+        // au-dessus du chemin du hameau (0.028) qu'elle chevauche ; les deux
+        // chemins sous la route (0.03), même logique anti z-fighting que les
+        // aplats existants.
+        aplat(
+            "Chemin des rizières",
+            Vec3::new(-4.5, 0.026, 20.0),
+            Vec3::new(1.8, 1.0, 12.0),
+            terre,
+        );
+        aplat(
+            "Sentier du promontoire",
+            Vec3::new(20.0, 0.027, -10.0),
+            Vec3::new(28.0, 1.0, 1.6),
+            terre,
+        );
+        aplat(
+            "Place du hameau",
+            Vec3::new(10.0, 0.031, 7.0),
+            Vec3::new(7.0, 1.0, 6.0),
+            terre,
+        );
+
+        // 2) Murs d'eau invisibles : bordent les 4 plans d'eau ci-dessus pour
+        //    les rendre réellement infranchissables (collider `Static` seul,
+        //    `visible = false` — l'eau garde son aspect, elle bloque juste le
+        //    passage comme une vraie rivière). Seules ouvertures : les deux
+        //    ponts existants (`Pont 1` sur la rivière sud, `Pont 2` sur la
+        //    rivière nord), qui redeviennent ainsi les seuls passages — le
+        //    commentaire historique « les ponts sont narratifs » ne l'est
+        //    plus.
+        //
+        //    Les 4 rects d'eau (rivière nord, coude, lac, rivière sud) se
+        //    chevauchent/se touchent de façon irrégulière (le coude et le lac
+        //    ont même un interstice de 2 m entre eux) : les murer à la main
+        //    côté par côté s'est révélé source d'erreurs de continuité (essayé
+        //    puis abandonné — un bord mal raccordé laisse une brèche). Plus
+        //    fiable : rasteriser l'UNION des 4 rects sur une grille et poser
+        //    un segment de mur à chaque frontière eau→terre — la topologie du
+        //    contour est alors dérivée automatiquement, pas raisonnée à la
+        //    main. `GRID` = 3 m (assez fin pour suivre les angles à ~1,5 m
+        //    près, largement sous la marge de 3,5 m des sondes créatures).
+        //    `GRID` = 1 m (pas 3 m comme au premier jet) : au grain plus
+        //    large, l'ouverture minimale au droit d'un pont devait couvrir 2
+        //    cellules pour ne pas rogner le tablier (~1,84 m de large), ce qui
+        //    ouvrait ~6 m de berge — largement plus que le pont, le joueur
+        //    pouvait entrer dans l'eau en longeant la rive à côté du tablier
+        //    sans jamais poser le pied dessus. À 1 m, l'ouverture se resserre
+        //    à ~3 m (tablier + ~0,6 m de marge de chaque côté), et le mur
+        //    repousse immédiatement quiconque s'écarte du pont.
+        {
+            const GRID: f32 = 1.0;
+            let water_rects: [(f32, f32, f32, f32); 4] = [
+                (-28.0, -36.0, -24.0, -6.0), // rivière nord
+                (-28.0, -8.0, -16.0, -4.0),  // coude
+                (-26.0, -2.0, -12.0, 10.0),  // lac
+                (-18.0, 10.0, -14.0, 36.0),  // rivière sud
+            ];
+            // Rectangles où aucun mur ne doit être posé : juste assez larges
+            // pour couvrir le tablier du pont (largeur réelle ~1,84 m,
+            // `gen_bridge()` × échelle 1.15) sans plus — un gap trop large
+            // laisserait le joueur entrer dans l'eau à côté du pont sans
+            // jamais l'emprunter.
+            let bridge_gaps: [(f32, f32, f32, f32); 2] = [
+                (-29.0, -11.5, -23.0, -8.5), // Pont 2 (rivière nord, z≈-10)
+                (-19.0, 12.5, -13.0, 15.5),  // Pont 1 (rivière sud, z≈14)
+            ];
+            let is_water = |x: f32, z: f32| {
+                water_rects
+                    .iter()
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+            };
+            let in_gap = |x: f32, z: f32| {
+                bridge_gaps
+                    .iter()
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+            };
+            // Bornes de balayage : englobent les 4 rects avec une marge d'une
+            // cellule pour détecter la frontière extérieure.
+            let (mut gx0, mut gz0, mut gx1, mut gz1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for &(x0, z0, x1, z1) in &water_rects {
+                gx0 = gx0.min(x0);
+                gz0 = gz0.min(z0);
+                gx1 = gx1.max(x1);
+                gz1 = gz1.max(z1);
+            }
+            let mut mur_n = 0u32;
+            let mut cx = gx0 - GRID;
+            while cx <= gx1 + GRID {
+                let mut cz = gz0 - GRID;
+                while cz <= gz1 + GRID {
+                    if is_water(cx, cz) {
+                        // Frontière est/ouest (mur vertical le long de X constant).
+                        for &(nx, wall_x) in
+                            &[(cx + GRID, cx + GRID / 2.0), (cx - GRID, cx - GRID / 2.0)]
+                        {
+                            if !is_water(nx, cz) && !in_gap(wall_x, cz) {
+                                mur_n += 1;
+                                let mut w = demo_obj(
+                                    &format!("Mur d'eau {mur_n}"),
+                                    MeshKind::Cube,
+                                    Vec3::new(wall_x, 0.9, cz),
+                                );
+                                w.transform = w.transform.with_scale(Vec3::new(0.4, 1.8, GRID));
+                                w.physics = PhysicsKind::Static;
+                                w.visible = false;
+                                objects.push(w);
+                            }
+                        }
+                        // Frontière nord/sud (mur horizontal le long de Z constant).
+                        for &(nz, wall_z) in
+                            &[(cz + GRID, cz + GRID / 2.0), (cz - GRID, cz - GRID / 2.0)]
+                        {
+                            if !is_water(cx, nz) && !in_gap(cx, wall_z) {
+                                mur_n += 1;
+                                let mut w = demo_obj(
+                                    &format!("Mur d'eau {mur_n}"),
+                                    MeshKind::Cube,
+                                    Vec3::new(cx, 0.9, wall_z),
+                                );
+                                w.transform = w.transform.with_scale(Vec3::new(GRID, 1.8, 0.4));
+                                w.physics = PhysicsKind::Static;
+                                w.visible = false;
+                                objects.push(w);
+                            }
+                        }
+                    }
+                    cz += GRID;
+                }
+                cx += GRID;
+            }
+        }
+
+        // 1 bis) Sprint 26 (Phase K, `sprintreflecion.md`) : petit bassin
+        //    intégré à un contrefort du relief existant (`gfx::mesh::
+        //    mmorpg_terrain_local_height`, zone `MMORPG_MOUND_X_LOCAL`/
+        //    `MMORPG_MOUND_Z_LOCAL`) — PAS un retrofit du lac historique
+        //    ci-dessus (`water_rects`), qui reste posé sur un sol resté plat
+        //    à dessein (des centaines de placements en dépendent, cf. la doc
+        //    de `mmorpg_terrain_local_height`). Zone (x∈[-34,-30],
+        //    z∈[3,5;8,5]) vérifiée numériquement libre de tout décor/spawn
+        //    placé à la main à ≥3 m près (`NATURE_DECOR`/`VILLAGE_PROPS`/
+        //    `MONSTER_DECOR`/`MMORPG_HALTES`/`MMORPG_CREATURES`/
+        //    `MMORPG_AMBIENT_FAUNA_SPAWNS`/`EXCL_*`), y compris du semis
+        //    procédural le plus proche (« Arbre du sud », x∈[22,34] z∈[30,35],
+        //    seule autre poche libre trouvée côté sud-est de la carte — trop
+        //    loin pour interférer ici) : juste à l'est de la bande de
+        //    collines existante, dont le relief retombe déjà à 0 dès
+        //    x=-34,5. Rive nord du bassin (z≈7, contre le contrefort) suit
+        //    donc une pente réelle du terrain ; rive sud (z≈8,5, côté champ
+        //    ouvert) reste sur du plat, comme n'importe quelle berge. Murs
+        //    invisibles sur les 4 côtés — même principe que les « Mur d'eau »
+        //    ci-dessus, mais un seul rectangle isolé (pas de pont à
+        //    ménager) : pas besoin de l'algorithme de rastérisation par
+        //    union, 4 plaques statiques suffisent.
+        {
+            const SE_LAKE: (f32, f32, f32, f32) = (-33.5, 7.0, -31.0, 8.5); // (x0,z0,x1,z1)
+            let (x0, z0, x1, z1) = SE_LAKE;
+            let (cx, cz) = ((x0 + x1) * 0.5, (z0 + z1) * 0.5);
+            let mut p = demo_obj(
+                "Bassin du contrefort",
+                MeshKind::Plane,
+                Vec3::new(cx, 0.02, cz),
+            );
+            p.transform = p.transform.with_scale(Vec3::new(x1 - x0, 1.0, z1 - z0));
+            p.color = eau_sombre;
+            p.roughness = 0.08;
+            p.metallic = 0.15;
+            objects.push(p);
+
+            let wall_h = 1.8;
+            let thick = 0.4;
+            let mut bassin_wall = |name: &str, pos: Vec3, scale: Vec3| {
+                let mut w = demo_obj(name, MeshKind::Cube, pos);
+                w.transform = w.transform.with_scale(scale);
+                w.physics = PhysicsKind::Static;
+                w.visible = false;
+                objects.push(w);
+            };
+            bassin_wall(
+                "Mur bassin Nord",
+                Vec3::new(cx, wall_h * 0.5, z0),
+                Vec3::new(x1 - x0 + thick, wall_h, thick),
+            );
+            bassin_wall(
+                "Mur bassin Sud",
+                Vec3::new(cx, wall_h * 0.5, z1),
+                Vec3::new(x1 - x0 + thick, wall_h, thick),
+            );
+            bassin_wall(
+                "Mur bassin Ouest",
+                Vec3::new(x0, wall_h * 0.5, cz),
+                Vec3::new(thick, wall_h, z1 - z0 + thick),
+            );
+            bassin_wall(
+                "Mur bassin Est",
+                Vec3::new(x1, wall_h * 0.5, cz),
+                Vec3::new(thick, wall_h, z1 - z0 + thick),
+            );
+        }
+
+        // Tunnel/surplomb (Sprint 26) : passage praticable sous un arceau
+        // statique — géométrie non-heightmap à dessein, un heightmap XZ→Y ne
+        // représente pas un surplomb (cf. l'objectif du sprint dans
+        // `sprintreflecion.md`) — posé sur du sol resté PLAT (hors de toute
+        // zone de relief : x∈[-34.2,-31.0] est à l'ouest de
+        // `MMORPG_MOUND_X_LOCAL`, qui commence à x=-30,2, donc `mound_h` y
+        // est nul ; la bande de collines historique est, elle, nulle dès
+        // x=-34,5). Même poche libre que le bassin ci-dessus mais décalée en
+        // Z (couloir x∈[-34.4,-30.8] z∈[-8.8,-2.8], vérifié libre
+        // séparément) : deux piliers encadrant un passage de 2 m de large,
+        // surmontés d'un toit — tous statiques, le sol sous le passage garde
+        // son collider dalle plate habituel (aucun trou de collision).
+        {
+            let pillar_y = 1.1;
+            let pillar_h = 2.2;
+            let z_center = -5.75;
+            let z_len = 5.1;
+            let mut arche = |name: &str, pos: Vec3, scale: Vec3| {
+                let mut c = demo_obj(name, MeshKind::Cube, pos);
+                c.transform = c.transform.with_scale(scale);
+                c.physics = PhysicsKind::Static;
+                c.color = [0.5, 0.48, 0.44];
+                objects.push(c);
+            };
+            arche(
+                "Pilier tunnel Ouest",
+                Vec3::new(-33.9, pillar_y, z_center),
+                Vec3::new(0.6, pillar_h, z_len),
+            );
+            arche(
+                "Pilier tunnel Est",
+                Vec3::new(-31.3, pillar_y, z_center),
+                Vec3::new(0.6, pillar_h, z_len),
+            );
+            arche(
+                "Toit tunnel",
+                Vec3::new(-32.6, pillar_y + pillar_h * 0.5 + 0.2, z_center),
+                Vec3::new(3.2, 0.4, z_len),
+            );
+        }
+
+        // 2) Meshes glb générés par Blender headless (gen_nature_pack.py pour
+        //    les statiques, gen_nature_animated.py pour les riggés). `solide` →
+        //    corps statique avec collider `TriMesh` (silhouette exacte : les
+        //    ponts se traversent à pied, on se faufile entre les troncs) ;
+        //    sinon pur décor traversable (fleurs, riz, roseaux, panneaux…).
+        //    `anim` → l'instance reçoit un `AnimationState` sur le clip nommé :
+        //    le mesh reste partagé entre instances (chargé une seule fois),
+        //    seul l'état d'animation est par objet — même mécanique que les
+        //    créatures. Le TriMesh d'un solide animé est celui de la POSE DE
+        //    REPOS (l'animation est purement visuelle) : les parties mobiles
+        //    des moulins sont hors de portée du joueur (en hauteur/côté eau).
+        //    Tout décor solide respecte ≥ 3,5 m (RAY_DIST des sondes) de
+        //    dégagement autour des spawns de créatures — vérifié par le test
+        //    `mmorpg_demo_contains_walkable_nature_decor`, y compris pour le
+        //    décor semé procéduralement ci-dessous.
+        struct DemoDecor {
+            name: &'static str,
+            file: &'static str,
+            pos: (f32, f32),
+            scale: f32,
+            /// Cap (degrés autour de Y) : oriente le décor vers ce qu'il
+            /// raconte (portes des cabanes vers la route, roue du moulin côté
+            /// rivière…). Les glb sortent de Blender porte vers -Z.
+            yaw_deg: f32,
+            solide: bool,
+            /// Clip joué en boucle (assets riggés de gen_nature_animated.py).
+            anim: Option<&'static str>,
+        }
+        // Landmarks posés à la main : le hameau (centre-est, sur la route), le
+        // promontoire (tour + anneau de rochers), les ponts, les moulins et la
+        // vie des berges. Le reste (forêt, lisières, fleurs, riz) est semé
+        // procéduralement plus bas.
+        const NATURE_DECOR: &[DemoDecor] = &[
+            DemoDecor {
+                name: "Pont 1",
+                file: "nature_bridge.glb",
+                pos: (-16.0, 14.0),
+                scale: 1.15,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Pont 2",
+                file: "nature_bridge.glb",
+                pos: (-26.0, -10.0),
+                scale: 1.15,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // Hameau : deux cabanes porte vers la route (au sud d'elles, d'où
+            // le cap 180°), la hutte de l'autre côté de la route, le puits, la
+            // charrette, le torii qui marque l'entrée du chemin.
+            DemoDecor {
+                name: "Cabane 1",
+                file: "nature_cabin.glb",
+                pos: (6.0, 9.0),
+                scale: 1.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cabane 2",
+                file: "nature_cabin.glb",
+                pos: (14.0, 9.0),
+                scale: 1.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Hutte",
+                file: "nature_hut.glb",
+                pos: (10.0, 21.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Puits",
+                file: "nature_well.glb",
+                pos: (10.0, 7.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Charrette",
+                file: "nature_cart.glb",
+                pos: (7.5, 11.5),
+                scale: 1.0,
+                yaw_deg: 35.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Torii",
+                file: "nature_torii.glb",
+                pos: (10.0, 12.2),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tas de bois",
+                file: "nature_woodpile.glb",
+                pos: (4.5, 10.8),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Bannière",
+                file: "nature_banner.glb",
+                pos: (13.0, 4.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            // Encadrent l'entrée du torii, de part et d'autre du chemin.
+            DemoDecor {
+                name: "Lanterne 1",
+                file: "nature_lantern.glb",
+                pos: (5.0, 13.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne 2",
+                file: "nature_lantern.glb",
+                pos: (15.0, 13.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // Clôtures des potagers, de part et d'autre des cabanes.
+            DemoDecor {
+                name: "Clôture 1",
+                file: "nature_fence.glb",
+                pos: (4.0, 6.2),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture 2",
+                file: "nature_fence.glb",
+                pos: (16.0, 6.2),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture 3",
+                file: "nature_fence.glb",
+                pos: (2.2, 8.2),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture 4",
+                file: "nature_fence.glb",
+                pos: (18.5, 9.5),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            // Promontoire : la tour de guet au centre d'un anneau de rochers,
+            // tous à ≥ 4 m de la tortue-canon (26, 13) qui y niche.
+            DemoDecor {
+                name: "Tour de guet",
+                file: "nature_tower.glb",
+                pos: (27.0, 9.0),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher 1",
+                file: "nature_rock.glb",
+                pos: (31.2, 9.6),
+                scale: 1.8,
+                yaw_deg: 40.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher 2",
+                file: "nature_rock.glb",
+                pos: (29.6, 4.8),
+                scale: 1.5,
+                yaw_deg: 130.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher 3",
+                file: "nature_rock.glb",
+                pos: (24.0, 4.4),
+                scale: 1.9,
+                yaw_deg: 210.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher 4",
+                file: "nature_rock.glb",
+                pos: (22.4, 8.8),
+                scale: 1.4,
+                yaw_deg: 300.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher 5",
+                file: "nature_rock.glb",
+                pos: (30.4, 13.4),
+                scale: 1.6,
+                yaw_deg: 75.0,
+                solide: true,
+                anim: None,
+            },
+            // Moulins : la roue à aubes trempe dans la rivière sud (cap 180° —
+            // la roue sort de Blender côté +X), les pales du moulin à vent
+            // dominent les rizières.
+            DemoDecor {
+                name: "Moulin à eau",
+                file: "nature_watermill.glb",
+                pos: (-13.2, 17.0),
+                scale: 1.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Moulin à vent",
+                file: "nature_windmill.glb",
+                pos: (10.0, 32.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            // Vie des berges et des champs (non solide sauf la barque).
+            DemoDecor {
+                name: "Feu de camp",
+                file: "nature_campfire.glb",
+                pos: (19.0, -6.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Épouvantail",
+                file: "nature_scarecrow.glb",
+                pos: (-8.0, 26.5),
+                scale: 1.0,
+                yaw_deg: 20.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Barque",
+                file: "nature_boat.glb",
+                pos: (-24.0, 11.8),
+                scale: 1.0,
+                yaw_deg: 20.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Panneau 1",
+                file: "nature_signpost.glb",
+                pos: (-12.8, 15.8),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Panneau 2",
+                file: "nature_signpost.glb",
+                pos: (11.6, 15.8),
+                scale: 1.0,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Nénuphars 1",
+                file: "nature_lily.glb",
+                pos: (-21.0, 3.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Nénuphars 2",
+                file: "nature_lily.glb",
+                pos: (-16.5, 6.5),
+                scale: 1.2,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Nénuphars 3",
+                file: "nature_lily.glb",
+                pos: (-23.5, 7.5),
+                scale: 0.9,
+                yaw_deg: 200.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Roseaux 1",
+                file: "nature_reeds.glb",
+                pos: (-12.4, 9.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Roseaux 2",
+                file: "nature_reeds.glb",
+                pos: (-25.2, 1.5),
+                scale: 1.1,
+                yaw_deg: 70.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Roseaux 3",
+                file: "nature_reeds.glb",
+                pos: (-13.6, 25.0),
+                scale: 1.0,
+                yaw_deg: 140.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Roseaux 4",
+                file: "nature_reeds.glb",
+                pos: (-18.7, 30.5),
+                scale: 1.05,
+                yaw_deg: 250.0,
+                solide: false,
+                anim: None,
+            },
+            // --- Faune ambiante (gen_menagerie_pack.py / gen_menagerie_pack2.py) : non
+            //     solide sauf mention contraire (mouton/cerf, socle plein → sondes),
+            //     `anim: Some("Idle")` sur toutes. Dispersée près de son biome (forêt,
+            //     prairie, berges, hameau) — la non-solidité ne dispense pas du
+            //     dégagement des spawns pour les 2 solides, cf. la doc de `DemoDecor`.
+            DemoDecor {
+                name: "Mouton",
+                file: "fauna_sheep.glb",
+                pos: (-3.0, 16.0),
+                scale: 1.0,
+                yaw_deg: 300.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Cerf",
+                file: "fauna_deer.glb",
+                pos: (4.5, -13.5),
+                scale: 1.0,
+                yaw_deg: 30.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Oiseau",
+                file: "fauna_bird.glb",
+                pos: (9.0, -12.0),
+                scale: 1.0,
+                yaw_deg: 80.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Papillon",
+                file: "fauna_butterfly.glb",
+                pos: (-2.0, 5.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Poisson",
+                file: "fauna_fish.glb",
+                pos: (-22.0, 5.0),
+                scale: 1.0,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Luciole",
+                file: "fauna_firefly.glb",
+                pos: (-4.0, -2.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Lapin",
+                file: "fauna_rabbit.glb",
+                pos: (2.0, -6.0),
+                scale: 1.0,
+                yaw_deg: 60.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Grenouille",
+                file: "fauna_frog.glb",
+                pos: (-19.0, 5.5),
+                scale: 1.0,
+                yaw_deg: 170.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Poule",
+                file: "fauna_chicken.glb",
+                pos: (8.5, 12.0),
+                scale: 1.0,
+                yaw_deg: 200.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Écureuil",
+                file: "fauna_squirrel.glb",
+                pos: (14.0, -12.0),
+                scale: 1.0,
+                yaw_deg: 110.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Chouette",
+                file: "fauna_owl.glb",
+                pos: (12.0, -16.0),
+                scale: 1.0,
+                yaw_deg: 40.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Chauve-souris",
+                file: "fauna_bat.glb",
+                pos: (18.0, -12.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Escargot",
+                file: "fauna_snail.glb",
+                pos: (-14.5, 8.0),
+                scale: 1.0,
+                yaw_deg: 260.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Crabe",
+                file: "fauna_crab.glb",
+                pos: (-25.5, 10.5),
+                scale: 1.0,
+                yaw_deg: 15.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Canard",
+                file: "fauna_duck.glb",
+                pos: (-19.5, 8.5),
+                scale: 1.0,
+                yaw_deg: 220.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Hérisson",
+                file: "fauna_hedgehog.glb",
+                pos: (16.0, -18.0),
+                scale: 1.0,
+                yaw_deg: 330.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Abeille",
+                file: "fauna_bee.glb",
+                pos: (-3.5, -1.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Taupe",
+                file: "fauna_mole.glb",
+                pos: (0.0, -8.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            // --- Mécanismes de décor animés, 2 vagues (gen_menagerie_pack.py /
+            //     gen_menagerie_pack2.py) : 3 clusters excentrés pour ne pas surcharger
+            //     le hameau existant — steppe nord-centrale (caravane), champs à
+            //     l'ouest des rizières (vie paysanne), rive est au sud du promontoire
+            //     (quartier portuaire). Carillon/chaise/cerf-volant : hameau, non
+            //     solides (trop fins pour les sondes, cf. gen_menagerie_pack.py).
+            DemoDecor {
+                name: "Girouette",
+                file: "nature_weathervane.glb",
+                pos: (-6.0, -16.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Pont-levis",
+                file: "nature_drawbridge.glb",
+                pos: (2.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Catapulte",
+                file: "nature_catapult.glb",
+                pos: (-6.0, -24.0),
+                scale: 1.0,
+                yaw_deg: 30.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Clocheton",
+                file: "nature_bell_tower.glb",
+                pos: (3.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Barrière de péage",
+                file: "nature_toll_gate.glb",
+                pos: (-2.0, -30.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Puits à manivelle",
+                file: "nature_well_windlass.glb",
+                pos: (-7.0, -30.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Marteau-pilon",
+                file: "nature_forge_hammer.glb",
+                pos: (-30.0, 22.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Métier à tisser",
+                file: "nature_weaving_loom.glb",
+                pos: (-24.0, 22.0),
+                scale: 1.0,
+                yaw_deg: 200.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Rouet",
+                file: "nature_spinning_wheel.glb",
+                pos: (-30.0, 27.0),
+                scale: 1.0,
+                yaw_deg: 250.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Soufflet",
+                file: "nature_bellows.glb",
+                pos: (-24.0, 27.0),
+                scale: 1.0,
+                yaw_deg: 150.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Pompe à eau",
+                file: "nature_water_pump.glb",
+                pos: (-18.0, 30.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Auvent de marché",
+                file: "nature_market_awning.glb",
+                pos: (-30.0, 32.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Moulin à prières",
+                file: "nature_prayer_wheel.glb",
+                pos: (-18.0, 24.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Bascule à balancier",
+                file: "nature_seesaw.glb",
+                pos: (-24.0, 32.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Manège",
+                file: "nature_merry_go_round.glb",
+                pos: (-33.0, 27.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Grue de quai",
+                file: "nature_dock_crane.glb",
+                pos: (30.0, 22.0),
+                scale: 1.0,
+                yaw_deg: 200.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Phare",
+                file: "nature_lighthouse_lamp.glb",
+                pos: (33.0, 27.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Horloge de tour",
+                file: "nature_pendulum_clock.glb",
+                pos: (30.0, 32.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Balançoire à corde",
+                file: "nature_rope_swing.glb",
+                pos: (16.0, -24.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Carillon à vent",
+                file: "nature_wind_chime.glb",
+                pos: (8.0, 20.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Chaise à bascule",
+                file: "nature_rocking_chair.glb",
+                pos: (11.5, 20.5),
+                scale: 1.0,
+                yaw_deg: 200.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Cerf-volant",
+                file: "nature_kite.glb",
+                pos: (0.0, 3.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            // Habillage des trois liaisons de voirie ajoutées aux aplats
+            // (chemin des rizières, sentier du promontoire, place du hameau) :
+            // pierres au carrefour route/chemin, pierre levée qui balise le
+            // sentier est, panneaux aux embranchements, lanternes aux étapes.
+            // Tout est posé en bord de voie, jamais sur la bande roulante.
+            // IMPORTANT : dans NATURE_DECOR (pas MONSTER_DECOR) — seuls
+            // NATURE_DECOR et VILLAGE_PROPS alimentent `solid_spots`, la
+            // liste que le scatter procédural évite à ≥ 2,5 m.
+            DemoDecor {
+                name: "Pierre du carrefour 1",
+                file: "nature_rock.glb",
+                pos: (14.5, 17.6),
+                scale: 0.45,
+                yaw_deg: 25.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Pierre du carrefour 2",
+                file: "nature_rock.glb",
+                pos: (16.8, 19.2),
+                scale: 0.3,
+                yaw_deg: 130.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Pierre levée du sentier",
+                file: "nature_rock.glb",
+                // Bord sud du sentier, hors du rectangle de la forêt NE.
+                pos: (30.0, -7.6),
+                scale: 0.7,
+                yaw_deg: 30.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Panneau des rizières",
+                file: "nature_signpost.glb",
+                pos: (-6.2, 15.8),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Panneau du promontoire",
+                file: "nature_signpost.glb",
+                pos: (7.0, -11.8),
+                scale: 1.0,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne du carrefour",
+                file: "nature_lantern.glb",
+                pos: (8.4, 15.7),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne du sentier est",
+                file: "nature_lantern.glb",
+                pos: (24.0, -8.4),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            // --- Pack « pierre & mystique » (gen_stone_pack.py) : landmarks
+            //     minéraux et sacrés qui étoffent les zones encore vides —
+            //     landes de l'est, ruines du sud, clairières. Tous solides
+            //     (TriMesh silhouette : on se faufile entre les pierres du
+            //     cromlech ou sous l'arche), tous à ≥ 4 m des spawns. ---
+            DemoDecor {
+                name: "Menhir",
+                file: "nature_menhir.glb",
+                pos: (32.0, -2.0),
+                scale: 1.0,
+                yaw_deg: 30.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cairn du sentier",
+                file: "nature_cairn.glb",
+                pos: (27.0, -8.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cromlech",
+                file: "nature_stone_circle.glb",
+                pos: (33.0, 18.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // Ruines du sud : l'arche et sa colonne racontent le domaine
+            // disparu, entre le clocheton et la balançoire.
+            DemoDecor {
+                name: "Arche en ruine",
+                file: "nature_ruin_arch.glb",
+                pos: (7.0, -26.0),
+                scale: 1.0,
+                yaw_deg: 20.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Colonne brisée",
+                file: "nature_ruin_column.glb",
+                pos: (10.0, -28.0),
+                scale: 1.0,
+                yaw_deg: 70.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cristaux",
+                file: "nature_crystal_cluster.glb",
+                pos: (18.0, -28.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // Bord du chemin des rizières, tourné vers les marcheurs (est).
+            DemoDecor {
+                name: "Autel du chemin",
+                file: "nature_shrine.glb",
+                pos: (-7.5, 20.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lanterne de pierre",
+                file: "nature_stone_lantern.glb",
+                pos: (17.8, 13.2),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Ruche",
+                file: "nature_beehive.glb",
+                pos: (19.5, 21.5),
+                scale: 1.0,
+                yaw_deg: 210.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Totem",
+                file: "nature_totem.glb",
+                pos: (-24.0, -18.0),
+                scale: 1.0,
+                yaw_deg: 150.0,
+                solide: true,
+                anim: None,
+            },
+            // Kiosque du hameau : l'entrée (face -Z du glb) regarde le chemin
+            // au sud, l'intérieur reste traversable entre les poteaux.
+            DemoDecor {
+                name: "Kiosque",
+                file: "nature_gazebo.glb",
+                pos: (3.5, 19.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+        ];
+
+        // Hameau fortifié : assets « maison », générés procéduralement par
+        // scripts/blender/gen_hamlet_*.py (cf. sprintcration3delement.md et
+        // la mémoire projet `charte-graphique-assets-maison` pour le détail
+        // du pipeline). Remplace depuis le Sprint 7 les assets tiers
+        // village_*.glb (Medieval Village Pack, Quaternius/CC0, retraités par
+        // scripts/blender/import_village_pack.py) — mêmes noms de fonction/
+        // silhouette, aucune géométrie tierce réutilisée. Posé dans le coin
+        // sud-est de la carte (x∈[22,36], z∈[-36,-20]), à l'écart du hameau
+        // existant et à ≥ 4 m du spawn le plus proche (créature 5, (20,-20))
+        // — la règle des 3,5 m (RAY_DIST) ne s'applique qu'au décor solide,
+        // testée plus bas.
+        const VILLAGE_PROPS: &[DemoDecor] = &[
+            // --- Bâtiments (grille 3×4, colonnes x=25/29/33, lignes
+            //     z=-23/-27/-30.5/-34) ---
+            DemoDecor {
+                name: "Caserne du hameau",
+                file: "hamlet_barracks.glb",
+                pos: (25.0, -23.0),
+                scale: 1.0,
+                yaw_deg: 200.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tour du hameau",
+                file: "hamlet_bell_tower.glb",
+                pos: (29.0, -23.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Auberge",
+                file: "hamlet_inn.glb",
+                pos: (33.0, -23.0),
+                scale: 1.0,
+                yaw_deg: 160.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Forge",
+                file: "hamlet_blacksmith.glb",
+                pos: (25.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Puits du hameau",
+                file: "hamlet_well.glb",
+                pos: (29.0, -27.0),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Scierie",
+                file: "hamlet_sawmill.glb",
+                pos: (33.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 270.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Maison du hameau 1",
+                file: "hamlet_house_a.glb",
+                pos: (25.0, -30.5),
+                scale: 1.0,
+                yaw_deg: 190.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Gazebo du hameau",
+                file: "hamlet_gazebo.glb",
+                pos: (29.0, -30.5),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Moulin du hameau",
+                file: "hamlet_mill.glb",
+                pos: (33.0, -30.5),
+                scale: 1.0,
+                yaw_deg: 250.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Maison du hameau 2",
+                file: "hamlet_house_b.glb",
+                pos: (25.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Écurie",
+                file: "hamlet_stable.glb",
+                pos: (29.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Maison du hameau 3",
+                file: "hamlet_house_c.glb",
+                pos: (33.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 220.0,
+                solide: true,
+                anim: None,
+            },
+            // --- Étals et clôtures (solides) ---
+            DemoDecor {
+                name: "Étal du marché 1",
+                file: "hamlet_market_stand_a.glb",
+                pos: (27.0, -24.5),
+                scale: 2.2,
+                yaw_deg: 45.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Étal du marché 2",
+                file: "hamlet_market_stand_b.glb",
+                pos: (31.0, -24.5),
+                scale: 2.2,
+                yaw_deg: 315.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 1",
+                file: "hamlet_fence.glb",
+                pos: (26.0, -19.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 2",
+                file: "hamlet_fence.glb",
+                pos: (29.0, -19.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 3",
+                file: "hamlet_fence.glb",
+                pos: (32.0, -19.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 4",
+                file: "hamlet_fence.glb",
+                pos: (27.0, -35.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Clôture du hameau 5",
+                file: "hamlet_fence.glb",
+                pos: (31.0, -35.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            // --- Petit décor solide (tonneaux, caisses, bancs, rochers) ---
+            DemoDecor {
+                name: "Tonneau du hameau 1",
+                file: "hamlet_barrel.glb",
+                pos: (23.0, -24.0),
+                scale: 3.0,
+                yaw_deg: 15.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tonneau du hameau 2",
+                file: "hamlet_barrel.glb",
+                pos: (34.7, -25.0),
+                scale: 3.0,
+                yaw_deg: 80.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Tonneau du hameau 3",
+                file: "hamlet_barrel.glb",
+                pos: (27.5, -21.5),
+                scale: 3.0,
+                yaw_deg: 200.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Caisse du hameau 1",
+                file: "hamlet_crate.glb",
+                pos: (23.0, -28.0),
+                scale: 3.0,
+                yaw_deg: 25.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Caisse du hameau 2",
+                file: "hamlet_crate.glb",
+                pos: (34.7, -29.0),
+                scale: 3.0,
+                yaw_deg: 140.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Caisse du hameau 3",
+                file: "hamlet_crate.glb",
+                pos: (30.5, -21.5),
+                scale: 3.0,
+                yaw_deg: 300.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 1",
+                file: "hamlet_bench_a.glb",
+                pos: (27.0, -28.75),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 2",
+                file: "hamlet_bench_a.glb",
+                pos: (31.0, -28.75),
+                scale: 3.0,
+                yaw_deg: 180.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 3",
+                file: "hamlet_bench_b.glb",
+                pos: (27.0, -32.25),
+                scale: 3.0,
+                yaw_deg: 90.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Banc du hameau 4",
+                file: "hamlet_bench_b.glb",
+                pos: (31.0, -32.25),
+                scale: 3.0,
+                yaw_deg: 270.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher du hameau 1",
+                file: "hamlet_rocks.glb",
+                pos: (23.0, -32.0),
+                scale: 2.5,
+                yaw_deg: 10.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher du hameau 2",
+                file: "hamlet_rocks.glb",
+                pos: (34.7, -32.5),
+                scale: 2.2,
+                yaw_deg: 80.0,
+                solide: true,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Rocher du hameau 3",
+                file: "hamlet_rocks.glb",
+                pos: (24.0, -20.5),
+                scale: 2.0,
+                yaw_deg: 140.0,
+                solide: true,
+                anim: None,
+            },
+            // --- Décor traversable (sacs, foin, paquets, portes/fenêtres
+            //     posées, fumée…) : aucune contrainte de dégagement. ---
+            DemoDecor {
+                name: "Sac du hameau 1",
+                file: "hamlet_bag.glb",
+                pos: (28.0, -24.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Sac du hameau 2",
+                file: "hamlet_bag.glb",
+                pos: (32.0, -31.0),
+                scale: 3.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Sac ouvert du hameau",
+                file: "hamlet_bag_open.glb",
+                pos: (26.0, -24.5),
+                scale: 3.0,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Sacs du hameau",
+                file: "hamlet_bags.glb",
+                pos: (34.0, -31.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Foin du hameau 1",
+                file: "hamlet_hay.glb",
+                pos: (24.0, -22.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Foin du hameau 2",
+                file: "hamlet_hay.glb",
+                pos: (34.0, -24.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Foin du hameau 3",
+                file: "hamlet_hay.glb",
+                pos: (28.0, -32.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 1",
+                file: "hamlet_package_a.glb",
+                pos: (30.0, -24.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 2",
+                file: "hamlet_package_a.glb",
+                pos: (24.0, -31.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 3",
+                file: "hamlet_package_b.glb",
+                pos: (32.0, -28.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Paquet du hameau 4",
+                file: "hamlet_package_b.glb",
+                pos: (26.0, -29.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chaudron de la forge",
+                file: "hamlet_cauldron.glb",
+                pos: (24.5, -27.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Feu du hameau",
+                file: "hamlet_bonfire.glb",
+                pos: (28.0, -29.0),
+                scale: 3.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fumée de la forge",
+                file: "hamlet_smoke.glb",
+                pos: (24.5, -27.5),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fumée de la scierie",
+                file: "hamlet_smoke.glb",
+                pos: (33.0, -27.3),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Lame de la scierie",
+                file: "hamlet_sawmill_saw.glb",
+                pos: (33.0, -27.6),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Porte ronde du hameau",
+                file: "hamlet_door_round.glb",
+                pos: (27.0, -22.5),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Porte droite du hameau",
+                file: "hamlet_door_straight.glb",
+                pos: (31.0, -23.5),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre ronde 1",
+                file: "hamlet_round_window.glb",
+                pos: (24.3, -23.5),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre ronde 2",
+                file: "hamlet_round_window.glb",
+                pos: (33.7, -31.0),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 1",
+                file: "hamlet_window_a.glb",
+                pos: (25.5, -26.0),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 2",
+                file: "hamlet_window_a.glb",
+                pos: (32.5, -31.5),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 3",
+                file: "hamlet_window_b.glb",
+                pos: (28.5, -31.0),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Fenêtre du hameau 4",
+                file: "hamlet_window_b.glb",
+                pos: (30.5, -27.0),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Cloche du hameau",
+                file: "hamlet_bell.glb",
+                pos: (29.0, -22.3),
+                scale: 2.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Marches du hameau 1",
+                file: "hamlet_stairs.glb",
+                pos: (29.0, -21.7),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Marches du hameau 2",
+                file: "hamlet_stairs.glb",
+                pos: (33.0, -29.3),
+                scale: 2.5,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 1",
+                file: "hamlet_path_straight.glb",
+                pos: (29.0, -21.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 2",
+                file: "hamlet_path_straight.glb",
+                pos: (29.0, -24.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 3",
+                file: "hamlet_path_straight.glb",
+                pos: (29.0, -27.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+            DemoDecor {
+                name: "Chemin du hameau 4",
+                file: "hamlet_path_straight.glb",
+                pos: (29.0, -30.0),
+                scale: 3.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: None,
+            },
+        ];
+
+        // Ménagerie de monstres (Ultimate Monsters Bundle, Quaternius/CC0,
+        // retraité par scripts/blender/import_monster_pack.py — armature/
+        // skin retirés à l'export, ce ne sont que des silhouettes figées en
+        // pose de repos). Non solides à dessein : ce pack est riggé dans le
+        // fichier source, et `MAX_SKINNED_INSTANCES` (src/gfx/renderer.rs,
+        // partagé avec les créatures MMORPG et le décor nature animé, déjà
+        // ~66/96 utilisés) aurait explosé si ces 45 assets gardaient leur
+        // squelette — cf. le script pour le détail. Posés en grille dans la
+        // bande nord jusque-là vide (x∈[-16,16], z∈[-34,-20]), à l'écart de
+        // toute zone déjà aménagée.
+        const MONSTER_DECOR: &[DemoDecor] = &[
+            DemoDecor {
+                name: "Monstre Alien",
+                file: "monster_alien.glb",
+                pos: (-16.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Alien 2",
+                file: "monster_alien_b.glb",
+                pos: (-12.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Alpaking",
+                file: "monster_alpaking.glb",
+                pos: (-8.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Alpaking évolué",
+                file: "monster_alpaking_evolved.glb",
+                pos: (-4.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Armabee",
+                file: "monster_armabee.glb",
+                pos: (0.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Armabee évolué",
+                file: "monster_armabee_evolved.glb",
+                pos: (4.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Birb",
+                file: "monster_birb.glb",
+                pos: (8.0, -34.0),
+                scale: 1.0,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Démon bleu",
+                file: "monster_blue_demon.glb",
+                pos: (12.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Lapin monstre",
+                file: "monster_bunny.glb",
+                pos: (16.0, -34.0),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Cactoro",
+                file: "monster_cactoro.glb",
+                pos: (-16.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Cactoro 2",
+                file: "monster_cactoro_b.glb",
+                pos: (-12.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Chat monstre",
+                file: "monster_cat.glb",
+                pos: (-8.0, -30.5),
+                scale: 1.3,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Poule monstre",
+                file: "monster_chicken.glb",
+                pos: (-4.0, -30.5),
+                scale: 1.3,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Démon",
+                file: "monster_demon.glb",
+                pos: (0.0, -30.5),
+                scale: 0.75,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Démon 2",
+                file: "monster_demon_b.glb",
+                pos: (4.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Dino",
+                file: "monster_dino.glb",
+                pos: (8.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Dragon",
+                file: "monster_dragon.glb",
+                pos: (12.0, -30.5),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Dragon évolué",
+                file: "monster_dragon_evolved.glb",
+                pos: (16.0, -30.5),
+                scale: 0.75,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Poisson monstre",
+                file: "monster_fish.glb",
+                pos: (-16.0, -27.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Poisson monstre 2",
+                file: "monster_fish_b.glb",
+                pos: (-12.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Grenouille monstre",
+                file: "monster_frog.glb",
+                pos: (-8.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Fantôme",
+                file: "monster_ghost.glb",
+                pos: (-4.0, -27.0),
+                scale: 0.75,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Crâne fantôme",
+                file: "monster_ghost_skull.glb",
+                pos: (0.0, -27.0),
+                scale: 0.75,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Glub",
+                file: "monster_glub.glb",
+                pos: (4.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Glub évolué",
+                file: "monster_glub_evolved.glb",
+                pos: (8.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Goleling",
+                file: "monster_goleling.glb",
+                pos: (12.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Goleling évolué",
+                file: "monster_goleling_evolved.glb",
+                pos: (16.0, -27.0),
+                scale: 0.9,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Blob vert",
+                file: "monster_green_blob.glb",
+                pos: (-16.0, -23.5),
+                scale: 1.3,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Blob épineux",
+                file: "monster_green_spiky_blob.glb",
+                pos: (-12.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Hywirl",
+                file: "monster_hywirl.glb",
+                pos: (-8.0, -23.5),
+                scale: 0.75,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Monkroose",
+                file: "monster_monkroose.glb",
+                pos: (-4.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Mushnub",
+                file: "monster_mushnub.glb",
+                pos: (0.0, -23.5),
+                scale: 1.0,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Mushnub évolué",
+                file: "monster_mushnub_evolved.glb",
+                pos: (4.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Roi champignon",
+                file: "monster_mushroom_king.glb",
+                pos: (8.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Ninja",
+                file: "monster_ninja.glb",
+                pos: (12.0, -23.5),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Ninja 2",
+                file: "monster_ninja_b.glb",
+                pos: (16.0, -23.5),
+                scale: 0.9,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Orc",
+                file: "monster_orc.glb",
+                pos: (-16.0, -20.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Orc ennemi",
+                file: "monster_orc_enemy.glb",
+                pos: (-12.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 225.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Pigeon monstre",
+                file: "monster_pigeon.glb",
+                pos: (-8.0, -20.0),
+                scale: 1.3,
+                yaw_deg: 270.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Blob rose",
+                file: "monster_pink_blob.glb",
+                pos: (-4.0, -20.0),
+                scale: 1.3,
+                yaw_deg: 315.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Squidle",
+                file: "monster_squidle.glb",
+                pos: (0.0, -20.0),
+                scale: 0.75,
+                yaw_deg: 0.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Tribal",
+                file: "monster_tribal.glb",
+                pos: (4.0, -20.0),
+                scale: 0.75,
+                yaw_deg: 45.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Sorcier",
+                file: "monster_wizard.glb",
+                pos: (8.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 90.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Yeti",
+                file: "monster_yeti.glb",
+                pos: (12.0, -20.0),
+                scale: 1.0,
+                yaw_deg: 135.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+            DemoDecor {
+                name: "Monstre Yeti 2",
+                file: "monster_yeti_b.glb",
+                pos: (16.0, -20.0),
+                scale: 0.9,
+                yaw_deg: 180.0,
+                solide: false,
+                anim: Some("Idle"),
+            },
+        ];
+
+        // Chargeur commun aux landmarks et au scatter : un même fichier n'est
+        // chargé qu'une fois, les instances partagent l'entrée `imported`.
+        let mut anim_count = 0usize;
+        let mut poser = |name: &str,
+                         file: &'static str,
+                         x: f32,
+                         z: f32,
+                         scale: f32,
+                         yaw_deg: f32,
+                         solide: bool,
+                         anim: Option<&'static str>| {
+            let mesh_index = match imported.iter().position(|m| m.path.ends_with(file)) {
+                Some(i) => i as u32,
+                None => {
+                    let path = format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), file);
+                    match crate::scene::import::load_gltf(&path) {
+                        Ok((data, aabb_min, aabb_max)) => {
+                            let mut mesh = ImportedMesh {
+                                path,
+                                data,
+                                aabb_min,
+                                aabb_max,
+                                ..Default::default()
+                            };
+                            // Statiques : ne peuple que les tangentes du rendu.
+                            // Riggés (moulins…) : charge squelette et clips.
+                            mesh.load_skinning();
+                            imported.push(mesh);
+                            (imported.len() - 1) as u32
+                        }
+                        Err(e) => {
+                            log::error!("{name} MMORPG ({file}) : {e}");
+                            return;
+                        }
+                    }
+                }
+            };
+            let mut deco = demo_obj(name, MeshKind::Imported(mesh_index), Vec3::new(x, 0.0, z));
+            deco.transform = deco.transform.with_scale(Vec3::splat(scale));
+            if yaw_deg != 0.0 {
+                deco.transform.rotation = glam::Quat::from_rotation_y(yaw_deg.to_radians());
+            }
+            if solide {
+                deco.physics = PhysicsKind::Static;
+                deco.collider_shape = crate::runtime::physics::ColliderShape::TriMesh;
+            }
+            if let Some(clip) = anim {
+                anim_count += 1;
+                deco.animation = Some(AnimationState {
+                    clip: clip.into(),
+                    // Phases de départ décalées : deux instances du même clip ne
+                    // pulsent jamais à l'unisson (l'œil le repère tout de suite).
+                    time: anim_count as f32 * 0.37,
+                    ..Default::default()
+                });
+            }
+            objects.push(deco);
+        };
+        for spec in NATURE_DECOR
+            .iter()
+            .chain(VILLAGE_PROPS.iter())
+            .chain(MONSTER_DECOR.iter())
+        {
+            poser(
+                spec.name,
+                spec.file,
+                spec.pos.0,
+                spec.pos.1,
+                spec.scale,
+                spec.yaw_deg,
+                spec.solide,
+                spec.anim,
+            );
+        }
+
+        // 3) Scatter procédural seedé : peuple forêt, lisières, prairie et
+        //    rizières sans énumérer 100 entrées à la main. Graine LITTÉRALE →
+        //    même carte à chaque chargement (et donc testable : densités et
+        //    dégagements sont des invariants, pas des coups de dés).
+        //    Rejection sampling : un candidat est rejeté s'il tombe dans une
+        //    zone aménagée (eau, routes, rizières, hameau, promontoire, col
+        //    venté, clairières), à < 4 m d'un spawn de créature (marge sur les
+        //    3,5 m des sondes) ou, pour un solide, à < 2,5 m d'un autre solide
+        //    (pas de troncs fusionnés). Budget solides borné (~75 avec les
+        //    landmarks) : chaque TriMesh pèse sur la broad-phase des raycasts
+        //    des sondes — la densité visuelle vient du végétal traversable.
+        type Rect = (f32, f32, f32, f32); // (x0, z0, x1, z1)
+        const EXCL_EAU_ROUTES: &[Rect] = &[
+            (-28.0, -36.0, -24.0, -6.0), // rivière nord
+            (-28.0, -8.0, -16.0, -4.0),  // coude
+            (-26.0, -2.0, -12.0, 10.0),  // lac
+            (-18.0, 10.0, -14.0, 36.0),  // rivière sud
+            (-26.0, 10.5, -12.0, 13.5),  // berge de sable
+            (-36.0, 12.3, 36.0, 15.7),   // route principale
+            (8.8, -10.0, 11.2, 14.0),    // chemin du hameau
+            // Chemin du pont nord + son prolongement « sentier du
+            // promontoire » (même bande z, x poussé de 6 à 34).
+            (-26.0, -10.9, 34.0, -9.1),
+            (-5.6, 14.0, -3.4, 26.0), // chemin des rizières
+        ];
+        const EXCL_ZONES_AMENAGEES: &[Rect] = &[
+            (-11.0, 23.5, -5.0, 28.5), // rizière 1
+            (-4.0, 23.5, 2.0, 28.5),   // rizière 2
+            (-11.0, 29.5, -5.0, 34.5), // rizière 3
+            (-4.0, 29.5, 2.0, 34.5),   // rizière 4
+            (3.0, 26.5, 9.0, 31.5),    // rizière 5
+            (2.0, 4.0, 20.0, 22.0),    // hameau
+            (20.0, 2.0, 34.0, 16.0),   // promontoire
+            (9.0, -9.0, 19.0, 1.0),    // col venté (zone de vent lisible)
+        ];
+        // Clairières de la forêt : rayon 6 autour des spawns des créatures 6
+        // (chauve-souris) et 12 (félin) — leurs territoires restent dégagés.
+        const EXCL_CLAIRIERES: &[Rect] = &[(14.0, -26.0, 26.0, -14.0), (18.0, -20.0, 30.0, -8.0)];
+
+        let spawns: Vec<(f32, f32)> = MMORPG_CREATURES
+            .iter()
+            .map(|c| (c.spawn.x, c.spawn.z))
+            .collect();
+        let mut solid_spots: Vec<(f32, f32)> = NATURE_DECOR
+            .iter()
+            .chain(VILLAGE_PROPS.iter())
+            .filter(|d| d.solide)
+            .map(|d| d.pos)
+            .collect();
+        let mut rng = crate::runtime::rng::Rng::new(0x4E41_5455_5245_3732); // « NATURE72 »
+        type Poser<'a> =
+            dyn FnMut(&str, &'static str, f32, f32, f32, f32, bool, Option<&'static str>) + 'a;
+        #[allow(clippy::too_many_arguments)]
+        fn scatter(
+            rng: &mut crate::runtime::rng::Rng,
+            poser: &mut Poser<'_>,
+            solid_spots: &mut Vec<(f32, f32)>,
+            spawns: &[(f32, f32)],
+            exclusions: &[&[Rect]],
+            files: &[&'static str],
+            prefix: &str,
+            rect: Rect,
+            n: usize,
+            scale: (f32, f32),
+            solide: bool,
+        ) {
+            let mut poses = 0usize;
+            let mut essais = 0usize;
+            while poses < n && essais < n * 40 {
+                essais += 1;
+                let x = rng.next_range(rect.0, rect.2);
+                let z = rng.next_range(rect.1, rect.3);
+                if exclusions
+                    .iter()
+                    .flat_map(|g| g.iter())
+                    .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                {
+                    continue;
+                }
+                let d2 = |(sx, sz): (f32, f32)| (sx - x) * (sx - x) + (sz - z) * (sz - z);
+                if spawns.iter().any(|&s| d2(s) < 16.0) {
+                    continue; // < 4 m d'un spawn de créature
+                }
+                if solide && solid_spots.iter().any(|&s| d2(s) < 6.25) {
+                    continue; // < 2,5 m d'un autre solide
+                }
+                poses += 1;
+                let file = files[rng.next_below(files.len())];
+                let s = rng.next_range(scale.0, scale.1);
+                let yaw = rng.next_range(0.0, 360.0);
+                poser(
+                    &format!("{prefix} {poses}"),
+                    file,
+                    x,
+                    z,
+                    s,
+                    yaw,
+                    solide,
+                    None,
+                );
+                if solide {
+                    solid_spots.push((x, z));
+                }
+            }
+        }
+
+        // Variante « en bosquets » de `scatter` : au lieu d'un tirage uniforme
+        // dans tout le rectangle (visuellement un peu quadrillé malgré le
+        // RNG), tire d'abord `n_clusters` centres, puis disperse
+        // `per_cluster.0..per_cluster.1` instances autour de chacun dans un
+        // disque de rayon `cluster_radius` — tirage en AIRE uniforme
+        // (`r = radius * sqrt(u)`, pas `r = radius * u` qui sur-représenterait
+        // le centre) pour un semis de bosquet crédible, façon sous-bois réel.
+        // Mêmes règles de rejet que `scatter` (exclusions, spawns, solides).
+        #[allow(clippy::too_many_arguments)]
+        fn scatter_clustered(
+            rng: &mut crate::runtime::rng::Rng,
+            poser: &mut Poser<'_>,
+            solid_spots: &mut Vec<(f32, f32)>,
+            spawns: &[(f32, f32)],
+            exclusions: &[&[Rect]],
+            files: &[&'static str],
+            prefix: &str,
+            rect: Rect,
+            n_clusters: usize,
+            per_cluster: (usize, usize),
+            cluster_radius: f32,
+            scale: (f32, f32),
+            solide: bool,
+        ) {
+            let mut poses = 0usize;
+            for c in 0..n_clusters {
+                // Centre du bosquet : rejeté s'il tombe dans une exclusion (le
+                // bosquet entier resterait alors coincé contre une zone
+                // aménagée) — pas de contrainte spawn/solide ici, seules les
+                // instances individuelles comptent pour ces règles.
+                let mut center = None;
+                for _ in 0..20 {
+                    let cx = rng.next_range(rect.0, rect.2);
+                    let cz = rng.next_range(rect.1, rect.3);
+                    if !exclusions
+                        .iter()
+                        .flat_map(|g| g.iter())
+                        .any(|&(x0, z0, x1, z1)| cx >= x0 && cx <= x1 && cz >= z0 && cz <= z1)
+                    {
+                        center = Some((cx, cz));
+                        break;
+                    }
+                }
+                let Some((cx, cz)) = center else { continue };
+                let n = per_cluster.0
+                    + if per_cluster.1 > per_cluster.0 {
+                        rng.next_below(per_cluster.1 - per_cluster.0 + 1)
+                    } else {
+                        0
+                    };
+                let mut placed_in_cluster = 0usize;
+                let mut essais = 0usize;
+                while placed_in_cluster < n && essais < n * 40 {
+                    essais += 1;
+                    let r = cluster_radius * rng.next_range(0.0, 1.0).sqrt();
+                    let a = rng.next_range(0.0, std::f32::consts::TAU);
+                    let x = cx + r * a.cos();
+                    let z = cz + r * a.sin();
+                    if x < rect.0 || x > rect.2 || z < rect.1 || z > rect.3 {
+                        continue;
+                    }
+                    if exclusions
+                        .iter()
+                        .flat_map(|g| g.iter())
+                        .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                    {
+                        continue;
+                    }
+                    let d2 = |(sx, sz): (f32, f32)| (sx - x) * (sx - x) + (sz - z) * (sz - z);
+                    if spawns.iter().any(|&s| d2(s) < 16.0) {
+                        continue;
+                    }
+                    if solide && solid_spots.iter().any(|&s| d2(s) < 6.25) {
+                        continue;
+                    }
+                    placed_in_cluster += 1;
+                    poses += 1;
+                    let file = files[rng.next_below(files.len())];
+                    let s = rng.next_range(scale.0, scale.1);
+                    let yaw = rng.next_range(0.0, 360.0);
+                    poser(
+                        &format!("{prefix} {c}-{poses}"),
+                        file,
+                        x,
+                        z,
+                        s,
+                        yaw,
+                        solide,
+                        None,
+                    );
+                    if solide {
+                        solid_spots.push((x, z));
+                    }
+                }
+            }
+        }
+
+        // Forêt dense du nord-est (évite les deux clairières) : feuillus mêlés
+        // aux sapins, souches, sous-bois traversable.
+        let foret: Rect = (8.0, -34.0, 34.0, -8.0);
+        let excl_foret: &[&[Rect]] = &[EXCL_EAU_ROUTES, EXCL_ZONES_AMENAGEES, EXCL_CLAIRIERES];
+        let excl_std: &[&[Rect]] = &[EXCL_EAU_ROUTES, EXCL_ZONES_AMENAGEES];
+
+        // Quatre petites « Halte » à mi-distance (10-20 m du spawn, un point
+        // par biome principal) : le regard n'avait aucun échelon entre le vide
+        // proche et le mur lointain du biome. Chaque halte = un solide (arbre/
+        // rocher/souche) + un compagnon non solide tout proche (la contrainte
+        // de 2 m ne s'applique qu'aux solides entre eux, cf.
+        // `mmorpg_solid_decor_stays_inside_and_spaced`) ; positions choisies à
+        // ≥ 4 m de tout spawn de créature et hors zones aménagées. Posées AVANT
+        // tout le scatter procédural ci-dessous (leurs positions rejoignent
+        // `solid_spots` immédiatement) pour que forêt/prairie/lisières les
+        // évitent d'elles-mêmes plutôt que de risquer une fusion visuelle
+        // découverte après coup par `mmorpg_solid_decor_stays_inside_and_spaced`.
+        struct Halte {
+            name: &'static str,
+            file: &'static str,
+            pos: (f32, f32),
+            scale: f32,
+            yaw_deg: f32,
+            solide: bool,
+        }
+        const MMORPG_HALTES: &[Halte] = &[
+            // Vers la forêt nord-est.
+            Halte {
+                name: "Halte NE rocher",
+                file: "nature_rock.glb",
+                pos: (7.5, -11.5),
+                scale: 0.8,
+                yaw_deg: 35.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte NE fougère",
+                file: "nature_fern.glb",
+                pos: (8.3, -10.5),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+            // Vers le lac et les rivières (ouest).
+            Halte {
+                name: "Halte Ouest souche",
+                file: "nature_stump.glb",
+                pos: (-11.5, -6.0),
+                scale: 1.0,
+                yaw_deg: 0.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte Ouest fleurs",
+                file: "nature_daisies.glb",
+                pos: (-10.3, -5.3),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+            // Vers les rizières (sud-ouest).
+            Halte {
+                name: "Halte Sud-Ouest arbre",
+                file: "nature_willow.glb",
+                pos: (-6.0, 12.0),
+                scale: 0.9,
+                yaw_deg: 200.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte Sud-Ouest fleurs",
+                file: "nature_lavender.glb",
+                pos: (-4.8, 11.3),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+            // Vers le hameau et le promontoire (est).
+            Halte {
+                name: "Halte Est rocher",
+                file: "nature_rock.glb",
+                // Pas (13, 4) : à 1,4 m de « Bannière » (landmark posé à la
+                // main du hameau, cf. `NATURE_DECOR`) — constaté par
+                // `mmorpg_solid_decor_stays_inside_and_spaced`. Décalé plus au
+                // nord, dans la bande étroite (z 1..4) qui échappe à la fois
+                // au col venté (z ≤ 1) et au hameau (z ≥ 4).
+                pos: (15.0, 2.5),
+                scale: 0.85,
+                yaw_deg: 150.0,
+                solide: true,
+            },
+            Halte {
+                name: "Halte Est fleurs",
+                file: "nature_sunflowers.glb",
+                pos: (15.8, 1.7),
+                scale: 1.1,
+                yaw_deg: 0.0,
+                solide: false,
+            },
+        ];
+        for h in MMORPG_HALTES {
+            poser(
+                h.name, h.file, h.pos.0, h.pos.1, h.scale, h.yaw_deg, h.solide, None,
+            );
+            if h.solide {
+                solid_spots.push(h.pos);
+            }
+        }
+
+        // Variété de la lisière forêt/prairie (bord sud-ouest, x 9..15,5, z
+        // -17,5..-12 — le segment de forêt le plus proche du regard du
+        // joueur depuis la prairie) : le remplissage `Arbre`/`Sapin`
+        // ci-dessous y répète surtout arbres/arbres2/sapins/sapins2, un mur
+        // de silhouettes similaires constaté sur une capture en jeu.
+        // Positions FIXES (pas de tirage RNG, contrairement à `scatter`) :
+        // cette portion de `foret` est déjà saturée à ~69 % par le
+        // remplissage suivant (cf. son propre commentaire) — un tirage
+        // aléatoire y échoue près de 100 % du temps (constaté : 8 demandés,
+        // 0 placés). Réservées dans `solid_spots` avant ledit remplissage,
+        // qui les évite de lui-même. Même préfixe « Arbre exotique » que le
+        // bosquet A) plus bas : aucun nouveau préfixe à ajouter à l'outil de
+        // synchro. Espacées ≥ 2,5 m entre elles et du Halte NE tout proche,
+        // ≥ 4 m des spawns des créatures dont le territoire touche ce coin
+        // (RAY_DIST 3,5 m + marge, cf. `mmorpg_demo_contains_walkable_nature_decor`).
+        for (name, file, x, z) in [
+            (
+                "Arbre exotique bouleau de lisière",
+                "nature_birch.glb",
+                9.0,
+                -15.0,
+            ),
+            (
+                "Arbre exotique chêne de lisière",
+                "nature_oak.glb",
+                13.5,
+                -15.0,
+            ),
+            (
+                "Arbre exotique érable de lisière",
+                "nature_maple_autumn.glb",
+                11.0,
+                -17.5,
+            ),
+            (
+                "Arbre exotique ginkgo de lisière",
+                "nature_ginkgo.glb",
+                15.5,
+                -12.0,
+            ),
+        ] {
+            poser(name, file, x, z, 1.0, 0.0, true, None);
+            solid_spots.push((x, z));
+        }
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &["nature_tree.glb", "nature_tree2.glb"],
+            "Arbre",
+            foret,
+            // 22 → 28 : le hameau fortifié (Medieval Village Pack) mord sur ce
+            // rectangle et son décor solide fait échouer plus de tirages
+            // (rejection sampling à ≥ 2,5 m d'un autre solide) — on compense
+            // pour garder ≥ 30 arbres/sapins (cf. test de densité).
+            // 28 → 31 : les spawns des créatures 21-26 (éléphanteau + pack
+            // savane & terreurs) décalent le flux RNG du scatter — marge pour
+            // garder l'invariant ≥ 30 sans rejouer cette compensation à chaque
+            // nouveau spawn.
+            // 31 → 40 : les 4 arbres de lisière + le rocher du Halte NE
+            // ci-dessus réservent désormais des places dans `foret` avant ce
+            // tirage (rejection sampling à ≥ 2,5 m), qui en trouve donc moins
+            // — reconstaté par comptage direct (25 arbres pour n=31) ; 40
+            // restaure une marge confortable au-dessus du minimum testé.
+            40,
+            (0.9, 1.3),
+            true,
+        );
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &["nature_pine.glb", "nature_pine2.glb"],
+            "Sapin",
+            foret,
+            // 15 → 20 : même compensation que ci-dessus pour `Arbre` (places
+            // réservées par la lisière/Halte), constaté par comptage direct.
+            20,
+            (0.9, 1.25),
+            true,
+        );
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &["nature_stump.glb"],
+            "Souche",
+            foret,
+            5,
+            (0.9, 1.2),
+            true,
+        );
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &["nature_bush.glb"],
+            "Buisson",
+            foret,
+            4,
+            (2, 4),
+            2.5,
+            (0.9, 1.4),
+            false,
+        );
+        // Couverture d'herbe/fougères du sous-bois : non solide, coût nul sur
+        // le budget physique (aucun collider), rendu batché — la densité
+        // vient de là plutôt que de multiplier les solides.
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &["nature_grass_tuft.glb", "nature_fern.glb"],
+            "Sous-bois",
+            foret,
+            18,
+            (4, 8),
+            1.8,
+            (0.85, 1.3),
+            false,
+        );
+        // Lisières : quelques arbres épars le long du mur ouest (au-delà de la
+        // rivière nord) et au sud-est (la lande du ver des sables reste ouverte).
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &["nature_tree.glb", "nature_pine.glb"],
+            "Arbre de lisière",
+            (-35.0, -34.0, -29.0, -12.0),
+            5,
+            (0.9, 1.2),
+            true,
+        );
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &["nature_tree2.glb", "nature_pine2.glb"],
+            "Arbre du sud",
+            (22.0, 30.0, 34.0, 35.0),
+            5,
+            (0.9, 1.2),
+            true,
+        );
+        // Prairie centrale : fleurs et buissons traversables uniquement — les
+        // cinq errants et le joueur y circulent sans obstacle.
+        let prairie: Rect = (-10.0, -12.0, 8.0, 8.0);
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &["nature_flowers.glb"],
+            "Fleurs",
+            prairie,
+            12,
+            (0.9, 1.4),
+            false,
+        );
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &["nature_bush.glb"],
+            "Buisson fleuri",
+            prairie,
+            3,
+            (2, 3),
+            2.2,
+            (0.9, 1.3),
+            false,
+        );
+        // Herbe basse de la prairie centrale : même logique de bosquets que
+        // le sous-bois, teinte plus claire (grass_tuft seul, pas de fougère
+        // sombre de forêt).
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &["nature_grass_tuft.glb"],
+            "Herbe",
+            prairie,
+            10,
+            (6, 10),
+            2.0,
+            (0.85, 1.3),
+            false,
+        );
+
+        // --- Élargissement de la prairie centrale ---------------------------
+        // Le rect `prairie` ci-dessus (-10,-12)-(8,8) concentre tout le semis
+        // près du spawn ; entre lui et les quatre « Repère » (±15, ±15) qui
+        // bordent la prairie restait un large anneau d'herbe nue (constaté sur
+        // une capture en jeu : grand aplat vert vide). Comble cet anneau sans
+        // toucher aux biomes voisins (forêt/hameau/lac/rizières/promontoire),
+        // ni au rect déjà dense, ni aux abords du spawn joueur et des Repère
+        // (rien ne doit gêner la vue au tout premier coup d'œil).
+        const PRAIRIE_DEJA_SEMEE: &[Rect] = &[(-10.0, -12.0, 8.0, 8.0)];
+        // Même bornes que le rect `foret` : la prairie élargie ne doit jamais
+        // mordre sur la forêt (son propre semis gère sa densité).
+        const EXCL_FORET_ZONE: &[Rect] = &[(8.0, -34.0, 34.0, -8.0)];
+        // Dégagement (6×6 m) autour de chacun des quatre Repère.
+        const EXCL_REPERES: &[Rect] = &[
+            (-18.0, -18.0, -12.0, -12.0),
+            (12.0, -18.0, 18.0, -12.0),
+            (-18.0, 12.0, -12.0, 18.0),
+            (12.0, 12.0, 18.0, 18.0),
+        ];
+        // Dégagement (8×8 m) autour du spawn du joueur (0, 0).
+        const EXCL_SPAWN_JOUEUR: &[Rect] = &[(-4.0, -4.0, 4.0, 4.0)];
+        let excl_prairie_large: &[&[Rect]] = &[
+            EXCL_EAU_ROUTES,
+            EXCL_ZONES_AMENAGEES,
+            EXCL_FORET_ZONE,
+            PRAIRIE_DEJA_SEMEE,
+            EXCL_REPERES,
+            EXCL_SPAWN_JOUEUR,
+        ];
+        let prairie_large: Rect = (-16.0, -16.0, 16.0, 16.0);
+
+        // Touffes/fougères éparses (non solides) : le gros de la densité
+        // visuelle, sans peser sur la broad-phase des raycasts.
+        scatter_clustered(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &["nature_grass_tuft.glb", "nature_fern.glb"],
+            "Prairie centrale herbe",
+            prairie_large,
+            8,
+            (3, 6),
+            2.2,
+            (0.85, 1.25),
+            false,
+        );
+        // Fleurs des prés (non solides), variété différente de celles déjà
+        // semées dans le rect dense pour ne pas juste répéter le motif.
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &[
+                "nature_daisies.glb",
+                "nature_irises.glb",
+                "nature_lavender.glb",
+            ],
+            "Prairie centrale fleur",
+            prairie_large,
+            10,
+            (0.85, 1.3),
+            false,
+        );
+        // Petits rochers isolés (solides, échelle réduite pour rester
+        // discrets — pas l'anneau du promontoire).
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &["nature_rock.glb"],
+            "Prairie centrale rocher",
+            prairie_large,
+            4,
+            (0.5, 0.75),
+            true,
+        );
+        // Un ou deux arbres isolés (solides) : jamais un bosquet, juste de
+        // quoi casser la platitude du grand aplat vert.
+        scatter(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_prairie_large,
+            &["nature_oak.glb", "nature_tree.glb"],
+            "Prairie centrale arbre isolé",
+            prairie_large,
+            2,
+            (0.8, 1.0),
+            true,
+        );
+
+        // Plants de riz dans chaque bassin (traversables) : le scatter vise
+        // l'intérieur du bassin, seules les zones eau/routes le repoussent.
+        let excl_riz: &[&[Rect]] = &[EXCL_EAU_ROUTES];
+        for (i, &(x0, z0, x1, z1)) in EXCL_ZONES_AMENAGEES[..5].iter().enumerate() {
+            scatter(
+                &mut rng,
+                &mut poser,
+                &mut solid_spots,
+                &spawns,
+                excl_riz,
+                &["nature_rice.glb"],
+                &format!("Riz {}", ["A", "B", "C", "D", "E"][i]),
+                (x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7),
+                3,
+                (0.9, 1.3),
+                false,
+            );
+        }
+
+        // Roseaux/nénuphars systématiques le long des 4 berges (en plus des
+        // quelques instances posées à la main dans `NATURE_DECOR`, gardées
+        // telles quelles) : un point tiré sur le PÉRIMÈTRE de chaque rect
+        // d'eau (`EXCL_EAU_ROUTES[..4]`, les 4 vrais plans d'eau — pas la
+        // berge de sable ni les routes), décalé perpendiculairement côté
+        // terre pour les roseaux, côté eau pour les nénuphars (flottent, non
+        // solides dans les deux cas). Bien plus systématique que les 7
+        // instances isolées d'origine.
+        for &(x0, z0, x1, z1) in &EXCL_EAU_ROUTES[..4] {
+            for i in 0..7 {
+                let side = rng.next_below(4);
+                let along = rng.next_range(0.0, 1.0);
+                let (bx, bz, nx, nz): (f32, f32, f32, f32) = match side {
+                    0 => (x0 + along * (x1 - x0), z0, 0.0, -1.0), // nord
+                    1 => (x0 + along * (x1 - x0), z1, 0.0, 1.0),  // sud
+                    2 => (x0, z0 + along * (z1 - z0), -1.0, 0.0), // ouest
+                    _ => (x1, z0 + along * (z1 - z0), 1.0, 0.0),  // est
+                };
+                let is_reed = i % 2 == 0;
+                let offset = rng.next_range(0.3, 0.8);
+                let (px, pz) = if is_reed {
+                    (bx + nx * offset, bz + nz * offset)
+                } else {
+                    (bx - nx * offset, bz - nz * offset)
+                };
+                if spawns.iter().any(|&(sx, sz)| {
+                    let dx = sx - px;
+                    let dz = sz - pz;
+                    dx * dx + dz * dz < 16.0
+                }) {
+                    continue;
+                }
+                let file = if is_reed {
+                    "nature_reeds.glb"
+                } else {
+                    "nature_lily.glb"
+                };
+                let scale = rng.next_range(0.85, 1.15);
+                let yaw = rng.next_range(0.0, 360.0);
+                poser(
+                    &format!(
+                        "Berge {} {i}",
+                        if is_reed { "Roseaux" } else { "Nénuphars" }
+                    ),
+                    file,
+                    px,
+                    pz,
+                    scale,
+                    yaw,
+                    false,
+                    None,
+                );
+            }
+        }
+
+        // --- Flore complémentaire + objets décoratifs (packs générés Blender
+        //     headless, gen_creature_pack*.py / gen_nature_pack*.py) ------------
+        // Contrairement à `scatter`/`scatter_clustered` (tirage aléatoire avec
+        // remise dans une liste de fichiers), chaque fichier ci-dessous doit
+        // apparaître AU MOINS une fois dans la scène (sinon un asset généré
+        // resterait inutilisé) : `scatter_each` place chaque fichier de la liste
+        // exactement une fois, avec le même rejet de zones aménagées / spawns /
+        // chevauchement de solides que `scatter`, mais sans tirage avec remise.
+        #[allow(clippy::too_many_arguments)]
+        fn scatter_each(
+            rng: &mut crate::runtime::rng::Rng,
+            poser: &mut Poser<'_>,
+            solid_spots: &mut Vec<(f32, f32)>,
+            spawns: &[(f32, f32)],
+            exclusions: &[&[Rect]],
+            files: &[&'static str],
+            prefix: &str,
+            rect: Rect,
+            scale: (f32, f32),
+            solide: bool,
+        ) {
+            for &file in files {
+                let mut placed = false;
+                for _ in 0..4000 {
+                    let x = rng.next_range(rect.0, rect.2);
+                    let z = rng.next_range(rect.1, rect.3);
+                    if exclusions
+                        .iter()
+                        .flat_map(|g| g.iter())
+                        .any(|&(x0, z0, x1, z1)| x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                    {
+                        continue;
+                    }
+                    let d2 = |(sx, sz): (f32, f32)| (sx - x) * (sx - x) + (sz - z) * (sz - z);
+                    if spawns.iter().any(|&s| d2(s) < 16.0) {
+                        continue;
+                    }
+                    if solide && solid_spots.iter().any(|&s| d2(s) < 6.25) {
+                        continue;
+                    }
+                    let s = rng.next_range(scale.0, scale.1);
+                    let yaw = rng.next_range(0.0, 360.0);
+                    let short = file
+                        .trim_start_matches("nature_")
+                        .trim_start_matches("item_")
+                        .trim_end_matches(".glb");
+                    poser(
+                        &format!("{prefix} {short}"),
+                        file,
+                        x,
+                        z,
+                        s,
+                        yaw,
+                        solide,
+                        None,
+                    );
+                    if solide {
+                        solid_spots.push((x, z));
+                    }
+                    placed = true;
+                    break;
+                }
+                if !placed {
+                    log::error!("« {prefix} » : impossible de placer {file} sans chevauchement");
+                }
+            }
+        }
+
+        // A) Arbres exotiques (packs faune d'Asie / fantastique / marin, décor
+        //    végétal) : forêt nord-est, solides comme les arbres existants.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &[
+                "nature_apple_tree.glb",
+                "nature_bamboo.glb",
+                "nature_birch.glb",
+                "nature_cherry_blossom.glb",
+                "nature_cypress.glb",
+                "nature_dead_tree.glb",
+                "nature_ginkgo.glb",
+                "nature_hazel.glb",
+                "nature_magnolia.glb",
+                "nature_maple_autumn.glb",
+                "nature_oak.glb",
+                "nature_olive.glb",
+                "nature_palm.glb",
+                "nature_pine_parasol.glb",
+                "nature_plum.glb",
+                "nature_poplar.glb",
+                "nature_sequoia.glb",
+                "nature_tree_windswept.glb",
+            ],
+            "Arbre exotique",
+            // Pas `foret` (déjà saturé à ~69 % de sa surface utile par les
+            // arbres/sapins/souches du scatter existant, au-delà du seuil de
+            // remplissage aléatoire (« jamming ») pour un rejet à ≥ 2,5 m —
+            // 300 tirages par fichier n'y trouvaient plus jamais de place,
+            // constaté par comptage direct). Bosquet complémentaire au
+            // sud-est de la forêt, hors rizières (x max 9) et hors hameau/
+            // promontoire (`EXCL_ZONES_AMENAGEES`), quasi vierge de décor
+            // solide.
+            (9.0, 20.0, 35.5, 35.5),
+            (0.85, 1.2),
+            true,
+        );
+        // B) Mobilier villageois (fontaine, meule, puits à poulie, balançoire,
+        //    topiaire, tonnelle glycine…) : posé dans le hameau lui-même (zone
+        //    aménagée non exclue ici), à ≥ 2,5 m de tout autre solide déjà posé
+        //    à la main dans `NATURE_DECOR`/`VILLAGE_PROPS`.
+        let excl_hameau_only: &[&[Rect]] = &[EXCL_EAU_ROUTES];
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "nature_fountain.glb",
+                "nature_well_pulley.glb",
+                "nature_grindstone.glb",
+                "nature_hay_roller.glb",
+                "nature_potters_wheel.glb",
+                "nature_wheelbarrow.glb",
+                "nature_swing_bench.glb",
+                "nature_topiary.glb",
+                "nature_vine_trellis.glb",
+                "nature_wisteria_arch.glb",
+                "nature_sundial.glb",
+                "nature_birdhouse.glb",
+            ],
+            "Mobilier du hameau",
+            (1.0, 2.0, 21.0, 23.0),
+            (0.9, 1.1),
+            true,
+        );
+        // C) Rochers moussus de bord de lac (moss_boulder/mossy_log) : rive
+        //    ouest du lac. Pas le rect exact de la « Berge du lac » (aplat
+        //    sable) : ce rect est LUI-MÊME une entrée d'`EXCL_EAU_ROUTES`, donc
+        //    100 % des tirages y étaient rejetés (constaté : 0/2 placés).
+        //    Juste à l'ouest, hors de tout aplat eau/route/berge.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &["nature_moss_boulder.glb", "nature_mossy_log.glb"],
+            "Rocher moussu",
+            (-30.0, -4.0, -26.0, 8.0),
+            (0.9, 1.2),
+            true,
+        );
+        // D) Sous-bois exotique (non solide : champignons, houx, ronces,
+        //    girouettes/oriflammes de prière plantées au sol).
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_foret,
+            &[
+                "nature_giant_mushroom.glb",
+                "nature_mushrooms.glb",
+                "nature_holly.glb",
+                "nature_bramble.glb",
+                "nature_mast_flag.glb",
+                "nature_prayer_flags.glb",
+            ],
+            "Sous-bois exotique",
+            foret,
+            (0.85, 1.2),
+            false,
+        );
+        // E) Fleurs des prés (non solides) : prairie centrale.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_std,
+            &[
+                "nature_daisies.glb",
+                "nature_irises.glb",
+                "nature_lavender.glb",
+                "nature_sunflowers.glb",
+                "nature_sunflowers_sway.glb",
+                "nature_thistle.glb",
+                "nature_windsock.glb",
+            ],
+            "Fleur des prés",
+            prairie,
+            (0.85, 1.3),
+            false,
+        );
+        // F) Cultures complémentaires (non solides) : bande des rizières,
+        //    exclusions restreintes à l'eau/aux routes (comme le riz existant)
+        //    pour pouvoir tomber DANS les bassins.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_riz,
+            &[
+                "nature_cabbages.glb",
+                "nature_carrots.glb",
+                "nature_corn.glb",
+                "nature_pumpkins.glb",
+                "nature_tomatoes.glb",
+                "nature_wheat.glb",
+                "nature_wheat_sway.glb",
+            ],
+            "Culture",
+            (-11.0, 23.0, 9.0, 35.0),
+            (0.85, 1.25),
+            false,
+        );
+        // G) Rives du lac et des rivières (non solides) : roseaux/nénuphars
+        //    existants complétés par saules, bambou et barque flottante.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "nature_cattails.glb",
+                "nature_reeds_sway.glb",
+                "nature_willow.glb",
+                "nature_willow_sway.glb",
+                "nature_boat_bob.glb",
+                "nature_bamboo_sway.glb",
+            ],
+            "Rive du lac",
+            (-30.0, -14.0, -10.0, 16.0),
+            (0.85, 1.2),
+            false,
+        );
+        // H) Petit décor du hameau (non solide) : lanterne suspendue, buisson à
+        //    baies.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &["nature_lantern_hanging.glb", "nature_berry_bush.glb"],
+            "Décor du hameau",
+            (1.0, 2.0, 21.0, 23.0),
+            (0.9, 1.1),
+            false,
+        );
+
+        // I) Objets décoratifs (`item_*`, packs générés) : PURE décor visuel,
+        //    aucune mécanique de ramassage (pas d'`ItemPickup`, à ne pas
+        //    confondre avec `MMORPG_ITEMS` plus bas) — regroupés en petites
+        //    scènes cohérentes posées au sol près du hameau, non solides,
+        //    petite échelle.
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_axe.glb",
+                "item_bow.glb",
+                "item_hammer.glb",
+                "item_shield.glb",
+                "item_sword.glb",
+                "item_ball.glb",
+                "item_bomb.glb",
+            ],
+            "Établi d'armes",
+            (13.0, 5.0, 16.0, 7.0),
+            (0.3, 0.4),
+            false,
+        );
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_apple.glb",
+                "item_bread.glb",
+                "item_carrot.glb",
+                "item_cheese.glb",
+                "item_egg.glb",
+                "item_fish.glb",
+                "item_meat.glb",
+                "item_mushroom.glb",
+                "item_berry.glb",
+            ],
+            // Pas « Étal du marché » : déjà pris par `VILLAGE_PROPS` (« Étal du
+            // marché 1/2 », `hamlet_market_stand_*`) — un préfixe partagé
+            // ferait retirer/réinjecter ces deux landmarks par erreur dans
+            // l'outil de synchro du décor ambiant (cf. `AMBIENT_DECOR_PREFIXES`
+            // dans `scene::mod`).
+            "Étal des vivres",
+            (16.5, 7.5, 19.5, 9.5),
+            (0.3, 0.4),
+            false,
+        );
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_coin.glb",
+                "item_gem.glb",
+                "item_crown.glb",
+                "item_ring.glb",
+                "item_star.glb",
+            ],
+            "Coin trésor",
+            (6.5, 5.0, 9.0, 6.5),
+            (0.3, 0.4),
+            false,
+        );
+        scatter_each(
+            &mut rng,
+            &mut poser,
+            &mut solid_spots,
+            &spawns,
+            excl_hameau_only,
+            &[
+                "item_potion.glb",
+                "item_mana.glb",
+                "item_scroll.glb",
+                "item_book.glb",
+                "item_feather.glb",
+                "item_heart.glb",
+                "item_key.glb",
+                "item_lantern.glb",
+                "item_pouch.glb",
+            ],
+            "Table d'apothicaire",
+            (3.0, 5.5, 6.0, 6.5),
+            (0.3, 0.4),
+            false,
+        );
+
+        // Objets d'inventaire (cf. `ItemPickup`) à trouver en explorant, posés
+        // sur la narration de chaque biome : potions devant la Cabane 1 et aux
+        // sorties des ponts, baies au bord des rizières, clé au pied de la tour
+        // de guet, gemmes au promontoire et au fond de la forêt. Non solides
+        // (`demo_obj` = `PhysicsKind::None`) : invisibles aux sondes raycast
+        // des créatures, donc sans effet sur les patrouilles.
+        struct DemoItem {
+            name: &'static str,
+            kind: ItemKind,
+            count: u32,
+            pos: (f32, f32, f32),
+            /// > 0 ⇒ l'objet repousse (buisson à baies) ; 0 ⇒ trouvaille unique.
+            respawn: f32,
+        }
+        const MMORPG_ITEMS: &[DemoItem] = &[
+            // Devant la porte de la Cabane 1 (6, 9 — porte côté route).
+            DemoItem {
+                name: "Potion de soin",
+                kind: ItemKind::Potion,
+                count: 1,
+                pos: (6.0, 0.35, 11.2),
+                respawn: 0.0,
+            },
+            // Sortie est du Pont 1 (-16, 14).
+            DemoItem {
+                name: "Potion de soin 2",
+                kind: ItemKind::Potion,
+                count: 1,
+                pos: (-12.6, 0.35, 14.0),
+                respawn: 0.0,
+            },
+            // Sortie est du Pont 2 (-26, -10), sur le chemin de la forêt.
+            DemoItem {
+                name: "Potion de soin 3",
+                kind: ItemKind::Potion,
+                count: 1,
+                pos: (-23.0, 0.35, -10.0),
+                respawn: 0.0,
+            },
+            // Bord nord des rizières : 2 baies par cueillette, repousse en 20 s.
+            DemoItem {
+                name: "Buisson à baies",
+                kind: ItemKind::Baie,
+                count: 2,
+                pos: (-4.0, 0.3, 22.5),
+                respawn: 20.0,
+            },
+            // Au pied de la tour de guet (27, 9).
+            DemoItem {
+                name: "Clé du village",
+                kind: ItemKind::Cle,
+                count: 1,
+                pos: (25.9, 0.3, 7.6),
+                respawn: 0.0,
+            },
+            // Dans l'anneau de rochers du promontoire.
+            DemoItem {
+                name: "Gemme",
+                kind: ItemKind::Gemme,
+                count: 1,
+                pos: (30.9, 0.3, 12.6),
+                respawn: 0.0,
+            },
+            // Au fond de la forêt dense : la récompense de l'exploration.
+            DemoItem {
+                name: "Gemme de la forêt",
+                kind: ItemKind::Gemme,
+                count: 1,
+                pos: (30.0, 0.3, -30.0),
+                respawn: 0.0,
+            },
+        ];
+        for spec in MMORPG_ITEMS {
+            let mesh = if spec.kind == ItemKind::Potion {
+                MeshKind::Capsule
+            } else {
+                MeshKind::Sphere
+            };
+            let mut item = demo_obj(
+                spec.name,
+                mesh,
+                Vec3::new(spec.pos.0, spec.pos.1, spec.pos.2),
+            );
+            item.transform = item.transform.with_scale(Vec3::splat(0.35));
+            item.color = spec.kind.color();
+            item.emissive = 0.8;
+            item.respawn_delay = spec.respawn;
+            item.item_pickup = Some(ItemPickup {
+                kind: spec.kind,
+                count: spec.count,
+            });
+            objects.push(item);
+        }
+
+        // Les Braises (GDD §2.1) sont la fiction du jeu : « c'est [le feu
+        // communal] qui attire les hordes ». La charte (§10.1 « au centre,
+        // les braises ; au loin, le danger », §10.2 orange = système
+        // feu/joueur) exige que ce soit le point chaud/saturé le plus
+        // lisible de la carte — jusqu'ici posé comme n'importe quel décor
+        // inerte (pas d'émissif). Marquage a posteriori (pas de champ
+        // couleur/émissif sur `DemoDecor`, partagé par ~150 entrées neutres)
+        // plutôt qu'une extension de la table pour deux objets seulement.
+        for name in ["Feu du hameau", "Feu de camp"] {
+            if let Some(feu) = objects.iter_mut().find(|o| o.name == name) {
+                feu.emissive = 1.2;
+            }
+        }
+
+        // Convoi (GDD §4, mode Escorte) : jusqu'ici absent de la scène réseau
+        // réelle (`mmorpg_demo`, embarquée via `player_scene.json`) — seule
+        // `Scene::escorte_demo()` (solo) en avait un. Conséquence mécanique
+        // vérifiée (Phase L, `sprintreflecion.md`) : un salon réseau qui
+        // choisit `RoundObjective::Escorte` ne se terminait jamais
+        // (`AppState::update_escorte`/`is_convoy_destroyed` retournent tôt
+        // sans rien faire quand aucun objet `convoy` n'existe, cf.
+        // `src/app/combat.rs`/`src/app/health.rs`). Même modèle
+        // (`nature_cart.glb`) et mêmes composants (`Combat`/`Convoy`) que
+        // `escorte_demo`, positionné sur la route principale (bande z
+        // 12.3–15.7, exclue du scatter procédural ci-dessus — cf.
+        // `EXCL_EAU_ROUTES`), entre le col venté et le hameau : x -18 → -2,
+        // à l'écart des collines de l'Ouest (x < -27) et des bâtiments du
+        // hameau (x > 2).
+        {
+            let convoi_mesh = import_single_model(&mut imported, "nature_cart.glb", MeshKind::Cube);
+            let mut convoi = demo_obj(
+                "Convoi — chariot de braises",
+                convoi_mesh,
+                Vec3::new(-18.0, 0.0, 14.0),
+            );
+            convoi.transform.rotation = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+            convoi.emissive = 0.3;
+            convoi.combat = Some(Combat {
+                attackable: true,
+                hp: 8,
+                ..Default::default()
+            });
+            convoi.convoy = Some(Convoy {
+                destination: Vec3::new(-2.0, 0.0, 14.0),
+                speed: 1.2,
+            });
+            objects.push(convoi);
+        }
+
+        Scene {
+            objects,
+            imported,
+            camera_follow: true,
+            point_lights: vec![
+                // Éclairage général : hissé et élargi avec la carte 72×72 (l'ancien
+                // range de 30 m laissait les biomes périphériques dans le noir).
+                PointLight {
+                    position: [0.0, 18.0, 0.0],
+                    color: [0.9, 0.95, 1.0],
+                    intensity: 1.4,
+                    range: 90.0,
+                    ..PointLight::default()
+                },
+                // Deux lampes chaudes au hameau (cf. les lanternes du décor) : la
+                // zone habitée se repère de loin, même à contre-jour du soleil.
+                PointLight {
+                    position: [10.0, 3.0, 12.0],
+                    color: [1.0, 0.75, 0.4],
+                    intensity: 1.1,
+                    range: 12.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [2.0, 3.0, 12.0],
+                    color: [1.0, 0.75, 0.4],
+                    intensity: 1.1,
+                    range: 12.0,
+                    ..PointLight::default()
+                },
+                // Les Braises (GDD §2.1/§10.1) : le feu communal du hameau
+                // (forge/scierie, x≈28/z≈-29) est hors de portée des deux
+                // lampes ci-dessus — il n'avait aucune source de lumière
+                // propre alors qu'il est la fiction centrale du jeu.
+                PointLight {
+                    position: [28.0, 1.2, -29.0],
+                    color: [1.0, 0.55, 0.15],
+                    intensity: 1.6,
+                    range: 14.0,
+                    ..PointLight::default()
+                },
+                PointLight {
+                    position: [19.0, 1.0, -6.0],
+                    color: [1.0, 0.6, 0.2],
+                    intensity: 0.9,
+                    range: 8.0,
+                    ..PointLight::default()
+                },
+            ],
+            mobile: MobileControls {
+                joystick: true,
+                buttons: vec!["Saut".into()],
+                ..Default::default()
+            },
+            // Soleil orienté sud-est : les ombres portées de la forêt, de la
+            // tour et du hameau donnent le relief qu'une carte plate n'a pas.
+            light: Light {
+                dir: [0.55, 1.0, -0.45],
+                color: [1.0, 0.96, 0.88],
+                ambient: 0.35,
+            },
+            // Ciel de journée chaude (cohérent avec la palette du pack nature,
+            // cf. gen_nature_pack.py) + brume légère : donne la profondeur
+            // atmosphérique sur 72 m, adoucit les murs d'enceinte au loin, et
+            // masque le pop de détail — à coût GPU nul (déjà dans le shader).
+            sky: Sky {
+                horizon_color: [0.85, 0.78, 0.62],
+                zenith_color: [0.30, 0.52, 0.78],
+                fog_color: [0.78, 0.74, 0.62],
+                fog_density: 0.012,
+                ..Sky::default()
+            },
+            ..Default::default()
+        }
+    }
+}
