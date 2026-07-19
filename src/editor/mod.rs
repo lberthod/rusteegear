@@ -350,6 +350,10 @@ pub struct UiActions {
     pub duplicate_project: bool,
     /// « Révéler dans le Finder » (menu Fichier, macOS uniquement, Sprint 4).
     pub reveal_project_in_finder: bool,
+    /// Réponses à la modale de récupération après crash (Sprint 6, cf.
+    /// `AppState::pending_autosave_recovery`).
+    pub restore_autosave: bool,
+    pub dismiss_autosave_recovery: bool,
     pub import: Option<String>,
     pub add: Option<MeshKind>,
     pub delete: Option<usize>,
@@ -936,6 +940,8 @@ impl Editor {
         has_project: bool,
         // Modale de fermeture de projet à afficher (cf. `AppState::confirm_close_project`).
         confirm_close_project: bool,
+        // Autosave à proposer en restauration (Sprint 6, `AppState::pending_autosave_recovery`).
+        pending_autosave_recovery: Option<&std::path::Path>,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
@@ -1039,6 +1045,7 @@ impl Editor {
                 confirm_quit,
                 has_project,
                 confirm_close_project,
+                pending_autosave_recovery,
             );
         });
 
@@ -1247,6 +1254,8 @@ fn build_ui(
     has_project: bool,
     // Confirmation de fermeture de projet en attente (`AppState::confirm_close_project`).
     confirm_close_project: bool,
+    // Autosave à proposer en restauration (Sprint 6, `AppState::pending_autosave_recovery`).
+    pending_autosave_recovery: Option<&std::path::Path>,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -2522,6 +2531,37 @@ fn build_ui(
             });
         if resp.should_close() {
             actions.close_project_cancel = true;
+        }
+    }
+
+    // Modale de récupération après crash (Sprint 6) : posée une fois au
+    // démarrage (`AppState::pending_autosave_recovery`) si un autosave est
+    // postérieur à la dernière sauvegarde manuelle connue. Ignorer laisse la
+    // scène de démarrage normale intacte — l'autosave reste sur disque
+    // (rotation à 5, pas supprimé par un simple « Ignorer »).
+    if let Some(path) = pending_autosave_recovery {
+        let resp = egui::Modal::new(egui::Id::new("autosave-recovery")).show(root.ctx(), |ui| {
+            ui.set_max_width(420.0);
+            ui.heading("Travail non enregistré détecté");
+            ui.label(
+                "Une sauvegarde automatique plus récente que ta dernière sauvegarde \
+                 manuelle a été trouvée (probablement après une fermeture inattendue). \
+                 Veux-tu la restaurer ?",
+            );
+            ui.add_space(4.0);
+            ui.small(format!("{}", path.display()));
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("♻  Restaurer").clicked() {
+                    actions.restore_autosave = true;
+                }
+                if ui.button("Ignorer").clicked() {
+                    actions.dismiss_autosave_recovery = true;
+                }
+            });
+        });
+        if resp.should_close() {
+            actions.dismiss_autosave_recovery = true;
         }
     }
 

@@ -730,6 +730,10 @@ impl ApplicationHandler for App {
         self.poll_gamepad();
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         self.poll_asset_hot_reload();
+        // Autosave (Sprint 6) : no-op la plupart des tours de boucle
+        // (`scene_dirty` faux, ou intervalle pas écoulé) — se contente de
+        // résoudre `app_data_dir()` à None là où il n'y en a pas (wasm32).
+        self.state.maybe_autosave();
         // Pont de pilotage : traite les requêtes externes sur ce thread, seul
         // détenteur légitime de `AppState`/`Renderer` — même modèle de drainage
         // que `poll_gamepad`/`poll_asset_hot_reload`.
@@ -918,6 +922,14 @@ pub fn run() {
         || cfg!(target_os = "ios")
         || cfg!(feature = "player_build");
     let mut app = make_app(player);
+    // Récupération après crash (Sprint 6) : un autosave plus récent que la
+    // dernière sauvegarde manuelle connue signale un travail potentiellement
+    // perdu (crash, `kill -9`) — proposé via une modale, jamais restauré en
+    // silence. Le mode Player joue la scène embarquée, pas la scène éditée :
+    // pas de notion de « travail non sauvegardé » à y récupérer.
+    if !player {
+        app.state.pending_autosave_recovery = app.state.detect_pending_autosave_recovery();
+    }
     // Pont de pilotage externe (opt-in explicite : éval Lua = exécution de code
     // arbitraire — jamais actif sans demande, et annoncé en clair dans les logs).
     // `run()` compile pour toute cible non-wasm32 (donc aussi iOS/Android), mais

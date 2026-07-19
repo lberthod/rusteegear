@@ -607,9 +607,52 @@ le grep transverse est vide.
 
 ---
 
-## Sprint 6 — Sécuriser les sauvegardes
+## Sprint 6 — Sécuriser les sauvegardes ✅ TERMINÉ (19 juillet 2026)
 
 **Objectif** : aucun testeur extérieur ne doit pouvoir perdre son travail.
+
+### Résultat
+
+- **6.1 ✅** — [Scene::save](../src/scene/persistence.rs) écrit désormais dans
+  `<chemin>.tmp` (même dossier, donc même volume) puis `fs::rename` vers le
+  chemin final : une coupure pendant l'écriture laisse `path` intact (`.tmp`
+  orphelin, sans effet). Couvre d'un coup tous les appelants
+  (`save`/`save_to`/export/`create_project`/`duplicate_project`) puisqu'ils
+  passent tous par cette même fonction.
+- **6.2 ✅** — Avant d'écraser, si `path` existe déjà, sa version courante est
+  copiée vers `<path>.backup` (une seule génération). Un échec de backup
+  n'empêche pas la sauvegarde (juste un `log::warn!`) — perdre le backup est
+  nettement moins grave que perdre la scène.
+- **6.3 ✅** — Nouveau module [src/app/autosave.rs](../src/app/autosave.rs) :
+  `AppState::maybe_autosave()` (appelée à chaque tour de
+  `about_to_wait`, [lib.rs](../src/lib.rs)) écrit dans
+  `~/.motor3derust/autosave/<horodatage>.json` (jamais par-dessus le fichier
+  de l'utilisateur) si `scene_dirty` et que `AUTOSAVE_INTERVAL` (2 min) est
+  écoulé ; ne garde que les `AUTOSAVE_KEEP` (5) plus récentes.
+- **6.4 ✅** — Au lancement (`lib::run()`, hors mode Player), `AppState::
+  detect_pending_autosave_recovery()` compare l'autosave la plus récente à la
+  date de modification du fichier de référence (scène du projet ouvert, sinon
+  le quick-save par défaut) — **sans état persisté séparé** : le fichier sur
+  disque porte déjà l'information de date. Si plus récente, une modale
+  « Travail non enregistré détecté » (Restaurer/Ignorer) apparaît, même style
+  que les modales de fermeture (Sprint 4).
+- **6.5 ✅** — 13 tests-preuves (9 dans `autosave.rs`, 4 dans
+  `scene/persistence.rs`) : simulation d'échec d'écriture (le `.tmp` piégé par
+  un dossier du même nom) → fichier original intact ; backup présent après une
+  2ᵉ sauvegarde et contenant la version N-1 ; aucun backup à la 1ʳᵉ
+  sauvegarde ; rotation à 5 ; politique d'intervalle ; détection de
+  récupération (autosave plus récent/plus ancien que la référence, aucun
+  autosave) ; restauration marque `scene_dirty`. Tous en `tempdir` sous
+  `target/`, jamais `$HOME`.
+
+### Terminé quand (vérifié)
+
+Tuer le processus pendant une sauvegarde ne corrompt jamais la scène — prouvé
+par test (`a_failed_write_to_the_temp_file_leaves_the_original_untouched`) —
+et un crash ne fait perdre au pire que l'intervalle d'autosave (2 min).
+`cargo test --all-targets` : 645 passés, 0 échec, 9 ignorés ; fmt/clippy
+stricts verts ; budget unwrap propre (seul le défaut pré-existant hors
+périmètre de `console.rs:135` subsiste, signalé au Sprint 2).
 
 ### État des lieux vérifié
 

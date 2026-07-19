@@ -1849,6 +1849,7 @@ impl Renderer {
                 app.confirm_quit,
                 app.current_project.is_some(),
                 app.confirm_close_project,
+                app.pending_autosave_recovery.as_deref(),
             );
             if app.ui_scene_fingerprint() != ui_fingerprint_before {
                 app.scene_dirty = true;
@@ -1954,6 +1955,16 @@ impl Renderer {
                         project.root.display()
                     );
                 }
+            }
+            // Réponses à la modale de récupération après crash (Sprint 6).
+            if actions.restore_autosave
+                && let Some(path) = app.pending_autosave_recovery.take()
+                && let Err(e) = app.restore_autosave(&path)
+            {
+                log::error!("Restauration de l'autosave échouée : {e}");
+            }
+            if actions.dismiss_autosave_recovery {
+                app.pending_autosave_recovery = None;
             }
             if let Some(path) = actions.import {
                 app.import_gltf(&path);

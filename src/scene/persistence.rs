@@ -122,12 +122,39 @@ impl Scene {
         })
     }
 
+    /// Sauvegarde atomique, avec backup de la version précédente (Sprint 6,
+    /// audit du 19 juillet 2026). Avant ce sprint, cette fonction faisait un
+    /// `fs::write` direct sur `path` : une coupure en pleine écriture (crash,
+    /// disque plein, `kill -9`) laissait le fichier tronqué/corrompu, sans
+    /// aucune version de secours. Désormais :
+    /// 1. si `path` existe déjà, sa version courante est copiée vers
+    ///    `<path>.backup` (une seule génération — suffisant pour l'alpha) ;
+    ///    un échec de backup n'empêche pas la sauvegarde (juste un
+    ///    avertissement) — perdre le backup est nettement moins grave que
+    ///    perdre la scène ;
+    /// 2. le JSON est écrit dans `<path>.tmp` **dans le même dossier** (donc
+    ///    même volume — un `rename` inter-volumes échouerait) ;
+    /// 3. `<path>.tmp` est renommé vers `path` : un `rename` est atomique sur
+    ///    un même système de fichiers, donc `path` contient soit l'ancienne
+    ///    version complète, soit la nouvelle — jamais un mélange tronqué.
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
-        if let Some(dir) = std::path::Path::new(path).parent() {
+        let path = std::path::Path::new(path);
+        if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, json)
+        if path.exists() {
+            let backup = backup_path(path);
+            if let Err(e) = std::fs::copy(path, &backup) {
+                log::warn!(
+                    "sauvegarde : backup {} impossible ({e}) — la sauvegarde continue quand même",
+                    backup.display()
+                );
+            }
+        }
+        let tmp = tmp_path(path);
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
     }
 
     pub fn load(path: &str) -> std::io::Result<Scene> {
@@ -172,5 +199,122 @@ impl Scene {
             }
         }
         self.version = Self::CURRENT_VERSION;
+    }
+}
+
+/// Chemin du fichier temporaire d'écriture atomique (Sprint 6) — dans le même
+/// dossier que `path`, jamais un dossier séparé (`std::env::temp_dir()` peut
+/// être sur un volume différent, ce qui ferait échouer le `rename` final).
+fn tmp_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".tmp");
+    std::path::PathBuf::from(s)
+}
+
+/// Chemin du backup de la version précédente (Sprint 6).
+fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".backup");
+    std::path::PathBuf::from(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_scene_path(name: &str) -> std::path::PathBuf {
+        // Sous-dossier dédié par test sous `target/`, jamais `$HOME` — même
+        // isolation que les autres tests d'écriture du dépôt.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-scene-save")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("création du dossier de test");
+        dir.join("scene.json")
+    }
+
+    #[test]
+    fn save_leaves_no_temp_file_behind_on_success() {
+        let path = temp_scene_path("pas-de-tmp-residuel");
+        let scene = Scene::default();
+        scene.save(path.to_str().unwrap()).expect("sauvegarde");
+        assert!(path.exists());
+        assert!(
+            !tmp_path(&path).exists(),
+            "le fichier .tmp intermédiaire ne doit pas survivre à une sauvegarde réussie"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_to_the_temp_file_leaves_the_original_untouched() {
+        // Simule l'échec « coupure en pleine écriture » : le fichier cible
+        // existe déjà (première sauvegarde réussie), puis on force l'échec de
+        // l'écriture du .tmp (répertoire remplacé par un fichier, qui ne peut
+        // pas accueillir <path>.tmp) — `save` doit renvoyer une erreur SANS
+        // toucher au contenu déjà présent dans `path`.
+        let path = temp_scene_path("coupure-en-cours");
+        let original = Scene::default();
+        original
+            .save(path.to_str().unwrap())
+            .expect("première sauvegarde");
+        let original_bytes = std::fs::read(&path).expect("lecture de l'original");
+
+        // `<path>.tmp` est un dossier plutôt qu'un fichier : `fs::write` sur
+        // ce chemin échoue systématiquement (EISDIR), avant même d'atteindre
+        // le `rename` — reproduit fidèlement une écriture interrompue.
+        std::fs::create_dir_all(tmp_path(&path)).expect("piège .tmp");
+
+        let mut modified = Scene::default();
+        modified.light.color = [9.0, 9.0, 9.0];
+        let result = modified.save(path.to_str().unwrap());
+
+        assert!(result.is_err(), "l'écriture du .tmp doit échouer");
+        let untouched = std::fs::read(&path).expect("lecture après échec");
+        assert_eq!(
+            untouched, original_bytes,
+            "path ne doit jamais contenir un mélange tronqué : soit l'ancienne \
+             version complète, soit la nouvelle — ici l'ancienne, puisque l'écriture a échoué"
+        );
+    }
+
+    #[test]
+    fn saving_twice_leaves_the_previous_version_in_a_backup_file() {
+        let path = temp_scene_path("backup-version-precedente");
+        let mut scene = Scene::default();
+        scene.light.color = [1.0, 0.0, 0.0];
+        scene
+            .save(path.to_str().unwrap())
+            .expect("première sauvegarde");
+        let first_version = std::fs::read_to_string(&path).expect("lecture v1");
+
+        scene.light.color = [0.0, 1.0, 0.0];
+        scene
+            .save(path.to_str().unwrap())
+            .expect("seconde sauvegarde");
+
+        let backup = backup_path(&path);
+        assert!(
+            backup.exists(),
+            ".backup doit exister après une 2ᵉ sauvegarde"
+        );
+        let backup_content = std::fs::read_to_string(&backup).expect("lecture du backup");
+        assert_eq!(
+            backup_content, first_version,
+            "le backup doit contenir la version N-1, pas la version courante"
+        );
+        // Et la version courante (path) est bien la N, pas un mélange.
+        let reloaded = Scene::load(path.to_str().unwrap()).expect("relecture");
+        assert_eq!(reloaded.light.color, [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn saving_once_creates_no_backup() {
+        // Pas de N-1 à sauvegarder au tout premier enregistrement.
+        let path = temp_scene_path("pas-de-backup-au-premier-coup");
+        Scene::default()
+            .save(path.to_str().unwrap())
+            .expect("première sauvegarde");
+        assert!(!backup_path(&path).exists());
     }
 }

@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod asset_ops;
+mod autosave;
 pub mod build_config;
 mod combat;
 mod console;
@@ -190,6 +191,15 @@ pub struct AppState {
     /// que `confirm_quit`, mais pour « Fermer le projet » plutôt que quitter
     /// l'application — posé par `request_close_project` si `scene_dirty`.
     pub confirm_close_project: bool,
+    /// Dernier autosave effectué cette session (Sprint 6) — `None` avant le
+    /// premier. Sert à espacer les écritures de `AppState::AUTOSAVE_INTERVAL`
+    /// (cf. `autosave::maybe_autosave`).
+    last_autosave: Option<crate::time_compat::Instant>,
+    /// Autosave à proposer en restauration au démarrage (Sprint 6), posé une
+    /// fois par `lib::run()` juste après la création de l'app (cf.
+    /// `AppState::pending_autosave_recovery`). `None` : rien à proposer, ou
+    /// modale déjà traitée (Restaurer/Ignorer, cf. `gfx::renderer`).
+    pub pending_autosave_recovery: Option<std::path::PathBuf>,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1092,6 +1102,8 @@ impl AppState {
             ai_scene_replace: true,
             current_project: None,
             confirm_close_project: false,
+            last_autosave: None,
+            pending_autosave_recovery: None,
         }
     }
 
