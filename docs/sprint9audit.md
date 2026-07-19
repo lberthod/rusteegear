@@ -65,7 +65,7 @@ qui exigent un vrai découpage de logique.
 ```
 9.0  Extraction de mod tests (6 fichiers, 6 commits indépendants) ─ ✅ FAIT (2026-07-19)
   │
-  ├─► 9.1  scene/demos.rs   (9 868 → dossier scene/demos/)    ─ ⬜ le plus gros, le plus mécanique
+  ├─► 9.1  scene/demos.rs   (9 868 → dossier scene/demos/, 26 fichiers) ─ ✅ FAIT (2026-07-19)
   ├─► 9.2  gfx/renderer.rs  (3 159 → dossier gfx/renderer/)   ─ ⬜ attention piège shaders/goldens
   ├─► 9.3  app/mod.rs       (1 654 → trim optionnel vers ~1 500)     ─ ⬜ optionnel
   ├─► 9.4  scene/mod.rs     (1 433, déjà sous la cible)              ─ ✅ terminé dès 9.0
@@ -297,7 +297,7 @@ Garde-fou final : `cargo build`, `cargo clippy --lib` (0 warning), `cargo test -
 (identique à la baseline post-9.0). `mmorpg/mod.rs` recule de ~4374 à **1396 lignes**, sous la
 cible de ~1500.
 
-### 9.1.6 — `hameau_gdd_demo` (~2 515 lignes) : même traitement
+### 9.1.6 — `hameau_gdd_demo` (~2 515 lignes) : même traitement — ✅ FAIT (2026-07-19)
 
 **Tâches** : même méthode qu'en 9.1.4/9.1.5 — lecture préalable pour repérer les coupures,
 puis dossier `demos/hameau_gdd/` (`mod.rs` orchestrateur + fichiers thématiques, ex. fort,
@@ -308,7 +308,50 @@ dupliquer sciemment plutôt que factoriser à ce stade (une factorisation est un
 structure, pas une extraction mécanique — hors scope du sprint 9).
 **Risques** : identiques à 9.1.5, en plus petit.
 
-### 9.1.7 — Tests
+Lecture préalable : contrairement à `mmorpg_demo`, `hameau_gdd_demo` a 24 marqueurs de section
+`// --- ... ---` bien identifiés, et surtout ses « fn locales de pose » (`at`, `in_corridor`,
+`poser`, `marker`, `box_seg`, `aplat`, `foret_scatter`, `faune_scatter`, `poser_scaled`,
+`wall_run`) sont de vraies fonctions libres, pas des closures — aucune capture implicite, donc
+partageables entre plusieurs fichiers extraits (contrairement au `poser`/scatter de
+`mmorpg_demo`, cf. 9.1.4). `HALF`/`GATE_HALF`/`TRIM` promus `pub(super) const` au niveau module
+(utilisés à travers plusieurs sections) ; `MODULE_LEN` gardé local à `wall_run` (son seul usage).
+Le partage de code créatures évoqué au brief n'a pas été tenté : `hameau_gdd_demo` extrait ses
+créatures depuis `Scene::mmorpg_demo()` (`let base = Scene::mmorpg_demo(); for c in
+base.objects...`), un couplage déjà présent dans le code d'origine, laissé tel quel.
+
+Réalisé en 7 commits :
+
+| Étape | Fichier | Lignes | Contenu |
+|---|---|---|---|
+| 1/7 | `hameau_gdd/mod.rs` (déplacement initial) | 2547 → | `hameau_gdd_demo` entier déplacé, doc-comment inclus dès cette étape (contrairement au premier essai sur `mmorpg_demo`, cf. 9.1.5) |
+| 2/7 | `hameau_gdd/helpers.rs` | 319 | les 10 fn libres de pose, promues `pub(super)` |
+| 3/7 | `hameau_gdd/fort.rs` | 489 | créatures (reprises de `mmorpg_demo`), remparts, chemin de ronde, dressing remparts |
+| 4/7 | `hameau_gdd/village.rs` | 692 | place centrale, anneau de spawns, îlots bâtis, artisanat, marché, lanternes/bannières |
+| 5/7 | `hameau_gdd/water.rs` | 352 | rivière/lac hors les murs + habillage organique `shore_*`/`grotto_*` |
+| 6/7 | `hameau_gdd/wilds.rs` | 444 | poste de guet, cabane, camps, second point d'eau, prairies, verger, forêt en anneau |
+| 7/7 | `hameau_gdd/tail.rs` | 158 | faune aquatique, lucioles, lande, Aînée de la lande (boss), tweak émissif du feu communal |
+| — | `hameau_gdd/mod.rs` (final) | **131** | orchestrateur pur : init, 5 appels en séquence, `Scene{}` final |
+
+**Nouveau piège trouvé (distinct de mmorpg_demo), rencontré à chaque extraction** : une fonction
+qui reçoit `objects: &mut Vec<SceneObject>` en paramètre et fait ensuite `poser(&mut objects,
+...)` en son sein échoue à la compilation (E0596 « cannot borrow as mutable ») sauf si le
+paramètre lui-même est déclaré `mut objects: &mut Vec<SceneObject>` — un `&mut T` reçu en
+paramètre est un binding immuable par défaut, le reborrow `&mut objects` a besoin que le binding
+soit `mut`. Corrigé à chaque fichier, puis `cargo clippy --fix --lib --allow-dirty` a supprimé
+les réemprunts `&mut` devenus inutiles (`objects`/`imported` se reborrowent implicitement aux
+sites d'appel une fois qu'ils sont eux-mêmes des références) et signalé le `mut` du binding
+redevenu inutile à son tour — retiré manuellement à chaque fois. `git status --short` vérifié
+après chaque `clippy --fix` pour confirmer qu'il n'avait touché que le fichier visé.
+
+Deux erreurs de comptage de lignes supplémentaires trouvées et corrigées avant commit (mêmes
+symptômes qu'en 9.1.5, cf. son tableau) : un appel de fonction manquant côté `village.rs`
+(repéré cette fois côté documentation : un `tail -n +764` avait fait sauter la première ligne
+du commentaire « --- Hors les murs » restant dans `mod.rs`, perte de doc pas de comportement).
+
+Garde-fou final : `cargo build`, `cargo clippy --lib` (0 warning), suite complète
+`cargo test --lib` → **649 passed, 0 failed, 9 ignored** (identique à la baseline).
+
+### 9.1.7 — Tests — ✅ FAIT (dès 9.1.1, confirmé 2026-07-19)
 
 **Tâches** : `src/scene/demos_tests.rs` (952 lignes, 17 tests `mmorpg_demo_*`/`mmorpg_map_*`/
 `mmorpg_water_*`/etc., déjà extrait par 9.0.6 — ✅ fait) doit être déplacé tel quel vers
@@ -319,6 +362,46 @@ publique (`Scene`), ils peuvent rester groupés dans un seul fichier de tests pl
 éclatés par sous-module — ce sont des tests de bout en bout de chaque démo, pas des tests
 unitaires de `build_terrain`.
 **Livrable vérifiable** : `cargo test` — même liste de tests (17), même résultat.
+
+Fait mécaniquement lors du renommage `demos.rs` → `demos/mod.rs` en 9.1.1 (`git mv
+demos_tests.rs demos/tests.rs`, chemin `#[path]` mis à jour) — rien à refaire ici. 952 lignes,
+groupées comme prévu, aucun éclatement par sous-module.
+
+---
+
+## 9.1 — Bilan final
+
+`src/scene/demos.rs` (10 820 lignes avant sprint) est maintenant un dossier de 26 fichiers,
+**10 958 lignes au total** (léger delta dû au découpage : signatures de fonctions, `use`
+répétés). Aucun fichier ne dépasse 1 911 lignes (`mmorpg/decor_data.rs`, pure donnée, 3 tables
+`const`), la plupart sont sous 700 lignes :
+
+| Fichier | Lignes | | Fichier | Lignes |
+|---|---|---|---|---|
+| `mmorpg/decor_data.rs` | 1911 | | `boss.rs` | 122 |
+| `mmorpg/mod.rs` | 1402 | | `escorte.rs` | 114 |
+| `tests.rs` | 952 | | `mmorpg/terrain.rs` | 76 |
+| `creature_scripts.rs` | 706 | | `hameau_gdd/mod.rs` | 131 |
+| `hameau_gdd/village.rs` | 692 | | `components.rs` | 84 |
+| `hameau_gdd/fort.rs` | 489 | | — | — |
+| `controller.rs` | 460 | | — | — |
+| `hameau_gdd/wilds.rs` | 444 | | — | — |
+| `mmorpg/creatures.rs` | 513 | | — | — |
+| `hameau_gdd/water.rs` | 352 | | — | — |
+| `mmorpg/decor_terrain.rs` | 368 | | — | — |
+| `roguelike.rs` | 323 | | — | — |
+| `hameau_gdd/helpers.rs` | 319 | | — | — |
+| `zombies.rs` | 229 | | — | — |
+| `misc.rs` | 233 | | — | — |
+| `demos/mod.rs` | 268 | | — | — |
+| `temple_run.rs` | 189 | | — | — |
+| `hameau_gdd/tail.rs` | 158 | | — | — |
+| `tower.rs` | 149 | | — | — |
+| `mmorpg/fauna.rs` | 146 | | — | — |
+| `brawl.rs` | 128 | | — | — |
+
+24 commits au total pour la phase 9.1 (9.1.1 à 9.1.6), tous atomiques et relisibles
+individuellement, suite complète verte à chaque étape.
 
 ---
 
