@@ -25,7 +25,7 @@ import bpy
 MODELS = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../assets/models")
 )
-IDS = [21, 22, 23, 24, 25, 26] + list(range(32, 62))
+IDS = [21, 22, 23, 24, 25, 26] + list(range(32, 73))
 CLIPS = {"Idle": 40, "Walk": 24}
 
 ok_count = 0
