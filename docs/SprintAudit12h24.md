@@ -1,10 +1,62 @@
-# Plan de sprints — Audit du 19 juillet 2026 à 12 h 24
+# Plan de sprints — Audit du 19 juillet 2026 à 12 h 24 (version optimisée)
 
-> Plan d'action issu de l'analyse [AnalyseAudit12h24.md](AnalyseAudit12h24.md).
-> Chaque sprint est découpé en sous-phases avec un critère « terminé quand » vérifiable.
-> Ordre pensé pour atteindre une alpha publique crédible : d'abord les deux corrections
-> minuscules à fort impact (Pilot, DMG), puis le chantier structurant du format de
-> projet, puis la sécurité des sauvegardes, enfin la bêta extérieure.
+> Plan d'action issu de [AnalyseAudit12h24.md](AnalyseAudit12h24.md), enrichi par une
+> session de cartographie du code. **Rédigé pour être exécuté par un agent sans
+> redécouverte du dépôt** : chaque sprint donne l'état des lieux vérifié
+> (fichier:ligne), des sous-phases concrètes, les pièges connus, et un critère
+> « terminé quand » vérifiable par commande.
+
+---
+
+## Guide de l'agent exécutant — à lire avant tout sprint
+
+### Conventions du projet (non négociables)
+
+- **Tout en français** : code visible, docs, messages de commit, textes UI.
+- Messages de commit descriptifs, style existant (voir `git log --oneline`) ; les
+  audits gameplay utilisent le préfixe « Audit gameplay : … ».
+- **Tests-preuves** : chaque fonctionnalité livrée s'accompagne de tests qui prouvent
+  le comportement (voir [tests/first_game_example.rs](../tests/first_game_example.rs)
+  comme modèle de style : noms de tests en phrases, assertions sur le comportement
+  réel, pas sur l'implémentation).
+- CI stricte : `cargo fmt --all -- --check` et
+  `cargo clippy --all-targets -- -D warnings` doivent passer. Lancer `cargo fmt --all`
+  avant chaque commit.
+- Il existe un budget `unwrap/panic` contrôlé en CI
+  (`python3 scripts/check_unwrap_budget.py`) : préférer les erreurs propagées.
+
+### Pièges connus du dépôt (mémoire des sessions précédentes)
+
+1. **L'export écrase la scène versionnée** : `ExportPanel::start()`
+   ([export.rs:135-140](../src/editor/export.rs)) réécrit en place
+   `assets/player_scene.json` (le vrai jeu MMORPG servi en ligne) et
+   `bundle_scene_json()` (l.819) **supprime puis régénère `assets/bundle/`**. Ne
+   jamais committer ces fichiers modifiés par accident ; après régénération légitime
+   du bundle, faire `touch src/assets.rs` pour forcer la re-inclusion.
+2. **Sessions concurrentes possibles sur ce dépôt** : vérifier `git status` juste
+   avant chaque commit ; ne committer que ses propres fichiers.
+3. **Test flaky préexistant** : le test roguelike « wave-clear » échoue ~60-80 % du
+   temps déjà sur `main` — ce n'est pas une régression, ne pas le « corriger » en
+   passant.
+4. **`PROTOCOL_VERSION = 6`** ([protocol.rs:42](../src/net/protocol.rs)) : toute
+   modification du protocole couple le déploiement client/VPS — hors périmètre de ces
+   sprints, ne pas y toucher.
+5. **`.app` périmés sur volumes montés** (`/Volumes/RusteeGear`, `/Volumes/MMORPG`) :
+   avant de diagnostiquer « un bug qui persiste » dans un bundle, comparer la date de
+   build.
+6. **Environnement sans sockets** : la sandbox locale peut interdire
+   `TcpListener::bind` — c'est précisément l'objet du Sprint 1 ; ne pas conclure que
+   Pilot est cassé sur un `Operation not permitted`.
+
+### Vérification standard de fin de sprint
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets        # doit passer même sans sockets après le Sprint 1
+```
+
+---
 
 ## Priorités immédiates
 
@@ -25,40 +77,56 @@
 
 **Objectif** : rendre la suite standard indépendante des permissions réseau.
 
-État des lieux : [tests/pilot_bridge.rs](../tests/pilot_bridge.rs) contient 6 tests —
-4 TCP et 2 déterministes sans socket. Aucune feature `pilot_tests` dans `Cargo.toml`.
+### État des lieux vérifié
+
+- [tests/pilot_bridge.rs](../tests/pilot_bridge.rs) : 6 tests. 4 TCP
+  (`pilot_bridge_drives_lua_play_scene_and_inputs_over_tcp` l.59,
+  `pilot_bridge_reports_lua_errors_and_survives_malformed_requests` l.128,
+  `pilot_bridge_full_editing_and_gameplay_session` l.168,
+  `pilot_bridge_options_and_demo_loading` l.250), démarrés par
+  `PilotServer::start(0, None)`, pilotés par les helpers `drive` (l.17), `ask` (l.41),
+  `connect` (l.52). 2 tests `advance_steps_*` (l.288, l.304) purs, sans socket.
+- **La feature d'isolation existe déjà** : `net_tests` dans la section `[features]` de
+  [Cargo.toml](../Cargo.toml). Pattern à imiter :
+  `#[cfg(all(test, feature = "net_tests"))]` sur le module de tests réseau de
+  [src/bin/server.rs:1107](../src/bin/server.rs) (raison documentée l.1102-1106 :
+  certains runners CI restreignent le bind loopback).
+- Job CI modèle : `net-tests` ([ci.yml:51](../.github/workflows/ci.yml)) exécute
+  `cargo test --features net_tests` avec les deps système Linux (l.29-33) — il couvre
+  aussi les tests d'intégration de `tests/`.
+- Sécurité du pont : **déjà acquise par construction** — bind exclusif
+  `TcpListener::bind(("127.0.0.1", port))` ([pilot.rs:72](../src/pilot.rs)), jamais
+  actif par défaut (`pilot_port_requested()`, [lib.rs:869](../src/lib.rs)).
 
 ### Sous-phases
 
-- **1.1 — Feature `pilot_tests`** : ajouter dans `Cargo.toml` :
-
-  ```toml
-  [features]
-  pilot_tests = []
-  ```
-
-  et placer les quatre tests TCP (`pilot_bridge_drives_lua_play_scene_and_inputs_over_tcp`,
-  `pilot_bridge_reports_lua_errors_and_survives_malformed_requests`,
-  `pilot_bridge_full_editing_and_gameplay_session`,
-  `pilot_bridge_options_and_demo_loading`) derrière
-  `#[cfg_attr(not(feature = "pilot_tests"), ignore = "nécessite un socket TCP local — lancer avec --features pilot_tests")]`.
-- **1.2 — Suite normale intacte** : conserver les deux tests déterministes
-  (`advance_steps_*`) dans la suite standard, sans feature.
-- **1.3 — Job CI Pilot** : ajouter un job dédié exécutant
-  `cargo test --features pilot_tests --test pilot_bridge` dans un environnement
-  autorisant les sockets.
-- **1.4 — Sécurité du pont** : vérifier (test à l'appui) que le pont refuse les
-  connexions non locales — liaison sur `127.0.0.1` uniquement.
-- **1.5 — Documentation** : documenter dans [PILOT.md](PILOT.md) que Pilot est
-  désactivé par défaut et comment lancer les tests TCP.
+- **1.1 — Gater les 4 tests TCP** : dans `tests/pilot_bridge.rs`, annoter chacun des
+  4 tests TCP avec `#[cfg(feature = "net_tests")]` (et gater de même les helpers
+  `drive`/`ask`/`connect` pour éviter les warnings `dead_code` hors feature).
+  **Recommandation : réutiliser `net_tests`**, ne pas créer de feature `pilot_tests` —
+  même cause (bind loopback interdit), même job CI, zéro maintenance en plus. Si une
+  distinction s'avère nécessaire plus tard, elle pourra être ajoutée alors.
+- **1.2 — Suite normale intacte** : les 2 tests `advance_steps_*` restent non gatés.
+- **1.3 — CI** : vérifier que le job `net-tests` existant compile bien
+  `tests/pilot_bridge.rs` avec la feature (c'est le cas : `cargo test --features
+  net_tests` inclut les tests d'intégration). Aucun nouveau job n'est nécessaire ;
+  ajouter seulement un commentaire dans `ci.yml` indiquant que ce job couvre aussi
+  Pilot TCP.
+- **1.4 — Preuve de localité** : ajouter un test (gaté `net_tests`) affirmant que
+  `PilotServer::start` binde une adresse dont `ip()` est `127.0.0.1` (lire
+  `local_addr`, champ public de [pilot.rs:63](../src/pilot.rs)) ; plus un test **non
+  gaté** sur `pilot_port_requested()` (fonction pure) prouvant que sans `--pilot` ni
+  env, le pont est désactivé.
+- **1.5 — Documentation** : dans [PILOT.md](PILOT.md), préciser : désactivé par
+  défaut, écoute locale uniquement, et comment lancer les tests TCP
+  (`cargo test --features net_tests --test pilot_bridge`).
 
 ### Terminé quand
 
 ```bash
-cargo test --all-targets
+cargo test --all-targets                                # passe sans sockets
+cargo test --features net_tests --test pilot_bridge     # 6 tests dans un env avec sockets
 ```
-
-passe même si les sockets sont interdits, et le job CI Pilot est vert.
 
 ---
 
@@ -66,34 +134,56 @@ passe même si les sockets sont interdits, et le job CI Pilot est vert.
 
 **Objectif** : une Release GitHub alpha téléchargeable et lançable.
 
-État des lieux : [packaging/build_dmg.sh:41](../packaging/build_dmg.sh:41) produit
-`RusteeGear.dmg` mais [.github/workflows/release.yml:27](../.github/workflows/release.yml:27)
-publie `Motor3DeRust.dmg` — l'upload échouera.
+### État des lieux vérifié
+
+- [packaging/build_dmg.sh](../packaging/build_dmg.sh) a **deux modes** :
+  - normal (`OUTPUT_NAME=RusteeGear`, défaut) → bundle **éditeur** →
+    `target/release/bundle/dmg/RusteeGear.dmg` (l.41) ;
+  - export (`OUTPUT_NAME` autre + `PLAYER_BUILD=1`) → identité réécrite au PlistBuddy
+    (l.25-39), feature `player_build`, scène embarquée → `target/export/${OUTPUT_NAME}.dmg`.
+- [release.yml:27](../.github/workflows/release.yml) attache `Motor3DeRust.dmg`, qui
+  **n'existe pas** (le job appelle le mode normal, qui produit `RusteeGear.dmg`).
+- Le DMG non signé nécessite un clic droit → Ouvrir au premier lancement (note dans le
+  script, l.46-47).
+- ⚠ Piège n° 1 du guide : construire un Player en CI ne doit pas passer par le panneau
+  éditeur ; le script shell suffit (`PLAYER_BUILD=1` embarque la scène **déjà
+  présente** dans `assets/player_scene.json` — pour un DMG « First Game » il faudrait
+  une scène embarquée différente, voir 2.2).
 
 ### Sous-phases
 
-- **2.1 — Chemin du DMG** : corriger le workflow en
-  `files: target/release/bundle/dmg/RusteeGear.dmg`.
-- **2.2 — Contenu des artefacts** : décider si le DMG contient l'éditeur ou le
-  Player ; produire les deux si nécessaire (le chemin export de `build_dmg.sh`
-  produit déjà `target/export/${OUTPUT_NAME}.dmg`).
-- **2.3 — Tag alpha** : créer `v0.1.0-alpha.1` et laisser le workflow construire.
-- **2.4 — Test sur machine propre** : télécharger les artefacts et les lancer sur
-  une installation vierge (attention aux `.app` périmés sur les volumes montés
-  `/Volumes/RusteeGear` — comparer la date de build).
+- **2.1 — Chemin du DMG** (le correctif d'une ligne) : dans `release.yml`,
+  `files: target/release/bundle/dmg/RusteeGear.dmg`. Renommer le livrable est possible
+  via une étape `mv` explicite si un nom versionné est souhaité
+  (`RusteeGear-Editor-${{ github.ref_name }}.dmg`).
+- **2.2 — Décision de contenu** : le DMG actuel = **éditeur** (avec démos intégrées).
+  C'est le bon livrable alpha n° 1. Un DMG « First Game » (Player) est **optionnel** à
+  ce stade : il exigerait d'embarquer `examples/first_game/scene.json` comme scène
+  player **sans écraser** `assets/player_scene.json` versionné (par exemple : le
+  générer dans la CI puis `git checkout -- assets/` avant tout autre pas, ou
+  paramétrer le chemin de scène embarquée). Si l'effort dépasse une demi-journée,
+  livrer l'éditeur seul en alpha.1 et reporter le Player en alpha.2.
+- **2.3 — Tag alpha** : créer et pousser `v0.1.0-alpha.1` ; le workflow se déclenche
+  sur `v*`. Vérifier le job Android au passage (`APP_VERSION` est dérivé du tag —
+  contrôler qu'un suffixe `-alpha.1` ne casse pas `build_apk.sh`).
+- **2.4 — Test sur machine propre** : télécharger le DMG de la Release, le monter, le
+  lancer (clic droit → Ouvrir), dérouler le Quickstart. Piège n° 5 : ne pas tester un
+  vieux `.app` d'un volume déjà monté.
 
-### Livrables
+### Livrables (cible, adaptée par 2.2)
 
 ```text
-RusteeGear-Editor-v0.1.0-alpha.1.dmg
-RusteeGear-FirstGame-v0.1.0-alpha.1.dmg
-RusteeGear-FirstGame-v0.1.0-alpha.1-web.zip
+RusteeGear-Editor-v0.1.0-alpha.1.dmg        (obligatoire)
+RusteeGear-FirstGame-v0.1.0-alpha.1.dmg     (optionnel, sinon alpha.2)
+RusteeGear-FirstGame-v0.1.0-alpha.1-web.zip (optionnel, sinon alpha.2)
+motor3derust.apk                            (déjà produit par le job android)
 ```
 
 ### Terminé quand
 
-La Release `v0.1.0-alpha.1` existe sur GitHub avec ses artefacts, et chacun démarre
-sur une installation propre.
+La Release `v0.1.0-alpha.1` existe sur GitHub, son DMG éditeur se télécharge, se monte
+et démarre sur une installation propre, et `git status` reste vierge (aucun
+`player_scene.json`/`bundle/` modifié).
 
 ---
 
@@ -101,13 +191,25 @@ sur une installation propre.
 
 **Objectif** : que RusteeGear sache ce qu'est un « projet », pas seulement une scène.
 
-État des lieux : aucune occurrence de `ProjectManifest` / `project.rusteegear.json`
-dans `src/` ; le seul `PROJECT_ROOT` est la racine du dépôt du moteur
-([src/editor/export.rs:14](../src/editor/export.rs:14)).
+### État des lieux vérifié
+
+- Aucune notion de projet ni de fichiers récents dans `src/` (recherches
+  `ProjectManifest|project\.rusteegear|recent|\.rgproj` : néant).
+- Ouverture actuelle : `rfd::FileDialog::pick_file` ([menus.rs:173](../src/editor/menus.rs))
+  → `AppState::load_from` ([app/persistence.rs:227](../src/app/persistence.rs), thread
+  de fond) → `Scene::load` + `migrate()`.
+- Les assets sont résolus par URI (`asset://`, `asset-id://`, `bundle://`, `user://`)
+  via `read_bytes` ([assets.rs:363](../src/assets.rs)) ancré sur
+  `~/.motor3derust/assets` (`assets_dir()`, l.243) — **pas relativement à la scène**.
+  Garde anti-traversée : `safe_join` (l.314).
+- Préférences persistées existantes à imiter : `Settings`
+  ([settings.rs:155/191](../src/app/settings.rs), `~/.motor3derust/settings.json`) et
+  `BuildConfig` ([build_config.rs:251-277](../src/app/build_config.rs)).
 
 ### Sous-phases
 
-- **3.1 — Format du manifeste** : définir `project.rusteegear.json` :
+- **3.1 — Struct et format** : nouveau module `src/project.rs` avec
+  `ProjectManifest` (serde) :
 
   ```json
   {
@@ -118,21 +220,32 @@ dans `src/` ; le seul `PROJECT_ROOT` est la racine du dépôt du moteur
   }
   ```
 
-- **3.2 — Chargement et validation** : struct `ProjectManifest` (serde), version de
-  format contrôlée, messages d'erreur lisibles (fichier manquant, JSON invalide,
-  scène principale introuvable).
-- **3.3 — Racine de projet** : notion de `project_root` dans le moteur ; résolution
-  des assets (scènes, scripts, modèles, textures, audio) relativement au projet et
-  non plus au dépôt.
-- **3.4 — Ouverture par manifeste** : ouvrir un dossier contenant
-  `project.rusteegear.json` charge la scène principale.
-- **3.5 — Tests-preuves** : tests de chargement valide, format inconnu, chemins
-  hors racine refusés, erreurs lisibles.
+  `format` contrôlé (erreur lisible si supérieur au connu), `build` optionnel.
+- **3.2 — Chargement et validation** : `ProjectManifest::load(dir)` cherche
+  `project.rusteegear.json` dans le dossier ; erreurs en français et actionnables
+  (fichier manquant, JSON invalide avec ligne, scène principale introuvable). Utiliser
+  `safe_join` pour interdire `main_scene` hors racine.
+- **3.3 — Racine de projet dans l'app** : champ `AppState`-niveau
+  `current_project: Option<ProjectRoot>` (nom + chemin racine). À ce stade, la
+  résolution d'un **nouveau** schéma `project://chemin/relatif` dans `read_bytes` peut
+  se limiter aux scènes et scripts ; ne pas réécrire le système `asset-id://`
+  existant (les assets importés continuent de vivre dans `~/.motor3derust/assets` —
+  la migration complète des assets vers le projet est un chantier ultérieur, le noter
+  dans [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)).
+- **3.4 — Ouverture par manifeste** : ouvrir un dossier (ou son
+  `project.rusteegear.json`) charge `main_scene` via `load_from` et pose
+  `current_project`. Étendre le filtre du dialogue « 📂 Ouvrir… » pour accepter le
+  manifeste.
+- **3.5 — Tests-preuves** : nouveau `tests/project_manifest.rs` — chargement valide,
+  `format` inconnu refusé avec message lisible, `main_scene: "../évasion.json"`
+  refusé, manifeste absent → erreur claire, ouverture d'un projet minimal fixture →
+  scène chargée.
 
 ### Terminé quand
 
-Un dossier avec manifeste s'ouvre comme un projet, ses assets se résolvent
-relativement à sa racine, et la validation échoue proprement sur les cas d'erreur.
+Un dossier avec manifeste s'ouvre comme un projet (scène principale chargée,
+`current_project` posé), la validation échoue proprement sur les cas d'erreur, et les
+tests de `tests/project_manifest.rs` passent dans la suite standard.
 
 ---
 
@@ -140,29 +253,41 @@ relativement à sa racine, et la validation échoue proprement sur les cas d'err
 
 **Objectif** : le cycle de vie complet d'un projet depuis l'éditeur.
 
+### État des lieux vérifié
+
+- Wizard actuel : `new_project_wizard_window`
+  ([windows.rs:2143-2199](../src/editor/windows.rs)) — 3 boutons de template
+  (Scène vide → `new_scene()` [selection.rs:350](../src/app/selection.rs), Démo
+  contrôleur, Niveau de combat). Ni nom, ni dossier, ni persistance.
+- ⚠ Piège egui connu du dépôt : une ligne cliquable **et** glissable doit être un seul
+  widget `Sense` clic+drag (`dnd_drag_source` avale les clics) — concerne la future
+  liste de projets récents si elle devient réordonnable.
+
 ### Sous-phases
 
-- **4.1 — Wizard de création** : transformer le wizard actuel en :
-
-  ```text
-  Nom du projet
-  Emplacement
-  Template
-  Créer
-  ```
-
-  La création génère la structure complète (manifeste, `scenes/`, `scripts/`, …).
-- **4.2 — Ouvrir / Fermer** : ouvrir un projet existant (sélection du dossier ou du
-  manifeste) ; fermer proprement le projet courant.
-- **4.3 — Projets récents** : liste persistée, accessible à l'accueil de l'éditeur.
-- **4.4 — Confort** : Révéler dans le Finder ; Dupliquer le projet.
-- **4.5 — Tests-preuves** : création depuis template → ouverture → scène principale
-  chargée ; projets récents mis à jour.
+- **4.1 — Wizard de création réel** : transformer la fenêtre en formulaire
+  « Nom du projet / Emplacement (choisi via `rfd::FileDialog::pick_folder`) /
+  Template / Créer ». « Créer » génère la structure (manifeste, `scenes/main.scene.json`
+  depuis le template, `scripts/`), puis ouvre le projet (Sprint 3.4). Les 3 templates
+  existants restent les choix proposés.
+- **4.2 — Ouvrir / Fermer** : entrée de menu « Ouvrir un projet… » (sélection du
+  dossier ou du manifeste) ; « Fermer le projet » revient à l'état sans projet, en
+  passant par la modale existante si `scene_dirty`.
+- **4.3 — Projets récents** : persister une liste MRU (chemin + nom + date) dans
+  `Settings` ([settings.rs](../src/app/settings.rs)) — c'est la struct de préférences
+  déjà chargée/sauvée ; plafonner à 10, ignorer silencieusement les chemins disparus.
+  Affichage : sous-menu « Fichier → Projets récents » + liste à l'ouverture du wizard.
+- **4.4 — Confort** : « Révéler dans le Finder » (`open -R` sur macOS, gated
+  plateforme) ; « Dupliquer le projet » (copie récursive du dossier + renommage dans
+  le manifeste).
+- **4.5 — Tests-preuves** : création depuis template dans un `tempdir` → manifeste
+  valide → ouverture → scène principale chargée ; MRU mis à jour et plafonné ;
+  duplication → manifeste renommé.
 
 ### Terminé quand
 
-On peut créer, ouvrir, fermer, retrouver et dupliquer un projet sans toucher au
-système de fichiers à la main.
+On peut créer, ouvrir, fermer, retrouver (récents) et dupliquer un projet sans toucher
+au système de fichiers à la main, tests à l'appui.
 
 ---
 
@@ -170,35 +295,47 @@ système de fichiers à la main.
 
 **Objectif** : First Game devient le premier vrai projet RusteeGear.
 
+### État des lieux vérifié
+
+- `examples/first_game/` : `scene.json` (version 2, 10 objets, scripts inline),
+  `README.md`, `preview.png`, `scripts/{rotating_object,zone_signal}.lua` (copies
+  lisibles des scripts inline — **pas** chargées par le moteur).
+- Les 4 tests : [tests/first_game_example.rs](../tests/first_game_example.rs) —
+  `example_dir()` (l.11) pointe sur le dossier, `load_scene()` sur `scene.json`.
+- Phrases de doc à changer : [QUICKSTART.md](../QUICKSTART.md) §4 (l.47-50 :
+  « Sélectionner `examples/first_game/scene.json` ») ; [FIRST_GAME.md](FIRST_GAME.md)
+  prérequis (l.3-4) et Étape 1 (l.9), plus l'avertissement l.60-61 (« ne sauvegarde
+  pas par-dessus scene.json ») ; [examples/first_game/README.md](../examples/first_game/README.md)
+  section « Ouvrir la scène ».
+
 ### Sous-phases
 
-- **5.1 — Restructuration** :
+- **5.1 — Restructuration** (avec `git mv` pour garder l'historique) :
 
   ```text
   examples/first_game/
   ├── project.rusteegear.json
-  ├── build.json
-  ├── scenes/main.scene.json
-  └── scripts/
+  ├── scenes/main.scene.json      (ex scene.json)
+  ├── scripts/                    (copies lisibles, inchangées)
+  ├── preview.png
+  └── README.md
   ```
 
-- **5.2 — Chemins internes** : adapter les références de la scène et des scripts à
-  la nouvelle arborescence.
-- **5.3 — Documentation** : adapter [QUICKSTART.md](../QUICKSTART.md) et
-  [FIRST_GAME.md](FIRST_GAME.md) :
-
-  ```text
-  Ouvrir le projet examples/first_game
-  ```
-
-  au lieu de « Ouvrir examples/first_game/scene.json ».
-- **5.4 — Tests-preuves** : les 4 tests First Game passent sur la nouvelle
-  structure ; ouverture par manifeste testée.
+  `build.json` : ne le créer que s'il a un consommateur (sinon l'omettre — le
+  manifeste le déclare optionnel depuis 3.1).
+- **5.2 — Tests adaptés** : mettre à jour `example_dir()`/`load_scene()` dans
+  `first_game_example.rs` ; ajouter un 5ᵉ test : le projet s'ouvre par manifeste et
+  charge `scenes/main.scene.json`.
+- **5.3 — Documentation** : réécrire les passages listés ci-dessus en
+  « Ouvrir le projet `examples/first_game` » ; l'avertissement « garde l'exemple
+  intact » reste valable (adapter le chemin).
+- **5.4 — Vérification transverse** : `grep -rn "first_game/scene.json"` sur tout le
+  dépôt (docs, scripts, tests, code) doit rendre zéro résultat résiduel.
 
 ### Terminé quand
 
-First Game s'ouvre comme un projet, le tutoriel est à jour, et les tests existants
-passent sur la nouvelle arborescence.
+First Game s'ouvre comme un projet, les 5 tests passent, le Quickstart est à jour, et
+le grep transverse est vide.
 
 ---
 
@@ -206,31 +343,44 @@ passent sur la nouvelle arborescence.
 
 **Objectif** : aucun testeur extérieur ne doit pouvoir perdre son travail.
 
-État des lieux : la sauvegarde de scène est un `std::fs::write` direct
-([src/editor/export.rs:137](../src/editor/export.rs:137)) — une coupure en pleine
-écriture corrompt le fichier.
+### État des lieux vérifié
+
+- **Déjà fait** (ne pas réimplémenter) : dirty-flag `scene_dirty` (levé par
+  `push_undo` [selection.rs:260](../src/app/selection.rs), gizmo, Pilot, empreinte
+  d'inspecteur [persistence.rs:202](../src/app/persistence.rs)) ; modale
+  « Modifications non sauvegardées » à la fermeture
+  ([editor/mod.rs:2406-2431](../src/editor/mod.rs)).
+- **À faire** : `Scene::save` ([scene/persistence.rs:125](../src/scene/persistence.rs))
+  est un `fs::write` direct — non atomique, sans backup. Quick-save par défaut :
+  `~/motor3derust_scene.json` (`scene_path()`, [app/mod.rs:1625](../src/app/mod.rs)).
+- Emplacement naturel des données d'app : `~/.motor3derust/`
+  (`app_data_dir()`, [assets.rs:278](../src/assets.rs)).
 
 ### Sous-phases
 
-- **6.1 — Sauvegarde atomique** : écrire dans un fichier temporaire du même dossier
-  puis renommer (remplacement atomique).
-- **6.2 — Backup** : conserver un `.backup` de la version précédente à chaque
-  sauvegarde.
-- **6.3 — Indicateur de modifications** : marqueur « non enregistré » visible dans
-  l'éditeur.
-- **6.4 — Confirmation avant fermeture** : avertissement si des modifications non
-  enregistrées existent.
-- **6.5 — Autosave** : sauvegarde périodique dans un emplacement dédié (pas par-dessus
-  le fichier de l'utilisateur).
-- **6.6 — Récupération au redémarrage** : au lancement, proposer de restaurer un
-  autosave plus récent que la dernière sauvegarde manuelle.
-- **6.7 — Tests-preuves** : atomicité (le fichier cible n'est jamais tronqué),
-  backup présent, autosave restauré.
+- **6.1 — Sauvegarde atomique** : dans `Scene::save`, écrire vers
+  `<chemin>.tmp` **dans le même dossier** (même volume, sinon `rename` non atomique)
+  puis `fs::rename` sur le chemin final. Couvre d'un coup tous les appelants
+  (`save`/`save_to`/export).
+- **6.2 — Backup** : avant le rename, si le fichier cible existe, le renommer en
+  `<chemin>.backup` (une seule génération suffit pour l'alpha).
+- **6.3 — Autosave** : sur une cadence simple (par exemple toutes les 2 minutes si
+  `scene_dirty`), sérialiser vers `~/.motor3derust/autosave/<horodatage>.json`
+  (jamais par-dessus le fichier de l'utilisateur) ; garder les 5 plus récents.
+  Brancher dans la boucle app existante (là où Pilot est pollé,
+  [lib.rs:759](../src/lib.rs), tick déjà disponible).
+- **6.4 — Récupération au redémarrage** : au lancement, si un autosave est plus
+  récent que la dernière sauvegarde manuelle connue, proposer une modale
+  « Restaurer / Ignorer » (réutiliser le style de la modale de fermeture).
+- **6.5 — Tests-preuves** : atomicité (simuler l'échec entre `.tmp` et rename : le
+  fichier cible d'origine est intact) ; `.backup` présent après deux sauvegardes et
+  contenant la version N-1 ; rotation des autosaves à 5 ; round-trip autosave →
+  restauration. Les tests d'écriture utilisent des `tempdir`, pas `~`.
 
 ### Terminé quand
 
-Tuer l'éditeur en pleine sauvegarde ne corrompt jamais la scène, et un crash ne fait
-perdre au pire que l'intervalle d'autosave.
+Tuer le processus pendant une sauvegarde ne corrompt jamais la scène (prouvé par
+test), et un crash ne fait perdre au pire que l'intervalle d'autosave.
 
 ---
 
@@ -238,21 +388,43 @@ perdre au pire que l'intervalle d'autosave.
 
 **Objectif** : le multijoueur local sans ligne de commande.
 
+### État des lieux vérifié
+
+- Serveur headless : binaire `server` ([src/bin/server.rs](../src/bin/server.rs)),
+  adresse par défaut `127.0.0.1:7777` (l.54), surcharge **par env**
+  `RUSTEEGEAR_SERVER_ADDR` (l.677) — pas d'argument CLI. Transport WebSocket,
+  multi-salons (`ClientMsg::Join::lobby`).
+- L'éditeur sait déjà **se connecter** : fenêtre multijoueur
+  ([windows.rs:1083, 1194](../src/editor/windows.rs)), action
+  `connect_to_server` ([editor/mod.rs:369](../src/editor/mod.rs)), URL par défaut
+  `wss://ws.loicberthod.ch` ([network_client.rs:39](../src/app/network_client.rs)).
+- Piège n° 4 : ne pas toucher à `PROTOCOL_VERSION`.
+
 ### Sous-phases
 
-- **7.1 — Démarrer / arrêter** : lancer le serveur depuis l'éditeur ; arrêt propre.
-- **7.2 — État visible** : panneau affichant l'état du serveur (port, joueurs
-  connectés).
-- **7.3 — Copier l'adresse** : bouton copiant l'adresse de connexion.
-- **7.4 — Auto-connexion de l'hôte** : l'éditeur qui héberge se connecte
-  automatiquement à son propre serveur.
-- **7.5 — Code de salon** : rejoindre via un code de salon.
-- **7.6 — Tests-preuves** : cycle démarrer → connecter → arrêter automatisé (via
-  Pilot si possible), en respectant `PROTOCOL_VERSION`.
+- **7.1 — Démarrer / arrêter** : depuis la fenêtre multijoueur, lancer le binaire
+  `server` en processus enfant (`std::process::Command`, env
+  `RUSTEEGEAR_SERVER_ADDR=127.0.0.1:7777`) ; bouton Arrêter = kill propre du child ;
+  arrêt automatique à la fermeture de l'éditeur.
+- **7.2 — État visible** : panneau affichant : serveur arrêté/en cours (PID), adresse,
+  et — si disponible via la connexion locale — le nombre de joueurs.
+- **7.3 — Copier l'adresse** : bouton copiant `ws://127.0.0.1:7777` dans le
+  presse-papiers (`ctx.copy_text` côté egui).
+- **7.4 — Auto-connexion de l'hôte** : après démarrage réussi (attendre que le port
+  accepte), poser `actions.connect_to_server` vers l'adresse locale — le chemin de
+  connexion existant fait le reste.
+- **7.5 — Code de salon** : le protocole a déjà `lobby` — exposer un champ « Salon »
+  dans la fenêtre (réutiliser `DEFAULT_LOBBY`) et l'inclure dans l'adresse copiée
+  (`ws://…/?salon=x` ou consigne texte), sans changement de protocole.
+- **7.6 — Tests-preuves** : gatés `net_tests` — cycle démarrer le vrai binaire →
+  se connecter → arrêter ; et un test que l'arrêt de l'éditeur ne laisse pas de
+  processus orphelin. Automatisation Pilot bienvenue (`net connect` existe déjà,
+  [pilot.rs:403](../src/pilot.rs)).
 
 ### Terminé quand
 
-Deux instances sur la même machine jouent ensemble sans jamais ouvrir un terminal.
+Deux instances sur la même machine jouent ensemble sans jamais ouvrir un terminal, et
+aucun processus serveur ne survit à la fermeture de l'éditeur.
 
 ---
 
@@ -264,22 +436,15 @@ Deux instances sur la même machine jouent ensemble sans jamais ouvrir un termin
 
 - **8.1 — Kit testeur** : Release alpha (Sprint 2) + [QUICKSTART.md](../QUICKSTART.md)
   + [TEST_SCENARIO.md](TEST_SCENARIO.md) + [TEST_FEEDBACK_FORM.md](TEST_FEEDBACK_FORM.md).
-- **8.2 — Scénario imposé** :
-
-  1. suivre le Quickstart ;
-  2. ouvrir First Game ;
-  3. jouer ;
-  4. ajouter un cube ;
-  5. ajouter le script ;
-  6. sauvegarder ;
-  7. rouvrir ;
-  8. exporter ;
-  9. envoyer un retour.
-
-- **8.3 — Collecte et tri** : centraliser les retours, classer
-  bloquant / gênant / cosmétique.
+  Vérifier que le Quickstart correspond bien à la version taguée (pas à `main`).
+- **8.2 — Scénario imposé** : 1. suivre le Quickstart ; 2. ouvrir First Game ;
+  3. jouer ; 4. ajouter un cube ; 5. ajouter le script ; 6. sauvegarder ;
+  7. rouvrir ; 8. exporter ; 9. envoyer un retour.
+- **8.3 — Collecte et tri** : centraliser les retours dans
+  `docs/audits/retours-alpha1.md`, classés bloquant / gênant / cosmétique, avec
+  machine et version.
 - **8.4 — Boucle corrective** : corriger les bloquants, publier `v0.1.0-alpha.2` si
-  nécessaire.
+  nécessaire (le pipeline du Sprint 2 rend cela peu coûteux).
 
 ### Terminé quand
 
@@ -288,18 +453,23 @@ retours sont triés et adressés.
 
 ---
 
-## Vue d'ensemble
+## Vue d'ensemble et dépendances
 
 ```text
-Sprint 1 (Pilot)  ─┐
-Sprint 2 (DMG)    ─┤  petites corrections, gros déblocage
-                   ▼
+Sprint 1 (Pilot/net_tests) ─┐
+Sprint 2 (DMG + alpha.1)   ─┤  indépendants, à faire d'abord (petits, gros déblocage)
+                            ▼
 Sprint 3 (manifeste) → Sprint 4 (gestionnaire) → Sprint 5 (migration First Game)
-                   ▼
-Sprint 6 (sauvegardes sûres) → Sprint 7 (serveur local)
-                   ▼
-Sprint 8 (bêta extérieure)
+                            ▼
+Sprint 6 (sauvegardes sûres, indépendant de 3-5) ; Sprint 7 (serveur local, indépendant)
+                            ▼
+Sprint 8 (bêta extérieure — exige au minimum 2, idéalement 2+5+6)
 ```
+
+- Sprints 1, 2, 6, 7 sont indépendants entre eux et de la chaîne 3→4→5.
+- Le Sprint 8 exige le Sprint 2 ; il est nettement plus crédible avec 5 et 6.
+- Chaque sprint = un ou plusieurs commits dédiés, `git status` vérifié avant chaque
+  commit (piège n° 2), vérification standard du guide en fin de sprint.
 
 Voir le constat complet dans [AnalyseAudit12h24.md](AnalyseAudit12h24.md) et la
 feuille de route générale dans [ROADMAP_SPRINTS.md](ROADMAP_SPRINTS.md).
