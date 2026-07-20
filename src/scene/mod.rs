@@ -577,7 +577,7 @@ impl Archetype {
 /// (collisions avec le décor respectées, comme le joueur). L'attaque au contact reste
 /// gérée séparément par `trigger` + un script `damage()` (cf. `controller_level`) :
 /// `AiChaser` ne fait que le déplacement, pas les dégâts.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiChaser {
     /// Vitesse de poursuite (unités/seconde).
     #[serde(default = "default_move_speed")]

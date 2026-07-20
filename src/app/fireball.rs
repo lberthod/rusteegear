@@ -1081,17 +1081,22 @@ mod tests {
              (trouvés : {})",
             monsters.len()
         );
-        // Revenu à des cibles statiques : `ai_chaser` (poursuite active) a été
-        // retiré de la carte embarquée — la poursuite active reste perçue
-        // comme un bug par un joueur solo qui ne s'attend pas à des monstres
-        // mobiles (cf. docs/audits/app-network.md). Des cibles immobiles,
-        // abattues à distance, ne peuvent structurellement plus produire ce
-        // ressenti — la vie individualisée (§3.1) reste utile dès qu'un vrai
-        // danger mobile sera réintroduit.
+        // Historique : « cibles statiques, jamais d'ai_chaser » — la poursuite
+        // permanente de l'époque était perçue comme un bug (cf.
+        // docs/audits/app-network.md). Le chantier 4.1 (audit 2026-07-20)
+        // réintroduit la chasse mais ENCADRÉE : créatures scriptées qui
+        // patrouillent par défaut et ne chassent qu'à courte portée (9 m),
+        // plafonnées à 2 par cible — c'est le « vrai danger mobile » que la
+        // note d'origine appelait de ses vœux. Ce que ce test continue
+        // d'interdire : un chasseur permanent non scripté (corps dynamique
+        // sans patrouille), le comportement-bug d'origine.
         assert!(
-            monsters.iter().all(|o| o.ai_chaser.is_none()),
-            "les monstres de la carte multijoueur doivent rester des cibles \
-             statiques, pas des chasseurs mobiles (`ai_chaser`)"
+            monsters.iter().all(|o| o.ai_chaser.is_none()
+                || (o.physics == crate::runtime::physics::PhysicsKind::Kinematic
+                    && !o.script.trim().is_empty())),
+            "tout monstre chasseur de la carte multijoueur doit être une créature \
+             scriptée (patrouille par défaut, chasse encadrée) — jamais un \
+             chasseur permanent"
         );
     }
 

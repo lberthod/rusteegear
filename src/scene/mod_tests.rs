@@ -2098,6 +2098,15 @@ fn the_embedded_scene_creatures_match_the_demo() {
             "physique de « {} » {sync_hint}",
             d.name
         );
+        // Grammaire de chasse (chantier 4.1, audit 2026-07-20) : vitesse ET
+        // archétype doivent suivre la démo — sans cette comparaison, un
+        // recalibrage du casting resterait silencieusement absent de la
+        // scène réellement servie aux joueurs.
+        assert!(
+            e.ai_chaser == d.ai_chaser,
+            "ai_chaser de « {} » {sync_hint}",
+            d.name
+        );
     }
     // Imports : seuls ceux référencés par les créatures doivent correspondre
     // (même indice, même fichier — juste `bundle://` au lieu du chemin
