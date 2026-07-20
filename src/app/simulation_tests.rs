@@ -718,7 +718,13 @@ fn mmorpg_creature_never_gets_stuck_walking_into_a_wall() {
                  sous Blender — cf. Scene::mmorpg_demo)"
         );
     }
-    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+    // Preuve de PATROUILLE : depuis le chantier 4.1, les créatures portent un
+    // `ai_chaser` et le gabarit « Joueur » de la démo (à l'origine, < 9 m de
+    // la Créature 1) déclencherait la chasse dès le premier tick — masquer le
+    // gabarit vide `candidate_targets` et isole la trajectoire d'errance
+    // testée ici (la chasse a ses propres preuves, cf.
+    // `a_scripted_creature_with_ai_chaser_chases_in_range_and_patrols_out_of_range`).
+    app.hide_local_player_template();
 
     // Bornes réelles de l'arène (cf. `Scene::MMORPG_HALF`) moins une petite
     // marge : au-delà, la créature est effectivement pressée contre un mur.
@@ -978,6 +984,12 @@ fn mmorpg_creature_wander_crosses_the_west_hill_band_without_getting_stuck() {
 fn mmorpg_creatures_never_teleport_nor_snap_turn() {
     let mut app = AppState::new();
     app.scene = crate::scene::Scene::mmorpg_demo();
+    // Gabarit joueur laissé VISIBLE : depuis le chantier 4.1 les créatures
+    // proches (< 9 m) le CHASSENT — ce test couvre donc désormais la
+    // continuité des deux régimes, patrouille ET chasse (pas borné
+    // `speed*dt`, rotation `rotate_towards_smooth`), dans le monde physique
+    // d'origine (le corps du gabarit à l'origine fait partie des trajectoires
+    // historiques du test).
     app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
 
     let creatures: Vec<usize> = app

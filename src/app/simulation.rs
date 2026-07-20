@@ -1569,11 +1569,11 @@ impl AppState {
                 // contre le monde exactement comme la patrouille (glissement
                 // le long des murs, dépénétration bornée).
                 for (idx, target, speed) in scripted_chase {
-                    let base = self
-                        .sim_curr_poses
-                        .get(idx)
-                        .map(|p| p.0)
-                        .unwrap_or(self.scene.objects[idx].transform.position);
+                    let (base, prev_rot) =
+                        self.sim_curr_poses.get(idx).map(|p| (p.0, p.1)).unwrap_or((
+                            self.scene.objects[idx].transform.position,
+                            self.scene.objects[idx].transform.rotation,
+                        ));
                     let to = Vec3::new(target.x - base.x, 0.0, target.z - base.z);
                     let dist = to.length();
                     if dist < 1e-4 {
@@ -1586,8 +1586,13 @@ impl AppState {
                         // Rotation lissée vers la cible (convention yaw=0 ⇒
                         // avant = -Z, cf. `Physics::face_direction`) — jamais
                         // de claquement, cf. la preuve `mmorpg_creatures_
-                        // never_teleport_nor_snap_turn`.
-                        let cur_yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
+                        // never_teleport_nor_snap_turn`. Ancrée sur la pose du
+                        // pas PRÉCÉDENT (comme la position) : le script vient
+                        // d'écrire son cap de patrouille ce tick, lisser
+                        // depuis ce cap-là ferait « claquer » l'orientation
+                        // affichée d'une frame à l'autre (patrouille et chasse
+                        // se disputeraient le cap à chaque tick).
+                        let cur_yaw = prev_rot.to_euler(EulerRot::YXZ).0;
                         let target_yaw = (-to.x).atan2(-to.z);
                         obj.transform.rotation = Quat::from_rotation_y(rotate_towards_smooth(
                             cur_yaw, target_yaw, 6.0, dt,

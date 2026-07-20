@@ -949,3 +949,46 @@ fn mmorpg_terrain_has_real_relief_but_stays_flat_under_placed_content() {
         );
     }
 }
+
+/// Verrou du chantier 4.1 (audit 2026-07-20) : le casting de chasse est un
+/// COMPORTEMENT, jamais des PV. Chaque créature porte un `ai_chaser`
+/// (grammaire Traqueuse/Meute/Colosse/Furtive, GDD §5.4) mais son
+/// `Combat::hp` reste celui de la table (1 troupe / 3 chef) et le budget par
+/// vague reste exactement la dent de scie du GDD §5.5 — appliquer
+/// `Archetype::hp_multiplier` ici casserait ce contrat.
+#[test]
+fn mmorpg_creatures_carry_a_chase_casting_without_touching_hp() {
+    let scene = Scene::mmorpg_demo();
+    let mut per_wave: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let mut count = 0;
+    for o in scene
+        .objects
+        .iter()
+        .filter(|o| o.name.starts_with("Créature") || o.name == "Créature")
+    {
+        let Some(c) = o.combat.as_ref().filter(|c| c.attackable) else {
+            continue;
+        };
+        count += 1;
+        assert!(
+            o.ai_chaser.is_some(),
+            "« {} » doit porter la grammaire de chasse (ai_chaser)",
+            o.name
+        );
+        assert!(
+            c.hp == 1 || c.hp == 3,
+            "« {} » : hp={} — le casting ne doit JAMAIS moduler les PV \
+             (1 troupe / 3 chef, hp_multiplier non appliqué)",
+            o.name,
+            c.hp
+        );
+        *per_wave.entry(c.wave).or_default() += c.hp;
+    }
+    assert_eq!(count, 26, "les 26 créatures nommées doivent être castées");
+    let budget: Vec<(u32, u32)> = per_wave.into_iter().collect();
+    assert_eq!(
+        budget,
+        vec![(1, 5), (2, 8), (3, 11), (4, 16)],
+        "budget de PV par vague = contrat GDD §5.5, intouchable par le casting"
+    );
+}

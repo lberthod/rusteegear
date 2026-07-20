@@ -58,6 +58,17 @@ pub(super) struct DemoCreature {
     /// tombe d'un coup », sans elle l'arme lourde est objectivement
     /// inférieure).
     hp: u32,
+    /// Casting de chasse (GDD §5.4, chantier 4.1 audit 2026-07-20) :
+    /// la grammaire Traqueuse/Meute/Colosse/Furtive appliquée à la
+    /// scène servie via un `AiChaser` — comportement SEULEMENT, jamais
+    /// les PV (`Archetype::hp_multiplier` n'est PAS appliqué ici : le
+    /// budget de vagues ci-dessus est un contrat verrouillé par test).
+    archetype: Archetype,
+    /// Vitesse de base de la poursuite (m/s), multipliée par
+    /// `Archetype::speed_multiplier` une fois la chasse engagée —
+    /// calée pour rester sous les 4,5 m/s du joueur, sauf la pointe
+    /// Furtive (rattrapable : éveil à courte portée seulement).
+    chase_speed: f32,
 }
 pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
     DemoCreature {
@@ -83,6 +94,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 1,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 2",
@@ -96,6 +109,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 1,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 3",
@@ -109,6 +124,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 1,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 4",
@@ -122,6 +139,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 1,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 5",
@@ -135,6 +154,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 1,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     // Chauve-souris : morsure rapide mais faible — harcèle plus qu'elle
     // ne punit.
@@ -150,6 +171,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 2,
         hp: 1,
+        archetype: Archetype::Meute,
+        chase_speed: 3.0,
     },
     // Crabe : pincement rare mais lourd — l'inverse de la chauve-souris.
     DemoCreature {
@@ -167,6 +190,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 2,
         hp: 3,
+        archetype: Archetype::Colosse,
+        chase_speed: 3.4,
     },
     DemoCreature {
         name: "Créature 8",
@@ -180,6 +205,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 3,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 9",
@@ -193,6 +220,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 3,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 10",
@@ -206,6 +235,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 3,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     // 11-15 : la génération « qualité supérieure » — attaques à
     // distance toutes différentes (cf. `creature_attack::AttackStyle`)
@@ -222,6 +253,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_guard_script,
         wave: 3,
         hp: 3,
+        archetype: Archetype::Colosse,
+        chase_speed: 3.4,
     },
     DemoCreature {
         name: "Créature 12",
@@ -235,6 +268,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_kite_script,
         wave: 3,
         hp: 1,
+        archetype: Archetype::Meute,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 13",
@@ -248,6 +283,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_drift_script,
         wave: 3,
         hp: 1,
+        archetype: Archetype::Furtive,
+        chase_speed: 2.8,
     },
     DemoCreature {
         name: "Créature 14",
@@ -261,6 +298,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_artillery_script,
         wave: 4,
         hp: 3,
+        archetype: Archetype::Colosse,
+        chase_speed: 3.4,
     },
     DemoCreature {
         name: "Créature 15",
@@ -274,6 +313,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_zigzag_script,
         wave: 4,
         hp: 1,
+        archetype: Archetype::Meute,
+        chase_speed: 3.0,
     },
     // 16-20 : même palier de qualité que 11-15 — attaques et
     // comportements tout aussi variés, cf. `creature_attack.rs`.
@@ -295,6 +336,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_soar_script,
         wave: 4,
         hp: 3,
+        archetype: Archetype::Colosse,
+        chase_speed: 3.4,
     },
     DemoCreature {
         name: "Créature 17",
@@ -311,6 +354,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_lemniscate_script,
         wave: 4,
         hp: 1,
+        archetype: Archetype::Furtive,
+        chase_speed: 2.8,
     },
     DemoCreature {
         name: "Créature 18",
@@ -324,6 +369,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_burrow_script,
         wave: 4,
         hp: 3,
+        archetype: Archetype::Furtive,
+        chase_speed: 2.8,
     },
     DemoCreature {
         name: "Créature 19",
@@ -337,6 +384,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_hover_script,
         wave: 4,
         hp: 1,
+        archetype: Archetype::Meute,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 20",
@@ -350,6 +399,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_turret_script,
         wave: 3,
         hp: 3,
+        archetype: Archetype::Colosse,
+        chase_speed: 3.4,
     },
     DemoCreature {
         name: "Créature 21",
@@ -363,6 +414,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 2,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 22",
@@ -376,6 +429,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 2,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 23",
@@ -389,6 +444,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 2,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 24",
@@ -409,6 +466,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_wander_script,
         wave: 2,
         hp: 1,
+        archetype: Archetype::Traqueuse,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 25",
@@ -422,6 +481,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_zigzag_script,
         wave: 4,
         hp: 1,
+        archetype: Archetype::Meute,
+        chase_speed: 3.0,
     },
     DemoCreature {
         name: "Créature 26",
@@ -435,6 +496,8 @@ pub(super) const MMORPG_CREATURES: &[DemoCreature] = &[
         script: creature_lemniscate_script,
         wave: 4,
         hp: 3,
+        archetype: Archetype::Colosse,
+        chase_speed: 3.4,
     },
 ];
 
@@ -476,6 +539,17 @@ pub(super) fn add_named_creatures(
                     wave: spec.wave,
                     hp: spec.hp,
                     ..Default::default()
+                });
+                // Grammaire de chasse (GDD §5.4, chantier 4.1) : le casting
+                // par archétype, appliqué comme COMPORTEMENT seulement — les
+                // PV ci-dessus restent ceux de la table (`hp_multiplier`
+                // volontairement non appliqué, contrat de vagues verrouillé).
+                // Le corps reste Kinematic scripté : patrouille Lua par
+                // défaut, chasse à portée (cf. `app::simulation`, boucle
+                // chasseurs, et `Physics::build` — le scripté prime).
+                creature.ai_chaser = Some(crate::scene::AiChaser {
+                    speed: spec.chase_speed,
+                    archetype: spec.archetype,
                 });
                 let wander = (spec.script)(
                     half,

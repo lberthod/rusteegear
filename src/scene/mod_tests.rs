@@ -1504,9 +1504,21 @@ fn zombies_demo_has_four_waves_of_varied_active_chasers() {
 #[test]
 fn mmorpg_demo_is_a_bare_arena_with_no_monsters_and_mobile_controls_on() {
     let s = Scene::mmorpg_demo();
+    // Historique : « aucun monstre » (test de connectivité). Depuis le
+    // chantier 4.1 (audit 2026-07-20), les 26 créatures scriptées portent
+    // délibérément un `ai_chaser` (grammaire de chasse GDD §5.4) — ce que ce
+    // test continue d'interdire, c'est un monstre-chasseur *primitif* façon
+    // `zombies_demo` glissé dans la carte : tout porteur d'`ai_chaser` doit
+    // être une créature nommée, kinématique et scriptée (patrouille par
+    // défaut, cf. `mmorpg_creatures_carry_a_chase_casting_without_touching_hp`).
     assert!(
-        !s.objects.iter().any(|o| o.ai_chaser.is_some()),
-        "la démo MMORPG ne doit avoir aucun monstre (test de connectivité, pas de combat)"
+        s.objects
+            .iter()
+            .filter(|o| o.ai_chaser.is_some())
+            .all(|o| o.name.starts_with("Créature")
+                && o.physics == crate::runtime::physics::PhysicsKind::Kinematic
+                && !o.script.trim().is_empty()),
+        "seules les créatures nommées scriptées portent la grammaire de chasse"
     );
     assert!(
         s.mobile.joystick,

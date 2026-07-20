@@ -2846,3 +2846,69 @@ fn axis_basis_is_orthonormal() {
         assert!(u.dot(w).abs() < 1e-5);
     }
 }
+
+/// Preuve bout-en-bout du chantier 4.1 (audit 2026-07-20, jalon « preuve du
+/// fun ») : dans la scène de la démo MMORPG — celle qui alimente la scène
+/// servie — une créature de vague 1 POURSUIT un joueur réseau à portée et le
+/// BLESSE au contact (`MONSTER_CONTACT_DPS` via son `ai_chaser`), au lieu de
+/// patrouiller indifféremment comme avant.
+#[test]
+fn a_served_scene_creature_chases_a_network_player_in_range_and_hurts_on_contact() {
+    let mut app = AppState::new();
+    app.scene = crate::scene::Scene::mmorpg_demo();
+    app.playing = true;
+    app.hide_local_player_template();
+    let pid = 1;
+    let p = app.spawn_network_player(pid, PlayerClass::Assault).unwrap();
+    let ci = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.name == "Créature")
+        .expect("la démo MMORPG contient la « Créature » (vague 1, Traqueuse)");
+    // Joueur posé à ~5 m de la créature (< CHASER_DETECT_RANGE = 9 m), à
+    // l'écart du hameau pour une trajectoire dégagée.
+    let cpos = app.scene.objects[ci].transform.position;
+    app.scene.objects[p].transform.position = cpos + Vec3::new(0.0, 1.0, 5.0);
+    // Le gabarit masqué GARDE un corps physique (cf. `Physics::build`,
+    // `is_player` ne regarde pas la visibilité) : posé à l'origine, il ferait
+    // mur invisible pile entre la créature et le joueur réseau — on le sort
+    // de la carte avant de reconstruire la physique.
+    if let Some(tmpl) = app
+        .scene
+        .objects
+        .iter_mut()
+        .find(|o| !o.visible && o.controller.as_ref().is_some_and(|c| c.input))
+    {
+        tmpl.transform.position = Vec3::new(500.0, 1.0, 500.0);
+    }
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+    let planar = |a: Vec3, b: Vec3| {
+        let d = a - b;
+        (d.x * d.x + d.z * d.z).sqrt()
+    };
+    let d0 = planar(
+        app.scene.objects[ci].transform.position,
+        app.scene.objects[p].transform.position,
+    );
+    let hp0 = app.network_health.get(&pid).copied().unwrap_or(1.0);
+    for _ in 0..(60 * 8) {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    let d1 = planar(
+        app.scene.objects[ci].transform.position,
+        app.scene.objects[p].transform.position,
+    );
+    assert!(
+        d1 < d0 - 1.5,
+        "la créature de vague 1 doit fondre sur le joueur réseau à portée \
+         (distance {d0:.2} → {d1:.2})"
+    );
+    let hp1 = app.network_health.get(&pid).copied().unwrap_or(1.0);
+    assert!(
+        hp1 < hp0,
+        "au contact, la créature doit blesser le joueur (vie {hp0:.2} → {hp1:.2})"
+    );
+}

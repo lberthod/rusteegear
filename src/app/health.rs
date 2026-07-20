@@ -97,6 +97,22 @@ fn aabbs_overlap(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
     a.0.cmple(b.1).all() && b.0.cmple(a.1).all()
 }
 
+/// Marge (m) ajoutée au test de contact monstre↔joueur : une créature
+/// **scriptée** en chasse (chantier 4.1, audit 2026-07-20) est maintenue à
+/// distance de peau par le `KinematicCharacterController` et le collider
+/// capsule du joueur déborde légèrement son mesh — physiquement pressée
+/// contre le joueur, ses AABB *visuelles* gardaient ~0,15 m d'écart et le
+/// contact ne se déclenchait jamais. Les monstres dynamiques, eux, pénètrent
+/// légèrement : la marge avance leur contact d'autant, un adoucissement
+/// négligeable à l'échelle du DPS (0,16/s).
+const CONTACT_MARGIN: f32 = 0.2;
+
+/// `aabbs_overlap` avec la marge de contact ci-dessus sur la boîte `b`.
+fn aabbs_touch(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
+    let m = Vec3::splat(CONTACT_MARGIN);
+    aabbs_overlap(a, (b.0 - m, b.1 + m))
+}
+
 /// Hachage déterministe de `time` en [0, 1) — même idiome que
 /// `creature_attack::deterministic_roll`/le script Lua `creature_bite_script`
 /// (pas partagé : trois occurrences courtes, chacune dans son propre module,
@@ -148,7 +164,7 @@ impl AppState {
             }
             let touching: Vec<usize> = monster_aabbs
                 .iter()
-                .filter(|&&(_, aabb)| aabbs_overlap(aabb, player_aabb))
+                .filter(|&&(_, aabb)| aabbs_touch(aabb, player_aabb))
                 .map(|&(idx, _)| idx)
                 .collect();
             let touched = !touching.is_empty();
