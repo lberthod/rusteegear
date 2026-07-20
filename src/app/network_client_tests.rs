@@ -81,7 +81,11 @@ fn firebase_uid_is_applied_once_the_background_request_resolves() {
     assert!(!app.has_firebase_account());
 
     app.firebase_tx
-        .send(Ok(("uid-test-1234".to_string(), "token-test".to_string())))
+        .send(Ok((
+            "uid-test-1234".to_string(),
+            "token-test".to_string(),
+            Some(1900),
+        )))
         .expect("canal ouvert");
     app.poll_network();
 
@@ -1662,4 +1666,61 @@ fn the_client_reconnects_and_rejoins_after_a_lost_connection() {
         app.net_reconnect.is_none(),
         "le Welcome doit solder la reconnexion"
     );
+}
+
+/// Bannière « palier atteint » (GDD §8.2/§17) : le résumé de fin de manche
+/// avance l'XP locale et arme la bannière quand un palier nommé tombe —
+/// et seulement dans ce cas (pas de fausse fête).
+#[test]
+fn round_summary_arms_the_palier_banner_when_a_milestone_is_crossed() {
+    let mut app = AppState::new();
+    app.net_player_id = Some(7);
+    app.firebase_xp = Some(1900); // niveau 2, à 100 XP du palier niv. 3
+
+    let summary = vec![crate::net::protocol::RoundPlayerSummary {
+        player_id: 7,
+        name: "Moi".into(),
+        frags: 3,
+        assists: 1,
+        xp: 200,
+    }];
+    app.check_palier_atteint(&summary);
+
+    assert_eq!(app.palier_flash, 1.0, "franchir 2000 XP arme la bannière");
+    assert_eq!(app.palier_level, 3);
+    assert_eq!(app.firebase_xp, Some(2100), "l'XP locale avance du gain");
+
+    // Deuxième manche sans franchissement : XP avance, bannière intacte.
+    app.palier_flash = 0.0;
+    let summary2 = vec![crate::net::protocol::RoundPlayerSummary {
+        player_id: 7,
+        name: "Moi".into(),
+        frags: 0,
+        assists: 0,
+        xp: 50,
+    }];
+    app.check_palier_atteint(&summary2);
+    assert_eq!(
+        app.palier_flash, 0.0,
+        "pas de palier franchi = pas de bannière"
+    );
+    assert_eq!(app.firebase_xp, Some(2150));
+}
+
+/// Sans XP connue (anonyme, lecture Firebase échouée) : no-op strict.
+#[test]
+fn palier_banner_stays_silent_without_a_known_xp_total() {
+    let mut app = AppState::new();
+    app.net_player_id = Some(7);
+    app.firebase_xp = None;
+    let summary = vec![crate::net::protocol::RoundPlayerSummary {
+        player_id: 7,
+        name: "Moi".into(),
+        frags: 10,
+        assists: 0,
+        xp: 5000,
+    }];
+    app.check_palier_atteint(&summary);
+    assert_eq!(app.palier_flash, 0.0);
+    assert_eq!(app.firebase_xp, None);
 }

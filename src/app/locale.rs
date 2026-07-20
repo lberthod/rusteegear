@@ -109,6 +109,24 @@ pub fn ally_down(locale: Locale) -> &'static str {
     }
 }
 
+/// Bannière « palier atteint » (GDD §8.2 : paliers nommés, un déblocage
+/// d'*options* affiché au moment où il tombe). Niveau hors table (jamais
+/// atteint en pratique) : libellé générique plutôt qu'un panic.
+pub fn palier_reached(locale: Locale, level: u32) -> String {
+    match (locale, level) {
+        (Locale::Fr, 3) => "✨ Palier — Niv. 3 « La foudre répond » : Éclair sans ramassage".into(),
+        (Locale::Fr, 6) => "✨ Palier — Niv. 6 « Le poids des braises » : Boulet débloqué".into(),
+        (Locale::Fr, 10) => {
+            "✨ Palier — Niv. 10 « Double foyer » : 2ᵉ emplacement de classe".into()
+        }
+        (Locale::Fr, n) => format!("✨ Palier atteint — Niveau {n}"),
+        (Locale::En, 3) => "✨ Milestone — Lv. 3 “The lightning answers”: Bolt unlocked".into(),
+        (Locale::En, 6) => "✨ Milestone — Lv. 6 “The weight of embers”: Cannonball".into(),
+        (Locale::En, 10) => "✨ Milestone — Lv. 10 “Twin hearth”: 2nd class slot".into(),
+        (Locale::En, n) => format!("✨ Milestone reached — Level {n}"),
+    }
+}
+
 /// Titre de l'écran de fin de manche détaillé (Phase H, Sprint 1, GDD §9.2/
 /// §17.4) — `round_summary_banner`, distinct du `won`/`lost` minimal
 /// existant (celui-ci reste utilisé par les démos solo sans salon réseau).

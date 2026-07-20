@@ -17,8 +17,8 @@ use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
     damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
     item_inventory_panel, kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel,
-    pause_menu, restart_button, round_summary_banner, scene_has_ranged_weapon, touch_feedback,
-    wave_hud, wave_start_banner, weapon_hud, weapon_inventory_panel,
+    palier_banner, pause_menu, restart_button, round_summary_banner, scene_has_ranged_weapon,
+    touch_feedback, wave_hud, wave_start_banner, weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -848,6 +848,8 @@ impl Editor {
         damage_flash: f32,
         ally_down_flash: f32,
         ally_marker: Option<(glam::Mat4, glam::Vec3)>,
+        palier_flash: f32,
+        palier_level: u32,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -898,6 +900,9 @@ impl Editor {
             }
             if ally_down_flash > 0.0 {
                 ally_down_banner(ctx, area, ally_down_flash, locale, hud_scale, ally_marker);
+            }
+            if palier_flash > 0.0 {
+                palier_banner(ctx, area, palier_flash, palier_level, locale, hud_scale);
             }
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h, hud_scale);
@@ -1071,6 +1076,8 @@ impl Editor {
         damage_flash: f32,
         ally_down_flash: f32,
         ally_marker: Option<(glam::Mat4, glam::Vec3)>,
+        palier_flash: f32,
+        palier_level: u32,
         game_time: Option<f32>,
         score: u32,
         lost: bool,
@@ -1160,6 +1167,8 @@ impl Editor {
                 damage_flash,
                 ally_down_flash,
                 ally_marker,
+                palier_flash,
+                palier_level,
                 game_time,
                 score,
                 lost,
@@ -1368,6 +1377,8 @@ fn build_ui(
     damage_flash: f32,
     ally_down_flash: f32,
     ally_marker: Option<(glam::Mat4, glam::Vec3)>,
+    palier_flash: f32,
+    palier_level: u32,
     game_time: Option<f32>,
     score: u32,
     lost: bool,
@@ -2456,6 +2467,16 @@ fn build_ui(
             locale,
             hud_scale,
             ally_marker,
+        );
+    }
+    if *playing && palier_flash > 0.0 {
+        palier_banner(
+            root.ctx(),
+            play_rect,
+            palier_flash,
+            palier_level,
+            locale,
+            hud_scale,
         );
     }
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {

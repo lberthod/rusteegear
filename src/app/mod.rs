@@ -189,6 +189,11 @@ impl PlayerInput {
     }
 }
 
+/// Résultat d'une connexion Firebase en arrière-plan (`request_firebase_auth`) :
+/// `(uid, id_token, xp cumulée si lisible)` — l'XP alimente la bannière
+/// « palier atteint » (GDD §8.2), `None` si la lecture de progression échoue.
+type FirebaseAuthResult = Result<(String, String, Option<u32>), String>;
+
 pub struct AppState {
     pub scene: Scene,
     /// Projet ouvert (Sprint 3, manifeste `project.rusteegear.json`), posé par
@@ -390,6 +395,21 @@ pub struct AppState {
     /// Numéro de la vague annoncée par la dernière `GameEvent::WaveStart`
     /// reçue, affiché tant que `wave_banner_flash > 0`.
     pub wave_banner_wave: u32,
+    /// Intensité (1 = pic, décroît vers 0) de la bannière « palier atteint »
+    /// (GDD §8.2/§17 : un palier = un déblocage nommé, affiché au moment où
+    /// il tombe) — armée par `check_palier_atteint` à la réception du résumé
+    /// de fin de manche, même mécanisme que `wave_banner_flash`.
+    pub palier_flash: f32,
+    /// Niveau-palier annoncé par la bannière ci-dessus (3, 6 ou 10), affiché
+    /// tant que `palier_flash > 0`.
+    pub palier_level: u32,
+    /// XP cumulée du compte Firebase telle que connue du client : lue une
+    /// fois à la connexion (`request_firebase_auth`, via `get_progress`),
+    /// puis avancée localement à chaque résumé de manche — sert uniquement à
+    /// détecter le franchissement d'un palier, la vérité comptable reste le
+    /// serveur (`award_progress`). `None` = anonyme ou lecture échouée
+    /// (aucune bannière plutôt qu'une fausse).
+    pub firebase_xp: Option<u32>,
     /// Manche courante (1-based) d'un système de vagues (cf. `Combat::wave`) ; 0 = pas
     /// de système de manches dans la scène courante (les autres démos). Toutes les
     /// cibles de la manche courante vaincues ⇒ manche suivante révélée ; dernière
@@ -668,8 +688,8 @@ pub struct AppState {
     /// seules les fonctions qui les produisent (`net::firebase::sign_in`/
     /// `sign_up`) le sont.
     /// `Ok((uid, id_token))` ou message d'erreur.
-    firebase_tx: std::sync::mpsc::Sender<Result<(String, String), String>>,
-    firebase_rx: std::sync::mpsc::Receiver<Result<(String, String), String>>,
+    firebase_tx: std::sync::mpsc::Sender<FirebaseAuthResult>,
+    firebase_rx: std::sync::mpsc::Receiver<FirebaseAuthResult>,
     /// Jeton d'authentification Firebase (`?auth=...`), nécessaire pour poster
     /// un message de chat (écriture réservée aux comptes connectés). `None`
     /// tant qu'aucun `sign_in`/`sign_up` n'a réussi.
@@ -993,6 +1013,9 @@ impl AppState {
             round_contract_label: None,
             wave_banner_flash: 0.0,
             wave_banner_wave: 0,
+            palier_flash: 0.0,
+            palier_level: 0,
+            firebase_xp: None,
             wave: 0,
             objective: multiplayer::RoundObjective::default(),
             player_down_count: 0,

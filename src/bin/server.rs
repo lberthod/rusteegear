@@ -61,10 +61,10 @@ const MAX_DURATION: Duration = Duration::from_secs(1200);
 /// manuels avec plusieurs instances sur la même machine).
 const DEFAULT_ADDR: &str = "127.0.0.1:7777";
 
-/// XP nécessaire pour passer au niveau suivant (formule volontairement simple :
-/// un palier fixe, pas de courbe — à raffiner si besoin une fois testé en
-/// conditions réelles).
-const XP_PER_LEVEL: u32 = 1000;
+/// XP nécessaire pour passer au niveau suivant — désormais partagée avec le
+/// client (`net::protocol::XP_PER_LEVEL`), qui détecte le franchissement d'un
+/// palier nommé en fin de manche : les deux doivent compter pareil.
+use motor3derust::net::protocol::XP_PER_LEVEL;
 
 /// Durée sans le moindre message d'un joueur réseau (même un `Input` inchangé —
 /// cf. le protocole, un client légitime en envoie un par tick) au-delà de

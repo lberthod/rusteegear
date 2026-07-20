@@ -35,6 +35,29 @@ pub struct NetworkInput {
     pub heal: bool,
 }
 
+/// Niveaux-paliers nommés (GDD §8.2 : « un palier = un déblocage nommé,
+/// affiché dans le HUD au moment où il tombe ») — niv. 3 « La foudre
+/// répond », niv. 6 « Le poids des braises », niv. 10 « Double foyer ».
+pub const PALIER_LEVELS: [u32; 3] = [3, 6, 10];
+
+/// Palier nommé franchi en gagnant `gained` XP par-dessus `prev_xp`, ou `None`.
+/// Niveau plat `1 + xp / XP_PER_LEVEL` (GDD §8.2, même compte que le serveur).
+/// Si plusieurs paliers tombent d'un coup (gros rattrapage), renvoie le plus
+/// haut — une seule bannière, la plus prestigieuse.
+pub fn palier_atteint(prev_xp: u32, gained: u32) -> Option<u32> {
+    if gained == 0 {
+        return None;
+    }
+    let level = |xp: u32| 1 + xp / crate::net::protocol::XP_PER_LEVEL;
+    let before = level(prev_xp);
+    let after = level(prev_xp.saturating_add(gained));
+    PALIER_LEVELS
+        .iter()
+        .copied()
+        .filter(|&p| before < p && p <= after)
+        .max()
+}
+
 /// Classe d'un joueur réseau (`GAMEDESIGN_MMORPG.md` §3.2) : choisie au
 /// `Join` (`ClientMsg::Join::class`), les modificateurs qu'elle implique ne
 /// sont **jamais** appliqués côté client — `spawn_network_player` les
@@ -866,9 +889,28 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use glam::Vec3;
-
     use super::*;
+
+    /// Paliers nommés (GDD §8.2) : niveau plat `1 + xp/1000`, bannière au
+    /// franchissement seul, le plus haut palier si plusieurs tombent d'un coup.
+    #[test]
+    fn palier_atteint_detects_named_milestones_only_on_crossing() {
+        // 1900 XP (niv. 2) + 200 → 2100 (niv. 3) : palier 3.
+        assert_eq!(palier_atteint(1900, 200), Some(3));
+        // Déjà niveau 3 : rejouer sans franchir ne refête pas.
+        assert_eq!(palier_atteint(2100, 200), None);
+        // Gros rattrapage 0 → 6000 (niv. 1 → 7) : paliers 3 ET 6 franchis,
+        // on annonce le plus haut.
+        assert_eq!(palier_atteint(0, 6000), Some(6));
+        // Niv. 10 : 8900 + 200 → 9100 (niv. 10).
+        assert_eq!(palier_atteint(8900, 200), Some(10));
+        // Aucun gain : jamais de bannière.
+        assert_eq!(palier_atteint(1999, 0), None);
+        // Au-delà du dernier palier nommé : plus rien à annoncer.
+        assert_eq!(palier_atteint(9500, 5000), None);
+    }
+
+    use glam::Vec3;
 
     fn app_with_zombies_demo() -> AppState {
         let mut app = AppState::new();

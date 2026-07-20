@@ -830,12 +830,14 @@ impl AppState {
             // `editor::hud::round_summary_banner`, tant que la manche
             // suivante ne l'a pas remplacé (`restart_game`).
             ServerMsg::Event(crate::net::protocol::GameEvent::Win { summary, contract }) => {
+                self.check_palier_atteint(&summary);
                 self.round_summary = Some(summary);
                 self.round_summary_won = true;
                 self.round_contract_label =
                     contract.map(|c| crate::app::multiplayer::Contract::from_u8(c).label());
             }
             ServerMsg::Event(crate::net::protocol::GameEvent::Lose { summary }) => {
+                self.check_palier_atteint(&summary);
                 self.round_summary = Some(summary);
                 self.round_summary_won = false;
                 self.round_contract_label = None;
@@ -1063,8 +1065,39 @@ impl AppState {
             } else {
                 crate::net::firebase::sign_in(&config, &email, &password)
             };
-            let _ = tx.send(result.map(|session| (session.uid, session.id_token)));
+            // XP cumulée lue dans la foulée (même thread, déjà hors rendu) :
+            // sert à la bannière « palier atteint » (GDD §8.2) — une lecture
+            // échouée donne `None` (pas de bannière), jamais une erreur.
+            let _ = tx.send(result.map(|session| {
+                let xp = crate::net::firebase::get_progress(&config, &session.uid)
+                    .ok()
+                    .map(|p| p.xp);
+                (session.uid, session.id_token, xp)
+            }));
         });
+    }
+
+    /// Bannière « palier atteint » (GDD §8.2/§17) : à la réception du résumé
+    /// de fin de manche, avance l'XP cumulée locale de notre ligne et arme la
+    /// bannière si un palier nommé (niv. 3/6/10) vient de tomber. Sans XP
+    /// connue (anonyme, lecture Firebase échouée), no-op — jamais de fausse
+    /// bannière. La vérité comptable reste le serveur (`award_progress`) ;
+    /// ce compteur local ne sert qu'à l'annonce.
+    pub(crate) fn check_palier_atteint(
+        &mut self,
+        summary: &[crate::net::protocol::RoundPlayerSummary],
+    ) {
+        let (Some(prev), Some(me)) = (self.firebase_xp, self.net_player_id) else {
+            return;
+        };
+        let Some(line) = summary.iter().find(|l| l.player_id == me) else {
+            return;
+        };
+        if let Some(palier) = crate::app::multiplayer::palier_atteint(prev, line.xp) {
+            self.palier_flash = 1.0;
+            self.palier_level = palier;
+        }
+        self.firebase_xp = Some(prev.saturating_add(line.xp));
     }
 
     /// Applique le résultat d'une requête Firebase en attente, s'il y en a un
@@ -1073,11 +1106,12 @@ impl AppState {
         while let Ok(result) = self.firebase_rx.try_recv() {
             self.firebase_busy = false;
             match result {
-                Ok((uid, id_token)) => {
+                Ok((uid, id_token, xp)) => {
                     log::info!("Firebase : connecté (uid {uid})");
                     self.net_status = format!("Connecté à Firebase (uid {uid})");
                     self.firebase_uid = Some(uid);
                     self.firebase_id_token = Some(id_token);
+                    self.firebase_xp = xp;
                 }
                 Err(e) => {
                     log::warn!("Firebase : connexion échouée : {e}");

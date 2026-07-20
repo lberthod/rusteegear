@@ -754,6 +754,12 @@ impl AppState {
         if self.wave_banner_flash > 0.0 {
             self.wave_banner_flash = (self.wave_banner_flash - dt * 0.4).max(0.0);
         }
+        // Décroissance de la bannière « palier atteint » (~3,3 s : la plus
+        // longue des bannières — un déblocage de compte est rare et festif,
+        // GDD §8.2, il mérite d'être lu jusqu'au bout).
+        if self.palier_flash > 0.0 {
+            self.palier_flash = (self.palier_flash - dt * 0.3).max(0.0);
+        }
         // Décroissance de l'effet d'attaque (~0,33 s) : rétrécit l'ancre `is_attack_fx`
         // jusqu'à disparition, puis la remasque pour ne pas polluer le prochain coup.
         if self.attack_flash > 0.0 {

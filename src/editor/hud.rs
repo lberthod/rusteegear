@@ -946,6 +946,34 @@ pub(super) fn ally_down_banner(
     }
 }
 
+/// Bannière « palier atteint » (GDD §8.2/§17) : annonce le déblocage nommé
+/// (niv. 3/6/10) au moment où il tombe, ton doré festif — placée sous la
+/// position de la bannière de vague/allié (`top + 84`) pour ne jamais les
+/// recouvrir ni masquer le réticule (GDD §16.3).
+pub(super) fn palier_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    intensity: f32,
+    level: u32,
+    locale: crate::app::locale::Locale,
+    scale: f32,
+) {
+    use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_palier"),
+    ));
+    let alpha = (235.0 * intensity.clamp(0.0, 1.0)) as u8;
+    painter.text(
+        egui::pos2(area.center().x, area.top() + 84.0 * scale),
+        Align2::CENTER_CENTER,
+        crate::app::locale::palier_reached(locale, level),
+        FontId::proportional(20.0 * scale),
+        Color32::from_rgba_unmultiplied(240, 200, 90, alpha),
+    );
+}
+
 /// Point sur le bord de `area` (marge de 28 px) dans la direction de
 /// `clip` (position homogène caméra, `Mat4::project_point`-like avant
 /// division par `w`), ou `None` si `clip` tombe déjà à l'écran — plafonné à

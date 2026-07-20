@@ -74,6 +74,13 @@ pub const MAX_FIREBASE_UID_LEN: usize = 128;
 /// borne large mais finie, loin de tout usage légitime.
 pub const MAX_FIREBASE_TOKEN_LEN: usize = 4096;
 
+/// XP par niveau (GDD §8.2 : niveau plat et lisible, `1 + xp / XP_PER_LEVEL`).
+/// Partagée client/serveur : le serveur calcule le niveau persisté
+/// (`bin/server.rs::award_progress`), le client détecte le franchissement
+/// d'un palier nommé à la fin de manche (GDD §17 « palier atteint », affiché
+/// au moment où il tombe) — les deux doivent compter pareil.
+pub const XP_PER_LEVEL: u32 = 1000;
+
 /// Valide les champs de `ClientMsg::Join` avant tout traitement côté serveur
 /// (Sprint 105a-2) : longueur bornée pour les trois champs, et charset
 /// restreint (alphanumérique + `-`/`_`) pour `lobby`/`firebase_uid` — tous
