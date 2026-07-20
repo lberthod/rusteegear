@@ -1218,6 +1218,37 @@ impl AppState {
                 .map(|o| o.transform.position)
                 .collect()
         };
+        // Créatures scriptées inéligibles à la chasse CE tick (chantier 4.1,
+        // audit 2026-07-20) — calculé AVANT l'emprunt `&mut self.physics` (les
+        // prédicats empruntent `self` entier) :
+        // - visée gelée (`creature_is_aim_frozen`) : le gel tourne avant ce
+        //   bloc et serait annulé par un pas de chasse ;
+        // - créature dont la simulation appartient au serveur (client en
+        //   ligne) : des pas de chasse locaux se battraient avec les
+        //   snapshots — même garde que la boucle de scripts ; le fallback
+        //   2,5 s réactive la chasse locale si le serveur se tait.
+        let chase_blocked: Vec<usize> = {
+            let online = self.is_online_client();
+            let now = Instant::now();
+            self.scene
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(idx, o)| {
+                    o.ai_chaser.is_some()
+                        && (self.creature_is_aim_frozen(*idx)
+                            || (online
+                                && o.controller.is_none()
+                                && o.combat.as_ref().is_some_and(|c| c.attackable)
+                                && creature_is_server_synced(
+                                    self.net_creature_last_snapshot.get(idx).copied(),
+                                    now,
+                                    CREATURE_SNAPSHOT_TIMEOUT,
+                                )))
+                })
+                .map(|(idx, _)| idx)
+                .collect()
+        };
         if let Some(phys) = &mut self.physics {
             // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
             // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
@@ -1397,6 +1428,13 @@ impl AppState {
                     if !obj.visible {
                         continue;
                     }
+                    // Chantier 4.1 : créature scriptée temporairement hors
+                    // chasse (visée gelée, simulation possédée par le
+                    // serveur) — elle ne consomme pas non plus de place dans
+                    // le plafond de chasseurs actifs.
+                    if chase_blocked.contains(&idx) {
+                        continue;
+                    }
                     let (target_i, dist_sq) = candidate_targets
                         .iter()
                         .enumerate()
@@ -1417,10 +1455,21 @@ impl AppState {
                     // laissant le rival immobile une fois repoussé trop loin (régression
                     // détectée par `brawl_demo_rival_survives_two_hits_then_falls_on_
                     // the_third`, qui ne teste rien de spécifique au réseau).
-                    if !self.network_players.is_empty()
+                    // Créature scriptée (chantier 4.1) : hors de portée, elle
+                    // ne freine pas (`control` serait de toute façon un no-op
+                    // sur un corps scripté) — elle PATROUILLE, la position
+                    // écrite par son script Lua ce tick reste en place. Et sa
+                    // portée s'applique en toute circonstance (solo compris) :
+                    // la patrouille est le comportement par défaut de la carte
+                    // servie, contrairement aux chasseurs dynamiques dont le
+                    // ring-out de `brawl_demo` exige un retour permanent.
+                    let scripted = phys.is_scripted_body(idx);
+                    if (scripted || !self.network_players.is_empty())
                         && dist_sq > CHASER_DETECT_RANGE * CHASER_DETECT_RANGE
                     {
-                        phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                        if !scripted {
+                            phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                        }
                         continue;
                     }
                     // Éveil de l'archétype `Furtive` (GDD §5.4) : portée réduite,
@@ -1430,7 +1479,9 @@ impl AppState {
                     if chaser.archetype == crate::scene::Archetype::Furtive
                         && dist_sq > FURTIVE_DETECT_RANGE * FURTIVE_DETECT_RANGE
                     {
-                        phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                        if !scripted {
+                            phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                        }
                         continue;
                     }
                     // Transition endormie → active (Phase O Sprint 1) : ce tick est le
@@ -1464,12 +1515,24 @@ impl AppState {
                 // menaçants, juste pas en train de foncer) — un chasseur relégué reprend
                 // la poursuite dès qu'un des premiers meurt ou s'éloigne, sans script ni
                 // état à mémoriser d'une frame à l'autre.
+                // Pas de chasse des créatures **scriptées** (chantier 4.1),
+                // collectés ici (emprunt immuable de la scène pendant la
+                // boucle) puis appliqués juste après — même idiome que
+                // `player_facing`.
+                let mut scripted_chase: Vec<(usize, Vec3, f32)> = Vec::new();
                 for (target_i, mut group) in by_target {
                     group.sort_by(|a, b| a.1.total_cmp(&b.1));
                     let target = candidate_targets[target_i];
                     for (rank, &(idx, _)) in group.iter().enumerate() {
+                        let scripted = phys.is_scripted_body(idx);
                         if rank >= MAX_ACTIVE_CHASERS_PER_TARGET {
-                            phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                            // Un scripté relégué au-delà du plafond PATROUILLE
+                            // (position du script laissée en place) au lieu de
+                            // freiner — plus vivant, cohérent avec « toujours
+                            // menaçants, juste pas en train de foncer ».
+                            if !scripted {
+                                phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                            }
                             continue;
                         }
                         let obj_pos = self.scene.objects[idx].transform.position;
@@ -1480,6 +1543,10 @@ impl AppState {
                         // Multiplicateur d'archétype (GDD §5.4) : Meute/Furtive accélèrent
                         // la poursuite, Colosse la ralentit — cf. `Archetype::speed_multiplier`.
                         let speed = ai.speed * ai.archetype.speed_multiplier();
+                        if scripted {
+                            scripted_chase.push((idx, target, speed));
+                            continue;
+                        }
                         let to_target = target - obj_pos;
                         let dir = Vec3::new(to_target.x, 0.0, to_target.z);
                         let (vx, vz) = if dir.length_squared() > 1e-6 {
@@ -1489,6 +1556,45 @@ impl AppState {
                             (0.0, 0.0)
                         };
                         phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+                    }
+                }
+                // Chasse scriptée : écrase la cible de patrouille que le
+                // script Lua a écrite ce tick, ancrée sur la position
+                // **réellement atteinte** au pas précédent (`sim_curr_poses`,
+                // remplie en fin de `sim_step`) — additionner un pas de chasse
+                // à la position déjà déplacée par le script ferait avancer la
+                // créature à vitesse patrouille + chasse. La hauteur reste
+                // celle écrite par le script (hover/drift préservés) ;
+                // `resolve_scripted_moves` résout ensuite ce déplacement
+                // contre le monde exactement comme la patrouille (glissement
+                // le long des murs, dépénétration bornée).
+                for (idx, target, speed) in scripted_chase {
+                    let base = self
+                        .sim_curr_poses
+                        .get(idx)
+                        .map(|p| p.0)
+                        .unwrap_or(self.scene.objects[idx].transform.position);
+                    let to = Vec3::new(target.x - base.x, 0.0, target.z - base.z);
+                    let dist = to.length();
+                    if dist < 1e-4 {
+                        continue;
+                    }
+                    let step = to / dist * (speed * dt).min(dist);
+                    if let Some(obj) = self.scene.objects.get_mut(idx) {
+                        let y = obj.transform.position.y;
+                        obj.transform.position = Vec3::new(base.x + step.x, y, base.z + step.z);
+                        // Rotation lissée vers la cible (convention yaw=0 ⇒
+                        // avant = -Z, cf. `Physics::face_direction`) — jamais
+                        // de claquement, cf. la preuve `mmorpg_creatures_
+                        // never_teleport_nor_snap_turn`.
+                        let cur_yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
+                        let target_yaw = (-to.x).atan2(-to.z);
+                        obj.transform.rotation = Quat::from_rotation_y(rotate_towards_smooth(
+                            cur_yaw, target_yaw, 6.0, dt,
+                        ));
+                        if let Some(anim) = obj.animation.as_mut() {
+                            anim.set_clip("Walk");
+                        }
                     }
                 }
             }

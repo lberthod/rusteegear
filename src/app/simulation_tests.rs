@@ -1773,3 +1773,86 @@ fn player_clip_switches_between_idle_and_walk_with_movement() {
         "à l'arrêt, le héros doit revenir à Idle"
     );
 }
+
+/// Chantier 4.1 (audit 2026-07-20) : une créature kinématique **scriptée** qui
+/// porte un `ai_chaser` chasse à portée (la réécriture de position prime sur
+/// la patrouille Lua) et PATROUILLE hors de portée (la position écrite par le
+/// script reste en place — contrairement aux chasseurs dynamiques, sa portée
+/// s'applique aussi en solo).
+#[test]
+fn a_scripted_creature_with_ai_chaser_chases_in_range_and_patrols_out_of_range() {
+    fn build_app(creature_pos: Vec3) -> (AppState, usize) {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        // Sol : les corps (joueur dynamique, créature scriptée) ne tombent pas.
+        let mut ground = SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        };
+        ground.transform.position = Vec3::new(0.0, -0.5, 0.0);
+        ground.transform.scale = Vec3::new(60.0, 1.0, 60.0);
+        app.scene.objects.push(ground);
+        let mut joueur = SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.transform.position = Vec3::new(0.0, 1.0, 0.0);
+        app.scene.objects.push(joueur);
+        let mut creature = SceneObject {
+            name: "Créature scriptée".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            physics: crate::runtime::physics::PhysicsKind::Kinematic,
+            // Patrouille rectiligne +X : signature claire, orthogonale à la
+            // direction de chasse (le joueur est plein -Z depuis la créature).
+            script: "obj.x = obj.x + dt * 2.0".into(),
+            ai_chaser: Some(crate::scene::AiChaser::default()),
+            ..Default::default()
+        };
+        creature.transform.position = creature_pos;
+        app.scene.objects.push(creature);
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        app.playing = true;
+        (app, 2)
+    }
+
+    // À 6 m (< CHASER_DETECT_RANGE = 9 m) : la chasse prime sur la patrouille.
+    let (mut app, ci) = build_app(Vec3::new(0.0, 0.0, -6.0));
+    let planar = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
+    let d0 = planar(app.scene.objects[ci].transform.position);
+    for _ in 0..120 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    let p = app.scene.objects[ci].transform.position;
+    let d1 = planar(p);
+    assert!(
+        d1 < d0 - 1.0,
+        "à portée, la créature scriptée doit se rapprocher du joueur \
+         (distance {d0:.2} → {d1:.2}, pos {p:?})"
+    );
+
+    // À 20 m (> 9 m) : patrouille pure — le script (+X) reste maître.
+    let (mut app2, ci2) = build_app(Vec3::new(0.0, 0.0, -20.0));
+    let x0 = app2.scene.objects[ci2].transform.position.x;
+    for _ in 0..120 {
+        app2.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app2.advance_play();
+    }
+    let p2 = app2.scene.objects[ci2].transform.position;
+    assert!(
+        p2.x > x0 + 2.0,
+        "hors de portée, la patrouille scriptée doit continuer (+X), pos {p2:?}"
+    );
+    assert!(
+        (p2.z - (-20.0)).abs() < 0.5,
+        "hors de portée, aucune dérive de chasse vers le joueur (z {})",
+        p2.z
+    );
+}

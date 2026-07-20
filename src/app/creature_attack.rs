@@ -397,6 +397,20 @@ impl AppState {
     /// libérait — un « gros saut » observé en jeu (cf. la preuve
     /// `mmorpg_creatures_never_teleport_nor_snap_turn`). Geler veut dire « ne
     /// marche pas pendant la visée », pas « élastique vers le point de capture ».
+    /// Vrai si la créature d'indice `idx` est actuellement **figée pour
+    /// viser** (`stopped_until` actif). La boucle de chasse scriptée
+    /// (chantier 4.1, audit 2026-07-20) ne doit pas lui écrire de pas pendant
+    /// ce gel : `update_creature_ranged_attacks` tourne AVANT le bloc physique
+    /// et son ancrage serait sinon annulé chaque tick.
+    pub(super) fn creature_is_aim_frozen(&self, idx: usize) -> bool {
+        let Some(obj) = self.scene.objects.get(idx) else {
+            return false;
+        };
+        RANGED_CREATURE_ATTACKS.iter().enumerate().any(|(ci, cfg)| {
+            cfg.creature == obj.name && self.creature_ranged[ci].stopped_until.is_some()
+        })
+    }
+
     pub(super) fn refresh_frozen_anchors(&mut self) {
         for (ci, cfg) in RANGED_CREATURE_ATTACKS.iter().enumerate() {
             let state = &mut self.creature_ranged[ci];
