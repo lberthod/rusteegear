@@ -2621,3 +2621,32 @@ fn the_embedded_scene_has_a_convoy_for_the_escorte_mode() {
              lancer `cargo test sync_embedded_scene_convoy_from_the_demo -- --ignored --nocapture`"
     );
 }
+
+/// Garde-fou de l'avatar (audit 2026-07-20, Vague 4) : la scène embarquée a
+/// déjà perdu **cinq fois** le héros skinné du joueur au profit d'une sphère
+/// placeholder (export/fusion éditeur, cf. `d9d50f3` puis régression
+/// `823a074`). Le « Joueur » servi doit rester un mesh importé `fairy_hero`
+/// avec un état d'animation — sans quoi silhouettes de classe (GDD §10.3) et
+/// clips Idle/Walk redeviennent silencieusement lettre morte.
+#[test]
+fn the_embedded_scene_player_is_the_skinned_fairy_hero() {
+    let scene = Scene::embedded_player();
+    let joueur = scene
+        .objects
+        .iter()
+        .find(|o| o.name == "Joueur")
+        .expect("la scène embarquée doit contenir « Joueur »");
+    let MeshKind::Imported(i) = joueur.mesh else {
+        panic!("le Joueur embarqué doit être un mesh importé (fairy_hero), pas une primitive");
+    };
+    let path = &scene.imported[i as usize].path;
+    assert!(
+        path.contains("fairy_hero"),
+        "le mesh du Joueur doit être fairy_hero, import actuel : {path}"
+    );
+    assert!(
+        joueur.animation.is_some(),
+        "le Joueur skinné doit avoir un AnimationState (clips Idle/Walk pilotés \
+         par la simulation)"
+    );
+}

@@ -1256,6 +1256,13 @@ impl AppState {
             // parfaitement symétrique autour de l'axe Y, donc une rotation de lacet
             // ne change jamais sa géométrie de collision.
             let mut player_facing: Vec<(usize, f32)> = Vec::new();
+            // Clip du héros skinné (Idle/Walk), élu d'après l'intention de
+            // déplacement de CE tick — joueur local comme joueurs réseau :
+            // côté serveur, le clip choisi part tel quel dans
+            // `EntityDelta.anim_clip` et anime le fantôme chez les autres.
+            // Appliqué après la boucle, comme `player_facing` (emprunt
+            // immuable ici) ; sans `AnimationState` (mesh non skinné), no-op.
+            let mut player_anim: Vec<(usize, bool)> = Vec::new();
             for (idx, obj) in self.scene.objects.iter().enumerate() {
                 let Some(ctrl) = &obj.controller else {
                     continue;
@@ -1301,6 +1308,9 @@ impl AppState {
                     || (space && ctrl.input);
                 let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
                 any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
+                if ctrl.input {
+                    player_anim.push((idx, vx * vx + vz * vz > 1e-4));
+                }
                 // Oriente le personnage — seulement pour le joueur *local* : les autres
                 // joueurs réseau reçoivent déjà leur orientation du serveur (cf.
                 // `network_client::apply_local_network_position`), l'écraser ici avec
@@ -1499,6 +1509,16 @@ impl AppState {
             for (idx, yaw) in player_facing {
                 if let Some(obj) = self.scene.objects.get_mut(idx) {
                     obj.transform.rotation = Quat::from_rotation_y(yaw);
+                }
+            }
+            for (idx, moving) in player_anim {
+                if let Some(anim) = self
+                    .scene
+                    .objects
+                    .get_mut(idx)
+                    .and_then(|o| o.animation.as_mut())
+                {
+                    anim.set_clip(if moving { "Walk" } else { "Idle" });
                 }
             }
             if any_jump {

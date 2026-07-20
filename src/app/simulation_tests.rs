@@ -1724,3 +1724,52 @@ fn camera_collision_ignores_creatures_on_their_own_layer() {
         "une créature sur sa couche dédiée ne doit pas être un obstacle caméra"
     );
 }
+
+/// Le héros skinné bascule tout seul entre `Idle` et `Walk` selon l'intention
+/// de déplacement du tick (Vague 4 de l'audit 2026-07-20 : l'avatar
+/// `fairy_hero` restauré dans la scène servie a des clips, mais rien ne les
+/// pilotait — il restait figé en Idle même en pleine course).
+#[test]
+fn player_clip_switches_between_idle_and_walk_with_movement() {
+    let mut app = AppState::new();
+    app.load_controller_demo();
+    app.playing = true;
+    let pi = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+        .expect("la démo contrôleur a un joueur pilotable");
+    app.scene.objects[pi].animation = Some(crate::scene::AnimationState {
+        clip: "Idle".into(),
+        ..Default::default()
+    });
+
+    app.input_state.key_move = (0.0, 1.0);
+    for _ in 0..10 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    assert_eq!(
+        app.scene.objects[pi]
+            .animation
+            .as_ref()
+            .map(|a| a.clip.as_str()),
+        Some("Walk"),
+        "en mouvement, le héros doit jouer Walk"
+    );
+
+    app.input_state.key_move = (0.0, 0.0);
+    for _ in 0..10 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    assert_eq!(
+        app.scene.objects[pi]
+            .animation
+            .as_ref()
+            .map(|a| a.clip.as_str()),
+        Some("Idle"),
+        "à l'arrêt, le héros doit revenir à Idle"
+    );
+}

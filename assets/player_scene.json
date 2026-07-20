@@ -1634,6 +1634,11 @@
       "name": "",
       "notifies": {},
       "path": "bundle://m320_creature72.glb"
+    },
+    {
+      "name": "fairy_hero",
+      "notifies": {},
+      "path": "bundle://m321_fairy_hero.glb"
     }
   ],
   "light": {
@@ -48497,7 +48502,14 @@
     },
     {
       "ai_chaser": null,
-      "animation": null,
+      "animation": {
+        "clip": "Idle",
+        "time": 0.0,
+        "speed": 1.0,
+        "prev_clip": "",
+        "prev_time": 0.0,
+        "blend": 1.0
+      },
       "audio": null,
       "bite": null,
       "ccd": false,
@@ -48533,7 +48545,9 @@
       "emissive": 0.0,
       "group": "",
       "item_pickup": null,
-      "mesh": "Sphere",
+      "mesh": {
+        "Imported": 321
+      },
       "metallic": 0.0,
       "name": "Joueur",
       "physics": "None",
@@ -48548,7 +48562,7 @@
       "transform": {
         "position": [
           0.0,
-          1.0,
+          0.0,
           0.0
         ],
         "rotation": [
