@@ -1602,8 +1602,31 @@ impl AppState {
             // pilotage joystick/IA ci-dessus, pour qu'un coup encaissé cette frame ne soit
             // pas immédiatement écrasé par la vitesse que le joystick ou la poursuite
             // viennent de recalculer.
+            let scene = &mut self.scene;
+            let prev_poses = &self.sim_curr_poses;
             self.stagger.retain_mut(|(idx, vel, remaining)| {
-                phys.control(*idx, vel.x, vel.z, false, 0.0, 0.0, dt);
+                if phys.is_scripted_body(*idx) {
+                    // Recul d'un corps scripté (chantier 4.1) : `control`
+                    // ignore la liste `scripted` — le knockback était un no-op
+                    // physique sur ces créatures. On écrase la cible (chasse
+                    // ou patrouille) écrite plus haut, ancrée sur la position
+                    // réelle du pas précédent (même principe que la chasse) ;
+                    // `resolve_scripted_moves` fait glisser le recul le long
+                    // des murs au lieu de traverser.
+                    if let Some(obj) = scene.objects.get_mut(*idx) {
+                        let base = prev_poses
+                            .get(*idx)
+                            .map(|p| p.0)
+                            .unwrap_or(obj.transform.position);
+                        obj.transform.position = Vec3::new(
+                            base.x + vel.x * dt,
+                            obj.transform.position.y,
+                            base.z + vel.z * dt,
+                        );
+                    }
+                } else {
+                    phys.control(*idx, vel.x, vel.z, false, 0.0, 0.0, dt);
+                }
                 *remaining -= dt;
                 *remaining > 0.0
             });

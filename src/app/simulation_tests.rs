@@ -1856,3 +1856,72 @@ fn a_scripted_creature_with_ai_chaser_chases_in_range_and_patrols_out_of_range()
         p2.z
     );
 }
+
+/// Chantier 4.1 : le knockback fonctionne aussi sur une créature **scriptée**
+/// (le recul écrase la cible de chasse/patrouille du tick) — avant, `control`
+/// ignorait la liste `scripted` et frapper une telle créature ne la faisait
+/// jamais reculer.
+#[test]
+fn a_scripted_creature_knockback_pushes_it_back_despite_the_chase() {
+    let mut app = AppState::new();
+    app.scene.objects.clear();
+    let mut ground = SceneObject {
+        name: "Sol".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        physics: crate::runtime::physics::PhysicsKind::Static,
+        ..Default::default()
+    };
+    ground.transform.position = Vec3::new(0.0, -0.5, 0.0);
+    ground.transform.scale = Vec3::new(60.0, 1.0, 60.0);
+    app.scene.objects.push(ground);
+    let mut joueur = SceneObject {
+        name: "Joueur".into(),
+        mesh: crate::scene::MeshKind::Capsule,
+        controller: Some(crate::scene::Controller {
+            input: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    joueur.transform.position = Vec3::new(0.0, 1.0, 0.0);
+    app.scene.objects.push(joueur);
+    let mut creature = SceneObject {
+        name: "Créature scriptée".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        physics: crate::runtime::physics::PhysicsKind::Kinematic,
+        script: "obj.x = obj.x + dt".into(),
+        ai_chaser: Some(crate::scene::AiChaser::default()),
+        ..Default::default()
+    };
+    // À 4 m : chasse active (elle tire la créature vers +Z / le joueur).
+    creature.transform.position = Vec3::new(0.0, 0.0, -4.0);
+    app.scene.objects.push(creature);
+    let ci = 2;
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+    app.playing = true;
+
+    // Coup encaissé : recul de 8 m/s vers -Z (loin du joueur) pendant 0,25 s.
+    app.stagger.push((ci, Vec3::new(0.0, 0.0, -8.0), 0.25));
+    let z0 = app.scene.objects[ci].transform.position.z;
+    for _ in 0..12 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    let z1 = app.scene.objects[ci].transform.position.z;
+    assert!(
+        z1 < z0 - 0.5,
+        "le recul doit primer sur la chasse et pousser la créature vers -Z \
+         ({z0:.2} → {z1:.2})"
+    );
+
+    // Le recul épuisé, la chasse reprend : la créature revient vers le joueur.
+    for _ in 0..90 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    let z2 = app.scene.objects[ci].transform.position.z;
+    assert!(
+        z2 > z1 + 0.5,
+        "après le recul, la chasse doit reprendre vers le joueur ({z1:.2} → {z2:.2})"
+    );
+}
