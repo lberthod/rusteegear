@@ -32,7 +32,7 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 | # | Action | Ferme | Statut |
 |---|---|---|---|
 | 3.1 | Le `Join` transporte un **idToken** vérifié serveur (`accounts:lookup`, thread + canal, jamais de HTTP dans le tick) ; uid brut ignoré dès que le serveur a une session Firebase ; même trame, pas de bump de protocole (`3aba61e`) | **R1** | ✅ ⚠️ Un nouveau client contre l'ANCIEN VPS = Join rejeté (charset) → **redéployer le VPS avant de distribuer de nouveaux clients** |
-| 3.2 | `scripts/deploy_vps.sh` versionné : push → pull+build VPS → restart systemd → smoke wss (chemin réel) + route claire optionnelle ; refuse arbre sale/branche ≠ main | **R2** (réduit) | ✅ Script prêt — **premier run à faire** (redémarre la prod). Vrai artefact CI + rollback = plus tard |
+| 3.2 | `scripts/deploy_vps.sh` versionné : push → pull+build VPS → restart systemd → smoke wss (chemin réel) | **R2** (réduit) | ✅ **Premier run réussi le 20/07** : `f70df90` (protocole v7) servi, smoke `wss://ws.loicberthod.ch` vert. Vrai artefact CI + rollback = plus tard |
 | 3.3 | `MAX_TOTAL_CONNECTIONS = 256` (server_loop, testé à plafond bas) + `MAX_ROOMS = 16` avec `JoinRejected` explicite (`d894e07`) | **R3** | ✅ net_tests 69/69 |
 | 3.4 | Fermer le port en clair du VPS si non nécessaire (constat R4) | surface | ⏳ Côté VPS/Caddy (SSH), pas dans le dépôt — à faire lors du prochain déploiement |
 
@@ -41,7 +41,7 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 | # | Action | Statut |
 |---|---|---|
 | 4.1 | Réunifier « les deux jeux » | ✅ **Livré en 6 commits** (`d03581b`→ docs, 2026-07-20, plan d'architecte vérifié ligne à ligne) : grammaire Traqueuse/Meute/Colosse/Furtive sur les 26 créatures servies, patrouille par défaut + chasse ≤ 9 m plafonnée, dégâts de contact, knockback scripté réparé, contrat PV 5/8/11/16 intact (test exact), scène resynchronisée + parité `ai_chaser` en CI, entrée roadmap « preuve du fun » créée. Reste : validation manuelle du ressenti (vitesses dégradables dans la table) |
-| 4.2 | Avatar `fairy_hero` | ✅ Restauré (`0506c90`) : mesh skinné + clips Idle/Walk pilotés + garde-fou CI. Reste ⬜ : 3 silhouettes de classe (bump protocole v7, à grouper avec le prochain déploiement couplé) |
+| 4.2 | Avatar `fairy_hero` + silhouettes | ✅ Avatar restauré (`0506c90`) ; **silhouettes de classe livrées** (`f70df90`, `PROTOCOL_VERSION` 7 : `EntityDelta::class`, teinte+gabarit idempotents côté client, hitbox serveur inchangée) et **VPS redéployé en v7 dans la foulée** (smoke wss vert). ⚠️ Les builds alpha.1-3 (v6) sont désormais refusés proprement (« mettez à jour ») : tagger `v0.1.0-alpha.4` pour redistribuer avant tout test externe |
 | 4.3 | Écran de fin de manche détaillé | ✅ Déjà livré avant l'audit (Phase H Sprint 1, `PROTOCOL_VERSION` 6) — constat d'audit périmé |
 | 4.4 | Surfaces contextuelles | ✅ Bannière de vague (déjà livrée), marqueur allié hors-écran (déjà livré — constat périmé, `ally_down_banner`/`offscreen_edge_position`), bannière « palier atteint » (livrée `9e54a73`) |
 
