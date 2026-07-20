@@ -403,6 +403,12 @@ pub struct AppState {
     /// Niveau-palier annoncé par la bannière ci-dessus (3, 6 ou 10), affiché
     /// tant que `palier_flash > 0`.
     pub palier_level: u32,
+    /// Base visuelle (échelle, couleur) des objets avant application d'une
+    /// silhouette de classe (v7, GDD §10.3, `apply_class_silhouette`) —
+    /// mémorisée à la première application par indice d'objet, pour que
+    /// réappliquer une silhouette (reconnexion, slot de fantôme réutilisé)
+    /// reparte toujours du gabarit neutre au lieu de composer les facteurs.
+    silhouette_base: std::collections::HashMap<usize, (Vec3, [f32; 3])>,
     /// XP cumulée du compte Firebase telle que connue du client : lue une
     /// fois à la connexion (`request_firebase_auth`, via `get_progress`),
     /// puis avancée localement à chaque résumé de manche — sert uniquement à
@@ -1015,6 +1021,7 @@ impl AppState {
             wave_banner_wave: 0,
             palier_flash: 0.0,
             palier_level: 0,
+            silhouette_base: std::collections::HashMap::new(),
             firebase_xp: None,
             wave: 0,
             objective: multiplayer::RoundObjective::default(),

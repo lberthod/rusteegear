@@ -39,7 +39,11 @@ pub type PlayerId = u32;
 /// rempli par cette manche, cf. `Contract::to_u8`) — sans quoi le client
 /// n'avait aucun moyen d'afficher un détail de manche, seulement la bannière
 /// minimale pilotée par sa propre simulation locale.
-pub const PROTOCOL_VERSION: u32 = 6;
+/// v7 (silhouettes de classe, GDD §10.3 — chantier 4.2 de l'audit
+/// 2026-07-20) : `EntityDelta` gagne `class: Option<u8>` — sans elle, un
+/// client ne connaissait jamais la classe des autres joueurs et tous les
+/// fantômes étaient identiques à l'écran.
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
@@ -366,6 +370,15 @@ pub struct EntityDelta {
     /// diffusé à tous.
     #[serde(default)]
     pub assists: Option<u32>,
+    /// Classe du joueur réseau (`PlayerClass::to_u8`, v7 — silhouettes de
+    /// classe GDD §10.3) : chaque client teinte/gabarit-ise le fantôme selon
+    /// la classe de son propriétaire, purement visuel (aucune hitbox modifiée,
+    /// le serveur reste seul juge du gameplay). Diffusée à chaque snapshot
+    /// plutôt que dans `PlayerJoined` : un client qui rejoint en cours de
+    /// manche n'a pas reçu les `PlayerJoined` des présents. Même politique
+    /// que `kills` : `Some` pour les entités-joueur, `None` sinon.
+    #[serde(default)]
+    pub class: Option<u8>,
 }
 
 /// Type d'agresseur à l'origine des derniers dégâts reçus avant une mort
@@ -623,6 +636,7 @@ mod tests {
                     anim_clip: String::new(),
                     kills: Some(3),
                     assists: Some(1),
+                    class: None,
                 },
                 EntityDelta {
                     index: 7,
@@ -634,6 +648,7 @@ mod tests {
                     anim_clip: String::new(),
                     kills: None,
                     assists: None,
+                    class: None,
                 },
             ],
         }));
@@ -699,6 +714,7 @@ mod tests {
                 anim_clip: String::new(),
                 kills: Some(i),
                 assists: Some(i / 2),
+                class: None,
             })
             .collect();
         let snapshot = ServerMsg::Snapshot(Snapshot {

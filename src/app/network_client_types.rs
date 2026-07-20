@@ -11,6 +11,11 @@ pub struct RemotePlayer {
     /// visuellement, contrairement à un mouvement) — `None` tant qu'aucun
     /// snapshot ne l'a renseignée.
     pub health: Option<f32>,
+    /// Classe reçue du serveur (`EntityDelta::class`, v7) et déjà appliquée
+    /// au fantôme (teinte + gabarit, cf. `apply_class_silhouette`) — `None`
+    /// tant qu'aucun snapshot ne l'a renseignée. Fixée au `Join` côté
+    /// serveur : ne change jamais pour un même fantôme.
+    pub(super) class: Option<u8>,
     /// Frags individualisés (brique de progression pour un futur MMORPG,
     /// GAMEDESIGN_EN_LIGNE.md) — même provenance que `health` : lus tels
     /// quels du dernier `Snapshot`, `None` tant qu'aucun n'est arrivé.

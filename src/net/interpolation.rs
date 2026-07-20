@@ -188,6 +188,7 @@ mod tests {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         }
     }
 

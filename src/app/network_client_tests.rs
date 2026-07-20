@@ -303,13 +303,17 @@ fn death_cause_is_stored_for_our_own_death_only() {
 /// `Join` reçu côté serveur doit porter le même `uid`.
 #[cfg(feature = "net_tests")]
 #[test]
-fn connect_to_server_forwards_the_known_firebase_uid() {
+fn connect_to_server_forwards_the_firebase_credential() {
     let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
     let url = format!("ws://{}", net.local_addr);
 
     let mut app = AppState::new();
     app.firebase_tx
-        .send(Ok(("uid-alice".to_string(), "token-alice".to_string())))
+        .send(Ok((
+            "uid-alice".to_string(),
+            "token-alice".to_string(),
+            None,
+        )))
         .expect("canal ouvert");
     app.poll_network(); // applique le uid simulé avant la connexion
 
@@ -324,7 +328,10 @@ fn connect_to_server_forwards_the_known_firebase_uid() {
         ClientMsg::Join {
             protocol: crate::net::protocol::PROTOCOL_VERSION,
             name: "Alice".to_string(),
-            firebase_uid: Some("uid-alice".to_string()),
+            // Depuis l'anti-usurpation (audit 2026-07-20, R1) : le champ
+            // transporte l'idToken de la session, pas l'uid brut —
+            // `join_credential` préfère le jeton, le serveur vérifie.
+            firebase_uid: Some("token-alice".to_string()),
             lobby: crate::net::protocol::DEFAULT_LOBBY.to_string(),
             class: 0,
             objective: 0,
@@ -816,6 +823,7 @@ fn a_single_call_only_takes_a_small_step_toward_the_authoritative_position() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -859,6 +867,7 @@ fn repeated_calls_gradually_converge_toward_the_authoritative_position() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -915,6 +924,7 @@ fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -935,6 +945,7 @@ fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -978,6 +989,7 @@ fn an_idle_player_softly_settles_onto_the_server_position() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -1025,6 +1037,7 @@ fn a_correction_never_discards_local_movement_that_happened_between_calls() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -1084,6 +1097,7 @@ fn a_local_position_correction_survives_the_next_physics_step() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );
@@ -1207,6 +1221,7 @@ fn climbing_stairs_does_not_trigger_a_spurious_correction() {
                 anim_clip: String::new(),
                 kills: None,
                 assists: None,
+                class: None,
             },
             Instant::now(),
         );
@@ -1315,6 +1330,7 @@ fn a_wall_blocked_player_settles_without_fighting_the_correction() {
             anim_clip: String::new(),
             kills: None,
             assists: None,
+            class: None,
         },
         Instant::now(),
     );

@@ -123,6 +123,12 @@ impl AppState {
                     class.to_u8(),
                     objective.to_u8(),
                 ));
+                // Silhouette de MA classe sur mon propre héros (v7, GDD
+                // §10.3) : les autres me voient via l'`EntityDelta::class`
+                // de leurs snapshots, moi je m'applique la mienne localement.
+                if let Some(pi) = self.player_index() {
+                    self.apply_class_silhouette(pi, class);
+                }
             }
             Err(e) => {
                 log::warn!("Multijoueur : connexion à {url} échouée : {e}");
@@ -767,11 +773,26 @@ impl AppState {
                         continue;
                     }
                     let default_name = format!("Joueur {pid}");
+                    let e_class = e.class;
                     let rp = self.ensure_remote_player(pid, &default_name);
                     rp.health = e.health;
                     rp.assists = e.assists;
                     rp.kills = e.kills;
+                    // Silhouette de classe (v7, GDD §10.3) : appliquée une
+                    // seule fois par fantôme (la classe est fixée au `Join`),
+                    // hors de l'emprunt `rp` — teinte + gabarit visuels.
+                    let ghost_index = rp.scene_index;
+                    let newly_classed = e_class.filter(|_| rp.class.is_none());
+                    if let Some(c) = newly_classed {
+                        rp.class = Some(c);
+                    }
                     rp.interp.push(e, now);
+                    if let Some(c) = newly_classed {
+                        self.apply_class_silhouette(
+                            ghost_index,
+                            crate::app::multiplayer::PlayerClass::from_u8(c),
+                        );
+                    }
                 }
             }
             // Évènements ponctuels : le seul exploité côté client est `Defeated`
@@ -907,6 +928,7 @@ impl AppState {
                     scene_index,
                     interp: crate::net::interpolation::RemoteEntity::default(),
                     health: None,
+                    class: None,
                     kills: None,
                     assists: None,
                 },

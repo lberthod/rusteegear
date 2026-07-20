@@ -90,6 +90,31 @@ impl PlayerClass {
         }
     }
 
+    /// Teinte de silhouette (GDD §10.3, v7) : multiplie `SceneObject::color`
+    /// du héros — Assaut neutre (zéro régression visuelle pour la classe par
+    /// défaut), Éclaireur verdâtre (vif, végétal), Soutien doré (chaleureux,
+    /// le « foyer »). Purement visuel, appliqué côté client
+    /// (`apply_class_silhouette`) — jamais par le serveur.
+    pub fn silhouette_tint(self) -> [f32; 3] {
+        match self {
+            PlayerClass::Assault => [1.0, 1.0, 1.0],
+            PlayerClass::Scout => [0.72, 1.0, 0.82],
+            PlayerClass::Support => [1.0, 0.88, 0.62],
+        }
+    }
+
+    /// Facteur d'échelle de silhouette (GDD §10.3) : l'Éclaireur est élancé,
+    /// le Soutien plus trapu — assez marqué pour se lire à distance, assez
+    /// subtil pour ne pas mentir sur la hitbox (qui, elle, ne change pas :
+    /// le serveur simule le gabarit commun).
+    pub fn silhouette_scale(self) -> f32 {
+        match self {
+            PlayerClass::Assault => 1.0,
+            PlayerClass::Scout => 0.90,
+            PlayerClass::Support => 1.08,
+        }
+    }
+
     /// Multiplicateur de `Controller::move_speed` appliqué au spawn.
     fn move_speed_mult(self) -> f32 {
         match self {
@@ -442,6 +467,29 @@ impl AppState {
     /// connecter** (cf. AUDIT_MMORPG.md). `spawn_network_player` masque
     /// aussi ce gabarit dès le premier joueur, donc cet appel n'est utile que
     /// pour la fenêtre *avant* ce premier join.
+    /// Applique l'identité visuelle d'une classe (teinte + gabarit, GDD
+    /// §10.3, protocole v7) à l'objet `index` — fantôme réseau ou joueur
+    /// local. Purement cosmétique : la hitbox simulée par le serveur reste le
+    /// gabarit commun. Idempotente : repart toujours de la base (échelle,
+    /// couleur) mémorisée à la première application (`silhouette_base`), au
+    /// lieu de composer les facteurs à chaque appel.
+    pub(crate) fn apply_class_silhouette(&mut self, index: usize, class: PlayerClass) {
+        let Some(obj) = self.scene.objects.get_mut(index) else {
+            return;
+        };
+        let (base_scale, base_color) = *self
+            .silhouette_base
+            .entry(index)
+            .or_insert((obj.transform.scale, obj.color));
+        obj.transform.scale = base_scale * class.silhouette_scale();
+        let tint = class.silhouette_tint();
+        obj.color = [
+            base_color[0] * tint[0],
+            base_color[1] * tint[1],
+            base_color[2] * tint[2],
+        ];
+    }
+
     pub fn hide_local_player_template(&mut self) {
         if let Some(o) = self
             .scene
@@ -819,6 +867,15 @@ impl AppState {
                     // `kills` ci-dessus — jusqu'ici calculé (`network_assists`) mais
                     // jamais diffusé, le HUD ne pouvait afficher que les frags.
                     assists: Some(self.network_assists.get(&id).copied().unwrap_or(0)),
+                    // Silhouettes de classe (v7, GDD §10.3) : chaque client
+                    // teinte le fantôme selon la classe de son propriétaire.
+                    class: Some(
+                        self.network_classes
+                            .get(&id)
+                            .copied()
+                            .unwrap_or_default()
+                            .to_u8(),
+                    ),
                     anim_clip: o
                         .animation
                         .as_ref()
@@ -854,6 +911,7 @@ impl AppState {
                 health: None,
                 kills: None,
                 assists: None,
+                class: None,
                 anim_clip: o
                     .animation
                     .as_ref()
@@ -1445,6 +1503,56 @@ mod tests {
             .find(|e| e.player_id == Some(2))
             .expect("le joueur 2 doit apparaître dans le snapshot");
         assert_eq!(entity_b.assists, Some(0));
+    }
+
+    /// v7 (silhouettes de classe, GDD §10.3) : la classe de chaque joueur
+    /// part dans son `EntityDelta` — sans elle, un client ne peut pas
+    /// teinter les fantômes des autres.
+    #[test]
+    fn network_snapshot_reports_the_player_class_for_silhouettes() {
+        let mut app = app_with_zombies_demo();
+        app.spawn_network_player(1, PlayerClass::Scout).unwrap();
+        let snap = app.network_snapshot(1);
+        let e = snap
+            .entities
+            .iter()
+            .find(|e| e.player_id == Some(1))
+            .expect("le joueur 1 doit figurer dans le snapshot");
+        assert_eq!(e.class, Some(PlayerClass::Scout.to_u8()));
+    }
+
+    /// La silhouette repart toujours de la base neutre mémorisée : appliquer
+    /// deux fois (snapshots successifs, reconnexion) ne compose jamais les
+    /// facteurs, et changer de classe repart du gabarit d'origine.
+    #[test]
+    fn apply_class_silhouette_is_idempotent_from_the_neutral_base() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Fantôme".into(),
+            ..Default::default()
+        });
+        let base_scale = app.scene.objects[0].transform.scale;
+
+        app.apply_class_silhouette(0, PlayerClass::Support);
+        app.apply_class_silhouette(0, PlayerClass::Support);
+        let s = app.scene.objects[0].transform.scale;
+        assert!(
+            (s.x - base_scale.x * PlayerClass::Support.silhouette_scale()).abs() < 1e-6,
+            "double application = un seul facteur (obtenu {s:?})"
+        );
+
+        app.apply_class_silhouette(0, PlayerClass::Scout);
+        let s2 = app.scene.objects[0].transform.scale;
+        assert!(
+            (s2.x - base_scale.x * PlayerClass::Scout.silhouette_scale()).abs() < 1e-6,
+            "changer de classe repart de la base neutre (obtenu {s2:?})"
+        );
+        assert_eq!(
+            app.scene.objects[0].color,
+            PlayerClass::Scout.silhouette_tint(),
+            "teinte appliquée depuis la couleur de base [1,1,1]"
+        );
     }
 
     #[test]
