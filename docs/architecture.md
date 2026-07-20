@@ -37,10 +37,12 @@ d'attaque…).
 
 ## Pipeline rendu
 
-`src/gfx/renderer.rs::Renderer` — couche de rendu pure (wgpu), sans état
+`src/gfx/renderer/` (struct `Renderer`, découpée au Sprint 9 : `frame.rs`,
+`shadows.rs`, `sync.rs`, `post_process.rs`, `resources.rs`, `headless.rs`,
+`types.rs`) — couche de rendu pure (wgpu), sans état
 métier propre : `render(&mut self, app: &mut AppState)` est l'appel
 principal par frame, `resize()`/`on_ui_event()` (interception egui) les
-autres points d'entrée notables. Structures GPU au sommet du fichier :
+autres points d'entrée notables. Structures GPU dans `types.rs` :
 `CameraUniform`, `ModelUniform`, `PointLightU`/`SceneUniform`/
 `BloomUniform`. Shaders sous `src/gfx/shaders/`. La caméra (orbite,
 yaw/pitch/distance) est séparée dans `src/gfx/camera.rs::OrbitCamera`
@@ -71,7 +73,8 @@ plusieurs fois/seconde/joueur). Champs `Join` validés par `valid_join_fields`
 (Sprint 105a-2, longueur + charset) avant toute inscription côté serveur.
 
 `src/net/server_loop.rs::NetServer` (thread tokio dédié, `WebSocketConfig`
-resserré à 64 Kio) / `src/net/client.rs::NetClient` — transport, un canal
+resserré à 64 Kio) / `src/net/client/` (struct `NetClient`, variantes
+`native.rs`/`web.rs`) — transport, un canal
 `std::sync::mpsc` synchrone de chaque côté (le reste du programme n'a jamais
 besoin de connaître tokio). `src/bin/server.rs` est le binaire serveur
 headless (multi-salons, une `AppState` par salon).

@@ -17,7 +17,9 @@ use motor3derust::net::protocol::{ClientMsg, ServerMsg};
 fn main() {
     let url = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "ws://179.237.71.235:80".to_string());
+        // Même chemin que les vrais joueurs (TLS via Caddy) : un smoke vert
+        // prouve le trajet wss:// réel, pas seulement le port en clair.
+        .unwrap_or_else(|| "wss://ws.loicberthod.ch".to_string());
     let client = NetClient::connect(&url, "SmokeTest", None).expect("connexion au serveur");
     let mut got_snapshot = false;
     let mut monsters = 0usize;

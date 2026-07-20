@@ -814,19 +814,40 @@ fn rust_target_installed(target: &str) -> bool {
 /// (modèles glTF, sons) et renvoie le JSON de la scène avec les chemins réécrits en
 /// `bundle://…`, plus la liste des assets introuvables (avertissements).
 fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
-    use std::path::Path;
-    let dir = Path::new(PROJECT_ROOT).join("assets/bundle");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let _ = std::fs::write(dir.join(".gitkeep"), b"");
+    let dir = std::path::Path::new(PROJECT_ROOT).join("assets/bundle");
+    bundle_scene_json_at(&dir, scene)
+}
 
+/// Variante paramétrée par le dossier bundle, pour rester testable sans toucher au
+/// vrai `assets/bundle/` du dépôt (même patron que `write_default_settings`).
+fn bundle_scene_json_at(
+    dir: &std::path::Path,
+    scene: &Scene,
+) -> Result<(String, Vec<String>), String> {
     let mut val = serde_json::to_value(scene).map_err(|e| e.to_string())?;
     let mut warns = Vec::new();
+
+    // Garde-fou (audit 2026-07-20, risque A1) : une scène déjà exportée — le player
+    // rechargé, typiquement — ne référence QUE des chemins `bundle://…`, que
+    // `copy_to_bundle` ignore (`Ok(None)`). Sans cette sauvegarde, le
+    // `remove_dir_all` ci-dessous vidait le bundle sans rien y recopier et le
+    // binaire suivant n'avait plus aucun asset. On garde donc en mémoire, AVANT de
+    // vider le dossier, les octets (déjà compressés zstd) de chaque clé bundle
+    // référencée — depuis le disque, sinon depuis le bundle embarqué au build.
+    let preserved = preserve_bundled(dir, &val, &mut warns);
+
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let _ = std::fs::write(dir.join(".gitkeep"), b"");
+    for (key, bytes) in &preserved {
+        std::fs::write(dir.join(key), bytes)
+            .map_err(|e| format!("réécriture de bundle://{key} : {e}"))?;
+    }
 
     if let Some(arr) = val.get_mut("imported").and_then(|v| v.as_array_mut()) {
         for (i, m) in arr.iter_mut().enumerate() {
             if let Some(p) = m.get("path").and_then(|v| v.as_str()).map(str::to_string) {
-                match copy_to_bundle(&dir, &p, &format!("m{i}")) {
+                match copy_to_bundle(dir, &p, &format!("m{i}")) {
                     Ok(Some(key)) => m["path"] = serde_json::Value::String(key),
                     Ok(None) => {}
                     Err(e) => warns.push(e),
@@ -842,7 +863,7 @@ fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
             {
-                match copy_to_bundle(&dir, &p, &format!("a{i}")) {
+                match copy_to_bundle(dir, &p, &format!("a{i}")) {
                     Ok(Some(key)) => o["audio"]["clip"] = serde_json::Value::String(key),
                     Ok(None) => {}
                     Err(e) => warns.push(e),
@@ -853,7 +874,7 @@ fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
             {
-                match copy_to_bundle(&dir, &p, &format!("t{i}")) {
+                match copy_to_bundle(dir, &p, &format!("t{i}")) {
                     Ok(Some(key)) => o["texture"] = serde_json::Value::String(key),
                     Ok(None) => {}
                     Err(e) => warns.push(e),
@@ -864,6 +885,58 @@ fn bundle_scene_json(scene: &Scene) -> Result<(String, Vec<String>), String> {
 
     let json = serde_json::to_string_pretty(&val).map_err(|e| e.to_string())?;
     Ok((json, warns))
+}
+
+/// Relève dans la scène sérialisée toutes les clés `bundle://…` (mêmes trois champs
+/// que `bundle_scene_json_at` : imports, clips audio, textures) et renvoie leurs
+/// octets compressés — lus depuis le dossier bundle sur disque, ou recompressés
+/// depuis le bundle embarqué (`assets::bundle_bytes`) si le disque ne les a plus.
+/// Une clé introuvable des deux côtés devient un avertissement (asset perdu).
+fn preserve_bundled(
+    dir: &std::path::Path,
+    val: &serde_json::Value,
+    warns: &mut Vec<String>,
+) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut keep = |path: &str| {
+        let Some(key) = crate::assets::strip_scheme(path) else {
+            return;
+        };
+        if out.contains_key(key) {
+            return;
+        }
+        let bytes = std::fs::read(dir.join(key))
+            .ok()
+            .or_else(|| crate::assets::bundle_bytes(key).and_then(|raw| compress(&raw).ok()));
+        match bytes {
+            Some(b) => {
+                out.insert(key.to_string(), b);
+            }
+            None => warns.push(format!("asset bundlé introuvable, perdu : {path}")),
+        }
+    };
+    if let Some(arr) = val.get("imported").and_then(|v| v.as_array()) {
+        for m in arr {
+            if let Some(p) = m.get("path").and_then(|v| v.as_str()) {
+                keep(p);
+            }
+        }
+    }
+    if let Some(arr) = val.get("objects").and_then(|v| v.as_array()) {
+        for o in arr {
+            if let Some(p) = o
+                .get("audio")
+                .and_then(|a| a.get("clip"))
+                .and_then(|v| v.as_str())
+            {
+                keep(p);
+            }
+            if let Some(p) = o.get("texture").and_then(|v| v.as_str()) {
+                keep(p);
+            }
+        }
+    }
+    out
 }
 
 /// Copie un asset disque dans le bundle, compressé zstd (Sprint 127, décompressé côté
@@ -1091,6 +1164,40 @@ mod tests {
         );
         let decoded = zstd::stream::decode_all(&written[..]).expect("flux zstd valide attendu");
         assert_eq!(decoded, original);
+    }
+
+    /// Garde-fou A1 (audit 2026-07-20) : ré-exporter une scène dont les imports sont
+    /// déjà `bundle://…` (le player rechargé) ne doit PAS vider le bundle — avant ce
+    /// correctif, `remove_dir_all` effaçait tout et `copy_to_bundle` ne recopiait
+    /// rien (`Ok(None)` sur les chemins déjà bundlés).
+    #[test]
+    fn reexporting_an_already_bundled_scene_preserves_the_bundle() {
+        let work = temp_dir("bundle_reexport_guard");
+        let original = b"GLBFAKE_octets_du_modele".to_vec();
+        let compressed = compress(&original).expect("compression zstd");
+        std::fs::write(work.join("m0_tree.glb"), &compressed).expect("écriture asset");
+
+        let mut scene = crate::scene::Scene::default();
+        scene.imported.push(crate::scene::ImportedMesh {
+            name: "tree".into(),
+            path: format!("{}m0_tree.glb", crate::assets::SCHEME),
+            ..Default::default()
+        });
+
+        let (json, warns) = bundle_scene_json_at(&work, &scene).expect("export réussi");
+
+        assert!(
+            warns.is_empty(),
+            "aucun asset ne doit être perdu : {warns:?}"
+        );
+        let kept = std::fs::read(work.join("m0_tree.glb"))
+            .expect("l'asset bundlé doit survivre au ré-export");
+        let decoded = zstd::stream::decode_all(&kept[..]).expect("flux zstd valide");
+        assert_eq!(decoded, original, "octets préservés à l'identique");
+        assert!(
+            json.contains("bundle://m0_tree.glb"),
+            "la clé bundle doit rester stable dans le JSON exporté"
+        );
     }
 
     #[test]
