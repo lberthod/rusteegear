@@ -27,14 +27,14 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 | 2.3 | Purge : 394 orphelins supprimés (bundle 22 → 12 Mo, 321 clés conservées), `scripts/check_bundle_orphans.py` en mode check dans le job CI `check` (`e7b4332`) — ferme **A2** | ✅ |
 | 2.4 | Tag `v0.1.0-alpha.1`, release, builds depuis le tag, lancement du protocole de test externe | ✅ Constat du 20/07 après-midi : les tags `v0.1.0-alpha.1/.2/.3` étaient **déjà posés et poussés** le 19/07 (autre session, `release.yml` construit depuis les tags) — le constat « gel bloqué » de l'audit était périmé. Restes utilisateur : inviter le testeur, test compte macOS neuf, issue GitHub flaky |
 
-## Vague 3 — Sécuriser avant d'élargir le cercle (2-3 jours)
+## Vague 3 — Sécuriser avant d'élargir le cercle (3/4 faits le 2026-07-20)
 
-| # | Action | Ferme | Coût | Fait quand |
-|---|---|---|---|---|
-| 3.1 | Vérifier le token Firebase (idToken) au `Join` côté serveur au lieu de faire confiance à l'uid client | **R1** | L | Un `Join` avec uid ≠ celui du token est rejeté ; test le prouvant |
-| 3.2 | Script de déploiement versionné : build artefact en CI → push binaire → restart → smoke | **R2** | L | Un déploiement complet = une seule commande, rejouable, tracée dans le dépôt |
-| 3.3 | Cap global de salons/connexions + éviction | **R3** | M | Test : au-delà du cap, création de salon refusée proprement |
-| 3.4 | Fermer le port en clair du VPS si non nécessaire (constat R4) | surface | S | Le port 80 direct ne répond plus au handshake WS |
+| # | Action | Ferme | Statut |
+|---|---|---|---|
+| 3.1 | Le `Join` transporte un **idToken** vérifié serveur (`accounts:lookup`, thread + canal, jamais de HTTP dans le tick) ; uid brut ignoré dès que le serveur a une session Firebase ; même trame, pas de bump de protocole (`3aba61e`) | **R1** | ✅ ⚠️ Un nouveau client contre l'ANCIEN VPS = Join rejeté (charset) → **redéployer le VPS avant de distribuer de nouveaux clients** |
+| 3.2 | `scripts/deploy_vps.sh` versionné : push → pull+build VPS → restart systemd → smoke wss (chemin réel) + route claire optionnelle ; refuse arbre sale/branche ≠ main | **R2** (réduit) | ✅ Script prêt — **premier run à faire** (redémarre la prod). Vrai artefact CI + rollback = plus tard |
+| 3.3 | `MAX_TOTAL_CONNECTIONS = 256` (server_loop, testé à plafond bas) + `MAX_ROOMS = 16` avec `JoinRejected` explicite (`d894e07`) | **R3** | ✅ net_tests 69/69 |
+| 3.4 | Fermer le port en clair du VPS si non nécessaire (constat R4) | surface | ⏳ Côté VPS/Caddy (SSH), pas dans le dépôt — à faire lors du prochain déploiement |
 
 ## Vague 4 — La preuve du fun (~1 semaine)
 
