@@ -18,14 +18,14 @@ de [00_SYNTHESE.md](00_SYNTHESE.md).*
 *Preuves : `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, garde-fou
 unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 
-## Vague 2 — Débloquer le gel `v0.1.0-alpha.1` (1-2 jours)
+## Vague 2 — Débloquer le gel `v0.1.0-alpha.1` (3/4 faits le 2026-07-20)
 
-| # | Action | Coût | Fait quand |
-|---|---|---|---|
-| 2.1 | Finir et committer le chantier contrôles : + test `update_camera_collision`, décision sur le masque de couches (voir [06](06_CHANTIER_EN_COURS.md)) | M | `git status` propre ; test collision (mur → distance réduite ; rien → `None`) vert ; [06](06_CHANTIER_EN_COURS.md) archivé |
-| 2.2 | Resynchroniser la scène embarquée (résoudre « Errant 62 ») en **automatisant** la copie `models/` → `bundle/mNN_` dans le test de resynchro (`src/scene/mod_tests.rs:1894`) — ferme aussi **A5** | M | Le test de resynchro passe sans étape manuelle ; la scène servie affiche Errant 62 correctement |
-| 2.3 | Purger les ~394 GLB orphelins du bundle : script comparant les clés de `player_scene.json` aux fichiers de `bundle/`, branché en mode check dans la CI | **A2**, L du binaire | M | `bundle/` = exactement les 321 clés référencées ; job CI échoue si un orphelin réapparaît |
-| 2.4 | Tag `v0.1.0-alpha.1`, release, builds depuis le tag, lancement du protocole de test externe (matériel prêt : QUICKSTART, doctor.sh, TEST_SCENARIO, FEEDBACK_FORM) | M | Tag poussé ; builds téléchargeables issus du tag ; premier testeur externe invité |
+| # | Action | Statut |
+|---|---|---|
+| 2.1 | Chantier contrôles fini et commité (`9dc0e42`) : masque caméra restreint au bit 0 (décor) + 3 tests de collision caméra (mur / voie libre / créature ignorée) | ✅ suite lib 669/669 verte |
+| 2.2 | Scène embarquée : les 11 gardes-fous `the_embedded` passent (« Errant 62 » résolu par le ré-export du 19-20/07) ; l'outil de resynchro copie désormais lui-même `models/` → `bundle/mNN_` compressé (`88f103e`) — ferme **A5** | ✅ |
+| 2.3 | Purge : 394 orphelins supprimés (bundle 22 → 12 Mo, 321 clés conservées), `scripts/check_bundle_orphans.py` en mode check dans le job CI `check` (`e7b4332`) — ferme **A2** | ✅ |
+| 2.4 | Tag `v0.1.0-alpha.1`, release, builds depuis le tag, lancement du protocole de test externe (matériel prêt : QUICKSTART, doctor.sh, TEST_SCENARIO, FEEDBACK_FORM) | ⏳ En attente de décision (action publique) + 2 restes manuels de `sprint.19matin.md` (test compte macOS neuf, issue GitHub flaky) |
 
 ## Vague 3 — Sécuriser avant d'élargir le cercle (2-3 jours)
 
