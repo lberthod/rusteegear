@@ -69,6 +69,14 @@ const MAX_BYTES_PER_SEC: usize = MAX_WS_MESSAGE_BYTES;
 /// sockets.
 const MAX_CONNECTIONS_PER_IP: usize = 4;
 
+/// Connexions simultanées tolérées **toutes IP confondues** (audit 2026-07-20,
+/// R3) : la limite par IP se contourne derrière un CGNAT/botnet, celle-ci
+/// borne la mémoire et les tâches tokio quoi qu'il arrive. 8 salons pleins
+/// (8 × 16 joueurs) = 128, marge ×2 pour les reconnexions croisées — très
+/// au-dessus de l'échelle visée (2-16 joueurs), très en dessous d'un déni de
+/// service par épuisement.
+const MAX_TOTAL_CONNECTIONS: usize = 256;
+
 /// Limiteur de débit à fenêtre glissante **approchée par deux seaux** (audit
 /// réseau 2026-07) : l'ancienne fenêtre « réinitialisée en bloc » laissait un
 /// client émettre jusqu'à ~2× `MAX_MESSAGES_PER_SEC` en concentrant un burst à
@@ -230,16 +238,23 @@ impl NetServer {
     /// 5ᵉ). La production (`src/bin/server.rs`) passe toujours par `start` :
     /// le garde-fou anti-DoS n'y est pas affaibli.
     pub fn start_with_ip_cap(addr: &str, max_connections_per_ip: usize) -> std::io::Result<Self> {
-        Self::start_inner(addr, max_connections_per_ip, INBOX_CAPACITY)
+        Self::start_inner(
+            addr,
+            max_connections_per_ip,
+            INBOX_CAPACITY,
+            MAX_TOTAL_CONNECTIONS,
+        )
     }
 
-    /// Cœur commun : `inbox_capacity` en paramètre uniquement pour que les
-    /// tests puissent saturer une inbox minuscule sans envoyer 4096 messages
-    /// réels (la production passe toujours `INBOX_CAPACITY`).
+    /// Cœur commun : `inbox_capacity` et `max_total_connections` en paramètres
+    /// uniquement pour que les tests puissent saturer une inbox minuscule ou
+    /// un plafond global bas sans ouvrir des centaines de sockets réels (la
+    /// production passe toujours `INBOX_CAPACITY`/`MAX_TOTAL_CONNECTIONS`).
     fn start_inner(
         addr: &str,
         max_connections_per_ip: usize,
         inbox_capacity: usize,
+        max_total_connections: usize,
     ) -> std::io::Result<Self> {
         let (tx, rx) = sync_channel::<Inbound>(inbox_capacity);
         let outboxes: Outboxes = Arc::new(Mutex::new(HashMap::new()));
@@ -297,6 +312,18 @@ impl NetServer {
                     // après handshake pour une IP déjà au plafond.
                     {
                         let mut counts = lock_ip_counts(&accept_ip_counts);
+                        // Plafond global (audit 2026-07-20, R3) : vérifié
+                        // sous le même verrou que le plafond par IP — la
+                        // somme des compteurs est le nombre de connexions
+                        // vivantes (chaque `IpGuard` décrémente à la fin).
+                        let total: usize = counts.values().sum();
+                        if total >= max_total_connections {
+                            log::warn!(
+                                "Connexion refusée depuis {} : serveur plein ({total} connexions, max {max_total_connections})",
+                                peer.ip()
+                            );
+                            continue;
+                        }
                         let n = counts.entry(peer.ip()).or_insert(0);
                         if *n >= max_connections_per_ip {
                             log::warn!(
@@ -845,8 +872,13 @@ mod tests {
     #[test]
     fn a_full_inbox_drops_excess_messages_without_killing_the_connection() {
         let capacity = 2;
-        let server = NetServer::start_inner("127.0.0.1:0", MAX_CONNECTIONS_PER_IP, capacity)
-            .expect("démarrage du serveur");
+        let server = NetServer::start_inner(
+            "127.0.0.1:0",
+            MAX_CONNECTIONS_PER_IP,
+            capacity,
+            MAX_TOTAL_CONNECTIONS,
+        )
+        .expect("démarrage du serveur");
         let url = format!("ws://{}", server.local_addr);
 
         let client = NetClient::connect(&url, "Patient", None).expect("connexion du client");
@@ -1139,6 +1171,52 @@ mod tests {
             server.connected_count(),
             MAX_CONNECTIONS_PER_IP,
             "le plafond par IP ne doit jamais être dépassé côté serveur"
+        );
+    }
+
+    /// Audit 2026-07-20 (R3) : au-delà du plafond **global** de connexions
+    /// (toutes IP confondues), les suivantes sont refusées — la limite par IP
+    /// seule se contourne en multipliant les adresses. Plafond global bas et
+    /// per-ip haut via `start_inner`, pour que ce soit bien le global qui
+    /// déclenche depuis 127.0.0.1.
+    #[test]
+    fn total_connection_limit_caps_the_server_globally() {
+        let total_cap = 3;
+        let server = NetServer::start_inner("127.0.0.1:0", 100, INBOX_CAPACITY, total_cap)
+            .expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+
+        let mut clients = Vec::new();
+        for i in 0..total_cap {
+            let c = NetClient::connect(&url, &format!("Client{i}"), None)
+                .unwrap_or_else(|e| panic!("connexion {i} attendue sous le plafond global : {e}"));
+            c.inbox
+                .recv_timeout(Duration::from_secs(2))
+                .expect("Welcome attendu sous le plafond global");
+            clients.push(c);
+        }
+
+        let mut waited = Duration::ZERO;
+        while server.connected_count() < total_cap && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert_eq!(server.connected_count(), total_cap);
+
+        if let Ok(over_limit) = NetClient::connect(&url, "OverLimit", None) {
+            let got_welcome = over_limit
+                .inbox
+                .recv_timeout(Duration::from_millis(500))
+                .is_ok();
+            assert!(
+                !got_welcome,
+                "une connexion au-delà du plafond global ne doit pas recevoir de Welcome"
+            );
+        }
+        assert_eq!(
+            server.connected_count(),
+            total_cap,
+            "le plafond global ne doit jamais être dépassé côté serveur"
         );
     }
 }

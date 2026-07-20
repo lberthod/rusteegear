@@ -36,6 +36,14 @@ use motor3derust::net::protocol::{
 };
 use motor3derust::net::server_loop::NetServer;
 
+/// Nombre maximal de salons simultanés (audit 2026-07-20, R3) : chaque salon
+/// porte une simulation `AppState` complète — sans borne, des `Join` avec des
+/// codes arbitraires font croître mémoire ET temps de tick sans limite. 16
+/// salons × 16 joueurs = 256 joueurs théoriques, très au-dessus de l'échelle
+/// visée (2-16). Rejoindre un salon existant n'est jamais bloqué par ce
+/// plafond ; les salons finis/vides sont fermés à chaque tick (`to_close`).
+const MAX_ROOMS: usize = 16;
+
 /// Cadence réseau du serveur : alignée sur la cadence de la physique elle-même
 /// (`FIXED_DT` dans `AppState::advance_play`) — un tick réseau par pas
 /// physique, au lieu d'un rythme intermédiaire arbitraire, pour que chaque
@@ -261,6 +269,26 @@ fn handle_message(
             } else {
                 lobby
             };
+            // Plafond de salons (audit 2026-07-20, R3) : un salon est créé à
+            // la demande par code arbitraire — sans borne, un client peut
+            // faire croître `rooms` (et sa simulation par salon !) sans
+            // limite. Rejoindre un salon *existant* reste toujours possible ;
+            // les salons vides sont déjà fermés par ailleurs (`to_close`).
+            if !rooms.contains_key(&code) && rooms.len() >= MAX_ROOMS {
+                log::warn!(
+                    "Join refusé ({id}) : plafond de {MAX_ROOMS} salons atteint \
+                     (code demandé « {code} »)"
+                );
+                net.send_to(
+                    id,
+                    &ServerMsg::JoinRejected {
+                        reason: "Serveur plein (trop de salons ouverts) — réessayez plus tard \
+                                 ou rejoignez un salon existant."
+                            .to_string(),
+                    },
+                );
+                return;
+            }
             let room = rooms.entry(code.clone()).or_insert_with(Room::new);
             // Mode fixé au tout premier `Join` jamais reçu par ce salon (avant
             // même qu'il ait un joueur effectivement piloté, cf.
