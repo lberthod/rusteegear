@@ -1960,6 +1960,46 @@ fn sync_embedded_scene_hameau_from_the_demo() {
         })
         .collect();
 
+    // Auto-suffisance de l'outil (audit 2026-07-20, risque A5) : la
+    // renumérotation `m{i}_` ci-dessus peut produire des clés absentes
+    // d'`assets/bundle/` — l'étape 3 d'`integration_siege_scene.md` (copie
+    // manuelle `models/<fichier>` → `bundle/mNN_<fichier>`, compressée zstd)
+    // était jusqu'ici à rejouer à la main, et son oubli laissait une scène
+    // embarquée aux imports morts. On la joue donc ici même : chaque clé
+    // manquante est copiée depuis `assets/models/`, et une source introuvable
+    // fait échouer l'outil (bruyamment, plutôt qu'une scène à trous).
+    let bundle_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/bundle");
+    let models_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/models");
+    let mut copied = 0usize;
+    let mut missing_sources = Vec::new();
+    for m in &imported {
+        let key = m
+            .path
+            .strip_prefix(crate::assets::SCHEME)
+            .expect("import réécrit en bundle:// juste au-dessus");
+        if bundle_dir.join(key).exists() {
+            continue;
+        }
+        let file = clean_file_name(key);
+        let src = models_dir.join(&file);
+        if !src.is_file() {
+            missing_sources.push(key.to_string());
+            continue;
+        }
+        let data = std::fs::read(&src).expect("lecture du modèle source");
+        let compressed =
+            zstd::stream::encode_all(&data[..], 0).expect("compression zstd du modèle");
+        std::fs::write(bundle_dir.join(key), compressed).expect("écriture dans assets/bundle/");
+        copied += 1;
+    }
+    assert!(
+        missing_sources.is_empty(),
+        "sources introuvables dans assets/models/ pour : {missing_sources:?}"
+    );
+    if copied > 0 {
+        println!("{copied} modèle(s) copié(s) de assets/models/ vers assets/bundle/");
+    }
+
     let merged = Scene {
         objects,
         imported,
