@@ -40,10 +40,10 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 
 | # | Action | Statut |
 |---|---|---|
-| 4.1 | Réunifier « les deux jeux » : grammaire de comportement appliquée à `player_scene.json` sans toucher au contrat de PV verrouillé ; entrée de roadmap « preuve du fun » | ⬜ XL — le prochain gros chantier |
-| 4.2 | Avatar `fairy_hero` | ✅ Restauré (`0506c90`) : mesh skinné + clips Idle/Walk pilotés par la simulation (local + fantômes réseau) + **nouveau garde-fou CI** contre une 6ᵉ perte. Reste ⬜ : 3 silhouettes de classe distinctes |
-| 4.3 | Écran de fin de manche détaillé | ✅ Déjà livré avant l'audit (Phase H Sprint 1, `PROTOCOL_VERSION` 6 : `RoundPlayerSummary` affiché par `hud.rs`) — constat d'audit périmé |
-| 4.4 | Surfaces contextuelles | 🟠 Bannière de vague : ✅ déjà livrée (`GameEvent::WaveStart` → `wave_banner_flash`). Restent ⬜ : palier atteint, marqueur allié hors-écran |
+| 4.1 | Réunifier « les deux jeux » | ✅ **Livré en 6 commits** (`d03581b`→ docs, 2026-07-20, plan d'architecte vérifié ligne à ligne) : grammaire Traqueuse/Meute/Colosse/Furtive sur les 26 créatures servies, patrouille par défaut + chasse ≤ 9 m plafonnée, dégâts de contact, knockback scripté réparé, contrat PV 5/8/11/16 intact (test exact), scène resynchronisée + parité `ai_chaser` en CI, entrée roadmap « preuve du fun » créée. Reste : validation manuelle du ressenti (vitesses dégradables dans la table) |
+| 4.2 | Avatar `fairy_hero` | ✅ Restauré (`0506c90`) : mesh skinné + clips Idle/Walk pilotés + garde-fou CI. Reste ⬜ : 3 silhouettes de classe (bump protocole v7, à grouper avec le prochain déploiement couplé) |
+| 4.3 | Écran de fin de manche détaillé | ✅ Déjà livré avant l'audit (Phase H Sprint 1, `PROTOCOL_VERSION` 6) — constat d'audit périmé |
+| 4.4 | Surfaces contextuelles | ✅ Bannière de vague (déjà livrée), marqueur allié hors-écran (déjà livré — constat périmé, `ally_down_banner`/`offscreen_edge_position`), bannière « palier atteint » (livrée `9e54a73`) |
 
 ## Vague 5 — Fond de roulement qualité (au fil de l'eau)
 

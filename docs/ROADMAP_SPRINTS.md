@@ -3243,3 +3243,31 @@ Contre :
 **Non tranché** : cette discussion n'a de sens qu'une fois les Phases L (playtest) et M
 (déploiement) de `sprintreflecion.md` vertes — prématuré tant que le cœur de boucle (modes de
 manche, classes, contrats) n'est pas validé en conditions réelles avec de vrais joueurs.
+
+---
+
+## Jalon « preuve du fun » (vertical slice, GDD §18.6) — suivi créé le 2026-07-20
+
+Jusqu'ici absent de toute roadmap (constat des audits des 18 et 20 juillet : bloqué par la
+« tension n°7 » des deux jeux, sans ligne de suivi). État à la création :
+
+- ✅ **Réunification des deux jeux (tension n°7)** — chantier « chasse 4.1 » livré en 6 commits
+  (2026-07-20) : les 26 créatures de la scène servie portent la grammaire de chasse
+  Traqueuse/Meute/Colosse/Furtive (GDD §5.4) comme **comportement** (patrouille Lua par défaut,
+  chasse ≤ 9 m plafonnée à 2 par cible, dégâts de contact, knockback fonctionnel) sans toucher au
+  contrat de PV des vagues (5/8/11/16, verrouillé par test exact). Scène servie resynchronisée,
+  parité `ai_chaser` verrouillée en CI.
+- ✅ Avatar `fairy_hero` skinné restauré (clips Idle/Walk pilotés, garde-fou CI anti-régression).
+- ✅ Écran de fin de manche détaillé, bannière de vague, marqueur d'allié à terre, bannière
+  « palier atteint » (GDD §17) — livrés.
+- ⬜ **Validation manuelle du ressenti** (exigée par le plan 4.1) : partie réelle solo + 2 clients
+  réseau — lisibilité des 4 archétypes, cumul morsure + DPS de contact, aucune créature coincée
+  aux nouvelles vitesses. Les vitesses sont des colonnes de `MMORPG_CREATURES` : dégradables sans
+  autre code.
+- ⬜ Silhouettes de classe distinctes (GDD §10.3) — nécessite de répliquer la classe dans
+  `EntityDelta` (bump `PROTOCOL_VERSION` 7, à grouper avec le prochain déploiement couplé).
+- ⬜ Critères §18.6 restants à cocher en conditions réelles après le playtest externe.
+
+⚠️ Déploiement : serveur VPS et clients doivent embarquer le **même** `player_scene.json`
+(indices d'`EntityDelta` partagés) — redéployer le VPS avec ce commit avant de distribuer,
+cf. `scripts/deploy_vps.sh`.
