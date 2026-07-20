@@ -193,7 +193,18 @@ impl Physics {
             // collider bloquerait le joueur alors qu'il est invisible (cf.
             // `App::init_waves`/`update_waves`).
             let is_player = obj.controller.as_ref().is_some_and(|c| c.input || c.gyro);
-            let is_ai = obj.ai_chaser.is_some() && obj.visible;
+            // Créature scriptée kinématique AVEC `ai_chaser` (chantier 4.1,
+            // audit 2026-07-20 : créatures de la scène servie qui patrouillent
+            // en Lua ET chassent par archétype) : le scripté PRIME. Sans ce
+            // garde, `controllable` la basculerait en corps dynamique piloté
+            // par vitesse — `resolve_scripted_moves` ne verrait plus jamais
+            // ses écritures Lua (patrouille morte) et `step` écraserait la
+            // position scriptée à chaque tick. La chasse de ces créatures
+            // passe par le même canal que leur patrouille : une réécriture de
+            // `transform.position` avant `resolve_scripted_moves`
+            // (cf. `app::simulation`, boucle chasseurs).
+            let is_ai =
+                obj.ai_chaser.is_some() && obj.visible && obj.physics != PhysicsKind::Kinematic;
             let controllable = is_player || is_ai;
             if matches!(obj.physics, PhysicsKind::None) && !controllable {
                 continue;
@@ -563,6 +574,15 @@ impl Physics {
     /// que l'accélération (`BRAKE_FACTOR` : arrêts nets) et une autorité réduite en
     /// l'air (`AIR_CONTROL` : arc de saut crédible). Renvoie `true` si un **saut** a
     /// effectivement été déclenché (objet au sol).
+    /// Vrai si l'objet `index` a un corps **scripté** (kinématique piloté par
+    /// `resolve_scripted_moves`) dans ce monde physique — la boucle chasseurs
+    /// (`app::simulation`) s'en sert pour router la poursuite : corps dynamique
+    /// → `control()` (vitesse), corps scripté → réécriture de position (même
+    /// canal que la patrouille Lua, chantier 4.1 audit 2026-07-20).
+    pub fn is_scripted_body(&self, index: usize) -> bool {
+        self.scripted.iter().any(|&(i, _)| i == index)
+    }
+
     #[allow(clippy::too_many_arguments)] // paramètres physiques distincts d'un même appel
     pub fn control(
         &mut self,
@@ -2354,6 +2374,44 @@ mod tests {
             vy < 0.0,
             "la gravité doit s'appliquer dès le premier `control` après une \
              téléportation, pas seulement au tick suivant (vy={vy})"
+        );
+    }
+
+    /// Chantier 4.1 (audit 2026-07-20) : une créature kinématique **scriptée**
+    /// qui reçoit un `ai_chaser` doit rester un corps scripté (patrouille Lua
+    /// résolue par `resolve_scripted_moves`), PAS devenir un corps dynamique
+    /// piloté par vitesse — la chasse de ces créatures passe par la
+    /// réécriture de position, même canal que la patrouille.
+    #[test]
+    fn a_kinematic_scripted_object_with_ai_chaser_stays_a_scripted_body() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject {
+            name: "Créature chasseuse scriptée".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            physics: PhysicsKind::Kinematic,
+            script: "obj.x = obj.x + dt".into(),
+            ai_chaser: Some(crate::scene::AiChaser::default()),
+            ..Default::default()
+        });
+        let phys = Physics::build(&scene);
+        assert!(
+            phys.is_scripted_body(0),
+            "kinématique + script + ai_chaser = corps scripté (le scripté prime)"
+        );
+
+        // Contre-épreuve : le même chasseur SANS `PhysicsKind::Kinematic`
+        // garde le comportement historique (corps dynamique contrôlé).
+        let mut scene2 = Scene::default();
+        scene2.objects.push(SceneObject {
+            name: "Chasseur historique".into(),
+            mesh: crate::scene::MeshKind::Cube,
+            ai_chaser: Some(crate::scene::AiChaser::default()),
+            ..Default::default()
+        });
+        let phys2 = Physics::build(&scene2);
+        assert!(
+            !phys2.is_scripted_body(0),
+            "un chasseur non kinématique reste un corps contrôlé par vitesse"
         );
     }
 }
