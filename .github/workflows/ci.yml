@@ -44,6 +44,9 @@ jobs:
       - name: Budget unwrap/expect/panic (Sprint 113b)
         run: python3 scripts/check_unwrap_budget.py
 
+      - name: Orphelins du bundle embarqué (audit 2026-07-20, A2)
+        run: python3 scripts/check_bundle_orphans.py
+
   # Tests réseau à sockets réels (feature `net_tests`, cf. Cargo.toml et
   # docs/architecture.md) : ils ouvrent des sockets TCP sur localhost, ce que
   # les runners ubuntu-latest autorisent. Job séparé du job `check` pour ne pas
