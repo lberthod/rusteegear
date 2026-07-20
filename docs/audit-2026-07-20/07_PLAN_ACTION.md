@@ -25,7 +25,7 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 | 2.1 | Chantier contrôles fini et commité (`9dc0e42`) : masque caméra restreint au bit 0 (décor) + 3 tests de collision caméra (mur / voie libre / créature ignorée) | ✅ suite lib 669/669 verte |
 | 2.2 | Scène embarquée : les 11 gardes-fous `the_embedded` passent (« Errant 62 » résolu par le ré-export du 19-20/07) ; l'outil de resynchro copie désormais lui-même `models/` → `bundle/mNN_` compressé (`88f103e`) — ferme **A5** | ✅ |
 | 2.3 | Purge : 394 orphelins supprimés (bundle 22 → 12 Mo, 321 clés conservées), `scripts/check_bundle_orphans.py` en mode check dans le job CI `check` (`e7b4332`) — ferme **A2** | ✅ |
-| 2.4 | Tag `v0.1.0-alpha.1`, release, builds depuis le tag, lancement du protocole de test externe (matériel prêt : QUICKSTART, doctor.sh, TEST_SCENARIO, FEEDBACK_FORM) | ⏳ En attente de décision (action publique) + 2 restes manuels de `sprint.19matin.md` (test compte macOS neuf, issue GitHub flaky) |
+| 2.4 | Tag `v0.1.0-alpha.1`, release, builds depuis le tag, lancement du protocole de test externe | ✅ Constat du 20/07 après-midi : les tags `v0.1.0-alpha.1/.2/.3` étaient **déjà posés et poussés** le 19/07 (autre session, `release.yml` construit depuis les tags) — le constat « gel bloqué » de l'audit était périmé. Restes utilisateur : inviter le testeur, test compte macOS neuf, issue GitHub flaky |
 
 ## Vague 3 — Sécuriser avant d'élargir le cercle (2-3 jours)
 

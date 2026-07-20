@@ -59,6 +59,19 @@ impl AppState {
         );
     }
 
+    /// Identifiant Firebase à joindre au `Join` : l'**idToken** de la session
+    /// (audit 2026-07-20 R1 — le serveur le vérifie via `accounts:lookup` et
+    /// ne crédite que l'uid prouvé), à défaut l'uid brut (que le serveur
+    /// ignorera s'il a lui-même une session Firebase). Limite connue : un
+    /// idToken expire (~1 h) ; une reconnexion tardive enverra un jeton
+    /// périmé, refusé côté serveur avec un simple warn — la partie continue,
+    /// seule la progression de la manche est perdue.
+    fn join_credential(&self) -> Option<String> {
+        self.firebase_id_token
+            .clone()
+            .or_else(|| self.firebase_uid.clone())
+    }
+
     /// Comme `connect_to_server`, avec une classe choisie (Sprint 3), un code
     /// de partie (`room`, Sprint 20 — **distinct** du salon de chat Firebase,
     /// cf. `editor::windows::multiplayer_window`) et un mode de manche
@@ -66,9 +79,8 @@ impl AppState {
     /// vide retombe sur `protocol::DEFAULT_LOBBY` (comportement inchangé pour
     /// qui laisse le champ vide, même repli que côté protocole,
     /// `net/protocol.rs:52-56`). Remplace une connexion existante s'il y en
-    /// avait une. Transmet `self.firebase_uid` au serveur s'il est connu (cf.
-    /// `sign_in`/`sign_up` ci-dessous, desktop uniquement — toujours `None`
-    /// sur Android) — `None` pour une partie anonyme.
+    /// avait une. Transmet `join_credential()` au serveur (idToken vérifié
+    /// côté serveur) — `None` pour une partie anonyme.
     pub fn connect_to_server_as(
         &mut self,
         url: &str,
@@ -84,10 +96,11 @@ impl AppState {
         } else {
             room
         };
+        let cred = self.join_credential();
         match crate::net::client::NetClient::connect_to_lobby(
             url,
             name,
-            self.firebase_uid.as_deref(),
+            cred.as_deref(),
             lobby,
             class.to_u8(),
             objective.to_u8(),
@@ -484,7 +497,7 @@ impl AppState {
             self.net_reconnect = None;
             return;
         };
-        let uid = self.firebase_uid.clone();
+        let uid = self.join_credential();
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Connexion bloquante (poignée de main TCP/WebSocket complète) :

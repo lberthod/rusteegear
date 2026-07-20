@@ -67,6 +67,13 @@ pub const MAX_LOBBY_LEN: usize = 32;
 /// usage légitime.
 pub const MAX_FIREBASE_UID_LEN: usize = 128;
 
+/// Longueur maximale (caractères) d'un **idToken** Firebase transmis dans le
+/// même champ `firebase_uid` (audit 2026-07-20, R1 : le client envoie
+/// désormais son jeton, que le serveur vérifie via `accounts:lookup`, plutôt
+/// qu'un uid brut cru sur parole). Un JWT Firebase fait ~900-1500 caractères ;
+/// borne large mais finie, loin de tout usage légitime.
+pub const MAX_FIREBASE_TOKEN_LEN: usize = 4096;
+
 /// Valide les champs de `ClientMsg::Join` avant tout traitement côté serveur
 /// (Sprint 105a-2) : longueur bornée pour les trois champs, et charset
 /// restreint (alphanumérique + `-`/`_`) pour `lobby`/`firebase_uid` — tous
@@ -105,13 +112,33 @@ pub fn valid_join_fields(
         }
     }
     if let Some(uid) = firebase_uid {
-        if uid.chars().count() > MAX_FIREBASE_UID_LEN {
-            return Err(format!(
-                "l'identifiant Firebase dépasse {MAX_FIREBASE_UID_LEN} caractères"
-            ));
-        }
-        if !is_safe_token(uid) {
-            return Err("l'identifiant Firebase contient des caractères non autorisés".to_string());
+        if uid.contains('.') {
+            // idToken JWT (trois segments base64url séparés par des '.') : le
+            // serveur le vérifie via `firebase::verify_id_token` et n'utilise
+            // que l'uid prouvé — le jeton lui-même ne finit jamais dans une
+            // URL, seul son charset/longueur est borné ici.
+            if uid.chars().count() > MAX_FIREBASE_TOKEN_LEN {
+                return Err(format!(
+                    "le jeton Firebase dépasse {MAX_FIREBASE_TOKEN_LEN} caractères"
+                ));
+            }
+            if !uid
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err("le jeton Firebase contient des caractères non autorisés".to_string());
+            }
+        } else {
+            if uid.chars().count() > MAX_FIREBASE_UID_LEN {
+                return Err(format!(
+                    "l'identifiant Firebase dépasse {MAX_FIREBASE_UID_LEN} caractères"
+                ));
+            }
+            if !is_safe_token(uid) {
+                return Err(
+                    "l'identifiant Firebase contient des caractères non autorisés".to_string(),
+                );
+            }
         }
     }
     Ok(())
@@ -735,6 +762,30 @@ mod tests {
             assert!(
                 valid_join_fields("Alice", "salon1", Some(bad)).is_err(),
                 "« {bad} » ne devrait pas être un uid Firebase valide"
+            );
+        }
+    }
+
+    /// Le même champ transporte désormais un **idToken** JWT (audit
+    /// 2026-07-20, R1) : trois segments base64url séparés par des '.', bien
+    /// plus long qu'un uid — accepté, avec sa propre borne et son charset.
+    #[test]
+    fn valid_join_fields_accepts_a_jwt_id_token_and_bounds_it() {
+        let jwt = format!(
+            "{}.{}.{}",
+            "eyJhbGciOiJSUzI1NiJ9",
+            "e".repeat(900),
+            "sig-_123"
+        );
+        assert!(valid_join_fields("Alice", "salon1", Some(&jwt)).is_ok());
+
+        let too_long = format!("a.{}", "b".repeat(MAX_FIREBASE_TOKEN_LEN));
+        assert!(valid_join_fields("Alice", "salon1", Some(&too_long)).is_err());
+
+        for bad in ["a.b/c", "a.b c", "a.b?c"] {
+            assert!(
+                valid_join_fields("Alice", "salon1", Some(bad)).is_err(),
+                "« {bad} » ne devrait pas être un jeton Firebase valide"
             );
         }
     }

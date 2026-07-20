@@ -302,6 +302,27 @@ fn rtdb_url(database_url: &str, path: &str, query: &str) -> String {
     }
 }
 
+/// Extrait l'uid (`users[0].localId`) d'une réponse `accounts:lookup` — brique
+/// pure de `verify_id_token`, testable sans réseau.
+fn parse_lookup_uid(text: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct LookupResponse {
+        users: Vec<LookupUser>,
+    }
+    #[derive(Deserialize)]
+    struct LookupUser {
+        #[serde(rename = "localId")]
+        local_id: String,
+    }
+    let resp: LookupResponse = serde_json::from_str(text)
+        .map_err(|e| format!("Réponse accounts:lookup invalide : {e}"))?;
+    resp.users
+        .into_iter()
+        .next()
+        .map(|u| u.local_id)
+        .ok_or_else(|| "accounts:lookup : aucun utilisateur pour ce jeton".to_string())
+}
+
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 mod net_io {
     use super::*;
@@ -350,6 +371,36 @@ mod net_io {
         password: &str,
     ) -> Result<AuthSession, String> {
         auth_call(config, "signUp", email, password)
+    }
+
+    /// Vérifie un idToken Firebase (`accounts:lookup`) et renvoie l'**uid
+    /// prouvé** par ce jeton. Utilisé par le serveur de jeu au `Join` (audit
+    /// 2026-07-20, R1) : la progression n'est créditée qu'à l'uid vérifié,
+    /// jamais à une chaîne fournie librement par le client.
+    pub fn verify_id_token(config: &FirebaseConfig, id_token: &str) -> Result<String, String> {
+        if config.api_key.trim().is_empty() {
+            return Err("Clé API Firebase manquante".into());
+        }
+        let url = format!(
+            "https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={}",
+            config.api_key
+        );
+        let body = serde_json::json!({ "idToken": id_token });
+        match ureq::post(&url).timeout(TIMEOUT).send_json(body) {
+            Ok(resp) => {
+                let text = resp
+                    .into_string()
+                    .map_err(|e| format!("Réponse Firebase illisible : {e}"))?;
+                super::parse_lookup_uid(&text)
+            }
+            Err(ureq::Error::Status(_, resp)) => {
+                let text = resp.into_string().unwrap_or_default();
+                Err(parse_error_message(&text)
+                    .map(|m| format!("Firebase Auth : {m}"))
+                    .unwrap_or_else(|| "Firebase Auth : jeton refusé".to_string()))
+            }
+            Err(e) => Err(format!("Requête accounts:lookup échouée : {e}")),
+        }
     }
 
     /// Connecte un joueur existant.
@@ -603,7 +654,7 @@ mod net_io {
 pub use net_io::{
     get_profile_name, get_progress, get_top_leaderboard, list_chat_messages, list_online_players,
     post_chat_message, post_leaderboard_entry, set_presence, set_profile_name, set_progress,
-    sign_in, sign_up,
+    sign_in, sign_up, verify_id_token,
 };
 
 // --- Qui écrit la progression ? ---------------------------------------------
@@ -633,6 +684,19 @@ pub use net_io::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `accounts:lookup` (vérification d'idToken, audit 2026-07-20 R1) : la
+    /// réponse porte l'uid prouvé dans `users[0].localId` ; zéro utilisateur
+    /// = jeton qui ne prouve rien, refusé.
+    #[test]
+    fn parses_a_lookup_response_into_the_proven_uid() {
+        let body = r#"{"kind":"identitytoolkit#GetAccountInfoResponse",
+            "users":[{"localId":"abc123DEF","email":"a@b.c"}]}"#;
+        assert_eq!(parse_lookup_uid(body).unwrap(), "abc123DEF");
+
+        assert!(parse_lookup_uid(r#"{"users":[]}"#).is_err());
+        assert!(parse_lookup_uid("pas du json").is_err());
+    }
 
     #[test]
     fn parses_a_successful_auth_response() {

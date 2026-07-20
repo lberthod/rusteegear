@@ -233,6 +233,8 @@ fn handle_message(
     net: &NetServer,
     id: PlayerId,
     msg: ClientMsg,
+    firebase: &Option<(FirebaseConfig, AuthSession)>,
+    verified_uids: &std::sync::mpsc::Sender<(PlayerId, String)>,
 ) {
     match msg {
         ClientMsg::Join {
@@ -283,8 +285,45 @@ fn handle_message(
             {
                 log::info!("Joueur {id} ({name}) entre en jeu (salon « {code} »)");
                 room.lobby.names.insert(id, name.clone());
-                if let Some(uid) = firebase_uid {
-                    room.lobby.firebase_uids.insert(id, uid);
+                // Anti-usurpation (audit 2026-07-20, R1) : le champ transporte
+                // désormais un **idToken** (JWT, contient des '.') que l'on
+                // vérifie via `accounts:lookup` — seul l'uid prouvé est
+                // crédité en progression. La vérification (HTTP, ~centaines de
+                // ms) part dans un thread dédié pour ne pas geler le tick de
+                // 16 ms ; l'uid rejoint `firebase_uids` via `verified_uids`,
+                // drainé par la boucle principale (la progression n'est lue
+                // qu'en fin de manche, l'arrivée différée est sans effet).
+                // Un uid brut (builds alpha.1-3) n'est plus cru sur parole :
+                // accepté seulement si le serveur n'a pas de session Firebase
+                // (progression inerte de toute façon).
+                if let Some(cred) = firebase_uid {
+                    match (firebase, cred.contains('.')) {
+                        (Some((config, _)), true) => {
+                            let config = config.clone();
+                            let tx = verified_uids.clone();
+                            std::thread::spawn(move || {
+                                match firebase::verify_id_token(&config, &cred) {
+                                    Ok(uid) => {
+                                        let _ = tx.send((id, uid));
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Jeton Firebase refusé ({id}) : {e}");
+                                    }
+                                }
+                            });
+                        }
+                        (Some(_), false) => {
+                            log::warn!(
+                                "Uid Firebase brut non vérifié ignoré ({id}) — client \
+                                 antérieur à la vérification de jeton, pas de progression"
+                            );
+                        }
+                        (None, _) => {
+                            if !cred.contains('.') {
+                                room.lobby.firebase_uids.insert(id, cred);
+                            }
+                        }
+                    }
                 }
                 player_room.insert(id, code);
                 net.send_to_many(
@@ -700,6 +739,12 @@ fn main() {
     let mut player_room: HashMap<PlayerId, String> = HashMap::new();
     let mut tick: u32 = 0;
 
+    // Uids Firebase **vérifiés** (audit 2026-07-20, R1) : les threads de
+    // `verify_id_token` lancés au `Join` déposent ici (PlayerId, uid prouvé),
+    // la boucle draine à chaque tick. Si le joueur a quitté entre-temps,
+    // l'entrée est simplement abandonnée.
+    let (verified_tx, verified_rx) = std::sync::mpsc::channel::<(PlayerId, String)>();
+
     // Sans réseau (bind échoué) : un unique salon local, pour ne pas régresser
     // le comportement historique (aucun moyen de le rejoindre de toute façon,
     // mais la manche tourne quand même — utile en test manuel sans port libre).
@@ -712,9 +757,35 @@ fn main() {
 
         if let Some(net) = &net {
             while let Ok((id, msg)) = net.inbox.try_recv() {
-                handle_message(&mut rooms, &mut player_room, net, id, msg);
+                handle_message(
+                    &mut rooms,
+                    &mut player_room,
+                    net,
+                    id,
+                    msg,
+                    &firebase,
+                    &verified_tx,
+                );
             }
             evict_timed_out_players(&mut rooms, &mut player_room, net, CLIENT_TIMEOUT);
+        }
+        while let Ok((id, uid)) = verified_rx.try_recv() {
+            // Défense en profondeur : même vérifié, l'uid finit non échappé
+            // dans une URL RTDB (`award_progress`) — on lui applique le même
+            // charset que `valid_join_fields` avant de l'inscrire.
+            let safe = !uid.is_empty()
+                && uid
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !safe {
+                log::warn!("Uid vérifié au format inattendu, ignoré ({id})");
+                continue;
+            }
+            if let Some(code) = player_room.get(&id)
+                && let Some(room) = rooms.get_mut(code)
+            {
+                room.lobby.firebase_uids.insert(id, uid);
+            }
         }
 
         let mut to_close: Vec<String> = Vec::new();
