@@ -36,14 +36,14 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 | 3.3 | `MAX_TOTAL_CONNECTIONS = 256` (server_loop, testé à plafond bas) + `MAX_ROOMS = 16` avec `JoinRejected` explicite (`d894e07`) | **R3** | ✅ net_tests 69/69 |
 | 3.4 | Fermer le port en clair du VPS si non nécessaire (constat R4) | surface | ⏳ Côté VPS/Caddy (SSH), pas dans le dépôt — à faire lors du prochain déploiement |
 
-## Vague 4 — La preuve du fun (~1 semaine)
+## Vague 4 — La preuve du fun (entamée le 2026-07-20 ; constats d'audit en partie périmés)
 
-| # | Action | Coût | Fait quand |
-|---|---|---|---|
-| 4.1 | Réunifier « les deux jeux » : grammaire de comportement (vitesse/agressivité par créature) appliquée à `player_scene.json` **sans toucher au contrat de PV verrouillé** ; créer l'entrée de roadmap « preuve du fun » | XL | Les créatures de la scène servie chassent/patrouillent selon leur casting ; les tests de PV de vagues restent verts ; entrée de roadmap créée |
-| 4.2 | Avatar `fairy_hero` + 3 silhouettes de classe à la place de la sphère | L | En jeu réseau, la classe d'un joueur est identifiable à sa silhouette seule |
-| 4.3 | Écran de fin de manche détaillé (ligne par joueur, frags/assists au même rang, XP, contrat) | L | Fin de manche à 2+ joueurs : chaque joueur voit sa ligne et le contrat |
-| 4.4 | Surfaces contextuelles : bannière de vague, palier atteint, marqueur allié hors-écran | M | Les 3 surfaces visibles en partie réseau |
+| # | Action | Statut |
+|---|---|---|
+| 4.1 | Réunifier « les deux jeux » : grammaire de comportement appliquée à `player_scene.json` sans toucher au contrat de PV verrouillé ; entrée de roadmap « preuve du fun » | ⬜ XL — le prochain gros chantier |
+| 4.2 | Avatar `fairy_hero` | ✅ Restauré (`0506c90`) : mesh skinné + clips Idle/Walk pilotés par la simulation (local + fantômes réseau) + **nouveau garde-fou CI** contre une 6ᵉ perte. Reste ⬜ : 3 silhouettes de classe distinctes |
+| 4.3 | Écran de fin de manche détaillé | ✅ Déjà livré avant l'audit (Phase H Sprint 1, `PROTOCOL_VERSION` 6 : `RoundPlayerSummary` affiché par `hud.rs`) — constat d'audit périmé |
+| 4.4 | Surfaces contextuelles | 🟠 Bannière de vague : ✅ déjà livrée (`GameEvent::WaveStart` → `wave_banner_flash`). Restent ⬜ : palier atteint, marqueur allié hors-écran |
 
 ## Vague 5 — Fond de roulement qualité (au fil de l'eau)
 
