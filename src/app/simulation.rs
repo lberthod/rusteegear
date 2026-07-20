@@ -141,6 +141,49 @@ impl AppState {
         let jy = (t * 59.0).sin() + (t * 83.0).sin() * 0.5;
         (right * jx + up * jy) * AMPLITUDE * self.camera_shake
     }
+
+    /// Rapproche `self.camera` de sa cible quand un décor solide se trouve entre
+    /// les deux (spherecast simplifié en rayon unique, cf. le document utilisateur
+    /// sur le pilotage manette) : sans ça, la caméra troisième personne traverse
+    /// les murs dès que le joueur passe à proximité. Le rayon part `CAMERA_
+    /// COLLISION_SKIP` mètres après `target` plutôt que dessus : sinon il
+    /// accrocherait le collider du joueur lui-même (juste sous la cible caméra,
+    /// cf. `PLAYER_CAMERA_HEIGHT_OFFSET`) et coincerait la caméra au ras du
+    /// personnage. `collision_distance` reste `None` (distance désirée inchangée)
+    /// dès que la voie est libre — pas de rattrapage progressif nécessaire, un
+    /// rayon par frame suffit et évite toute caméra qui « traîne » en sortant
+    /// d'un couloir.
+    pub(super) fn update_camera_collision(&mut self) {
+        const SKIP: f32 = 0.35;
+        const MARGIN: f32 = 0.25;
+        // Couches vues par le rayon : le bit 0 seulement. Le décor garde la
+        // couche par défaut (= toutes les couches, bit 0 inclus) tandis que les
+        // créatures (bits 1-26, `scene/demos/mmorpg/creatures.rs`) et la faune
+        // (bits 27-31, `fauna.rs`) posent leur membership sur des bits ≥ 1
+        // uniquement : une bête qui passe entre la caméra et le joueur ne doit
+        // pas faire sauter la caméra (audit 2026-07-20, point C1 — un masque
+        // `u32::MAX` accrochait tout). Résidu assumé : les fantômes réseau
+        // héritent de la couche du joueur (défaut, bit 0 inclus) et restent
+        // donc des obstacles caméra.
+        const CAMERA_COLLISION_MASK: u32 = 1;
+        self.camera.collision_distance = None;
+        let Some(phys) = &self.physics else {
+            return;
+        };
+        let desired = self.camera.distance;
+        if desired <= SKIP {
+            return;
+        }
+        let Some(dir) = (self.camera.eye() - self.camera.target).try_normalize() else {
+            return;
+        };
+        let origin = self.camera.target + dir * SKIP;
+        let max_toi = desired - SKIP;
+        if let Some(hit) = phys.raycast(origin, dir, max_toi, CAMERA_COLLISION_MASK) {
+            let clamped = (SKIP + hit.distance - MARGIN).max(0.3);
+            self.camera.collision_distance = Some(clamped.min(desired));
+        }
+    }
 }
 
 /// Rayon mort du joystick virtuel (0..1) : en-deçà, l'entrée est ramenée à zéro plutôt
@@ -666,6 +709,31 @@ impl AppState {
                 self.camera.pitch =
                     (self.camera.pitch - look * GAMEPAD_PITCH_RATE * dt).clamp(0.08, 1.35);
             }
+            // Orbite libre du stick droit (axe horizontal) : caméra découplée du
+            // personnage (style « action moderne » — stick gauche = déplacement,
+            // stick droit = caméra), cumulée chaque frame par-dessus le
+            // rattrapage éventuel vers `player_yaw` ci-dessus (visée à l'arme à
+            // distance). Sans manette, `gamepad_yaw` reste à 0 — aucun effet.
+            //
+            // Désactivée pour un personnage en course automatique (`auto_run_speed`,
+            // cf. démo « Temple Run ») : `camera_relative_move` interprète le stick
+            // gauche selon `camera.yaw` (`AppState::advance_play`), et la voie de ce
+            // mode avance toujours en +Z monde fixe — une caméra libre y ferait
+            // dériver l'axe gauche/droite perçu par rapport à la voie réelle. La
+            // caméra de ce mode reste donc fixe derrière le coureur, comme avant.
+            let auto_run = self
+                .player_object()
+                .and_then(|o| o.controller.as_ref())
+                .is_some_and(|c| c.auto_run_speed > 0.0);
+            let yaw_look = self.input_state.gamepad_yaw;
+            if yaw_look != 0.0 && !auto_run {
+                const GAMEPAD_YAW_RATE: f32 = 2.4; // rad/s à plein débattement
+                self.camera.yaw -= yaw_look * GAMEPAD_YAW_RATE * dt;
+            }
+            // Collision de caméra : rapproche la caméra devant tout décor solide
+            // entre la cible et l'œil, pour ne jamais traverser un mur quand le
+            // joueur passe près d'un obstacle (cf. `update_camera_collision`).
+            self.update_camera_collision();
         }
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
         if self.damage_flash > 0.0 {
@@ -1153,8 +1221,10 @@ impl AppState {
             // sur le joystick éloigne le personnage de la caméra, comme dans un jeu
             // à la Zelda, quelle que soit sa rotation actuelle.
             let joy = apply_deadzone(inp.joy, JOYSTICK_DEADZONE);
-            let (raw_mx, raw_my) =
-                clamp_move_vector(joy.0 + inp.key_move.0, joy.1 + inp.key_move.1);
+            let (raw_mx, raw_my) = clamp_move_vector(
+                joy.0 + inp.key_move.0 + inp.gamepad_move.0,
+                joy.1 + inp.key_move.1 + inp.gamepad_move.1,
+            );
             let (mx, my) = camera_relative_move(raw_mx, raw_my, self.camera.yaw);
             let (tilt, space) = (inp.tilt, inp.jump);
             let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
@@ -1268,6 +1338,18 @@ impl AppState {
                         // « claquait » en fin de course.
                         let target_yaw = (-vx).atan2(-vz);
                         rotate_towards_smooth(cur_yaw, target_yaw, ctrl.turn_speed, dt)
+                    } else if !ctrl.fire_button.is_empty() && self.input_state.gamepad_yaw != 0.0 {
+                        // Immobile avec une arme à distance équipée et le stick droit
+                        // activement poussé : le personnage suit l'orbite libre de la
+                        // caméra plutôt que de garder son cap — sans ça, viser à l'arrêt
+                        // en orbitant la caméra désaligne le réticule central
+                        // (`editor::crosshair`) de la direction réelle du tir
+                        // (`fireball.rs`, qui part de `transform.rotation`, pas de
+                        // `camera.yaw`). Gardé au `!= 0.0`, pas juste « immobile » : sans
+                        // ce garde-fou, un joueur qui n'a jamais touché le stick droit se
+                        // ferait pivoter vers le yaw caméra par défaut, indépendant de sa
+                        // vraie orientation de spawn.
+                        rotate_towards_smooth(cur_yaw, self.camera.yaw, ctrl.turn_speed, dt)
                     } else {
                         cur_yaw
                     };

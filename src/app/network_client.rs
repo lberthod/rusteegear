@@ -905,16 +905,16 @@ impl AppState {
 
 /// Construit le `ClientMsg::Input` envoyé au serveur à partir de l'état local
 /// **complet** — exactement les mêmes sources que la prédiction locale de
-/// `sim_step` : joystick/croix tactile + flèches (`network_move_axes`),
-/// poussée clavier/tactile W/S (`key_thrust`/`touch_thrust`, même formule que
-/// `AppState::advance_play` : `-sin(yaw)`/`-cos(yaw)`, pour rester cohérent
-/// avec le mouvement prédit localement), gyroscope si l'objet joueur l'active,
-/// et saut/attaque venant aussi bien du clavier que des **boutons tactiles
-/// nommés** (`Controller::jump_button`/`attack_button`) — omettre l'une de ces
-/// sources laisserait le serveur ignorer un mouvement que la prédiction
-/// locale affiche pourtant, et la réconciliation finirait par tirer le joueur
-/// en arrière pour un mouvement qu'il a réellement fait (cf.
-/// docs/audits/app-network.md).
+/// `sim_step` : joystick/croix tactile + flèches + WASD + stick gauche manette,
+/// tous relatifs à la caméra (`network_move_axes`), poussée tactile W/S
+/// (`touch_thrust`, même formule que `AppState::advance_play` :
+/// `-sin(yaw)`/`-cos(yaw)`, pour rester cohérent avec le mouvement prédit
+/// localement), gyroscope si l'objet joueur l'active, et saut/attaque venant
+/// aussi bien du clavier que des **boutons tactiles nommés**
+/// (`Controller::jump_button`/`attack_button`) — omettre l'une de ces sources
+/// laisserait le serveur ignorer un mouvement que la prédiction locale affiche
+/// pourtant, et la réconciliation finirait par tirer le joueur en arrière pour
+/// un mouvement qu'il a réellement fait (cf. docs/audits/app-network.md).
 fn network_input_msg(
     inp: &super::PlayerInput,
     camera_yaw: f32,
@@ -967,8 +967,8 @@ fn network_move_axes(
     camera_yaw: f32,
     player_yaw: Option<f32>,
 ) -> (f32, f32) {
-    let raw_mx = (inp.joy.0 + inp.key_move.0).clamp(-1.0, 1.0);
-    let raw_my = (inp.joy.1 + inp.key_move.1).clamp(-1.0, 1.0);
+    let raw_mx = (inp.joy.0 + inp.key_move.0 + inp.gamepad_move.0).clamp(-1.0, 1.0);
+    let raw_my = (inp.joy.1 + inp.key_move.1 + inp.gamepad_move.1).clamp(-1.0, 1.0);
     let (mut mx, mut my) = super::simulation::camera_relative_move(raw_mx, raw_my, camera_yaw);
     // `thrust()` (clavier + pavé tactile W/A/S/D) et non `key_thrust` seul : le
     // pavé de l'APK doit être vu par le serveur exactement comme le clavier.

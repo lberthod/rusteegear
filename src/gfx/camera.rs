@@ -9,6 +9,12 @@ pub struct OrbitCamera {
     pub pitch: f32,
     pub aspect: f32,
     pub fovy: f32,
+    /// Distance effective imposée par la collision de caméra (`AppState::
+    /// update_camera_collision`, décor solide entre `target` et l'œil) — `None`
+    /// tant que la voie est libre, auquel cas `eye()` retombe sur `distance`. Ne
+    /// mute jamais `distance` elle-même : le zoom désiré (molette, réglages) reste
+    /// intact dès que l'obstacle disparaît, sans qu'il faille le mémoriser à part.
+    pub collision_distance: Option<f32>,
 }
 
 impl OrbitCamera {
@@ -20,14 +26,16 @@ impl OrbitCamera {
             pitch: 0.5,
             aspect,
             fovy: 45f32.to_radians(),
+            collision_distance: None,
         }
     }
 
     pub fn eye(&self) -> Vec3 {
         let pitch = self.pitch.clamp(-1.54, 1.54);
-        let x = self.distance * pitch.cos() * self.yaw.sin();
-        let y = self.distance * pitch.sin();
-        let z = self.distance * pitch.cos() * self.yaw.cos();
+        let dist = self.collision_distance.unwrap_or(self.distance);
+        let x = dist * pitch.cos() * self.yaw.sin();
+        let y = dist * pitch.sin();
+        let z = dist * pitch.cos() * self.yaw.cos();
         self.target + Vec3::new(x, y, z)
     }
 

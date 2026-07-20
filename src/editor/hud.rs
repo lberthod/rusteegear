@@ -1158,8 +1158,10 @@ pub(super) fn mobile_overlay(
                 if down.is_pointer_button_down_on() {
                     thrust -= 1.0;
                 }
-                // Mêmes signes que le clavier (cf. `lib.rs` : `key_turn =
-                // axis_from_held(a, d)`) : A = -1, D = +1.
+                // Convention « tank » du pavé tactile (`touch_turn`) : A = -1,
+                // D = +1 — le clavier de bureau n'utilise plus ce canal depuis le
+                // passage au style « action moderne » (cf. `PlayerInput::key_move`),
+                // mais le pavé mobile le conserve pour ce contrôle dédié.
                 if left.is_pointer_button_down_on() {
                     turn -= 1.0;
                 }

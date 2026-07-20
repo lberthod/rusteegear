@@ -1495,6 +1495,98 @@ fn tank_controls_reversing_never_spins_the_player_around() {
     );
 }
 
+/// Style « action moderne » (WASD/flèches/stick gauche, `PlayerInput::key_move`
+/// et `gamepad_move`) : le joueur doit avancer **relatif à la caméra**, pas le
+/// long de sa propre orientation comme les contrôles « tank » ci-dessus, et
+/// tourner tout seul pour faire face à cette direction.
+#[test]
+fn camera_relative_move_advances_the_player_and_turns_it_to_face_the_direction() {
+    let mut app = AppState::new();
+    app.load_controller_demo();
+    app.playing = true;
+    let pi = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+        .expect("la démo contrôleur a un joueur pilotable");
+    let p0 = app.scene.objects[pi].transform.position;
+    app.camera.yaw = 0.0;
+
+    // Stick gauche/WASD vers la droite de l'écran (`mx = 1`) : `key_move` et
+    // `gamepad_move` empruntent le même chemin (`PlayerInput::mod.rs`), tester
+    // l'un couvre l'autre — cf. `raw_mx/raw_my` dans `advance_play`.
+    app.input_state.key_move = (1.0, 0.0);
+    for _ in 0..30 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    let moved = app.scene.objects[pi].transform.position - p0;
+    assert!(
+        moved.length() > 0.3,
+        "le stick gauche/WASD doit faire avancer le joueur, déplacement={moved:?}"
+    );
+    // Caméra à yaw=0 : `camera_relative_move(1, 0, 0)` pointe vers +X monde.
+    assert!(
+        moved.normalize().dot(Vec3::X) > 0.8,
+        "à yaw caméra 0, mx=1 doit avancer vers +X monde : déplacement={moved:?}"
+    );
+    let yaw = app.scene.objects[pi]
+        .transform
+        .rotation
+        .to_euler(EulerRot::YXZ)
+        .0;
+    assert!(
+        (yaw - (-std::f32::consts::FRAC_PI_2)).abs() < 0.3,
+        "le personnage doit tourner tout seul pour faire face à +X (yaw≈-π/2), yaw={yaw}"
+    );
+}
+
+/// Le stick droit de la manette (`gamepad_yaw`) doit orbiter librement la
+/// caméra de jeu, indépendamment du personnage — style « action moderne ».
+#[test]
+fn gamepad_yaw_orbits_the_camera_freely() {
+    let mut app = AppState::new();
+    app.load_controller_demo();
+    app.playing = true;
+    app.camera.yaw = 0.0;
+
+    app.input_state.gamepad_yaw = 1.0;
+    for _ in 0..10 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    assert!(
+        app.camera.yaw < -0.1,
+        "le stick droit doit avoir fait tourner la caméra, yaw={}",
+        app.camera.yaw
+    );
+}
+
+/// Garde-fou (endless runner « Temple Run », `auto_run_speed`) : la voie
+/// avance toujours en +Z monde fixe, donc le stick droit ne doit **pas**
+/// orbiter la caméra là — sinon `camera_relative_move` ferait dériver l'axe
+/// gauche/droite perçu par rapport à la voie réelle (cf.
+/// `AppState::advance_play`, bloc caméra frame-level).
+#[test]
+fn gamepad_yaw_is_ignored_during_auto_run() {
+    let mut app = AppState::new();
+    app.load_temple_run_demo();
+    app.playing = true;
+    app.camera.yaw = 0.0;
+
+    app.input_state.gamepad_yaw = 1.0;
+    for _ in 0..10 {
+        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.advance_play();
+    }
+    assert_eq!(
+        app.camera.yaw, 0.0,
+        "l'orbite libre au stick droit doit être coupée en course automatique, yaw={}",
+        app.camera.yaw
+    );
+}
+
 /// Garde-fou du piège respawn + PV : un ennemi à plusieurs PV et
 /// `respawn_delay > 0` doit revenir avec ses PV d'origine, pas avec les 0 PV
 /// où il les a laissés (sinon il réapparaît « déjà vaincu » : re-masqué au
@@ -1544,4 +1636,91 @@ fn a_respawning_enemy_comes_back_with_its_original_hp() {
         "après respawn, un seul coup ne doit plus suffire"
     );
     assert!(app.scene.objects[i].visible);
+}
+
+/// Monte une app minimale pour la collision de caméra : joueur virtuel en
+/// `target` (0,0,0), caméra plein axe +Z (`yaw=0`, `pitch=0`, distance 6) et,
+/// selon le test, un mur cube statique en travers de la ligne cible→œil.
+fn camera_collision_app() -> AppState {
+    let mut app = AppState::new();
+    app.camera.target = glam::Vec3::ZERO;
+    app.camera.yaw = 0.0;
+    app.camera.pitch = 0.0;
+    app.camera.distance = 6.0;
+    app
+}
+
+fn camera_collision_wall() -> SceneObject {
+    let mut wall = SceneObject {
+        name: "Mur caméra".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        physics: crate::runtime::physics::PhysicsKind::Static,
+        ..Default::default()
+    };
+    // Face avant à z = 2,75 (centre 3,0, demi-épaisseur 0,25), assez large pour
+    // que le rayon cible→œil (axe +Z) ne puisse pas passer à côté.
+    wall.transform.position = glam::Vec3::new(0.0, 0.0, 3.0);
+    wall.transform.scale = glam::Vec3::new(4.0, 4.0, 0.5);
+    wall
+}
+
+/// Un décor solide entre la cible et l'œil rapproche la caméra devant le mur
+/// (`collision_distance` < distance désirée), au lieu de la laisser traverser.
+#[test]
+fn camera_collision_pulls_the_eye_in_front_of_a_wall() {
+    let mut app = camera_collision_app();
+    app.scene.objects.push(camera_collision_wall());
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+    app.update_camera_collision();
+
+    let d = app
+        .camera
+        .collision_distance
+        .expect("un mur en travers doit imposer une distance de collision");
+    assert!(
+        d < app.camera.distance,
+        "la caméra doit se rapprocher (d={d}, désirée={})",
+        app.camera.distance
+    );
+    // Face du mur à 2,75 m, marge de sécurité déduite (cf. `MARGIN`) : la
+    // caméra doit s'arrêter un peu AVANT le mur, sans se coller au joueur.
+    assert!(
+        (1.5..2.75).contains(&d),
+        "distance attendue entre le joueur et la face du mur, marge comprise (d={d})"
+    );
+}
+
+/// Voie libre : `collision_distance` reste `None` et l'œil garde le zoom désiré.
+#[test]
+fn camera_collision_stays_none_when_the_way_is_clear() {
+    let mut app = camera_collision_app();
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+    app.update_camera_collision();
+
+    assert_eq!(
+        app.camera.collision_distance, None,
+        "sans obstacle, la distance désirée doit rester seule maîtresse"
+    );
+}
+
+/// Une créature (membership sur un bit ≥ 1, cf. `creatures.rs`/`fauna.rs`) qui
+/// passe entre la caméra et le joueur ne doit PAS faire sauter la caméra : le
+/// rayon ne regarde que le bit 0 (décor à couche par défaut).
+#[test]
+fn camera_collision_ignores_creatures_on_their_own_layer() {
+    let mut app = camera_collision_app();
+    let mut creature = camera_collision_wall();
+    creature.name = "Créature de passage".into();
+    creature.collision_layer = 1 << 5;
+    app.scene.objects.push(creature);
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+
+    app.update_camera_collision();
+
+    assert_eq!(
+        app.camera.collision_distance, None,
+        "une créature sur sa couche dédiée ne doit pas être un obstacle caméra"
+    );
 }

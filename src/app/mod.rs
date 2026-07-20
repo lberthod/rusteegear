@@ -113,9 +113,11 @@ pub struct PlayerInput {
     /// Inclinaison (gyroscope/accéléromètre), chaque composante dans [-1, 1].
     /// Desktop : simulée aux flèches du clavier ; mobile : capteur natif (à brancher).
     pub tilt: (f32, f32),
-    /// Déplacement clavier (ordinateur), relatif à la caméra : flèches uniquement
-    /// (WASD pilote désormais des contrôles « tank », cf. `key_turn`) ; chaque
-    /// composante dans [-1, 1].
+    /// Déplacement clavier (ordinateur), relatif à la caméra : flèches **et** WASD
+    /// (les deux jeux de touches sont équivalents depuis le passage au style
+    /// « action moderne » — stick gauche/WASD = intention de déplacement relative
+    /// à la caméra, le personnage tourne ensuite tout seul vers cette direction,
+    /// cf. `AppState::advance_play`) ; chaque composante dans [-1, 1].
     pub key_move: (f32, f32),
     /// Élévation caméra libre (Espace = monte, C = descend), cf. `AppState::fly_cam`
     /// et `AppState::update_fly_cam` — sans effet ailleurs.
@@ -134,18 +136,22 @@ pub struct PlayerInput {
     pub touch_thrust: f32,
     /// Rotation « tank » du pavé tactile (A/D) — même principe que `touch_thrust`.
     pub touch_turn: f32,
-    /// Avance/recul « tank » du stick gauche de la manette (Sprint 110), zone morte
-    /// déjà appliquée — canal séparé de `key_thrust`/`touch_thrust`, cumulé avec eux
-    /// via `thrust()`, même principe que les deux autres sources.
-    pub gamepad_thrust: f32,
-    /// Rotation « tank » du stick gauche de la manette — même principe que
-    /// `gamepad_thrust`, cumulée via `turn()`.
-    pub gamepad_turn: f32,
+    /// Stick gauche de la manette, zone morte + croix directionnelle déjà
+    /// résolues (cf. `input::resolve_gamepad_input`) : déplacement **relatif à
+    /// la caméra**, comme `joy`/`key_move`, cumulé avec eux avant
+    /// `camera_relative_move` (style « action moderne » — stick gauche =
+    /// intention de déplacement, le personnage tourne tout seul vers la
+    /// direction résultante). Chaque composante dans [-1, 1].
+    pub gamepad_move: (f32, f32),
+    /// Axe horizontal du stick droit de la manette, zone morte déjà appliquée :
+    /// orbite librement la caméra de jeu (`AppState::advance_play`), indépendant
+    /// du personnage — stick droit = caméra, comme dans un TPS moderne. Sans
+    /// manette, reste à 0 — aucun effet.
+    pub gamepad_yaw: f32,
     /// Tangage caméra du stick droit de la manette (axe vertical, zone morte
     /// déjà appliquée) : consommé par la caméra de suivi (`update_effects`),
-    /// stick vers le haut = regarder vers le haut. L'axe horizontal du stick
-    /// droit, lui, est cumulé dans `gamepad_turn` (en contrôles « tank »,
-    /// tourner = viser — cf. `App::recompute_action_buttons`).
+    /// stick vers le haut = regarder vers le haut. Sans manette, `gamepad_pitch`
+    /// reste à 0 — aucun effet.
     pub gamepad_pitch: f32,
     /// Saut clavier (Espace) maintenu enfoncé.
     pub jump: bool,
@@ -171,13 +177,15 @@ impl PlayerInput {
     /// `network_move_axes`) passe par ici — mêmes contrôles au clavier, au tactile
     /// (APK) et en aperçu mobile desktop, sans qu'aucune source n'écrase l'autre.
     pub fn thrust(&self) -> f32 {
-        (self.key_thrust + self.touch_thrust + self.gamepad_thrust).clamp(-1.0, 1.0)
+        (self.key_thrust + self.touch_thrust).clamp(-1.0, 1.0)
     }
 
-    /// Rotation « tank » effective : clavier (A/D) + pavé tactile + stick gauche
-    /// manette (Sprint 110), borné à [-1, 1].
+    /// Rotation « tank » effective : pavé tactile mobile (`touch_turn`) + toute
+    /// source externe qui pilote encore `key_turn` directement (pont de pilotage,
+    /// cf. `pilot.rs`) — le clavier de bureau (A/D) n'y contribue plus depuis le
+    /// passage au style « action moderne » (WASD alimente `key_move`, cf. `lib.rs`).
     pub fn turn(&self) -> f32 {
-        (self.key_turn + self.touch_turn + self.gamepad_turn).clamp(-1.0, 1.0)
+        (self.key_turn + self.touch_turn).clamp(-1.0, 1.0)
     }
 }
 

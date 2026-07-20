@@ -248,12 +248,11 @@ impl App {
             keys.contains(&KeyCode::Space),
         );
         inp.weapon_cycle = gp.weapon;
-        // Stick droit horizontal cumulé au stick gauche : en contrôles « tank »,
-        // l'orientation du personnage EST la visée — le stick droit est donc un
-        // second canal de rotation (habitude « stick de visée » des TPS), pas
-        // une caméra libre découplée. Le cumul reste borné par `turn()`.
-        inp.gamepad_turn = (gp.turn + gp.look_x).clamp(-1.0, 1.0);
-        inp.gamepad_thrust = gp.thrust;
+        // Style « action moderne » : stick gauche = intention de déplacement
+        // relative à la caméra (comme `joy`/`key_move`), stick droit = caméra
+        // libre (yaw + pitch), découplée du personnage.
+        inp.gamepad_move = (gp.move_x, gp.move_y);
+        inp.gamepad_yaw = gp.look_x;
         inp.gamepad_pitch = gp.look_y;
         // Bascules sur front montant (Select = masquer le HUD) — routées vers
         // l'éditeur via le renderer, seul accès. Start : fenêtre Multijoueur en
@@ -696,19 +695,16 @@ impl ApplicationHandler for App {
                         let s = held.contains(&KeyCode::KeyS);
 
                         let inp = &mut self.state.input_state;
-                        // Flèches : déplacement relatif à la caméra (comportement
-                        // inchangé, cf. `camera_relative_move`).
-                        inp.key_move.0 = axis_from_held(arrow_left, arrow_right);
-                        inp.key_move.1 = axis_from_held(arrow_down, arrow_up);
-                        // WASD : contrôles « tank », indépendants de la caméra. A/D
-                        // tournent le personnage sur lui-même (A = droite, D = gauche)
-                        // plutôt que de le faire strafer ; W/S avancent/reculent le
-                        // long de son orientation *actuelle* (cf.
-                        // `AppState::advance_play`). Tourner à droite fait décroître le
-                        // yaw (cf. `Physics::face_direction` : yaw=0 pointe vers -Z, et
-                        // tourner vers +X, à droite, correspond à un yaw négatif).
-                        inp.key_turn = axis_from_held(a, d);
-                        inp.key_thrust = axis_from_held(s, w);
+                        // Flèches et WASD : même déplacement, relatif à la caméra
+                        // (cf. `camera_relative_move`) — style « action moderne » :
+                        // l'intention de déplacement est cumulée depuis les deux jeux
+                        // de touches, puis `AppState::advance_play` fait tourner le
+                        // personnage tout seul vers la direction résultante
+                        // (`rotate_towards_smooth`), sans rotation manuelle séparée.
+                        inp.key_move.0 =
+                            axis_from_held(arrow_left, arrow_right) + axis_from_held(a, d);
+                        inp.key_move.1 =
+                            axis_from_held(arrow_down, arrow_up) + axis_from_held(s, w);
                         // Les flèches alimentent aussi le gyroscope simulé (objets
                         // gyro_control) — WASD n'y touche pas (comportement inchangé).
                         inp.tilt.0 = axis_from_held(arrow_left, arrow_right);

@@ -83,18 +83,16 @@ pub fn apply_deadzone(v: f32, threshold: f32) -> f32 {
 /// ni à winit) — testable sans manette réelle ni boucle d'événements.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GamepadInput {
-    /// `turn` : rotation, pilotée uniquement par le D-pad (le stick gauche
-    /// horizontal est ignoré à la demande — le joueur ne veut avancer/reculer
-    /// qu'avec le stick, la rotation restant au D-pad/stick droit).
-    /// `thrust` : stick gauche vertical, zone morte déjà appliquée, avance/recul
-    /// (mêmes axes que les contrôles clavier « tank », cf. `PlayerInput::turn`/
-    /// `thrust`).
-    pub turn: f32,
-    pub thrust: f32,
-    /// Stick droit, zone morte déjà appliquée : x = visée/rotation (cumulée à
-    /// `turn` par l'appelant — en contrôles « tank », l'orientation du
-    /// personnage EST la visée), y = tangage caméra (cf.
-    /// `PlayerInput::gamepad_pitch`).
+    /// Stick gauche (zone morte **circulaire** déjà appliquée) + croix
+    /// directionnelle en repli, cumulés puis bornés : déplacement **relatif à
+    /// la caméra**, comme le joystick tactile/les flèches (cf.
+    /// `PlayerInput::gamepad_move`) — style « action moderne », pas de contrôles
+    /// « tank » à la manette.
+    pub move_x: f32,
+    pub move_y: f32,
+    /// Stick droit, zone morte déjà appliquée : x = orbite caméra horizontale
+    /// (cf. `PlayerInput::gamepad_yaw`), y = tangage caméra (cf.
+    /// `PlayerInput::gamepad_pitch`) — caméra libre, découplée du personnage.
     pub look_x: f32,
     pub look_y: f32,
     pub jump: bool,
@@ -119,7 +117,7 @@ pub const STICK_DEADZONE: f32 = 0.15;
 /// des axes bruts des deux sticks et de la table de remapping — cf. `GamepadInput`.
 ///
 /// **D-pad = déplacement de secours** : une croix directionnelle tenue pilote
-/// `turn`/`thrust` comme le stick gauche (cumulés puis bornés). Deux raisons :
+/// `move_x`/`move_y` comme le stick gauche (cumulés puis bornés). Deux raisons :
 /// certaines manettes en mode DirectInput (Logitech F310/F710, commutateur
 /// « D ») rapportent le hat à la place du stick selon l'OS/le mapping, et un
 /// déplacement digital est un repli universel qui ne coûte rien. Un bouton de
@@ -150,11 +148,16 @@ pub fn resolve_gamepad_input(
         (held_free(pos) as i8 - held_free(neg) as i8) as f32
     };
     use gilrs::Button::{DPadDown, DPadLeft, DPadRight, DPadUp};
-    let turn = dpad_axis(DPadLeft, DPadRight);
-    let thrust = apply_deadzone(raw_axes.1, STICK_DEADZONE) + dpad_axis(DPadDown, DPadUp);
+    // Zone morte **circulaire** (cf. `simulation::apply_deadzone`) plutôt que par
+    // axe : un stick légèrement dérivé en diagonale reste bloqué à zéro tant qu'il
+    // n'a pas franchi le rayon mort, et la plage utile est remappée en continu
+    // (pas de « cran » perceptible à la sortie du rayon mort).
+    let left = crate::app::simulation::apply_deadzone(raw_axes, STICK_DEADZONE);
+    let move_x = (left.0 + dpad_axis(DPadLeft, DPadRight)).clamp(-1.0, 1.0);
+    let move_y = (left.1 + dpad_axis(DPadDown, DPadUp)).clamp(-1.0, 1.0);
     GamepadInput {
-        turn: turn.clamp(-1.0, 1.0),
-        thrust: thrust.clamp(-1.0, 1.0),
+        move_x,
+        move_y,
         look_x: apply_deadzone(raw_axes_right.0, STICK_DEADZONE),
         look_y: apply_deadzone(raw_axes_right.1, STICK_DEADZONE),
         jump: pressed(&bindings.jump),
@@ -213,11 +216,19 @@ mod tests {
         assert!(!resolved.heal, "North (Soin) n'est pas tenu");
         assert!(!resolved.menu, "Start (Menu) n'est pas tenu");
         assert!(!resolved.hud, "Select (HUD) n'est pas tenu");
-        assert_eq!(
-            resolved.turn, 0.0,
-            "stick gauche horizontal ignoré, seul le D-pad tourne"
+        // Zone morte circulaire : (0.6, -1.2) a une longueur > 1, donc `move_x`/
+        // `move_y` sont saturés à la direction unitaire correspondante — le stick
+        // gauche horizontal contribue désormais au strafe (style « action moderne »,
+        // plus de contrôles « tank » à la manette).
+        let len = (0.6f32 * 0.6 + 1.2 * 1.2).sqrt();
+        assert!(
+            (resolved.move_x - 0.6 / len).abs() < 1e-5,
+            "stick gauche horizontal utilisé pour le strafe"
         );
-        assert_eq!(resolved.thrust, -1.0, "reclampé à 1 en valeur absolue");
+        assert!(
+            (resolved.move_y - (-1.2 / len)).abs() < 1e-5,
+            "stick gauche vertical, reclampé à la direction unitaire"
+        );
     }
 
     #[test]
@@ -237,7 +248,7 @@ mod tests {
 
     /// D-pad = déplacement de secours (Logitech F310/F710 en mode « D » : le
     /// hat remplace parfois le stick gauche selon l'OS) — la croix tenue doit
-    /// piloter `turn`/`thrust` comme le stick, cumulée puis bornée.
+    /// piloter `move_x`/`move_y` comme le stick, cumulée puis bornée.
     #[test]
     fn dpad_drives_movement_as_a_left_stick_fallback() {
         let mut held = std::collections::HashSet::new();
@@ -245,13 +256,13 @@ mod tests {
         held.insert(gilrs::Button::DPadRight);
         let bindings = GamepadBindings::default();
         let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
-        assert_eq!(resolved.thrust, 1.0, "DPadUp = avancer");
-        assert_eq!(resolved.turn, 1.0, "DPadRight = tourner à droite");
+        assert_eq!(resolved.move_y, 1.0, "DPadUp = avancer");
+        assert_eq!(resolved.move_x, 1.0, "DPadRight = strafe à droite");
 
         // Cumul stick + croix : borné, jamais au-delà de ±1.
         let resolved = resolve_gamepad_input(&held, (0.8, 0.9), (0.0, 0.0), &bindings);
-        assert_eq!(resolved.turn, 1.0);
-        assert_eq!(resolved.thrust, 1.0);
+        assert_eq!(resolved.move_x, 1.0);
+        assert_eq!(resolved.move_y, 1.0);
     }
 
     /// Un bouton de croix **assigné à une action** dans le remapping ne doit
@@ -268,7 +279,7 @@ mod tests {
         let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
         assert!(resolved.jump, "DPadUp remappé sur Saut doit sauter");
         assert_eq!(
-            resolved.thrust, 0.0,
+            resolved.move_y, 0.0,
             "un bouton de croix assigné à une action est exclu du déplacement"
         );
     }
