@@ -111,6 +111,12 @@ player_build = []
 # et indépendant d'un environnement CI qui restreint parfois le bind
 # loopback/les sockets. Couverture complète : `cargo test --features
 # net_tests` (cf. docs/architecture.md, section réseau).
+# Phase 0 du spike XR (docs/XR_PORTAIL_ARENE.md) : active `openxr` sur la cible
+# Android uniquement. Désactivée par défaut — la cible `aarch64-linux-android`
+# n'existe pas dans les environnements de dev sans NDK, ce flag évite de casser
+# `cargo check`/`cargo build` par défaut pendant que le module `src/xr` est
+# encore non vérifié sur device.
+xr = ["dep:openxr"]
 net_tests = []
 
 [dependencies]
@@ -199,6 +205,11 @@ zstd = "0.13.3"
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30.13", features = ["android-native-activity"] }
 android_logger = "0.14"
+# Phase 0 du spike XR (docs/XR_PORTAIL_ARENE.md, feature `xr`) — optionnelle :
+# jamais compilée en dehors d'un `cargo build --target aarch64-linux-android
+# --features xr` explicite. Version à revérifier avant le premier vrai build
+# device (écosystème `openxrs` mouvant, cf. doc).
+openxr = { version = "0.21", optional = true }
 
 # wasm32 (Sprint 114). `getrandom` (dépendance transitive de `uuid`/`wgpu`/…) refuse
 # de compiler sur `wasm32-unknown-unknown` sans le backend `wasm_js` explicitement

@@ -27,6 +27,11 @@ pub mod project;
 pub mod runtime;
 pub mod scene;
 pub mod time_compat;
+/// Spike XR (Phase 0, `docs/XR_PORTAIL_ARENE.md`) — Android + feature `xr`
+/// uniquement, jamais compilé par défaut (cf. doc du module pour l'état non
+/// vérifié de ce code).
+#[cfg(all(target_os = "android", feature = "xr"))]
+pub mod xr;
 
 use app::input::InputEvent;
 use app::{AppState, GizmoMode};
@@ -1013,6 +1018,19 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
     // Après `set_android_data_dir` : le hook de crash écrit dans `user://`, qui en
     // dépend sur Android (cf. doc de `crash_log::install`).
     crate::crash_log::install();
+
+    // Spike XR Phase 0 (feature `xr` uniquement, cf. `docs/XR_PORTAIL_ARENE.md`) :
+    // juste vérifier que l'instance/system OpenXR se créent sur ce device, ne
+    // remplace pas encore la boucle winit ci-dessous.
+    #[cfg(feature = "xr")]
+    {
+        let vm = android_app.vm_as_ptr();
+        let activity = android_app.activity_as_ptr();
+        match crate::xr::XrEntryPoint::new(vm, activity) {
+            Ok(_) => log::info!("Spike XR Phase 0 : instance OpenXR créée."),
+            Err(e) => log::error!("Spike XR Phase 0 : échec création instance OpenXR : {e}"),
+        }
+    }
 
     let event_loop = match EventLoop::builder().with_android_app(android_app).build() {
         Ok(el) => el,
