@@ -11,8 +11,20 @@
 > (spéculatif, après Phase Q). Ce document couvre un chantier différent —
 > **OpenXR natif sur APK Quest**, hors périmètre wasm32.
 
-**Statut** : analyse/cadrage terminés, aucun code écrit. Prochaine étape :
-spike Phase 0 (voir [Plan par phases](#plan-par-phases)).
+**Statut** : **direction retenue** — transformation du moteur vers le XR/MR
+lancée. Ce n'est plus un side-track optionnel : c'est l'axe de
+développement actif de RusteeGear à partir de maintenant. Aucun code écrit
+pour l'instant. Prochaine étape : spike Phase 0 (voir
+[Plan par phases](#plan-par-phases)).
+
+> Note de cadrage (gardée ici pour la traçabilité, pas pour re-débattre) :
+> le risque principal identifié n'est pas technique — la faisabilité est
+> réelle, avec du prior art vérifié — mais la **bande passante solo** face
+> à deux projets ambitieux en parallèle (le shooter MR sur Unity/MRPortal,
+> et maintenant cette transformation). Décision assumée : on y va quand
+> même. Les garde-fous ci-dessous ([Plan par phases](#plan-par-phases),
+> checkpoints go/no-go) existent pour protéger la qualité *dans* ce choix,
+> pas pour le retarder.
 
 ---
 
@@ -236,3 +248,7 @@ bloquer mutuellement.
   `wgpu-example`), architecture cible (greffe sur modules existants),
   budget perf, UX MR, plan en 7 phases. Aucun code écrit — prochaine étape
   Phase 0.
+- **2026-07-28** — Décision : la transformation XR/MR devient l'axe de
+  développement actif de RusteeGear (plus un side-track). Doc référencé
+  depuis le README (§ La suite — analyse & sprints). Prochaine action
+  concrète : démarrer la Phase 0 (spike swapchain OpenXR + wgpu).
