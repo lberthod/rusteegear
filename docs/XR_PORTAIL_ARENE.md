@@ -252,3 +252,13 @@ bloquer mutuellement.
   développement actif de RusteeGear (plus un side-track). Doc référencé
   depuis le README (§ La suite — analyse & sprints). Prochaine action
   concrète : démarrer la Phase 0 (spike swapchain OpenXR + wgpu).
+- **2026-07-28** — Premier code Phase 0 : `src/xr/mod.rs` (instance + system
+  OpenXR, feature `xr`/Android uniquement), écrit sans pouvoir compiler pour
+  `aarch64-linux-android` dans l'environnement de rédaction. **Contrainte
+  découverte en cours de route : aucun casque Quest disponible pour tester**
+  — ni ici, ni chez le développeur pour l'instant. Le job CI `cross-build`
+  (qui installe déjà le NDK pour builder la lib Android) a été étendu pour
+  builder aussi avec `--features xr` : c'est la vérification de référence
+  tant qu'aucun device n'est disponible — compile-checké, pas runtime-testé.
+  Ne se déclenche que sur push `main`/pull request, pas sur un simple push
+  de branche.
