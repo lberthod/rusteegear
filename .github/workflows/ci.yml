@@ -148,3 +148,11 @@ jobs:
 
       - name: Build lib pour ${{ matrix.target }}
         run: cargo build --lib --target ${{ matrix.target }}
+
+      # Spike XR (docs/XR_PORTAIL_ARENE.md) : `openxr` n'est dépendance que sur
+      # Android (Cargo.toml), donc ce deuxième build est le seul endroit qui
+      # vérifie que `src/xr` compile réellement contre le NDK — remplace le
+      # test sur device tant qu'aucun Quest n'est disponible pour ce projet.
+      - name: Build lib (feature xr) pour ${{ matrix.target }}
+        if: matrix.target == 'aarch64-linux-android'
+        run: cargo build --lib --target ${{ matrix.target }} --features xr
