@@ -804,7 +804,7 @@ impl AppState {
                 {
                     o.visible = false;
                 }
-                self.attack_flash = 1.0;
+                self.fx.attack_flash = 1.0;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
             }
             // Un joueur réseau vient de tomber à 0 PV (GDD §5.3 : « la mort
@@ -815,8 +815,8 @@ impl AppState {
             // groupe doit *sentir* qu'il perd quelqu'un, pas le déduire.
             ServerMsg::Event(crate::net::protocol::GameEvent::PlayerDown { player_id, cause }) => {
                 if Some(player_id) == self.net_player_id {
-                    self.damage_flash = 1.0;
-                    self.camera_shake = 1.0;
+                    self.fx.damage_flash = 1.0;
+                    self.fx.camera_shake = 1.0;
                     // Sprint 2 (`sprint10audit.md`) : mémorisé pour la bannière
                     // « Vaincu » enrichie (cf. `editor::hud::defeated_banner`) —
                     // seulement pour nous, une cause de mort n'a de sens que pour
@@ -824,7 +824,7 @@ impl AppState {
                     self.death_cause = cause;
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 } else {
-                    self.ally_down_flash = 1.0;
+                    self.fx.ally_down_flash = 1.0;
                     // Phase O Sprint 1 (`sprint2audijeu0718.md`, GDD §10.4 rang 2) : un
                     // allié à terre doit sonner différemment de notre propre défaite
                     // (`Sfx::Lose` ci-dessus) — jusqu'ici les deux branches jouaient le
@@ -867,8 +867,8 @@ impl AppState {
             // jamais émis par la boucle de jeu (`bin/server.rs`), donc jamais
             // reçu ici — tombait aussi dans le catch-all.
             ServerMsg::Event(crate::net::protocol::GameEvent::WaveStart { wave }) => {
-                self.wave_banner_flash = 1.0;
-                self.wave_banner_wave = wave;
+                self.fx.wave_banner_flash = 1.0;
+                self.fx.wave_banner_wave = wave;
             }
             // Rejet **fatal** (version de protocole incompatible…) : on affiche
             // la raison et on n'insiste JAMAIS — désarmer la reconnexion
@@ -1116,8 +1116,8 @@ impl AppState {
             return;
         };
         if let Some(palier) = crate::app::multiplayer::palier_atteint(prev, line.xp) {
-            self.palier_flash = 1.0;
-            self.palier_level = palier;
+            self.fx.palier_flash = 1.0;
+            self.fx.palier_level = palier;
         }
         self.firebase_xp = Some(prev.saturating_add(line.xp));
     }

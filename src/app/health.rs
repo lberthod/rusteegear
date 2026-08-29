@@ -296,7 +296,7 @@ impl AppState {
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 } else {
                     if Some(id) == self.net_player_id {
-                        self.camera_shake = 1.0;
+                        self.fx.camera_shake = 1.0;
                     }
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
                 }

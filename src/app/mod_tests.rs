@@ -1318,18 +1318,18 @@ fn attack_shows_and_hides_the_visual_fx_anchor() {
         (fx(&app).transform.position - target_pos).length() < 1e-4,
         "l'ancre FX doit être téléportée sur la cible touchée"
     );
-    assert!(app.attack_flash > 0.0);
+    assert!(app.fx.attack_flash > 0.0);
 
     app.input_state.buttons.clear();
     for _ in 0..30 {
         app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
-        if app.attack_flash <= 0.0 {
+        if app.fx.attack_flash <= 0.0 {
             break;
         }
     }
     assert_eq!(
-        app.attack_flash, 0.0,
+        app.fx.attack_flash, 0.0,
         "le flash d'attaque doit finir par retomber à 0"
     );
     assert!(
@@ -2522,7 +2522,7 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
     // Le pic (1.0) est déclenché par le sim_step qui détecte le coup, mais cette même
     // frame applique déjà une frame de décroissance ensuite (comportement voulu : le
     // flash commence à s'estomper dès la frame du coup) — d'où la marge, pas `== 1.0`.
-    let peak = app.damage_flash;
+    let peak = app.fx.damage_flash;
     assert!(
         peak > 0.8,
         "un coup doit déclencher un pic net du flash : {peak}"
@@ -2543,7 +2543,7 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
     app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(
-        app.damage_flash < peak,
+        app.fx.damage_flash < peak,
         "le flash doit continuer à décroître frame après frame hors contact"
     );
     // Sortir de Play remet tout à zéro (pas de flash résiduel visible en édition).
@@ -2551,7 +2551,7 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
     app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert_eq!(
-        app.damage_flash, 0.0,
+        app.fx.damage_flash, 0.0,
         "le flash est effacé à la sortie de Play"
     );
 }

@@ -376,7 +376,7 @@ impl AppState {
                                     &mut self.audio,
                                     crate::runtime::sfx::Sfx::Defeat,
                                 );
-                                self.attack_flash = 1.0;
+                                self.fx.attack_flash = 1.0;
                                 if let Some(fx) = self.attack_fx_index()
                                     && let Some(o) = self.scene.objects.get_mut(fx)
                                 {
@@ -409,7 +409,7 @@ impl AppState {
                     // ne la masque que si ce coup l'achève.
                     let i = proj.target;
                     let defeated = self.scene.damage_attackable(i);
-                    self.attack_flash = 1.0;
+                    self.fx.attack_flash = 1.0;
                     if defeated {
                         self.add_score(1);
                         crate::runtime::sfx::play(

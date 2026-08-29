@@ -28,17 +28,17 @@ fn rotate_towards_smooth_eases_toward_the_target_the_short_way() {
 #[test]
 fn camera_shake_offset_is_zero_when_reduce_shake_is_set() {
     let mut app = AppState::new();
-    app.camera_shake = 1.0;
-    app.reduce_shake = false;
+    app.fx.camera_shake = 1.0;
+    app.fx.reduce_shake = false;
     // `t=0` annulerait le jitter sinusoïdal indépendamment de `reduce_shake`
     // (sin(0) = 0) — un instant non nul isole bien la cause testée ici.
     app.time = 1.0;
     assert_ne!(app.camera_shake_offset(), Vec3::ZERO);
 
-    app.reduce_shake = true;
+    app.fx.reduce_shake = true;
     assert_eq!(app.camera_shake_offset(), Vec3::ZERO);
     assert_eq!(
-        app.camera_shake, 1.0,
+        app.fx.camera_shake, 1.0,
         "reduce_shake ne doit pas muter camera_shake"
     );
 }

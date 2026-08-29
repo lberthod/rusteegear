@@ -311,7 +311,7 @@ impl AppState {
             self.record_damage_contribution(i, id);
         }
         let defeated = self.scene.damage_attackable_by(i, damage);
-        self.attack_flash = 1.0;
+        self.fx.attack_flash = 1.0;
         if let Some(fx) = self.attack_fx_index()
             && let Some(o) = self.scene.objects.get_mut(fx)
         {

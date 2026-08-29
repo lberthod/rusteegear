@@ -194,6 +194,50 @@ impl PlayerInput {
 /// « palier atteint » (GDD §8.2), `None` si la lecture de progression échoue.
 type FirebaseAuthResult = Result<(String, String, Option<u32>), String>;
 
+/// État purement cosmétique des retours visuels HUD/caméra (flashs, secousse,
+/// bannières de vague/palier/allié à terre) — regroupé hors de `AppState`
+/// (roadmap post-audit 2026-08-29, vague 2.3) car aucun de ces champs ne
+/// pilote de logique de jeu : ils partagent tous le même patron « intensité
+/// 1 = pic, décroît vers 0 (ou compteur associé), lu uniquement par le rendu
+/// HUD/caméra ».
+#[derive(Default)]
+pub struct FxState {
+    /// Intensité (1 = pic, décroît vers 0) du flash de dégâts (vignette rouge HUD),
+    /// déclenché quand `hud_health` baisse. Purement cosmétique (retour de coup).
+    pub damage_flash: f32,
+    /// Intensité (1 = pic, décroît vers 0) du recul caméra à l'encaissement d'un
+    /// coup (secousse brève) — même déclencheurs que `damage_flash`, décroissance
+    /// séparée pour pouvoir ajuster l'un sans l'autre (Sprint 1, `sprint10audit.md`).
+    pub camera_shake: f32,
+    /// Coupe le recul caméra calculé par `camera_shake_offset` sans toucher
+    /// `camera_shake` lui-même — persisté dans `Settings::reduce_shake`
+    /// (PHASE I Sprint 1, accessibilité §16.6).
+    pub reduce_shake: bool,
+    /// Intensité (1 = pic, décroît vers 0) de la bannière « allié à terre »,
+    /// déclenchée par `GameEvent::PlayerDown` d'un **autre** joueur réseau
+    /// (GDD §5.3 : « la mort d'un allié est un événement de groupe » — jusqu'ici
+    /// seule notre propre mort déclenchait un retour, `network_client.rs`).
+    pub ally_down_flash: f32,
+    /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
+    /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
+    pub attack_flash: f32,
+    /// Intensité (1 = pic, décroît vers 0) de la bannière de vague (Phase H,
+    /// Sprint 2, GDD §17.2), déclenchée par `GameEvent::WaveStart` — même
+    /// mécanisme que `ally_down_flash`.
+    pub wave_banner_flash: f32,
+    /// Numéro de la vague annoncée par la dernière `GameEvent::WaveStart`
+    /// reçue, affiché tant que `wave_banner_flash > 0`.
+    pub wave_banner_wave: u32,
+    /// Intensité (1 = pic, décroît vers 0) de la bannière « palier atteint »
+    /// (GDD §8.2/§17 : un palier = un déblocage nommé, affiché au moment où
+    /// il tombe) — armée par `check_palier_atteint` à la réception du résumé
+    /// de fin de manche, même mécanisme que `wave_banner_flash`.
+    pub palier_flash: f32,
+    /// Niveau-palier annoncé par la bannière ci-dessus (3, 6 ou 10), affiché
+    /// tant que `palier_flash > 0`.
+    pub palier_level: u32,
+}
+
 pub struct AppState {
     pub scene: Scene,
     /// Projet ouvert (Sprint 3, manifeste `project.rusteegear.json`), posé par
@@ -350,30 +394,14 @@ pub struct AppState {
     /// `RenderQuality::bloom_enabled()` (opt-out automatique sur qualité « Basse ») —
     /// les deux doivent être vrais pour que le renderer calcule le bloom.
     pub bloom_enabled: bool,
-    /// Intensité (1 = pic, décroît vers 0) du flash de dégâts (vignette rouge HUD),
-    /// déclenché quand `hud_health` baisse. Purement cosmétique (retour de coup).
-    pub damage_flash: f32,
-    /// Intensité (1 = pic, décroît vers 0) du recul caméra à l'encaissement d'un
-    /// coup (secousse brève) — même déclencheurs que `damage_flash`, décroissance
-    /// séparée pour pouvoir ajuster l'un sans l'autre (Sprint 1, `sprint10audit.md`).
-    pub camera_shake: f32,
-    /// Coupe le recul caméra calculé par `camera_shake_offset` sans toucher
-    /// `camera_shake` lui-même — persisté dans `Settings::reduce_shake`
-    /// (PHASE I Sprint 1, accessibilité §16.6).
-    pub reduce_shake: bool,
-    /// Intensité (1 = pic, décroît vers 0) de la bannière « allié à terre »,
-    /// déclenchée par `GameEvent::PlayerDown` d'un **autre** joueur réseau
-    /// (GDD §5.3 : « la mort d'un allié est un événement de groupe » — jusqu'ici
-    /// seule notre propre mort déclenchait un retour, `network_client.rs`).
-    pub ally_down_flash: f32,
+    /// Retours visuels HUD/caméra purement cosmétiques (flashs, secousse,
+    /// bannières) — cf. `FxState`.
+    pub fx: FxState,
     /// Cause résumée de notre dernière mort (Sprint 2, `sprint10audit.md`,
     /// GDD §16.5), affichée par `editor::hud::defeated_banner` tant qu'on
     /// reste spectateur — `None` par défaut ou si le serveur n'a diffusé
     /// aucune cause (ex. vie mise à 0 sans dégât mémorisé).
     pub death_cause: Option<crate::net::protocol::DeathCause>,
-    /// Intensité (1 = pic, décroît vers 0) de l'effet 3D d'attaque : téléporte et affiche
-    /// brièvement l'objet `is_attack_fx` sur la cible touchée (rend le coup lisible).
-    pub attack_flash: f32,
     /// Résumé par joueur de la dernière manche réseau décidée (Phase H,
     /// Sprint 1, GDD §9.2/§17.4), reçu via `GameEvent::Win`/`Lose`
     /// (`network_client::handle_server_msg`) — `None` avant la première
@@ -388,21 +416,6 @@ pub struct AppState {
     /// (`GameEvent::Win::contract`, GDD §3.4/§3.5), `None` si aucun contrat
     /// n'a été rempli ou sur une défaite.
     pub round_contract_label: Option<&'static str>,
-    /// Intensité (1 = pic, décroît vers 0) de la bannière de vague (Phase H,
-    /// Sprint 2, GDD §17.2), déclenchée par `GameEvent::WaveStart` — même
-    /// mécanisme que `ally_down_flash`.
-    pub wave_banner_flash: f32,
-    /// Numéro de la vague annoncée par la dernière `GameEvent::WaveStart`
-    /// reçue, affiché tant que `wave_banner_flash > 0`.
-    pub wave_banner_wave: u32,
-    /// Intensité (1 = pic, décroît vers 0) de la bannière « palier atteint »
-    /// (GDD §8.2/§17 : un palier = un déblocage nommé, affiché au moment où
-    /// il tombe) — armée par `check_palier_atteint` à la réception du résumé
-    /// de fin de manche, même mécanisme que `wave_banner_flash`.
-    pub palier_flash: f32,
-    /// Niveau-palier annoncé par la bannière ci-dessus (3, 6 ou 10), affiché
-    /// tant que `palier_flash > 0`.
-    pub palier_level: u32,
     /// Base visuelle (échelle, couleur) des objets avant application d'une
     /// silhouette de classe (v7, GDD §10.3, `apply_class_silhouette`) —
     /// mémorisée à la première application par indice d'objet, pour que
@@ -1008,19 +1021,14 @@ impl AppState {
             hud_health: None,
             render_quality: crate::app::build_config::BuildConfig::load().render_quality,
             bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
-            damage_flash: 0.0,
-            camera_shake: 0.0,
-            reduce_shake: initial_settings.reduce_shake,
-            ally_down_flash: 0.0,
+            fx: FxState {
+                reduce_shake: initial_settings.reduce_shake,
+                ..FxState::default()
+            },
             death_cause: None,
-            attack_flash: 0.0,
             round_summary: None,
             round_summary_won: false,
             round_contract_label: None,
-            wave_banner_flash: 0.0,
-            wave_banner_wave: 0,
-            palier_flash: 0.0,
-            palier_level: 0,
             silhouette_base: std::collections::HashMap::new(),
             firebase_xp: None,
             wave: 0,
@@ -1267,7 +1275,7 @@ impl AppState {
     /// Réduction du screen-shake (PHASE I Sprint 1, persistée dans
     /// `Settings::reduce_shake`).
     pub fn set_reduce_shake(&mut self, v: bool) {
-        self.reduce_shake = v;
+        self.fx.reduce_shake = v;
     }
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {

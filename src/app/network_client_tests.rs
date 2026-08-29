@@ -112,11 +112,11 @@ fn player_down_for_an_ally_raises_the_shared_banner_not_the_self_flash() {
     ));
 
     assert_eq!(
-        app.ally_down_flash, 1.0,
+        app.fx.ally_down_flash, 1.0,
         "la mort d'un allié doit déclencher la bannière partagée"
     );
     assert_eq!(
-        app.damage_flash, 0.0,
+        app.fx.damage_flash, 0.0,
         "la mort d'un allié ne doit jamais déclencher notre propre flash de dégâts"
     );
 }
@@ -137,11 +137,11 @@ fn player_down_for_ourselves_raises_the_self_flash_not_the_ally_banner() {
     ));
 
     assert_eq!(
-        app.damage_flash, 1.0,
+        app.fx.damage_flash, 1.0,
         "notre propre mort doit déclencher le flash de dégâts"
     );
     assert_eq!(
-        app.ally_down_flash, 0.0,
+        app.fx.ally_down_flash, 0.0,
         "notre propre mort ne doit pas déclencher la bannière « allié à terre »"
     );
 }
@@ -250,14 +250,14 @@ fn lose_event_stores_the_round_summary_without_a_contract() {
 #[test]
 fn wave_start_event_arms_the_wave_banner() {
     let mut app = AppState::new();
-    assert_eq!(app.wave_banner_flash, 0.0);
+    assert_eq!(app.fx.wave_banner_flash, 0.0);
 
     app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
         crate::net::protocol::GameEvent::WaveStart { wave: 3 },
     ));
 
-    assert_eq!(app.wave_banner_flash, 1.0);
-    assert_eq!(app.wave_banner_wave, 3);
+    assert_eq!(app.fx.wave_banner_flash, 1.0);
+    assert_eq!(app.fx.wave_banner_wave, 3);
 }
 
 /// Sprint 2 (`sprint10audit.md`) : la cause de mort reçue du serveur doit
@@ -1702,12 +1702,15 @@ fn round_summary_arms_the_palier_banner_when_a_milestone_is_crossed() {
     }];
     app.check_palier_atteint(&summary);
 
-    assert_eq!(app.palier_flash, 1.0, "franchir 2000 XP arme la bannière");
-    assert_eq!(app.palier_level, 3);
+    assert_eq!(
+        app.fx.palier_flash, 1.0,
+        "franchir 2000 XP arme la bannière"
+    );
+    assert_eq!(app.fx.palier_level, 3);
     assert_eq!(app.firebase_xp, Some(2100), "l'XP locale avance du gain");
 
     // Deuxième manche sans franchissement : XP avance, bannière intacte.
-    app.palier_flash = 0.0;
+    app.fx.palier_flash = 0.0;
     let summary2 = vec![crate::net::protocol::RoundPlayerSummary {
         player_id: 7,
         name: "Moi".into(),
@@ -1717,7 +1720,7 @@ fn round_summary_arms_the_palier_banner_when_a_milestone_is_crossed() {
     }];
     app.check_palier_atteint(&summary2);
     assert_eq!(
-        app.palier_flash, 0.0,
+        app.fx.palier_flash, 0.0,
         "pas de palier franchi = pas de bannière"
     );
     assert_eq!(app.firebase_xp, Some(2150));
@@ -1737,6 +1740,6 @@ fn palier_banner_stays_silent_without_a_known_xp_total() {
         xp: 5000,
     }];
     app.check_palier_atteint(&summary);
-    assert_eq!(app.palier_flash, 0.0);
+    assert_eq!(app.fx.palier_flash, 0.0);
     assert_eq!(app.firebase_xp, None);
 }

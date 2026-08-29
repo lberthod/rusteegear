@@ -127,7 +127,7 @@ impl AppState {
         // copié dans `self.reduce_shake` (même patron que `music_volume`) —
         // coupe le recul caméra sans toucher `camera_shake`, dont d'autres
         // systèmes (flash de dégâts) restent indépendants.
-        if self.reduce_shake || self.camera_shake <= 0.0 {
+        if self.fx.reduce_shake || self.fx.camera_shake <= 0.0 {
             return Vec3::ZERO;
         }
         let forward = (self.camera.target - self.camera.eye()).normalize_or_zero();
@@ -139,7 +139,7 @@ impl AppState {
         let t = self.time;
         let jx = (t * 47.0).sin() + (t * 71.0).sin() * 0.5;
         let jy = (t * 59.0).sin() + (t * 83.0).sin() * 0.5;
-        (right * jx + up * jy) * AMPLITUDE * self.camera_shake
+        (right * jx + up * jy) * AMPLITUDE * self.fx.camera_shake
     }
 
     /// Rapproche `self.camera` de sa cible quand un décor solide se trouve entre
@@ -437,8 +437,8 @@ impl AppState {
             self.physics = None;
             self.paused = false;
             self.hud_health = None;
-            self.damage_flash = 0.0;
-            self.attack_flash = 0.0;
+            self.fx.damage_flash = 0.0;
+            self.fx.attack_flash = 0.0;
             self.attack_cooldown_remaining = 0.0;
             self.attack_projectile = None;
             self.attack_charge = None;
@@ -736,41 +736,41 @@ impl AppState {
             self.update_camera_collision();
         }
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
-        if self.damage_flash > 0.0 {
-            self.damage_flash = (self.damage_flash - dt * 2.5).max(0.0);
+        if self.fx.damage_flash > 0.0 {
+            self.fx.damage_flash = (self.fx.damage_flash - dt * 2.5).max(0.0);
         }
         // Décroissance du recul caméra (~0,25 s, plus rapide que le flash : une
         // secousse qui traîne gênerait la visée du joueur en combat rapproché).
-        if self.camera_shake > 0.0 {
-            self.camera_shake = (self.camera_shake - dt * 4.0).max(0.0);
+        if self.fx.camera_shake > 0.0 {
+            self.fx.camera_shake = (self.fx.camera_shake - dt * 4.0).max(0.0);
         }
         // Décroissance de la bannière « allié à terre » (~1,3 s : assez pour se
         // lire, conforme à GDD §16.3 « les bannières d'événement durent < 2 s »).
-        if self.ally_down_flash > 0.0 {
-            self.ally_down_flash = (self.ally_down_flash - dt * 0.75).max(0.0);
+        if self.fx.ally_down_flash > 0.0 {
+            self.fx.ally_down_flash = (self.fx.ally_down_flash - dt * 0.75).max(0.0);
         }
         // Décroissance de la bannière de vague (Phase H, Sprint 2, ~2,5 s : un
         // peu plus longue que `ally_down_flash`, moins urgente à lire).
-        if self.wave_banner_flash > 0.0 {
-            self.wave_banner_flash = (self.wave_banner_flash - dt * 0.4).max(0.0);
+        if self.fx.wave_banner_flash > 0.0 {
+            self.fx.wave_banner_flash = (self.fx.wave_banner_flash - dt * 0.4).max(0.0);
         }
         // Décroissance de la bannière « palier atteint » (~3,3 s : la plus
         // longue des bannières — un déblocage de compte est rare et festif,
         // GDD §8.2, il mérite d'être lu jusqu'au bout).
-        if self.palier_flash > 0.0 {
-            self.palier_flash = (self.palier_flash - dt * 0.3).max(0.0);
+        if self.fx.palier_flash > 0.0 {
+            self.fx.palier_flash = (self.fx.palier_flash - dt * 0.3).max(0.0);
         }
         // Décroissance de l'effet d'attaque (~0,33 s) : rétrécit l'ancre `is_attack_fx`
         // jusqu'à disparition, puis la remasque pour ne pas polluer le prochain coup.
-        if self.attack_flash > 0.0 {
-            self.attack_flash = (self.attack_flash - dt * 3.0).max(0.0);
+        if self.fx.attack_flash > 0.0 {
+            self.fx.attack_flash = (self.fx.attack_flash - dt * 3.0).max(0.0);
             if let Some(fx) = self.attack_fx_index()
                 && let Some(o) = self.scene.objects.get_mut(fx)
             {
-                if self.attack_flash <= 0.0 {
+                if self.fx.attack_flash <= 0.0 {
                     o.visible = false;
                 } else {
-                    o.transform.scale = Vec3::splat(0.25 + 0.95 * self.attack_flash);
+                    o.transform.scale = Vec3::splat(0.25 + 0.95 * self.fx.attack_flash);
                 }
             }
         }
@@ -1154,8 +1154,8 @@ impl AppState {
         if let (Some(prev), Some(cur)) = (self.hud_health, health)
             && cur < prev - 1e-4
         {
-            self.damage_flash = 1.0;
-            self.camera_shake = 1.0;
+            self.fx.damage_flash = 1.0;
+            self.fx.camera_shake = 1.0;
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
         }
         self.hud_health = health;
