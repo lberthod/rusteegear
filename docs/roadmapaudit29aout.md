@@ -19,14 +19,14 @@ silhouettes de classe v7, sécurisation réseau) — toutes confirmées solides 
 faille de sécurité critique), mais le coût de toute modification touchant `editor/mod.rs`,
 `runtime/physics.rs` ou `AppState` continue d'augmenter plus vite qu'il ne diminue.
 
-## Vague 1 — Désamorcer avant que ça ne coûte plus cher — non commencée
+## Vague 1 — Désamorcer avant que ça ne coûte plus cher — 3/4 faites (2026-08-29)
 
 | # | Action | Ferme | Statut |
 |---|---|---|---|
-| 1.1 | Trancher Git LFS vs exclusion pour `assets/models/` (159 Mo, 826 fichiers versionnés en Git normal, `.git/` déjà à 146 Mo) | dette bloquante | ⏳ Seul point classé « bloquant » de l'audit — irréversible sans réécriture d'historique si on attend encore |
-| 1.2 | Réactiver le test roguelike (`src/app/demos.rs:341-342`, `#[ignore]` depuis juillet) en le rendant déterministe | qualité | ⏳ Un pan du gameplay (donjon 3 salles) n'a plus de garantie automatisée depuis plus d'un mois |
-| 1.3 | Corriger les 3 dérives README : lignes de code (« ~32 000 » annoncé, 75 422 réel), chemin mort `src/scene/demos.rs` (→ `src/scene/demos/`), compteur `.glb` (412 annoncé, 482 réel) | doc | ⏳ Cosmétique mais trompeur, notamment l'argument « tenable dans la tête » sous-évalué de moitié |
-| 1.4 | Mettre à jour le commentaire `Cargo.toml:4-5` (« deux binaires » → 4 : `motor3derust`, `server`, `pilot`, `glbviewer`) | doc | ⏳ |
+| 1.1 | Trancher Git LFS vs exclusion pour `assets/models/` (159 Mo, 826 fichiers versionnés en Git normal, `.git/` déjà à 146 Mo) | dette bloquante | ⏳ Seul point classé « bloquant » de l'audit — irréversible sans réécriture d'historique si on attend encore ; **décision à prendre avec l'utilisateur** (LFS a un coût de stockage/bande passante) |
+| 1.2 | Réactiver le test roguelike (`src/app/demos.rs:341-342`) | qualité | ✅ Plus flaky : 35/35 passages verts (isolé + sous charge) constatés le 2026-08-29 — les changements ultérieurs (`attack_range`/`cooldown`/`windup` figés, budget 400 frames) ont éliminé la cause. `#[ignore]` retiré, suite complète 684/684 verte (`d71b3f9`) |
+| 1.3 | Corriger les 3 dérives README : lignes de code (« ~32 000 » annoncé, 75 422 réel), chemin mort `src/scene/demos.rs` (→ `src/scene/demos/`), compteur `.glb` (412 annoncé, 482 réel) | doc | ✅ `14c47a7` — chiffre de lignes recalé sur ~65 000 (hors tests) |
+| 1.4 | Mettre à jour le commentaire `Cargo.toml:4-5` (« deux binaires » → 4 : `motor3derust`, `server`, `pilot`, `glbviewer`) | doc | ✅ `14c47a7` |
 
 ## Vague 2 — Découper les trois points de passage obligés — non commencée
 
