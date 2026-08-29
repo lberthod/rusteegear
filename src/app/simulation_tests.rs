@@ -128,7 +128,7 @@ fn hand_tool_pan_is_not_snapped_back_by_the_player_follow_cam() {
     // avec l'outil Main actif.
     app.camera.pan(50.0, 0.0);
     let panned_target = app.camera.target;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert_eq!(
         app.camera.target, panned_target,
@@ -163,7 +163,7 @@ fn orbit_tool_yaw_is_not_pulled_back_towards_a_ranged_players_facing() {
     // en glissant avec l'outil Orbite actif.
     app.camera.orbit(300.0, 0.0);
     let orbited_yaw = app.camera.yaw;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert_eq!(
         app.camera.yaw, orbited_yaw,
@@ -285,34 +285,34 @@ fn the_perf_log_window_tracks_the_worst_frame_and_resets_each_window() {
     let mut app = AppState::new();
     app.playing = true;
     let t0 = Instant::now();
-    app.perf_window_start = t0;
+    app.perf.perf_window_start = t0;
 
     let d = std::time::Duration::from_secs;
     app.log_perf_window(t0 + d(1), 1.0 / 60.0);
     app.log_perf_window(t0 + d(2), 0.050); // à-coup réel : doit être retenu
     app.log_perf_window(t0 + d(3), 1.0 / 60.0);
     assert!(
-        (app.perf_window_worst_dt - 0.050).abs() < 1e-6,
+        (app.perf.perf_window_worst_dt - 0.050).abs() < 1e-6,
         "la pire frame de la fenêtre doit être retenue (worst={})",
-        app.perf_window_worst_dt
+        app.perf.perf_window_worst_dt
     );
     // dt aberrant (> 0,5 s : throttle, mise en veille) : ignoré.
     app.log_perf_window(t0 + d(4), 2.0);
     assert!(
-        (app.perf_window_worst_dt - 0.050).abs() < 1e-6,
+        (app.perf.perf_window_worst_dt - 0.050).abs() < 1e-6,
         "un dt aberrant ne doit pas polluer la pire frame"
     );
     // Fenêtre écoulée : bilan flushé, la suivante repart de zéro.
     app.log_perf_window(t0 + d(11), 1.0 / 60.0);
     assert_eq!(
-        app.perf_window_worst_dt, 0.0,
+        app.perf.perf_window_worst_dt, 0.0,
         "la fenêtre doit repartir de zéro après le bilan"
     );
     // Hors Play : rien n'est accumulé (les frames sont throttlées exprès).
     app.playing = false;
     app.log_perf_window(t0 + d(12), 0.2);
     assert_eq!(
-        app.perf_window_worst_dt, 0.0,
+        app.perf.perf_window_worst_dt, 0.0,
         "hors Play, aucune frame ne doit être comptée"
     );
 }
@@ -492,7 +492,7 @@ fn step_requested_advances_exactly_one_fixed_tick_while_paused() {
     let mut app = AppState::new();
     app.playing = true;
     app.paused = true;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play(); // transition Edit→Play + première frame gelée
     assert_eq!(
         app.time, 0.0,
@@ -500,7 +500,7 @@ fn step_requested_advances_exactly_one_fixed_tick_while_paused() {
     );
 
     app.request_step();
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     let fixed_dt = 1.0 / 60.0;
     assert!(
@@ -510,7 +510,7 @@ fn step_requested_advances_exactly_one_fixed_tick_while_paused() {
     );
 
     // Sans nouvelle demande, la pause suivante ne doit pas avancer davantage.
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(
         (app.time - fixed_dt).abs() < 1e-5,
@@ -559,7 +559,7 @@ fn edit_mode_still_advances_skeletal_clips() {
     assert!(!app.playing, "AppState démarre en mode édition");
     // Simule ~50 ms écoulés depuis la frame précédente (l'horloge réelle
     // d'`advance_play` ne verrait que quelques µs entre deux appels de test).
-    app.last_frame = Instant::now() - std::time::Duration::from_millis(50);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_millis(50);
     app.advance_play();
     let anim = app.scene.objects[0].animation.as_ref().unwrap();
     assert!(
@@ -1437,7 +1437,7 @@ fn tank_controls_turn_then_thrust_move_the_player_along_its_own_facing() {
     // (-π, π]).
     app.input_state.key_turn = 1.0;
     for _ in 0..5 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     app.input_state.key_turn = 0.0;
@@ -1456,7 +1456,7 @@ fn tank_controls_turn_then_thrust_move_the_player_along_its_own_facing() {
     let p0 = app.scene.objects[pi].transform.position;
     app.input_state.key_thrust = 1.0;
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let moved = app.scene.objects[pi].transform.position - p0;
@@ -1493,7 +1493,7 @@ fn tank_controls_reversing_never_spins_the_player_around() {
 
     app.input_state.key_thrust = -1.0; // S tenue
     for _ in 0..90 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let yaw1 = app.scene.objects[pi]
@@ -1530,7 +1530,7 @@ fn camera_relative_move_advances_the_player_and_turns_it_to_face_the_direction()
     // l'un couvre l'autre — cf. `raw_mx/raw_my` dans `advance_play`.
     app.input_state.key_move = (1.0, 0.0);
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let moved = app.scene.objects[pi].transform.position - p0;
@@ -1565,7 +1565,7 @@ fn gamepad_yaw_orbits_the_camera_freely() {
 
     app.input_state.gamepad_yaw = 1.0;
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     assert!(
@@ -1589,7 +1589,7 @@ fn gamepad_yaw_is_ignored_during_auto_run() {
 
     app.input_state.gamepad_yaw = 1.0;
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     assert_eq!(
@@ -1759,7 +1759,7 @@ fn player_clip_switches_between_idle_and_walk_with_movement() {
 
     app.input_state.key_move = (0.0, 1.0);
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     assert_eq!(
@@ -1773,7 +1773,7 @@ fn player_clip_switches_between_idle_and_walk_with_movement() {
 
     app.input_state.key_move = (0.0, 0.0);
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     assert_eq!(
@@ -1839,7 +1839,7 @@ fn a_scripted_creature_with_ai_chaser_chases_in_range_and_patrols_out_of_range()
     let planar = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
     let d0 = planar(app.scene.objects[ci].transform.position);
     for _ in 0..120 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let p = app.scene.objects[ci].transform.position;
@@ -1854,7 +1854,7 @@ fn a_scripted_creature_with_ai_chaser_chases_in_range_and_patrols_out_of_range()
     let (mut app2, ci2) = build_app(Vec3::new(0.0, 0.0, -20.0));
     let x0 = app2.scene.objects[ci2].transform.position.x;
     for _ in 0..120 {
-        app2.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app2.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app2.advance_play();
     }
     let p2 = app2.scene.objects[ci2].transform.position;
@@ -1916,7 +1916,7 @@ fn a_scripted_creature_knockback_pushes_it_back_despite_the_chase() {
     app.stagger.push((ci, Vec3::new(0.0, 0.0, -8.0), 0.25));
     let z0 = app.scene.objects[ci].transform.position.z;
     for _ in 0..12 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let z1 = app.scene.objects[ci].transform.position.z;
@@ -1928,7 +1928,7 @@ fn a_scripted_creature_knockback_pushes_it_back_despite_the_chase() {
 
     // Le recul épuisé, la chasse reprend : la créature revient vers le joueur.
     for _ in 0..90 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let z2 = app.scene.objects[ci].transform.position.z;

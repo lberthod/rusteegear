@@ -631,7 +631,7 @@ mod tests {
 
     fn advance(app: &mut AppState, frames: usize, frame_dt: f32) {
         for _ in 0..frames {
-            app.last_frame =
+            app.perf.last_frame =
                 std::time::Instant::now() - std::time::Duration::from_secs_f32(frame_dt);
             app.advance_play();
         }

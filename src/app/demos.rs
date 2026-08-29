@@ -367,7 +367,7 @@ mod tests {
             }
         }
         app.playing = true;
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         assert_eq!(app.wave, 1, "démarre à la salle 1");
 
@@ -389,7 +389,7 @@ mod tests {
         app.input_state.attack = true;
         for wave in 1..=3u32 {
             for _ in 0..400 {
-                app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+                app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
                 app.advance_play();
                 if app.wave > wave || app.has_won() {
                     break;
@@ -432,7 +432,7 @@ mod tests {
         app.scene.objects[pi].transform.position = loot_pos;
 
         app.playing = true;
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
 
         let ctrl = app.scene.objects[pi].controller.as_ref().unwrap();
@@ -480,7 +480,7 @@ mod tests {
 
         let mut hp_history = Vec::new();
         for _ in 0..1000 {
-            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
             if let Some(hp) = app.scene.objects[ri].combat.as_ref().map(|c| c.hp)
                 && hp_history.last() != Some(&hp)
@@ -541,7 +541,7 @@ mod tests {
 
         let mut pos_at_impact = None;
         for _ in 0..200 {
-            app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
             if app.scene.objects[ri]
                 .combat
@@ -558,7 +558,7 @@ mod tests {
             .expect("le joueur ne bouge pas dans ce test (aucune entrée de mouvement)");
         let dist0 = (pos_at_impact - player_pos).length();
 
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         let dist1 = (app.scene.objects[ri].transform.position - player_pos).length();
         assert!(
@@ -585,7 +585,7 @@ mod tests {
         // recul, déjà testée ailleurs (`brawl_demo_non_lethal_hit_knocks_the_rival_away_from_the_player`).
         app.scene.objects[ri].transform.position = Vec3::new(0.0, -8.0, 0.0);
         app.playing = true;
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
 
         assert!(

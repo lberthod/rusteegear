@@ -13,7 +13,7 @@ impl AppState {
     pub fn set_viewport(&mut self, width: u32, height: u32) {
         let w = width.max(1) as f32;
         let h = height.max(1) as f32;
-        self.viewport = (w, h);
+        self.perf.viewport = (w, h);
         self.camera.aspect = w / h;
     }
 
@@ -315,12 +315,12 @@ impl AppState {
             let (bx, by, bw, bh) = if self.view_rect_px.2 > 1.0 {
                 self.view_rect_px
             } else {
-                (0.0, 0.0, self.viewport.0, self.viewport.1)
+                (0.0, 0.0, self.perf.viewport.0, self.perf.viewport.1)
             };
             let (rx, ry, rw, rh) = device_rect(bw, bh, self.device_portrait);
             (bx + rx, by + ry, rw, rh)
         } else {
-            (0.0, 0.0, self.viewport.0, self.viewport.1)
+            (0.0, 0.0, self.perf.viewport.0, self.perf.viewport.1)
         };
         (
             2.0 * (px as f32 - ox) / w - 1.0,
@@ -350,7 +350,7 @@ impl AppState {
             return None;
         }
         let ndc = clip.truncate() / clip.w;
-        let (w, h) = self.viewport;
+        let (w, h) = self.perf.viewport;
         Some((
             ((ndc.x * 0.5 + 0.5) * w) as f64,
             ((1.0 - (ndc.y * 0.5 + 0.5)) * h) as f64,
@@ -859,7 +859,7 @@ mod tests {
         app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
         app.handle_input(InputEvent::PointerDown { pan: false });
         app.handle_input(InputEvent::PointerUp);
-        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
         app.advance_play();
     }
 
@@ -966,7 +966,7 @@ mod tests {
         app.paused = false;
         app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
         app.handle_input(InputEvent::PointerDown { pan: false });
-        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
         app.advance_play();
         assert_eq!(
             app.scene.objects[0].transform.position.x, 1.0,
@@ -996,12 +996,12 @@ mod tests {
         app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
         app.handle_input(InputEvent::PointerDown { pan: false });
 
-        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
         app.advance_play();
         assert_eq!(app.scene.objects[0].transform.position.y, 2.0);
 
         // Toujours pressé (pas de PointerUp) : `touching` doit rester vrai.
-        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
         app.advance_play();
         assert_eq!(
             app.scene.objects[0].transform.position.y, 2.0,
@@ -1029,7 +1029,7 @@ mod tests {
         app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
         app.handle_input(InputEvent::PointerDown { pan: false });
 
-        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
         app.advance_play();
         assert_eq!(
             app.scene.objects[0].transform.position.z, 0.0,
@@ -1037,7 +1037,7 @@ mod tests {
         );
 
         app.handle_input(InputEvent::PointerUp);
-        app.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - Duration::from_secs_f32(0.05);
         app.advance_play();
         assert!(
             (app.scene.objects[0].transform.position.z - 3.0).abs() < 1e-4,

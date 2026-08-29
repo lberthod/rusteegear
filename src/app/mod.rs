@@ -290,6 +290,25 @@ pub struct FxState {
 /// `editor::build_ui` directement (contrairement à `gizmo_mode`/
 /// `active_axis`/`selected_light`, laissés en place au niveau d'AppState
 /// car ce sont eux que l'UI lit pour l'état visuel du gizmo).
+/// Mesure de performance par frame (viewport courant, horodatage de la
+/// dernière frame, FPS lissé, fenêtre de bilan périodique) — regroupée hors
+/// de `AppState` (roadmap post-audit 2026-08-29, vague 2.3, lot 10) :
+/// purement diagnostique, aucune de ces valeurs ne pilote de logique de jeu.
+pub struct PerfState {
+    viewport: (f32, f32),
+    last_frame: Instant,
+    /// Images par seconde lissées (moyenne mobile exponentielle), pour le bandeau d'état.
+    fps: f32,
+    /// Fenêtre du bilan de perf périodique (cf. `log_perf_window` dans
+    /// `simulation.rs`) : début de la fenêtre courante et pire `dt` observé dedans.
+    perf_window_start: Instant,
+    perf_window_worst_dt: f32,
+    /// Pire durée d'`advance_play` (simulation seule) sur la fenêtre courante —
+    /// pas forcément la même frame que `perf_window_worst_dt`, c'est un
+    /// indicateur de *quel côté* (sim vs rendu/présentation) chercher un à-coup.
+    perf_window_worst_sim: f32,
+}
+
 pub struct DragState {
     dragging: bool,
     /// Pan forcé en cours (clic milieu / Maj+glisser) : déplace la caméra quel
@@ -871,18 +890,8 @@ pub struct AppState {
     pub debug_view: DebugView,
     pub camera: OrbitCamera,
 
-    viewport: (f32, f32),
-    last_frame: Instant,
-    /// Images par seconde lissées (moyenne mobile exponentielle), pour le bandeau d'état.
-    fps: f32,
-    /// Fenêtre du bilan de perf périodique (cf. `log_perf_window` dans
-    /// `simulation.rs`) : début de la fenêtre courante et pire `dt` observé dedans.
-    perf_window_start: Instant,
-    perf_window_worst_dt: f32,
-    /// Pire durée d'`advance_play` (simulation seule) sur la fenêtre courante —
-    /// pas forcément la même frame que `perf_window_worst_dt`, c'est un
-    /// indicateur de *quel côté* (sim vs rendu/présentation) chercher un à-coup.
-    perf_window_worst_sim: f32,
+    /// Mesure de performance par frame — cf. `PerfState`.
+    perf: PerfState,
 
     // --- gizmo ---
     pub gizmo_mode: GizmoMode,
@@ -1212,12 +1221,14 @@ impl AppState {
             snap_modifier: false,
             debug_view: DebugView::default(),
             camera: OrbitCamera::new(1.0),
-            viewport: (1.0, 1.0),
-            last_frame: Instant::now(),
-            fps: 0.0,
-            perf_window_start: Instant::now(),
-            perf_window_worst_dt: 0.0,
-            perf_window_worst_sim: 0.0,
+            perf: PerfState {
+                viewport: (1.0, 1.0),
+                last_frame: Instant::now(),
+                fps: 0.0,
+                perf_window_start: Instant::now(),
+                perf_window_worst_dt: 0.0,
+                perf_window_worst_sim: 0.0,
+            },
             gizmo_mode: GizmoMode::Translate,
             active_axis: None,
             selected_light: None,
@@ -1347,7 +1358,7 @@ impl AppState {
 
     /// Images par seconde lissées, pour le bandeau d'état de l'éditeur.
     pub fn fps(&self) -> f32 {
-        self.fps
+        self.perf.fps
     }
 
     /// Vrai quand l'app doit rendre en continu (animation Play ou interaction en cours) :

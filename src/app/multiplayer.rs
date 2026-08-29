@@ -1004,7 +1004,8 @@ mod tests {
         app.hide_local_player_template();
         app.playing = true;
         for _ in 0..80 {
-            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
         }
         assert_eq!(
@@ -1453,7 +1454,8 @@ mod tests {
         );
         app.playing = true;
         for _ in 0..30 {
-            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
         }
 
@@ -1697,7 +1699,8 @@ mod tests {
         );
         app.playing = true;
         for _ in 0..10 {
-            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
         }
         let pos = app.scene.objects[a].transform.position;
@@ -1818,7 +1821,8 @@ mod tests {
         // Plusieurs ticks rapprochés (bien en-deçà de NETWORK_ATTACK_COOLDOWN) :
         // un client qui spamme `attack: true` ne doit vaincre qu'UNE cible.
         for _ in 0..5 {
-            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.02);
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.02);
             app.advance_play();
         }
         let defeated_early: usize = app
@@ -1834,7 +1838,8 @@ mod tests {
 
         // Après le temps de recharge, une nouvelle attaque doit passer.
         for _ in 0..15 {
-            app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
             app.advance_play();
         }
         let defeated_later: usize = app
@@ -1881,7 +1886,7 @@ mod tests {
             },
         );
 
-        app.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.02);
+        app.perf.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.02);
         app.advance_play();
 
         assert_eq!(

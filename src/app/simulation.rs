@@ -283,26 +283,26 @@ impl AppState {
         if !self.playing || self.paused {
             // Hors Play la boucle throttle volontairement : une fenêtre en cours
             // mélangerait des frames throttlées — on repart de zéro.
-            self.perf_window_start = now;
-            self.perf_window_worst_dt = 0.0;
+            self.perf.perf_window_start = now;
+            self.perf.perf_window_worst_dt = 0.0;
             return;
         }
         if dt > 1e-4 && dt < 0.5 {
-            self.perf_window_worst_dt = self.perf_window_worst_dt.max(dt);
+            self.perf.perf_window_worst_dt = self.perf.perf_window_worst_dt.max(dt);
         }
-        if now.duration_since(self.perf_window_start) >= PERF_WINDOW {
-            if self.perf_window_worst_dt > 0.0 {
+        if now.duration_since(self.perf.perf_window_start) >= PERF_WINDOW {
+            if self.perf.perf_window_worst_dt > 0.0 {
                 log::info!(
                     "Perf : {:.0} FPS lissés, pire frame {:.1} ms (pire sim {:.1} ms) \
                      sur les 10 dernières s",
-                    self.fps,
-                    self.perf_window_worst_dt * 1000.0,
-                    self.perf_window_worst_sim * 1000.0
+                    self.perf.fps,
+                    self.perf.perf_window_worst_dt * 1000.0,
+                    self.perf.perf_window_worst_sim * 1000.0
                 );
             }
-            self.perf_window_start = now;
-            self.perf_window_worst_dt = 0.0;
-            self.perf_window_worst_sim = 0.0;
+            self.perf.perf_window_start = now;
+            self.perf.perf_window_worst_dt = 0.0;
+            self.perf.perf_window_worst_sim = 0.0;
         }
     }
 
@@ -310,7 +310,7 @@ impl AppState {
     /// perf (cf. `log_perf_window`) — appelé par `Renderer::render`, seul endroit
     /// qui voit la frame entière.
     pub fn note_sim_duration(&mut self, d: std::time::Duration) {
-        self.perf_window_worst_sim = self.perf_window_worst_sim.max(d.as_secs_f32());
+        self.perf.perf_window_worst_sim = self.perf.perf_window_worst_sim.max(d.as_secs_f32());
     }
 
     /// Avance la simulation d'exactement `n` pas fixes de 1/60 s, immédiatement
@@ -349,16 +349,16 @@ impl AppState {
         self.audio.update();
 
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32();
-        self.last_frame = now;
+        let dt = (now - self.perf.last_frame).as_secs_f32();
+        self.perf.last_frame = now;
 
         // FPS lissé (EMA) ; ignore les dt aberrants (première frame, throttle au repos).
         if dt > 1e-4 && dt < 0.5 {
             let inst = 1.0 / dt;
-            self.fps = if self.fps == 0.0 {
+            self.perf.fps = if self.perf.fps == 0.0 {
                 inst
             } else {
-                self.fps * 0.9 + inst * 0.1
+                self.perf.fps * 0.9 + inst * 0.1
             };
         }
         self.log_perf_window(now, dt);

@@ -267,7 +267,7 @@ fn a_door_opens_on_score_3_without_direct_coupling() {
     app.scene = scene;
     app.playing = true;
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert_eq!(app.score, 3, "les 3 pièces doivent être ramassées");
@@ -302,13 +302,13 @@ fn push_hud_event_reaches_scripts_prefixed_with_hud_via_on_event() {
     });
     app.scene = scene;
     app.playing = true;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     // Transition Edit→Play d'abord : elle vide `game_events` (nouvelle partie), donc
     // le clic HUD doit être poussé après, sans quoi il serait perdu avant même
     // d'atteindre un script.
     app.advance_play();
     app.push_hud_event("jump");
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     let porte = app
         .scene
@@ -337,7 +337,7 @@ fn script_calling_obj_destroy_soft_deletes_via_visible_false() {
     });
     app.scene = scene;
     app.playing = true;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(!app.scene.objects[0].visible, "l'objet devait être masqué");
     // Toujours dans `scene.objects` : ce n'est pas un vrai retrait.
@@ -375,7 +375,7 @@ fn a_spawned_enemy_via_lua_joins_the_scene_and_can_be_found_by_tag() {
     app.scene = scene;
     app.playing = true;
     for _ in 0..3 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert_eq!(
@@ -481,7 +481,7 @@ fn an_anim_notify_gates_the_combat_hit_window() {
     app.playing = true;
 
     let advance_one_tick = |app: &mut AppState| {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     };
 
@@ -1124,7 +1124,7 @@ fn sustained_enemy_contact_drains_health_and_ends_the_game() {
     app.playing = true;
     let mut ended = false;
     for _ in 0..80 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         if app.lost {
             ended = true;
@@ -1151,7 +1151,7 @@ fn attacking_defeats_enemy_and_stops_further_damage() {
     // Laisse le temps à la préparation (attack_windup) puis au missile d'arriver
     // (l'attaque n'est plus instantanée, cf. `AttackCharge`/`AttackProjectile`).
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert_eq!(
@@ -1173,7 +1173,7 @@ fn attacking_defeats_enemy_and_stops_further_damage() {
     app.input_state.buttons.clear();
     let health_after_defeat = app.hud_health;
     for _ in 0..20 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert!(
@@ -1243,7 +1243,7 @@ fn attack_cooldown_blocks_rapid_refire_but_allows_it_once_expired() {
     // de recharge (0,5 s), sans quoi l'assertion suivante (cible 2 protégée par la
     // recharge) ne serait plus valide.
     for _ in 0..8 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert!(
@@ -1259,7 +1259,7 @@ fn attack_cooldown_blocks_rapid_refire_but_allows_it_once_expired() {
     // dans la fenêtre de recharge de 0,5 s : le bouton reste enfoncé mais ne doit PAS
     // tirer un nouveau missile sur elle à cet instant.
     app.scene.objects[2].transform.position = Vec3::new(1.0, 0.5, 0.0);
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(
         app.scene.objects[2].visible,
@@ -1269,7 +1269,7 @@ fn attack_cooldown_blocks_rapid_refire_but_allows_it_once_expired() {
     // Laisse la recharge s'écouler (0,5 s) puis le missile arriver : l'attaque
     // suivante doit alors porter.
     for _ in 0..15 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert!(
@@ -1298,7 +1298,7 @@ fn attack_shows_and_hides_the_visual_fx_anchor() {
     // Laisse le temps à la préparation puis au missile d'arriver (le coup n'est plus
     // instantané, cf. `AttackCharge`/`AttackProjectile`).
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
 
@@ -1322,7 +1322,7 @@ fn attack_shows_and_hides_the_visual_fx_anchor() {
 
     app.input_state.buttons.clear();
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         if app.fx.attack_flash <= 0.0 {
             break;
@@ -1349,7 +1349,7 @@ fn auto_run_speed_advances_the_player_with_zero_input() {
     // `input_state` reste à ses valeurs par défaut (aucune entrée).
     let z0 = app.player_position().unwrap().z;
     for _ in 0..40 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     let z1 = app.player_position().unwrap().z;
@@ -1405,7 +1405,7 @@ fn ai_chaser_actively_closes_distance_to_the_player() {
     app.playing = true;
     let dist0 = (app.scene.objects[2].transform.position - Vec3::new(0.0, 1.0, 0.0)).length();
     for _ in 0..60 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     let player_pos = app.player_position().unwrap();
@@ -1470,7 +1470,7 @@ fn only_the_nearest_chasers_up_to_the_cap_advance_on_a_single_target() {
         .map(|i| app.scene.objects[i].transform.position)
         .collect();
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     let moved = |i: usize| (app.scene.objects[i].transform.position - start[i - 2]).length();
@@ -1547,7 +1547,7 @@ fn a_chaser_beyond_detection_range_never_moves_towards_a_lone_network_player() {
     app.playing = true;
     let start = app.scene.objects[2].transform.position;
     for _ in 0..60 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     let moved = (app.scene.objects[2].transform.position - start).length();
@@ -1604,7 +1604,7 @@ fn chaser_distance_moved(chaser_x: f32, archetype: crate::scene::Archetype, step
     app.playing = true;
     let start = app.scene.objects[2].transform.position;
     for _ in 0..steps {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     (app.scene.objects[2].transform.position - start).length()
@@ -1683,7 +1683,7 @@ fn a_furtive_is_marked_awake_exactly_once_when_it_crosses_its_wake_radius() {
     };
     app.playing = true;
     for _ in 0..10 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert!(
@@ -1696,7 +1696,7 @@ fn a_furtive_is_marked_awake_exactly_once_when_it_crosses_its_wake_radius() {
     // doit franchir la portée d'éveil et être enregistrée exactement une fois.
     app.scene.objects[2].transform.position = Vec3::new(3.0, 0.5, 0.0);
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert_eq!(
@@ -1709,7 +1709,7 @@ fn a_furtive_is_marked_awake_exactly_once_when_it_crosses_its_wake_radius() {
     // permettrait de toute façon pas, mais confirme qu'aucun autre indice n'est
     // ajouté par erreur au passage).
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert_eq!(app.furtive_awake, std::collections::HashSet::from([2]));
@@ -1803,7 +1803,7 @@ fn ai_chaser_pursues_the_nearest_network_player_not_just_the_first_joined() {
         .length();
 
     for _ in 0..60 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
 
@@ -1888,7 +1888,7 @@ fn wave_system_reveals_next_wave_then_wins_on_the_last() {
         ..Default::default()
     };
     app.playing = true;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play(); // entrée en Play : `init_waves` doit s'exécuter.
 
     assert_eq!(app.wave, 1, "démarre à la manche 1");
@@ -1906,7 +1906,7 @@ fn wave_system_reveals_next_wave_then_wins_on_the_last() {
     // `AttackProjectile`) et à `update_waves` de détecter la manche vidée.
     app.input_state.buttons.insert("Attaque".into());
     for _ in 0..20 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         if app.wave == 2 {
             // S'arrête dès la révélation de la manche 2, avant qu'un nouveau missile
@@ -1929,7 +1929,7 @@ fn wave_system_reveals_next_wave_then_wins_on_the_last() {
     // Vainc le monstre de la manche 2 : dernière manche ⇒ victoire.
     app.input_state.buttons.insert("Attaque".into());
     for _ in 0..20 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     app.input_state.buttons.clear();
@@ -2246,7 +2246,7 @@ fn attack_mode_zone_clears_a_whole_cluster_in_one_swing() {
     app.input_state.attack = true;
     let mut seen_counts: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for _ in 0..30 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         let visible = app.scene.objects[2..].iter().filter(|o| o.visible).count();
         seen_counts.insert(visible);
@@ -2339,7 +2339,7 @@ fn chasing_monster_with_solid_body_can_bite_the_player_on_contact() {
 
     let mut took_damage = false;
     for _ in 0..40 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         if app.hud_health.is_some() {
             took_damage = true;
@@ -2371,7 +2371,7 @@ fn attack_windup_finally_guarantees_risk_in_a_1v1() {
 
     let mut bitten_before_kill = false;
     for _ in 0..40 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         if app.hud_health.is_some() && app.scene.objects[2].visible {
             bitten_before_kill = true;
@@ -2467,7 +2467,7 @@ fn attack_is_a_missile_with_travel_time_not_an_instant_hit() {
     // atteindre le temps de vol du missile (5 m à 10 m/s ≈ 0,5 s) — le monstre à 5 m
     // ne doit pas être vaincu si tôt.
     for _ in 0..6 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
     }
     assert!(
@@ -2483,7 +2483,7 @@ fn attack_is_a_missile_with_travel_time_not_an_instant_hit() {
         .map(|o| o.transform.position);
 
     // Quelques frames plus tard : le missile a progressé (pas téléporté).
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     let fx_mid_flight = app
         .scene
@@ -2498,7 +2498,7 @@ fn attack_is_a_missile_with_travel_time_not_an_instant_hit() {
 
     // Laisse le temps au missile d'arriver.
     for _ in 0..20 {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
         app.advance_play();
         if !app.scene.objects[2].visible {
             break;
@@ -2517,7 +2517,7 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
     let mut app = AppState::new();
     app.scene = synthetic_damage_scene();
     app.playing = true;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     // Le pic (1.0) est déclenché par le sim_step qui détecte le coup, mais cette même
     // frame applique déjà une frame de décroissance ensuite (comportement voulu : le
@@ -2540,7 +2540,7 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
         j.transform.position = Vec3::new(50.0, 0.5, 50.0);
     }
     app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(
         app.fx.damage_flash < peak,
@@ -2548,7 +2548,7 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
     );
     // Sortir de Play remet tout à zéro (pas de flash résiduel visible en édition).
     app.playing = false;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert_eq!(
         app.fx.damage_flash, 0.0,
@@ -2779,7 +2779,7 @@ fn pausing_freezes_the_survie_timer() {
         ..Default::default()
     };
     app.playing = true;
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play(); // entrée en Play : `init_waves` + `time` remis à 0.
 
     // 10 s avant la fin de la manche (`SURVIE_DURATION_SECS` = 180 s) : on pause.
@@ -2788,7 +2788,7 @@ fn pausing_freezes_the_survie_timer() {
     assert!(app.paused);
 
     // 30 s réelles s'écoulent pendant la pause.
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(30.0);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(30.0);
     app.advance_play();
     assert_eq!(
         app.time, 170.0,
@@ -2802,7 +2802,7 @@ fn pausing_freezes_the_survie_timer() {
     // On reprend : la simulation doit repartir normalement.
     app.toggle_pause();
     assert!(!app.paused);
-    app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     assert!(app.time > 170.0, "le chrono doit repartir après la reprise");
 }
@@ -2894,7 +2894,7 @@ fn a_served_scene_creature_chases_a_network_player_in_range_and_hurts_on_contact
     );
     let hp0 = app.network.network_health.get(&pid).copied().unwrap_or(1.0);
     for _ in 0..(60 * 8) {
-        app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+        app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
     }
     let d1 = planar(
