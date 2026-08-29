@@ -254,6 +254,22 @@ pub struct FxState {
 /// nom de la struct) plutôt que raccourcis : permet de corriger tous les
 /// sites d'appel à partir du seul nom de champ, sans ambiguïté possible avec
 /// un autre champ `uid`/`busy`/`tx`/`rx` du reste d'`AppState`.
+/// Résultats de chargements asynchrones lancés depuis un thread de fond
+/// (import glTF, chargement de scène) — regroupés hors de `AppState`
+/// (roadmap post-audit 2026-08-29, vague 2.3, lot 4) : confinés aux mêmes 3
+/// fichiers (`app/mod.rs`, `app/persistence.rs`, `app/demos.rs`), déjà
+/// signalés comme un même sous-domaine par les commentaires de section
+/// `--- import glTF asynchrone ---` / `--- chargement de scène asynchrone
+/// (Load) ---` qui les précédaient dans `AppState`.
+pub struct AsyncLoadState {
+    import_tx: Sender<ImportResult>,
+    import_rx: Receiver<ImportResult>,
+    scene_load_tx: Sender<Result<Scene, String>>,
+    scene_load_rx: Receiver<Result<Scene, String>>,
+    /// Vrai après remplacement de la scène : le renderer doit reconstruire les meshes GPU importés.
+    imported_dirty: bool,
+}
+
 pub struct FirebaseAuthState {
     /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
     /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
@@ -853,15 +869,8 @@ pub struct AppState {
     physics: Option<crate::runtime::physics::Physics>,
     audio: crate::runtime::audio::Audio,
 
-    // --- import glTF asynchrone ---
-    import_tx: Sender<ImportResult>,
-    import_rx: Receiver<ImportResult>,
-
-    // --- chargement de scène asynchrone (Load) ---
-    scene_load_tx: Sender<Result<Scene, String>>,
-    scene_load_rx: Receiver<Result<Scene, String>>,
-    /// Vrai après remplacement de la scène : le renderer doit reconstruire les meshes GPU importés.
-    imported_dirty: bool,
+    // --- chargements asynchrones (import glTF, scène) ---
+    async_load: AsyncLoadState,
 
     // --- génération de script par IA (asynchrone) ---
     ai_tx: Sender<(usize, Result<String, String>)>,
@@ -1181,11 +1190,13 @@ impl AppState {
             play_snapshot: Vec::new(),
             physics: None,
             audio,
-            import_tx: tx,
-            import_rx: rx,
-            scene_load_tx: scene_tx,
-            scene_load_rx: scene_rx,
-            imported_dirty: false,
+            async_load: AsyncLoadState {
+                import_tx: tx,
+                import_rx: rx,
+                scene_load_tx: scene_tx,
+                scene_load_rx: scene_rx,
+                imported_dirty: false,
+            },
             ai_tx,
             ai_rx,
             ai_busy: false,
@@ -1256,7 +1267,7 @@ impl AppState {
                         self.scene.point_lights.append(&mut scene.point_lights);
                         log::info!("{n} objet(s) ajouté(s) par IA à la scène");
                     }
-                    self.imported_dirty = true;
+                    self.async_load.imported_dirty = true;
                     self.clear_selection();
                 }
                 Err(e) => log::error!("Génération de scène IA : {e}"),
@@ -1267,7 +1278,7 @@ impl AppState {
     /// Indique (et réinitialise) si la scène vient d'être remplacée par un Load :
     /// le renderer s'en sert pour reconstruire ses meshes GPU importés.
     pub fn take_imported_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.imported_dirty)
+        std::mem::take(&mut self.async_load.imported_dirty)
     }
 
     /// Images par seconde lissées, pour le bandeau d'état de l'éditeur.

@@ -167,7 +167,7 @@ impl AppState {
     pub fn next_level(&mut self) {
         self.level = self.level % crate::scene::CONTROLLER_LEVELS + 1;
         self.scene = crate::scene::Scene::controller_level(self.level);
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.is_leveled_demo = true;
         // Repart « en jeu » sur le nouveau niveau.
         self.play_snapshot = self.scene.objects.clone();
@@ -225,7 +225,7 @@ impl AppState {
     /// Charge une scène depuis un chemin JSON donné, en thread de fond (sans bloquer
     /// le rendu). Le résultat est appliqué dans `poll_imports`.
     pub fn load_from(&mut self, path: &str) {
-        let tx = self.scene_load_tx.clone();
+        let tx = self.async_load.scene_load_tx.clone();
         let path = path.to_string();
         std::thread::spawn(move || {
             // Erreur enrichie du chemin et d'une piste de réparation (Phase C5,
@@ -256,7 +256,7 @@ impl AppState {
         s.reload_imported();
         self.scene = s;
         self.clear_selection();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.scene_dirty = false;
         Ok(self.scene.objects.len())
     }
@@ -386,7 +386,7 @@ impl AppState {
 
     /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).
     pub fn import_gltf(&mut self, path: &str) {
-        let tx = self.import_tx.clone();
+        let tx = self.async_load.import_tx.clone();
         let p = path.to_string();
         std::thread::spawn(move || {
             // Même principe que `load_from` (Phase C5) : l'erreur cite le fichier
@@ -406,19 +406,19 @@ impl AppState {
 
     /// Récupère les imports terminés et les ajoute à la scène (appelé chaque frame).
     pub(super) fn poll_imports(&mut self) {
-        while let Ok(res) = self.import_rx.try_recv() {
+        while let Ok(res) = self.async_load.import_rx.try_recv() {
             match res {
                 Ok((path, data, min, max)) => self.finish_import(path, data, min, max),
                 Err(e) => log::error!("Import glTF échoué : {e}"),
             }
         }
         // scènes chargées en arrière-plan (Load) prêtes cette frame
-        while let Ok(res) = self.scene_load_rx.try_recv() {
+        while let Ok(res) = self.async_load.scene_load_rx.try_recv() {
             match res {
                 Ok(s) => {
                     self.scene = s;
                     self.clear_selection();
-                    self.imported_dirty = true;
+                    self.async_load.imported_dirty = true;
                     // Une scène fraîchement chargée depuis le disque est, par
                     // définition, identique à sa version sauvegardée.
                     self.scene_dirty = false;

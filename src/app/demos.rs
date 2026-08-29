@@ -16,7 +16,7 @@ impl AppState {
     pub fn load_mobile_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::mobile_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.is_leveled_demo = false;
         self.clear_selection();
     }
@@ -25,7 +25,7 @@ impl AppState {
     pub fn load_gameplay_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::gameplay_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -40,7 +40,7 @@ impl AppState {
         self.level = 1;
         self.push_undo();
         self.scene = Scene::controller_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -55,7 +55,7 @@ impl AppState {
     pub fn load_tower_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::tower_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -70,7 +70,7 @@ impl AppState {
     pub fn load_temple_run_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::temple_run_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -85,7 +85,7 @@ impl AppState {
     pub fn load_zombies_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::zombies_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -101,7 +101,7 @@ impl AppState {
     pub fn load_embedded_player_scene(&mut self) {
         self.push_undo();
         self.scene = Scene::embedded_player();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -126,7 +126,7 @@ impl AppState {
             .objects
             .retain(|o| !o.name.starts_with("Créature"));
         self.seed_mmorpg_repere_prefab_instances();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -176,7 +176,7 @@ impl AppState {
     pub fn load_roguelike_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::roguelike_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -192,7 +192,7 @@ impl AppState {
     pub fn load_brawl_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::brawl_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -211,7 +211,7 @@ impl AppState {
         self.push_undo();
         self.scene = Scene::boss_demo();
         self.objective = crate::app::multiplayer::RoundObjective::Boss;
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -230,7 +230,7 @@ impl AppState {
         self.push_undo();
         self.scene = Scene::escorte_demo();
         self.objective = crate::app::multiplayer::RoundObjective::Escorte;
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -249,7 +249,7 @@ impl AppState {
         self.push_undo();
         self.scene = Scene::zombies_demo();
         self.objective = crate::app::multiplayer::RoundObjective::Survie;
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
@@ -264,7 +264,7 @@ impl AppState {
     pub fn load_components_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::components_demo();
-        self.imported_dirty = true;
+        self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
         self.fx.camera_shake = 0.0;
