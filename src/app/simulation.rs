@@ -1207,12 +1207,13 @@ impl AppState {
             .flatten();
         let candidate_targets: Vec<Vec3> = if let Some(convoy) = convoy_target {
             vec![convoy]
-        } else if self.network_players.is_empty() {
+        } else if self.network.network_players.is_empty() {
             self.player_position().into_iter().collect()
         } else {
-            self.network_players
+            self.network
+                .network_players
                 .iter()
-                .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
+                .filter(|(id, _)| self.network.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
                 .filter_map(|(_, &idx)| self.scene.objects.get(idx))
                 .filter(|o| o.visible)
                 .map(|o| o.transform.position)
@@ -1277,10 +1278,11 @@ impl AppState {
             // reste toujours neutre (aucun joueur ne pilote le serveur lui-même).
             // Spectateur immobile jusqu'à la fin de la manche, comme voulu.
             let network_by_index: HashMap<usize, multiplayer::NetworkInput> = self
+                .network
                 .network_players
                 .iter()
-                .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
-                .filter_map(|(id, &idx)| self.network_inputs.get(id).map(|inp| (idx, *inp)))
+                .filter(|(id, _)| self.network.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
+                .filter_map(|(id, &idx)| self.network.network_inputs.get(id).map(|inp| (idx, *inp)))
                 .collect();
             // Orientation du joueur local : calculée ici puis appliquée **après**
             // `phys.step()` ci-dessous, directement sur `transform.rotation` — jamais
@@ -1464,7 +1466,7 @@ impl AppState {
                     // servie, contrairement aux chasseurs dynamiques dont le
                     // ring-out de `brawl_demo` exige un retour permanent.
                     let scripted = phys.is_scripted_body(idx);
-                    if (scripted || !self.network_players.is_empty())
+                    if (scripted || !self.network.network_players.is_empty())
                         && dist_sq > CHASER_DETECT_RANGE * CHASER_DETECT_RANGE
                     {
                         if !scripted {

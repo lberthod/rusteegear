@@ -128,7 +128,7 @@ impl AppState {
     /// après `update_fireballs` (les dégâts à distance du tick sont déjà
     /// résolus, la vie de ce tick est donc à jour avant d'y ajouter le contact).
     pub(super) fn update_network_health(&mut self, dt: f32) {
-        if self.network_players.is_empty() {
+        if self.network.network_players.is_empty() {
             return;
         }
         // AABB des monstres `AiChaser` visibles ce tick — même notion de
@@ -145,9 +145,9 @@ impl AppState {
             .map(|(i, o)| (i, self.scene.world_aabb(o)))
             .collect();
 
-        let ids: Vec<PlayerId> = self.network_players.keys().copied().collect();
+        let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
         for id in ids {
-            let Some(&index) = self.network_players.get(&id) else {
+            let Some(&index) = self.network.network_players.get(&id) else {
                 continue;
             };
             let Some((visible, player_aabb)) = self
@@ -169,11 +169,17 @@ impl AppState {
                 .collect();
             let touched = !touching.is_empty();
             let max_hp = self.max_health_for(id);
-            let was_alive = self.network_health.get(&id).copied().unwrap_or(max_hp) > 0.0;
-            let hp = self.network_health.entry(id).or_insert(max_hp);
+            let was_alive = self
+                .network
+                .network_health
+                .get(&id)
+                .copied()
+                .unwrap_or(max_hp)
+                > 0.0;
+            let hp = self.network.network_health.entry(id).or_insert(max_hp);
             if touched {
                 *hp = (*hp - MONSTER_CONTACT_DPS * dt).max(0.0);
-                let buf = self.recent_damage.entry(id).or_default();
+                let buf = self.network.recent_damage.entry(id).or_default();
                 for idx in touching {
                     buf.push_back((DeathCauseKind::Monster, idx));
                     while buf.len() > DEATH_CAUSE_WINDOW {
@@ -193,6 +199,7 @@ impl AppState {
                     o.visible = false;
                 }
                 let cause = self
+                    .network
                     .recent_damage
                     .remove(&id)
                     .and_then(|buf| compute_death_cause(&buf));
@@ -216,7 +223,7 @@ impl AppState {
     /// (avant `update_network_heal` : le contact de ce tick doit être à jour avant
     /// que le soin ne s'applique).
     pub(super) fn update_creature_bite(&mut self, dt: f32) {
-        if self.network_players.is_empty() {
+        if self.network.network_players.is_empty() {
             return;
         }
         // Créatures mordeuses visibles ce tick, avec leur AABB — calculé une fois,
@@ -232,13 +239,13 @@ impl AppState {
         if biters.is_empty() {
             return;
         }
-        for cd in self.bite_cooldowns.values_mut() {
+        for cd in self.network.bite_cooldowns.values_mut() {
             *cd = (*cd - dt).max(0.0);
         }
 
-        let ids: Vec<PlayerId> = self.network_players.keys().copied().collect();
+        let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
         for id in ids {
-            let Some(&index) = self.network_players.get(&id) else {
+            let Some(&index) = self.network.network_players.get(&id) else {
                 continue;
             };
             let Some((visible, player_aabb)) = self
@@ -256,7 +263,11 @@ impl AppState {
                 if !aabbs_overlap(creature_aabb, player_aabb) {
                     continue;
                 }
-                let cd = self.bite_cooldowns.entry((creature_idx, id)).or_insert(0.0);
+                let cd = self
+                    .network
+                    .bite_cooldowns
+                    .entry((creature_idx, id))
+                    .or_insert(0.0);
                 if *cd > 0.0 {
                     continue;
                 }
@@ -271,10 +282,16 @@ impl AppState {
                 if deterministic_roll(self.time, salt) >= bite.chance {
                     continue;
                 }
-                let was_alive = self.network_health.get(&id).copied().unwrap_or(MAX_HEALTH) > 0.0;
-                let hp = self.network_health.entry(id).or_insert(MAX_HEALTH);
+                let was_alive = self
+                    .network
+                    .network_health
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(MAX_HEALTH)
+                    > 0.0;
+                let hp = self.network.network_health.entry(id).or_insert(MAX_HEALTH);
                 *hp = (*hp - bite.damage).max(0.0);
-                let buf = self.recent_damage.entry(id).or_default();
+                let buf = self.network.recent_damage.entry(id).or_default();
                 buf.push_back((DeathCauseKind::Creature, creature_idx));
                 while buf.len() > DEATH_CAUSE_WINDOW {
                     buf.pop_front();
@@ -285,6 +302,7 @@ impl AppState {
                         o.visible = false;
                     }
                     let cause = self
+                        .network
                         .recent_damage
                         .remove(&id)
                         .and_then(|buf| compute_death_cause(&buf));
@@ -310,16 +328,17 @@ impl AppState {
     /// débit `HEAL_RATE_PER_S`. Continue (pas de recharge discrète) : le débit
     /// lui-même borne l'efficacité, pas un temporisateur.
     pub(super) fn update_network_heal(&mut self, dt: f32) {
-        if self.network_players.len() < 2 {
+        if self.network.network_players.len() < 2 {
             // Un soin a besoin d'un soigneur ET d'un allié : rien à faire seul
             // (le cas de loin le plus courant hors session de test/démo).
             return;
         }
         let healers: Vec<(PlayerId, usize)> = self
+            .network
             .network_players
             .iter()
-            .filter(|(id, _)| self.network_inputs.get(id).is_some_and(|i| i.heal))
-            .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(0.0) > 0.0)
+            .filter(|(id, _)| self.network.network_inputs.get(id).is_some_and(|i| i.heal))
+            .filter(|(id, _)| self.network.network_health.get(id).copied().unwrap_or(0.0) > 0.0)
             .map(|(&id, &idx)| (id, idx))
             .collect();
         for (healer_id, healer_idx) in healers {
@@ -334,6 +353,7 @@ impl AppState {
             // Soutien (GDD §8.1) : soin ×2,5 — 0,5 PV/s à 4 m, contre 0,2 PV/s
             // à 2,5 m pour les autres classes (soin universel, jamais retiré).
             let is_support = self
+                .network
                 .network_classes
                 .get(&healer_id)
                 .is_some_and(|c| matches!(c, crate::app::multiplayer::PlayerClass::Support));
@@ -347,11 +367,12 @@ impl AppState {
             // d'autre malgré un blessé un peu plus loin, mais à portée), le
             // plus proche à portée — jamais soi-même.
             let target_id = self
+                .network
                 .network_players
                 .iter()
                 .filter(|(id, _)| **id != healer_id)
                 .filter_map(|(&id, &idx)| {
-                    let hp = self.network_health.get(&id).copied().unwrap_or(0.0);
+                    let hp = self.network.network_health.get(&id).copied().unwrap_or(0.0);
                     if hp <= 0.0 || hp >= self.max_health_for(id) {
                         return None;
                     }
@@ -363,7 +384,7 @@ impl AppState {
                 .map(|(id, _)| id);
             if let Some(target_id) = target_id {
                 let max_hp = self.max_health_for(target_id);
-                if let Some(hp) = self.network_health.get_mut(&target_id) {
+                if let Some(hp) = self.network.network_health.get_mut(&target_id) {
                     *hp = (*hp + heal_rate * dt).min(max_hp);
                 }
             }
@@ -380,15 +401,21 @@ impl AppState {
     /// au milieu d'une horde »), pas un droit acquis qu'on peut fractionner
     /// sans risque.
     pub(super) fn update_network_revive(&mut self, dt: f32) {
-        if self.network_players.len() < 2 {
+        if self.network.network_players.len() < 2 {
             return;
         }
         let healers: Vec<(PlayerId, usize)> = self
+            .network
             .network_players
             .iter()
-            .filter(|(id, _)| self.network_classes.get(id).is_some_and(|c| c.can_revive()))
-            .filter(|(id, _)| self.network_inputs.get(id).is_some_and(|i| i.heal))
-            .filter(|(id, _)| self.network_health.get(id).copied().unwrap_or(0.0) > 0.0)
+            .filter(|(id, _)| {
+                self.network
+                    .network_classes
+                    .get(id)
+                    .is_some_and(|c| c.can_revive())
+            })
+            .filter(|(id, _)| self.network.network_inputs.get(id).is_some_and(|i| i.heal))
+            .filter(|(id, _)| self.network.network_health.get(id).copied().unwrap_or(0.0) > 0.0)
             .map(|(&id, &idx)| (id, idx))
             .collect();
 
@@ -398,7 +425,9 @@ impl AppState {
         // plutôt que d'exiger un canal continu comme le décrit le GDD.
         let healer_ids: std::collections::HashSet<PlayerId> =
             healers.iter().map(|(id, _)| *id).collect();
-        self.network_revive.retain(|id, _| healer_ids.contains(id));
+        self.network
+            .network_revive
+            .retain(|id, _| healer_ids.contains(id));
 
         for (healer_id, healer_idx) in healers {
             let Some(healer_pos) = self
@@ -412,11 +441,12 @@ impl AppState {
             // Allié spectateur (0 PV, jamais un simple blessé — cf.
             // `update_network_heal` pour ce cas) le plus proche à portée.
             let target_id = self
+                .network
                 .network_players
                 .iter()
                 .filter(|(id, _)| **id != healer_id)
                 .filter_map(|(&id, &idx)| {
-                    let hp = self.network_health.get(&id).copied().unwrap_or(1.0);
+                    let hp = self.network.network_health.get(&id).copied().unwrap_or(1.0);
                     if hp > 0.0 {
                         return None;
                     }
@@ -428,11 +458,12 @@ impl AppState {
                 .map(|(id, _)| id);
 
             let Some(target_id) = target_id else {
-                self.network_revive.remove(&healer_id);
+                self.network.network_revive.remove(&healer_id);
                 continue;
             };
 
             let entry = self
+                .network
                 .network_revive
                 .entry(healer_id)
                 .or_insert((target_id, 0.0));
@@ -443,15 +474,15 @@ impl AppState {
             entry.1 += dt;
             if entry.1 >= REVIVE_DURATION {
                 let max_hp = self.max_health_for(target_id);
-                if let Some(hp) = self.network_health.get_mut(&target_id) {
+                if let Some(hp) = self.network.network_health.get_mut(&target_id) {
                     *hp = max_hp * REVIVE_HEALTH_FRACTION;
                 }
-                if let Some(&idx) = self.network_players.get(&target_id)
+                if let Some(&idx) = self.network.network_players.get(&target_id)
                     && let Some(o) = self.scene.objects.get_mut(idx)
                 {
                     o.visible = true;
                 }
-                self.network_revive.remove(&healer_id);
+                self.network.network_revive.remove(&healer_id);
                 self.revives_completed += 1;
             }
         }
@@ -472,12 +503,17 @@ impl AppState {
         {
             return true;
         }
-        if self.network_players.is_empty() {
+        if self.network.network_players.is_empty() {
             self.is_lost()
         } else {
-            self.network_players
-                .keys()
-                .all(|id| self.network_health.get(id).copied().unwrap_or(MAX_HEALTH) <= 0.0)
+            self.network.network_players.keys().all(|id| {
+                self.network
+                    .network_health
+                    .get(id)
+                    .copied()
+                    .unwrap_or(MAX_HEALTH)
+                    <= 0.0
+            })
         }
     }
 
@@ -495,7 +531,7 @@ impl AppState {
 
     /// Vie (0..1) du joueur réseau `id`, `None` s'il n'est pas connecté.
     pub fn network_player_health(&self, id: PlayerId) -> Option<f32> {
-        self.network_health.get(&id).copied()
+        self.network.network_health.get(&id).copied()
     }
 
     /// PV max du joueur réseau `id` (base `MAX_HEALTH` modulée par sa classe,
@@ -504,7 +540,8 @@ impl AppState {
     /// (jamais censé arriver après un spawn, mais un repli sûr plutôt qu'un
     /// panic pour un id qui ne serait plus connecté).
     pub(super) fn max_health_for(&self, id: PlayerId) -> f32 {
-        self.network_max_health
+        self.network
+            .network_max_health
             .get(&id)
             .copied()
             .unwrap_or(MAX_HEALTH)
@@ -516,10 +553,18 @@ impl AppState {
     /// Sert à exclure un joueur à 0 PV des tirs/attaques (cf. `fireball.rs`,
     /// `multiplayer::update_network_attacks`).
     pub(super) fn is_alive_at(&self, index: usize) -> bool {
-        self.network_players
+        self.network
+            .network_players
             .iter()
             .find(|&(_, &idx)| idx == index)
-            .is_none_or(|(id, _)| self.network_health.get(id).copied().unwrap_or(MAX_HEALTH) > 0.0)
+            .is_none_or(|(id, _)| {
+                self.network
+                    .network_health
+                    .get(id)
+                    .copied()
+                    .unwrap_or(MAX_HEALTH)
+                    > 0.0
+            })
     }
 }
 
@@ -644,7 +689,7 @@ mod tests {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
         app.spawn_network_player(1, PlayerClass::Assault);
-        app.network_health.insert(1, 0.3);
+        app.network.network_health.insert(1, 0.3);
 
         advance(&mut app, 40, 0.05); // 2 s hors de tout contact
 
@@ -780,13 +825,13 @@ mod tests {
 
         assert!(!app.is_room_lost(), "deux joueurs en vie : le salon tient");
 
-        app.network_health.insert(1, 0.0);
+        app.network.network_health.insert(1, 0.0);
         assert!(
             !app.is_room_lost(),
             "un seul joueur vaincu sur deux : le salon continue"
         );
 
-        app.network_health.insert(2, 0.0);
+        app.network.network_health.insert(2, 0.0);
         assert!(
             app.is_room_lost(),
             "tous les joueurs réseau vaincus : le salon est perdu"
@@ -798,7 +843,7 @@ mod tests {
         let mut app = app_with(scene_with_optional_monster(false));
         app.hide_local_player_template();
         let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
-        app.network_health.insert(1, 0.0);
+        app.network.network_health.insert(1, 0.0);
         // Un vrai mort est masqué (cf. `update_network_health`) : sans ça, la
         // régénération passive (objet visible ⇒ « vivant mais blessé », pas de
         // monstre à proximité dans cette scène) ramènerait sa vie au-dessus de
@@ -833,7 +878,7 @@ mod tests {
         // Rapproche l'allié blessé, à portée de soin.
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[wounded].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
-        app.network_health.insert(2, 0.4);
+        app.network.network_health.insert(2, 0.4);
         app.set_network_input(
             1,
             NetworkInput {
@@ -859,7 +904,7 @@ mod tests {
         let far = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[far].transform.position = healer_pos + Vec3::new(50.0, 0.0, 0.0);
-        app.network_health.insert(2, 0.4);
+        app.network.network_health.insert(2, 0.4);
         app.set_network_input(
             1,
             NetworkInput {
@@ -896,7 +941,7 @@ mod tests {
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[healthy].transform.position = healer_pos + Vec3::new(0.5, 0.0, 0.0);
         app.scene.objects[wounded].transform.position = healer_pos + Vec3::new(-0.5, 0.0, 0.0);
-        app.network_health.insert(3, 0.3);
+        app.network.network_health.insert(3, 0.3);
         app.set_network_input(
             1,
             NetworkInput {
@@ -927,7 +972,7 @@ mod tests {
         let healer_pos = assault_app.scene.objects[healer].transform.position;
         assault_app.scene.objects[wounded].transform.position =
             healer_pos + Vec3::new(1.0, 0.0, 0.0);
-        assault_app.network_health.insert(2, 0.1);
+        assault_app.network.network_health.insert(2, 0.1);
         assault_app.set_network_input(
             1,
             NetworkInput {
@@ -951,7 +996,7 @@ mod tests {
         let healer_pos = support_app.scene.objects[healer].transform.position;
         support_app.scene.objects[wounded].transform.position =
             healer_pos + Vec3::new(1.0, 0.0, 0.0);
-        support_app.network_health.insert(2, 0.1);
+        support_app.network.network_health.insert(2, 0.1);
         support_app.set_network_input(
             1,
             NetworkInput {
@@ -980,7 +1025,7 @@ mod tests {
         let downed = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[downed].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
-        app.network_health.insert(2, 0.0);
+        app.network.network_health.insert(2, 0.0);
         app.scene.objects[downed].visible = false;
         app.set_network_input(
             1,
@@ -1027,7 +1072,7 @@ mod tests {
         let downed = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[downed].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
-        app.network_health.insert(2, 0.0);
+        app.network.network_health.insert(2, 0.0);
         app.scene.objects[downed].visible = false;
         app.set_network_input(
             1,
@@ -1059,7 +1104,7 @@ mod tests {
         let downed = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
         let healer_pos = app.scene.objects[healer].transform.position;
         app.scene.objects[downed].transform.position = healer_pos + Vec3::new(1.0, 0.0, 0.0);
-        app.network_health.insert(2, 0.0);
+        app.network.network_health.insert(2, 0.0);
         app.scene.objects[downed].visible = false;
         app.set_network_input(
             1,

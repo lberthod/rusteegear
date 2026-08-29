@@ -2096,8 +2096,8 @@ fn is_room_lost_true_when_the_escorte_convoy_is_destroyed_even_with_a_living_pla
         ..Default::default()
     };
     let player_id = 1;
-    app.network_players.insert(player_id, 0);
-    app.network_health.insert(player_id, 100.0);
+    app.network.network_players.insert(player_id, 0);
+    app.network.network_health.insert(player_id, 100.0);
 
     assert!(
         app.is_room_lost(),
@@ -2892,7 +2892,7 @@ fn a_served_scene_creature_chases_a_network_player_in_range_and_hurts_on_contact
         app.scene.objects[ci].transform.position,
         app.scene.objects[p].transform.position,
     );
-    let hp0 = app.network_health.get(&pid).copied().unwrap_or(1.0);
+    let hp0 = app.network.network_health.get(&pid).copied().unwrap_or(1.0);
     for _ in 0..(60 * 8) {
         app.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
         app.advance_play();
@@ -2906,7 +2906,7 @@ fn a_served_scene_creature_chases_a_network_player_in_range_and_hurts_on_contact
         "la créature de vague 1 doit fondre sur le joueur réseau à portée \
          (distance {d0:.2} → {d1:.2})"
     );
-    let hp1 = app.network_health.get(&pid).copied().unwrap_or(1.0);
+    let hp1 = app.network.network_health.get(&pid).copied().unwrap_or(1.0);
     assert!(
         hp1 < hp0,
         "au contact, la créature doit blesser le joueur (vie {hp0:.2} → {hp1:.2})"

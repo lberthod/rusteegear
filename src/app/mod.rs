@@ -261,6 +261,80 @@ pub struct FxState {
 /// signalés comme un même sous-domaine par les commentaires de section
 /// `--- import glTF asynchrone ---` / `--- chargement de scène asynchrone
 /// (Load) ---` qui les précédaient dans `AppState`.
+/// État de simulation par joueur réseau (positions pilotées, vie, frags,
+/// classe, cooldowns...) — regroupé hors de `AppState` (roadmap post-audit
+/// 2026-08-29, vague 2.3, lot 5) : le plus gros cluster restant, cœur de la
+/// simulation multijoueur autoritaire côté serveur (cf. `multiplayer.rs`,
+/// `health.rs`). Noms de champs conservés à l'identique (préfixe
+/// `network_`/domaine déjà explicite) pour garder le correctif mécanique des
+/// sites d'appel simple.
+pub struct NetworkPlayersState {
+    /// Joueurs réseau connectés (cf. `multiplayer.rs`) : indice de
+    /// l'objet de scène que chacun pilote, dans `scene.objects`.
+    network_players: HashMap<crate::net::protocol::PlayerId, usize>,
+    /// Dernier `Input` reçu de chaque joueur réseau (remplacé, pas cumulé : le
+    /// client renvoie son état complet à chaque message).
+    network_inputs: HashMap<crate::net::protocol::PlayerId, multiplayer::NetworkInput>,
+    /// Temps de recharge (s) restant avant la prochaine attaque possible de
+    /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`).
+    network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Vie individualisée de chaque joueur réseau (0..1, cf. `app::health`,
+    /// GAMEDESIGN_EN_LIGNE.md §3.1) : remplace le champ scalaire unique
+    /// (`hud_health`, pensé pour un seul joueur local) côté multijoueur — un
+    /// joueur peut désormais mourir sans que la manche entière échoue pour tous.
+    network_health: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Frags individualisés par joueur réseau (cf. `app::health`) : nombre de
+    /// monstres vaincus par **ce** joueur depuis sa connexion, toutes méthodes
+    /// confondues (attaque au contact, boule de feu) — brique de progression
+    /// pour un futur MMORPG (contribution individuelle, pas un score de salon
+    /// partagé). Diffusé à tous via `EntityDelta::kills`, pas seulement au
+    /// joueur concerné.
+    network_kills: HashMap<crate::net::protocol::PlayerId, u32>,
+    /// Assists individualisés par joueur réseau (GDD §8.3) : nombre de fois où
+    /// **ce** joueur a porté un dégât à un monstre achevé par un autre joueur
+    /// peu après (cf. `multiplayer::credit_assists_on_kill`) — distinct de
+    /// `network_kills`, jamais incrémentés pour la même mise à mort (le
+    /// tireur reçoit le frag, les autres contributeurs l'assist).
+    network_assists: HashMap<crate::net::protocol::PlayerId, u32>,
+    /// Dernier instant (`self.time`) où chaque joueur réseau a porté un dégât
+    /// à chaque monstre encore vivant (indice d'objet → joueur → instant) —
+    /// mémoire courte servant uniquement à décider qui a droit à un assist
+    /// quand ce monstre meurt (cf. `multiplayer::ASSIST_WINDOW`), purgée à
+    /// chaque mise à mort résolue (`credit_assists_on_kill`) pour ne jamais
+    /// compter sur la vie suivante du même emplacement après respawn.
+    damage_contributions: HashMap<usize, HashMap<crate::net::protocol::PlayerId, f32>>,
+    /// Classe choisie par chaque joueur réseau au `Join` (cf.
+    /// `multiplayer::PlayerClass`, GAMEDESIGN_MMORPG.md §3.2) — appliquée une
+    /// fois pour toutes au spawn (vitesse, PV max), relue pour les
+    /// modificateurs qui dépendent du tick courant (dégâts, soin, réanimation).
+    network_classes: HashMap<crate::net::protocol::PlayerId, multiplayer::PlayerClass>,
+    /// PV max de chaque joueur réseau (base `health::MAX_HEALTH` modulée par
+    /// sa classe, ex. Éclaireur ×0,70) — remplace la constante plate partout
+    /// où la vie est clampée ou testée à pleine vie (cf. `health::max_health_for`).
+    network_max_health: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Réanimation en cours (GDD §8.1, exclusivité Soutien) : pour chaque
+    /// **soigneur**, la cible spectatrice qu'il canalise et le temps déjà
+    /// accumulé (s) — remis à zéro si la cible change ou si le canal
+    /// s'interrompt (cf. `health::update_network_revive`).
+    network_revive: HashMap<crate::net::protocol::PlayerId, (crate::net::protocol::PlayerId, f32)>,
+    /// Cooldown restant (s) par paire (indice de créature mordeuse, joueur réseau)
+    /// — cf. `health::update_creature_bite`. Clé composite plutôt qu'un cooldown
+    /// par créature seule : deux joueurs au contact de la même créature ne
+    /// doivent pas partager un seul temporisateur (l'un mordu ne doit pas
+    /// « protéger » l'autre).
+    bite_cooldowns: HashMap<(usize, crate::net::protocol::PlayerId), f32>,
+    /// Dernières sources de dégâts subies par chaque joueur réseau — type
+    /// d'agresseur et indice de l'objet attaquant — bornées à
+    /// `health::DEATH_CAUSE_WINDOW` (Sprint 2, `sprint10audit.md`) :
+    /// consommées à la mort pour calculer `net::protocol::DeathCause`
+    /// (diagnostic de mort, GDD §16.5), purgées ensuite (`health::
+    /// compute_death_cause`).
+    recent_damage: HashMap<
+        crate::net::protocol::PlayerId,
+        VecDeque<(crate::net::protocol::DeathCauseKind, usize)>,
+    >,
+}
+
 pub struct AsyncLoadState {
     import_tx: Sender<ImportResult>,
     import_rx: Receiver<ImportResult>,
@@ -563,70 +637,9 @@ pub struct AppState {
     /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
     /// la frame suivante).
     stagger: Vec<(usize, Vec3, f32)>,
-    /// Joueurs réseau connectés (cf. `multiplayer.rs`) : indice de
-    /// l'objet de scène que chacun pilote, dans `scene.objects`.
-    network_players: HashMap<crate::net::protocol::PlayerId, usize>,
-    /// Dernier `Input` reçu de chaque joueur réseau (remplacé, pas cumulé : le
-    /// client renvoie son état complet à chaque message).
-    network_inputs: HashMap<crate::net::protocol::PlayerId, multiplayer::NetworkInput>,
-    /// Temps de recharge (s) restant avant la prochaine attaque possible de
-    /// chaque joueur réseau (cf. `multiplayer::update_network_attacks`).
-    network_attack_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
-    /// Vie individualisée de chaque joueur réseau (0..1, cf. `app::health`,
-    /// GAMEDESIGN_EN_LIGNE.md §3.1) : remplace le champ scalaire unique
-    /// (`hud_health`, pensé pour un seul joueur local) côté multijoueur — un
-    /// joueur peut désormais mourir sans que la manche entière échoue pour tous.
-    network_health: HashMap<crate::net::protocol::PlayerId, f32>,
-    /// Frags individualisés par joueur réseau (cf. `app::health`) : nombre de
-    /// monstres vaincus par **ce** joueur depuis sa connexion, toutes méthodes
-    /// confondues (attaque au contact, boule de feu) — brique de progression
-    /// pour un futur MMORPG (contribution individuelle, pas un score de salon
-    /// partagé). Diffusé à tous via `EntityDelta::kills`, pas seulement au
-    /// joueur concerné.
-    network_kills: HashMap<crate::net::protocol::PlayerId, u32>,
-    /// Assists individualisés par joueur réseau (GDD §8.3) : nombre de fois où
-    /// **ce** joueur a porté un dégât à un monstre achevé par un autre joueur
-    /// peu après (cf. `multiplayer::credit_assists_on_kill`) — distinct de
-    /// `network_kills`, jamais incrémentés pour la même mise à mort (le
-    /// tireur reçoit le frag, les autres contributeurs l'assist).
-    network_assists: HashMap<crate::net::protocol::PlayerId, u32>,
-    /// Dernier instant (`self.time`) où chaque joueur réseau a porté un dégât
-    /// à chaque monstre encore vivant (indice d'objet → joueur → instant) —
-    /// mémoire courte servant uniquement à décider qui a droit à un assist
-    /// quand ce monstre meurt (cf. `multiplayer::ASSIST_WINDOW`), purgée à
-    /// chaque mise à mort résolue (`credit_assists_on_kill`) pour ne jamais
-    /// compter sur la vie suivante du même emplacement après respawn.
-    damage_contributions: HashMap<usize, HashMap<crate::net::protocol::PlayerId, f32>>,
-    /// Classe choisie par chaque joueur réseau au `Join` (cf.
-    /// `multiplayer::PlayerClass`, GAMEDESIGN_MMORPG.md §3.2) — appliquée une
-    /// fois pour toutes au spawn (vitesse, PV max), relue pour les
-    /// modificateurs qui dépendent du tick courant (dégâts, soin, réanimation).
-    network_classes: HashMap<crate::net::protocol::PlayerId, multiplayer::PlayerClass>,
-    /// PV max de chaque joueur réseau (base `health::MAX_HEALTH` modulée par
-    /// sa classe, ex. Éclaireur ×0,70) — remplace la constante plate partout
-    /// où la vie est clampée ou testée à pleine vie (cf. `health::max_health_for`).
-    network_max_health: HashMap<crate::net::protocol::PlayerId, f32>,
-    /// Réanimation en cours (GDD §8.1, exclusivité Soutien) : pour chaque
-    /// **soigneur**, la cible spectatrice qu'il canalise et le temps déjà
-    /// accumulé (s) — remis à zéro si la cible change ou si le canal
-    /// s'interrompt (cf. `health::update_network_revive`).
-    network_revive: HashMap<crate::net::protocol::PlayerId, (crate::net::protocol::PlayerId, f32)>,
-    /// Cooldown restant (s) par paire (indice de créature mordeuse, joueur réseau)
-    /// — cf. `health::update_creature_bite`. Clé composite plutôt qu'un cooldown
-    /// par créature seule : deux joueurs au contact de la même créature ne
-    /// doivent pas partager un seul temporisateur (l'un mordu ne doit pas
-    /// « protéger » l'autre).
-    bite_cooldowns: HashMap<(usize, crate::net::protocol::PlayerId), f32>,
-    /// Dernières sources de dégâts subies par chaque joueur réseau — type
-    /// d'agresseur et indice de l'objet attaquant — bornées à
-    /// `health::DEATH_CAUSE_WINDOW` (Sprint 2, `sprint10audit.md`) :
-    /// consommées à la mort pour calculer `net::protocol::DeathCause`
-    /// (diagnostic de mort, GDD §16.5), purgées ensuite (`health::
-    /// compute_death_cause`).
-    recent_damage: HashMap<
-        crate::net::protocol::PlayerId,
-        VecDeque<(crate::net::protocol::DeathCauseKind, usize)>,
-    >,
+    /// État de simulation par joueur réseau (positions pilotées, vie, frags,
+    /// classe, cooldowns...) — cf. `NetworkPlayersState`.
+    network: NetworkPlayersState,
     /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
     /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
     /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
@@ -1076,18 +1089,20 @@ impl AppState {
             attack_projectile: None,
             attack_charge: None,
             stagger: Vec::new(),
-            network_players: HashMap::new(),
-            network_inputs: HashMap::new(),
-            network_attack_cooldowns: HashMap::new(),
-            network_health: HashMap::new(),
-            network_kills: HashMap::new(),
-            network_assists: HashMap::new(),
-            damage_contributions: HashMap::new(),
-            network_classes: HashMap::new(),
-            network_max_health: HashMap::new(),
-            network_revive: HashMap::new(),
-            bite_cooldowns: HashMap::new(),
-            recent_damage: HashMap::new(),
+            network: NetworkPlayersState {
+                network_players: HashMap::new(),
+                network_inputs: HashMap::new(),
+                network_attack_cooldowns: HashMap::new(),
+                network_health: HashMap::new(),
+                network_kills: HashMap::new(),
+                network_assists: HashMap::new(),
+                damage_contributions: HashMap::new(),
+                network_classes: HashMap::new(),
+                network_max_health: HashMap::new(),
+                network_revive: HashMap::new(),
+                bite_cooldowns: HashMap::new(),
+                recent_damage: HashMap::new(),
+            },
             fireballs: Vec::new(),
             fireball_cooldowns: HashMap::new(),
             fireball_pool: Vec::new(),

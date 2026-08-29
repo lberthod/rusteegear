@@ -177,9 +177,10 @@ impl AppState {
         // La direction vient de l'`aim_yaw` reçu (l'orientation que ce joueur voit
         // à son écran), l'arme de son `weapon` (déjà borné par `sanitize`).
         let shooters: Vec<(usize, f32, usize)> = self
+            .network
             .network_players
             .iter()
-            .filter_map(|(id, &index)| self.network_inputs.get(id).map(|inp| (index, inp)))
+            .filter_map(|(id, &index)| self.network.network_inputs.get(id).map(|inp| (index, inp)))
             .filter(|(index, inp)| {
                 inp.fire && !self.fireball_cooldowns.contains_key(index) && self.is_alive_at(*index)
             })
@@ -805,7 +806,7 @@ mod tests {
         let mut app = app_with(scene_with_monster_ahead(false));
         app.hide_local_player_template();
         let index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
-        app.network_health.insert(1, 0.0);
+        app.network.network_health.insert(1, 0.0);
         // Un vrai mort est masqué (cf. `health::update_network_health`) : sans
         // ça, la régénération passive (objet toujours visible, donc considéré
         // « vivant mais blessé ») ramènerait sa vie au-dessus de 0 dès la

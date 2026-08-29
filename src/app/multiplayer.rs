@@ -538,7 +538,7 @@ impl AppState {
     /// borne la taille de la scène au pic de joueurs *simultanés* jamais
     /// atteint, pas au nombre cumulé de connexions depuis le démarrage.
     pub fn spawn_network_player(&mut self, id: PlayerId, class: PlayerClass) -> Option<usize> {
-        if let Some(&existing) = self.network_players.get(&id) {
+        if let Some(&existing) = self.network.network_players.get(&id) {
             return Some(existing);
         }
         let template_index = self
@@ -549,7 +549,7 @@ impl AppState {
         let reusable_index = self.scene.objects.iter().enumerate().position(|(i, o)| {
             i != template_index
                 && o.controller.as_ref().is_some_and(|c| c.input)
-                && !self.network_players.values().any(|&v| v == i)
+                && !self.network.network_players.values().any(|&v| v == i)
         });
         let mut template = self.scene.objects[template_index].clone();
         // Écarte chaque joueur du gabarit d'origine (et des précédents) : sans ça,
@@ -561,7 +561,7 @@ impl AppState {
         // et marcher les uns vers les autres dès la connexion plutôt que de devoir
         // traverser toute l'arène.
         const SPAWN_RADIUS: f32 = 3.0;
-        let n = self.network_players.len() as f32;
+        let n = self.network.network_players.len() as f32;
         let angle = n * std::f32::consts::TAU / 8.0;
         template.transform.position.x += angle.cos() * SPAWN_RADIUS;
         template.transform.position.z += angle.sin() * SPAWN_RADIUS;
@@ -591,24 +591,26 @@ impl AppState {
                 i
             }
         };
-        self.network_players.insert(id, index);
-        self.network_inputs.insert(id, NetworkInput::default());
-        self.network_classes.insert(id, class);
+        self.network.network_players.insert(id, index);
+        self.network
+            .network_inputs
+            .insert(id, NetworkInput::default());
+        self.network.network_classes.insert(id, class);
         // PV max modulés par la classe (GDD §3.2 : Éclaireur −30 %) : calculé
         // une fois au spawn, jamais recalculé côté client — cf. `health::
         // max_health_for`, seule fonction qui doit lire ce champ.
         let max_health = crate::app::health::MAX_HEALTH * class.max_health_mult();
-        self.network_max_health.insert(id, max_health);
+        self.network.network_max_health.insert(id, max_health);
         // Vie individualisée (GAMEDESIGN_EN_LIGNE.md §3.1) : chaque joueur
         // réseau démarre à pleine vie (celle de sa classe), indépendamment
         // des autres — cf. `app::health`.
-        self.network_health.insert(id, max_health);
+        self.network.network_health.insert(id, max_health);
         // Frags individualisés (brique de progression pour un futur MMORPG) :
         // chaque nouvelle connexion démarre à 0, comme la vie.
-        self.network_kills.insert(id, 0);
+        self.network.network_kills.insert(id, 0);
         // Assists individualisés (cf. `credit_assists_on_kill`) : même
         // principe que les frags ci-dessus, démarre à 0 par connexion.
-        self.network_assists.insert(id, 0);
+        self.network.network_assists.insert(id, 0);
         // Masque le gabarit d'origine : personne ne le pilote (ni un joueur
         // réseau — chacun a son propre clone — ni un joueur local, le serveur
         // étant headless). Sans ça, `player_index` continuerait de le désigner
@@ -635,19 +637,19 @@ impl AppState {
     /// que de le retirer du `Vec` — un retrait décalerait les indices de tous les
     /// joueurs suivants dans `scene.objects`, cassant leur mapping `network_players`.
     pub fn despawn_network_player(&mut self, id: PlayerId) {
-        if let Some(index) = self.network_players.remove(&id)
+        if let Some(index) = self.network.network_players.remove(&id)
             && let Some(o) = self.scene.objects.get_mut(index)
         {
             o.visible = false;
         }
-        self.network_inputs.remove(&id);
-        self.network_attack_cooldowns.remove(&id);
-        self.network_health.remove(&id);
-        self.network_kills.remove(&id);
-        self.network_assists.remove(&id);
-        self.network_classes.remove(&id);
-        self.network_max_health.remove(&id);
-        self.network_revive.remove(&id);
+        self.network.network_inputs.remove(&id);
+        self.network.network_attack_cooldowns.remove(&id);
+        self.network.network_health.remove(&id);
+        self.network.network_kills.remove(&id);
+        self.network.network_assists.remove(&id);
+        self.network.network_classes.remove(&id);
+        self.network.network_max_health.remove(&id);
+        self.network.network_revive.remove(&id);
         // Reconstruction complète documentée et acceptée — cf. le commentaire
         // du site jumeau dans `spawn_network_player`.
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
@@ -666,16 +668,16 @@ impl AppState {
     /// décider s'il faut aussi fermer les connexions ou re-spawner les joueurs
     /// dans la scène restaurée.
     pub fn clear_network_players(&mut self) {
-        self.network_players.clear();
-        self.network_inputs.clear();
-        self.network_attack_cooldowns.clear();
-        self.network_health.clear();
-        self.network_kills.clear();
-        self.network_assists.clear();
-        self.damage_contributions.clear();
-        self.network_classes.clear();
-        self.network_max_health.clear();
-        self.network_revive.clear();
+        self.network.network_players.clear();
+        self.network.network_inputs.clear();
+        self.network.network_attack_cooldowns.clear();
+        self.network.network_health.clear();
+        self.network.network_kills.clear();
+        self.network.network_assists.clear();
+        self.network.damage_contributions.clear();
+        self.network.network_classes.clear();
+        self.network.network_max_health.clear();
+        self.network.network_revive.clear();
     }
 
     /// Enregistre l'input reçu d'un joueur réseau pour le tick courant : remplace
@@ -693,14 +695,14 @@ impl AppState {
     /// fausses) et corromprait la simulation pour tout le monde, pas seulement
     /// ce joueur.
     pub fn set_network_input(&mut self, id: PlayerId, input: NetworkInput) {
-        if let Some(slot) = self.network_inputs.get_mut(&id) {
+        if let Some(slot) = self.network.network_inputs.get_mut(&id) {
             *slot = sanitize_network_input(input);
         }
     }
 
     /// Indice de l'objet piloté par ce joueur réseau, s'il est connecté.
     pub fn network_player_object(&self, id: PlayerId) -> Option<usize> {
-        self.network_players.get(&id).copied()
+        self.network.network_players.get(&id).copied()
     }
 
     /// Recherche inverse de `network_player_object` : quel joueur réseau pilote
@@ -709,7 +711,8 @@ impl AppState {
     /// frag quand seul l'indice de l'objet tireur est connu (cf.
     /// `fireball::resolve_fireball_hit`).
     pub(super) fn network_player_id_at(&self, index: usize) -> Option<PlayerId> {
-        self.network_players
+        self.network
+            .network_players
             .iter()
             .find(|&(_, &i)| i == index)
             .map(|(&id, _)| id)
@@ -720,7 +723,7 @@ impl AppState {
     /// connecté (cible vaincue par un tir dont le tireur s'est déconnecté
     /// entre-temps, ex. un projectile encore en vol).
     pub(super) fn credit_kill(&mut self, id: PlayerId) {
-        if let Some(count) = self.network_kills.get_mut(&id) {
+        if let Some(count) = self.network.network_kills.get_mut(&id) {
             *count += 1;
         }
     }
@@ -733,7 +736,8 @@ impl AppState {
     /// dernier coup de chacun compte pour la fenêtre.
     pub(super) fn record_damage_contribution(&mut self, creature: usize, id: PlayerId) {
         let now = self.time;
-        self.damage_contributions
+        self.network
+            .damage_contributions
             .entry(creature)
             .or_default()
             .insert(id, now);
@@ -747,7 +751,7 @@ impl AppState {
     /// (après respawn) ne doit rien hériter de la précédente.
     pub(super) fn credit_assists_on_kill(&mut self, creature: usize, killer: PlayerId) {
         let now = self.time;
-        if let Some(contributors) = self.damage_contributions.remove(&creature) {
+        if let Some(contributors) = self.network.damage_contributions.remove(&creature) {
             for (id, at) in contributors {
                 if id != killer && now - at <= ASSIST_WINDOW {
                     self.credit_assist(id);
@@ -760,31 +764,31 @@ impl AppState {
     /// séparé de `credit_kill` pour ne jamais confondre un assist avec un
     /// frag côté XP (`round_xp`, `src/bin/server.rs`).
     fn credit_assist(&mut self, id: PlayerId) {
-        if let Some(count) = self.network_assists.get_mut(&id) {
+        if let Some(count) = self.network.network_assists.get_mut(&id) {
             *count += 1;
         }
     }
 
     /// Nombre de joueurs réseau actuellement en jeu (hors joueur local).
     pub fn network_player_count(&self) -> usize {
-        self.network_players.len()
+        self.network.network_players.len()
     }
 
     /// Frags du joueur réseau `id` (brique de progression pour un futur
     /// MMORPG), `None` s'il n'est pas connecté.
     pub fn network_player_kills(&self, id: PlayerId) -> Option<u32> {
-        self.network_kills.get(&id).copied()
+        self.network.network_kills.get(&id).copied()
     }
 
     /// Assists du joueur réseau `id` (GDD §8.3, cf. `credit_assists_on_kill`),
     /// `None` s'il n'est pas connecté.
     pub fn network_player_assists(&self, id: PlayerId) -> Option<u32> {
-        self.network_assists.get(&id).copied()
+        self.network.network_assists.get(&id).copied()
     }
 
     /// Classe du joueur réseau `id` (GDD §3.2), `None` s'il n'est pas connecté.
     pub fn network_player_class(&self, id: PlayerId) -> Option<PlayerClass> {
-        self.network_classes.get(&id).copied()
+        self.network.network_classes.get(&id).copied()
     }
 
     /// Résout les attaques des joueurs réseau pour ce tick : décompte
@@ -799,21 +803,26 @@ impl AppState {
     /// 0 PV est spectateur, son `Input` continue d'arriver (le client ne sait
     /// pas qu'il doit arrêter d'envoyer) mais le serveur l'ignore.
     pub fn update_network_attacks(&mut self, dt: f32) {
-        for cd in self.network_attack_cooldowns.values_mut() {
+        for cd in self.network.network_attack_cooldowns.values_mut() {
             *cd -= dt;
         }
-        let ids: Vec<PlayerId> = self.network_players.keys().copied().collect();
+        let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
         for id in ids {
             let ready = self
+                .network
                 .network_attack_cooldowns
                 .get(&id)
                 .is_none_or(|cd| *cd <= 0.0);
-            let wants_attack = self.network_inputs.get(&id).is_some_and(|i| i.attack);
-            let alive = self.network_health.get(&id).copied().unwrap_or(1.0) > 0.0;
+            let wants_attack = self
+                .network
+                .network_inputs
+                .get(&id)
+                .is_some_and(|i| i.attack);
+            let alive = self.network.network_health.get(&id).copied().unwrap_or(1.0) > 0.0;
             if !ready || !wants_attack || !alive {
                 continue;
             }
-            let Some(index) = self.network_players.get(&id).copied() else {
+            let Some(index) = self.network.network_players.get(&id).copied() else {
                 continue;
             };
             let Some(pos) = self.scene.objects.get(index).map(|o| o.transform.position) else {
@@ -834,7 +843,8 @@ impl AppState {
                 self.credit_assists_on_kill(i, id);
                 self.credit_kill(id);
             }
-            self.network_attack_cooldowns
+            self.network
+                .network_attack_cooldowns
                 .insert(id, NETWORK_ATTACK_COOLDOWN);
         }
     }
@@ -850,6 +860,7 @@ impl AppState {
     /// seulement la sienne (cf. `network_client::RemotePlayer::health`).
     pub fn network_snapshot(&self, tick: u32) -> Snapshot {
         let mut entities: Vec<EntityDelta> = self
+            .network
             .network_players
             .iter()
             .filter_map(|(&id, &index)| self.scene.objects.get(index).map(|o| (id, index, o)))
@@ -861,16 +872,17 @@ impl AppState {
                     position: o.transform.position.to_array(),
                     yaw,
                     visible: o.visible,
-                    health: self.network_health.get(&id).copied(),
-                    kills: Some(self.network_kills.get(&id).copied().unwrap_or(0)),
+                    health: self.network.network_health.get(&id).copied(),
+                    kills: Some(self.network.network_kills.get(&id).copied().unwrap_or(0)),
                     // Phase L Sprint 3 (`sprint2audijeu0718.md`) : même politique que
                     // `kills` ci-dessus — jusqu'ici calculé (`network_assists`) mais
                     // jamais diffusé, le HUD ne pouvait afficher que les frags.
-                    assists: Some(self.network_assists.get(&id).copied().unwrap_or(0)),
+                    assists: Some(self.network.network_assists.get(&id).copied().unwrap_or(0)),
                     // Silhouettes de classe (v7, GDD §10.3) : chaque client
                     // teinte le fantôme selon la classe de son propriétaire.
                     class: Some(
-                        self.network_classes
+                        self.network
+                            .network_classes
                             .get(&id)
                             .copied()
                             .unwrap_or_default()
@@ -1485,7 +1497,7 @@ mod tests {
         let mut app = app_with_zombies_demo();
         app.spawn_network_player(1, PlayerClass::Assault).unwrap();
         app.spawn_network_player(2, PlayerClass::Assault).unwrap();
-        app.network_assists.insert(1, 2);
+        app.network.network_assists.insert(1, 2);
 
         let snap = app.network_snapshot(1);
         let entity = snap
