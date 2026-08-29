@@ -301,6 +301,31 @@ pub struct FxState {
 /// regroupée hors de `AppState` (roadmap post-audit 2026-08-29, vague 2.3,
 /// lot 12) : même patron de canal `Sender`/`Receiver` de thread de fond que
 /// `AsyncLoadState`/`FirebaseAuthState`.
+/// Interpréteur Lua et ses caches — regroupés hors de `AppState` (roadmap
+/// post-audit 2026-08-29, vague 2.3, lot 13) : deux variantes mutuellement
+/// exclusives selon la cible (`mlua` natif vs `rilua` sur wasm32, cf.
+/// Cargo.toml — `lua-src` ne sait pas construire Lua pour
+/// `wasm32-unknown-unknown`, Sprint 114), gardées `#[cfg]` à l'identique de
+/// leur emplacement d'origine dans `AppState`.
+pub struct ScriptingState {
+    #[cfg(not(target_arch = "wasm32"))]
+    lua: Lua,
+    /// Breakpoints Lua basiques (Sprint 128) — cf. `scripting::LuaBreakpoints`.
+    #[cfg(not(target_arch = "wasm32"))]
+    lua_breakpoints: scripting::LuaBreakpoints,
+    /// Chunks Lua déjà compilés, indexés par hash de la source (évite de re-parser
+    /// le même script à chaque frame).
+    #[cfg(not(target_arch = "wasm32"))]
+    script_cache: HashMap<u64, mlua::Function>,
+    /// Backend Lua du player web (Sprint 137) — symétrique de `lua`/`script_cache`
+    /// ci-dessus, sur `rilua` au lieu de `mlua` (cf. `scripting_web`). Pas de
+    /// breakpoints ici : fonctionnalité éditeur, absente du player web.
+    #[cfg(target_arch = "wasm32")]
+    lua_web: rilua::Lua,
+    #[cfg(target_arch = "wasm32")]
+    script_cache_web: HashMap<u64, rilua::Function>,
+}
+
 pub struct AiGenState {
     ai_tx: Sender<(usize, Result<String, String>)>,
     ai_rx: Receiver<(usize, Result<String, String>)>,
@@ -927,24 +952,8 @@ pub struct AppState {
     /// Mécanique de glissé souris/gizmo — cf. `DragState`.
     drag: DragState,
 
-    // --- scripting (indisponible sur wasm32, cf. Cargo.toml : `lua-src` ne
-    // sait pas construire Lua pour `wasm32-unknown-unknown` — Sprint 114) ---
-    #[cfg(not(target_arch = "wasm32"))]
-    lua: Lua,
-    /// Breakpoints Lua basiques (Sprint 128) — cf. `scripting::LuaBreakpoints`.
-    #[cfg(not(target_arch = "wasm32"))]
-    lua_breakpoints: scripting::LuaBreakpoints,
-    /// Chunks Lua déjà compilés, indexés par hash de la source (évite de re-parser
-    /// le même script à chaque frame).
-    #[cfg(not(target_arch = "wasm32"))]
-    script_cache: HashMap<u64, mlua::Function>,
-    /// Backend Lua du player web (Sprint 137) — symétrique de `lua`/`script_cache`
-    /// ci-dessus, sur `rilua` au lieu de `mlua` (cf. `scripting_web`). Pas de
-    /// breakpoints ici : fonctionnalité éditeur, absente du player web.
-    #[cfg(target_arch = "wasm32")]
-    lua_web: rilua::Lua,
-    #[cfg(target_arch = "wasm32")]
-    script_cache_web: HashMap<u64, rilua::Function>,
+    /// Interpréteur Lua et ses caches — cf. `ScriptingState`.
+    scripting: ScriptingState,
     time: f32,
 
     // --- runtime Play ---
@@ -1265,16 +1274,18 @@ impl AppState {
                 undo_stack: VecDeque::new(),
                 redo_stack: Vec::new(),
             },
-            #[cfg(not(target_arch = "wasm32"))]
-            lua,
-            #[cfg(not(target_arch = "wasm32"))]
-            lua_breakpoints,
-            #[cfg(not(target_arch = "wasm32"))]
-            script_cache: HashMap::new(),
-            #[cfg(target_arch = "wasm32")]
-            lua_web,
-            #[cfg(target_arch = "wasm32")]
-            script_cache_web: HashMap::new(),
+            scripting: ScriptingState {
+                #[cfg(not(target_arch = "wasm32"))]
+                lua,
+                #[cfg(not(target_arch = "wasm32"))]
+                lua_breakpoints,
+                #[cfg(not(target_arch = "wasm32"))]
+                script_cache: HashMap::new(),
+                #[cfg(target_arch = "wasm32")]
+                lua_web,
+                #[cfg(target_arch = "wasm32")]
+                script_cache_web: HashMap::new(),
+            },
             time: 0.0,
             was_playing: false,
             play_snapshot: Vec::new(),

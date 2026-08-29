@@ -545,18 +545,18 @@ impl super::AppState {
     /// Active/désactive un breakpoint Lua à `line` — cf. la doc de
     /// `LuaBreakpoints` pour ce que ça déclenche concrètement.
     pub fn toggle_lua_breakpoint(&mut self, line: u32) {
-        let enabled = !self.lua_breakpoints.is_set(line);
-        self.lua_breakpoints.set(line, enabled);
+        let enabled = !self.scripting.lua_breakpoints.is_set(line);
+        self.scripting.lua_breakpoints.set(line, enabled);
     }
 
     /// Lignes actuellement marquées (triées), pour l'affichage éditeur.
     pub fn lua_breakpoint_lines(&self) -> Vec<u32> {
-        self.lua_breakpoints.lines()
+        self.scripting.lua_breakpoints.lines()
     }
 
     /// Arrêts survenus depuis le dernier appel (consommés une fois).
     pub fn take_lua_breakpoint_hits(&mut self) -> Vec<BreakpointHit> {
-        self.lua_breakpoints.take_hits()
+        self.scripting.lua_breakpoints.take_hits()
     }
 }
 

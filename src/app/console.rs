@@ -295,6 +295,7 @@ impl AppState {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn eval_lua(&mut self, src: &str) -> Result<String, String> {
         let values = self
+            .scripting
             .lua
             .load(src)
             .eval::<mlua::MultiValue>()

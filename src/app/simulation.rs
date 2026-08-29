@@ -998,21 +998,23 @@ impl AppState {
             #[cfg(target_arch = "wasm32")]
             {
                 let key = scripting_web::script_key(&obj.script);
-                let func = match self.script_cache_web.get(&key) {
+                let func = match self.scripting.script_cache_web.get(&key) {
                     Some(f) => *f,
-                    None => match self.lua_web.load(&obj.script) {
+                    None => match self.scripting.lua_web.load(&obj.script) {
                         Ok(f) => {
                             // Ancrage dans la table `registry` de `rilua` (racine GC) :
                             // sans ça, le cache Rust (`script_cache_web`) garde un
                             // handle invisible du GC, ramassé à la première collecte
                             // complète — cf. la doc d'`anchor_compiled_function`.
-                            if let Err(e) =
-                                scripting_web::anchor_compiled_function(&mut self.lua_web, key, f)
-                            {
+                            if let Err(e) = scripting_web::anchor_compiled_function(
+                                &mut self.scripting.lua_web,
+                                key,
+                                f,
+                            ) {
                                 log::error!("Ancrage GC du script '{}' : {e}", obj.name);
                                 continue;
                             }
-                            self.script_cache_web.insert(key, f);
+                            self.scripting.script_cache_web.insert(key, f);
                             f
                         }
                         Err(e) => {
@@ -1021,12 +1023,12 @@ impl AppState {
                         }
                     },
                 };
-                let tapped = self.tapped_obj == Some(idx);
+                let tapped = self.touch.tapped_obj == Some(idx);
                 let mut destroy_requested = false;
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 if let Err(e) = scripting_web::run_script_web(
-                    &mut self.lua_web,
+                    &mut self.scripting.lua_web,
                     &func,
                     &mut obj.transform,
                     &mut obj.color,
@@ -1065,7 +1067,7 @@ impl AppState {
             {
                 // Récupère (ou compile une seule fois) le chunk associé à cette source.
                 let key = scripting::script_key(&obj.script);
-                let func = match self.script_cache.get(&key) {
+                let func = match self.scripting.script_cache.get(&key) {
                     Some(f) => f.clone(),
                     // Chunk nommé d'après l'objet : sans ça, mlua nomme le chunk
                     // d'après le call-site Rust (`src/app/simulation.rs:NNN`) et
@@ -1073,13 +1075,14 @@ impl AppState {
                     // (Phase C5, sprint.19matin.md) — avec, elles se lisent
                     // « script de « Nom » »:ligne: message ».
                     None => match self
+                        .scripting
                         .lua
                         .load(&obj.script)
                         .set_name(format!("script de « {} »", obj.name))
                         .into_function()
                     {
                         Ok(f) => {
-                            self.script_cache.insert(key, f.clone());
+                            self.scripting.script_cache.insert(key, f.clone());
                             f
                         }
                         Err(e) => {
@@ -1093,7 +1096,7 @@ impl AppState {
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 if let Err(e) = scripting::run_script(
-                    &self.lua,
+                    &self.scripting.lua,
                     &func,
                     &mut obj.transform,
                     &mut obj.color,
