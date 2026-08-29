@@ -28,12 +28,12 @@ faille de sécurité critique), mais le coût de toute modification touchant `ed
 | 1.3 | Corriger les 3 dérives README : lignes de code (« ~32 000 » annoncé, 75 422 réel), chemin mort `src/scene/demos.rs` (→ `src/scene/demos/`), compteur `.glb` (412 annoncé, 482 réel) | doc | ✅ `14c47a7` — chiffre de lignes recalé sur ~65 000 (hors tests) |
 | 1.4 | Mettre à jour le commentaire `Cargo.toml:4-5` (« deux binaires » → 4 : `motor3derust`, `server`, `pilot`, `glbviewer`) | doc | ✅ `14c47a7` |
 
-## Vague 2 — Découper les trois points de passage obligés — non commencée
+## Vague 2 — Découper les trois points de passage obligés — 1/4 faite (2026-08-29)
 
 | # | Action | Ferme | Statut |
 |---|---|---|---|
 | 2.1 | Découper `build_ui` (`src/editor/mod.rs:1362-2744`, 1382 lignes, 0 test dessus) par panneau, comme déjà fait pour `windows.rs` / `hud.rs` / `export.rs` | dette | ⏳ |
-| 2.2 | Scinder `impl Physics` (`src/runtime/physics.rs:173-2417`, 2244 lignes / 58 méthodes) en `impl` partiels thématiques (`physics/collision.rs`, `physics/ai.rs`, `physics/triggers.rs`...), pattern déjà utilisé dans `gfx/renderer/*` | dette | ⏳ |
+| 2.2 | Scinder `impl Physics` en modules thématiques | dette | ✅ `76b0967` — `src/runtime/physics.rs` → `physics/{mod,build,control,query,step,tests}.rs`. **Correction du chiffre de l'audit en cours de route** : « 58 méthodes » était un artefact `grep` (comptait aussi les fonctions de test) ; `impl Physics` n'en avait réellement que 14 sur ~978 lignes, la plupart concentrées dans `build()` (406 l.) et `control_kinematic()` (146 l.). Découpage multi-fichiers fait quand même sur choix explicite de l'utilisateur. Vérifié : 684/684 tests verts avant/après, `cargo build --all-targets` propre, garde-fou unwrap toujours vert |
 | 2.3 | Regrouper `AppState` (`src/app/mod.rs:197-836`, 175 champs, +47 % depuis juillet) en sous-structs par domaine (`ui`, `gameplay`, `network_fx`, ...) | dette | ⏳ Priorité haute : la struct continue de grossir à chaque sprint fonctionnel |
 | 2.4 | Ajouter des tests sur `src/editor/menus.rs` (765 lignes, 0 test) | qualité | ⏳ |
 
