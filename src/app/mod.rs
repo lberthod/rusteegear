@@ -294,6 +294,16 @@ pub struct FxState {
 /// dernière frame, FPS lissé, fenêtre de bilan périodique) — regroupée hors
 /// de `AppState` (roadmap post-audit 2026-08-29, vague 2.3, lot 10) :
 /// purement diagnostique, aucune de ces valeurs ne pilote de logique de jeu.
+/// Historique d'édition de la scène (presse-papiers copier/coller, piles
+/// annuler/refaire) — regroupé hors de `AppState` (roadmap post-audit
+/// 2026-08-29, vague 2.3, lot 11) : confiné à `app/mod.rs`/`app/selection.rs`.
+pub struct EditHistoryState {
+    /// Presse-papiers d'objets (copier/coller).
+    clipboard: Vec<SceneObject>,
+    undo_stack: VecDeque<SceneSnapshot>,
+    redo_stack: Vec<SceneSnapshot>,
+}
+
 pub struct PerfState {
     viewport: (f32, f32),
     last_frame: Instant,
@@ -552,8 +562,8 @@ pub struct AppState {
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
     pub selected: Vec<usize>,
-    /// Presse-papiers d'objets (copier/coller).
-    clipboard: Vec<SceneObject>,
+    /// Historique d'édition (presse-papiers, annuler/refaire) — cf. `EditHistoryState`.
+    edit_history: EditHistoryState,
     pub playing: bool,
     /// Caméra libre (« vol libre »/noclip) de l'éditeur, hors Play : bascule au clavier
     /// (G), déplacement aux flèches + Espace/C, cf. `update_fly_cam`. Sans effet en Play
@@ -902,10 +912,6 @@ pub struct AppState {
     /// Mécanique de glissé souris/gizmo — cf. `DragState`.
     drag: DragState,
 
-    // --- historique (snapshots de la liste d'objets) ---
-    undo_stack: VecDeque<SceneSnapshot>,
-    redo_stack: Vec<SceneSnapshot>,
-
     // --- scripting (indisponible sur wasm32, cf. Cargo.toml : `lua-src` ne
     // sait pas construire Lua pour `wasm32-unknown-unknown` — Sprint 114) ---
     #[cfg(not(target_arch = "wasm32"))]
@@ -1083,7 +1089,6 @@ impl AppState {
             scene: Scene::demo(),
             selection: None,
             selected: Vec::new(),
-            clipboard: Vec::new(),
             playing: false,
             fly_cam: false,
             paused: false,
@@ -1248,8 +1253,11 @@ impl AppState {
                 additive: false,
                 drag_light: None,
             },
-            undo_stack: VecDeque::new(),
-            redo_stack: Vec::new(),
+            edit_history: EditHistoryState {
+                clipboard: Vec::new(),
+                undo_stack: VecDeque::new(),
+                redo_stack: Vec::new(),
+            },
             #[cfg(not(target_arch = "wasm32"))]
             lua,
             #[cfg(not(target_arch = "wasm32"))]

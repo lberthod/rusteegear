@@ -101,7 +101,7 @@ impl AppState {
 
     /// Copie les objets sélectionnés dans le presse-papiers.
     pub fn copy_selected(&mut self) {
-        self.clipboard = self
+        self.edit_history.clipboard = self
             .selected
             .iter()
             .filter_map(|&i| self.scene.objects.get(i).cloned())
@@ -219,12 +219,12 @@ impl AppState {
 
     /// Colle le presse-papiers (décalé), et sélectionne les nouveaux objets.
     pub fn paste(&mut self) {
-        if self.clipboard.is_empty() {
+        if self.edit_history.clipboard.is_empty() {
             return;
         }
         self.push_undo();
         let start = self.scene.objects.len();
-        let clips = self.clipboard.clone();
+        let clips = self.edit_history.clipboard.clone();
         for o in clips {
             let mut c = o.clone();
             c.name = format!("{} (copie)", c.name);
@@ -259,12 +259,13 @@ impl AppState {
         // Toute opération annulable est une modification de scène : c'est le point
         // de passage commun qui pose le drapeau « non sauvegardé » (cf. `scene_dirty`).
         self.scene_dirty = true;
-        self.undo_stack
+        self.edit_history
+            .undo_stack
             .push_back(SceneSnapshot::capture(&self.scene));
-        if self.undo_stack.len() > 50 {
-            self.undo_stack.pop_front(); // O(1), contrairement à Vec::remove(0)
+        if self.edit_history.undo_stack.len() > 50 {
+            self.edit_history.undo_stack.pop_front(); // O(1), contrairement à Vec::remove(0)
         }
-        self.redo_stack.clear();
+        self.edit_history.redo_stack.clear();
     }
 
     /// Vide l'historique undo/redo — utilisé au démarrage de l'éditeur pour que
@@ -272,14 +273,16 @@ impl AppState {
     /// Repart aussi sur une scène « propre » : la scène d'ouverture vient d'être
     /// chargée, elle n'a par définition rien de non sauvegardé.
     pub fn clear_history(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.edit_history.undo_stack.clear();
+        self.edit_history.redo_stack.clear();
         self.scene_dirty = false;
     }
 
     pub fn undo(&mut self) {
-        if let Some(prev) = self.undo_stack.pop_back() {
-            self.redo_stack.push(SceneSnapshot::capture(&self.scene));
+        if let Some(prev) = self.edit_history.undo_stack.pop_back() {
+            self.edit_history
+                .redo_stack
+                .push(SceneSnapshot::capture(&self.scene));
             prev.restore(&mut self.scene);
             self.clear_selection();
             self.selected_light = None;
@@ -287,8 +290,9 @@ impl AppState {
     }
 
     pub fn redo(&mut self) {
-        if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack
+        if let Some(next) = self.edit_history.redo_stack.pop() {
+            self.edit_history
+                .undo_stack
                 .push_back(SceneSnapshot::capture(&self.scene));
             next.restore(&mut self.scene);
             self.clear_selection();
