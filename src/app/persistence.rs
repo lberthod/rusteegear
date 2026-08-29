@@ -29,10 +29,10 @@ impl AppState {
         self.clear_fireballs();
         self.clear_creature_shots();
         self.time = 0.0;
-        self.sim_accumulator = 0.0;
-        self.sim_prev_poses.clear();
-        self.sim_curr_poses.clear();
-        self.sim_render_poses.clear();
+        self.sim_poses.sim_accumulator = 0.0;
+        self.sim_poses.sim_prev_poses.clear();
+        self.sim_poses.sim_curr_poses.clear();
+        self.sim_poses.sim_render_poses.clear();
         self.win_time = None;
         self.lost = false;
         // Redémarrer depuis le menu pause (Phase J) doit aussi lever la pause —

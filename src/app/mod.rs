@@ -273,6 +273,32 @@ pub struct FxState {
 /// 2026-08-29, vague 2.3, lot 6) : même patron pour les deux familles
 /// (liste simulée + pool d'affichage + version reçue du réseau côté client
 /// connecté). Noms de champs conservés à l'identique.
+/// État d'interpolation de la simulation à pas fixe (accumulateur de temps
+/// réel + poses avant/après/rendues) — regroupé hors de `AppState` (roadmap
+/// post-audit 2026-08-29, vague 2.3, lot 7) : les 4 champs ne servent qu'au
+/// mélange visuel entre deux pas de simulation (`advance_play`,
+/// `blend_render_poses`, `restore_sim_poses`), toujours lus/écrits ensemble.
+pub struct SimPosesState {
+    /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
+    sim_accumulator: f32,
+    /// Poses (position, rotation, échelle) de tous les objets après l'**avant-dernier**
+    /// pas de simulation à pas fixe. Couplé à `sim_curr_poses` pour l'interpolation de
+    /// rendu (cf. `advance_play`) : le rendu affiche un mélange des deux pondéré par
+    /// l'accumulateur, au lieu de la dernière pose brute — sans quoi une frame affiche
+    /// tantôt 0, tantôt 2 pas de simulation selon l'alignement rendu/60 Hz, un
+    /// à-coup visible en continu (« judder »).
+    sim_prev_poses: Vec<(Vec3, Quat, Vec3)>,
+    /// Poses après le **dernier** pas de simulation — l'état « vrai » de la simulation,
+    /// restauré avant chaque nouveau pas (cf. `restore_sim_poses` : les transforms
+    /// affichés peuvent s'en écarter d'une fraction de pas à cause du mélange visuel).
+    sim_curr_poses: Vec<(Vec3, Quat, Vec3)>,
+    /// Poses telles qu'écrites par le **dernier** `blend_render_poses` : référence de
+    /// `restore_sim_poses` pour distinguer « transform encore égal au mélange » (à
+    /// restaurer) d'une écriture externe survenue depuis (à respecter). Vide = pas de
+    /// mélange valide (début de Play, scène modifiée).
+    sim_render_poses: Vec<(Vec3, Quat, Vec3)>,
+}
+
 pub struct ProjectilesState {
     /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
     /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
@@ -497,8 +523,8 @@ pub struct AppState {
     /// Une seule frame : la presse démarrée sur cet objet vient de se terminer
     /// (`obj.touch_ended`), qu'elle se relâche dessus ou après un glissé.
     touch_ended_obj: Option<usize>,
-    /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
-    sim_accumulator: f32,
+    /// Interpolation de la simulation à pas fixe — cf. `SimPosesState`.
+    sim_poses: SimPosesState,
     /// Multiplicateur du temps simulé : 1.0 = normal, 0 = figé, &gt;1 = accéléré.
     /// N'affecte que le `dt` consommé par la physique/les scripts, jamais le FPS affiché
     /// ni le pas fixe lui-même (`FIXED_DT` reste 1/60 s : seul le nombre de pas exécutés
@@ -511,22 +537,6 @@ pub struct AppState {
     /// frame par le picking et le gameplay (`debug_line`/`debug_box`/`debug_sphere`), lus et
     /// vidés par `Renderer::render` après dessin — jamais persistants au-delà d'une frame.
     pub debug_lines: Vec<(Vec3, Vec3, [f32; 3])>,
-    /// Poses (position, rotation, échelle) de tous les objets après l'**avant-dernier**
-    /// pas de simulation à pas fixe. Couplé à `sim_curr_poses` pour l'interpolation de
-    /// rendu (cf. `advance_play`) : le rendu affiche un mélange des deux pondéré par
-    /// l'accumulateur, au lieu de la dernière pose brute — sans quoi une frame affiche
-    /// tantôt 0, tantôt 2 pas de simulation selon l'alignement rendu/60 Hz, un
-    /// à-coup visible en continu (« judder »).
-    sim_prev_poses: Vec<(Vec3, Quat, Vec3)>,
-    /// Poses après le **dernier** pas de simulation — l'état « vrai » de la simulation,
-    /// restauré avant chaque nouveau pas (cf. `restore_sim_poses` : les transforms
-    /// affichés peuvent s'en écarter d'une fraction de pas à cause du mélange visuel).
-    sim_curr_poses: Vec<(Vec3, Quat, Vec3)>,
-    /// Poses telles qu'écrites par le **dernier** `blend_render_poses` : référence de
-    /// `restore_sim_poses` pour distinguer « transform encore égal au mélange » (à
-    /// restaurer) d'une écriture externe survenue depuis (à respecter). Vide = pas de
-    /// mélange valide (début de Play, scène modifiée).
-    sim_render_poses: Vec<(Vec3, Quat, Vec3)>,
     /// Temps de jeu (s) auquel tous les collectibles ont été ramassés (figé pour le HUD).
     win_time: Option<f32>,
     /// Partie perdue : le joueur a touché une zone mortelle (fige le jeu jusqu'au Stop).
@@ -1058,13 +1068,15 @@ impl AppState {
             touched_obj: None,
             touch_started_obj: None,
             touch_ended_obj: None,
-            sim_accumulator: 0.0,
+            sim_poses: SimPosesState {
+                sim_accumulator: 0.0,
+                sim_prev_poses: Vec::new(),
+                sim_curr_poses: Vec::new(),
+                sim_render_poses: Vec::new(),
+            },
             time_scale: 1.0,
             step_requested: false,
             debug_lines: Vec::new(),
-            sim_prev_poses: Vec::new(),
-            sim_curr_poses: Vec::new(),
-            sim_render_poses: Vec::new(),
             win_time: None,
             lost: false,
             score: 0,

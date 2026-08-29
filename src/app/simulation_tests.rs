@@ -265,8 +265,8 @@ fn blend_render_poses_interpolates_between_the_last_two_sim_steps() {
     let n = app.scene.objects.len();
     // Delta de 0,1 m par pas (6 m/s : un déplacement normal, sous le seuil de
     // téléportation) : à mi-accumulateur, le rendu doit être à mi-chemin.
-    app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
-    app.sim_curr_poses = vec![(Vec3::new(0.1, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_curr_poses = vec![(Vec3::new(0.1, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE); n];
     app.blend_render_poses(0.5);
     let p = app.scene.objects[0].transform.position;
     assert!(
@@ -324,8 +324,8 @@ fn blend_render_poses_snaps_on_teleport_instead_of_streaking() {
     let mut app = AppState::new();
     let n = app.scene.objects.len();
     let target = Vec3::new(5.0, 0.5, -3.0);
-    app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
-    app.sim_curr_poses = vec![(target, Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_curr_poses = vec![(target, Quat::IDENTITY, Vec3::ONE); n];
     app.blend_render_poses(0.5);
     assert!(
         (app.scene.objects[0].transform.position - target).length() < 1e-6,
@@ -340,8 +340,8 @@ fn restore_sim_poses_undoes_the_visual_blend_before_simulating() {
     let mut app = AppState::new();
     let n = app.scene.objects.len();
     let curr = Vec3::new(0.2, 0.0, -0.1);
-    app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
-    app.sim_curr_poses = vec![(curr, Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_curr_poses = vec![(curr, Quat::IDENTITY, Vec3::ONE); n];
     app.blend_render_poses(0.25);
     assert!((app.scene.objects[0].transform.position - curr * 0.25).length() < 1e-6);
     app.restore_sim_poses();
@@ -358,8 +358,8 @@ fn restore_sim_poses_respects_an_external_transform_write() {
     // c'est une intention, pas un artefact de mélange.
     let mut app = AppState::new();
     let n = app.scene.objects.len();
-    app.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
-    app.sim_curr_poses = vec![(Vec3::new(0.1, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_prev_poses = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE); n];
+    app.sim_poses.sim_curr_poses = vec![(Vec3::new(0.1, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE); n];
     app.blend_render_poses(0.5);
     let moved = Vec3::new(50.0, 0.5, 50.0);
     app.scene.objects[0].transform.position = moved;

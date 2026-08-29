@@ -445,9 +445,9 @@ impl AppState {
             self.stagger.clear();
             // Poses d'interpolation de rendu périmées (la scène vient d'être restaurée
             // depuis le snapshot d'édition) : ne surtout pas les mélanger au retour en Play.
-            self.sim_prev_poses.clear();
-            self.sim_curr_poses.clear();
-            self.sim_render_poses.clear();
+            self.sim_poses.sim_prev_poses.clear();
+            self.sim_poses.sim_curr_poses.clear();
+            self.sim_poses.sim_render_poses.clear();
             self.wave = 0;
             self.win_time = None;
             self.lost = false;
@@ -462,10 +462,10 @@ impl AppState {
             self.clear_selection();
             // Démarrage de Play : repart d'un accumulateur vide (pas de rafale initiale)
             // et sans poses d'interpolation héritées d'une partie précédente.
-            self.sim_accumulator = 0.0;
-            self.sim_prev_poses.clear();
-            self.sim_curr_poses.clear();
-            self.sim_render_poses.clear();
+            self.sim_poses.sim_accumulator = 0.0;
+            self.sim_poses.sim_prev_poses.clear();
+            self.sim_poses.sim_curr_poses.clear();
+            self.sim_poses.sim_render_poses.clear();
             self.win_time = None;
             self.lost = false;
             self.score = 0;
@@ -520,7 +520,7 @@ impl AppState {
         let step_once = self.paused && self.step_requested;
         self.step_requested = false;
         if !self.playing || (self.paused && !step_once) {
-            self.sim_accumulator = 0.0;
+            self.sim_poses.sim_accumulator = 0.0;
             return;
         }
 
@@ -542,8 +542,13 @@ impl AppState {
         };
         // Jeu figé une fois gagné ou perdu (l'écran de fin attend « Rejouer »).
         if !self.lost && self.win_time.is_none() {
-            let (steps, acc) = fixed_substeps(self.sim_accumulator, sim_dt, FIXED_DT, MAX_SUBSTEPS);
-            self.sim_accumulator = acc;
+            let (steps, acc) = fixed_substeps(
+                self.sim_poses.sim_accumulator,
+                sim_dt,
+                FIXED_DT,
+                MAX_SUBSTEPS,
+            );
+            self.sim_poses.sim_accumulator = acc;
             // Avant de simuler, restaure l'état **exact** du dernier pas : les
             // transforms affichés contiennent la pose *mélangée* du rendu précédent
             // (cf. `blend_render_poses` ci-dessous), en retrait d'une fraction de pas
@@ -563,7 +568,7 @@ impl AppState {
             // prev→curr pondéré par le temps restant dans l'accumulateur — le rendu
             // retarde d'au plus un pas (≤ 16,7 ms), imperceptible, contre une
             // trajectoire parfaitement continue à l'écran.
-            self.blend_render_poses(self.sim_accumulator / FIXED_DT);
+            self.blend_render_poses(self.sim_poses.sim_accumulator / FIXED_DT);
 
             // Ramassage par contact : le joueur récupère les pièces qu'il traverse.
             // Score +1 par pièce ; les pièces bonus (respawn_delay>0) réapparaissent.
@@ -1571,8 +1576,12 @@ impl AppState {
                 // contre le monde exactement comme la patrouille (glissement
                 // le long des murs, dépénétration bornée).
                 for (idx, target, speed) in scripted_chase {
-                    let (base, prev_rot) =
-                        self.sim_curr_poses.get(idx).map(|p| (p.0, p.1)).unwrap_or((
+                    let (base, prev_rot) = self
+                        .sim_poses
+                        .sim_curr_poses
+                        .get(idx)
+                        .map(|p| (p.0, p.1))
+                        .unwrap_or((
                             self.scene.objects[idx].transform.position,
                             self.scene.objects[idx].transform.rotation,
                         ));
@@ -1610,7 +1619,7 @@ impl AppState {
             // pas immédiatement écrasé par la vitesse que le joystick ou la poursuite
             // viennent de recalculer.
             let scene = &mut self.scene;
-            let prev_poses = &self.sim_curr_poses;
+            let prev_poses = &self.sim_poses.sim_curr_poses;
             self.stagger.retain_mut(|(idx, vel, remaining)| {
                 if phys.is_scripted_body(*idx) {
                     // Recul d'un corps scripté (chantier 4.1) : `control`
@@ -1672,9 +1681,13 @@ impl AppState {
         // l'ancien « courant » devient le « précédent », puis on capture les poses
         // fraîches de ce pas — physique **et** scripts (plateformes animées, pièces
         // qui tournent… tout ce qui bouge à pas fixe profite du lissage).
-        std::mem::swap(&mut self.sim_prev_poses, &mut self.sim_curr_poses);
-        self.sim_curr_poses.clear();
-        self.sim_curr_poses
+        std::mem::swap(
+            &mut self.sim_poses.sim_prev_poses,
+            &mut self.sim_poses.sim_curr_poses,
+        );
+        self.sim_poses.sim_curr_poses.clear();
+        self.sim_poses
+            .sim_curr_poses
             .extend(self.scene.objects.iter().map(|o| {
                 (
                     o.transform.position,
@@ -1696,15 +1709,17 @@ impl AppState {
     /// ramènerait en arrière et l'écriture externe ne « prendrait » jamais.
     pub(super) fn restore_sim_poses(&mut self) {
         let n = self.scene.objects.len();
-        if self.sim_curr_poses.len() != n || self.sim_render_poses.len() != n {
+        if self.sim_poses.sim_curr_poses.len() != n || self.sim_poses.sim_render_poses.len() != n {
             return;
         }
         let ghosts = self.remote_player_scene_indices();
         for (i, obj) in self.scene.objects.iter_mut().enumerate() {
-            if ghosts.contains(&i) || !pose_matches(&obj.transform, self.sim_render_poses[i]) {
+            if ghosts.contains(&i)
+                || !pose_matches(&obj.transform, self.sim_poses.sim_render_poses[i])
+            {
                 continue;
             }
-            let (p, r, s) = self.sim_curr_poses[i];
+            let (p, r, s) = self.sim_poses.sim_curr_poses[i];
             obj.transform.position = p;
             obj.transform.rotation = r;
             obj.transform.scale = s;
@@ -1718,11 +1733,11 @@ impl AppState {
     /// instantanés ne couvrent pas la scène actuelle (début de Play, objet ajouté).
     pub(super) fn blend_render_poses(&mut self, alpha: f32) {
         let n = self.scene.objects.len();
-        if self.sim_prev_poses.len() != n || self.sim_curr_poses.len() != n {
+        if self.sim_poses.sim_prev_poses.len() != n || self.sim_poses.sim_curr_poses.len() != n {
             // Instantanés inexploitables (début de Play, objet ajouté) : invalide
             // aussi les poses de rendu, sinon `restore_sim_poses` comparerait les
             // transforms à un mélange d'une scène qui n'existe plus.
-            self.sim_render_poses.clear();
+            self.sim_poses.sim_render_poses.clear();
             return;
         }
         let alpha = alpha.clamp(0.0, 1.0);
@@ -1730,10 +1745,10 @@ impl AppState {
         // snapshots serveur à la frame (cf. `poll_network`) : le mélange local les
         // ferait revenir en arrière sur une pose de simulation qui ne les pilote pas.
         let ghosts = self.remote_player_scene_indices();
-        self.sim_render_poses.clear();
+        self.sim_poses.sim_render_poses.clear();
         for (i, obj) in self.scene.objects.iter_mut().enumerate() {
-            let (pp, pr, ps) = self.sim_prev_poses[i];
-            let (cp, cr, cs) = self.sim_curr_poses[i];
+            let (pp, pr, ps) = self.sim_poses.sim_prev_poses[i];
+            let (cp, cr, cs) = self.sim_poses.sim_curr_poses[i];
             // Une **téléportation** (ancre FX déplacée sur la cible, respawn…) n'est
             // pas un mouvement : l'interpoler tracerait une traînée entre les deux
             // points. Au-delà d'un déplacement impossible en un seul pas de 1/60 s
@@ -1754,7 +1769,7 @@ impl AppState {
             // Mémorise ce que le mélange vient d'écrire (pose des fantômes incluse,
             // pour garder l'indexation alignée) : référence de `restore_sim_poses`
             // pour détecter une écriture externe survenue après cette frame.
-            self.sim_render_poses.push((
+            self.sim_poses.sim_render_poses.push((
                 obj.transform.position,
                 obj.transform.rotation,
                 obj.transform.scale,
