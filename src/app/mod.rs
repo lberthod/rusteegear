@@ -283,6 +283,37 @@ pub struct FxState {
 /// post-audit 2026-08-29, vague 2.3, lot 8) : les 4 champs sont lus
 /// ensemble par le picking et exposés aux scripts Lua via `obj.tapped`/
 /// `obj.touching`/`obj.touch_started`/`obj.touch_ended`.
+/// Mécanique de glissé souris/gizmo (drag translate/rotate/scale, pan forcé,
+/// état d'origine à restaurer si le glissé est annulé) — regroupée hors de
+/// `AppState` (roadmap post-audit 2026-08-29, vague 2.3, lot 9) : confinée à
+/// `app/picking.rs` (17 tests) et `app/selection.rs`, jamais lue par
+/// `editor::build_ui` directement (contrairement à `gizmo_mode`/
+/// `active_axis`/`selected_light`, laissés en place au niveau d'AppState
+/// car ce sont eux que l'UI lit pour l'état visuel du gizmo).
+pub struct DragState {
+    dragging: bool,
+    /// Pan forcé en cours (clic milieu / Maj+glisser) : déplace la caméra quel
+    /// que soit l'outil actif, sans passer par le gizmo ni la sélection.
+    pan_dragging: bool,
+    last_cursor: Option<(f64, f64)>,
+    press_cursor: Option<(f64, f64)>,
+    drag_start_t: f32,
+    drag_start_angle: f32,
+    drag_orig_pos: Vec3,
+    drag_orig_rot: Quat,
+    drag_orig_scale: Vec3,
+    /// Positions d'origine de tous les objets sélectionnés (gizmo translate multi).
+    drag_orig_positions: Vec<(usize, Vec3)>,
+    /// Transforms d'origine de la sélection (gizmo rotate/scale multi, autour d'un pivot).
+    drag_orig_transforms: Vec<(usize, Transform)>,
+    /// Pivot commun (centroïde de la sélection) pour rotate/scale multi.
+    drag_pivot: Vec3,
+    /// Le prochain clic ajoute/retire de la sélection (Cmd/Maj enfoncé).
+    additive: bool,
+    /// Lumière en cours de déplacement au gizmo (avec `active_axis`).
+    drag_light: Option<usize>,
+}
+
 pub struct TouchState {
     /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
     tapped_obj: Option<usize>,
@@ -853,35 +884,14 @@ pub struct AppState {
     /// indicateur de *quel côté* (sim vs rendu/présentation) chercher un à-coup.
     perf_window_worst_sim: f32,
 
-    // --- état d'interaction pointeur ---
-    dragging: bool,
-    /// Pan forcé en cours (clic milieu / Maj+glisser) : déplace la caméra quel
-    /// que soit l'outil actif, sans passer par le gizmo ni la sélection.
-    pan_dragging: bool,
-    last_cursor: Option<(f64, f64)>,
-    press_cursor: Option<(f64, f64)>,
-
     // --- gizmo ---
     pub gizmo_mode: GizmoMode,
     /// Axe en cours de manipulation (0 = X, 1 = Y, 2 = Z).
     pub active_axis: Option<usize>,
-    drag_start_t: f32,
-    drag_start_angle: f32,
-    drag_orig_pos: Vec3,
-    drag_orig_rot: Quat,
-    drag_orig_scale: Vec3,
-    /// Positions d'origine de tous les objets sélectionnés (gizmo translate multi).
-    drag_orig_positions: Vec<(usize, Vec3)>,
-    /// Transforms d'origine de la sélection (gizmo rotate/scale multi, autour d'un pivot).
-    drag_orig_transforms: Vec<(usize, Transform)>,
-    /// Pivot commun (centroïde de la sélection) pour rotate/scale multi.
-    drag_pivot: Vec3,
-    /// Le prochain clic ajoute/retire de la sélection (Cmd/Maj enfoncé).
-    additive: bool,
     /// Lumière ponctuelle sélectionnée (déplaçable au gizmo) ; exclusif avec `selection`.
     pub selected_light: Option<usize>,
-    /// Lumière en cours de déplacement au gizmo (avec `active_axis`).
-    drag_light: Option<usize>,
+    /// Mécanique de glissé souris/gizmo — cf. `DragState`.
+    drag: DragState,
 
     // --- historique (snapshots de la liste d'objets) ---
     undo_stack: VecDeque<SceneSnapshot>,
@@ -1208,23 +1218,25 @@ impl AppState {
             perf_window_start: Instant::now(),
             perf_window_worst_dt: 0.0,
             perf_window_worst_sim: 0.0,
-            dragging: false,
-            pan_dragging: false,
-            last_cursor: None,
-            press_cursor: None,
             gizmo_mode: GizmoMode::Translate,
             active_axis: None,
-            drag_start_t: 0.0,
-            drag_start_angle: 0.0,
-            drag_orig_pos: Vec3::ZERO,
-            drag_orig_rot: Quat::IDENTITY,
-            drag_orig_scale: Vec3::ONE,
-            drag_orig_positions: Vec::new(),
-            drag_orig_transforms: Vec::new(),
-            drag_pivot: Vec3::ZERO,
-            additive: false,
             selected_light: None,
-            drag_light: None,
+            drag: DragState {
+                dragging: false,
+                pan_dragging: false,
+                last_cursor: None,
+                press_cursor: None,
+                drag_start_t: 0.0,
+                drag_start_angle: 0.0,
+                drag_orig_pos: Vec3::ZERO,
+                drag_orig_rot: Quat::IDENTITY,
+                drag_orig_scale: Vec3::ONE,
+                drag_orig_positions: Vec::new(),
+                drag_orig_transforms: Vec::new(),
+                drag_pivot: Vec3::ZERO,
+                additive: false,
+                drag_light: None,
+            },
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1341,7 +1353,7 @@ impl AppState {
     /// Vrai quand l'app doit rendre en continu (animation Play ou interaction en cours) :
     /// la boucle d'événements reste en `Poll`. Sinon elle peut throttler (économie CPU).
     pub fn is_active(&self) -> bool {
-        (self.playing && !self.paused) || self.dragging || self.active_axis.is_some()
+        (self.playing && !self.paused) || self.drag.dragging || self.active_axis.is_some()
     }
 
     /// Joue immédiatement un fichier son (bouton de test / scripts).
@@ -1378,7 +1390,7 @@ impl AppState {
 
     /// Le prochain clic de sélection sera additif (Cmd/Maj enfoncé), positionné par la plateforme.
     pub fn set_additive(&mut self, additive: bool) {
-        self.additive = additive;
+        self.drag.additive = additive;
     }
 
     /// Touche modificatrice de snap (Ctrl) tenue ou non, positionné par la

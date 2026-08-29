@@ -21,7 +21,7 @@ impl AppState {
     pub fn handle_input(&mut self, event: InputEvent) {
         match event {
             InputEvent::PointerDown { pan } => {
-                self.press_cursor = self.last_cursor;
+                self.drag.press_cursor = self.drag.last_cursor;
                 // Cycle de vie du toucher (obj.touch_started/touching/touch_ended, cf. script
                 // Lua) : indépendant du gizmo d'édition, évalué avant toute anticipation de
                 // glissé/pan/orbite — y compris en aperçu mobile (`device_preview`), où c'est
@@ -29,7 +29,7 @@ impl AppState {
                 if self.playing
                     && !self.paused
                     && !pan
-                    && let Some((cx, cy)) = self.last_cursor
+                    && let Some((cx, cy)) = self.drag.last_cursor
                     && let Some(i) = self.pick(cx, cy)
                     && self.scene.objects[i].tappable
                 {
@@ -38,23 +38,23 @@ impl AppState {
                 }
                 // Aperçu mobile : on joue au tactile, pas d'édition (ni gizmo, ni sélection).
                 if self.device_preview {
-                    self.dragging = true;
+                    self.drag.dragging = true;
                     return;
                 }
                 // Pan forcé (clic milieu / Maj+glisser) : navigation immédiate,
                 // sans passer par le gizmo — quel que soit l'outil actif.
                 if pan {
-                    self.pan_dragging = true;
+                    self.drag.pan_dragging = true;
                     return;
                 }
                 // Outil de navigation (Main/Orbite/Loupe) : le glissé pilote la
                 // caméra, jamais le gizmo (même patron que l'aperçu mobile).
                 if self.gizmo_mode.is_nav() {
-                    self.dragging = true;
+                    self.drag.dragging = true;
                     return;
                 }
                 // Gizmo de translation d'une lumière sélectionnée.
-                if let (Some(li), Some((cx, cy))) = (self.selected_light, self.last_cursor)
+                if let (Some(li), Some((cx, cy))) = (self.selected_light, self.drag.last_cursor)
                     && let Some(pl) = self.scene.point_lights.get(li)
                 {
                     let origin = Vec3::from_array(pl.position);
@@ -62,15 +62,15 @@ impl AppState {
                         if let Some(p) = self.axis_drag_param(origin, axis_dir(axis), cx, cy) {
                             self.push_undo(); // déplacement de lumière annulable
                             self.active_axis = Some(axis);
-                            self.drag_light = Some(li);
-                            self.drag_start_t = p;
-                            self.drag_orig_pos = origin;
+                            self.drag.drag_light = Some(li);
+                            self.drag.drag_start_t = p;
+                            self.drag.drag_orig_pos = origin;
                         }
                         return;
                     }
                 }
                 // priorité au gizmo : si une poignée est cliquée, on démarre la manipulation.
-                if let (Some(sel), Some((cx, cy))) = (self.selection, self.last_cursor) {
+                if let (Some(sel), Some((cx, cy))) = (self.selection, self.drag.last_cursor) {
                     let origin = self.scene.objects[sel].transform.position;
                     let t = &self.scene.objects[sel].transform;
                     let (orig_rot, orig_scale) = (t.rotation, t.scale);
@@ -82,9 +82,9 @@ impl AppState {
                                 {
                                     self.push_undo(); // un seul snapshot par manipulation
                                     self.active_axis = Some(axis);
-                                    self.drag_start_angle = ang;
-                                    self.drag_orig_pos = origin;
-                                    self.drag_orig_rot = orig_rot;
+                                    self.drag.drag_start_angle = ang;
+                                    self.drag.drag_orig_pos = origin;
+                                    self.drag.drag_orig_rot = orig_rot;
                                     self.capture_drag_selection();
                                 }
                                 return;
@@ -97,11 +97,11 @@ impl AppState {
                                 {
                                     self.push_undo();
                                     self.active_axis = Some(axis);
-                                    self.drag_start_t = p;
-                                    self.drag_orig_pos = origin;
-                                    self.drag_orig_scale = orig_scale;
+                                    self.drag.drag_start_t = p;
+                                    self.drag.drag_orig_pos = origin;
+                                    self.drag.drag_orig_scale = orig_scale;
                                     // mémorise les positions de toute la sélection (translate multi)
-                                    self.drag_orig_positions = self
+                                    self.drag.drag_orig_positions = self
                                         .selected
                                         .iter()
                                         .filter_map(|&i| {
@@ -118,7 +118,7 @@ impl AppState {
                         }
                     }
                 }
-                self.dragging = true;
+                self.drag.dragging = true;
             }
             InputEvent::PointerUp => {
                 // La presse démarrée sur cet objet (`touched_obj`) se termine ce frame,
@@ -127,18 +127,18 @@ impl AppState {
                     self.touch.touch_ended_obj = Some(i);
                 }
                 if self.active_axis.take().is_some() {
-                    self.drag_light = None;
-                    self.press_cursor = None;
+                    self.drag.drag_light = None;
+                    self.drag.press_cursor = None;
                     return;
                 }
-                self.dragging = false;
+                self.drag.dragging = false;
                 // Fin d'un pan forcé : un tap milieu ne sélectionne pas, mais un
                 // Maj+clic sans glisser reste une sélection additive (`additive`).
-                let was_pan = self.pan_dragging;
-                self.pan_dragging = false;
+                let was_pan = self.drag.pan_dragging;
+                self.drag.pan_dragging = false;
                 // Tap (appui sans déplacement notable) ?
                 let tap = matches!(
-                    (self.press_cursor, self.last_cursor),
+                    (self.drag.press_cursor, self.drag.last_cursor),
                     (Some((px, py)), Some((cx, cy))) if (px - cx).hypot(py - cy) < 4.0
                 );
                 // En mode Play : un tap sur un objet « tactile » le notifie à son script
@@ -150,7 +150,7 @@ impl AppState {
                 if self.playing
                     && !self.paused
                     && tap
-                    && let Some((cx, cy)) = self.last_cursor
+                    && let Some((cx, cy)) = self.drag.last_cursor
                     && let Some(i) = self.pick(cx, cy)
                     && (self.scene.objects[i].tappable
                         || self.scene.objects[i].tap_action != crate::scene::TapAction::None)
@@ -159,7 +159,7 @@ impl AppState {
                 }
                 // Aperçu mobile : pas de sélection éditeur au clic (on joue, on n'édite pas).
                 if self.device_preview {
-                    self.press_cursor = None;
+                    self.drag.press_cursor = None;
                     return;
                 }
                 // appui sans déplacement notable = sélection éditeur — sauf en
@@ -167,10 +167,11 @@ impl AppState {
                 // pendant une simulation Play active (la sélection d'objets 3D
                 // ne reprend qu'à l'arrêt ou en Pause, pour ne pas interférer
                 // avec le clic gameplay pendant que la scène tourne).
-                if let (Some((px, py)), Some((cx, cy))) = (self.press_cursor, self.last_cursor)
+                if let (Some((px, py)), Some((cx, cy))) =
+                    (self.drag.press_cursor, self.drag.last_cursor)
                     && (px - cx).hypot(py - cy) < 4.0
                     && !self.gizmo_mode.is_nav()
-                    && (!was_pan || self.additive)
+                    && (!was_pan || self.drag.additive)
                     && (!self.playing || self.paused)
                 {
                     // Debug drawing : visualise le rayon de picking envoyé.
@@ -184,27 +185,27 @@ impl AppState {
                         self.selected_light = None;
                         match self.pick(cx, cy) {
                             // Cmd/Maj : ajoute/retire de la sélection ; sinon sélection simple.
-                            Some(i) if self.additive => self.toggle_select(i),
+                            Some(i) if self.drag.additive => self.toggle_select(i),
                             Some(i) => self.select_single(i),
-                            None if !self.additive => self.clear_selection(),
+                            None if !self.drag.additive => self.clear_selection(),
                             None => {}
                         }
                     }
                 }
-                self.press_cursor = None;
+                self.drag.press_cursor = None;
             }
             InputEvent::PointerMove { x, y } => {
                 // Déplacement d'une lumière sélectionnée (translate uniquement).
-                if let (Some(axis), Some(li)) = (self.active_axis, self.drag_light) {
+                if let (Some(axis), Some(li)) = (self.active_axis, self.drag.drag_light) {
                     let a = axis_dir(axis);
                     let snap = self.effective_snap();
-                    if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y)
+                    if let Some(t) = self.axis_drag_param(self.drag.drag_orig_pos, a, x, y)
                         && let Some(pl) = self.scene.point_lights.get_mut(li)
                     {
-                        let delta = a * (t - self.drag_start_t);
-                        pl.position = maybe_snap(self.drag_orig_pos + delta, snap).to_array();
+                        let delta = a * (t - self.drag.drag_start_t);
+                        pl.position = maybe_snap(self.drag.drag_orig_pos + delta, snap).to_array();
                     }
-                    self.last_cursor = Some((x, y));
+                    self.drag.last_cursor = Some((x, y));
                     return;
                 }
                 // manipulation via la poignée active
@@ -212,27 +213,29 @@ impl AppState {
                     let a = axis_dir(axis);
                     match self.gizmo_mode {
                         GizmoMode::Translate => {
-                            if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y) {
-                                let delta = a * (t - self.drag_start_t);
+                            if let Some(t) = self.axis_drag_param(self.drag.drag_orig_pos, a, x, y)
+                            {
+                                let delta = a * (t - self.drag.drag_start_t);
                                 let snap = self.effective_snap();
-                                if self.drag_orig_positions.len() > 1 {
+                                if self.drag.drag_orig_positions.len() > 1 {
                                     // déplace toute la sélection en bloc
-                                    for (i, orig) in &self.drag_orig_positions {
+                                    for (i, orig) in &self.drag.drag_orig_positions {
                                         if let Some(o) = self.scene.objects.get_mut(*i) {
                                             o.transform.position = maybe_snap(*orig + delta, snap);
                                         }
                                     }
                                 } else {
                                     self.scene.objects[sel].transform.position =
-                                        maybe_snap(self.drag_orig_pos + delta, snap);
+                                        maybe_snap(self.drag.drag_orig_pos + delta, snap);
                                 }
                             }
                         }
                         GizmoMode::Scale => {
-                            if let Some(t) = self.axis_drag_param(self.drag_orig_pos, a, x, y) {
-                                let d = t - self.drag_start_t;
+                            if let Some(t) = self.axis_drag_param(self.drag.drag_orig_pos, a, x, y)
+                            {
+                                let d = t - self.drag.drag_start_t;
                                 // Même delta appliqué à chaque objet sélectionné (multi-scale).
-                                for (i, t0) in &self.drag_orig_transforms {
+                                for (i, t0) in &self.drag.drag_orig_transforms {
                                     if let Some(o) = self.scene.objects.get_mut(*i) {
                                         let mut s = t0.scale;
                                         match axis {
@@ -246,15 +249,17 @@ impl AppState {
                             }
                         }
                         GizmoMode::Rotate => {
-                            if let Some(ang) = self.ring_drag_angle(self.drag_orig_pos, a, x, y) {
+                            if let Some(ang) =
+                                self.ring_drag_angle(self.drag.drag_orig_pos, a, x, y)
+                            {
                                 let delta = maybe_snap_angle(
-                                    ang - self.drag_start_angle,
+                                    ang - self.drag.drag_start_angle,
                                     self.effective_snap(),
                                 );
                                 let rot = Quat::from_axis_angle(a, delta);
                                 // Rotation autour du pivot commun (position + orientation).
-                                let pivot = self.drag_pivot;
-                                for (i, t0) in &self.drag_orig_transforms {
+                                let pivot = self.drag.drag_pivot;
+                                for (i, t0) in &self.drag.drag_orig_transforms {
                                     if let Some(o) = self.scene.objects.get_mut(*i) {
                                         o.transform.rotation = rot * t0.rotation;
                                         o.transform.position = pivot + rot * (t0.position - pivot);
@@ -266,14 +271,14 @@ impl AppState {
                         // `PointerDown` navigation ne pose pas d'`active_axis`).
                         GizmoMode::Pan | GizmoMode::Orbit | GizmoMode::Zoom => {}
                     }
-                    self.last_cursor = Some((x, y));
+                    self.drag.last_cursor = Some((x, y));
                     return;
-                } else if (self.dragging || self.pan_dragging)
+                } else if (self.drag.dragging || self.drag.pan_dragging)
                     && !self.device_preview // en aperçu mobile : pas d'orbite souris (simule le tactile)
-                    && let Some((lx, ly)) = self.last_cursor
+                    && let Some((lx, ly)) = self.drag.last_cursor
                 {
                     let (dx, dy) = ((x - lx) as f32, (y - ly) as f32);
-                    if self.pan_dragging {
+                    if self.drag.pan_dragging {
                         // Pan forcé (clic milieu / Maj+glisser), quel que soit l'outil.
                         self.camera.pan(dx, dy);
                     } else {
@@ -290,7 +295,7 @@ impl AppState {
                         }
                     }
                 }
-                self.last_cursor = Some((x, y));
+                self.drag.last_cursor = Some((x, y));
             }
             InputEvent::Scroll { delta } => {
                 // En aperçu mobile, la molette ne zoome pas (un téléphone n'a pas de molette).

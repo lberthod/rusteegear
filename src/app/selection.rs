@@ -50,18 +50,19 @@ impl AppState {
     /// Mémorise les transforms d'origine de la sélection + leur centroïde (pivot),
     /// pour les manipulations multi-objets rotate/scale.
     pub(super) fn capture_drag_selection(&mut self) {
-        self.drag_orig_transforms = self
+        self.drag.drag_orig_transforms = self
             .selected
             .iter()
             .filter_map(|&i| self.scene.objects.get(i).map(|o| (i, o.transform)))
             .collect();
-        let n = self.drag_orig_transforms.len().max(1) as f32;
+        let n = self.drag.drag_orig_transforms.len().max(1) as f32;
         let sum: Vec3 = self
+            .drag
             .drag_orig_transforms
             .iter()
             .map(|(_, t)| t.position)
             .sum();
-        self.drag_pivot = sum / n;
+        self.drag.drag_pivot = sum / n;
     }
 
     /// Sélectionne un seul objet (remplace l'ensemble).
