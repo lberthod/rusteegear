@@ -297,6 +297,21 @@ pub struct FxState {
 /// Historique d'édition de la scène (presse-papiers copier/coller, piles
 /// annuler/refaire) — regroupé hors de `AppState` (roadmap post-audit
 /// 2026-08-29, vague 2.3, lot 11) : confiné à `app/mod.rs`/`app/selection.rs`.
+/// Génération asynchrone par IA (script d'un objet, scène entière) —
+/// regroupée hors de `AppState` (roadmap post-audit 2026-08-29, vague 2.3,
+/// lot 12) : même patron de canal `Sender`/`Receiver` de thread de fond que
+/// `AsyncLoadState`/`FirebaseAuthState`.
+pub struct AiGenState {
+    ai_tx: Sender<(usize, Result<String, String>)>,
+    ai_rx: Receiver<(usize, Result<String, String>)>,
+    /// Une génération IA est en cours (désactive le bouton, affiche l'état).
+    pub ai_busy: bool,
+    ai_scene_tx: Sender<Result<Scene, String>>,
+    ai_scene_rx: Receiver<Result<Scene, String>>,
+    /// Mode de la génération de scène en cours : `true` = remplacer, `false` = ajouter.
+    ai_scene_replace: bool,
+}
+
 pub struct EditHistoryState {
     /// Presse-papiers d'objets (copier/coller).
     clipboard: Vec<SceneObject>,
@@ -941,16 +956,8 @@ pub struct AppState {
     // --- chargements asynchrones (import glTF, scène) ---
     async_load: AsyncLoadState,
 
-    // --- génération de script par IA (asynchrone) ---
-    ai_tx: Sender<(usize, Result<String, String>)>,
-    ai_rx: Receiver<(usize, Result<String, String>)>,
-    /// Une génération IA est en cours (désactive le bouton, affiche l'état).
-    pub ai_busy: bool,
-    // --- génération de scène entière par IA (asynchrone) ---
-    ai_scene_tx: Sender<Result<Scene, String>>,
-    ai_scene_rx: Receiver<Result<Scene, String>>,
-    /// Mode de la génération de scène en cours : `true` = remplacer, `false` = ajouter.
-    ai_scene_replace: bool,
+    /// Génération asynchrone par IA (script, scène) — cf. `AiGenState`.
+    pub ai: AiGenState,
 }
 
 /// Mode de manipulation du gizmo (touches W / E / R) ou outil de navigation
@@ -1280,12 +1287,14 @@ impl AppState {
                 scene_load_rx: scene_rx,
                 imported_dirty: false,
             },
-            ai_tx,
-            ai_rx,
-            ai_busy: false,
-            ai_scene_tx,
-            ai_scene_rx,
-            ai_scene_replace: true,
+            ai: AiGenState {
+                ai_tx,
+                ai_rx,
+                ai_busy: false,
+                ai_scene_tx,
+                ai_scene_rx,
+                ai_scene_replace: true,
+            },
             current_project: None,
             confirm_close_project: false,
             last_autosave: None,
@@ -1296,12 +1305,12 @@ impl AppState {
     /// Lance une génération de scène par IA (thread de fond). `replace` = remplace la
     /// scène ; sinon ajoute les objets générés à la scène actuelle.
     pub fn request_ai_scene(&mut self, req: ai::AiRequest, replace: bool) {
-        if self.ai_busy {
+        if self.ai.ai_busy {
             return;
         }
-        self.ai_busy = true;
-        self.ai_scene_replace = replace;
-        let tx = self.ai_scene_tx.clone();
+        self.ai.ai_busy = true;
+        self.ai.ai_scene_replace = replace;
+        let tx = self.ai.ai_scene_tx.clone();
         std::thread::spawn(move || {
             let result = ai::generate_scene_json(&req).and_then(|j| Scene::from_ai_json(&j));
             let _ = tx.send(result);
@@ -1310,11 +1319,11 @@ impl AppState {
 
     /// Lance une génération de script Lua par IA (thread de fond) pour l'objet `idx`.
     pub fn request_ai_script(&mut self, idx: usize, req: ai::AiRequest) {
-        if self.ai_busy {
+        if self.ai.ai_busy {
             return;
         }
-        self.ai_busy = true;
-        let tx = self.ai_tx.clone();
+        self.ai.ai_busy = true;
+        let tx = self.ai.ai_tx.clone();
         std::thread::spawn(move || {
             let result = ai::generate_lua(&req);
             let _ = tx.send((idx, result));
@@ -1323,8 +1332,8 @@ impl AppState {
 
     /// Applique un script généré par IA s'il est prêt (à appeler chaque frame).
     fn poll_ai(&mut self) {
-        while let Ok((idx, result)) = self.ai_rx.try_recv() {
-            self.ai_busy = false;
+        while let Ok((idx, result)) = self.ai.ai_rx.try_recv() {
+            self.ai.ai_busy = false;
             match result {
                 Ok(script) if idx < self.scene.objects.len() => {
                     self.push_undo();
@@ -1335,12 +1344,12 @@ impl AppState {
                 Err(e) => log::error!("Génération IA : {e}"),
             }
         }
-        while let Ok(result) = self.ai_scene_rx.try_recv() {
-            self.ai_busy = false;
+        while let Ok(result) = self.ai.ai_scene_rx.try_recv() {
+            self.ai.ai_busy = false;
             match result {
                 Ok(mut scene) => {
                     self.push_undo();
-                    if self.ai_scene_replace {
+                    if self.ai.ai_scene_replace {
                         self.scene = scene;
                         log::info!("Scène générée par IA appliquée");
                     } else {

@@ -125,7 +125,7 @@ impl Renderer {
             let status = crate::editor::StatusInfo {
                 fps: app.fps(),
                 backend: &self.backend,
-                ai_busy: app.ai_busy,
+                ai_busy: app.ai.ai_busy,
                 grid: app.show_grid,
                 snap: app.snap,
                 debug_view: app.debug_view,
