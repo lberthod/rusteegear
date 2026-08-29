@@ -1,0 +1,72 @@
+# Roadmap post-audit (2026-08-29)
+
+*Suite au [Rapport d'audit RusteeGear](https://claude.ai/code/artifact/ffc6987d-f1ef-48a9-8903-9266fe0b434a)
+du 2026-08-29 : quatre lectures indépendantes du dépôt (architecture, réseau/sécurité,
+cohérence gameplay Chasse 4.1, cohérence doc/code) à l'état du commit `163e081`,
+copie de travail propre. Même format que
+[docs/audit-2026-07-20/07_PLAN_ACTION.md](audit-2026-07-20/07_PLAN_ACTION.md) : vagues
+priorisées par valeur débloquée / coût, coûts en taille de t-shirt (S ≈ ≤1 h, M ≈ ½ journée,
+L ≈ 1-2 jours, XL ≈ 3 jours et plus).*
+
+## Constat d'ensemble
+
+L'audit du 20 juillet avait identifié une dette d'architecture précise (fichiers trop gros,
+`AppState` à regrouper, couverture de tests faible dans `editor/`). Un mois de développement
+plus tard, le rythme a clairement privilégié les livraisons fonctionnelles (Chasse 4.1,
+silhouettes de classe v7, sécurisation réseau) — toutes confirmées solides et testées — mais
+**aucun des constats de dette de juillet n'a été traité, et `AppState` a même grossi de 47 %**
+(119 → 175 champs). Rien n'est urgent au sens « ça casse » (CI verte, tests réseau réels, aucune
+faille de sécurité critique), mais le coût de toute modification touchant `editor/mod.rs`,
+`runtime/physics.rs` ou `AppState` continue d'augmenter plus vite qu'il ne diminue.
+
+## Vague 1 — Désamorcer avant que ça ne coûte plus cher — non commencée
+
+| # | Action | Ferme | Statut |
+|---|---|---|---|
+| 1.1 | Trancher Git LFS vs exclusion pour `assets/models/` (159 Mo, 826 fichiers versionnés en Git normal, `.git/` déjà à 146 Mo) | dette bloquante | ⏳ Seul point classé « bloquant » de l'audit — irréversible sans réécriture d'historique si on attend encore |
+| 1.2 | Réactiver le test roguelike (`src/app/demos.rs:341-342`, `#[ignore]` depuis juillet) en le rendant déterministe | qualité | ⏳ Un pan du gameplay (donjon 3 salles) n'a plus de garantie automatisée depuis plus d'un mois |
+| 1.3 | Corriger les 3 dérives README : lignes de code (« ~32 000 » annoncé, 75 422 réel), chemin mort `src/scene/demos.rs` (→ `src/scene/demos/`), compteur `.glb` (412 annoncé, 482 réel) | doc | ⏳ Cosmétique mais trompeur, notamment l'argument « tenable dans la tête » sous-évalué de moitié |
+| 1.4 | Mettre à jour le commentaire `Cargo.toml:4-5` (« deux binaires » → 4 : `motor3derust`, `server`, `pilot`, `glbviewer`) | doc | ⏳ |
+
+## Vague 2 — Découper les trois points de passage obligés — non commencée
+
+| # | Action | Ferme | Statut |
+|---|---|---|---|
+| 2.1 | Découper `build_ui` (`src/editor/mod.rs:1362-2744`, 1382 lignes, 0 test dessus) par panneau, comme déjà fait pour `windows.rs` / `hud.rs` / `export.rs` | dette | ⏳ |
+| 2.2 | Scinder `impl Physics` (`src/runtime/physics.rs:173-2417`, 2244 lignes / 58 méthodes) en `impl` partiels thématiques (`physics/collision.rs`, `physics/ai.rs`, `physics/triggers.rs`...), pattern déjà utilisé dans `gfx/renderer/*` | dette | ⏳ |
+| 2.3 | Regrouper `AppState` (`src/app/mod.rs:197-836`, 175 champs, +47 % depuis juillet) en sous-structs par domaine (`ui`, `gameplay`, `network_fx`, ...) | dette | ⏳ Priorité haute : la struct continue de grossir à chaque sprint fonctionnel |
+| 2.4 | Ajouter des tests sur `src/editor/menus.rs` (765 lignes, 0 test) | qualité | ⏳ |
+
+## Vague 3 — Petits nettoyages sécurité/infra — non commencée, non bloquant
+
+| # | Action | Ferme | Statut |
+|---|---|---|---|
+| 3.1 | Retirer l'IP publique et l'utilisateur SSH en dur de `scripts/deploy_vps.sh:23` (variable d'env obligatoire sans défaut) | surface | ⏳ Pas un secret, mais une divulgation d'infra si le dépôt devient public |
+| 3.2 | Clarifier dans la doc que « parité `ai_chaser` vérifiée en CI » (`src/scene/mod_tests.rs:2060-2110`) est un test unitaire noyé dans `cargo test --all-targets`, pas un job CI dédié isolé | doc | ⏳ Le contrôle est réel, la formulation prête à confusion |
+| 3.3 | Revalider côté VPS que le port en clair est bien fermé si non nécessaire (item déjà noté dans le plan d'action du 20/07, jamais confirmé) | surface | ⏳ Hors dépôt (SSH/Caddy), à faire lors du prochain déploiement |
+
+## Ce qui est déjà solide (à ne pas re-questionner sans raison)
+
+- **Sécurité réseau** : anti-usurpation Firebase (idToken vérifié serveur), anti-DoS
+  (`MAX_TOTAL_CONNECTIONS=256`, `MAX_ROOMS=16`), rate-limiting **par connexion** (pas seulement
+  global), entrées réseau nettoyées contre NaN/infini avant simulation — tous vérifiés actifs sur
+  le chemin critique et couverts par des tests d'intégration sur vrais sockets. Aucune faille
+  critique trouvée.
+- **Chasse 4.1 / silhouettes v7** : grammaire Traqueuse/Meute/Colosse/Furtive sur les 26
+  créatures, contrat de PV 5/8/11/16, portée de chasse plafonnée à 9 m, knockback et dégâts de
+  contact, `PROTOCOL_VERSION` 7 avec rejet propre des clients v6 — tout confirmé dans le code et
+  par exécution réelle des tests, pas seulement par le discours des commits.
+- **Outillage** : garde-fou `unwrap`/`panic` testé en CI (14 occurrences whitelistées,
+  justifiées), CI mature (fmt, clippy strict, tests réseau réels, goldens de rendu Metal,
+  cross-build Android/iOS/wasm32), `unsafe` et `dead_code` quasi absents, `Cargo.toml`
+  exemplairement documenté.
+
+## Ce qu'il ne faut pas faire maintenant
+
+- Réécrire l'historique Git pour purger `assets/models/` rétroactivement avant d'avoir tranché
+  LFS vs exclusion (1.1) — décider d'abord la cible, migrer ensuite en une seule fois.
+- Refactorer `AppState`/`Physics`/`build_ui` en même temps qu'un chantier fonctionnel en cours —
+  ce sont des changements à isoler dans leur propre commit, testables indépendamment.
+- Réagir à l'écoute en clair du serveur applicatif (`src/bin/server.rs:62`) : c'est une
+  architecture voulue (TLS délégué à Caddy), pas une faille — seul le point 3.3 (infra VPS) reste
+  à confirmer.
