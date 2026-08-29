@@ -83,9 +83,9 @@ différencie :
    état → rendu GPU → réseau) est écrit à la main, sans boîte noire.
 6. **Aucun ECS sophistiqué à maîtriser** — la scène est une structure simple
    (`Vec<SceneObject>`), lisible sans courbe d'apprentissage dédiée.
-7. **Un projet complet, lisible par une seule personne** — ~32 000 lignes de
-   Rust, du rendu au réseau, qu'un développeur seul peut tenir entièrement
-   dans sa tête.
+7. **Un projet complet, lisible par une seule personne** — ~65 000 lignes de
+   Rust (hors tests), du rendu au réseau, qu'un développeur seul peut tenir
+   entièrement dans sa tête.
 
 ---
 
@@ -117,7 +117,7 @@ RusteeGear répond à un besoin précis :
   (fenêtre → événements → état → rendu GPU → réseau) est écrit à la main,
   lisible en une après-midi, sans abstraction magique ni ordonnanceur de
   systèmes à comprendre avant de pouvoir avancer.
-- **Hackable et minimal.** ~32 000 lignes de Rust au total. Ajouter une
+- **Hackable et minimal.** ~65 000 lignes de Rust (hors tests) au total. Ajouter une
   primitive, un type de collider ou une variable de script se fait en
   quelques lignes, sans se battre contre un framework.
 - **Sans dépendance lourde ni runtime caché.** Pas de garbage collector, pas
@@ -182,7 +182,7 @@ là où RusteeGear garde une scène simple (`Vec<SceneObject>`) et un pipeline
 | Critère | RusteeGear (from scratch) | Bevy |
 |---|---|---|
 | **Objectif** | Petits jeux 3D multijoueurs, code compréhensible | Large éventail de jeux, écosystème riche |
-| **Taille du cœur** | ~32 000 lignes, lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
+| **Taille du cœur** | ~65 000 lignes (hors tests), lisible d'un bout à l'autre | Très large, nombreux sous-systèmes |
 | **Architecture** | Scène = `Vec<SceneObject>`, explicite | ECS complet + ordonnanceur de systèmes |
 | **Rendu** | Pipeline `wgpu`/WGSL écrit à la main | Moteur de rendu intégré (PBR, etc.) |
 | **Courbe d'apprentissage** | Pas d'ECS à apprendre, on lit le code directement | On apprend d'abord le framework |
@@ -299,7 +299,7 @@ techniques** (Contrôleur, Mobile, Gameplay/API, Composants).
 <a id="pipeline-assets"></a>
 ## 🗿 Pipeline d'assets 3D — Blender → GLB
 
-Tout le contenu 3D du jeu (**412 fichiers `.glb`** dans `assets/models/`) est
+Tout le contenu 3D du jeu (**482 fichiers `.glb`** dans `assets/models/`) est
 produit par un pipeline **procédural, reproductible et scripté** — aucun
 modèle téléchargé, aucun artiste externe : chaque asset sort d'un script
 Python qui pilote Blender en ligne de commande.
@@ -334,7 +334,7 @@ Python qui pilote Blender en ligne de commande.
   fondu enchaîné entre clips).
 - Un asset une fois importé est mis en cache (`ImportedMesh`) et référencé
   par chemin — un même `.glb` posé 50 fois dans une scène ne le recharge
-  qu'une fois (cf. `poser()` dans `src/scene/demos.rs`).
+  qu'une fois (cf. `poser()` dans `src/scene/demos/hameau_gdd/helpers.rs`).
 
 **Gestionnaire GLB** (`glbviewer`, menu éditeur **Outils → 🖼 Gestionnaire GLB**)
 - Visualiseur **autonome** (`src/bin/glbviewer.rs`, `cargo run --bin
@@ -345,7 +345,7 @@ Python qui pilote Blender en ligne de commande.
   nom exact.
 
 **Composition assistée par Blender (MCP)** — nouveau : plutôt que d'écrire des
-coordonnées `(x, y, z)` à l'aveugle dans `src/scene/demos.rs`, une session
+coordonnées `(x, y, z)` à l'aveugle dans `src/scene/demos/`, une session
 Claude Code connectée au **serveur MCP `blender-mcp`** peut piloter une
 instance Blender en direct (import, positionnement, rendu de prévisualisation)
 pour **composer une scène en la regardant**, puis ne traduire en Rust que le
