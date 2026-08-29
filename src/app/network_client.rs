@@ -178,7 +178,7 @@ impl AppState {
         self.net_last_input_sent = None;
         // Plus de snapshots à venir : oublie les projectiles serveur et masque le
         // pool, sinon les dernières boules reçues resteraient figées à l'écran.
-        self.net_projectiles.clear();
+        self.projectiles.net_projectiles.clear();
         self.sync_fireball_pool(&[]);
     }
 
@@ -713,14 +713,14 @@ impl AppState {
                 // par `update_fireballs` à chaque frame). Pas d'interpolation :
                 // à 60 Hz de snapshots pour un projectile qui vit ~1,5 s, le
                 // pas entre deux positions reçues est déjà sous le pixel utile.
-                self.net_projectiles = snap
+                self.projectiles.net_projectiles = snap
                     .projectiles
                     .iter()
                     .map(|p| (glam::Vec3::from_array(p.position), p.weapon as usize))
                     .collect();
                 // Projectiles de créature (jet d'eau, crachat de feu...) — même
                 // principe, affichés par `creature_attack::sync_creature_shot_pool`.
-                self.net_creature_shots = snap
+                self.projectiles.net_creature_shots = snap
                     .creature_shots
                     .iter()
                     .map(|s| {

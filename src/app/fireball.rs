@@ -131,7 +131,7 @@ impl AppState {
         // Recharges : décomptées chaque frame, indépendamment du bouton (sinon
         // relâcher puis rappuyer contournerait le temporisateur) — mêmes raisons
         // que `attack_cooldown_remaining` (cf. `combat.rs`).
-        self.fireball_cooldowns.retain(|_, cd| {
+        self.projectiles.fireball_cooldowns.retain(|_, cd| {
             *cd -= dt;
             *cd > 0.0
         });
@@ -165,7 +165,7 @@ impl AppState {
             let pressed = self.input_state.fire
                 || (!ctrl.fire_button.is_empty()
                     && self.input_state.buttons.contains(&ctrl.fire_button));
-            if pressed && !self.fireball_cooldowns.contains_key(&pi) {
+            if pressed && !self.projectiles.fireball_cooldowns.contains_key(&pi) {
                 let (yaw, _, _) = player.transform.rotation.to_euler(glam::EulerRot::YXZ);
                 self.spawn_fireball(pi, yaw, self.selected_weapon);
             }
@@ -182,7 +182,9 @@ impl AppState {
             .iter()
             .filter_map(|(id, &index)| self.network.network_inputs.get(id).map(|inp| (index, inp)))
             .filter(|(index, inp)| {
-                inp.fire && !self.fireball_cooldowns.contains_key(index) && self.is_alive_at(*index)
+                inp.fire
+                    && !self.projectiles.fireball_cooldowns.contains_key(index)
+                    && self.is_alive_at(*index)
             })
             .map(|(index, inp)| (index, inp.aim_yaw, clamp_weapon(inp.weapon)))
             .collect();
@@ -192,7 +194,7 @@ impl AppState {
 
         // Vol + impacts. `mem::take` pour itérer sans bloquer l'emprunt de `self`
         // (les impacts mutent la scène) ; les survivants sont remis en place.
-        let mut flying = std::mem::take(&mut self.fireballs);
+        let mut flying = std::mem::take(&mut self.projectiles.fireballs);
         flying.retain_mut(|fb| {
             fb.remaining -= dt;
             if fb.remaining <= 0.0 {
@@ -211,14 +213,15 @@ impl AppState {
                 None => survivors.push(fb),
             }
         }
-        self.fireballs = survivors;
+        self.projectiles.fireballs = survivors;
 
         // Pool d'affichage : projectiles simulés ici (solo/serveur), ou reçus du
         // dernier `Snapshot` (client connecté — `self.fireballs` y reste vide).
         let shots: Vec<(Vec3, usize)> = if self.is_online_client() {
-            self.net_projectiles.clone()
+            self.projectiles.net_projectiles.clone()
         } else {
-            self.fireballs
+            self.projectiles
+                .fireballs
                 .iter()
                 .map(|fb| (fb.pos, fb.weapon))
                 .collect()
@@ -240,14 +243,16 @@ impl AppState {
         // `(-sin yaw, 0, -cos yaw)`) — le projectile part là où le joueur regarde.
         let dir = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
         let pos = o.transform.position + dir * SPAWN_AHEAD + Vec3::Y * SPAWN_UP;
-        self.fireballs.push(Fireball {
+        self.projectiles.fireballs.push(Fireball {
             owner,
             pos,
             dir,
             remaining: w.lifetime,
             weapon,
         });
-        self.fireball_cooldowns.insert(owner, w.cooldown);
+        self.projectiles
+            .fireball_cooldowns
+            .insert(owner, w.cooldown);
     }
 
     /// Premier objet frappé par le projectile `fb` à sa position courante, s'il y
@@ -376,10 +381,10 @@ impl AppState {
     /// en place une fois créés (les retirer décalerait tous les indices de
     /// `scene.objects` — même contrainte que `despawn_network_player`).
     pub(super) fn sync_fireball_pool(&mut self, shots: &[(Vec3, usize)]) {
-        while self.fireball_pool.len() < shots.len() {
+        while self.projectiles.fireball_pool.len() < shots.len() {
             let index = self.scene.objects.len();
             self.scene.objects.push(crate::scene::SceneObject {
-                name: format!("Projectile {}", self.fireball_pool.len() + 1),
+                name: format!("Projectile {}", self.projectiles.fireball_pool.len() + 1),
                 mesh: crate::scene::MeshKind::Sphere,
                 transform: crate::scene::Transform::from_pos(Vec3::ZERO),
                 emissive: 2.0,
@@ -387,9 +392,9 @@ impl AppState {
                 visible: false,
                 ..Default::default()
             });
-            self.fireball_pool.push(index);
+            self.projectiles.fireball_pool.push(index);
         }
-        for (slot, &index) in self.fireball_pool.iter().enumerate() {
+        for (slot, &index) in self.projectiles.fireball_pool.iter().enumerate() {
             if let Some(o) = self.scene.objects.get_mut(index) {
                 match shots.get(slot) {
                     Some(&(p, weapon)) => {
@@ -410,10 +415,10 @@ impl AppState {
     /// que `clear_network_players`) — le pool vit dans `scene.objects`, ses
     /// indices deviennent obsolètes après restauration.
     pub(super) fn clear_fireballs(&mut self) {
-        self.fireballs.clear();
-        self.fireball_cooldowns.clear();
-        self.fireball_pool.clear();
-        self.net_projectiles.clear();
+        self.projectiles.fireballs.clear();
+        self.projectiles.fireball_cooldowns.clear();
+        self.projectiles.fireball_pool.clear();
+        self.projectiles.net_projectiles.clear();
         self.pending_net_events.clear();
     }
 
@@ -588,7 +593,7 @@ mod tests {
         advance(&mut app, 10, 0.02);
 
         assert_eq!(
-            app.fireballs.len(),
+            app.projectiles.fireballs.len(),
             1,
             "maintenir le bouton ne doit tirer qu'une boule par temps de recharge"
         );
@@ -612,11 +617,11 @@ mod tests {
         advance(&mut app, 5, 0.02);
 
         assert_eq!(
-            app.fireballs.len(),
+            app.projectiles.fireballs.len(),
             1,
             "l'input réseau fire=true doit faire tirer l'objet de ce joueur"
         );
-        assert_eq!(app.fireballs[0].owner, index);
+        assert_eq!(app.projectiles.fireballs[0].owner, index);
 
         // Et le snapshot diffusé doit exposer le projectile aux clients.
         let snap = app.network_snapshot(1);
@@ -823,7 +828,7 @@ mod tests {
         advance(&mut app, 5, 0.02);
 
         assert_eq!(
-            app.fireballs.len(),
+            app.projectiles.fireballs.len(),
             0,
             "un joueur vaincu ne doit plus pouvoir tirer"
         );
@@ -916,7 +921,7 @@ mod tests {
         // 0,3 s de spam, bien sous la recharge : une seule boule en vol.
         advance(&mut app, 15, 0.02);
         assert_eq!(
-            app.fireballs.len(),
+            app.projectiles.fireballs.len(),
             1,
             "le serveur doit imposer sa recharge, quel que soit le spam du client"
         );
@@ -971,8 +976,11 @@ mod tests {
             },
         );
         advance(&mut app, 5, 0.02);
-        assert_eq!(app.fireballs.len(), 1);
-        assert_eq!(app.fireballs[0].weapon, RANGED_WEAPONS.len() - 1);
+        assert_eq!(app.projectiles.fireballs.len(), 1);
+        assert_eq!(
+            app.projectiles.fireballs[0].weapon,
+            RANGED_WEAPONS.len() - 1
+        );
     }
 
     #[test]
@@ -1107,8 +1115,12 @@ mod tests {
         app.input_state.fire = true;
 
         advance(&mut app, 2, 0.02);
-        assert_eq!(app.fireball_pool.len(), 1, "une boule en vol = une sphère");
-        let sphere = app.fireball_pool[0];
+        assert_eq!(
+            app.projectiles.fireball_pool.len(),
+            1,
+            "une boule en vol = une sphère"
+        );
+        let sphere = app.projectiles.fireball_pool[0];
         assert!(app.scene.objects[sphere].visible);
         assert_eq!(
             app.scene.objects[sphere].color, RANGED_WEAPONS[0].color,
@@ -1120,6 +1132,6 @@ mod tests {
         app.input_state.fire = false;
         advance(&mut app, 60, 0.05);
         assert!(!app.scene.objects[sphere].visible);
-        assert_eq!(app.fireball_pool.len(), 1);
+        assert_eq!(app.projectiles.fireball_pool.len(), 1);
     }
 }

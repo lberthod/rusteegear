@@ -268,6 +268,43 @@ pub struct FxState {
 /// `health.rs`). Noms de champs conservés à l'identique (préfixe
 /// `network_`/domaine déjà explicite) pour garder le correctif mécanique des
 /// sites d'appel simple.
+/// Projectiles simulés (boules de feu du joueur, attaques à distance des
+/// créatures) — regroupés hors de `AppState` (roadmap post-audit
+/// 2026-08-29, vague 2.3, lot 6) : même patron pour les deux familles
+/// (liste simulée + pool d'affichage + version reçue du réseau côté client
+/// connecté). Noms de champs conservés à l'identique.
+pub struct ProjectilesState {
+    /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
+    /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
+    /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
+    fireballs: Vec<fireball::Fireball>,
+    /// Temps de recharge (s) restant par **objet tireur** (indice dans
+    /// `scene.objects`) : la même table sert au joueur local (solo) et aux joueurs
+    /// réseau (serveur) — validation côté simulation, un client qui spamme
+    /// `fire: true` ne tire pas plus vite pour autant.
+    fireball_cooldowns: HashMap<usize, f32>,
+    /// Pool d'objets de scène (sphères émissives) réutilisés pour afficher les
+    /// boules de feu — créés à la demande, masqués quand inutilisés, jamais
+    /// retirés en cours de partie (retirer décalerait tous les indices).
+    fireball_pool: Vec<usize>,
+    /// Projectiles (position + arme) reçus du dernier `Snapshot` serveur (client
+    /// connecté uniquement) : affichés tels quels via le pool.
+    net_projectiles: Vec<(Vec3, usize)>,
+    /// États des attaques à distance des créatures PNJ (pistolet à eau de la
+    /// n°3, feu de la n°8, étincelle de la n°9, spore de la n°10) — un état
+    /// par entrée de `creature_attack::RANGED_CREATURE_ATTACKS`, même indice.
+    creature_ranged: Vec<creature_attack::RangedState>,
+    /// Projectiles de créatures en vol (cf. `creature_attack::CreatureShot`).
+    creature_shots: Vec<creature_attack::CreatureShot>,
+    /// Pool d'affichage des projectiles de créatures, même principe que
+    /// `fireball_pool`.
+    creature_shot_pool: Vec<usize>,
+    /// Projectiles de créature (position, direction, config) reçus du dernier
+    /// `Snapshot` serveur (client connecté uniquement) — même principe que
+    /// `net_projectiles`, affichés tels quels via le pool.
+    net_creature_shots: Vec<(Vec3, Vec3, usize)>,
+}
+
 pub struct NetworkPlayersState {
     /// Joueurs réseau connectés (cf. `multiplayer.rs`) : indice de
     /// l'objet de scène que chacun pilote, dans `scene.objects`.
@@ -640,35 +677,9 @@ pub struct AppState {
     /// État de simulation par joueur réseau (positions pilotées, vie, frags,
     /// classe, cooldowns...) — cf. `NetworkPlayersState`.
     network: NetworkPlayersState,
-    /// Boules de feu en vol (cf. `fireball.rs`) : simulées ici en solo **et** sur
-    /// le serveur autoritaire (joueurs réseau) — un client connecté n'en simule
-    /// aucune, il affiche celles du `Snapshot` (cf. `net_projectiles`).
-    fireballs: Vec<fireball::Fireball>,
-    /// Temps de recharge (s) restant par **objet tireur** (indice dans
-    /// `scene.objects`) : la même table sert au joueur local (solo) et aux joueurs
-    /// réseau (serveur) — validation côté simulation, un client qui spamme
-    /// `fire: true` ne tire pas plus vite pour autant.
-    fireball_cooldowns: HashMap<usize, f32>,
-    /// Pool d'objets de scène (sphères émissives) réutilisés pour afficher les
-    /// boules de feu — créés à la demande, masqués quand inutilisés, jamais
-    /// retirés en cours de partie (retirer décalerait tous les indices).
-    fireball_pool: Vec<usize>,
-    /// Projectiles (position + arme) reçus du dernier `Snapshot` serveur (client
-    /// connecté uniquement) : affichés tels quels via le pool.
-    net_projectiles: Vec<(Vec3, usize)>,
-    /// États des attaques à distance des créatures PNJ (pistolet à eau de la
-    /// n°3, feu de la n°8, étincelle de la n°9, spore de la n°10) — un état
-    /// par entrée de `creature_attack::RANGED_CREATURE_ATTACKS`, même indice.
-    creature_ranged: Vec<creature_attack::RangedState>,
-    /// Projectiles de créatures en vol (cf. `creature_attack::CreatureShot`).
-    creature_shots: Vec<creature_attack::CreatureShot>,
-    /// Pool d'affichage des projectiles de créatures, même principe que
-    /// `fireball_pool`.
-    creature_shot_pool: Vec<usize>,
-    /// Projectiles de créature (position, direction, config) reçus du dernier
-    /// `Snapshot` serveur (client connecté uniquement) — même principe que
-    /// `net_projectiles`, affichés tels quels via le pool.
-    net_creature_shots: Vec<(Vec3, Vec3, usize)>,
+    /// Projectiles simulés (boules de feu, attaques à distance des
+    /// créatures) — cf. `ProjectilesState`.
+    projectiles: ProjectilesState,
     /// Arme à distance équipée par le joueur local (indice dans
     /// `fireball::RANGED_WEAPONS`) : clavier 1/2/3, ou bouton tactile « Arme »
     /// qui cycle (cf. `Controller::weapon_button`). Envoyée au serveur à chaque
@@ -1103,14 +1114,16 @@ impl AppState {
                 bite_cooldowns: HashMap::new(),
                 recent_damage: HashMap::new(),
             },
-            fireballs: Vec::new(),
-            fireball_cooldowns: HashMap::new(),
-            fireball_pool: Vec::new(),
-            net_projectiles: Vec::new(),
-            creature_ranged: creature_attack::default_states(),
-            creature_shots: Vec::new(),
-            creature_shot_pool: Vec::new(),
-            net_creature_shots: Vec::new(),
+            projectiles: ProjectilesState {
+                fireballs: Vec::new(),
+                fireball_cooldowns: HashMap::new(),
+                fireball_pool: Vec::new(),
+                net_projectiles: Vec::new(),
+                creature_ranged: creature_attack::default_states(),
+                creature_shots: Vec::new(),
+                creature_shot_pool: Vec::new(),
+                net_creature_shots: Vec::new(),
+            },
             selected_weapon: 0,
             weapon_button_was_down: false,
             pending_net_events: Vec::new(),

@@ -935,6 +935,7 @@ impl AppState {
             tick,
             entities,
             projectiles: self
+                .projectiles
                 .fireballs
                 .iter()
                 .map(|fb| crate::net::protocol::ProjectileState {
@@ -945,6 +946,7 @@ impl AppState {
             // Projectiles de créature (jet d'eau, crachat de feu...) — même non-
             // identité que les `projectiles` ci-dessus, cf. leur doc respective.
             creature_shots: self
+                .projectiles
                 .creature_shots
                 .iter()
                 .map(|s| crate::net::protocol::CreatureShotState {

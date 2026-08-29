@@ -407,13 +407,13 @@ impl AppState {
             return false;
         };
         RANGED_CREATURE_ATTACKS.iter().enumerate().any(|(ci, cfg)| {
-            cfg.creature == obj.name && self.creature_ranged[ci].stopped_until.is_some()
+            cfg.creature == obj.name && self.projectiles.creature_ranged[ci].stopped_until.is_some()
         })
     }
 
     pub(super) fn refresh_frozen_anchors(&mut self) {
         for (ci, cfg) in RANGED_CREATURE_ATTACKS.iter().enumerate() {
-            let state = &mut self.creature_ranged[ci];
+            let state = &mut self.projectiles.creature_ranged[ci];
             if state.stopped_until.is_none() || state.frozen_pos.is_none() {
                 continue;
             }
@@ -429,7 +429,7 @@ impl AppState {
             // aucune simulation ni dégât local, uniquement l'affichage des
             // projectiles reçus par `Snapshot` — sinon le déplacement/visée
             // tournerait deux fois (un vrai côté serveur, un fantôme ici).
-            let shots: Vec<(Vec3, Vec3, usize)> = self.net_creature_shots.clone();
+            let shots: Vec<(Vec3, Vec3, usize)> = self.projectiles.net_creature_shots.clone();
             self.sync_creature_shot_pool(&shots);
             return;
         }
@@ -448,11 +448,11 @@ impl AppState {
                 continue;
             }
 
-            if let Some(deadline) = self.creature_ranged[ci].stopped_until {
+            if let Some(deadline) = self.projectiles.creature_ranged[ci].stopped_until {
                 // Arrêtée : gèle la position (annule le déplacement que le
                 // script de patrouille a quand même calculé ce tick) et force
                 // `Idle`.
-                if let Some(frozen) = self.creature_ranged[ci].frozen_pos {
+                if let Some(frozen) = self.projectiles.creature_ranged[ci].frozen_pos {
                     self.scene.objects[creature_idx].transform.position = frozen;
                 }
                 if let Some(anim) = self.scene.objects[creature_idx].animation.as_mut() {
@@ -472,7 +472,7 @@ impl AppState {
                     }
                     // Rafale : reste figée jusqu'au tir suivant ; sinon libérée.
                     if let AttackStyle::Burst { count, interval } = cfg.style {
-                        let state = &mut self.creature_ranged[ci];
+                        let state = &mut self.projectiles.creature_ranged[ci];
                         if state.burst_left == 0 {
                             // Premier tir de la rafale (la visée initiale vient
                             // d'aboutir) : arme les suivants.
@@ -485,13 +485,13 @@ impl AppState {
                             continue;
                         }
                     }
-                    self.creature_ranged[ci].stopped_until = None;
-                    self.creature_ranged[ci].frozen_pos = None;
+                    self.projectiles.creature_ranged[ci].stopped_until = None;
+                    self.projectiles.creature_ranged[ci].frozen_pos = None;
                 }
             } else {
-                self.creature_ranged[ci].cooldown =
-                    (self.creature_ranged[ci].cooldown - dt).max(0.0);
-                if self.creature_ranged[ci].cooldown <= 0.0 {
+                self.projectiles.creature_ranged[ci].cooldown =
+                    (self.projectiles.creature_ranged[ci].cooldown - dt).max(0.0);
+                if self.projectiles.creature_ranged[ci].cooldown <= 0.0 {
                     let creature_pos = self.scene.objects[creature_idx].transform.position;
                     let in_range =
                         player_pos.is_some_and(|p| p.distance(creature_pos) <= cfg.range);
@@ -500,10 +500,11 @@ impl AppState {
                         // ça, rester à portée avec un cooldown à 0 referait le
                         // tirage chaque tick (60/s), rendant `chance` illusoire
                         // — même garde-fou que `creature_bite_script`.
-                        self.creature_ranged[ci].cooldown = cfg.cooldown;
+                        self.projectiles.creature_ranged[ci].cooldown = cfg.cooldown;
                         if deterministic_roll(time, cfg.salt) < cfg.chance {
-                            self.creature_ranged[ci].frozen_pos = Some(creature_pos);
-                            self.creature_ranged[ci].stopped_until = Some(time + cfg.windup);
+                            self.projectiles.creature_ranged[ci].frozen_pos = Some(creature_pos);
+                            self.projectiles.creature_ranged[ci].stopped_until =
+                                Some(time + cfg.windup);
                         }
                     }
                 }
@@ -511,7 +512,7 @@ impl AppState {
         }
 
         // Vol + impacts, toutes configs confondues.
-        let mut shots = std::mem::take(&mut self.creature_shots);
+        let mut shots = std::mem::take(&mut self.projectiles.creature_shots);
         shots.retain_mut(|s| {
             s.remaining -= dt;
             if s.remaining <= 0.0 {
@@ -564,11 +565,12 @@ impl AppState {
             }
             !hit
         });
-        self.creature_shots = shots;
+        self.projectiles.creature_shots = shots;
 
         // Pool d'affichage : projectiles simulés ici (solo/serveur) — le chemin
         // client connecté est déjà retourné plus haut avant d'atteindre ce point.
         let shots: Vec<(Vec3, Vec3, usize)> = self
+            .projectiles
             .creature_shots
             .iter()
             .map(|s| (s.pos, s.dir, s.cfg))
@@ -585,7 +587,7 @@ impl AppState {
         let cfg = &RANGED_CREATURE_ATTACKS[ci];
         let target = player + Vec3::Y * SPAWN_UP;
         let mut push = |dir: Vec3, vvel: f32| {
-            self.creature_shots.push(CreatureShot {
+            self.projectiles.creature_shots.push(CreatureShot {
                 pos: origin,
                 dir,
                 remaining: cfg.lifetime,
@@ -642,10 +644,13 @@ impl AppState {
     /// côté client connecté, l'appelant passe `net_creature_shots` (reçus du
     /// `Snapshot`) à la place, `self.creature_shots` y restant vide.
     fn sync_creature_shot_pool(&mut self, shots: &[(Vec3, Vec3, usize)]) {
-        while self.creature_shot_pool.len() < shots.len() {
+        while self.projectiles.creature_shot_pool.len() < shots.len() {
             let index = self.scene.objects.len();
             self.scene.objects.push(crate::scene::SceneObject {
-                name: format!("Tir de créature {}", self.creature_shot_pool.len() + 1),
+                name: format!(
+                    "Tir de créature {}",
+                    self.projectiles.creature_shot_pool.len() + 1
+                ),
                 mesh: crate::scene::MeshKind::Sphere,
                 transform: crate::scene::Transform::from_pos(Vec3::ZERO),
                 emissive: 1.6,
@@ -653,9 +658,9 @@ impl AppState {
                 visible: false,
                 ..Default::default()
             });
-            self.creature_shot_pool.push(index);
+            self.projectiles.creature_shot_pool.push(index);
         }
-        for (slot, &index) in self.creature_shot_pool.iter().enumerate() {
+        for (slot, &index) in self.projectiles.creature_shot_pool.iter().enumerate() {
             if let Some(o) = self.scene.objects.get_mut(index) {
                 match shots.get(slot) {
                     Some(&(pos, dir, cfg_idx)) => {
@@ -679,9 +684,9 @@ impl AppState {
     /// dans `scene.objects`, ses indices deviennent obsolètes après une
     /// restauration en bloc, ex. retour Edit <-> Play).
     pub(super) fn clear_creature_shots(&mut self) {
-        self.creature_shots.clear();
-        self.creature_shot_pool.clear();
-        for state in &mut self.creature_ranged {
+        self.projectiles.creature_shots.clear();
+        self.projectiles.creature_shot_pool.clear();
+        for state in &mut self.projectiles.creature_ranged {
             *state = RangedState::default();
         }
     }
@@ -743,7 +748,7 @@ mod tests {
         let mut was_aiming = false;
         for _ in 0..(30 * 60) {
             app.sim_step(dt);
-            let aiming = app.creature_ranged[ci].stopped_until.is_some();
+            let aiming = app.projectiles.creature_ranged[ci].stopped_until.is_some();
             if aiming && !was_aiming {
                 aims += 1;
             }
@@ -793,7 +798,7 @@ mod tests {
             // Neutralise les 19 autres créatures pour ce tour : le point
             // « loin » de la créature testée peut tomber par hasard à portée
             // d'une voisine (arène dense) — seule la config `ci` nous intéresse.
-            for (i, state) in app.creature_ranged.iter_mut().enumerate() {
+            for (i, state) in app.projectiles.creature_ranged.iter_mut().enumerate() {
                 if i != ci {
                     state.cooldown = 1000.0;
                 }
@@ -803,12 +808,12 @@ mod tests {
             for step in 0..(3 * 60) {
                 app.sim_step(dt);
                 assert!(
-                    app.creature_shots.is_empty(),
+                    app.projectiles.creature_shots.is_empty(),
                     "{} — step {step} : hors de portée, aucun projectile ne devrait partir",
                     cfg.creature
                 );
                 assert!(
-                    app.creature_ranged[ci].stopped_until.is_none(),
+                    app.projectiles.creature_ranged[ci].stopped_until.is_none(),
                     "{} — step {step} : hors de portée, ne devrait jamais viser",
                     cfg.creature
                 );
@@ -837,8 +842,8 @@ mod tests {
         app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
 
         let frozen_at = app.scene.objects[creature_idx].transform.position;
-        app.creature_ranged[ci].frozen_pos = Some(frozen_at);
-        app.creature_ranged[ci].stopped_until = Some(app.time + 1.0);
+        app.projectiles.creature_ranged[ci].frozen_pos = Some(frozen_at);
+        app.projectiles.creature_ranged[ci].stopped_until = Some(app.time + 1.0);
 
         let dt = 1.0 / 60.0;
         for step in 0..30 {
@@ -885,8 +890,8 @@ mod tests {
                 app.scene.objects[creature_idx].transform.position + Vec3::new(5.0, 0.0, 0.0);
 
             let frozen_at = app.scene.objects[creature_idx].transform.position;
-            app.creature_ranged[ci].frozen_pos = Some(frozen_at);
-            app.creature_ranged[ci].stopped_until = Some(app.time + 1.0 / 60.0);
+            app.projectiles.creature_ranged[ci].frozen_pos = Some(frozen_at);
+            app.projectiles.creature_ranged[ci].stopped_until = Some(app.time + 1.0 / 60.0);
 
             let dt = 1.0 / 60.0;
             app.sim_step(dt); // franchit l'échéance : la volée part
@@ -901,12 +906,12 @@ mod tests {
                 _ => 1,
             };
             assert_eq!(
-                app.creature_shots.len(),
+                app.projectiles.creature_shots.len(),
                 expected,
                 "{} : volée initiale de {expected} projectile(s) attendue",
                 cfg.creature
             );
-            let sphere_idx = app.creature_shot_pool[0];
+            let sphere_idx = app.projectiles.creature_shot_pool[0];
             let sphere = &app.scene.objects[sphere_idx];
             assert!(
                 sphere.visible,
@@ -937,15 +942,15 @@ mod tests {
             app.scene.objects[creature_idx].transform.position + offset;
         app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
         let frozen_at = app.scene.objects[creature_idx].transform.position;
-        app.creature_ranged[ci].frozen_pos = Some(frozen_at);
-        app.creature_ranged[ci].stopped_until = Some(app.time + 1.0 / 60.0);
+        app.projectiles.creature_ranged[ci].frozen_pos = Some(frozen_at);
+        app.projectiles.creature_ranged[ci].stopped_until = Some(app.time + 1.0 / 60.0);
         app.sim_step(1.0 / 60.0);
         // Isole la config testée : le joueur posé près de la créature visée
         // est souvent à portée d'une voisine (l'arène est dense depuis les
         // créatures 11-15) — bloque toute nouvelle tentative (cooldown) ET
         // annule les visées que les voisines ont pu commencer pendant le tick
         // déjà simulé (leur tir partirait sinon en plein comptage).
-        for (i, state) in app.creature_ranged.iter_mut().enumerate() {
+        for (i, state) in app.projectiles.creature_ranged.iter_mut().enumerate() {
             state.cooldown = 1000.0;
             if i != ci {
                 state.stopped_until = None;
@@ -967,9 +972,13 @@ mod tests {
             panic!("la Créature 12 doit tirer en rafale");
         };
         let mut app = force_fire("Créature 12", Vec3::new(5.0, 0.0, 0.0));
-        assert_eq!(app.creature_shots.len(), 1, "premier tir de la rafale");
+        assert_eq!(
+            app.projectiles.creature_shots.len(),
+            1,
+            "premier tir de la rafale"
+        );
         assert!(
-            app.creature_ranged[ci].stopped_until.is_some(),
+            app.projectiles.creature_ranged[ci].stopped_until.is_some(),
             "la créature doit rester figée entre deux tirs de rafale"
         );
         // Le joueur s'écarte de la ligne de tir : resté à 5 m, le 1er tir le
@@ -988,14 +997,14 @@ mod tests {
         let mut max_seen = 1;
         for _ in 0..steps {
             app.sim_step(dt);
-            max_seen = max_seen.max(app.creature_shots.len());
+            max_seen = max_seen.max(app.projectiles.creature_shots.len());
         }
         assert_eq!(
             max_seen, count as usize,
             "la rafale complète doit avoir mis {count} tirs en vol simultanément"
         );
         assert!(
-            app.creature_ranged[ci].stopped_until.is_none(),
+            app.projectiles.creature_ranged[ci].stopped_until.is_none(),
             "rafale finie : la créature doit être libérée"
         );
     }
@@ -1006,7 +1015,7 @@ mod tests {
     #[test]
     fn homing_shot_curves_toward_a_moved_player() {
         let mut app = force_fire("Créature 13", Vec3::new(6.0, 0.0, 0.0));
-        assert_eq!(app.creature_shots.len(), 1);
+        assert_eq!(app.projectiles.creature_shots.len(), 1);
         let (_, player_idx) = indices(&app, "Créature 13");
         // Le joueur se décale perpendiculairement à la trajectoire initiale.
         let dodge = app.scene.objects[player_idx].transform.position + Vec3::new(0.0, 0.0, 4.0);
@@ -1016,11 +1025,11 @@ mod tests {
             .unwrap()
             .set_position(player_idx, dodge);
 
-        let dir_before = app.creature_shots[0].dir;
+        let dir_before = app.projectiles.creature_shots[0].dir;
         let dt = 1.0 / 60.0;
         for _ in 0..30 {
             app.sim_step(dt);
-            if app.creature_shots.is_empty() {
+            if app.projectiles.creature_shots.is_empty() {
                 break; // il l'a déjà rattrapé — c'est le comportement voulu
             }
             // Le joueur reste sur place (repoussé à chaque tick, il patrouille
@@ -1032,7 +1041,7 @@ mod tests {
                 .unwrap()
                 .set_position(player_idx, dodge);
         }
-        if let Some(shot) = app.creature_shots.first() {
+        if let Some(shot) = app.projectiles.creature_shots.first() {
             let to_player = (dodge + Vec3::Y * 0.5 - shot.pos).normalize();
             assert!(
                 shot.dir.dot(to_player) > dir_before.dot(to_player) + 0.1,
@@ -1050,19 +1059,19 @@ mod tests {
     #[test]
     fn lob_shot_arcs_up_then_falls_to_the_ground() {
         let mut app = force_fire("Créature 14", Vec3::new(7.0, 0.0, 0.0));
-        assert_eq!(app.creature_shots.len(), 1);
+        assert_eq!(app.projectiles.creature_shots.len(), 1);
         let (_, player_idx) = indices(&app, "Créature 14");
         // Le joueur s'écarte : l'obus doit retomber dans le vide et s'éteindre.
         let away = app.scene.objects[player_idx].transform.position + Vec3::new(0.0, 0.0, 5.0);
         app.scene.objects[player_idx].transform.position = away;
         app.physics.as_mut().unwrap().set_position(player_idx, away);
 
-        let start_y = app.creature_shots[0].pos.y;
+        let start_y = app.projectiles.creature_shots[0].pos.y;
         let mut peak = start_y;
         let dt = 1.0 / 60.0;
         for _ in 0..(4 * 60) {
             app.sim_step(dt);
-            match app.creature_shots.first() {
+            match app.projectiles.creature_shots.first() {
                 Some(shot) => peak = peak.max(shot.pos.y),
                 None => break,
             }
@@ -1074,7 +1083,7 @@ mod tests {
             "l'obus doit monter en cloche (départ {start_y:.2}, sommet {peak:.2})"
         );
         assert!(
-            app.creature_shots.is_empty(),
+            app.projectiles.creature_shots.is_empty(),
             "l'obus esquivé doit s'être écrasé au sol et éteint"
         );
     }
