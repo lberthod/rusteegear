@@ -80,7 +80,8 @@ fn firebase_uid_is_applied_once_the_background_request_resolves() {
     let mut app = AppState::new();
     assert!(!app.has_firebase_account());
 
-    app.firebase_tx
+    app.firebase
+        .firebase_tx
         .send(Ok((
             "uid-test-1234".to_string(),
             "token-test".to_string(),
@@ -90,7 +91,7 @@ fn firebase_uid_is_applied_once_the_background_request_resolves() {
     app.poll_network();
 
     assert!(app.has_firebase_account());
-    assert_eq!(app.firebase_uid.as_deref(), Some("uid-test-1234"));
+    assert_eq!(app.firebase.firebase_uid.as_deref(), Some("uid-test-1234"));
 }
 
 /// GDD §5.3 : « la mort d'un allié est un événement de groupe ». Un

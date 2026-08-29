@@ -67,9 +67,10 @@ impl AppState {
     /// périmé, refusé côté serveur avec un simple warn — la partie continue,
     /// seule la progression de la manche est perdue.
     fn join_credential(&self) -> Option<String> {
-        self.firebase_id_token
+        self.firebase
+            .firebase_id_token
             .clone()
-            .or_else(|| self.firebase_uid.clone())
+            .or_else(|| self.firebase.firebase_uid.clone())
     }
 
     /// Comme `connect_to_server`, avec une classe choisie (Sprint 3), un code
@@ -1034,7 +1035,7 @@ impl AppState {
     /// `true` si un compte Firebase est associé à cette session (cf.
     /// `sign_in`/`sign_up`).
     pub fn has_firebase_account(&self) -> bool {
-        self.firebase_uid.is_some()
+        self.firebase.firebase_uid.is_some()
     }
 
     /// Se connecte à un compte Firebase existant (thread de fond, comme les
@@ -1071,12 +1072,12 @@ impl AppState {
         password: String,
         sign_up: bool,
     ) {
-        if self.firebase_busy {
+        if self.firebase.firebase_busy {
             return;
         }
-        self.firebase_busy = true;
+        self.firebase.firebase_busy = true;
         self.net_status = "Connexion à Firebase…".to_string();
-        let tx = self.firebase_tx.clone();
+        let tx = self.firebase.firebase_tx.clone();
         std::thread::spawn(move || {
             let config = crate::net::firebase::FirebaseConfig {
                 api_key,
@@ -1125,14 +1126,14 @@ impl AppState {
     /// Applique le résultat d'une requête Firebase en attente, s'il y en a un
     /// (appelé depuis `poll_network`, non bloquant).
     fn poll_firebase(&mut self) {
-        while let Ok(result) = self.firebase_rx.try_recv() {
-            self.firebase_busy = false;
+        while let Ok(result) = self.firebase.firebase_rx.try_recv() {
+            self.firebase.firebase_busy = false;
             match result {
                 Ok((uid, id_token, xp)) => {
                     log::info!("Firebase : connecté (uid {uid})");
                     self.net_status = format!("Connecté à Firebase (uid {uid})");
-                    self.firebase_uid = Some(uid);
-                    self.firebase_id_token = Some(id_token);
+                    self.firebase.firebase_uid = Some(uid);
+                    self.firebase.firebase_id_token = Some(id_token);
                     self.firebase_xp = xp;
                 }
                 Err(e) => {
@@ -1156,7 +1157,7 @@ impl AppState {
         sender_name: String,
         text: String,
     ) {
-        let Some(id_token) = self.firebase_id_token.clone() else {
+        let Some(id_token) = self.firebase.firebase_id_token.clone() else {
             self.net_status = "Connecte-toi d'abord à un compte pour discuter".to_string();
             return;
         };
@@ -1311,9 +1312,10 @@ impl AppState {
     /// `request_send_chat_message` : pas de suivi de résultat, un heartbeat
     /// manqué se rattrape au suivant.
     pub fn request_presence_heartbeat(&mut self, api_key: String, database_url: String) {
-        let (Some(uid), Some(id_token)) =
-            (self.firebase_uid.clone(), self.firebase_id_token.clone())
-        else {
+        let (Some(uid), Some(id_token)) = (
+            self.firebase.firebase_uid.clone(),
+            self.firebase.firebase_id_token.clone(),
+        ) else {
             return;
         };
         std::thread::spawn(move || {

@@ -244,6 +244,38 @@ pub struct FxState {
 /// forme (donnée affichée + drapeau "requête en cours" + canal
 /// `Sender`/`Receiver` d'un thread de fond) et ne sont lus que par la fenêtre
 /// Multijoueur de l'éditeur / le HUD réseau.
+/// État de la connexion Firebase du joueur local (sign in/up, uid, jeton) —
+/// regroupé hors de `AppState` (roadmap post-audit 2026-08-29, vague 2.3,
+/// lot 3) : mêmes 3 fichiers d'utilisation que `NetPanelsState`
+/// (`app/mod.rs`, `app/network_client.rs`), même patron requête en
+/// arrière-plan (busy + canal `Sender`/`Receiver`) que les panneaux
+/// Multijoueur, mais distinct par le domaine (identité, pas affichage). Noms
+/// de champs conservés à l'identique (préfixe `firebase_`, redondant avec le
+/// nom de la struct) plutôt que raccourcis : permet de corriger tous les
+/// sites d'appel à partir du seul nom de champ, sans ambiguïté possible avec
+/// un autre champ `uid`/`busy`/`tx`/`rx` du reste d'`AppState`.
+pub struct FirebaseAuthState {
+    /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
+    /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
+    /// créditer la progression au bon compte. `None` = partie anonyme, sans
+    /// compte.
+    firebase_uid: Option<String>,
+    /// Une requête Firebase (sign in/up) est en cours (évite d'en empiler
+    /// plusieurs si l'utilisateur clique deux fois).
+    firebase_busy: bool,
+    /// Canal de résultat des requêtes Firebase (thread de fond, cf. les
+    /// requêtes IA existantes) : `Ok((uid, id_token))` ou message d'erreur.
+    /// Types universels (`String`) : pas besoin de gater ces champs par
+    /// plateforme, seules les fonctions qui les produisent
+    /// (`net::firebase::sign_in`/`sign_up`) le sont.
+    firebase_tx: std::sync::mpsc::Sender<FirebaseAuthResult>,
+    firebase_rx: std::sync::mpsc::Receiver<FirebaseAuthResult>,
+    /// Jeton d'authentification Firebase (`?auth=...`), nécessaire pour poster
+    /// un message de chat (écriture réservée aux comptes connectés). `None`
+    /// tant qu'aucun `sign_in`/`sign_up` n'a réussi.
+    firebase_id_token: Option<String>,
+}
+
 pub struct NetPanelsState {
     /// Derniers messages de chat connus (dernier `request_refresh_chat`
     /// réussi) ; `ChatLine` est une représentation universelle (pas
@@ -727,26 +759,9 @@ pub struct AppState {
     /// définitivement abandonnée.
     #[cfg(not(target_os = "ios"))]
     net_reconnect: Option<network_client::ReconnectState>,
-    /// `uid` Firebase du joueur local une fois connecté (`sign_in`/`sign_up`,
-    /// cf. `network_client`) : transmis au `Join` pour que le serveur puisse
-    /// créditer la progression au bon compte. `None` = partie anonyme, sans
-    /// compte.
-    firebase_uid: Option<String>,
-    /// Une requête Firebase (sign in/up) est en cours (évite d'en empiler
-    /// plusieurs si l'utilisateur clique deux fois).
-    firebase_busy: bool,
-    /// Canal de résultat des requêtes Firebase (thread de fond, cf. les
-    /// requêtes IA existantes) : `Ok(uid)` ou message d'erreur. Types
-    /// universels (`String`) : pas besoin de gater ces champs par plateforme,
-    /// seules les fonctions qui les produisent (`net::firebase::sign_in`/
-    /// `sign_up`) le sont.
-    /// `Ok((uid, id_token))` ou message d'erreur.
-    firebase_tx: std::sync::mpsc::Sender<FirebaseAuthResult>,
-    firebase_rx: std::sync::mpsc::Receiver<FirebaseAuthResult>,
-    /// Jeton d'authentification Firebase (`?auth=...`), nécessaire pour poster
-    /// un message de chat (écriture réservée aux comptes connectés). `None`
-    /// tant qu'aucun `sign_in`/`sign_up` n'a réussi.
-    firebase_id_token: Option<String>,
+    /// Connexion Firebase du joueur local (sign in/up, uid, jeton) — cf.
+    /// `FirebaseAuthState`.
+    firebase: FirebaseAuthState,
     /// Panneaux Multijoueur alimentés en arrière-plan (chat, classement,
     /// présence en ligne) — cf. `NetPanelsState`.
     pub net_panels: NetPanelsState,
@@ -1100,11 +1115,13 @@ impl AppState {
             net_last_connect: None,
             #[cfg(not(target_os = "ios"))]
             net_reconnect: None,
-            firebase_uid: None,
-            firebase_busy: false,
-            firebase_tx,
-            firebase_rx,
-            firebase_id_token: None,
+            firebase: FirebaseAuthState {
+                firebase_uid: None,
+                firebase_busy: false,
+                firebase_tx,
+                firebase_rx,
+                firebase_id_token: None,
+            },
             net_panels: NetPanelsState {
                 chat_messages: Vec::new(),
                 chat_busy: false,
