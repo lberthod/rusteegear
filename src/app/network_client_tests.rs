@@ -346,7 +346,7 @@ fn connect_to_server_forwards_the_firebase_credential() {
 #[test]
 fn sending_chat_without_an_account_is_a_no_op() {
     let mut app = AppState::new();
-    assert!(!app.chat_busy);
+    assert!(!app.net_panels.chat_busy);
 
     app.request_send_chat_message(
         "api-key".to_string(),
@@ -357,10 +357,10 @@ fn sending_chat_without_an_account_is_a_no_op() {
     );
 
     assert!(
-        !app.chat_busy,
+        !app.net_panels.chat_busy,
         "aucune requête ne doit démarrer sans compte connecté"
     );
-    assert!(app.chat_messages.is_empty());
+    assert!(app.net_panels.chat_messages.is_empty());
 }
 
 /// `poll_leaderboard` (appelée par `poll_network`) applique le résultat
@@ -370,9 +370,10 @@ fn sending_chat_without_an_account_is_a_no_op() {
 #[test]
 fn leaderboard_is_applied_once_the_background_request_resolves() {
     let mut app = AppState::new();
-    assert!(app.leaderboard.is_empty());
+    assert!(app.net_panels.leaderboard.is_empty());
 
-    app.leaderboard_tx
+    app.net_panels
+        .leaderboard_tx
         .send(Ok(vec![
             LeaderboardLine {
                 name: "Bob".to_string(),
@@ -386,8 +387,8 @@ fn leaderboard_is_applied_once_the_background_request_resolves() {
         .expect("canal ouvert");
     app.poll_network();
 
-    assert_eq!(app.leaderboard.len(), 2);
-    assert_eq!(app.leaderboard[0].name, "Bob");
+    assert_eq!(app.net_panels.leaderboard.len(), 2);
+    assert_eq!(app.net_panels.leaderboard[0].name, "Bob");
 }
 
 /// Bout-en-bout (vrai socket) : deux clients rejoignent le même serveur de

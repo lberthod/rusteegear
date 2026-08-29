@@ -238,6 +238,40 @@ pub struct FxState {
     pub palier_level: u32,
 }
 
+/// Panneaux « Multijoueur » alimentés par des requêtes en arrière-plan (chat,
+/// classement, présence en ligne) — regroupés hors de `AppState` (roadmap
+/// post-audit 2026-08-29, vague 2.3, lot 2) car les trois partagent la même
+/// forme (donnée affichée + drapeau "requête en cours" + canal
+/// `Sender`/`Receiver` d'un thread de fond) et ne sont lus que par la fenêtre
+/// Multijoueur de l'éditeur / le HUD réseau.
+pub struct NetPanelsState {
+    /// Derniers messages de chat connus (dernier `request_refresh_chat`
+    /// réussi) ; `ChatLine` est une représentation universelle (pas
+    /// `net::firebase::ChatMessage`, absent des cibles mobiles), cf.
+    /// `network_client`.
+    pub chat_messages: Vec<network_client::ChatLine>,
+    /// Une requête de chat (envoi ou rafraîchissement) est en cours.
+    chat_busy: bool,
+    chat_tx: std::sync::mpsc::Sender<Result<Vec<network_client::ChatLine>, String>>,
+    chat_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::ChatLine>, String>>,
+    /// Dernier classement connu (dernier `request_refresh_leaderboard` réussi).
+    pub leaderboard: Vec<network_client::LeaderboardLine>,
+    /// Une requête de classement est en cours.
+    leaderboard_busy: bool,
+    leaderboard_tx: std::sync::mpsc::Sender<Result<Vec<network_client::LeaderboardLine>, String>>,
+    leaderboard_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::LeaderboardLine>, String>>,
+    /// Derniers `uid` en ligne connus (dernier `request_refresh_online_players`
+    /// réussi, cf. `net::firebase::list_online_players` — Phase L Sprint 1,
+    /// `sprint2audijeu0718.md`). Présence globale par compte Firebase, pas
+    /// filtrée par salon : la RTDB ne garde pas trace du salon dans
+    /// `presence/<uid>`, seulement le dernier heartbeat.
+    pub online_players: Vec<String>,
+    /// Une requête de présence (rafraîchissement ou heartbeat) est en cours.
+    online_players_busy: bool,
+    online_players_tx: std::sync::mpsc::Sender<Result<Vec<String>, String>>,
+    online_players_rx: std::sync::mpsc::Receiver<Result<Vec<String>, String>>,
+}
+
 pub struct AppState {
     pub scene: Scene,
     /// Projet ouvert (Sprint 3, manifeste `project.rusteegear.json`), posé par
@@ -713,31 +747,9 @@ pub struct AppState {
     /// un message de chat (écriture réservée aux comptes connectés). `None`
     /// tant qu'aucun `sign_in`/`sign_up` n'a réussi.
     firebase_id_token: Option<String>,
-    /// Derniers messages de chat connus (dernier `request_refresh_chat`
-    /// réussi) ; `ChatLine` est une représentation universelle (pas
-    /// `net::firebase::ChatMessage`, absent des cibles mobiles), cf.
-    /// `network_client`.
-    pub chat_messages: Vec<network_client::ChatLine>,
-    /// Une requête de chat (envoi ou rafraîchissement) est en cours.
-    chat_busy: bool,
-    chat_tx: std::sync::mpsc::Sender<Result<Vec<network_client::ChatLine>, String>>,
-    chat_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::ChatLine>, String>>,
-    /// Dernier classement connu (dernier `request_refresh_leaderboard` réussi).
-    pub leaderboard: Vec<network_client::LeaderboardLine>,
-    /// Une requête de classement est en cours.
-    leaderboard_busy: bool,
-    leaderboard_tx: std::sync::mpsc::Sender<Result<Vec<network_client::LeaderboardLine>, String>>,
-    leaderboard_rx: std::sync::mpsc::Receiver<Result<Vec<network_client::LeaderboardLine>, String>>,
-    /// Derniers `uid` en ligne connus (dernier `request_refresh_online_players`
-    /// réussi, cf. `net::firebase::list_online_players` — Phase L Sprint 1,
-    /// `sprint2audijeu0718.md`). Présence globale par compte Firebase, pas
-    /// filtrée par salon : la RTDB ne garde pas trace du salon dans
-    /// `presence/<uid>`, seulement le dernier heartbeat.
-    pub online_players: Vec<String>,
-    /// Une requête de présence (rafraîchissement ou heartbeat) est en cours.
-    online_players_busy: bool,
-    online_players_tx: std::sync::mpsc::Sender<Result<Vec<String>, String>>,
-    online_players_rx: std::sync::mpsc::Receiver<Result<Vec<String>, String>>,
+    /// Panneaux Multijoueur alimentés en arrière-plan (chat, classement,
+    /// présence en ligne) — cf. `NetPanelsState`.
+    pub net_panels: NetPanelsState,
     /// Grille de référence au sol affichée en mode édition.
     pub show_grid: bool,
     /// Aimantation : les translations/rotations au gizmo s'alignent sur un pas
@@ -1093,18 +1105,20 @@ impl AppState {
             firebase_tx,
             firebase_rx,
             firebase_id_token: None,
-            chat_messages: Vec::new(),
-            chat_busy: false,
-            chat_tx,
-            chat_rx,
-            leaderboard: Vec::new(),
-            leaderboard_busy: false,
-            leaderboard_tx,
-            leaderboard_rx,
-            online_players: Vec::new(),
-            online_players_busy: false,
-            online_players_tx,
-            online_players_rx,
+            net_panels: NetPanelsState {
+                chat_messages: Vec::new(),
+                chat_busy: false,
+                chat_tx,
+                chat_rx,
+                leaderboard: Vec::new(),
+                leaderboard_busy: false,
+                leaderboard_tx,
+                leaderboard_rx,
+                online_players: Vec::new(),
+                online_players_busy: false,
+                online_players_tx,
+                online_players_rx,
+            },
             show_grid: true,
             snap: false,
             snap_modifier: false,

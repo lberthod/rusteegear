@@ -1160,15 +1160,15 @@ impl AppState {
             self.net_status = "Connecte-toi d'abord à un compte pour discuter".to_string();
             return;
         };
-        if self.chat_busy {
+        if self.net_panels.chat_busy {
             return;
         }
         if let Err(reason) = crate::net::firebase::valid_chat_text(&text) {
             self.net_status = format!("Message non envoyé : {reason}");
             return;
         }
-        self.chat_busy = true;
-        let tx = self.chat_tx.clone();
+        self.net_panels.chat_busy = true;
+        let tx = self.net_panels.chat_tx.clone();
         std::thread::spawn(move || {
             let config = crate::net::firebase::FirebaseConfig {
                 api_key,
@@ -1202,11 +1202,11 @@ impl AppState {
         database_url: String,
         lobby_code: String,
     ) {
-        if self.chat_busy {
+        if self.net_panels.chat_busy {
             return;
         }
-        self.chat_busy = true;
-        let tx = self.chat_tx.clone();
+        self.net_panels.chat_busy = true;
+        let tx = self.net_panels.chat_tx.clone();
         std::thread::spawn(move || {
             let config = crate::net::firebase::FirebaseConfig {
                 api_key,
@@ -1218,10 +1218,10 @@ impl AppState {
 
     /// Applique le résultat d'une requête de chat en attente, s'il y en a un.
     fn poll_chat(&mut self) {
-        while let Ok(result) = self.chat_rx.try_recv() {
-            self.chat_busy = false;
+        while let Ok(result) = self.net_panels.chat_rx.try_recv() {
+            self.net_panels.chat_busy = false;
             match result {
-                Ok(lines) => self.chat_messages = lines,
+                Ok(lines) => self.net_panels.chat_messages = lines,
                 Err(e) => log::warn!("Chat : requête échouée : {e}"),
             }
         }
@@ -1237,11 +1237,11 @@ impl AppState {
         database_url: String,
         limit: usize,
     ) {
-        if self.leaderboard_busy {
+        if self.net_panels.leaderboard_busy {
             return;
         }
-        self.leaderboard_busy = true;
-        let tx = self.leaderboard_tx.clone();
+        self.net_panels.leaderboard_busy = true;
+        let tx = self.net_panels.leaderboard_tx.clone();
         std::thread::spawn(move || {
             let config = crate::net::firebase::FirebaseConfig {
                 api_key,
@@ -1262,10 +1262,10 @@ impl AppState {
 
     /// Applique le résultat d'une requête de classement en attente, s'il y en a un.
     fn poll_leaderboard(&mut self) {
-        while let Ok(result) = self.leaderboard_rx.try_recv() {
-            self.leaderboard_busy = false;
+        while let Ok(result) = self.net_panels.leaderboard_rx.try_recv() {
+            self.net_panels.leaderboard_busy = false;
             match result {
-                Ok(entries) => self.leaderboard = entries,
+                Ok(entries) => self.net_panels.leaderboard = entries,
                 Err(e) => log::warn!("Classement : requête échouée : {e}"),
             }
         }
@@ -1275,11 +1275,11 @@ impl AppState {
     /// `sprint2audijeu0718.md` — lecture publique de `/presence`, ne nécessite
     /// pas de compte connecté). Sans effet si une requête est déjà en cours.
     pub fn request_refresh_online_players(&mut self, api_key: String, database_url: String) {
-        if self.online_players_busy {
+        if self.net_panels.online_players_busy {
             return;
         }
-        self.online_players_busy = true;
-        let tx = self.online_players_tx.clone();
+        self.net_panels.online_players_busy = true;
+        let tx = self.net_panels.online_players_tx.clone();
         std::thread::spawn(move || {
             let config = crate::net::firebase::FirebaseConfig {
                 api_key,
@@ -1295,10 +1295,10 @@ impl AppState {
 
     /// Applique le résultat d'une requête de présence en attente, s'il y en a un.
     fn poll_online_players(&mut self) {
-        while let Ok(result) = self.online_players_rx.try_recv() {
-            self.online_players_busy = false;
+        while let Ok(result) = self.net_panels.online_players_rx.try_recv() {
+            self.net_panels.online_players_busy = false;
             match result {
-                Ok(uids) => self.online_players = uids,
+                Ok(uids) => self.net_panels.online_players = uids,
                 Err(e) => log::warn!("Présence : requête échouée : {e}"),
             }
         }
