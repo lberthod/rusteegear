@@ -2817,7 +2817,7 @@ fn touch_state_of_reflects_started_touching_and_ended_independently() {
     let mut app = AppState::new();
     assert_eq!(app.touch_state_of(0), (false, false, false));
 
-    app.touch_started_obj = Some(0);
+    app.touch.touch_started_obj = Some(0);
     assert_eq!(app.touch_state_of(0), (true, false, false));
     assert_eq!(
         app.touch_state_of(1),
@@ -2825,12 +2825,12 @@ fn touch_state_of_reflects_started_touching_and_ended_independently() {
         "un autre index ne doit rien voir allumé"
     );
 
-    app.touch_started_obj = None;
-    app.touched_obj = Some(0);
+    app.touch.touch_started_obj = None;
+    app.touch.touched_obj = Some(0);
     assert_eq!(app.touch_state_of(0), (false, true, false));
 
-    app.touched_obj = None;
-    app.touch_ended_obj = Some(0);
+    app.touch.touched_obj = None;
+    app.touch.touch_ended_obj = Some(0);
     assert_eq!(app.touch_state_of(0), (false, false, true));
 }
 

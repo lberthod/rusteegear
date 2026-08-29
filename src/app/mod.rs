@@ -278,6 +278,28 @@ pub struct FxState {
 /// post-audit 2026-08-29, vague 2.3, lot 7) : les 4 champs ne servent qu'au
 /// mélange visuel entre deux pas de simulation (`advance_play`,
 /// `blend_render_poses`, `restore_sim_poses`), toujours lus/écrits ensemble.
+/// Objets touchés par les entrées tactiles cette frame (tap net, presse
+/// maintenue, début/fin de presse) — regroupés hors de `AppState` (roadmap
+/// post-audit 2026-08-29, vague 2.3, lot 8) : les 4 champs sont lus
+/// ensemble par le picking et exposés aux scripts Lua via `obj.tapped`/
+/// `obj.touching`/`obj.touch_started`/`obj.touch_ended`.
+pub struct TouchState {
+    /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
+    tapped_obj: Option<usize>,
+    /// Objet sous presse actuellement maintenue (du PointerDown au PointerUp) —
+    /// pour `obj.touching` côté script. Contrairement à `tapped_obj` (vrai une
+    /// seule frame au relâché, seulement pour un tap net sans glissé), reste
+    /// `Some` sur toute la durée de la presse, quelle que soit la position
+    /// courante du curseur.
+    touched_obj: Option<usize>,
+    /// Une seule frame : l'objet vient de recevoir la presse qui commence
+    /// (`obj.touch_started`).
+    touch_started_obj: Option<usize>,
+    /// Une seule frame : la presse démarrée sur cet objet vient de se terminer
+    /// (`obj.touch_ended`), qu'elle se relâche dessus ou après un glissé.
+    touch_ended_obj: Option<usize>,
+}
+
 pub struct SimPosesState {
     /// Accumulateur de temps réel pour la simulation à **pas fixe** (découplée du rendu).
     sim_accumulator: f32,
@@ -509,20 +531,8 @@ pub struct AppState {
     pub locale: locale::Locale,
     /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
     pub input_state: PlayerInput,
-    /// Objet « tactile » touché cette frame (exposé une frame à son script via `obj.tapped`).
-    tapped_obj: Option<usize>,
-    /// Objet sous presse actuellement maintenue (du PointerDown au PointerUp) —
-    /// pour `obj.touching` côté script. Contrairement à `tapped_obj` (vrai une
-    /// seule frame au relâché, seulement pour un tap net sans glissé), reste
-    /// `Some` sur toute la durée de la presse, quelle que soit la position
-    /// courante du curseur.
-    touched_obj: Option<usize>,
-    /// Une seule frame : l'objet vient de recevoir la presse qui commence
-    /// (`obj.touch_started`).
-    touch_started_obj: Option<usize>,
-    /// Une seule frame : la presse démarrée sur cet objet vient de se terminer
-    /// (`obj.touch_ended`), qu'elle se relâche dessus ou après un glissé.
-    touch_ended_obj: Option<usize>,
+    /// Objets touchés par les entrées tactiles cette frame — cf. `TouchState`.
+    touch: TouchState,
     /// Interpolation de la simulation à pas fixe — cf. `SimPosesState`.
     sim_poses: SimPosesState,
     /// Multiplicateur du temps simulé : 1.0 = normal, 0 = figé, &gt;1 = accéléré.
@@ -1064,10 +1074,12 @@ impl AppState {
             player: false,
             locale: initial_settings.locale,
             input_state: PlayerInput::default(),
-            tapped_obj: None,
-            touched_obj: None,
-            touch_started_obj: None,
-            touch_ended_obj: None,
+            touch: TouchState {
+                tapped_obj: None,
+                touched_obj: None,
+                touch_started_obj: None,
+                touch_ended_obj: None,
+            },
             sim_poses: SimPosesState {
                 sim_accumulator: 0.0,
                 sim_prev_poses: Vec::new(),
@@ -1516,9 +1528,9 @@ impl AppState {
     /// pour ce qui pose ces trois champs.
     pub fn touch_state_of(&self, idx: usize) -> (bool, bool, bool) {
         (
-            self.touch_started_obj == Some(idx),
-            self.touched_obj == Some(idx),
-            self.touch_ended_obj == Some(idx),
+            self.touch.touch_started_obj == Some(idx),
+            self.touch.touched_obj == Some(idx),
+            self.touch.touch_ended_obj == Some(idx),
         )
     }
 

@@ -58,7 +58,7 @@ impl AppState {
         self.attack_projectile = None;
         self.attack_charge = None;
         self.stagger.clear();
-        self.tapped_obj = None;
+        self.touch.tapped_obj = None;
         // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
         // reconstruire la physique, pour que les corps rigides des monstres masqués ne
         // soient pas créés (cf. `init_waves`).

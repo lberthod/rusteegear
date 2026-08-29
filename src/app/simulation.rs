@@ -953,10 +953,10 @@ impl AppState {
             std::time::Duration::from_millis(2500);
         let net_check_now = Instant::now();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
-            let just_tapped = self.tapped_obj == Some(idx);
-            let touch_started = self.touch_started_obj == Some(idx);
-            let touching = self.touched_obj == Some(idx);
-            let touch_ended = self.touch_ended_obj == Some(idx);
+            let just_tapped = self.touch.tapped_obj == Some(idx);
+            let touch_started = self.touch.touch_started_obj == Some(idx);
+            let touching = self.touch.touched_obj == Some(idx);
+            let touch_ended = self.touch.touch_ended_obj == Some(idx);
             // Vibration Feedback : retour haptique quand l'objet est tapé.
             if obj.vibrate_on_tap > 0 && just_tapped {
                 vibrations.push(obj.vibrate_on_tap as f32);
@@ -1088,7 +1088,7 @@ impl AppState {
                         }
                     },
                 };
-                let tapped = self.tapped_obj == Some(idx);
+                let tapped = self.touch.tapped_obj == Some(idx);
                 let mut destroy_requested = false;
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
@@ -1165,9 +1165,9 @@ impl AppState {
         }
         self.hud_health = health;
         // Le tap n'est exposé qu'une frame.
-        self.tapped_obj = None;
-        self.touch_started_obj = None;
-        self.touch_ended_obj = None;
+        self.touch.tapped_obj = None;
+        self.touch.touch_started_obj = None;
+        self.touch.touch_ended_obj = None;
         // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
         for ms in vibrations {
             crate::runtime::vibrate(ms);

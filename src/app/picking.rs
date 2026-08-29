@@ -33,8 +33,8 @@ impl AppState {
                     && let Some(i) = self.pick(cx, cy)
                     && self.scene.objects[i].tappable
                 {
-                    self.touched_obj = Some(i);
-                    self.touch_started_obj = Some(i);
+                    self.touch.touched_obj = Some(i);
+                    self.touch.touch_started_obj = Some(i);
                 }
                 // Aperçu mobile : on joue au tactile, pas d'édition (ni gizmo, ni sélection).
                 if self.device_preview {
@@ -123,8 +123,8 @@ impl AppState {
             InputEvent::PointerUp => {
                 // La presse démarrée sur cet objet (`touched_obj`) se termine ce frame,
                 // qu'elle se relâche dessus ou après un glissé (onTouchEnd).
-                if let Some(i) = self.touched_obj.take() {
-                    self.touch_ended_obj = Some(i);
+                if let Some(i) = self.touch.touched_obj.take() {
+                    self.touch.touch_ended_obj = Some(i);
                 }
                 if self.active_axis.take().is_some() {
                     self.drag_light = None;
@@ -155,7 +155,7 @@ impl AppState {
                     && (self.scene.objects[i].tappable
                         || self.scene.objects[i].tap_action != crate::scene::TapAction::None)
                 {
-                    self.tapped_obj = Some(i);
+                    self.touch.tapped_obj = Some(i);
                 }
                 // Aperçu mobile : pas de sélection éditeur au clic (on joue, on n'édite pas).
                 if self.device_preview {
