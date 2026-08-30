@@ -939,6 +939,33 @@ impl AppState {
             .get_mut(&id)
             .expect("vient d'être inséré juste au-dessus")
     }
+
+    /// Bannière « palier atteint » (GDD §8.2/§17) : à la réception du résumé
+    /// de fin de manche, avance l'XP cumulée locale de notre ligne et arme la
+    /// bannière si un palier nommé (niv. 3/6/10) vient de tomber. Sans XP
+    /// connue (anonyme, lecture Firebase échouée), no-op — jamais de fausse
+    /// bannière. La vérité comptable reste le serveur (`award_progress`) ;
+    /// ce compteur local ne sert qu'à l'annonce. Déplacé hors du bloc
+    /// `#[cfg(not(any(ios, android, wasm32)))]` (roadmap post-audit
+    /// 2026-08-29, item 3.4) : appelé depuis `handle_server_msg`, compilé
+    /// sur toutes les cibles (y compris le player web), alors que ne dépend
+    /// d'aucune fonctionnalité desktop-only (juste l'XP déjà en cache).
+    pub(crate) fn check_palier_atteint(
+        &mut self,
+        summary: &[crate::net::protocol::RoundPlayerSummary],
+    ) {
+        let (Some(prev), Some(me)) = (self.firebase_xp, self.net_player_id) else {
+            return;
+        };
+        let Some(line) = summary.iter().find(|l| l.player_id == me) else {
+            return;
+        };
+        if let Some(palier) = crate::app::multiplayer::palier_atteint(prev, line.xp) {
+            self.fx.palier_flash = 1.0;
+            self.fx.palier_level = palier;
+        }
+        self.firebase_xp = Some(prev.saturating_add(line.xp));
+    }
 }
 
 /// Construit le `ClientMsg::Input` envoyé au serveur à partir de l'état local
@@ -1098,29 +1125,6 @@ impl AppState {
                 (session.uid, session.id_token, xp)
             }));
         });
-    }
-
-    /// Bannière « palier atteint » (GDD §8.2/§17) : à la réception du résumé
-    /// de fin de manche, avance l'XP cumulée locale de notre ligne et arme la
-    /// bannière si un palier nommé (niv. 3/6/10) vient de tomber. Sans XP
-    /// connue (anonyme, lecture Firebase échouée), no-op — jamais de fausse
-    /// bannière. La vérité comptable reste le serveur (`award_progress`) ;
-    /// ce compteur local ne sert qu'à l'annonce.
-    pub(crate) fn check_palier_atteint(
-        &mut self,
-        summary: &[crate::net::protocol::RoundPlayerSummary],
-    ) {
-        let (Some(prev), Some(me)) = (self.firebase_xp, self.net_player_id) else {
-            return;
-        };
-        let Some(line) = summary.iter().find(|l| l.player_id == me) else {
-            return;
-        };
-        if let Some(palier) = crate::app::multiplayer::palier_atteint(prev, line.xp) {
-            self.fx.palier_flash = 1.0;
-            self.fx.palier_level = palier;
-        }
-        self.firebase_xp = Some(prev.saturating_add(line.xp));
     }
 
     /// Applique le résultat d'une requête Firebase en attente, s'il y en a un
