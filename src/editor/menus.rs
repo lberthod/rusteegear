@@ -231,7 +231,7 @@ pub(super) fn menu_fichier(
                 .add_filter("Projet ou scène RusteeGear", &["json"])
                 .pick_file()
             {
-                if p.file_name().and_then(|n| n.to_str()) == Some(crate::project::MANIFEST_FILE) {
+                if crate::project::is_manifest_path(&p) {
                     actions.open_project_path = Some(p.to_string_lossy().into_owned());
                 } else {
                     actions.load_path = Some(p.to_string_lossy().into_owned());
@@ -587,12 +587,10 @@ pub(super) fn menu_ajouter(
                 .selectable_label(m.joystick, "🕹  Joystick virtuel")
                 .clicked()
             {
-                m.joystick = !m.joystick;
-                // Mutuellement exclusif avec la croix directionnelle : les deux se
-                // dessinent dans le même coin de l'écran, jamais les deux à la fois.
-                if m.joystick {
-                    m.dpad = false;
-                }
+                // Mutuellement exclusif avec la croix directionnelle (cf.
+                // `MobileControls::toggle_joystick`) : les deux se dessinent dans
+                // le même coin de l'écran, jamais les deux à la fois.
+                m.toggle_joystick();
                 ui.close();
             }
             if ui
@@ -603,10 +601,7 @@ pub(super) fn menu_ajouter(
                 )
                 .clicked()
             {
-                m.dpad = !m.dpad;
-                if m.dpad {
-                    m.joystick = false;
-                }
+                m.toggle_dpad();
                 ui.close();
             }
             if ui.button("🔘  Bouton tactile").clicked() {

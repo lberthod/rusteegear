@@ -19,6 +19,15 @@ use serde::{Deserialize, Serialize};
 /// Nom du fichier de manifeste attendu à la racine d'un projet.
 pub const MANIFEST_FILE: &str = "project.rusteegear.json";
 
+/// Le fichier choisi dans le sélecteur « Fichier › Ouvrir… » est-il un
+/// manifeste de projet (par opposition à une scène JSON isolée) ? Détermine
+/// si `editor::menus::menu_fichier` route vers `open_project_path` ou
+/// `load_path`. Extrait de la logique de menu (roadmap post-audit
+/// 2026-08-29, item 2.4) pour pouvoir vérifier ce classement par un test.
+pub fn is_manifest_path(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some(MANIFEST_FILE)
+}
+
 /// Version de format la plus récente comprise par cette version du moteur.
 /// `ProjectManifest::load` refuse tout manifeste dont `format` est supérieur.
 const CURRENT_FORMAT: u32 = 1;
@@ -190,6 +199,27 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_manifest_path_recognizes_the_manifest_filename() {
+        assert!(is_manifest_path(Path::new(
+            "/tmp/mon_projet/project.rusteegear.json"
+        )));
+    }
+
+    #[test]
+    fn is_manifest_path_rejects_a_plain_scene_file() {
+        assert!(!is_manifest_path(Path::new("/tmp/mon_projet/scene.json")));
+    }
+
+    #[test]
+    fn is_manifest_path_is_exact_not_a_substring_match() {
+        // Un fichier dont le nom contient MANIFEST_FILE sans lui être identique
+        // (ex. renommé/dupliqué à la main) ne doit pas être pris pour le manifeste.
+        assert!(!is_manifest_path(Path::new(
+            "/tmp/mon_projet/old_project.rusteegear.json.bak"
+        )));
+    }
 
     fn write_manifest(dir: &Path, json: &str) {
         std::fs::write(dir.join(MANIFEST_FILE), json).expect("écriture du manifeste de test");

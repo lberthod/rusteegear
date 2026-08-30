@@ -52,4 +52,103 @@ impl MobileControls {
             || self.touch_zone
             || self.health_bar
     }
+
+    /// Bascule le joystick virtuel ; l'activer désactive le pavé
+    /// directionnel — les deux se dessinent dans le même coin de l'écran
+    /// (bas-gauche), jamais les deux à la fois (cf. `editor::menus::menu_ajouter`,
+    /// menu « UI mobile »). Extrait de la logique de menu (roadmap post-audit
+    /// 2026-08-29, item 2.4) pour pouvoir vérifier l'invariant par un test,
+    /// indépendamment d'`egui`.
+    pub fn toggle_joystick(&mut self) {
+        self.joystick = !self.joystick;
+        if self.joystick {
+            self.dpad = false;
+        }
+    }
+
+    /// Bascule le pavé directionnel ; l'activer désactive le joystick — même
+    /// raison que `toggle_joystick`.
+    pub fn toggle_dpad(&mut self) {
+        self.dpad = !self.dpad;
+        if self.dpad {
+            self.joystick = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_joystick_turns_it_on_from_the_default_off_state() {
+        let mut m = MobileControls::default();
+        m.toggle_joystick();
+        assert!(m.joystick);
+    }
+
+    #[test]
+    fn toggle_joystick_turns_it_back_off_on_a_second_call() {
+        let mut m = MobileControls::default();
+        m.toggle_joystick();
+        m.toggle_joystick();
+        assert!(!m.joystick);
+    }
+
+    #[test]
+    fn toggle_joystick_on_clears_an_active_dpad() {
+        let mut m = MobileControls {
+            dpad: true,
+            ..Default::default()
+        };
+        m.toggle_joystick();
+        assert!(m.joystick);
+        assert!(
+            !m.dpad,
+            "joystick et pavé ne doivent jamais être actifs ensemble"
+        );
+    }
+
+    #[test]
+    fn toggle_dpad_on_clears_an_active_joystick() {
+        let mut m = MobileControls {
+            joystick: true,
+            ..Default::default()
+        };
+        m.toggle_dpad();
+        assert!(m.dpad);
+        assert!(
+            !m.joystick,
+            "joystick et pavé ne doivent jamais être actifs ensemble"
+        );
+    }
+
+    #[test]
+    fn toggling_dpad_off_again_does_not_reactivate_the_joystick() {
+        // Ce n'est pas une bascule vers l'état précédent : désactiver le pavé
+        // laisse simplement les deux contrôles inactifs.
+        let mut m = MobileControls::default();
+        m.toggle_dpad();
+        m.toggle_dpad();
+        assert!(!m.dpad);
+        assert!(!m.joystick);
+    }
+
+    #[test]
+    fn toggle_joystick_never_touches_unrelated_controls() {
+        let mut m = MobileControls {
+            dual_stick: true,
+            touch_zone: true,
+            health_bar: true,
+            safe_area: true,
+            buttons: vec!["B1".into()],
+            ..Default::default()
+        };
+        m.toggle_joystick();
+        assert!(m.dual_stick);
+        assert!(m.touch_zone);
+        assert!(m.health_bar);
+        assert!(m.safe_area);
+        assert_eq!(m.buttons, vec!["B1".to_string()]);
+    }
 }
