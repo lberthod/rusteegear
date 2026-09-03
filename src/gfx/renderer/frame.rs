@@ -2,6 +2,23 @@ use super::*;
 
 use crate::editor::UiActions;
 
+/// Sortie de `Renderer::build_frame_ui` : l'UI construite pour cette frame, plus
+/// ce que ses actions ont demandé et qui doit survivre au-delà de la
+/// construction elle-même (`render` les lit après avoir aussi géré les passes
+/// GPU). Cf. le plan de découpage (`docs/plan_decoupage_sim_step_et_render.md`,
+/// lot 3.2.D).
+struct FrameUiOutcome {
+    full_output: Option<egui::FullOutput>,
+    /// Bouton de fin de partie (« Rejouer »/« Niveau suivant ») cliqué ce tick.
+    restart: bool,
+    /// « Reprendre » du menu pause (mode player) cliqué ce tick.
+    resume: bool,
+    /// Actions réseau de l'overlay mode player (connexion/déconnexion) — le
+    /// panneau multijoueur complet (`editor.run`) les traite déjà lui-même via
+    /// `apply_editor_actions`, seul l'overlay mode player les remonte à part.
+    player_net_actions: Option<UiActions>,
+}
+
 impl Renderer {
     pub fn render(&mut self, app: &mut AppState) {
         // 0. Acquérir la surface EN PREMIER. Si indisponible, on sort avant de lancer
@@ -44,181 +61,12 @@ impl Renderer {
 
         // 1. Construire l'UI éditeur. En mode player : pas de panneaux, mais on
         //    dessine quand même les contrôles tactiles (joystick + boutons).
-        // Calculé avant les appels mutant `app` (évite un conflit d'emprunt au site d'appel).
-        let game_time = app.hud_timer();
-        let score = app.score();
-        let lost = app.is_lost();
-        let won = app.has_won();
-        let wave = app.wave;
-        let mut restart = false;
-        let mut resume = false;
-        let mut player_net_actions = None;
-        let full_output = if app.player {
-            if app.scene.mobile.any() {
-                let net_status = app.net_conn.net_status.clone();
-                let net_connected = app.is_connected();
-                let weapon_label = app.selected_weapon_label();
-                let defeated = app.is_locally_defeated();
-                let kills = app.displayed_kill_count();
-                let assists = app.displayed_assist_count();
-                let weapon_inventory = app.ranged_weapon_display_info();
-                let selected_weapon = app.selected_weapon();
-                let item_inventory = app.inventory_items().to_vec();
-                let roster = app.multiplayer_roster();
-                let ally_marker = app
-                    .nearest_downed_ally_position()
-                    .map(|p| (app.camera.view_proj(), p));
-                let minimap = app.minimap_data();
-                let (output, actions) = editor.run_player_overlay(
-                    &window,
-                    &app.scene,
-                    &mut app.input_state,
-                    app.device_preview,
-                    app.device_portrait,
-                    app.hud_health,
-                    app.fx.damage_flash,
-                    app.fx.ally_down_flash,
-                    ally_marker,
-                    app.fx.palier_flash,
-                    app.fx.palier_level,
-                    game_time,
-                    score,
-                    lost,
-                    won,
-                    wave,
-                    &mut restart,
-                    app.paused,
-                    &mut resume,
-                    &net_status,
-                    net_connected,
-                    weapon_label,
-                    defeated,
-                    app.death_cause,
-                    kills,
-                    assists,
-                    &weapon_inventory,
-                    selected_weapon,
-                    &item_inventory,
-                    &roster,
-                    app.round_summary.as_deref(),
-                    app.round_summary_won,
-                    app.round_contract_label,
-                    app.fx.wave_banner_flash,
-                    app.fx.wave_banner_wave,
-                    &minimap,
-                    app.locale,
-                );
-                if let Some(i) = actions.select_weapon {
-                    app.select_weapon(i);
-                }
-                if let Some(kind) = actions.use_item {
-                    app.use_item(kind);
-                }
-                for action in &actions.hud_clicks {
-                    app.push_hud_event(action);
-                }
-                player_net_actions = Some(actions);
-                Some(output)
-            } else {
-                None
-            }
-        } else {
-            let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
-            let status = crate::editor::StatusInfo {
-                fps: app.fps(),
-                backend: &self.backend,
-                ai_busy: app.ai.ai_busy,
-                grid: app.show_grid,
-                snap: app.snap,
-                debug_view: app.debug_view,
-                gpu_pass_timings_ms,
-                gpu_draw_calls,
-                skinned_dropped: self.skinned_dropped_count(),
-            };
-            let net_status = app.net_conn.net_status.clone();
-            let net_connected = app.is_connected();
-            let has_firebase_account = app.has_firebase_account();
-            let weapon_label = app.selected_weapon_label();
-            let defeated = app.is_locally_defeated();
-            let kills = app.displayed_kill_count();
-            let assists = app.displayed_assist_count();
-            let weapon_inventory = app.ranged_weapon_display_info();
-            let selected_weapon = app.selected_weapon();
-            let item_inventory = app.inventory_items().to_vec();
-            let roster = app.multiplayer_roster();
-            let minimap = app.minimap_data();
-            let ally_marker = app
-                .nearest_downed_ally_position()
-                .map(|p| (app.camera.view_proj(), p));
-            // Détection d'édition de champs UI (Inspecteur…) pour le drapeau
-            // « scène modifiée » : les widgets egui mutent la scène directement,
-            // sans passer par `push_undo` — on compare une empreinte des parties
-            // éditables juste avant/après la construction de l'UI de la frame.
-            let ui_fingerprint_before = app.ui_scene_fingerprint();
-            let (full_output, actions) = editor.run(
-                &window,
-                &mut app.scene,
-                &mut app.selection,
-                &mut app.selected,
-                &mut app.selected_light,
-                &mut app.playing,
-                &mut app.paused,
-                &mut app.time_scale,
-                &mut app.gizmo_mode,
-                &mut app.input_state,
-                &mut app.device_preview,
-                &mut app.device_portrait,
-                &mut app.view_rect_px,
-                app.hud_health,
-                app.fx.damage_flash,
-                app.fx.ally_down_flash,
-                ally_marker,
-                app.fx.palier_flash,
-                app.fx.palier_level,
-                game_time,
-                score,
-                lost,
-                won,
-                wave,
-                status,
-                &net_status,
-                net_connected,
-                &app.net_panels.chat_messages,
-                has_firebase_account,
-                &app.net_panels.leaderboard,
-                &app.net_panels.online_players,
-                weapon_label,
-                defeated,
-                app.death_cause,
-                kills,
-                assists,
-                &weapon_inventory,
-                selected_weapon,
-                &item_inventory,
-                &roster,
-                app.round_summary.as_deref(),
-                app.round_summary_won,
-                app.round_contract_label,
-                app.fx.wave_banner_flash,
-                app.fx.wave_banner_wave,
-                &minimap,
-                app.locale,
-                app.confirm_quit,
-                app.current_project.is_some(),
-                app.confirm_close_project,
-                app.pending_autosave_recovery.as_deref(),
-            );
-            apply_editor_actions(
-                app,
-                &mut editor,
-                actions,
-                ui_fingerprint_before,
-                &mut restart,
-            );
-            Some(full_output)
-        };
+        let ui = self.build_frame_ui(app, &mut editor, &window);
+        let full_output = ui.full_output;
+        let restart = ui.restart;
+        let resume = ui.resume;
 
-        if let Some(actions) = player_net_actions {
+        if let Some(actions) = ui.player_net_actions {
             if let Some((url, name, class, room, objective)) = actions.connect_to_server {
                 app.connect_to_server_as(&url, &name, class, &room, objective);
             }
@@ -557,6 +405,192 @@ impl Renderer {
             self.read_gpu_pass_timings();
         }
         frame.present();
+    }
+
+    /// Construit l'UI de la frame (overlay mode player, ou panneaux éditeur
+    /// complets) et applique les actions qu'elle a produites — extrait tel
+    /// quel de `render` (plan de découpage, lot 3.2.D), aucun changement de
+    /// comportement. `game_time`/`score`/`lost`/`won`/`wave` sont calculés une
+    /// fois avant l'appel mutant `app` (évite un conflit d'emprunt), comme dans
+    /// `render` d'origine.
+    fn build_frame_ui(
+        &mut self,
+        app: &mut AppState,
+        editor: &mut Editor,
+        window: &Window,
+    ) -> FrameUiOutcome {
+        let game_time = app.hud_timer();
+        let score = app.score();
+        let lost = app.is_lost();
+        let won = app.has_won();
+        let wave = app.wave;
+        let mut restart = false;
+        let mut resume = false;
+        let mut player_net_actions = None;
+        let full_output = if app.player {
+            if app.scene.mobile.any() {
+                let net_status = app.net_conn.net_status.clone();
+                let net_connected = app.is_connected();
+                let weapon_label = app.selected_weapon_label();
+                let defeated = app.is_locally_defeated();
+                let kills = app.displayed_kill_count();
+                let assists = app.displayed_assist_count();
+                let weapon_inventory = app.ranged_weapon_display_info();
+                let selected_weapon = app.selected_weapon();
+                let item_inventory = app.inventory_items().to_vec();
+                let roster = app.multiplayer_roster();
+                let ally_marker = app
+                    .nearest_downed_ally_position()
+                    .map(|p| (app.camera.view_proj(), p));
+                let minimap = app.minimap_data();
+                let (output, actions) = editor.run_player_overlay(
+                    window,
+                    &app.scene,
+                    &mut app.input_state,
+                    app.device_preview,
+                    app.device_portrait,
+                    app.hud_health,
+                    app.fx.damage_flash,
+                    app.fx.ally_down_flash,
+                    ally_marker,
+                    app.fx.palier_flash,
+                    app.fx.palier_level,
+                    game_time,
+                    score,
+                    lost,
+                    won,
+                    wave,
+                    &mut restart,
+                    app.paused,
+                    &mut resume,
+                    &net_status,
+                    net_connected,
+                    weapon_label,
+                    defeated,
+                    app.death_cause,
+                    kills,
+                    assists,
+                    &weapon_inventory,
+                    selected_weapon,
+                    &item_inventory,
+                    &roster,
+                    app.round_summary.as_deref(),
+                    app.round_summary_won,
+                    app.round_contract_label,
+                    app.fx.wave_banner_flash,
+                    app.fx.wave_banner_wave,
+                    &minimap,
+                    app.locale,
+                );
+                if let Some(i) = actions.select_weapon {
+                    app.select_weapon(i);
+                }
+                if let Some(kind) = actions.use_item {
+                    app.use_item(kind);
+                }
+                for action in &actions.hud_clicks {
+                    app.push_hud_event(action);
+                }
+                player_net_actions = Some(actions);
+                Some(output)
+            } else {
+                None
+            }
+        } else {
+            let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
+            let status = crate::editor::StatusInfo {
+                fps: app.fps(),
+                backend: &self.backend,
+                ai_busy: app.ai.ai_busy,
+                grid: app.show_grid,
+                snap: app.snap,
+                debug_view: app.debug_view,
+                gpu_pass_timings_ms,
+                gpu_draw_calls,
+                skinned_dropped: self.skinned_dropped_count(),
+            };
+            let net_status = app.net_conn.net_status.clone();
+            let net_connected = app.is_connected();
+            let has_firebase_account = app.has_firebase_account();
+            let weapon_label = app.selected_weapon_label();
+            let defeated = app.is_locally_defeated();
+            let kills = app.displayed_kill_count();
+            let assists = app.displayed_assist_count();
+            let weapon_inventory = app.ranged_weapon_display_info();
+            let selected_weapon = app.selected_weapon();
+            let item_inventory = app.inventory_items().to_vec();
+            let roster = app.multiplayer_roster();
+            let minimap = app.minimap_data();
+            let ally_marker = app
+                .nearest_downed_ally_position()
+                .map(|p| (app.camera.view_proj(), p));
+            // Détection d'édition de champs UI (Inspecteur…) pour le drapeau
+            // « scène modifiée » : les widgets egui mutent la scène directement,
+            // sans passer par `push_undo` — on compare une empreinte des parties
+            // éditables juste avant/après la construction de l'UI de la frame.
+            let ui_fingerprint_before = app.ui_scene_fingerprint();
+            let (full_output, actions) = editor.run(
+                window,
+                &mut app.scene,
+                &mut app.selection,
+                &mut app.selected,
+                &mut app.selected_light,
+                &mut app.playing,
+                &mut app.paused,
+                &mut app.time_scale,
+                &mut app.gizmo_mode,
+                &mut app.input_state,
+                &mut app.device_preview,
+                &mut app.device_portrait,
+                &mut app.view_rect_px,
+                app.hud_health,
+                app.fx.damage_flash,
+                app.fx.ally_down_flash,
+                ally_marker,
+                app.fx.palier_flash,
+                app.fx.palier_level,
+                game_time,
+                score,
+                lost,
+                won,
+                wave,
+                status,
+                &net_status,
+                net_connected,
+                &app.net_panels.chat_messages,
+                has_firebase_account,
+                &app.net_panels.leaderboard,
+                &app.net_panels.online_players,
+                weapon_label,
+                defeated,
+                app.death_cause,
+                kills,
+                assists,
+                &weapon_inventory,
+                selected_weapon,
+                &item_inventory,
+                &roster,
+                app.round_summary.as_deref(),
+                app.round_summary_won,
+                app.round_contract_label,
+                app.fx.wave_banner_flash,
+                app.fx.wave_banner_wave,
+                &minimap,
+                app.locale,
+                app.confirm_quit,
+                app.current_project.is_some(),
+                app.confirm_close_project,
+                app.pending_autosave_recovery.as_deref(),
+            );
+            apply_editor_actions(app, editor, actions, ui_fingerprint_before, &mut restart);
+            Some(full_output)
+        };
+        FrameUiOutcome {
+            full_output,
+            restart,
+            resume,
+            player_net_actions,
+        }
     }
 
     /// Construit et pousse dans `self.gizmo_vbuf` la géométrie des gizmos
