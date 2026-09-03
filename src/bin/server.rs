@@ -1234,6 +1234,25 @@ mod tests {
         }
     }
 
+    /// Enveloppe `handle_message` pour ce module : aucun test ici n'envoie de
+    /// `firebase_uid` vérifiable (tous passent `firebase_uid: None`), donc
+    /// `firebase: None` et un canal jetable suffisent — évite de répéter ces
+    /// deux arguments à chacun des 14 appels (roadmap post-audit 2026-09-03,
+    /// 0.2 bis : la signature de `handle_message` avait grossi de 2 arguments
+    /// avec la vérification Firebase serveur sans que ces tests suivent, ce
+    /// qui cassait la compilation de ce module — non détecté six semaines
+    /// faute de `cargo clippy --all-features` en CI).
+    fn test_handle_message(
+        rooms: &mut HashMap<String, Room>,
+        player_room: &mut HashMap<PlayerId, String>,
+        net: &NetServer,
+        id: PlayerId,
+        msg: ClientMsg,
+    ) {
+        let (verified_tx, _verified_rx) = std::sync::mpsc::channel();
+        handle_message(rooms, player_room, net, id, msg, &None, &verified_tx);
+    }
+
     #[test]
     fn joining_moving_and_leaving_through_the_real_socket() {
         let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
@@ -1257,7 +1276,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
         assert_eq!(id, player_id);
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         let room = rooms.get(DEFAULT_LOBBY).unwrap();
         let object_index = room
@@ -1280,7 +1299,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Input attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         // Pas d'accès à `last_frame` (privé) depuis ce binaire externe : on avance
         // en temps réel, comme le fait réellement `main` (contrairement aux tests
@@ -1302,7 +1321,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Leave attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
         let room = rooms.get(DEFAULT_LOBBY).unwrap();
         assert_eq!(room.app.network_player_object(player_id), None);
         assert!(
@@ -1345,7 +1364,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         // `PlayerJoined` (déjà couvert ailleurs) précède `RoundObjective` sur
         // le fil : on consomme les messages dans l'ordre plutôt que de
@@ -1384,7 +1403,7 @@ mod tests {
         let mut rooms: HashMap<String, Room> = HashMap::new();
         let mut player_room: HashMap<PlayerId, String> = HashMap::new();
 
-        handle_message(
+        test_handle_message(
             &mut rooms,
             &mut player_room,
             &net,
@@ -1406,7 +1425,7 @@ mod tests {
 
         // Alice quitte : plus personne dans le salon, mais il n'est pas fermé
         // (fermeture réservée à la boucle `main`, à manche décidée).
-        handle_message(&mut rooms, &mut player_room, &net, 1, ClientMsg::Leave);
+        test_handle_message(&mut rooms, &mut player_room, &net, 1, ClientMsg::Leave);
         {
             let room = rooms
                 .get("salle-survie")
@@ -1416,7 +1435,7 @@ mod tests {
 
         // Bob rejoint le même salon en demandant Vagues : le mode déjà choisi
         // (Survie) doit être conservé, pas réassigné.
-        handle_message(
+        test_handle_message(
             &mut rooms,
             &mut player_room,
             &net,
@@ -1468,7 +1487,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         let room = rooms.get(DEFAULT_LOBBY).unwrap();
         assert_eq!(
@@ -1517,7 +1536,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         let room = rooms.get(DEFAULT_LOBBY).unwrap();
         let object_index = room
@@ -1540,7 +1559,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Input attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         // Comme `joining_moving_and_leaving_through_the_real_socket` : pas
         // d'autre `Input` envoyé après celui-ci, `advance_play` continue de
@@ -1598,7 +1617,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
         assert!(
             rooms
                 .get(DEFAULT_LOBBY)
@@ -1649,7 +1668,7 @@ mod tests {
                 .inbox
                 .recv_timeout(Duration::from_secs(2))
                 .expect("Join attendu côté serveur");
-            handle_message(&mut rooms, &mut player_room, &net, id, msg);
+            test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
         }
 
         assert_eq!(
@@ -1688,7 +1707,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Join attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
         assert!(rooms.contains_key("ephemere"));
 
         client.send(&motor3derust::net::protocol::ClientMsg::Leave);
@@ -1696,7 +1715,7 @@ mod tests {
             .inbox
             .recv_timeout(Duration::from_secs(2))
             .expect("Leave attendu côté serveur");
-        handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
 
         // `handle_message` masque le joueur mais ne ferme le salon vide que la
         // boucle `main` (le nettoyage `to_close` vit dans `main`, pas dans

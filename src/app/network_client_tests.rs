@@ -309,7 +309,8 @@ fn connect_to_server_forwards_the_firebase_credential() {
     let url = format!("ws://{}", net.local_addr);
 
     let mut app = AppState::new();
-    app.firebase_tx
+    app.firebase
+        .firebase_tx
         .send(Ok((
             "uid-alice".to_string(),
             "token-alice".to_string(),
@@ -633,6 +634,7 @@ fn two_connected_clients_see_the_same_creature_position_kill_and_bite_damage() {
     // `network_health` baisse et se propage identiquement aux deux clients.
     let alice_id = alice.net_player_id.expect("Alice doit être connectée");
     let alice_idx = *server_app
+        .network
         .network_players
         .get(&alice_id)
         .expect("Alice doit avoir un objet serveur");
@@ -782,8 +784,8 @@ fn is_locally_defeated_reflects_the_servers_health_once_it_reaches_zero() {
     // vrai contact monstre — ce test isole la propagation Snapshot → HUD,
     // pas le combat lui-même (déjà couvert par `src/app/health.rs`).
     let id = app.net_player_id.expect("connecté, donc un id attribué");
-    server_app.network_health.insert(id, 0.0);
-    if let Some(&index) = server_app.network_players.get(&id) {
+    server_app.network.network_health.insert(id, 0.0);
+    if let Some(&index) = server_app.network.network_players.get(&id) {
         server_app.scene.objects[index].visible = false;
     }
     for tick in 15..30 {
