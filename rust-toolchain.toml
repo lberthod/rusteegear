@@ -1,0 +1,8 @@
+# Épinglé (roadmap post-audit 2026-09-03, 1.2) : la CI utilisait `stable` flottant et
+# le passage à 1.98 a cassé Clippy sans changement de code. Monter de version = un
+# commit dédié qui change cette ligne, met à jour `.github/workflows/ci.yml`
+# (toolchain explicite, cf. le job `check`) et corrige les nouveaux lints dans la
+# foulée.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]

@@ -18,9 +18,10 @@ jobs:
         with:
           lfs: true
 
-      - name: Installer la toolchain Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           components: clippy, rustfmt
 
       - name: Cache cargo
@@ -61,8 +62,10 @@ jobs:
         with:
           lfs: true
 
-      - name: Installer la toolchain Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -97,8 +100,10 @@ jobs:
       # fichier d'assets/models/, inutile de payer le téléchargement LFS.
       - uses: actions/checkout@v4
 
-      - name: Installer la toolchain Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -130,9 +135,10 @@ jobs:
       # jamais assets/models/.
       - uses: actions/checkout@v4
 
-      - name: Installer la toolchain Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
