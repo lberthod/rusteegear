@@ -1611,7 +1611,202 @@ fn build_ui(
     }
 
     if show_panels {
-        egui::Panel::right("inspector")
+        inspector_panel(
+            root, scene, selection, status, panels, settings, ai_prompt, actions,
+        );
+    }
+
+    // Région centrale 3D (ce qui reste après les panneaux) : base de l'aperçu mobile.
+    let central = root.available_rect_before_wrap();
+    let ppp = root.ctx().pixels_per_point();
+    *view_rect = (
+        central.left() * ppp,
+        central.top() * ppp,
+        central.width() * ppp,
+        central.height() * ppp,
+    );
+
+    // Cadre « téléphone » + contrôles tactiles, confinés à la zone de jeu.
+    let play_rect = play_area_rect(central, *device_preview, *device_portrait);
+    let hud_scale = settings.hud_scale;
+    if *device_preview {
+        device_bezel(root.ctx(), play_rect);
+        touch_feedback(root.ctx(), play_rect);
+    }
+    if *playing && damage_flash > 0.0 {
+        damage_vignette(root.ctx(), play_rect, damage_flash);
+    }
+    if *playing && ally_down_flash > 0.0 {
+        ally_down_banner(
+            root.ctx(),
+            play_rect,
+            ally_down_flash,
+            locale,
+            hud_scale,
+            ally_marker,
+        );
+    }
+    if *playing && palier_flash > 0.0 {
+        palier_banner(
+            root.ctx(),
+            play_rect,
+            palier_flash,
+            palier_level,
+            locale,
+            hud_scale,
+        );
+    }
+    if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
+        health_bar(root.ctx(), play_rect, h, hud_scale);
+    }
+    if *playing && !panels.hud_hidden {
+        // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
+        // partie en cours (`draggable: false`) — le repositionnement se fait via
+        // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous. Le bloc
+        // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
+        // la vignette de dégâts et la barre de vie, au-dessus, jamais.
+        wave_hud(root.ctx(), play_rect, scene, wave, locale, hud_scale);
+        weapon_hud(
+            root.ctx(),
+            play_rect,
+            weapon_label,
+            &mut scene.hud_layout.weapon_hud,
+            false,
+            locale,
+            hud_scale,
+        );
+        kills_hud(
+            root.ctx(),
+            play_rect,
+            kills,
+            assists,
+            &mut scene.hud_layout.kills,
+            false,
+            locale,
+            hud_scale,
+        );
+        multiplayer_roster_panel(
+            root.ctx(),
+            play_rect,
+            roster,
+            &mut scene.hud_layout.roster,
+            false,
+            locale,
+        );
+        if scene_has_ranged_weapon(scene) {
+            crosshair(
+                root.ctx(),
+                play_rect,
+                &mut scene.hud_layout.crosshair,
+                false,
+                hud_scale,
+            );
+            weapon_inventory_panel(
+                root.ctx(),
+                play_rect,
+                weapon_inventory,
+                selected_weapon,
+                &mut scene.hud_layout.weapon_inventory,
+                false,
+                actions,
+                locale,
+            );
+        }
+        item_inventory_panel(
+            root.ctx(),
+            play_rect,
+            item_inventory,
+            &mut scene.hud_layout.item_inventory,
+            false,
+            actions,
+        );
+    } else if hud_preview.open {
+        hud_preview_overlays(
+            root.ctx(),
+            play_rect,
+            hud_preview,
+            &mut scene.hud_layout,
+            weapon_label,
+            weapon_inventory,
+            selected_weapon,
+            actions,
+            locale,
+            hud_scale,
+        );
+    }
+    if *playing {
+        play_overlays(
+            root,
+            scene,
+            panels,
+            play_rect,
+            minimap,
+            locale,
+            hud_scale,
+            game_time,
+            score,
+            round_summary,
+            round_summary_won,
+            round_contract_label,
+            lost,
+            defeated,
+            death_cause,
+            wave_banner_flash,
+            wave_banner_wave,
+        );
+    }
+    end_of_round_and_hud_widgets(
+        root,
+        scene,
+        playing,
+        input_state,
+        won,
+        lost,
+        round_summary,
+        round_summary_won,
+        play_rect,
+        locale,
+        hud_scale,
+        hud_preview,
+        hud_health,
+        score,
+        kills,
+        wave,
+        hud_image_cache,
+        actions,
+    );
+
+    confirmation_modals(
+        root,
+        confirm_quit,
+        confirm_close_project,
+        pending_autosave_recovery,
+        actions,
+    );
+
+    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
+    // après cette frame, afin de passer par l'historique.
+}
+
+/// Panneau « Inspecteur » (propriétés de l'objet/lumière sélectionné,
+/// éclairage de scène, ciel/brouillard) — extrait de `build_ui` (roadmap
+/// post-audit 2026-08-29, item 2.1, lot 5) : le plus gros bloc restant de
+/// `build_ui`, déplacé tel quel (même contenu, même ordre) dans sa propre
+/// fonction. Signature complétée à partir des erreurs de compilation
+/// (paramètres = exactement ce que ce bloc lisait/écrivait dans `build_ui`,
+/// rien de plus).
+#[allow(clippy::too_many_arguments)] // même style que build_ui : un paramètre par donnée affichée
+fn inspector_panel(
+    root: &mut egui::Ui,
+    scene: &mut Scene,
+    selection: &mut Option<usize>,
+    status: &StatusInfo,
+    panels: &mut Panels,
+    settings: &mut crate::app::settings::Settings,
+    ai_prompt: &mut String,
+    actions: &mut UiActions,
+) {
+    egui::Panel::right("inspector")
             .default_size(240.0)
             .show_inside(root, |ui| {
                 ui.heading("Inspecteur");
@@ -2247,178 +2442,6 @@ fn build_ui(
                 }
                     });
             });
-    }
-
-    // Région centrale 3D (ce qui reste après les panneaux) : base de l'aperçu mobile.
-    let central = root.available_rect_before_wrap();
-    let ppp = root.ctx().pixels_per_point();
-    *view_rect = (
-        central.left() * ppp,
-        central.top() * ppp,
-        central.width() * ppp,
-        central.height() * ppp,
-    );
-
-    // Cadre « téléphone » + contrôles tactiles, confinés à la zone de jeu.
-    let play_rect = play_area_rect(central, *device_preview, *device_portrait);
-    let hud_scale = settings.hud_scale;
-    if *device_preview {
-        device_bezel(root.ctx(), play_rect);
-        touch_feedback(root.ctx(), play_rect);
-    }
-    if *playing && damage_flash > 0.0 {
-        damage_vignette(root.ctx(), play_rect, damage_flash);
-    }
-    if *playing && ally_down_flash > 0.0 {
-        ally_down_banner(
-            root.ctx(),
-            play_rect,
-            ally_down_flash,
-            locale,
-            hud_scale,
-            ally_marker,
-        );
-    }
-    if *playing && palier_flash > 0.0 {
-        palier_banner(
-            root.ctx(),
-            play_rect,
-            palier_flash,
-            palier_level,
-            locale,
-            hud_scale,
-        );
-    }
-    if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
-        health_bar(root.ctx(), play_rect, h, hud_scale);
-    }
-    if *playing && !panels.hud_hidden {
-        // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
-        // partie en cours (`draggable: false`) — le repositionnement se fait via
-        // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous. Le bloc
-        // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
-        // la vignette de dégâts et la barre de vie, au-dessus, jamais.
-        wave_hud(root.ctx(), play_rect, scene, wave, locale, hud_scale);
-        weapon_hud(
-            root.ctx(),
-            play_rect,
-            weapon_label,
-            &mut scene.hud_layout.weapon_hud,
-            false,
-            locale,
-            hud_scale,
-        );
-        kills_hud(
-            root.ctx(),
-            play_rect,
-            kills,
-            assists,
-            &mut scene.hud_layout.kills,
-            false,
-            locale,
-            hud_scale,
-        );
-        multiplayer_roster_panel(
-            root.ctx(),
-            play_rect,
-            roster,
-            &mut scene.hud_layout.roster,
-            false,
-            locale,
-        );
-        if scene_has_ranged_weapon(scene) {
-            crosshair(
-                root.ctx(),
-                play_rect,
-                &mut scene.hud_layout.crosshair,
-                false,
-                hud_scale,
-            );
-            weapon_inventory_panel(
-                root.ctx(),
-                play_rect,
-                weapon_inventory,
-                selected_weapon,
-                &mut scene.hud_layout.weapon_inventory,
-                false,
-                actions,
-                locale,
-            );
-        }
-        item_inventory_panel(
-            root.ctx(),
-            play_rect,
-            item_inventory,
-            &mut scene.hud_layout.item_inventory,
-            false,
-            actions,
-        );
-    } else if hud_preview.open {
-        hud_preview_overlays(
-            root.ctx(),
-            play_rect,
-            hud_preview,
-            &mut scene.hud_layout,
-            weapon_label,
-            weapon_inventory,
-            selected_weapon,
-            actions,
-            locale,
-            hud_scale,
-        );
-    }
-    if *playing {
-        play_overlays(
-            root,
-            scene,
-            panels,
-            play_rect,
-            minimap,
-            locale,
-            hud_scale,
-            game_time,
-            score,
-            round_summary,
-            round_summary_won,
-            round_contract_label,
-            lost,
-            defeated,
-            death_cause,
-            wave_banner_flash,
-            wave_banner_wave,
-        );
-    }
-    end_of_round_and_hud_widgets(
-        root,
-        scene,
-        playing,
-        input_state,
-        won,
-        lost,
-        round_summary,
-        round_summary_won,
-        play_rect,
-        locale,
-        hud_scale,
-        hud_preview,
-        hud_health,
-        score,
-        kills,
-        wave,
-        hud_image_cache,
-        actions,
-    );
-
-    confirmation_modals(
-        root,
-        confirm_quit,
-        confirm_close_project,
-        pending_autosave_recovery,
-        actions,
-    );
-
-    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
-    // après cette frame, afin de passer par l'historique.
 }
 
 /// Barre d'outils rapide (haut de l'éditeur : lecture/pause/stop, échelle de
