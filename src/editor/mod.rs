@@ -1616,6 +1616,124 @@ fn build_ui(
         );
     }
 
+    let (play_rect, hud_scale) = play_area_and_in_game_hud(
+        root,
+        view_rect,
+        device_preview,
+        device_portrait,
+        settings,
+        playing,
+        damage_flash,
+        ally_down_flash,
+        ally_marker,
+        palier_flash,
+        palier_level,
+        hud_health,
+        scene,
+        panels,
+        wave,
+        locale,
+        weapon_label,
+        kills,
+        assists,
+        roster,
+        weapon_inventory,
+        selected_weapon,
+        item_inventory,
+        actions,
+        hud_preview,
+    );
+
+    if *playing {
+        play_overlays(
+            root,
+            scene,
+            panels,
+            play_rect,
+            minimap,
+            locale,
+            hud_scale,
+            game_time,
+            score,
+            round_summary,
+            round_summary_won,
+            round_contract_label,
+            lost,
+            defeated,
+            death_cause,
+            wave_banner_flash,
+            wave_banner_wave,
+        );
+    }
+    end_of_round_and_hud_widgets(
+        root,
+        scene,
+        playing,
+        input_state,
+        won,
+        lost,
+        round_summary,
+        round_summary_won,
+        play_rect,
+        locale,
+        hud_scale,
+        hud_preview,
+        hud_health,
+        score,
+        kills,
+        wave,
+        hud_image_cache,
+        actions,
+    );
+
+    confirmation_modals(
+        root,
+        confirm_quit,
+        confirm_close_project,
+        pending_autosave_recovery,
+        actions,
+    );
+
+    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
+    // après cette frame, afin de passer par l'historique.
+}
+
+/// Zone de jeu (rectangle central après panneaux, base de l'aperçu mobile),
+/// cadre téléphone, et HUD affiché dans cette zone (vignette de dégâts,
+/// bannières allié/palier, barre de vie, widgets HUD persistés ou aperçu) —
+/// extrait de build_ui (roadmap post-audit 2026-08-29, item 2.1, lot 6,
+/// dernier morceau du corps de build_ui). Retourne `play_rect`/`hud_scale`,
+/// réutilisés par les appels suivants dans build_ui (play_overlays,
+/// end_of_round_and_hud_widgets) — signature complétée à partir des
+/// erreurs de compilation.
+#[allow(clippy::too_many_arguments)] // même style que build_ui : un paramètre par donnée affichée
+fn play_area_and_in_game_hud(
+    root: &mut egui::Ui,
+    view_rect: &mut (f32, f32, f32, f32),
+    device_preview: &mut bool,
+    device_portrait: &mut bool,
+    settings: &crate::app::settings::Settings,
+    playing: &mut bool,
+    damage_flash: f32,
+    ally_down_flash: f32,
+    ally_marker: Option<(glam::Mat4, glam::Vec3)>,
+    palier_flash: f32,
+    palier_level: u32,
+    hud_health: Option<f32>,
+    scene: &mut Scene,
+    panels: &mut Panels,
+    wave: u32,
+    locale: crate::app::locale::Locale,
+    weapon_label: &str,
+    kills: u32,
+    assists: u32,
+    roster: &[RosterEntry],
+    weapon_inventory: &[(&str, [f32; 3])],
+    selected_weapon: usize,
+    item_inventory: &[(crate::scene::ItemKind, u32)],
+    actions: &mut UiActions,
+    hud_preview: &mut HudPreview,
+) -> (egui::Rect, f32) {
     // Région centrale 3D (ce qui reste après les panneaux) : base de l'aperçu mobile.
     let central = root.available_rect_before_wrap();
     let ppp = root.ctx().pixels_per_point();
@@ -1734,58 +1852,8 @@ fn build_ui(
             hud_scale,
         );
     }
-    if *playing {
-        play_overlays(
-            root,
-            scene,
-            panels,
-            play_rect,
-            minimap,
-            locale,
-            hud_scale,
-            game_time,
-            score,
-            round_summary,
-            round_summary_won,
-            round_contract_label,
-            lost,
-            defeated,
-            death_cause,
-            wave_banner_flash,
-            wave_banner_wave,
-        );
-    }
-    end_of_round_and_hud_widgets(
-        root,
-        scene,
-        playing,
-        input_state,
-        won,
-        lost,
-        round_summary,
-        round_summary_won,
-        play_rect,
-        locale,
-        hud_scale,
-        hud_preview,
-        hud_health,
-        score,
-        kills,
-        wave,
-        hud_image_cache,
-        actions,
-    );
 
-    confirmation_modals(
-        root,
-        confirm_quit,
-        confirm_close_project,
-        pending_autosave_recovery,
-        actions,
-    );
-
-    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
-    // après cette frame, afin de passer par l'historique.
+    (play_rect, hud_scale)
 }
 
 /// Panneau « Inspecteur » (propriétés de l'objet/lumière sélectionné,
