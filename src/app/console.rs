@@ -261,10 +261,10 @@ impl AppState {
                     format!(
                         "connecté · {} joueur(s) réseau · statut : {}",
                         self.network_player_count(),
-                        if self.net_status.is_empty() {
+                        if self.net_conn.net_status.is_empty() {
                             "ok"
                         } else {
-                            &self.net_status
+                            &self.net_conn.net_status
                         }
                     )
                 } else {

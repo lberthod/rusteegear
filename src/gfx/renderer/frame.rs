@@ -53,7 +53,7 @@ impl Renderer {
         let mut player_net_actions = None;
         let full_output = if app.player {
             if app.scene.mobile.any() {
-                let net_status = app.net_status.clone();
+                let net_status = app.net_conn.net_status.clone();
                 let net_connected = app.is_connected();
                 let weapon_label = app.selected_weapon_label();
                 let defeated = app.is_locally_defeated();
@@ -133,7 +133,7 @@ impl Renderer {
                 gpu_draw_calls,
                 skinned_dropped: self.skinned_dropped_count(),
             };
-            let net_status = app.net_status.clone();
+            let net_status = app.net_conn.net_status.clone();
             let net_connected = app.is_connected();
             let has_firebase_account = app.has_firebase_account();
             let weapon_label = app.selected_weapon_label();

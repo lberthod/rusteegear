@@ -984,7 +984,7 @@ impl AppState {
                 && obj.controller.is_none()
                 && obj.combat.as_ref().is_some_and(|c| c.attackable)
                 && creature_is_server_synced(
-                    self.net_creature_last_snapshot.get(&idx).copied(),
+                    self.net_conn.net_creature_last_snapshot.get(&idx).copied(),
                     net_check_now,
                     CREATURE_SNAPSHOT_TIMEOUT,
                 )
@@ -1250,7 +1250,7 @@ impl AppState {
                                 && o.controller.is_none()
                                 && o.combat.as_ref().is_some_and(|c| c.attackable)
                                 && creature_is_server_synced(
-                                    self.net_creature_last_snapshot.get(idx).copied(),
+                                    self.net_conn.net_creature_last_snapshot.get(idx).copied(),
                                     now,
                                     CREATURE_SNAPSHOT_TIMEOUT,
                                 )))

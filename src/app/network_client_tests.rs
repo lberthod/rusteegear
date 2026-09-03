@@ -103,7 +103,7 @@ fn firebase_uid_is_applied_once_the_background_request_resolves() {
 #[test]
 fn player_down_for_an_ally_raises_the_shared_banner_not_the_self_flash() {
     let mut app = AppState::new();
-    app.net_player_id = Some(1);
+    app.net_conn.net_player_id = Some(1);
 
     app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
         crate::net::protocol::GameEvent::PlayerDown {
@@ -128,7 +128,7 @@ fn player_down_for_an_ally_raises_the_shared_banner_not_the_self_flash() {
 #[test]
 fn player_down_for_ourselves_raises_the_self_flash_not_the_ally_banner() {
     let mut app = AppState::new();
-    app.net_player_id = Some(1);
+    app.net_conn.net_player_id = Some(1);
 
     app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
         crate::net::protocol::GameEvent::PlayerDown {
@@ -268,7 +268,7 @@ fn wave_start_event_arms_the_wave_banner() {
 #[test]
 fn death_cause_is_stored_for_our_own_death_only() {
     let mut app = AppState::new();
-    app.net_player_id = Some(1);
+    app.net_conn.net_player_id = Some(1);
     let cause = crate::net::protocol::DeathCause {
         kind: crate::net::protocol::DeathCauseKind::Monster,
         distinct_attackers: 2,
@@ -429,22 +429,23 @@ fn client_sees_a_ghost_for_the_other_player_but_never_for_itself() {
     }
 
     assert_eq!(
-        alice.remote_players.len(),
+        alice.net_conn.remote_players.len(),
         1,
         "Alice doit voir exactement un fantôme (Bob), pas elle-même"
     );
     assert_eq!(
-        bob.remote_players.len(),
+        bob.net_conn.remote_players.len(),
         1,
         "Bob doit voir exactement un fantôme (Alice), pas lui-même"
     );
-    assert!(alice.net_player_id.is_some());
-    assert!(bob.net_player_id.is_some());
-    assert_ne!(alice.net_player_id, bob.net_player_id);
+    assert!(alice.net_conn.net_player_id.is_some());
+    assert!(bob.net_conn.net_player_id.is_some());
+    assert_ne!(alice.net_conn.net_player_id, bob.net_conn.net_player_id);
     assert!(
         !alice
+            .net_conn
             .remote_players
-            .contains_key(&alice.net_player_id.expect("vérifié ci-dessus")),
+            .contains_key(&alice.net_conn.net_player_id.expect("vérifié ci-dessus")),
         "Alice ne doit jamais avoir un fantôme d'elle-même"
     );
 }
@@ -632,7 +633,10 @@ fn two_connected_clients_see_the_same_creature_position_kill_and_bite_damage() {
     // --- Morsure : place un joueur réseau au contact de la Créature 1
     // (mordeuse, cf. `MMORPG_CREATURES`) côté serveur, avance, vérifie que
     // `network_health` baisse et se propage identiquement aux deux clients.
-    let alice_id = alice.net_player_id.expect("Alice doit être connectée");
+    let alice_id = alice
+        .net_conn
+        .net_player_id
+        .expect("Alice doit être connectée");
     let alice_idx = *server_app
         .network
         .network_players
@@ -677,10 +681,15 @@ fn two_connected_clients_see_the_same_creature_position_kill_and_bite_damage() {
         if let Some(h) = server_app.network_player_health(alice_id) {
             min_server_health = min_server_health.min(h);
         }
-        if let Some(h) = alice.net_local_health {
+        if let Some(h) = alice.net_conn.net_local_health {
             min_alice_seen = min_alice_seen.min(h);
         }
-        if let Some(h) = bob.remote_players.get(&alice_id).and_then(|rp| rp.health) {
+        if let Some(h) = bob
+            .net_conn
+            .remote_players
+            .get(&alice_id)
+            .and_then(|rp| rp.health)
+        {
             min_bob_seen = min_bob_seen.min(h);
         }
     }
@@ -705,12 +714,15 @@ fn two_connected_clients_see_the_same_creature_position_kill_and_bite_damage() {
         .network_player_health(alice_id)
         .expect("Alice doit avoir une vie réseau");
     assert_eq!(
-        alice.net_local_health,
+        alice.net_conn.net_local_health,
         Some(server_health),
         "Alice doit voir sa propre vie exactement comme le serveur la connaît"
     );
     assert_eq!(
-        bob.remote_players.get(&alice_id).and_then(|rp| rp.health),
+        bob.net_conn
+            .remote_players
+            .get(&alice_id)
+            .and_then(|rp| rp.health),
         Some(server_health),
         "Bob doit voir la vie d'Alice exactement comme le serveur la connaît"
     );
@@ -783,7 +795,10 @@ fn is_locally_defeated_reflects_the_servers_health_once_it_reaches_zero() {
     // Vainc le joueur directement côté serveur (0 PV), sans dépendre d'un
     // vrai contact monstre — ce test isole la propagation Snapshot → HUD,
     // pas le combat lui-même (déjà couvert par `src/app/health.rs`).
-    let id = app.net_player_id.expect("connecté, donc un id attribué");
+    let id = app
+        .net_conn
+        .net_player_id
+        .expect("connecté, donc un id attribué");
     server_app.network.network_health.insert(id, 0.0);
     if let Some(&index) = server_app.network.network_players.get(&id) {
         server_app.scene.objects[index].visible = false;
@@ -797,7 +812,7 @@ fn is_locally_defeated_reflects_the_servers_health_once_it_reaches_zero() {
     assert!(
         app.is_locally_defeated(),
         "une fois la vie serveur tombée à 0, le client doit le savoir (net_local_health={:?})",
-        app.net_local_health
+        app.net_conn.net_local_health
     );
 }
 
@@ -816,7 +831,7 @@ fn a_single_call_only_takes_a_small_step_toward_the_authoritative_position() {
     // Écart largement au-dessus de SNAP_THRESHOLD (0,5 m).
     let authoritative = predicted + Vec3::new(2.0, 0.0, 0.0);
 
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -860,7 +875,7 @@ fn repeated_calls_gradually_converge_toward_the_authoritative_position() {
     let predicted = app.scene.objects[pi].transform.position;
     let authoritative = predicted + Vec3::new(2.0, 0.0, 0.0);
 
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -917,7 +932,7 @@ fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
     let pi = app.player_index().expect("gabarit pilotable");
     let start = app.scene.objects[pi].transform.position;
     // 1. Serveur et client d'accord au départ : peuple l'historique avec `start`.
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -938,7 +953,7 @@ fn a_lagging_server_position_on_our_recent_path_triggers_no_correction() {
     // retard d'une latence, renvoie encore la position de départ.
     let ran_to = start + Vec3::new(2.0, 0.0, 0.0);
     app.scene.objects[pi].transform.position = ran_to;
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -982,7 +997,7 @@ fn an_idle_player_softly_settles_onto_the_server_position() {
     // Écart *sous* SNAP_THRESHOLD : ignoré par `reconcile`, mais visible à
     // l'écran (~0,3 m) — c'est le cas que le rattrapage doit combler.
     let authoritative = start + Vec3::new(0.3, 0.0, 0.0);
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -1030,7 +1045,7 @@ fn a_correction_never_discards_local_movement_that_happened_between_calls() {
     let start = app.scene.objects[pi].transform.position;
     let authoritative = start + Vec3::new(2.0, 0.0, 0.0);
 
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -1090,7 +1105,7 @@ fn a_local_position_correction_survives_the_next_physics_step() {
     let predicted = app.scene.objects[pi].transform.position;
     let authoritative = predicted + Vec3::new(2.0, 0.0, 0.0);
 
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -1214,7 +1229,7 @@ fn climbing_stairs_does_not_trigger_a_spurious_correction() {
             recent.pop_front();
         }
         let lagging = *recent.front().unwrap();
-        app.net_local_interp.push(
+        app.net_conn.net_local_interp.push(
             EntityDelta {
                 index: pi as u32,
                 player_id: None,
@@ -1323,7 +1338,7 @@ fn a_wall_blocked_player_settles_without_fighting_the_correction() {
     // réconciliation. Sous `SNAP_THRESHOLD` (ignoré par `reconcile`),
     // comme dans `an_idle_player_softly_settles_onto_the_server_position`.
     let authoritative = stuck_at + Vec3::new(0.3, 0.0, 0.0);
-    app.net_local_interp.push(
+    app.net_conn.net_local_interp.push(
         EntityDelta {
             index: pi as u32,
             player_id: None,
@@ -1576,7 +1591,7 @@ fn reconnect_delay_grows_and_caps() {
 #[test]
 fn reconnection_gives_up_after_max_attempts_and_says_so() {
     let mut app = AppState::new();
-    app.net_last_connect = Some((
+    app.net_conn.net_last_connect = Some((
         "ws://127.0.0.1:9".to_string(),
         "Testeur".to_string(),
         crate::net::protocol::DEFAULT_LOBBY.to_string(),
@@ -1586,7 +1601,7 @@ fn reconnection_gives_up_after_max_attempts_and_says_so() {
     for expected in 1..=MAX_RECONNECT_ATTEMPTS {
         app.schedule_reconnect_attempt();
         assert_eq!(
-            app.net_reconnect.as_ref().map(|r| r.attempt),
+            app.net_conn.net_reconnect.as_ref().map(|r| r.attempt),
             Some(expected),
             "tentative {expected} attendue"
         );
@@ -1596,14 +1611,17 @@ fn reconnection_gives_up_after_max_attempts_and_says_so() {
         );
     }
     app.schedule_reconnect_attempt();
-    assert!(app.net_reconnect.is_none(), "abandon attendu après le max");
     assert!(
-        app.net_status.contains("échouée"),
-        "le statut doit expliquer l'abandon : {}",
-        app.net_status
+        app.net_conn.net_reconnect.is_none(),
+        "abandon attendu après le max"
     );
     assert!(
-        app.net_last_connect.is_none(),
+        app.net_conn.net_status.contains("échouée"),
+        "le statut doit expliquer l'abandon : {}",
+        app.net_conn.net_status
+    );
+    assert!(
+        app.net_conn.net_last_connect.is_none(),
         "plus rien à rejouer après l'abandon"
     );
 }
@@ -1613,7 +1631,7 @@ fn reconnection_gives_up_after_max_attempts_and_says_so() {
 #[test]
 fn voluntary_disconnect_cancels_any_pending_reconnection() {
     let mut app = AppState::new();
-    app.net_last_connect = Some((
+    app.net_conn.net_last_connect = Some((
         "ws://127.0.0.1:9".to_string(),
         "Testeur".to_string(),
         crate::net::protocol::DEFAULT_LOBBY.to_string(),
@@ -1621,16 +1639,16 @@ fn voluntary_disconnect_cancels_any_pending_reconnection() {
         0,
     ));
     app.schedule_reconnect_attempt();
-    assert!(app.net_reconnect.is_some());
+    assert!(app.net_conn.net_reconnect.is_some());
 
     app.disconnect_from_server();
-    assert!(app.net_reconnect.is_none());
-    assert!(app.net_last_connect.is_none());
+    assert!(app.net_conn.net_reconnect.is_none());
+    assert!(app.net_conn.net_last_connect.is_none());
     assert_eq!(app.net_connection_state(), NetConnState::Offline);
 
     // Et `poll_network` ne relance rien dans le dos du joueur.
     app.poll_network();
-    assert!(app.net_client.is_none() && app.net_reconnect.is_none());
+    assert!(app.net_conn.net_client.is_none() && app.net_conn.net_reconnect.is_none());
 }
 
 /// Bout-en-bout de la reconnexion automatique : le serveur coupe la
@@ -1652,7 +1670,7 @@ fn the_client_reconnects_and_rejoins_after_a_lost_connection() {
     let deadline = Instant::now() + Duration::from_secs(2);
     let first_id = loop {
         app.poll_network();
-        if let Some(id) = app.net_player_id {
+        if let Some(id) = app.net_conn.net_player_id {
             break id;
         }
         assert!(
@@ -1669,7 +1687,7 @@ fn the_client_reconnects_and_rejoins_after_a_lost_connection() {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         app.poll_network();
-        if let Some(id) = app.net_player_id
+        if let Some(id) = app.net_conn.net_player_id
             && id != first_id
         {
             break;
@@ -1677,13 +1695,13 @@ fn the_client_reconnects_and_rejoins_after_a_lost_connection() {
         assert!(
             Instant::now() < deadline,
             "reconnexion attendue sous 5 s (statut : {})",
-            app.net_status
+            app.net_conn.net_status
         );
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(app.is_connected(), "la connexion doit être redevenue saine");
     assert!(
-        app.net_reconnect.is_none(),
+        app.net_conn.net_reconnect.is_none(),
         "le Welcome doit solder la reconnexion"
     );
 }
@@ -1694,7 +1712,7 @@ fn the_client_reconnects_and_rejoins_after_a_lost_connection() {
 #[test]
 fn round_summary_arms_the_palier_banner_when_a_milestone_is_crossed() {
     let mut app = AppState::new();
-    app.net_player_id = Some(7);
+    app.net_conn.net_player_id = Some(7);
     app.firebase_xp = Some(1900); // niveau 2, à 100 XP du palier niv. 3
 
     let summary = vec![crate::net::protocol::RoundPlayerSummary {
@@ -1734,7 +1752,7 @@ fn round_summary_arms_the_palier_banner_when_a_milestone_is_crossed() {
 #[test]
 fn palier_banner_stays_silent_without_a_known_xp_total() {
     let mut app = AppState::new();
-    app.net_player_id = Some(7);
+    app.net_conn.net_player_id = Some(7);
     app.firebase_xp = None;
     let summary = vec![crate::net::protocol::RoundPlayerSummary {
         player_id: 7,

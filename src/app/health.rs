@@ -203,10 +203,12 @@ impl AppState {
                     .recent_damage
                     .remove(&id)
                     .and_then(|buf| compute_death_cause(&buf));
-                self.pending_net_events.push(GameEvent::PlayerDown {
-                    player_id: id,
-                    cause,
-                });
+                self.net_conn
+                    .pending_net_events
+                    .push(GameEvent::PlayerDown {
+                        player_id: id,
+                        cause,
+                    });
                 self.player_down_count += 1;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
             }
@@ -306,14 +308,16 @@ impl AppState {
                         .recent_damage
                         .remove(&id)
                         .and_then(|buf| compute_death_cause(&buf));
-                    self.pending_net_events.push(GameEvent::PlayerDown {
-                        player_id: id,
-                        cause,
-                    });
+                    self.net_conn
+                        .pending_net_events
+                        .push(GameEvent::PlayerDown {
+                            player_id: id,
+                            cause,
+                        });
                     self.player_down_count += 1;
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
                 } else {
-                    if Some(id) == self.net_player_id {
+                    if Some(id) == self.net_conn.net_player_id {
                         self.fx.camera_shake = 1.0;
                     }
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);

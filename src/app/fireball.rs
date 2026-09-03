@@ -332,7 +332,8 @@ impl AppState {
                 self.credit_kill(shooter_id);
             }
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Defeat);
-            self.pending_net_events
+            self.net_conn
+                .pending_net_events
                 .push(GameEvent::Defeated { index: i as u32 });
             let d = self.scene.objects[i].respawn_delay;
             if d > 0.0 {
@@ -419,14 +420,14 @@ impl AppState {
         self.projectiles.fireball_cooldowns.clear();
         self.projectiles.fireball_pool.clear();
         self.projectiles.net_projectiles.clear();
-        self.pending_net_events.clear();
+        self.net_conn.pending_net_events.clear();
     }
 
     /// Évènements de gameplay en attente de diffusion (monstre vaincu...), drainés
     /// par le serveur headless à chaque tick (`src/bin/server.rs`), qui les
     /// broadcast en `ServerMsg::Event`.
     pub fn take_net_events(&mut self) -> Vec<GameEvent> {
-        std::mem::take(&mut self.pending_net_events)
+        std::mem::take(&mut self.net_conn.pending_net_events)
     }
 
     /// `true` si cette instance est un **client** connecté à un serveur (jamais le
@@ -437,7 +438,7 @@ impl AppState {
     pub(super) fn is_online_client(&self) -> bool {
         #[cfg(not(target_os = "ios"))]
         {
-            self.net_client.is_some()
+            self.net_conn.net_client.is_some()
         }
         #[cfg(target_os = "ios")]
         {

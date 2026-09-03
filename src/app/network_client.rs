@@ -108,16 +108,16 @@ impl AppState {
         ) {
             Ok(client) => {
                 log::info!("Multijoueur : connecté à {url} sous « {name} »");
-                self.net_client = Some(client);
-                self.net_status = format!("Connexion à {url}…");
+                self.net_conn.net_client = Some(client);
+                self.net_conn.net_status = format!("Connexion à {url}…");
                 // Arme le watchdog dès maintenant (pas au premier message) : un
                 // serveur qui accepte la socket mais ne répond jamais doit finir
                 // par déclencher la reconnexion, pas rester « Connexion… » à vie.
-                self.net_last_server_msg = Some(crate::time_compat::Instant::now());
+                self.net_conn.net_last_server_msg = Some(crate::time_compat::Instant::now());
                 // Mémorisé pour la reconnexion automatique (cf. `poll_network`) —
                 // seulement au succès : un échec immédiat reste une erreur
                 // affichée au joueur, pas une boucle de reconnexion.
-                self.net_last_connect = Some((
+                self.net_conn.net_last_connect = Some((
                     url.to_string(),
                     name.to_string(),
                     lobby.to_string(),
@@ -133,7 +133,7 @@ impl AppState {
             }
             Err(e) => {
                 log::warn!("Multijoueur : connexion à {url} échouée : {e}");
-                self.net_status = format!("Connexion échouée : {e}");
+                self.net_conn.net_status = format!("Connexion échouée : {e}");
             }
         }
     }
@@ -144,14 +144,14 @@ impl AppState {
     /// à venir) — quitter la partie ne doit jamais voir le client se
     /// reconnecter tout seul dans le dos du joueur.
     pub fn disconnect_from_server(&mut self) {
-        if let Some(client) = &self.net_client {
+        if let Some(client) = &self.net_conn.net_client {
             client.send(&crate::net::protocol::ClientMsg::Leave);
         }
         self.reset_network_session();
-        self.net_last_connect = None;
-        self.net_reconnect = None;
-        self.net_last_server_msg = None;
-        self.net_status = "Déconnecté".to_string();
+        self.net_conn.net_last_connect = None;
+        self.net_conn.net_reconnect = None;
+        self.net_conn.net_last_server_msg = None;
+        self.net_conn.net_status = "Déconnecté".to_string();
     }
 
     /// Nettoyage commun à toute fin de session réseau : déconnexion volontaire
@@ -159,23 +159,23 @@ impl AppState {
     /// (`poll_network`) — sans toucher à la politique de reconnexion ni au
     /// `net_status`, qui diffèrent entre les deux.
     fn reset_network_session(&mut self) {
-        self.net_client = None;
-        self.net_player_id = None;
-        for rp in self.remote_players.values() {
+        self.net_conn.net_client = None;
+        self.net_conn.net_player_id = None;
+        for rp in self.net_conn.remote_players.values() {
             if let Some(o) = self.scene.objects.get_mut(rp.scene_index) {
                 if o.visible {
-                    self.net_visibility_dirty = true;
+                    self.net_conn.net_visibility_dirty = true;
                 }
                 o.visible = false;
             }
         }
-        self.remote_players.clear();
-        self.net_local_interp = crate::net::interpolation::RemoteEntity::default();
-        self.net_local_health = None;
-        self.net_local_kills = None;
-        self.net_local_assists = None;
-        self.net_local_history.clear();
-        self.net_last_input_sent = None;
+        self.net_conn.remote_players.clear();
+        self.net_conn.net_local_interp = crate::net::interpolation::RemoteEntity::default();
+        self.net_conn.net_local_health = None;
+        self.net_conn.net_local_kills = None;
+        self.net_conn.net_local_assists = None;
+        self.net_conn.net_local_history.clear();
+        self.net_conn.net_last_input_sent = None;
         // Plus de snapshots à venir : oublie les projectiles serveur et masque le
         // pool, sinon les dernières boules reçues resteraient figées à l'écran.
         self.projectiles.net_projectiles.clear();
@@ -188,8 +188,12 @@ impl AppState {
     /// « connecté » un client dont la connexion était morte depuis des minutes —
     /// roster figé, envois dans un canal fermé, aucun message d'erreur.
     pub fn is_connected(&self) -> bool {
-        self.net_client.as_ref().is_some_and(|c| c.is_alive())
+        self.net_conn
+            .net_client
+            .as_ref()
+            .is_some_and(|c| c.is_alive())
             && self
+                .net_conn
                 .net_last_server_msg
                 .is_none_or(|t| t.elapsed() < NET_SILENCE_TIMEOUT)
     }
@@ -197,13 +201,13 @@ impl AppState {
     /// État de la connexion multijoueur (cf. `NetConnState`) — la forme
     /// exploitable par du code, là où `net_status` reste le texte du HUD.
     pub fn net_connection_state(&self) -> NetConnState {
-        if let Some(r) = &self.net_reconnect {
+        if let Some(r) = &self.net_conn.net_reconnect {
             return NetConnState::Reconnecting { attempt: r.attempt };
         }
         if !self.is_connected() {
             return NetConnState::Offline;
         }
-        if self.net_player_id.is_some() {
+        if self.net_conn.net_player_id.is_some() {
             NetConnState::Connected
         } else {
             NetConnState::Connecting
@@ -219,7 +223,7 @@ impl AppState {
     /// flash rouge d'un tiers de seconde puis un écran figé, indiscernable
     /// d'un vrai bug.
     pub fn is_locally_defeated(&self) -> bool {
-        self.is_connected() && self.net_local_health.is_some_and(|h| h <= 0.0)
+        self.is_connected() && self.net_conn.net_local_health.is_some_and(|h| h <= 0.0)
     }
 
     /// Frags à afficher au HUD (brique de progression pour un futur MMORPG) :
@@ -229,7 +233,7 @@ impl AppState {
     /// seul joueur, pas besoin d'individualiser).
     pub fn displayed_kill_count(&self) -> u32 {
         if self.is_connected() {
-            self.net_local_kills.unwrap_or(0)
+            self.net_conn.net_local_kills.unwrap_or(0)
         } else {
             self.score()
         }
@@ -240,7 +244,7 @@ impl AppState {
     /// d'assist possible sans coéquipier).
     pub fn displayed_assist_count(&self) -> u32 {
         if self.is_connected() {
-            self.net_local_assists.unwrap_or(0)
+            self.net_conn.net_local_assists.unwrap_or(0)
         } else {
             0
         }
@@ -256,12 +260,13 @@ impl AppState {
         }
         let mut roster = vec![(
             "Vous".to_string(),
-            self.net_local_health,
-            self.net_local_kills,
+            self.net_conn.net_local_health,
+            self.net_conn.net_local_kills,
             true,
         )];
         roster.extend(
-            self.remote_players
+            self.net_conn
+                .remote_players
                 .values()
                 .map(|rp| (rp.name.clone(), rp.health, rp.kills, false)),
         );
@@ -283,7 +288,7 @@ impl AppState {
         // du backoff) — **avant** le early-return ci-dessous, qui masquait
         // jusqu'ici toute vie réseau dès que `net_client` était `None`.
         self.advance_reconnection();
-        if self.net_client.is_none() {
+        if self.net_conn.net_client.is_none() {
             return;
         }
 
@@ -304,6 +309,7 @@ impl AppState {
         // pour un coût réseau/CPU inutile des deux côtés.
         let now = crate::time_compat::Instant::now();
         let should_send_input = self
+            .net_conn
             .net_last_input_sent
             .is_none_or(|last| now.duration_since(last) >= INPUT_SEND_INTERVAL);
         if should_send_input {
@@ -313,13 +319,13 @@ impl AppState {
                 self.player_object(),
                 self.selected_weapon() as u8,
             );
-            if let Some(client) = &self.net_client {
+            if let Some(client) = &self.net_conn.net_client {
                 client.send(&input);
             }
-            self.net_last_input_sent = Some(now);
+            self.net_conn.net_last_input_sent = Some(now);
         }
 
-        let messages: Vec<crate::net::protocol::ServerMsg> = match &self.net_client {
+        let messages: Vec<crate::net::protocol::ServerMsg> = match &self.net_conn.net_client {
             Some(client) => client.inbox.try_iter().collect(),
             None => Vec::new(),
         };
@@ -330,7 +336,7 @@ impl AppState {
             // (pause, App Nap), les messages accumulés pendant la suspension
             // comptent comme vie récente, sinon la reprise déclencherait une
             // fausse reconnexion.
-            self.net_last_server_msg = Some(crate::time_compat::Instant::now());
+            self.net_conn.net_last_server_msg = Some(crate::time_compat::Instant::now());
         }
         for msg in messages {
             self.handle_server_msg(msg);
@@ -341,8 +347,13 @@ impl AppState {
         // cf. sa doc pour la hiérarchie des timeouts). Détectée ⇒ session
         // nettoyée et reconnexion automatique armée — le joueur voit
         // « Connexion perdue… » au lieu d'un monde figé sans explication.
-        let transport_dead = self.net_client.as_ref().is_some_and(|c| !c.is_alive());
+        let transport_dead = self
+            .net_conn
+            .net_client
+            .as_ref()
+            .is_some_and(|c| !c.is_alive());
         let server_silent = self
+            .net_conn
             .net_last_server_msg
             .is_some_and(|t| t.elapsed() >= NET_SILENCE_TIMEOUT);
         if transport_dead || server_silent {
@@ -364,14 +375,14 @@ impl AppState {
         // capturé plus haut (juste avant l'envoi éventuel de l'`Input`) plutôt
         // que d'en reprendre un nouveau : les deux usages sont à quelques
         // microsecondes d'écart, pas la peine d'un second appel système.
-        for rp in self.remote_players.values_mut() {
+        for rp in self.net_conn.remote_players.values_mut() {
             if let Some((pos, yaw, visible)) = rp.interp.sample_delayed(now)
                 && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
             {
                 o.transform.position = pos;
                 o.transform.rotation = glam::Quat::from_rotation_y(yaw);
                 if o.visible != visible {
-                    self.net_visibility_dirty = true;
+                    self.net_conn.net_visibility_dirty = true;
                 }
                 o.visible = visible;
             }
@@ -399,8 +410,8 @@ impl AppState {
         // de `net_visibility_dirty` et `ensure_remote_player` — même principe
         // que `App::update_waves` pour une manche révélée). Rare (connexion/
         // déconnexion, mort) : pas de rebuild à chaque frame en régime normal.
-        if self.net_visibility_dirty {
-            self.net_visibility_dirty = false;
+        if self.net_conn.net_visibility_dirty {
+            self.net_conn.net_visibility_dirty = false;
             if self.physics.is_some() {
                 self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
             }
@@ -413,29 +424,33 @@ impl AppState {
     /// `MAX_RECONNECT_ATTEMPTS` — dans tous les cas, `net_status` dit au
     /// joueur ce qui se passe.
     fn schedule_reconnect_attempt(&mut self) {
-        if self.net_last_connect.is_none() {
+        if self.net_conn.net_last_connect.is_none() {
             // Rien à rejouer : jamais connecté avec succès, ou déconnexion
             // volontaire entre-temps.
-            self.net_reconnect = None;
-            self.net_status = "Déconnecté".to_string();
+            self.net_conn.net_reconnect = None;
+            self.net_conn.net_status = "Déconnecté".to_string();
             return;
         }
-        let attempt = self.net_reconnect.as_ref().map_or(1, |r| r.attempt + 1);
+        let attempt = self
+            .net_conn
+            .net_reconnect
+            .as_ref()
+            .map_or(1, |r| r.attempt + 1);
         if attempt > MAX_RECONNECT_ATTEMPTS {
             log::warn!(
                 "Multijoueur : reconnexion abandonnée après {MAX_RECONNECT_ATTEMPTS} tentatives"
             );
-            self.net_reconnect = None;
-            self.net_last_connect = None;
-            self.net_status = format!(
+            self.net_conn.net_reconnect = None;
+            self.net_conn.net_last_connect = None;
+            self.net_conn.net_status = format!(
                 "Déconnecté (reconnexion échouée après {MAX_RECONNECT_ATTEMPTS} tentatives)"
             );
             return;
         }
-        self.net_status = format!(
+        self.net_conn.net_status = format!(
             "Connexion perdue — reconnexion (tentative {attempt}/{MAX_RECONNECT_ATTEMPTS})…"
         );
-        self.net_reconnect = Some(ReconnectState {
+        self.net_conn.net_reconnect = Some(ReconnectState {
             attempt,
             next_try: crate::time_compat::Instant::now() + reconnect_delay(attempt),
             #[cfg(not(target_arch = "wasm32"))]
@@ -443,7 +458,7 @@ impl AppState {
         });
         // Watchdog désarmé le temps de l'attente : il ne surveille qu'une
         // connexion active, pas un backoff.
-        self.net_last_server_msg = None;
+        self.net_conn.net_last_server_msg = None;
     }
 
     /// Fait avancer la reconnexion automatique (appelée à chaque frame par
@@ -451,14 +466,14 @@ impl AppState {
     /// résultat d'une tentative en vol, ou en lance une nouvelle au terme du
     /// backoff. Sans effet si connecté ou si aucune reconnexion n'est armée.
     fn advance_reconnection(&mut self) {
-        if self.net_client.is_some() || self.net_reconnect.is_none() {
+        if self.net_conn.net_client.is_some() || self.net_conn.net_reconnect.is_none() {
             return;
         }
         // 1. Résultat d'une tentative en vol (natif uniquement : la connexion
         //    bloquante vit dans un thread éphémère, cf. `ReconnectState::pending`).
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let outcome = self.net_reconnect.as_ref().and_then(|s| {
+            let outcome = self.net_conn.net_reconnect.as_ref().and_then(|s| {
                 let rx = s.pending.as_ref()?;
                 match rx.try_recv() {
                     Ok(res) => Some(res),
@@ -482,6 +497,7 @@ impl AppState {
                     // Tentative toujours en vol : attendre son verdict avant
                     // d'en lancer une autre.
                     if self
+                        .net_conn
                         .net_reconnect
                         .as_ref()
                         .is_some_and(|s| s.pending.is_some())
@@ -494,14 +510,16 @@ impl AppState {
         // 2. Backoff écoulé ? → lancer la tentative suivante.
         let now = crate::time_compat::Instant::now();
         if self
+            .net_conn
             .net_reconnect
             .as_ref()
             .is_some_and(|s| now < s.next_try)
         {
             return;
         }
-        let Some((url, name, lobby, class, objective)) = self.net_last_connect.clone() else {
-            self.net_reconnect = None;
+        let Some((url, name, lobby, class, objective)) = self.net_conn.net_last_connect.clone()
+        else {
+            self.net_conn.net_reconnect = None;
             return;
         };
         let uid = self.join_credential();
@@ -523,7 +541,7 @@ impl AppState {
                 .map_err(|e| e.to_string());
                 let _ = tx.send(res);
             });
-            if let Some(s) = self.net_reconnect.as_mut() {
+            if let Some(s) = self.net_conn.net_reconnect.as_mut() {
                 s.pending = Some(rx);
             }
         }
@@ -558,15 +576,16 @@ impl AppState {
     /// avatar a été retiré à la fermeture de l'ancienne socket (`Leave`
     /// synthétique de `server_loop::handle_connection`).
     fn install_reconnected_client(&mut self, client: crate::net::client::NetClient) {
-        self.net_client = Some(client);
+        self.net_conn.net_client = Some(client);
         // Ré-arme le watchdog : cette connexion neuve a droit à sa pleine
         // fenêtre de silence avant d'être déclarée morte à son tour.
-        self.net_last_server_msg = Some(crate::time_compat::Instant::now());
+        self.net_conn.net_last_server_msg = Some(crate::time_compat::Instant::now());
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(s) = self.net_reconnect.as_mut() {
+        if let Some(s) = self.net_conn.net_reconnect.as_mut() {
             s.pending = None;
         }
-        self.net_status = "Reconnexion : transport rétabli, en attente du serveur…".to_string();
+        self.net_conn.net_status =
+            "Reconnexion : transport rétabli, en attente du serveur…".to_string();
     }
 
     /// Réconcilie le joueur local avec la position renvoyée par le serveur : à
@@ -597,11 +616,11 @@ impl AppState {
     /// significatif. Rien à faire si non connecté ou si aucun snapshot n'est
     /// encore arrivé.
     pub(super) fn apply_local_network_position(&mut self) {
-        if self.net_client.is_none() {
+        if self.net_conn.net_client.is_none() {
             return;
         }
         let now = crate::time_compat::Instant::now();
-        if let Some((server_pos, _yaw, visible)) = self.net_local_interp.sample(now)
+        if let Some((server_pos, _yaw, visible)) = self.net_conn.net_local_interp.sample(now)
             && let Some(pi) = self.player_index()
             && let Some(o) = self.scene.objects.get_mut(pi)
         {
@@ -609,12 +628,13 @@ impl AppState {
             // `HISTORY_WINDOW`) : la position que le serveur renvoie date d'une
             // latence + un tick — en pleine course, elle est *toujours* à
             // vitesse × latence (≈ 1 m sur le VPS réel) derrière la prédiction.
-            self.net_local_history
+            self.net_conn
+                .net_local_history
                 .push_back((now, o.transform.position));
-            while let Some(&(t, _)) = self.net_local_history.front()
+            while let Some(&(t, _)) = self.net_conn.net_local_history.front()
                 && now.duration_since(t) > HISTORY_WINDOW
             {
-                self.net_local_history.pop_front();
+                self.net_conn.net_local_history.pop_front();
             }
             // Vraie désynchronisation = la position serveur n'est **nulle part**
             // sur notre trajectoire récente. Si elle est proche d'un point où l'on
@@ -623,10 +643,10 @@ impl AppState {
             // instantanée) déclencherait une traction continue dès qu'on bouge —
             // le personnage freinerait par à-coups et tremblerait à l'arrêt (cf.
             // docs/audits/app-network.md).
-            let on_recent_path = self
-                .net_local_history
-                .iter()
-                .any(|&(_, p)| p.distance(server_pos) <= crate::net::interpolation::SNAP_THRESHOLD);
+            let on_recent_path =
+                self.net_conn.net_local_history.iter().any(|&(_, p)| {
+                    p.distance(server_pos) <= crate::net::interpolation::SNAP_THRESHOLD
+                });
             let mut correction =
                 crate::net::interpolation::reconcile(o.transform.position, server_pos)
                     .filter(|_| !on_recent_path)
@@ -681,27 +701,27 @@ impl AppState {
         match msg {
             ServerMsg::Welcome { player_id } => {
                 log::info!("Multijoueur : bienvenue, joueur {player_id}");
-                self.net_player_id = Some(player_id);
-                self.net_status = format!("Connecté (joueur {player_id})");
+                self.net_conn.net_player_id = Some(player_id);
+                self.net_conn.net_status = format!("Connecté (joueur {player_id})");
                 // Solde une éventuelle reconnexion automatique : le serveur nous
                 // a réadmis (sous un **nouveau** `player_id` — l'ancien avatar a
                 // été retiré à la fermeture de l'ancienne socket), le compteur
                 // de tentatives repart de zéro pour la prochaine coupure.
-                self.net_reconnect = None;
+                self.net_conn.net_reconnect = None;
             }
             ServerMsg::PlayerJoined { player_id, name } => {
-                if Some(player_id) != self.net_player_id {
+                if Some(player_id) != self.net_conn.net_player_id {
                     log::info!("Multijoueur : « {name} » (joueur {player_id}) a rejoint");
                     self.ensure_remote_player(player_id, &name);
                 }
             }
             ServerMsg::PlayerLeft { player_id } => {
                 log::info!("Multijoueur : joueur {player_id} est parti");
-                if let Some(rp) = self.remote_players.remove(&player_id)
+                if let Some(rp) = self.net_conn.remote_players.remove(&player_id)
                     && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
                 {
                     if o.visible {
-                        self.net_visibility_dirty = true;
+                        self.net_conn.net_visibility_dirty = true;
                     }
                     o.visible = false;
                 }
@@ -744,11 +764,11 @@ impl AppState {
                             && o.controller.is_none()
                             && o.combat.as_ref().is_some_and(|c| c.attackable)
                         {
-                            self.net_creature_last_snapshot.insert(i, now);
+                            self.net_conn.net_creature_last_snapshot.insert(i, now);
                             o.transform.position = glam::Vec3::from_array(e.position);
                             o.transform.rotation = glam::Quat::from_rotation_y(e.yaw);
                             if o.visible != e.visible {
-                                self.net_visibility_dirty = true;
+                                self.net_conn.net_visibility_dirty = true;
                             }
                             o.visible = e.visible;
                             // Animation répliquée : même mécanisme que
@@ -766,11 +786,11 @@ impl AppState {
                     // de `net_local_interp`) — même traitement que les autres
                     // joueurs, appliqué à `player_index` plutôt qu'à un
                     // fantôme dans `poll_network`.
-                    if Some(pid) == self.net_player_id {
-                        self.net_local_health = e.health;
-                        self.net_local_kills = e.kills;
-                        self.net_local_assists = e.assists;
-                        self.net_local_interp.push(e, now);
+                    if Some(pid) == self.net_conn.net_player_id {
+                        self.net_conn.net_local_health = e.health;
+                        self.net_conn.net_local_kills = e.kills;
+                        self.net_conn.net_local_assists = e.assists;
+                        self.net_conn.net_local_interp.push(e, now);
                         continue;
                     }
                     let default_name = format!("Joueur {pid}");
@@ -815,7 +835,7 @@ impl AppState {
             // fantôme se masquer au prochain `Snapshot` ne suffisait pas, un
             // groupe doit *sentir* qu'il perd quelqu'un, pas le déduire.
             ServerMsg::Event(crate::net::protocol::GameEvent::PlayerDown { player_id, cause }) => {
-                if Some(player_id) == self.net_player_id {
+                if Some(player_id) == self.net_conn.net_player_id {
                     self.fx.damage_flash = 1.0;
                     self.fx.camera_shake = 1.0;
                     // Sprint 2 (`sprint10audit.md`) : mémorisé pour la bannière
@@ -878,10 +898,10 @@ impl AppState {
             ServerMsg::JoinRejected { reason } => {
                 log::warn!("Multijoueur : connexion refusée par le serveur : {reason}");
                 self.reset_network_session();
-                self.net_reconnect = None;
-                self.net_last_connect = None;
-                self.net_last_server_msg = None;
-                self.net_status = reason;
+                self.net_conn.net_reconnect = None;
+                self.net_conn.net_last_connect = None;
+                self.net_conn.net_last_server_msg = None;
+                self.net_conn.net_status = reason;
             }
         }
     }
@@ -904,7 +924,7 @@ impl AppState {
         id: crate::net::protocol::PlayerId,
         name: &str,
     ) -> &mut RemotePlayer {
-        if !self.remote_players.contains_key(&id) {
+        if !self.net_conn.remote_players.contains_key(&id) {
             let template = self
                 .scene
                 .objects
@@ -922,7 +942,7 @@ impl AppState {
             };
             let scene_index = self.scene.objects.len();
             self.scene.objects.push(ghost);
-            self.remote_players.insert(
+            self.net_conn.remote_players.insert(
                 id,
                 RemotePlayer {
                     name: name.to_string(),
@@ -935,7 +955,8 @@ impl AppState {
                 },
             );
         }
-        self.remote_players
+        self.net_conn
+            .remote_players
             .get_mut(&id)
             .expect("vient d'être inséré juste au-dessus")
     }
@@ -954,7 +975,7 @@ impl AppState {
         &mut self,
         summary: &[crate::net::protocol::RoundPlayerSummary],
     ) {
-        let (Some(prev), Some(me)) = (self.firebase_xp, self.net_player_id) else {
+        let (Some(prev), Some(me)) = (self.firebase_xp, self.net_conn.net_player_id) else {
             return;
         };
         let Some(line) = summary.iter().find(|l| l.player_id == me) else {
@@ -1103,7 +1124,7 @@ impl AppState {
             return;
         }
         self.firebase.firebase_busy = true;
-        self.net_status = "Connexion à Firebase…".to_string();
+        self.net_conn.net_status = "Connexion à Firebase…".to_string();
         let tx = self.firebase.firebase_tx.clone();
         std::thread::spawn(move || {
             let config = crate::net::firebase::FirebaseConfig {
@@ -1135,14 +1156,14 @@ impl AppState {
             match result {
                 Ok((uid, id_token, xp)) => {
                     log::info!("Firebase : connecté (uid {uid})");
-                    self.net_status = format!("Connecté à Firebase (uid {uid})");
+                    self.net_conn.net_status = format!("Connecté à Firebase (uid {uid})");
                     self.firebase.firebase_uid = Some(uid);
                     self.firebase.firebase_id_token = Some(id_token);
                     self.firebase_xp = xp;
                 }
                 Err(e) => {
                     log::warn!("Firebase : connexion échouée : {e}");
-                    self.net_status = format!("Connexion Firebase échouée : {e}");
+                    self.net_conn.net_status = format!("Connexion Firebase échouée : {e}");
                 }
             }
         }
@@ -1162,14 +1183,14 @@ impl AppState {
         text: String,
     ) {
         let Some(id_token) = self.firebase.firebase_id_token.clone() else {
-            self.net_status = "Connecte-toi d'abord à un compte pour discuter".to_string();
+            self.net_conn.net_status = "Connecte-toi d'abord à un compte pour discuter".to_string();
             return;
         };
         if self.net_panels.chat_busy {
             return;
         }
         if let Err(reason) = crate::net::firebase::valid_chat_text(&text) {
-            self.net_status = format!("Message non envoyé : {reason}");
+            self.net_conn.net_status = format!("Message non envoyé : {reason}");
             return;
         }
         self.net_panels.chat_busy = true;
@@ -1363,7 +1384,7 @@ fn fetch_chat_lines(
 #[cfg(target_os = "ios")]
 impl AppState {
     pub fn connect_to_server(&mut self, _url: &str, _name: &str) {
-        self.net_status = "Multijoueur indisponible sur iOS".to_string();
+        self.net_conn.net_status = "Multijoueur indisponible sur iOS".to_string();
     }
 
     /// Stub de parité avec le bloc `not(target_os = "ios")` ci-dessus (Sprint 3,
@@ -1378,7 +1399,7 @@ impl AppState {
         _room: &str,
         _objective: crate::app::multiplayer::RoundObjective,
     ) {
-        self.net_status = "Multijoueur indisponible sur iOS".to_string();
+        self.net_conn.net_status = "Multijoueur indisponible sur iOS".to_string();
     }
 
     pub fn disconnect_from_server(&mut self) {}
@@ -1423,7 +1444,7 @@ impl AppState {
         _email: String,
         _password: String,
     ) {
-        self.net_status = "Firebase indisponible sur mobile".to_string();
+        self.net_conn.net_status = "Firebase indisponible sur mobile".to_string();
     }
 
     pub fn request_firebase_sign_up(
@@ -1433,7 +1454,7 @@ impl AppState {
         _email: String,
         _password: String,
     ) {
-        self.net_status = "Firebase indisponible sur mobile".to_string();
+        self.net_conn.net_status = "Firebase indisponible sur mobile".to_string();
     }
 
     pub fn request_send_chat_message(

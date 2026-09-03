@@ -453,6 +453,123 @@ pub struct ProjectilesState {
     net_creature_shots: Vec<(Vec3, Vec3, usize)>,
 }
 
+/// Connexion réseau côté client (roadmap post-audit 2026-09-03, 3.3) : transport,
+/// identité serveur, statut affiché et état local prédit/reçu — distinct de
+/// `NetworkPlayersState`, qui suit les **autres** joueurs (positions, vie, frags),
+/// pas la connexion elle-même ni le joueur local.
+pub struct NetConnectionState {
+    /// Évènements de gameplay produits par la simulation (ex. monstre vaincu par
+    /// une boule de feu) à diffuser aux clients — drainés par le serveur headless
+    /// à chaque tick (cf. `take_net_events`). Reste vide hors serveur (le joueur
+    /// solo entend ses sons directement, il n'a personne à prévenir).
+    pending_net_events: Vec<crate::net::protocol::GameEvent>,
+    /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
+    /// a rejoint une partie en ligne. Desktop + Android seulement : `net::client`
+    /// dépend de `tokio`, pas encore ciblé sur iOS (cf. `net/mod.rs`).
+    #[cfg(not(target_os = "ios"))]
+    net_client: Option<crate::net::client::NetClient>,
+    /// Identifiant attribué par le serveur à ce client (`ServerMsg::Welcome`),
+    /// une fois connecté. Sert à repérer sa propre entité dans les `Snapshot`
+    /// reçus (cf. `net_local_interp` : le serveur reste maître même de la
+    /// position du joueur local, `network_client::poll_network` se contente
+    /// d'afficher ce qu'il reçoit).
+    net_player_id: Option<crate::net::protocol::PlayerId>,
+    /// Message de statut réseau à afficher dans l'UI (connecté/déconnecté/erreur).
+    pub net_status: String,
+    /// Autres joueurs réseau visibles par ce client, affichés comme des
+    /// « fantômes » (objet de scène dont la position suit le dernier `Snapshot`
+    /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
+    /// localement (le serveur est autoritaire sur eux).
+    remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
+    /// `true` si un fantôme réseau (joueur distant ou créature diffusée par le
+    /// serveur) a changé de visibilité depuis le dernier appel à
+    /// `network_client::poll_network` — un fantôme masqué n'a pas de corps
+    /// physique (cf. `runtime::physics::Physics::build`), donc chaque
+    /// bascule doit reconstruire le monde physique pour que son collider
+    /// apparaisse/disparaisse (même mécanisme que `App::update_waves` pour
+    /// une manche révélée). Remis à `false` une fois le rebuild fait.
+    net_visibility_dirty: bool,
+    /// Horodatage du dernier `Snapshot` reçu couvrant chaque créature autoritaire
+    /// (indexée par `SceneObject`, cf. `network_client::handle_server_msg`). Sert
+    /// de filet de secours (`simulation::advance_play`) : si le serveur ne
+    /// diffuse jamais (room jointe sans succès, scène désynchronisée) ou cesse
+    /// de diffuser une créature donnée, on reprend sa simulation locale plutôt
+    /// que de la laisser figée pour toujours — cf. `[[creature-freeze-...]]`.
+    net_creature_last_snapshot: HashMap<usize, Instant>,
+    /// Historique (2 derniers points) de la position du joueur **local** telle
+    /// que rapportée par le serveur — même mécanisme d'interpolation que les
+    /// fantômes des autres joueurs (`RemoteEntity`). Sert de référence
+    /// autoritative pour la réconciliation (`apply_local_network_position`) :
+    /// le joueur local reste piloté par prédiction immédiate (`sim_step`), le
+    /// serveur ne corrige que si l'écart dépasse `interpolation::SNAP_THRESHOLD`.
+    #[cfg(not(target_os = "ios"))]
+    net_local_interp: crate::net::interpolation::RemoteEntity,
+    /// Dernière vie connue du joueur local (0..1, cf. `app::health`,
+    /// GAMEDESIGN_EN_LIGNE.md §3.1/§3.4) : lue telle quelle du dernier
+    /// `Snapshot` reçu pour notre propre `PlayerId` — même principe que
+    /// `RemotePlayer::health` pour les autres joueurs. `None` hors ligne ou
+    /// avant le premier snapshot.
+    #[cfg(not(target_os = "ios"))]
+    net_local_health: Option<f32>,
+    /// Frags individualisés connus du joueur local (brique de progression pour
+    /// un futur MMORPG) — même principe que `net_local_health` : lu tel quel
+    /// du dernier `Snapshot`. `None` hors ligne ou avant le premier snapshot.
+    #[cfg(not(target_os = "ios"))]
+    net_local_kills: Option<u32>,
+    /// Assists individualisés connus du joueur local (Phase L Sprint 3,
+    /// `sprint2audijeu0718.md`, GDD §8.3) — même principe que `net_local_kills`.
+    #[cfg(not(target_os = "ios"))]
+    net_local_assists: Option<u32>,
+    /// Historique court (~1 s) des positions **prédites** du joueur local, une par
+    /// frame (cf. `apply_local_network_position`). La position renvoyée par le
+    /// serveur est en retard d'une latence aller-retour + un tick : la comparer à la
+    /// position prédite *instantanée* la déclare « désynchronisée » dès qu'on bouge
+    /// (écart ≈ vitesse × latence ≈ 1 m au-delà de `SNAP_THRESHOLD` à 4,5 m/s sur le
+    /// VPS réel) — d'où une correction continue qui freinait et faisait trembler le
+    /// personnage en pleine course. La position
+    /// serveur est donc validée contre la **trajectoire récente** : si elle est
+    /// proche d'un point où l'on est réellement passé, on est en phase (le serveur
+    /// est juste en retard), pas de correction.
+    #[cfg(not(target_os = "ios"))]
+    net_local_history: std::collections::VecDeque<(crate::time_compat::Instant, Vec3)>,
+    /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur : `poll_network`
+    /// est appelée une fois par frame de rendu, potentiellement bien au-dessus du
+    /// tick serveur — ce champ sert à plafonner le débit d'envoi à
+    /// `network_client::INPUT_SEND_INTERVAL` plutôt que d'envoyer un message par
+    /// frame affichée.
+    #[cfg(not(target_os = "ios"))]
+    net_last_input_sent: Option<crate::time_compat::Instant>,
+    /// Horodatage du dernier `ServerMsg` reçu, **quel qu'il soit** (`Welcome`,
+    /// `Snapshot`, évènement… — tout message prouve que le serveur est vivant).
+    /// Watchdog applicatif (`network_client::NET_SILENCE_TIMEOUT`) : le
+    /// transport peut être à moitié mort (TCP half-open, façade Caddy qui gèle)
+    /// sans que `NetClient::is_alive()` ne bascule — un silence prolongé est
+    /// alors le seul symptôme. Armé dès la connexion (pas seulement au premier
+    /// message), pour couvrir aussi un serveur qui accepte la socket mais ne
+    /// répond jamais.
+    #[cfg(not(target_os = "ios"))]
+    net_last_server_msg: Option<crate::time_compat::Instant>,
+    /// Paramètres `(url, nom, salon)` de la dernière connexion **réussie** —
+    /// ce que la reconnexion automatique rejoue à l'identique après une
+    /// coupure (cf. `network_client::poll_network`). `None` tant qu'on ne
+    /// s'est jamais connecté, et remis à `None` par une déconnexion
+    /// **volontaire** (`disconnect_from_server`) : quitter la partie ne doit
+    /// jamais déclencher une reconnexion dans le dos du joueur.
+    /// Quatrième champ (Sprint 3, `sprint10audit.md`) : la classe choisie
+    /// (`multiplayer::PlayerClass::to_u8`) au `Join` initial — rejouée à
+    /// l'identique par la reconnexion automatique, comme le reste du tuple.
+    /// Cinquième champ (Sprint 21, `sprintreflecion.md`) : le mode de manche
+    /// choisi (`multiplayer::RoundObjective::to_u8`), même principe.
+    #[cfg(not(target_os = "ios"))]
+    net_last_connect: Option<(String, String, String, u8, u8)>,
+    /// Reconnexion automatique en cours, s'il y en a une (cf.
+    /// `network_client::ReconnectState` : numéro de tentative, prochain essai,
+    /// tentative de fond éventuellement en vol). `None` = connexion saine ou
+    /// définitivement abandonnée.
+    #[cfg(not(target_os = "ios"))]
+    net_reconnect: Option<network_client::ReconnectState>,
+}
+
 pub struct NetworkPlayersState {
     /// Joueurs réseau connectés (cf. `multiplayer.rs`) : indice de
     /// l'objet de scène que chacun pilote, dans `scene.objects`.
@@ -809,116 +926,9 @@ pub struct AppState {
     /// déclenche que sur le front montant (l'overlay réécrit `buttons` à chaque
     /// frame — sans ça, un appui ferait défiler toutes les armes en rafale).
     weapon_button_was_down: bool,
-    /// Évènements de gameplay produits par la simulation (ex. monstre vaincu par
-    /// une boule de feu) à diffuser aux clients — drainés par le serveur headless
-    /// à chaque tick (cf. `take_net_events`). Reste vide hors serveur (le joueur
-    /// solo entend ses sons directement, il n'a personne à prévenir).
-    pending_net_events: Vec<crate::net::protocol::GameEvent>,
-    /// Connexion au serveur multijoueur (cf. `network_client.rs`), si ce client
-    /// a rejoint une partie en ligne. Desktop + Android seulement : `net::client`
-    /// dépend de `tokio`, pas encore ciblé sur iOS (cf. `net/mod.rs`).
-    #[cfg(not(target_os = "ios"))]
-    net_client: Option<crate::net::client::NetClient>,
-    /// Identifiant attribué par le serveur à ce client (`ServerMsg::Welcome`),
-    /// une fois connecté. Sert à repérer sa propre entité dans les `Snapshot`
-    /// reçus (cf. `net_local_interp` : le serveur reste maître même de la
-    /// position du joueur local, `network_client::poll_network` se contente
-    /// d'afficher ce qu'il reçoit).
-    net_player_id: Option<crate::net::protocol::PlayerId>,
-    /// Message de statut réseau à afficher dans l'UI (connecté/déconnecté/erreur).
-    pub net_status: String,
-    /// Autres joueurs réseau visibles par ce client, affichés comme des
-    /// « fantômes » (objet de scène dont la position suit le dernier `Snapshot`
-    /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
-    /// localement (le serveur est autoritaire sur eux).
-    remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
-    /// `true` si un fantôme réseau (joueur distant ou créature diffusée par le
-    /// serveur) a changé de visibilité depuis le dernier appel à
-    /// `network_client::poll_network` — un fantôme masqué n'a pas de corps
-    /// physique (cf. `runtime::physics::Physics::build`), donc chaque
-    /// bascule doit reconstruire le monde physique pour que son collider
-    /// apparaisse/disparaisse (même mécanisme que `App::update_waves` pour
-    /// une manche révélée). Remis à `false` une fois le rebuild fait.
-    net_visibility_dirty: bool,
-    /// Horodatage du dernier `Snapshot` reçu couvrant chaque créature autoritaire
-    /// (indexée par `SceneObject`, cf. `network_client::handle_server_msg`). Sert
-    /// de filet de secours (`simulation::advance_play`) : si le serveur ne
-    /// diffuse jamais (room jointe sans succès, scène désynchronisée) ou cesse
-    /// de diffuser une créature donnée, on reprend sa simulation locale plutôt
-    /// que de la laisser figée pour toujours — cf. `[[creature-freeze-...]]`.
-    net_creature_last_snapshot: HashMap<usize, Instant>,
-    /// Historique (2 derniers points) de la position du joueur **local** telle
-    /// que rapportée par le serveur — même mécanisme d'interpolation que les
-    /// fantômes des autres joueurs (`RemoteEntity`). Sert de référence
-    /// autoritative pour la réconciliation (`apply_local_network_position`) :
-    /// le joueur local reste piloté par prédiction immédiate (`sim_step`), le
-    /// serveur ne corrige que si l'écart dépasse `interpolation::SNAP_THRESHOLD`.
-    #[cfg(not(target_os = "ios"))]
-    net_local_interp: crate::net::interpolation::RemoteEntity,
-    /// Dernière vie connue du joueur local (0..1, cf. `app::health`,
-    /// GAMEDESIGN_EN_LIGNE.md §3.1/§3.4) : lue telle quelle du dernier
-    /// `Snapshot` reçu pour notre propre `PlayerId` — même principe que
-    /// `RemotePlayer::health` pour les autres joueurs. `None` hors ligne ou
-    /// avant le premier snapshot.
-    #[cfg(not(target_os = "ios"))]
-    net_local_health: Option<f32>,
-    /// Frags individualisés connus du joueur local (brique de progression pour
-    /// un futur MMORPG) — même principe que `net_local_health` : lu tel quel
-    /// du dernier `Snapshot`. `None` hors ligne ou avant le premier snapshot.
-    #[cfg(not(target_os = "ios"))]
-    net_local_kills: Option<u32>,
-    /// Assists individualisés connus du joueur local (Phase L Sprint 3,
-    /// `sprint2audijeu0718.md`, GDD §8.3) — même principe que `net_local_kills`.
-    #[cfg(not(target_os = "ios"))]
-    net_local_assists: Option<u32>,
-    /// Historique court (~1 s) des positions **prédites** du joueur local, une par
-    /// frame (cf. `apply_local_network_position`). La position renvoyée par le
-    /// serveur est en retard d'une latence aller-retour + un tick : la comparer à la
-    /// position prédite *instantanée* la déclare « désynchronisée » dès qu'on bouge
-    /// (écart ≈ vitesse × latence ≈ 1 m au-delà de `SNAP_THRESHOLD` à 4,5 m/s sur le
-    /// VPS réel) — d'où une correction continue qui freinait et faisait trembler le
-    /// personnage en pleine course. La position
-    /// serveur est donc validée contre la **trajectoire récente** : si elle est
-    /// proche d'un point où l'on est réellement passé, on est en phase (le serveur
-    /// est juste en retard), pas de correction.
-    #[cfg(not(target_os = "ios"))]
-    net_local_history: std::collections::VecDeque<(crate::time_compat::Instant, Vec3)>,
-    /// Horodatage du dernier `ClientMsg::Input` envoyé au serveur : `poll_network`
-    /// est appelée une fois par frame de rendu, potentiellement bien au-dessus du
-    /// tick serveur — ce champ sert à plafonner le débit d'envoi à
-    /// `network_client::INPUT_SEND_INTERVAL` plutôt que d'envoyer un message par
-    /// frame affichée.
-    #[cfg(not(target_os = "ios"))]
-    net_last_input_sent: Option<crate::time_compat::Instant>,
-    /// Horodatage du dernier `ServerMsg` reçu, **quel qu'il soit** (`Welcome`,
-    /// `Snapshot`, évènement… — tout message prouve que le serveur est vivant).
-    /// Watchdog applicatif (`network_client::NET_SILENCE_TIMEOUT`) : le
-    /// transport peut être à moitié mort (TCP half-open, façade Caddy qui gèle)
-    /// sans que `NetClient::is_alive()` ne bascule — un silence prolongé est
-    /// alors le seul symptôme. Armé dès la connexion (pas seulement au premier
-    /// message), pour couvrir aussi un serveur qui accepte la socket mais ne
-    /// répond jamais.
-    #[cfg(not(target_os = "ios"))]
-    net_last_server_msg: Option<crate::time_compat::Instant>,
-    /// Paramètres `(url, nom, salon)` de la dernière connexion **réussie** —
-    /// ce que la reconnexion automatique rejoue à l'identique après une
-    /// coupure (cf. `network_client::poll_network`). `None` tant qu'on ne
-    /// s'est jamais connecté, et remis à `None` par une déconnexion
-    /// **volontaire** (`disconnect_from_server`) : quitter la partie ne doit
-    /// jamais déclencher une reconnexion dans le dos du joueur.
-    /// Quatrième champ (Sprint 3, `sprint10audit.md`) : la classe choisie
-    /// (`multiplayer::PlayerClass::to_u8`) au `Join` initial — rejouée à
-    /// l'identique par la reconnexion automatique, comme le reste du tuple.
-    /// Cinquième champ (Sprint 21, `sprintreflecion.md`) : le mode de manche
-    /// choisi (`multiplayer::RoundObjective::to_u8`), même principe.
-    #[cfg(not(target_os = "ios"))]
-    net_last_connect: Option<(String, String, String, u8, u8)>,
-    /// Reconnexion automatique en cours, s'il y en a une (cf.
-    /// `network_client::ReconnectState` : numéro de tentative, prochain essai,
-    /// tentative de fond éventuellement en vol). `None` = connexion saine ou
-    /// définitivement abandonnée.
-    #[cfg(not(target_os = "ios"))]
-    net_reconnect: Option<network_client::ReconnectState>,
+    /// Connexion réseau côté client (transport, statut, reconnexion, état
+    /// local prédit) — cf. `NetConnectionState`.
+    pub net_conn: NetConnectionState,
     /// Connexion Firebase du joueur local (sign in/up, uid, jeton) — cf.
     /// `FirebaseAuthState`.
     firebase: FirebaseAuthState,
@@ -1190,32 +1200,34 @@ impl AppState {
             },
             selected_weapon: 0,
             weapon_button_was_down: false,
-            pending_net_events: Vec::new(),
-            #[cfg(not(target_os = "ios"))]
-            net_client: None,
-            net_player_id: None,
-            net_status: String::new(),
-            remote_players: HashMap::new(),
-            net_visibility_dirty: false,
-            net_creature_last_snapshot: HashMap::new(),
-            #[cfg(not(target_os = "ios"))]
-            net_local_interp: crate::net::interpolation::RemoteEntity::default(),
-            #[cfg(not(target_os = "ios"))]
-            net_local_health: None,
-            #[cfg(not(target_os = "ios"))]
-            net_local_kills: None,
-            #[cfg(not(target_os = "ios"))]
-            net_local_assists: None,
-            #[cfg(not(target_os = "ios"))]
-            net_local_history: std::collections::VecDeque::new(),
-            #[cfg(not(target_os = "ios"))]
-            net_last_input_sent: None,
-            #[cfg(not(target_os = "ios"))]
-            net_last_server_msg: None,
-            #[cfg(not(target_os = "ios"))]
-            net_last_connect: None,
-            #[cfg(not(target_os = "ios"))]
-            net_reconnect: None,
+            net_conn: NetConnectionState {
+                pending_net_events: Vec::new(),
+                #[cfg(not(target_os = "ios"))]
+                net_client: None,
+                net_player_id: None,
+                net_status: String::new(),
+                remote_players: HashMap::new(),
+                net_visibility_dirty: false,
+                net_creature_last_snapshot: HashMap::new(),
+                #[cfg(not(target_os = "ios"))]
+                net_local_interp: crate::net::interpolation::RemoteEntity::default(),
+                #[cfg(not(target_os = "ios"))]
+                net_local_health: None,
+                #[cfg(not(target_os = "ios"))]
+                net_local_kills: None,
+                #[cfg(not(target_os = "ios"))]
+                net_local_assists: None,
+                #[cfg(not(target_os = "ios"))]
+                net_local_history: std::collections::VecDeque::new(),
+                #[cfg(not(target_os = "ios"))]
+                net_last_input_sent: None,
+                #[cfg(not(target_os = "ios"))]
+                net_last_server_msg: None,
+                #[cfg(not(target_os = "ios"))]
+                net_last_connect: None,
+                #[cfg(not(target_os = "ios"))]
+                net_reconnect: None,
+            },
             firebase: FirebaseAuthState {
                 firebase_uid: None,
                 firebase_busy: false,
@@ -1506,7 +1518,8 @@ impl AppState {
     /// chaque frame par l'interpolation réseau (cf. `poll_network`), jamais par la
     /// simulation locale — l'interpolation de rendu ne doit pas y toucher.
     fn remote_player_scene_indices(&self) -> std::collections::HashSet<usize> {
-        self.remote_players
+        self.net_conn
+            .remote_players
             .values()
             .map(|rp| rp.scene_index)
             .collect()
@@ -1596,6 +1609,7 @@ impl AppState {
             .and_then(|i| self.scene.objects.get(i))
             .map(|o| (o.transform.position.x, o.transform.position.z));
         let allies = self
+            .net_conn
             .remote_players
             .values()
             .filter_map(|rp| {
@@ -1713,7 +1727,8 @@ impl AppState {
     /// que la bannière texte, comme avant ce sprint.
     pub fn nearest_downed_ally_position(&self) -> Option<Vec3> {
         let player_pos = self.player_position()?;
-        self.remote_players
+        self.net_conn
+            .remote_players
             .values()
             .filter(|rp| rp.health.is_some_and(|h| h <= 0.0))
             .filter_map(|rp| self.scene.objects.get(rp.scene_index))
