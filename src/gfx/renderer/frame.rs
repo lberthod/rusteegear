@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::editor::UiActions;
+
 impl Renderer {
     pub fn render(&mut self, app: &mut AppState) {
         // 0. Acquérir la surface EN PREMIER. Si indisponible, on sort avant de lancer
@@ -206,427 +208,13 @@ impl Renderer {
                 app.confirm_close_project,
                 app.pending_autosave_recovery.as_deref(),
             );
-            if app.ui_scene_fingerprint() != ui_fingerprint_before {
-                app.scene_dirty = true;
-            }
-            if let Some(kind) = actions.use_item {
-                app.use_item(kind);
-            }
-            if let Some(i) = actions.select_weapon {
-                app.select_weapon(i);
-            }
-            for action in &actions.hud_clicks {
-                app.push_hud_event(action);
-            }
-            if actions.save {
-                app.save();
-            }
-            if let Some(path) = actions.save_path {
-                app.save_to(&path);
-            }
-            if actions.load {
-                app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
-            }
-            if let Some(path) = actions.load_path {
-                app.load_from(&path);
-            }
-            if let Some(picked_path) = actions.open_project_path {
-                // Accepte soit le manifeste (sélecteur générique « Ouvrir… »,
-                // Sprint 3), soit directement le dossier racine du projet
-                // (« Ouvrir un projet… », projets récents — Sprint 4).
-                let picked = std::path::Path::new(&picked_path);
-                let dir = if picked.file_name().and_then(|n| n.to_str())
-                    == Some(crate::project::MANIFEST_FILE)
-                {
-                    picked.parent().unwrap_or(picked)
-                } else {
-                    picked
-                };
-                match app.open_project(dir) {
-                    Ok(_) => {
-                        if let Some(project) = &app.current_project {
-                            editor.note_recent_project(&project.name, &project.root);
-                        }
-                    }
-                    Err(e) => log::error!("Ouverture du projet échouée : {e}"),
-                }
-            }
-            if let Some(req) = actions.create_project {
-                match app.create_project(&req.location, &req.name, req.template) {
-                    Ok(_) => {
-                        if let Some(project) = &app.current_project {
-                            editor.note_recent_project(&project.name, &project.root);
-                        }
-                    }
-                    Err(e) => log::error!("Création du projet échouée : {e}"),
-                }
-            }
-            if actions.close_project {
-                app.request_close_project();
-            }
-            // Réponses à la modale « modifications non sauvegardées » de
-            // fermeture de projet (Sprint 4) — mêmes noms que la modale de
-            // Quitter, cf. plus bas.
-            if actions.close_project_cancel {
-                app.confirm_close_project = false;
-            }
-            if actions.close_project_discard {
-                app.close_project();
-            }
-            if actions.close_project_save {
-                if let Some(project) = app.current_project.clone() {
-                    let path = project.main_scene_path.to_string_lossy().into_owned();
-                    app.save_to(&path);
-                    // `save_to` ne baisse `scene_dirty` que sur succès : en cas
-                    // d'échec, on reste ouvert plutôt que de fermer en perdant
-                    // la scène — même garde que `quit_save`.
-                    if !app.scene_dirty {
-                        app.close_project();
-                    }
-                } else {
-                    app.confirm_close_project = false;
-                }
-            }
-            if actions.duplicate_project {
-                match app.duplicate_project() {
-                    Ok(dst) => log::info!("Projet dupliqué dans {}", dst.display()),
-                    Err(e) => log::error!("Duplication du projet échouée : {e}"),
-                }
-            }
-            if actions.reveal_project_in_finder
-                && let Some(project) = &app.current_project
-            {
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = std::process::Command::new("open")
-                        .arg("-R")
-                        .arg(&project.root)
-                        .spawn();
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    log::info!(
-                        "Révéler dans le Finder n'est disponible que sur macOS ({})",
-                        project.root.display()
-                    );
-                }
-            }
-            // Réponses à la modale de récupération après crash (Sprint 6).
-            if actions.restore_autosave
-                && let Some(path) = app.pending_autosave_recovery.take()
-                && let Err(e) = app.restore_autosave(&path)
-            {
-                log::error!("Restauration de l'autosave échouée : {e}");
-            }
-            if actions.dismiss_autosave_recovery {
-                app.pending_autosave_recovery = None;
-            }
-            if let Some(path) = actions.import {
-                app.import_gltf(&path);
-            }
-            if let Some(kind) = actions.add {
-                app.add_object(kind);
-            }
-            if let Some(i) = actions.delete {
-                app.delete_object(i);
-            }
-            if actions.duplicate {
-                app.duplicate_selected();
-            }
-            if actions.new_scene {
-                app.new_scene();
-            }
-            if actions.load_demo {
-                app.load_mobile_demo();
-            }
-            if actions.load_gameplay {
-                app.load_gameplay_demo();
-            }
-            if actions.load_controller {
-                app.load_controller_demo();
-            }
-            if actions.load_tower {
-                app.load_tower_demo();
-            }
-            if actions.load_temple_run {
-                app.load_temple_run_demo();
-            }
-            if actions.load_components_demo {
-                app.load_components_demo();
-            }
-            if actions.load_ai_duel {
-                app.load_zombies_demo();
-            }
-            if actions.load_mmorpg {
-                app.load_mmorpg_demo();
-            }
-            if actions.load_roguelike {
-                app.load_roguelike_demo();
-            }
-            if actions.load_brawl {
-                app.load_brawl_demo();
-            }
-            if actions.load_boss {
-                app.load_boss_demo();
-            }
-            if actions.load_escorte {
-                app.load_escorte_demo();
-            }
-            if actions.load_survie {
-                app.load_survie_demo();
-            }
-            if actions.restart {
-                restart = true;
-            }
-            if let Some((url, name, class, room, objective)) = actions.connect_to_server {
-                app.connect_to_server_as(&url, &name, class, &room, objective);
-            }
-            if actions.disconnect_from_server {
-                app.disconnect_from_server();
-            }
-            // Serveur local (Sprint 7) : démarrer puis auto-connecter l'hôte
-            // (7.4), avec les mêmes pseudo/classe/salon/mode que le bouton
-            // « Se connecter » enverrait — sauf pseudo vide, auquel cas on
-            // laisse l'utilisateur cliquer lui-même une fois renseigné.
-            if actions.start_local_server {
-                match editor.start_local_server() {
-                    Ok(addr) => {
-                        let url = format!("ws://{addr}");
-                        let (url, name, class, room, objective) =
-                            editor.multiplayer_connect_params(&url);
-                        if name.trim().is_empty() {
-                            log::info!(
-                                "Serveur local démarré sur {addr} — renseigne un pseudo puis \
-                                 clique ▶ Se connecter."
-                            );
-                        } else {
-                            app.connect_to_server_as(&url, &name, class, &room, objective);
-                        }
-                    }
-                    Err(e) => log::error!("Démarrage du serveur local échoué : {e}"),
-                }
-            }
-            if actions.stop_local_server {
-                editor.stop_local_server();
-                // Le serveur auquel on était peut-être connecté vient de
-                // disparaître : la connexion cliente doit suivre, pas rester
-                // affichée comme active vers un process mort.
-                app.disconnect_from_server();
-            }
-            if let Some((email, password)) = actions.firebase_sign_in {
-                let settings = editor.settings();
-                app.request_firebase_sign_in(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                    email,
-                    password,
-                );
-            }
-            if let Some((email, password)) = actions.firebase_sign_up {
-                let settings = editor.settings();
-                app.request_firebase_sign_up(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                    email,
-                    password,
-                );
-            }
-            if let Some((lobby_code, sender_name, text)) = actions.send_chat_message {
-                let settings = editor.settings();
-                app.request_send_chat_message(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                    lobby_code,
-                    sender_name,
-                    text,
-                );
-            }
-            if let Some(lobby_code) = actions.refresh_chat {
-                let settings = editor.settings();
-                app.request_refresh_chat(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                    lobby_code,
-                );
-            }
-            if actions.refresh_leaderboard {
-                let settings = editor.settings();
-                app.request_refresh_leaderboard(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                    10,
-                );
-            }
-            if actions.refresh_online_players {
-                let settings = editor.settings();
-                app.request_refresh_online_players(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                );
-            }
-            if actions.presence_heartbeat {
-                let settings = editor.settings();
-                app.request_presence_heartbeat(
-                    settings.firebase_api_key.clone(),
-                    settings.firebase_database_url.clone(),
-                );
-            }
-            if actions.align_ground {
-                app.align_to_ground();
-            }
-            if actions.reset_transform {
-                app.reset_transform();
-            }
-            if let Some(scope) = actions.save_as_prefab {
-                let result = app.save_selected_as_prefab(scope);
-                if let Err(e) = &result {
-                    log::warn!("Création du prefab impossible : {e}");
-                }
-                editor.set_prefab_feedback(result);
-            }
-            if let Some(asset_id) = actions.instantiate_prefab {
-                app.instantiate_prefab(&asset_id);
-            }
-            if actions.sync_prefab_instances {
-                app.sync_prefab_instances();
-            }
-            if let Some((scope, name)) = actions.delete_prefab {
-                crate::assets::delete_prefab(&scope, &name);
-            }
-            if actions.quit {
-                app.request_quit();
-            }
-            // Réponses à la modale « modifications non sauvegardées ».
-            if actions.quit_cancel {
-                app.confirm_quit = false;
-            }
-            if actions.quit_discard {
-                app.confirm_quit = false;
-                app.should_quit = true;
-            }
-            if actions.quit_save {
-                app.confirm_quit = false;
-                app.save();
-                // `save` ne baisse `scene_dirty` que sur succès : en cas d'échec
-                // (disque plein, chemin illisible…), on reste ouvert plutôt que de
-                // quitter en perdant la scène — l'erreur est visible dans la console.
-                if !app.scene_dirty {
-                    app.should_quit = true;
-                }
-            }
-            if actions.launch_glb_viewer {
-                crate::editor::launch_glb_viewer();
-            }
-            if actions.undo {
-                app.undo();
-            }
-            if actions.redo {
-                app.redo();
-            }
-            if actions.step_frame {
-                app.request_step();
-            }
-            if let Some(cmd) = actions.console_command {
-                let result = app.run_console_command(&cmd);
-                log::info!("> {cmd}\n{result}");
-            }
-            if let Some(clip) = actions.play_audio {
-                app.play_audio(&clip);
-            }
-            if let Some(v) = actions.music_volume {
-                app.set_music_volume(v);
-            }
-            if let Some(v) = actions.sfx_volume {
-                app.set_sfx_volume(v);
-            }
-            if let Some(l) = actions.locale {
-                app.set_locale(l);
-            }
-            if let Some(v) = actions.reduce_shake {
-                app.set_reduce_shake(v);
-            }
-            if let Some(down) = actions.move_in_list {
-                app.move_selected_in_list(down);
-            }
-            if let Some((from, to)) = actions.reorder {
-                app.reorder_object(from, to);
-            }
-            if actions.focus_selection {
-                app.frame_selected();
-            }
-            if let Some((idx, req)) = actions.ai_generate {
-                app.request_ai_script(idx, req);
-            }
-            if let Some((req, replace)) = actions.ai_generate_scene {
-                app.request_ai_scene(req, replace);
-            }
-            if actions.set_game_camera {
-                app.set_game_camera();
-            }
-            if actions.clear_game_camera {
-                app.clear_game_camera();
-            }
-            if let Some(max) = actions.optimize_textures {
-                let n = app.optimize_textures(max);
-                log::info!("Optimisation : {n} texture(s) réduite(s) à ≤ {max} px");
-            }
-            if let Some(max) = actions.limit_lights {
-                app.limit_point_lights(max);
-            }
-            if actions.convert_textures_pot {
-                let n = app.convert_textures_pot();
-                log::info!("Convertisseur : {n} texture(s) en puissances de 2");
-            }
-            if actions.bake_lighting {
-                let n = app.bake_lighting();
-                log::info!("Bake lighting : {n} lumière(s) ponctuelle(s) figée(s) en émission");
-            }
-            if actions.perf_mode {
-                let t = app.optimize_textures(1024);
-                app.limit_point_lights(4);
-                log::info!("Mode performance Android : {t} texture(s) réduite(s), ≤ 4 lumières");
-            }
-            if let Some(preset) = actions.apply_quality_preset {
-                app.apply_quality_preset(preset);
-                log::info!("Préset qualité appliqué : {preset:?}");
-            }
-            if actions.collect_assets {
-                let n = app.collect_assets();
-                log::info!("Assets rassemblés : {n} chemin(s) → asset://");
-            }
-            if actions.cut {
-                app.cut_selected();
-            }
-            if actions.copy {
-                app.copy_selected();
-            }
-            if actions.paste {
-                app.paste();
-            }
-            if actions.select_all {
-                app.select_all();
-            }
-            if actions.group {
-                app.group_selected();
-            }
-            if actions.ungroup {
-                app.ungroup_selected();
-            }
-            if let Some(axis) = actions.align_axis {
-                app.align_selection_axis(axis);
-            }
-            if let Some(axis) = actions.distribute_axis {
-                app.distribute_selection_axis(axis);
-            }
-            if actions.toggle_grid {
-                app.show_grid = !app.show_grid;
-            }
-            if actions.toggle_snap {
-                app.snap = !app.snap;
-            }
-            if let Some(view) = actions.set_debug_view {
-                app.debug_view = view;
-            }
+            apply_editor_actions(
+                app,
+                &mut editor,
+                actions,
+                ui_fingerprint_before,
+                &mut restart,
+            );
             Some(full_output)
         };
 
@@ -1141,5 +729,440 @@ impl Renderer {
                 .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
         }
         verts.len() as u32
+    }
+}
+
+/// Traduit chaque action de l'UI éditeur (`UiActions`, produites par
+/// `Editor::run`) en appel `AppState`/`Editor` correspondant. Fonction libre
+/// (aucun accès à `Renderer` lui-même) : extraction pure de `render`, aucune
+/// logique nouvelle (plan de découpage, `docs/plan_decoupage_sim_step_et_
+/// render.md`, lot 3.2.C). `restart` est un paramètre de sortie plutôt qu'une
+/// valeur de retour : `render` le lit après avoir aussi traité
+/// `player_net_actions`, pas seulement à la sortie de cette fonction.
+fn apply_editor_actions(
+    app: &mut AppState,
+    editor: &mut Editor,
+    actions: UiActions,
+    ui_fingerprint_before: String,
+    restart: &mut bool,
+) {
+    if app.ui_scene_fingerprint() != ui_fingerprint_before {
+        app.scene_dirty = true;
+    }
+    if let Some(kind) = actions.use_item {
+        app.use_item(kind);
+    }
+    if let Some(i) = actions.select_weapon {
+        app.select_weapon(i);
+    }
+    for action in &actions.hud_clicks {
+        app.push_hud_event(action);
+    }
+    if actions.save {
+        app.save();
+    }
+    if let Some(path) = actions.save_path {
+        app.save_to(&path);
+    }
+    if actions.load {
+        app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
+    }
+    if let Some(path) = actions.load_path {
+        app.load_from(&path);
+    }
+    if let Some(picked_path) = actions.open_project_path {
+        // Accepte soit le manifeste (sélecteur générique « Ouvrir… »,
+        // Sprint 3), soit directement le dossier racine du projet
+        // (« Ouvrir un projet… », projets récents — Sprint 4).
+        let picked = std::path::Path::new(&picked_path);
+        let dir =
+            if picked.file_name().and_then(|n| n.to_str()) == Some(crate::project::MANIFEST_FILE) {
+                picked.parent().unwrap_or(picked)
+            } else {
+                picked
+            };
+        match app.open_project(dir) {
+            Ok(_) => {
+                if let Some(project) = &app.current_project {
+                    editor.note_recent_project(&project.name, &project.root);
+                }
+            }
+            Err(e) => log::error!("Ouverture du projet échouée : {e}"),
+        }
+    }
+    if let Some(req) = actions.create_project {
+        match app.create_project(&req.location, &req.name, req.template) {
+            Ok(_) => {
+                if let Some(project) = &app.current_project {
+                    editor.note_recent_project(&project.name, &project.root);
+                }
+            }
+            Err(e) => log::error!("Création du projet échouée : {e}"),
+        }
+    }
+    if actions.close_project {
+        app.request_close_project();
+    }
+    // Réponses à la modale « modifications non sauvegardées » de
+    // fermeture de projet (Sprint 4) — mêmes noms que la modale de
+    // Quitter, cf. plus bas.
+    if actions.close_project_cancel {
+        app.confirm_close_project = false;
+    }
+    if actions.close_project_discard {
+        app.close_project();
+    }
+    if actions.close_project_save {
+        if let Some(project) = app.current_project.clone() {
+            let path = project.main_scene_path.to_string_lossy().into_owned();
+            app.save_to(&path);
+            // `save_to` ne baisse `scene_dirty` que sur succès : en cas
+            // d'échec, on reste ouvert plutôt que de fermer en perdant
+            // la scène — même garde que `quit_save`.
+            if !app.scene_dirty {
+                app.close_project();
+            }
+        } else {
+            app.confirm_close_project = false;
+        }
+    }
+    if actions.duplicate_project {
+        match app.duplicate_project() {
+            Ok(dst) => log::info!("Projet dupliqué dans {}", dst.display()),
+            Err(e) => log::error!("Duplication du projet échouée : {e}"),
+        }
+    }
+    if actions.reveal_project_in_finder
+        && let Some(project) = &app.current_project
+    {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg("-R")
+                .arg(&project.root)
+                .spawn();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            log::info!(
+                "Révéler dans le Finder n'est disponible que sur macOS ({})",
+                project.root.display()
+            );
+        }
+    }
+    // Réponses à la modale de récupération après crash (Sprint 6).
+    if actions.restore_autosave
+        && let Some(path) = app.pending_autosave_recovery.take()
+        && let Err(e) = app.restore_autosave(&path)
+    {
+        log::error!("Restauration de l'autosave échouée : {e}");
+    }
+    if actions.dismiss_autosave_recovery {
+        app.pending_autosave_recovery = None;
+    }
+    if let Some(path) = actions.import {
+        app.import_gltf(&path);
+    }
+    if let Some(kind) = actions.add {
+        app.add_object(kind);
+    }
+    if let Some(i) = actions.delete {
+        app.delete_object(i);
+    }
+    if actions.duplicate {
+        app.duplicate_selected();
+    }
+    if actions.new_scene {
+        app.new_scene();
+    }
+    if actions.load_demo {
+        app.load_mobile_demo();
+    }
+    if actions.load_gameplay {
+        app.load_gameplay_demo();
+    }
+    if actions.load_controller {
+        app.load_controller_demo();
+    }
+    if actions.load_tower {
+        app.load_tower_demo();
+    }
+    if actions.load_temple_run {
+        app.load_temple_run_demo();
+    }
+    if actions.load_components_demo {
+        app.load_components_demo();
+    }
+    if actions.load_ai_duel {
+        app.load_zombies_demo();
+    }
+    if actions.load_mmorpg {
+        app.load_mmorpg_demo();
+    }
+    if actions.load_roguelike {
+        app.load_roguelike_demo();
+    }
+    if actions.load_brawl {
+        app.load_brawl_demo();
+    }
+    if actions.load_boss {
+        app.load_boss_demo();
+    }
+    if actions.load_escorte {
+        app.load_escorte_demo();
+    }
+    if actions.load_survie {
+        app.load_survie_demo();
+    }
+    if actions.restart {
+        *restart = true;
+    }
+    if let Some((url, name, class, room, objective)) = actions.connect_to_server {
+        app.connect_to_server_as(&url, &name, class, &room, objective);
+    }
+    if actions.disconnect_from_server {
+        app.disconnect_from_server();
+    }
+    // Serveur local (Sprint 7) : démarrer puis auto-connecter l'hôte
+    // (7.4), avec les mêmes pseudo/classe/salon/mode que le bouton
+    // « Se connecter » enverrait — sauf pseudo vide, auquel cas on
+    // laisse l'utilisateur cliquer lui-même une fois renseigné.
+    if actions.start_local_server {
+        match editor.start_local_server() {
+            Ok(addr) => {
+                let url = format!("ws://{addr}");
+                let (url, name, class, room, objective) = editor.multiplayer_connect_params(&url);
+                if name.trim().is_empty() {
+                    log::info!(
+                        "Serveur local démarré sur {addr} — renseigne un pseudo puis \
+                         clique ▶ Se connecter."
+                    );
+                } else {
+                    app.connect_to_server_as(&url, &name, class, &room, objective);
+                }
+            }
+            Err(e) => log::error!("Démarrage du serveur local échoué : {e}"),
+        }
+    }
+    if actions.stop_local_server {
+        editor.stop_local_server();
+        // Le serveur auquel on était peut-être connecté vient de
+        // disparaître : la connexion cliente doit suivre, pas rester
+        // affichée comme active vers un process mort.
+        app.disconnect_from_server();
+    }
+    if let Some((email, password)) = actions.firebase_sign_in {
+        let settings = editor.settings();
+        app.request_firebase_sign_in(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+            email,
+            password,
+        );
+    }
+    if let Some((email, password)) = actions.firebase_sign_up {
+        let settings = editor.settings();
+        app.request_firebase_sign_up(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+            email,
+            password,
+        );
+    }
+    if let Some((lobby_code, sender_name, text)) = actions.send_chat_message {
+        let settings = editor.settings();
+        app.request_send_chat_message(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+            lobby_code,
+            sender_name,
+            text,
+        );
+    }
+    if let Some(lobby_code) = actions.refresh_chat {
+        let settings = editor.settings();
+        app.request_refresh_chat(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+            lobby_code,
+        );
+    }
+    if actions.refresh_leaderboard {
+        let settings = editor.settings();
+        app.request_refresh_leaderboard(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+            10,
+        );
+    }
+    if actions.refresh_online_players {
+        let settings = editor.settings();
+        app.request_refresh_online_players(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+        );
+    }
+    if actions.presence_heartbeat {
+        let settings = editor.settings();
+        app.request_presence_heartbeat(
+            settings.firebase_api_key.clone(),
+            settings.firebase_database_url.clone(),
+        );
+    }
+    if actions.align_ground {
+        app.align_to_ground();
+    }
+    if actions.reset_transform {
+        app.reset_transform();
+    }
+    if let Some(scope) = actions.save_as_prefab {
+        let result = app.save_selected_as_prefab(scope);
+        if let Err(e) = &result {
+            log::warn!("Création du prefab impossible : {e}");
+        }
+        editor.set_prefab_feedback(result);
+    }
+    if let Some(asset_id) = actions.instantiate_prefab {
+        app.instantiate_prefab(&asset_id);
+    }
+    if actions.sync_prefab_instances {
+        app.sync_prefab_instances();
+    }
+    if let Some((scope, name)) = actions.delete_prefab {
+        crate::assets::delete_prefab(&scope, &name);
+    }
+    if actions.quit {
+        app.request_quit();
+    }
+    // Réponses à la modale « modifications non sauvegardées ».
+    if actions.quit_cancel {
+        app.confirm_quit = false;
+    }
+    if actions.quit_discard {
+        app.confirm_quit = false;
+        app.should_quit = true;
+    }
+    if actions.quit_save {
+        app.confirm_quit = false;
+        app.save();
+        // `save` ne baisse `scene_dirty` que sur succès : en cas d'échec
+        // (disque plein, chemin illisible…), on reste ouvert plutôt que de
+        // quitter en perdant la scène — l'erreur est visible dans la console.
+        if !app.scene_dirty {
+            app.should_quit = true;
+        }
+    }
+    if actions.launch_glb_viewer {
+        crate::editor::launch_glb_viewer();
+    }
+    if actions.undo {
+        app.undo();
+    }
+    if actions.redo {
+        app.redo();
+    }
+    if actions.step_frame {
+        app.request_step();
+    }
+    if let Some(cmd) = actions.console_command {
+        let result = app.run_console_command(&cmd);
+        log::info!("> {cmd}\n{result}");
+    }
+    if let Some(clip) = actions.play_audio {
+        app.play_audio(&clip);
+    }
+    if let Some(v) = actions.music_volume {
+        app.set_music_volume(v);
+    }
+    if let Some(v) = actions.sfx_volume {
+        app.set_sfx_volume(v);
+    }
+    if let Some(l) = actions.locale {
+        app.set_locale(l);
+    }
+    if let Some(v) = actions.reduce_shake {
+        app.set_reduce_shake(v);
+    }
+    if let Some(down) = actions.move_in_list {
+        app.move_selected_in_list(down);
+    }
+    if let Some((from, to)) = actions.reorder {
+        app.reorder_object(from, to);
+    }
+    if actions.focus_selection {
+        app.frame_selected();
+    }
+    if let Some((idx, req)) = actions.ai_generate {
+        app.request_ai_script(idx, req);
+    }
+    if let Some((req, replace)) = actions.ai_generate_scene {
+        app.request_ai_scene(req, replace);
+    }
+    if actions.set_game_camera {
+        app.set_game_camera();
+    }
+    if actions.clear_game_camera {
+        app.clear_game_camera();
+    }
+    if let Some(max) = actions.optimize_textures {
+        let n = app.optimize_textures(max);
+        log::info!("Optimisation : {n} texture(s) réduite(s) à ≤ {max} px");
+    }
+    if let Some(max) = actions.limit_lights {
+        app.limit_point_lights(max);
+    }
+    if actions.convert_textures_pot {
+        let n = app.convert_textures_pot();
+        log::info!("Convertisseur : {n} texture(s) en puissances de 2");
+    }
+    if actions.bake_lighting {
+        let n = app.bake_lighting();
+        log::info!("Bake lighting : {n} lumière(s) ponctuelle(s) figée(s) en émission");
+    }
+    if actions.perf_mode {
+        let t = app.optimize_textures(1024);
+        app.limit_point_lights(4);
+        log::info!("Mode performance Android : {t} texture(s) réduite(s), ≤ 4 lumières");
+    }
+    if let Some(preset) = actions.apply_quality_preset {
+        app.apply_quality_preset(preset);
+        log::info!("Préset qualité appliqué : {preset:?}");
+    }
+    if actions.collect_assets {
+        let n = app.collect_assets();
+        log::info!("Assets rassemblés : {n} chemin(s) → asset://");
+    }
+    if actions.cut {
+        app.cut_selected();
+    }
+    if actions.copy {
+        app.copy_selected();
+    }
+    if actions.paste {
+        app.paste();
+    }
+    if actions.select_all {
+        app.select_all();
+    }
+    if actions.group {
+        app.group_selected();
+    }
+    if actions.ungroup {
+        app.ungroup_selected();
+    }
+    if let Some(axis) = actions.align_axis {
+        app.align_selection_axis(axis);
+    }
+    if let Some(axis) = actions.distribute_axis {
+        app.distribute_selection_axis(axis);
+    }
+    if actions.toggle_grid {
+        app.show_grid = !app.show_grid;
+    }
+    if actions.toggle_snap {
+        app.snap = !app.snap;
+    }
+    if let Some(view) = actions.set_debug_view {
+        app.debug_view = view;
     }
 }
