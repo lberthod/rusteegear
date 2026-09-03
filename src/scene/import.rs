@@ -110,7 +110,7 @@ pub fn compute_tangents(vertices: &[Vertex], indices: &[u32]) -> Vec<[f32; 4]> {
     let mut tangent_acc = vec![Vec3::ZERO; vertices.len()];
     let mut bitangent_acc = vec![Vec3::ZERO; vertices.len()];
 
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
         let (Some(v0), Some(v1), Some(v2)) = (vertices.get(i0), vertices.get(i1), vertices.get(i2))
         else {

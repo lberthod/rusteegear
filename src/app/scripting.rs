@@ -404,7 +404,7 @@ pub(super) fn run_script(
         *health_out = Some(h);
     }
     let flat: Vec<f32> = debug_tbl.sequence_values::<f32>().flatten().collect();
-    for chunk in flat.chunks_exact(9) {
+    for chunk in flat.as_chunks::<9>().0 {
         debug_out.push((
             Vec3::new(chunk[0], chunk[1], chunk[2]),
             Vec3::new(chunk[3], chunk[4], chunk[5]),

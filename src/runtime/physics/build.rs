@@ -147,11 +147,7 @@ impl Physics {
                     return None;
                 }
                 let points = imported_points()?;
-                let tris: Vec<[u32; 3]> = data
-                    .indices
-                    .chunks_exact(3)
-                    .map(|c| [c[0], c[1], c[2]])
-                    .collect();
+                let tris: Vec<[u32; 3]> = data.indices.as_chunks::<3>().0.to_vec();
                 SharedShape::trimesh(points, tris)
                     .ok()
                     .map(ColliderBuilder::new)

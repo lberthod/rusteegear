@@ -20,9 +20,6 @@ import glob
 # doit soit être supprimée (durcie en Result/let-else), soit ajoutée ici avec la
 # même justification en commentaire dans le code.
 WHITELIST = {
-    # `chunks_exact(8)` garantit des tranches de 8 octets, la conversion ne peut
-    # jamais échouer — anciennement src/gfx/renderer.rs, déplacé en 9.2.5.
-    ("src/gfx/renderer/post_process.rs", "unwrap"): 1,
     # render_skinned_test : `slot 0 < MAX_SKINNED_INSTANCES, toujours valide`
     # (helper de test public — utilisé par tests/golden_skinning.rs, donc
     # impossible à mettre sous #[cfg(test)]). Anciennement src/gfx/renderer.rs,
