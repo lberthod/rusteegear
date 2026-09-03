@@ -1,5 +1,6 @@
 //! Caméra orbitale : produit la matrice view-projection (compatible NDC wgpu, z in \[0,1\]).
 
+use glam::camera::rh::{proj::directx, view::look_at_mat4};
 use glam::{Mat4, Vec3};
 
 pub struct OrbitCamera {
@@ -45,12 +46,12 @@ impl OrbitCamera {
     /// inchangée, seul le rendu de la frame courante tressaute (Sprint 1,
     /// `sprint10audit.md` — retour d'encaissement de coup).
     pub fn view_proj_shaken(&self, shake_offset: Vec3) -> Mat4 {
-        let view = Mat4::look_at_rh(
+        let view = look_at_mat4(
             self.eye() + shake_offset,
             self.target + shake_offset,
             Vec3::Y,
         );
-        let proj = Mat4::perspective_rh(self.fovy, self.aspect, 0.1, 100.0);
+        let proj = directx::perspective(self.fovy, self.aspect, 0.1, 100.0);
         proj * view
     }
 
@@ -80,8 +81,8 @@ impl OrbitCamera {
     }
 
     pub fn view_proj(&self) -> Mat4 {
-        let view = Mat4::look_at_rh(self.eye(), self.target, Vec3::Y);
-        let proj = Mat4::perspective_rh(self.fovy, self.aspect, 0.1, 100.0);
+        let view = look_at_mat4(self.eye(), self.target, Vec3::Y);
+        let proj = directx::perspective(self.fovy, self.aspect, 0.1, 100.0);
         proj * view
     }
 }

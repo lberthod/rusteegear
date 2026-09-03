@@ -171,8 +171,9 @@ impl Renderer {
         } else {
             glam::Vec3::Y
         };
-        let view = glam::Mat4::look_at_rh(dir * 20.0, glam::Vec3::ZERO, up);
-        let proj = glam::Mat4::orthographic_rh(-12.0, 12.0, -12.0, 12.0, 0.1, 60.0);
+        let view = glam::camera::rh::view::look_at_mat4(dir * 20.0, glam::Vec3::ZERO, up);
+        let proj =
+            glam::camera::rh::proj::directx::orthographic(-12.0, 12.0, -12.0, 12.0, 0.1, 60.0);
         let light_vp = proj * view;
         let mut points = [PointLightU {
             pos_range: [0.0; 4],
