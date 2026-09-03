@@ -1570,213 +1570,23 @@ fn build_ui(
         panels.settings = true;
     }
 
-    // --- Barre d'outils rapide (passe à la ligne si la fenêtre est étroite) ---
-    egui::Panel::top("toolbar").show_inside(root, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            // Play / Pause / Stop distincts (style lecteur).
-            if !*playing {
-                if ui.button("▶ Play").clicked() {
-                    *playing = true;
-                    *paused = false;
-                }
-            } else {
-                let pause_label = if *paused {
-                    "▶ Reprendre"
-                } else {
-                    "⏸ Pause"
-                };
-                if ui.button(pause_label).clicked() {
-                    *paused = !*paused;
-                }
-                if ui.button("⏹ Stop").clicked() {
-                    *playing = false;
-                    *paused = false;
-                }
-                // Pas unique : n'a de sens qu'en pause.
-                if ui
-                    .add_enabled(*paused, egui::Button::new("⏭"))
-                    .on_hover_text("Avancer d'un pas fixe")
-                    .clicked()
-                {
-                    actions.step_frame = true;
-                }
-            }
-            ui.separator();
-            // Time scale : ralenti/accélère la simulation pour déboguer la
-            // physique et le réseau. Préréglages + valeur affichée plutôt qu'un slider :
-            // les valeurs qui comptent en pratique sont peu nombreuses (figé/ralenti/normal/rapide).
-            ui.label("⏱");
-            for (label, value) in [("¼×", 0.25), ("½×", 0.5), ("1×", 1.0), ("2×", 2.0)] {
-                if ui.selectable_label(*time_scale == value, label).clicked() {
-                    *time_scale = value;
-                }
-            }
-            ui.separator();
-            // Outils en icônes seules (les noms sont au survol et dans le menu
-            // Outils), dans l'ordre des raccourcis Q W E R T Y. Icônes choisies
-            // dans la couverture réelle des polices d'egui — 🖐 et ⤢ n'y sont
-            // pas et rendaient des carrés (tofu).
-            ui.selectable_value(gizmo_mode, GizmoMode::Pan, "✋")
-                .on_hover_text(
-                    "Main (Q) : glisser = déplacer la vue — aussi : clic milieu ou Maj+glisser",
-                );
-            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔")
-                .on_hover_text("Déplacer l'objet (W)");
-            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻")
-                .on_hover_text("Tourner l'objet (E)");
-            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⛶")
-                .on_hover_text("Redimensionner l'objet (R)");
-            ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄")
-                .on_hover_text(
-                    "Orbite libre (T) : glisser = tourner la vue (horizontal et vertical)",
-                );
-            ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍")
-                .on_hover_text("Loupe (Y) : glisser haut/bas = zoom avant/arrière");
-            if ui
-                .add_enabled(selection.is_some(), egui::Button::new("⌖"))
-                .on_hover_text("Cadrer la sélection (F)")
-                .clicked()
-            {
-                actions.focus_selection = true;
-            }
-            ui.separator();
-            if ui.button("↩").on_hover_text("Annuler (Cmd+Z)").clicked() {
-                actions.undo = true;
-            }
-            if ui
-                .button("↪")
-                .on_hover_text("Rétablir (Cmd+Maj+Z)")
-                .clicked()
-            {
-                actions.redo = true;
-            }
-            ui.separator();
-            if ui.button("💾").on_hover_text("Enregistrer").clicked() {
-                actions.save = true;
-            }
-            ui.separator();
-            let has_sel = selection.is_some();
-            if ui
-                .add_enabled(has_sel, egui::Button::new("⧉"))
-                .on_hover_text("Dupliquer (Cmd+D)")
-                .clicked()
-            {
-                actions.duplicate = true;
-            }
-            if ui
-                .add_enabled(has_sel, egui::Button::new("🗑"))
-                .on_hover_text("Supprimer")
-                .clicked()
-            {
-                actions.delete = *selection;
-            }
-            ui.separator();
-            // Aperçu mobile : cadre téléphone + orientation.
-            if ui
-                .selectable_label(*device_preview, "📱 Aperçu mobile")
-                .on_hover_text("Affiche la scène dans un écran de téléphone (mode jeu tactile)")
-                .clicked()
-            {
-                *device_preview = !*device_preview;
-                if *device_preview {
-                    // On passe en « mode jeu » : pas d'objet sélectionné/gizmo.
-                    *selection = None;
-                    selected.clear();
-                }
-            }
-            if *device_preview {
-                let label = if *device_portrait {
-                    "⟳ Portrait"
-                } else {
-                    "⟳ Paysage"
-                };
-                if ui
-                    .button(label)
-                    .on_hover_text("Basculer l'orientation")
-                    .clicked()
-                {
-                    *device_portrait = !*device_portrait;
-                }
-            }
-            // Aperçu HUD : voir réticule/inventaire/joueurs en Édition,
-            // sans passer par Play (cf. `HudPreview`).
-            if ui
-                .selectable_label(hud_preview.open, "👁 Aperçu HUD")
-                .on_hover_text(
-                    "Prévisualise les overlays de jeu (réticule, inventaire, joueurs…) \
-                     en Édition, sans lancer Play",
-                )
-                .clicked()
-            {
-                hud_preview.open = !hud_preview.open;
-            }
-            // Widgets HUD déclaratifs (`Scene::hud_widgets`) : texte/image/jauge/
-            // bouton ancrés dans la scène — cf. Sprint 109.
-            if ui
-                .selectable_label(panels.hud_widgets_editor, "🧩 Widgets HUD")
-                .on_hover_text(
-                    "Ajouter/éditer des widgets HUD déclaratifs (texte, image, jauge, bouton)",
-                )
-                .clicked()
-            {
-                panels.hud_widgets_editor = !panels.hud_widgets_editor;
-            }
-            if ui
-                .selectable_label(scene.camera_follow, "🎥 Suivi")
-                .on_hover_text("En Play, la caméra suit le joueur (objet scripté)")
-                .clicked()
-            {
-                scene.camera_follow = !scene.camera_follow;
-            }
-            if ui
-                .selectable_label(status.grid, "▦ Grille")
-                .on_hover_text("Grille de référence au sol (édition)")
-                .clicked()
-            {
-                actions.toggle_grid = true;
-            }
-            if ui
-                .selectable_label(status.snap, "🧲 Snap")
-                .on_hover_text(
-                    "Aimanter position (pas 0.5) et rotation (pas 15°) au gizmo — \
-                     tenir Ctrl pendant un glissé inverse ponctuellement ce réglage",
-                )
-                .clicked()
-            {
-                actions.toggle_snap = true;
-            }
-            // Vue de debug : remplace l'éclairage par les normales ou la
-            // profondeur, pour voir directement ce que le pipeline calcule.
-            ui.separator();
-            ui.label("👁");
-            for view in crate::app::DebugView::ALL {
-                if ui
-                    .selectable_label(status.debug_view == view, view.label())
-                    .clicked()
-                {
-                    actions.set_debug_view = Some(view);
-                }
-            }
-            // Build APK + Run Device : différenciateurs du moteur (passent à la ligne si étroit).
-            ui.separator();
-            if ui
-                .selectable_label(export.open, "🤖 Build APK")
-                .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
-                .clicked()
-            {
-                export.open = !export.open;
-            }
-            if ui
-                .button("📲 Run Device")
-                .on_hover_text(
-                    "Build Android + installation/lancement sur le téléphone branché (adb)",
-                )
-                .clicked()
-            {
-                actions.run_device = true;
-            }
-        });
-    });
+    toolbar(
+        root,
+        playing,
+        paused,
+        time_scale,
+        gizmo_mode,
+        selection,
+        selected,
+        device_preview,
+        device_portrait,
+        hud_preview,
+        panels,
+        scene,
+        status,
+        export,
+        actions,
+    );
 
     // Mode « focus jeu » : en aperçu mobile, on masque les panneaux latéraux pour
     // laisser toute la place au téléphone (la toolbar reste pour quitter l'aperçu).
@@ -2609,6 +2419,238 @@ fn build_ui(
 
     // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
     // après cette frame, afin de passer par l'historique.
+}
+
+/// Barre d'outils rapide (haut de l'éditeur : lecture/pause/stop, échelle de
+/// temps, outils de gizmo, undo/redo, sauvegarde, dupliquer/supprimer,
+/// aperçu mobile/HUD, vue de debug, Build APK/Run Device) — extraite de
+/// `build_ui` (roadmap post-audit 2026-08-29, item 2.1, lot 4) : bloc
+/// syntaxiquement autonome (un seul `egui::Panel::top("toolbar")`), déplacé
+/// tel quel sans changer l'ordre ni la logique d'aucun bouton.
+#[allow(clippy::too_many_arguments)] // même style que build_ui : un paramètre par donnée affichée
+fn toolbar(
+    root: &mut egui::Ui,
+    playing: &mut bool,
+    paused: &mut bool,
+    time_scale: &mut f32,
+    gizmo_mode: &mut GizmoMode,
+    selection: &mut Option<usize>,
+    selected: &mut Vec<usize>,
+    device_preview: &mut bool,
+    device_portrait: &mut bool,
+    hud_preview: &mut HudPreview,
+    panels: &mut Panels,
+    scene: &mut Scene,
+    status: &StatusInfo,
+    export: &mut export::ExportPanel,
+    actions: &mut UiActions,
+) {
+    egui::Panel::top("toolbar").show_inside(root, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            // Play / Pause / Stop distincts (style lecteur).
+            if !*playing {
+                if ui.button("▶ Play").clicked() {
+                    *playing = true;
+                    *paused = false;
+                }
+            } else {
+                let pause_label = if *paused {
+                    "▶ Reprendre"
+                } else {
+                    "⏸ Pause"
+                };
+                if ui.button(pause_label).clicked() {
+                    *paused = !*paused;
+                }
+                if ui.button("⏹ Stop").clicked() {
+                    *playing = false;
+                    *paused = false;
+                }
+                // Pas unique : n'a de sens qu'en pause.
+                if ui
+                    .add_enabled(*paused, egui::Button::new("⏭"))
+                    .on_hover_text("Avancer d'un pas fixe")
+                    .clicked()
+                {
+                    actions.step_frame = true;
+                }
+            }
+            ui.separator();
+            // Time scale : ralenti/accélère la simulation pour déboguer la
+            // physique et le réseau. Préréglages + valeur affichée plutôt qu'un slider :
+            // les valeurs qui comptent en pratique sont peu nombreuses (figé/ralenti/normal/rapide).
+            ui.label("⏱");
+            for (label, value) in [("¼×", 0.25), ("½×", 0.5), ("1×", 1.0), ("2×", 2.0)] {
+                if ui.selectable_label(*time_scale == value, label).clicked() {
+                    *time_scale = value;
+                }
+            }
+            ui.separator();
+            // Outils en icônes seules (les noms sont au survol et dans le menu
+            // Outils), dans l'ordre des raccourcis Q W E R T Y. Icônes choisies
+            // dans la couverture réelle des polices d'egui — 🖐 et ⤢ n'y sont
+            // pas et rendaient des carrés (tofu).
+            ui.selectable_value(gizmo_mode, GizmoMode::Pan, "✋")
+                .on_hover_text(
+                    "Main (Q) : glisser = déplacer la vue — aussi : clic milieu ou Maj+glisser",
+                );
+            ui.selectable_value(gizmo_mode, GizmoMode::Translate, "↔")
+                .on_hover_text("Déplacer l'objet (W)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Rotate, "↻")
+                .on_hover_text("Tourner l'objet (E)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Scale, "⛶")
+                .on_hover_text("Redimensionner l'objet (R)");
+            ui.selectable_value(gizmo_mode, GizmoMode::Orbit, "🔄")
+                .on_hover_text(
+                    "Orbite libre (T) : glisser = tourner la vue (horizontal et vertical)",
+                );
+            ui.selectable_value(gizmo_mode, GizmoMode::Zoom, "🔍")
+                .on_hover_text("Loupe (Y) : glisser haut/bas = zoom avant/arrière");
+            if ui
+                .add_enabled(selection.is_some(), egui::Button::new("⌖"))
+                .on_hover_text("Cadrer la sélection (F)")
+                .clicked()
+            {
+                actions.focus_selection = true;
+            }
+            ui.separator();
+            if ui.button("↩").on_hover_text("Annuler (Cmd+Z)").clicked() {
+                actions.undo = true;
+            }
+            if ui
+                .button("↪")
+                .on_hover_text("Rétablir (Cmd+Maj+Z)")
+                .clicked()
+            {
+                actions.redo = true;
+            }
+            ui.separator();
+            if ui.button("💾").on_hover_text("Enregistrer").clicked() {
+                actions.save = true;
+            }
+            ui.separator();
+            let has_sel = selection.is_some();
+            if ui
+                .add_enabled(has_sel, egui::Button::new("⧉"))
+                .on_hover_text("Dupliquer (Cmd+D)")
+                .clicked()
+            {
+                actions.duplicate = true;
+            }
+            if ui
+                .add_enabled(has_sel, egui::Button::new("🗑"))
+                .on_hover_text("Supprimer")
+                .clicked()
+            {
+                actions.delete = *selection;
+            }
+            ui.separator();
+            // Aperçu mobile : cadre téléphone + orientation.
+            if ui
+                .selectable_label(*device_preview, "📱 Aperçu mobile")
+                .on_hover_text("Affiche la scène dans un écran de téléphone (mode jeu tactile)")
+                .clicked()
+            {
+                *device_preview = !*device_preview;
+                if *device_preview {
+                    // On passe en « mode jeu » : pas d'objet sélectionné/gizmo.
+                    *selection = None;
+                    selected.clear();
+                }
+            }
+            if *device_preview {
+                let label = if *device_portrait {
+                    "⟳ Portrait"
+                } else {
+                    "⟳ Paysage"
+                };
+                if ui
+                    .button(label)
+                    .on_hover_text("Basculer l'orientation")
+                    .clicked()
+                {
+                    *device_portrait = !*device_portrait;
+                }
+            }
+            // Aperçu HUD : voir réticule/inventaire/joueurs en Édition,
+            // sans passer par Play (cf. `HudPreview`).
+            if ui
+                .selectable_label(hud_preview.open, "👁 Aperçu HUD")
+                .on_hover_text(
+                    "Prévisualise les overlays de jeu (réticule, inventaire, joueurs…) \
+                     en Édition, sans lancer Play",
+                )
+                .clicked()
+            {
+                hud_preview.open = !hud_preview.open;
+            }
+            // Widgets HUD déclaratifs (`Scene::hud_widgets`) : texte/image/jauge/
+            // bouton ancrés dans la scène — cf. Sprint 109.
+            if ui
+                .selectable_label(panels.hud_widgets_editor, "🧩 Widgets HUD")
+                .on_hover_text(
+                    "Ajouter/éditer des widgets HUD déclaratifs (texte, image, jauge, bouton)",
+                )
+                .clicked()
+            {
+                panels.hud_widgets_editor = !panels.hud_widgets_editor;
+            }
+            if ui
+                .selectable_label(scene.camera_follow, "🎥 Suivi")
+                .on_hover_text("En Play, la caméra suit le joueur (objet scripté)")
+                .clicked()
+            {
+                scene.camera_follow = !scene.camera_follow;
+            }
+            if ui
+                .selectable_label(status.grid, "▦ Grille")
+                .on_hover_text("Grille de référence au sol (édition)")
+                .clicked()
+            {
+                actions.toggle_grid = true;
+            }
+            if ui
+                .selectable_label(status.snap, "🧲 Snap")
+                .on_hover_text(
+                    "Aimanter position (pas 0.5) et rotation (pas 15°) au gizmo — \
+                     tenir Ctrl pendant un glissé inverse ponctuellement ce réglage",
+                )
+                .clicked()
+            {
+                actions.toggle_snap = true;
+            }
+            // Vue de debug : remplace l'éclairage par les normales ou la
+            // profondeur, pour voir directement ce que le pipeline calcule.
+            ui.separator();
+            ui.label("👁");
+            for view in crate::app::DebugView::ALL {
+                if ui
+                    .selectable_label(status.debug_view == view, view.label())
+                    .clicked()
+                {
+                    actions.set_debug_view = Some(view);
+                }
+            }
+            // Build APK + Run Device : différenciateurs du moteur (passent à la ligne si étroit).
+            ui.separator();
+            if ui
+                .selectable_label(export.open, "🤖 Build APK")
+                .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
+                .clicked()
+            {
+                export.open = !export.open;
+            }
+            if ui
+                .button("📲 Run Device")
+                .on_hover_text(
+                    "Build Android + installation/lancement sur le téléphone branché (adb)",
+                )
+                .clicked()
+            {
+                actions.run_device = true;
+            }
+        });
+    });
 }
 
 /// Overlays affichés uniquement en Play : mini-carte (coin ou plein écran
