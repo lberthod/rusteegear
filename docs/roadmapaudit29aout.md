@@ -15,15 +15,22 @@ L'audit du 20 juillet avait identifié une dette d'architecture précise (fichie
 plus tard, le rythme a clairement privilégié les livraisons fonctionnelles (Chasse 4.1,
 silhouettes de classe v7, sécurisation réseau) — toutes confirmées solides et testées — mais
 **aucun des constats de dette de juillet n'a été traité, et `AppState` a même grossi de 47 %**
-(119 → 175 champs). Rien n'est urgent au sens « ça casse » (CI verte, tests réseau réels, aucune
-faille de sécurité critique), mais le coût de toute modification touchant `editor/mod.rs`,
+(119 → 175 champs). Rien n'est urgent au sens « ça casse » côté produit (aucune faille de
+sécurité critique), mais le coût de toute modification touchant `editor/mod.rs`,
 `runtime/physics.rs` ou `AppState` continue d'augmenter plus vite qu'il ne diminue.
+
+**Correction (audit du 3 septembre)** : « CI verte » ci-dessus était faux au moment où c'était
+écrit — la CI était rouge sur chaque run depuis le 20 juillet (`0a62dde`), y compris au commit
+`163e081` audité ici, où quatre jobs sur six échouaient déjà. Les tests réseau à sockets réels
+cités plus bas comme « couverts par des tests d'intégration sur vrais sockets » ne compilaient
+plus pendant toute cette période. Détail et correctifs :
+[docs/roadmapaudit3septembre.md](roadmapaudit3septembre.md), vague 0.
 
 ## Vague 1 — Désamorcer avant que ça ne coûte plus cher — 3/4 faites (2026-08-29)
 
 | # | Action | Ferme | Statut |
 |---|---|---|---|
-| 1.1 | Trancher Git LFS vs exclusion pour `assets/models/` (159 Mo, 826 fichiers versionnés en Git normal, `.git/` déjà à 146 Mo) | dette bloquante | ⏳ Seul point classé « bloquant » de l'audit — irréversible sans réécriture d'historique si on attend encore ; **décision à prendre avec l'utilisateur** (LFS a un coût de stockage/bande passante) |
+| 1.1 | Trancher Git LFS vs exclusion pour `assets/models/` (159 Mo, 826 fichiers versionnés en Git normal, `.git/` déjà à 146 Mo) | dette bloquante | ✅ `47a6ae2`/`b11a215` (2026-09-03) — LFS choisi, `assets/models/**/*.glb` (482 fichiers) converti en pointeurs, `doctor.sh`/`QUICKSTART.md` mis à jour. Historique **non réécrit** (choix explicite, portée limitée à un commit forward) : `.git/` reste à ~144 Mo de pack + 98 Mo d'objets LFS locaux. Correctif suivant nécessaire le 3 septembre : le premier commit CI activant `lfs: true` le faisait sur les 5 jobs sans distinction, risquant d'épuiser un quota LFS mensuel — restreint aux 2 jobs qui en ont besoin (`docs/roadmapaudit3septembre.md`, 0.3) |
 | 1.2 | Réactiver le test roguelike (`src/app/demos.rs:341-342`) | qualité | ✅ Plus flaky : 35/35 passages verts (isolé + sous charge) constatés le 2026-08-29 — les changements ultérieurs (`attack_range`/`cooldown`/`windup` figés, budget 400 frames) ont éliminé la cause. `#[ignore]` retiré, suite complète 684/684 verte (`d71b3f9`) |
 | 1.3 | Corriger les 3 dérives README : lignes de code (« ~32 000 » annoncé, 75 422 réel), chemin mort `src/scene/demos.rs` (→ `src/scene/demos/`), compteur `.glb` (412 annoncé, 482 réel) | doc | ✅ `14c47a7` — chiffre de lignes recalé sur ~65 000 (hors tests) |
 | 1.4 | Mettre à jour le commentaire `Cargo.toml:4-5` (« deux binaires » → 4 : `motor3derust`, `server`, `pilot`, `glbviewer`) | doc | ✅ `14c47a7` |
@@ -44,7 +51,7 @@ faille de sécurité critique), mais le coût de toute modification touchant `ed
 | 3.1 | Retirer l'IP publique et l'utilisateur SSH en dur de `scripts/deploy_vps.sh` (variable d'env obligatoire sans défaut) | surface | ✅ `144a9c4` — `RUSTEEGEAR_VPS_SSH` passé en `${VAR:?message}` (échec immédiat et explicite si non défini, avant toute action git/ssh). Piège trouvé en route : un guillemet simple droit dans le message casse le parsing bash de `${VAR:?...}` même entre guillemets doubles — corrigé avec une apostrophe typographique, vérifié par `bash -n` et un run réel sans la variable |
 | 3.2 | Clarifier dans la doc que « parité `ai_chaser` vérifiée en CI » (`src/scene/mod_tests.rs:2060-2110`) est un test unitaire noyé dans `cargo test --all-targets`, pas un job CI dédié isolé | doc | ✅ `037bc79`+`db548ce` — formulation corrigée dans `docs/audit-2026-07-20/07_PLAN_ACTION.md`, ligne référencée revérifiée (toujours exacte). Un premier commit avait cassé le rendu du tableau markdown (retours à la ligne dans une cellule) — rattrapé par un second commit avant que ça ne traîne |
 | 3.3 | Revalider côté VPS que le port en clair est bien fermé si non nécessaire (item déjà noté dans le plan d'action du 20/07, jamais confirmé) | surface | ⏳ Hors dépôt (SSH/Caddy), à faire lors du prochain déploiement |
-| 3.4 | Build wasm32/iOS/Android cassé : `network_client.rs:855/862` appelait `check_palier_atteint` depuis un `impl AppState` compilé sur toutes cibles, mais la méthode n'était définie que dans un `impl AppState` gated `#[cfg(not(any(ios, android, wasm32)))]` | régression silencieuse | ✅ `f43a59a` — méthode déplacée vers l'impl non gated qui la seule à l'appeler (`handle_server_msg`) ; ne dépendait d'aucune fonctionnalité desktop-only. Trouvé le 2026-08-29 en vérifiant le lot 13 (Lua) sur les deux cibles, confirmé pré-existant au commit `2e73226`. Vérifié sur wasm32 et natif, 684/684 tests verts. **Reste ouvert** : pourquoi le job CI `cross-build` (wasm32) ne l'a pas détecté avant — à investiguer séparément |
+| 3.4 | Build wasm32/iOS/Android cassé : `network_client.rs:855/862` appelait `check_palier_atteint` depuis un `impl AppState` compilé sur toutes cibles, mais la méthode n'était définie que dans un `impl AppState` gated `#[cfg(not(any(ios, android, wasm32)))]` | régression silencieuse | ✅ `f43a59a` — méthode déplacée vers l'impl non gated qui la seule à l'appeler (`handle_server_msg`) ; ne dépendait d'aucune fonctionnalité desktop-only. Trouvé le 2026-08-29 en vérifiant le lot 13 (Lua) sur les deux cibles, confirmé pré-existant au commit `2e73226`. Vérifié sur wasm32 et natif, 684/684 tests verts. **Fermé (3 septembre)** : le job `cross-build` (wasm32) l'avait bien détecté, à `163e081` puis de nouveau à `2e73226` — mais la CI était déjà rouge en continu depuis le 20 juillet (tests réseau, cf. correction en tête de document), donc un échec de plus sur un job de plus n'a alerté personne. Rien à investiguer côté détection : le vrai trou était l'absence de badge/suivi de la CI, corrigé dans [docs/roadmapaudit3septembre.md](roadmapaudit3septembre.md) (1.1) |
 
 ## Ce qui est déjà solide (à ne pas re-questionner sans raison)
 
@@ -60,7 +67,9 @@ faille de sécurité critique), mais le coût de toute modification touchant `ed
 - **Outillage** : garde-fou `unwrap`/`panic` testé en CI (14 occurrences whitelistées,
   justifiées), CI mature (fmt, clippy strict, tests réseau réels, goldens de rendu Metal,
   cross-build Android/iOS/wasm32), `unsafe` et `dead_code` quasi absents, `Cargo.toml`
-  exemplairement documenté.
+  exemplairement documenté. *(Correction du 3 septembre : « tests réseau réels » et « CI mature »
+  décrivaient l'intention du dispositif, pas son état réel à ce moment — il était cassé depuis le
+  20 juillet, cf. la correction en tête de document.)*
 
 ## Ce qu'il ne faut pas faire maintenant
 
