@@ -414,7 +414,7 @@ logique pure), `export::ui` (306 lignes, dont la validation des chemins de bundl
 | 0.1 | 5 sites Clippy `as_chunks` + whitelist unwrap | S | ✅ `e4914e7` |
 | 0.2 | 4 accès `network_client_tests.rs` + run réel `net_tests` | S | ✅ `31c41fe` — inclut 0.2 bis (`src/bin/server.rs`, non prévu à l'origine, trouvé en vérifiant `--all-features`) ; `cargo test --features net_tests` : 718 verts, 0 échec |
 | 0.3 | `lfs: true` limité à `check` et `net-tests` (amender `dc42cb2`) | S | ✅ `f734bbc` (amendement de `dc42cb2`, toujours non poussé) |
-| 0.4 | Push + run CI 6/6 vert (noter le SHA) | S | ⏳ commits locaux prêts, push en attente de confirmation |
+| 0.4 | Push + run CI 6/6 vert (noter le SHA) | S | ✅ Poussé (`f734bbc`→`d759158`) ; [run 33765270175](https://github.com/lberthod/rusteegear/actions/runs/33765270175) 6/6 vert — premier run entièrement vert depuis `0a62dde` (2026-07-20), soit 46 jours |
 | 1.1 | Badge CI README | S | ✅ `8090a6b` |
 | 1.2 | `rust-toolchain.toml` 1.98.0 + `@master` dans ci.yml + badge | S | ✅ `8090a6b` |
 | 1.3 | `--all-features` dans Clippy CI + hook pre-push documenté | S | ✅ `787af6b` |
