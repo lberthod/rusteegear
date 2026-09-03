@@ -2557,62 +2557,25 @@ fn build_ui(
             hud_scale,
         );
     }
-    // Carte (mini-carte permanente + plein écran sur `M`) : les deux vues
-    // vivent dans `editor/windows.rs` et n'étaient jusqu'ici câblées que dans
-    // `run_player_overlay` (build joueur/mobile réel) — absentes du Play
-    // testé depuis l'éditeur (bouton ▶ Play, ce `build_ui`), qui passe par un
-    // chemin de rendu séparé. Même état partagé (`Panels::map_open`/
-    // `map_zoom`/`map_pan`), donc la touche `M` (cf. `Renderer::toggle_player_map`,
-    // maintenant armée aussi hors mode `--player`) les bascule ici aussi.
     if *playing {
-        if panels.map_open {
-            player_map_overlay(
-                root.ctx(),
-                play_rect,
-                minimap,
-                locale,
-                &mut panels.map_zoom,
-                &mut panels.map_pan,
-            );
-        } else {
-            player_corner_minimap(root.ctx(), play_rect, minimap, hud_scale);
-        }
-    }
-    if *playing && let Some((c, t)) = scene.collectibles() {
-        collectibles_hud(
-            root.ctx(),
+        play_overlays(
+            root,
+            scene,
+            panels,
             play_rect,
-            c,
-            t,
+            minimap,
+            locale,
+            hud_scale,
             game_time,
             score,
-            locale,
-            hud_scale,
-        );
-    }
-    if *playing && let Some(summary) = round_summary {
-        round_summary_banner(
-            root.ctx(),
-            play_rect,
+            round_summary,
             round_summary_won,
-            summary,
             round_contract_label,
-            locale,
-            hud_scale,
-        );
-    } else if *playing && lost {
-        lose_banner(root.ctx(), play_rect, locale, hud_scale);
-    } else if *playing && defeated {
-        defeated_banner(root.ctx(), play_rect, death_cause, locale, hud_scale);
-    }
-    if *playing && wave_banner_flash > 0.0 {
-        wave_start_banner(
-            root.ctx(),
-            play_rect,
-            wave_banner_wave,
+            lost,
+            defeated,
+            death_cause,
             wave_banner_flash,
-            locale,
-            hud_scale,
+            wave_banner_wave,
         );
     }
     end_of_round_and_hud_widgets(
@@ -2646,6 +2609,93 @@ fn build_ui(
 
     // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
     // après cette frame, afin de passer par l'historique.
+}
+
+/// Overlays affichés uniquement en Play : mini-carte (coin ou plein écran
+/// sur `M`), HUD des collectibles, bannières de fin de manche/défaite/vague —
+/// extrait de `build_ui` (roadmap post-audit 2026-08-29, item 2.1, lot 3).
+/// Toutes ces vues sont déjà des fonctions autonomes d'`editor/windows.rs`/
+/// `editor/hud.rs` ; ce bloc ne fait que les enchaîner dans le même ordre
+/// qu'avant l'extraction, sans changer de logique. Appelé seulement quand
+/// `playing` est vrai (vérifié par l'appelant), donc pas de paramètre
+/// `playing` ici — sa négation garderait tout le corps mort, comme les `if
+/// *playing && …` individuels qu'il remplace.
+#[allow(clippy::too_many_arguments)] // même style que build_ui : un paramètre par donnée affichée
+fn play_overlays(
+    root: &mut egui::Ui,
+    scene: &Scene,
+    panels: &mut Panels,
+    play_rect: egui::Rect,
+    minimap: &crate::app::MinimapData,
+    locale: crate::app::locale::Locale,
+    hud_scale: f32,
+    game_time: Option<f32>,
+    score: u32,
+    round_summary: Option<&[crate::net::protocol::RoundPlayerSummary]>,
+    round_summary_won: bool,
+    round_contract_label: Option<&str>,
+    lost: bool,
+    defeated: bool,
+    death_cause: Option<crate::net::protocol::DeathCause>,
+    wave_banner_flash: f32,
+    wave_banner_wave: u32,
+) {
+    // Carte (mini-carte permanente + plein écran sur `M`) : les deux vues
+    // vivent dans `editor/windows.rs` et n'étaient jusqu'ici câblées que dans
+    // `run_player_overlay` (build joueur/mobile réel) — absentes du Play
+    // testé depuis l'éditeur (bouton ▶ Play, ce `build_ui`), qui passe par un
+    // chemin de rendu séparé. Même état partagé (`Panels::map_open`/
+    // `map_zoom`/`map_pan`), donc la touche `M` (cf. `Renderer::toggle_player_map`,
+    // maintenant armée aussi hors mode `--player`) les bascule ici aussi.
+    if panels.map_open {
+        player_map_overlay(
+            root.ctx(),
+            play_rect,
+            minimap,
+            locale,
+            &mut panels.map_zoom,
+            &mut panels.map_pan,
+        );
+    } else {
+        player_corner_minimap(root.ctx(), play_rect, minimap, hud_scale);
+    }
+    if let Some((c, t)) = scene.collectibles() {
+        collectibles_hud(
+            root.ctx(),
+            play_rect,
+            c,
+            t,
+            game_time,
+            score,
+            locale,
+            hud_scale,
+        );
+    }
+    if let Some(summary) = round_summary {
+        round_summary_banner(
+            root.ctx(),
+            play_rect,
+            round_summary_won,
+            summary,
+            round_contract_label,
+            locale,
+            hud_scale,
+        );
+    } else if lost {
+        lose_banner(root.ctx(), play_rect, locale, hud_scale);
+    } else if defeated {
+        defeated_banner(root.ctx(), play_rect, death_cause, locale, hud_scale);
+    }
+    if wave_banner_flash > 0.0 {
+        wave_start_banner(
+            root.ctx(),
+            play_rect,
+            wave_banner_wave,
+            wave_banner_flash,
+            locale,
+            hud_scale,
+        );
+    }
 }
 
 /// Fin de manche (bouton « Rejouer », `restart_button`), overlay tactile
