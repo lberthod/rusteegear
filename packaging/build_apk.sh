@@ -9,12 +9,21 @@ export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_HOME/ndk/28.2.13676358}"
 export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 
+# Obligatoire, pas de défaut (roadmap post-audit 2026-09-03, 2.3) : "android" en
+# dur ici (comme dans Cargo.toml) aurait suffi à signer un APK au nom du projet
+# à qui obtenait une copie de packaging/release.keystore, jamais versionné mais
+# pas à l'abri d'une fuite (backup, autre poste…). Si le keystore existe déjà
+# avec l'ancien mot de passe par défaut, la signature échoue plus bas avec une
+# erreur explicite de mot de passe incorrect — supprimer packaging/release.keystore
+# et relancer pour en régénérer un avec le nouveau mot de passe.
+KS_PASS="${RUSTEEGEAR_KEYSTORE_PASS:?variable requise (mot de passe du keystore de signature release, ex. RUSTEEGEAR_KEYSTORE_PASS=$(openssl rand -base64 18) pour en générer un) — pas de défaut}"
+
 KS="packaging/release.keystore"
 if [ ! -f "$KS" ]; then
     echo "▶ Génération d'une clé de signature ($KS)…"
     "$JAVA_HOME/bin/keytool" -genkeypair -v -keystore "$KS" \
         -alias motor3derust -keyalg RSA -keysize 2048 -validity 10000 \
-        -storepass android -keypass android -dname "CN=RusteeGear, O=Berthod, C=CH"
+        -storepass "$KS_PASS" -keypass "$KS_PASS" -dname "CN=RusteeGear, O=Berthod, C=CH"
 fi
 
 # --- Override d'identité Android (Sprint 36) ---
@@ -25,6 +34,20 @@ CARGO_BAK="$(mktemp)"
 cp Cargo.toml "$CARGO_BAK"
 restore_cargo() { cp "$CARGO_BAK" Cargo.toml; rm -f "$CARGO_BAK"; }
 trap restore_cargo EXIT
+
+# Mot de passe réel du keystore (cf. RUSTEEGEAR_KEYSTORE_PASS ci-dessus) : le
+# placeholder commité dans Cargo.toml n'est jamais utilisé pour signer, restauré
+# par le `trap` juste après le build comme les autres champs ci-dessous. Passé
+# par variable d'environnement et lu côté Perl (`$ENV{...}`) plutôt qu'interpolé
+# dans le code du one-liner shell comme BUNDLE_ID/APP_NAME ci-dessous : un mot de
+# passe généré contient typiquement `/` ou `+`, qui casseraient le délimiteur
+# `s/.../.../ ` s'ils atterrissaient dans le source Perl (constaté en testant).
+# Limite restante : un mot de passe contenant un guillemet `"` casserait quand
+# même le TOML généré — à éviter en le choisissant.
+KS_PASS="$KS_PASS" perl -0pi -e '
+    my $pw = $ENV{KS_PASS};
+    s/^keystore_password = "[^"]*"/keystore_password = "$pw"/m;
+' Cargo.toml
 
 if [ -n "${BUNDLE_ID:-}" ]; then
     echo "▶ Identité : package=$BUNDLE_ID"

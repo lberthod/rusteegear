@@ -85,9 +85,15 @@ target_sdk_version = 33
 label = "RusteeGear"
 
 # Clé de signature release (générée par packaging/build_apk.sh, non versionnée).
+# Placeholder ci-dessous jamais utilisé tel quel : packaging/build_apk.sh injecte
+# le vrai mot de passe (variable d'environnement obligatoire RUSTEEGEAR_KEYSTORE_
+# PASS, jamais commitée) avant `cargo apk build`, puis restaure ce fichier tel
+# quel juste après (roadmap post-audit 2026-09-03, 2.3 — "android" en dur ici
+# aurait suffi à signer un APK au nom du projet à qui obtenait une copie de
+# packaging/release.keystore).
 [package.metadata.android.signing.release]
 path = "packaging/release.keystore"
-keystore_password = "android"
+keystore_password = "changeme-voir-RUSTEEGEAR_KEYSTORE_PASS"
 
 [dev-dependencies]
 # Sprint 127 : produire de vrais octets compressés zstd dans les tests de
