@@ -69,6 +69,15 @@ const CHASER_DETECT_RANGE: f32 = 9.0;
 /// la déclenche de loin » d'exister aussi en solo.
 const FURTIVE_DETECT_RANGE: f32 = 5.0;
 
+/// Délai de grâce (filet de secours) : une créature `attackable` dont aucun
+/// `Snapshot` serveur n'est arrivé depuis ce délai reprend sa simulation locale
+/// plutôt que de rester figée pour toujours (room jamais rejointe avec succès,
+/// scène serveur désynchronisée, ou serveur qui cesse de diffuser en cours de
+/// partie). Utilisé par `run_object_scripts` (script local sauté ou non) et par
+/// le ciblage IA (`sim_step`, `chase_blocked`) — même seuil pour les deux, une
+/// créature ne doit pas rester scriptée-serveur pour l'un et locale pour l'autre.
+const CREATURE_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
+
 /// Écart angulaire **signé le plus court** (radians, dans [-π, π]) de `cur` vers
 /// `target` — jamais plus d'un demi-tour, quel que soit l'enroulement des angles.
 fn shortest_angle(cur: f32, target: f32) -> f32 {
@@ -223,6 +232,26 @@ fn pose_matches(t: &crate::scene::Transform, (p, r, s): (Vec3, Quat, Vec3)) -> b
     (t.position - p).length_squared() < 1e-10
         && (t.scale - s).length_squared() < 1e-10
         && t.rotation.dot(r).abs() > 1.0 - 1e-6
+}
+
+/// Ce que la boucle de scripts de `run_object_scripts` a accumulé pendant un
+/// tick, à appliquer par l'appelant (`sim_step`) une fois `scene.objects`
+/// libéré de l'emprunt mutable de la boucle — cf. `run_object_scripts`.
+struct ScriptRunOutcome {
+    /// `emit()` de ce tick, délivrés aux scripts au tick **suivant** (cf. la
+    /// doc de `AppState::game_events`).
+    events_out: Vec<String>,
+    /// `spawn(prefab_ref)` demandés, (référence de prefab, position).
+    spawn_requests: Vec<(String, Vec3)>,
+    /// `add_item(kind, n)` demandés.
+    item_add_requests: Vec<(crate::scene::ItemKind, u32)>,
+    /// Vibrations demandées (`vibrate(ms)`), en millisecondes.
+    vibrations: Vec<f32>,
+    /// Mélanges de réverbération demandés (`reverb(mix)`) — le dernier gagne.
+    reverb_requests: Vec<f32>,
+    /// Vie du joueur local après régénération passive et `damage()`/`heal()`
+    /// éventuels des scripts, `None` si `hud_health` était déjà `None`.
+    health: Option<f32>,
 }
 
 /// Avance la lecture des clips d'animation squelettale : indépendant des
@@ -894,266 +923,20 @@ impl AppState {
             }
             None => std::collections::HashSet::new(),
         };
-        // Sortie de zone : objets `trigger` qui étaient en contact au tick
-        // précédent (`trigger_prev`) et ne le sont plus ce tick-ci — exposé aux scripts
-        // via `obj.exited`, symétrique de `obj.triggered`. Calculé avant de remplacer
-        // `trigger_prev` par `triggered` (sinon la différence serait toujours vide).
-        let exited: std::collections::HashSet<usize> =
-            self.trigger_prev.difference(&triggered).copied().collect();
-        self.trigger_prev = triggered.clone();
-        let mut vibrations: Vec<f32> = Vec::new();
-        // Sprint 121 : mélanges de réverbération demandés par les scripts ce tick
-        // (`reverb(mix)`, typiquement depuis une zone `trigger`) — le dernier appel
-        // l'emporte, appliqué après la boucle comme les vibrations.
-        let mut reverb_requests: Vec<f32> = Vec::new();
-        // Événements de gameplay : ceux émis au tick précédent (scripts ou
-        // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
-        // de ce tick s'accumulent dans `events_out` et seront délivrés au suivant.
-        let mut events_in = std::mem::take(&mut self.game_events);
-        // Marqueurs d'animation franchis plus haut, livrés ce même tick.
-        events_in.extend(anim_notify_events);
-        let mut events_out: Vec<String> = Vec::new();
-        // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
-        // que les appels `damage()` de cette frame s'appliquent après, sans s'annuler.
-        const HEALTH_REGEN_PER_S: f32 = 0.25;
-        let mut health = self
-            .hud_health
-            .map(|h| (h + HEALTH_REGEN_PER_S * dt).min(1.0));
-        // Positions de départ (snapshot d'entrée en Play) pour l'action « Respawn ».
-        let start_pos: Vec<Vec3> = self
-            .play_snapshot
-            .iter()
-            .map(|o| o.transform.position)
-            .collect();
-        // `find_tag` : instantané pris **avant** la boucle, pas de vue
-        // vivante sur `scene.objects` (déjà emprunté mutable ci-dessous). Un objet
-        // masqué ce tick (destroy) ou pas encore spawné n'y figure pas.
-        let tagged: Vec<(String, Vec3)> = self
-            .scene
-            .objects
-            .iter()
-            .filter(|o| o.visible && !o.tag.is_empty())
-            .map(|o| (o.tag.clone(), o.transform.position))
-            .collect();
-        // `spawn()`/`obj:destroy()` : accumulés pendant la boucle des
-        // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
-        // mutable par l'itération ci-dessous.
-        let mut spawn_requests: Vec<(String, Vec3)> = Vec::new();
-        // `add_item(kind, n)` : accumulé comme `spawn_requests` — `self.add_item`
-        // exige `&mut self` en entier, incompatible avec l'emprunt de
-        // `self.scene.objects` actif tout le temps de la boucle ci-dessous (`obj`).
-        let mut item_add_requests: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
-        // Calculé une fois : `self.scene.objects` est emprunté mutable par
-        // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
-        // n'y serait pas appelable.
-        let online_client = self.is_online_client();
-        // Filet de secours : une créature `attackable` ne doit sauter son script
-        // local que si le serveur diffuse *réellement* ses positions pour elle.
-        // Si la room n'a jamais été rejointe avec succès (gabarit introuvable côté
-        // serveur, cf. `spawn_network_player`) ou si la scène serveur diverge
-        // (index qui ne correspond à rien côté client), aucun `Snapshot` ne la
-        // couvre jamais et elle resterait figée pour toujours sans ce filet — de
-        // même si le serveur cesse de diffuser en cours de partie (déconnexion
-        // silencieuse, redémarrage). Nom distinct de la variable `now` réutilisée
-        // (ombrée) plus haut dans cette fonction pour `self.time`.
-        const CREATURE_SNAPSHOT_TIMEOUT: std::time::Duration =
-            std::time::Duration::from_millis(2500);
-        let net_check_now = Instant::now();
-        for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
-            let just_tapped = self.touch.tapped_obj == Some(idx);
-            let touch_started = self.touch.touch_started_obj == Some(idx);
-            let touching = self.touch.touched_obj == Some(idx);
-            let touch_ended = self.touch.touch_ended_obj == Some(idx);
-            // Vibration Feedback : retour haptique quand l'objet est tapé.
-            if obj.vibrate_on_tap > 0 && just_tapped {
-                vibrations.push(obj.vibrate_on_tap as f32);
-            }
-            // Action au tap sans script (couleur / masquer / grandir / respawn).
-            if just_tapped {
-                let start = start_pos
-                    .get(idx)
-                    .copied()
-                    .unwrap_or(obj.transform.position);
-                crate::scene::apply_tap_action(obj, start, time);
-            }
-            // Game feel : les collectibles encore visibles tournent sur eux-mêmes.
-            crate::scene::animate_collectible(obj, time);
-            if obj.script.trim().is_empty() {
-                continue;
-            }
-            // Créature synchronisée par le serveur (`Combat::attackable`, cf.
-            // `AppState::network_snapshot`/`scene::demos::MMORPG_CREATURES`) : un
-            // client connecté ne doit pas dupliquer sa simulation localement (sa
-            // patrouille/morsure tourne réellement côté serveur, cf. `is_online_
-            // client`), seulement se fier aux `EntityDelta` reçus. En solo et côté
-            // serveur (jamais de `net_client`), rien ne change.
-            if online_client
-                && obj.controller.is_none()
-                && obj.combat.as_ref().is_some_and(|c| c.attackable)
-                && creature_is_server_synced(
-                    self.net_conn.net_creature_last_snapshot.get(&idx).copied(),
-                    net_check_now,
-                    CREATURE_SNAPSHOT_TIMEOUT,
-                )
-            {
-                continue;
-            }
-            // `mlua`/`lua-src` ne ciblent pas `wasm32-unknown-unknown` (cf. Cargo.toml,
-            // Sprint 114) : sur le web, les scripts tournent sur `scripting_web`
-            // (backend `rilua`, Sprint 137) — même contrat que `scripting::run_script`
-            // ci-dessous, cf. sa doc pour ce qui diffère en interne.
-            #[cfg(target_arch = "wasm32")]
-            {
-                let key = scripting_web::script_key(&obj.script);
-                let func = match self.scripting.script_cache_web.get(&key) {
-                    Some(f) => *f,
-                    None => match self.scripting.lua_web.load(&obj.script) {
-                        Ok(f) => {
-                            // Ancrage dans la table `registry` de `rilua` (racine GC) :
-                            // sans ça, le cache Rust (`script_cache_web`) garde un
-                            // handle invisible du GC, ramassé à la première collecte
-                            // complète — cf. la doc d'`anchor_compiled_function`.
-                            if let Err(e) = scripting_web::anchor_compiled_function(
-                                &mut self.scripting.lua_web,
-                                key,
-                                f,
-                            ) {
-                                log::error!("Ancrage GC du script '{}' : {e}", obj.name);
-                                continue;
-                            }
-                            self.scripting.script_cache_web.insert(key, f);
-                            f
-                        }
-                        Err(e) => {
-                            log::error!("Compilation du script '{}' : {e}", obj.name);
-                            continue;
-                        }
-                    },
-                };
-                let tapped = self.touch.tapped_obj == Some(idx);
-                let mut destroy_requested = false;
-                let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
-                let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
-                if let Err(e) = scripting_web::run_script_web(
-                    &mut self.scripting.lua_web,
-                    &func,
-                    &mut obj.transform,
-                    &mut obj.color,
-                    &mut obj.animation,
-                    dt,
-                    time,
-                    &self.input_state,
-                    tapped,
-                    touch_started,
-                    touching,
-                    touch_ended,
-                    triggered.contains(&idx),
-                    &events_in,
-                    &mut events_out,
-                    &tagged,
-                    &mut spawns_this_obj,
-                    &mut item_adds_this_obj,
-                    &mut destroy_requested,
-                    &mut self.lua_vars,
-                    &mut vibrations,
-                    &mut health,
-                    &mut self.debug_lines,
-                    exited.contains(&idx),
-                    self.physics.as_ref(),
-                    &mut reverb_requests,
-                ) {
-                    log::error!("Script '{}' : {e}", obj.name);
-                }
-                if destroy_requested {
-                    obj.visible = false;
-                }
-                spawn_requests.extend(spawns_this_obj);
-                item_add_requests.extend(item_adds_this_obj);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Récupère (ou compile une seule fois) le chunk associé à cette source.
-                let key = scripting::script_key(&obj.script);
-                let func = match self.scripting.script_cache.get(&key) {
-                    Some(f) => f.clone(),
-                    // Chunk nommé d'après l'objet : sans ça, mlua nomme le chunk
-                    // d'après le call-site Rust (`src/app/simulation.rs:NNN`) et
-                    // les erreurs Lua deviennent illisibles pour l'utilisateur
-                    // (Phase C5, sprint.19matin.md) — avec, elles se lisent
-                    // « script de « Nom » »:ligne: message ».
-                    None => match self
-                        .scripting
-                        .lua
-                        .load(&obj.script)
-                        .set_name(format!("script de « {} »", obj.name))
-                        .into_function()
-                    {
-                        Ok(f) => {
-                            self.scripting.script_cache.insert(key, f.clone());
-                            f
-                        }
-                        Err(e) => {
-                            log::error!("Compilation du script '{}' : {e}", obj.name);
-                            continue;
-                        }
-                    },
-                };
-                let tapped = self.touch.tapped_obj == Some(idx);
-                let mut destroy_requested = false;
-                let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
-                let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
-                if let Err(e) = scripting::run_script(
-                    &self.scripting.lua,
-                    &func,
-                    &mut obj.transform,
-                    &mut obj.color,
-                    &mut obj.animation,
-                    dt,
-                    time,
-                    &self.input_state,
-                    tapped,
-                    touch_started,
-                    touching,
-                    touch_ended,
-                    triggered.contains(&idx),
-                    &events_in,
-                    &mut events_out,
-                    &tagged,
-                    &mut spawns_this_obj,
-                    &mut item_adds_this_obj,
-                    &mut destroy_requested,
-                    &mut self.lua_vars,
-                    &mut vibrations,
-                    &mut health,
-                    &mut self.debug_lines,
-                    exited.contains(&idx),
-                    self.physics.as_ref(),
-                    &mut reverb_requests,
-                ) {
-                    log::error!("Script '{}' : {e}", obj.name);
-                }
-                // `obj:destroy()` : suppression douce, cf. sa doc dans
-                // `run_script` — jamais un retrait de `scene.objects`.
-                if destroy_requested {
-                    obj.visible = false;
-                }
-                spawn_requests.extend(spawns_this_obj);
-                item_add_requests.extend(item_adds_this_obj);
-            }
-        }
-        for (kind, n) in item_add_requests {
+        let outcome = self.run_object_scripts(dt, time, &triggered, anim_notify_events);
+        for (kind, n) in outcome.item_add_requests {
             self.add_item(kind, n);
         }
         // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
         // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
-        self.game_events = events_out;
+        self.game_events = outcome.events_out;
         // `spawn()` : appliqué maintenant que `scene.objects` n'est plus
         // emprunté — ajout en fin de tableau (jamais d'insertion/retrait ailleurs),
         // les indices existants (réseau, undo, IA) restent donc valides. Physique
         // reconstruite une seule fois si des objets ont réellement été ajoutés (coûte
         // cher, cf. le même garde-fou dans `spawn_network_player`).
-        if !spawn_requests.is_empty() {
-            for (prefab_ref, pos) in spawn_requests {
+        if !outcome.spawn_requests.is_empty() {
+            for (prefab_ref, pos) in outcome.spawn_requests {
                 let name = format!("Spawn {}", self.scene.objects.len());
                 if let Some(obj) = crate::scene::Scene::instantiate_prefab(&prefab_ref, name, pos) {
                     self.scene.objects.push(obj);
@@ -1166,25 +949,25 @@ impl AppState {
         // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
         // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
         // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
-        if let (Some(prev), Some(cur)) = (self.hud_health, health)
+        if let (Some(prev), Some(cur)) = (self.hud_health, outcome.health)
             && cur < prev - 1e-4
         {
             self.fx.damage_flash = 1.0;
             self.fx.camera_shake = 1.0;
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
         }
-        self.hud_health = health;
+        self.hud_health = outcome.health;
         // Le tap n'est exposé qu'une frame.
         self.touch.tapped_obj = None;
         self.touch.touch_started_obj = None;
         self.touch.touch_ended_obj = None;
         // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
-        for ms in vibrations {
+        for ms in outcome.vibrations {
             crate::runtime::vibrate(ms);
         }
         // Réverbération demandée par les scripts ce tick (Sprint 121) — dernier
         // appel gagnant, transition douce (0,5 s) plutôt qu'un changement abrupt.
-        if let Some(&mix) = reverb_requests.last() {
+        if let Some(&mix) = outcome.reverb_requests.last() {
             self.audio.set_reverb_mix(mix, 0.5);
         }
 
@@ -1705,6 +1488,267 @@ impl AppState {
                     o.transform.scale,
                 )
             }));
+    }
+
+    /// Exécute le script de chaque objet de la scène (natif ou wasm32 selon la
+    /// cible) et accumule ce qu'ils ont demandé — extrait tel quel de `sim_step`
+    /// (plan de découpage, `docs/plan_decoupage_sim_step_et_render.md`, lot
+    /// 3.1.B), aucun changement de comportement. `triggered`/`anim_notify_events`
+    /// restent calculés par l'appelant (respectivement zones de déclenchement et
+    /// marqueurs d'animation, tous deux réutilisés ailleurs dans `sim_step`) ;
+    /// tout le reste (vie régénérée, positions de départ, tags, sortie de zone…)
+    /// n'a d'usage que dans cette boucle et est calculé ici.
+    fn run_object_scripts(
+        &mut self,
+        dt: f32,
+        time: f32,
+        triggered: &std::collections::HashSet<usize>,
+        anim_notify_events: Vec<String>,
+    ) -> ScriptRunOutcome {
+        // Sortie de zone : objets `trigger` qui étaient en contact au tick
+        // précédent (`trigger_prev`) et ne le sont plus ce tick-ci — exposé aux scripts
+        // via `obj.exited`, symétrique de `obj.triggered`. Calculé avant de remplacer
+        // `trigger_prev` par `triggered` (sinon la différence serait toujours vide).
+        let exited: std::collections::HashSet<usize> =
+            self.trigger_prev.difference(triggered).copied().collect();
+        self.trigger_prev = triggered.clone();
+        let mut vibrations: Vec<f32> = Vec::new();
+        // Sprint 121 : mélanges de réverbération demandés par les scripts ce tick
+        // (`reverb(mix)`, typiquement depuis une zone `trigger`) — le dernier appel
+        // l'emporte, appliqué après la boucle comme les vibrations.
+        let mut reverb_requests: Vec<f32> = Vec::new();
+        // Événements de gameplay : ceux émis au tick précédent (scripts ou
+        // moteur) sont délivrés à tous les scripts de ce tick, puis jetés ; les `emit()`
+        // de ce tick s'accumulent dans `events_out` et seront délivrés au suivant.
+        let mut events_in = std::mem::take(&mut self.game_events);
+        // Marqueurs d'animation franchis plus haut, livrés ce même tick.
+        events_in.extend(anim_notify_events);
+        let mut events_out: Vec<String> = Vec::new();
+        // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
+        // que les appels `damage()` de cette frame s'appliquent après, sans s'annuler.
+        const HEALTH_REGEN_PER_S: f32 = 0.25;
+        let mut health = self
+            .hud_health
+            .map(|h| (h + HEALTH_REGEN_PER_S * dt).min(1.0));
+        // Positions de départ (snapshot d'entrée en Play) pour l'action « Respawn ».
+        let start_pos: Vec<Vec3> = self
+            .play_snapshot
+            .iter()
+            .map(|o| o.transform.position)
+            .collect();
+        // `find_tag` : instantané pris **avant** la boucle, pas de vue
+        // vivante sur `scene.objects` (déjà emprunté mutable ci-dessous). Un objet
+        // masqué ce tick (destroy) ou pas encore spawné n'y figure pas.
+        let tagged: Vec<(String, Vec3)> = self
+            .scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && !o.tag.is_empty())
+            .map(|o| (o.tag.clone(), o.transform.position))
+            .collect();
+        // `spawn()`/`obj:destroy()` : accumulés pendant la boucle des
+        // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
+        // mutable par l'itération ci-dessous.
+        let mut spawn_requests: Vec<(String, Vec3)> = Vec::new();
+        // `add_item(kind, n)` : accumulé comme `spawn_requests` — `self.add_item`
+        // exige `&mut self` en entier, incompatible avec l'emprunt de
+        // `self.scene.objects` actif tout le temps de la boucle ci-dessous (`obj`).
+        let mut item_add_requests: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
+        // Calculé une fois : `self.scene.objects` est emprunté mutable par
+        // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
+        // n'y serait pas appelable.
+        let online_client = self.is_online_client();
+        let net_check_now = Instant::now();
+        for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
+            let just_tapped = self.touch.tapped_obj == Some(idx);
+            let touch_started = self.touch.touch_started_obj == Some(idx);
+            let touching = self.touch.touched_obj == Some(idx);
+            let touch_ended = self.touch.touch_ended_obj == Some(idx);
+            // Vibration Feedback : retour haptique quand l'objet est tapé.
+            if obj.vibrate_on_tap > 0 && just_tapped {
+                vibrations.push(obj.vibrate_on_tap as f32);
+            }
+            // Action au tap sans script (couleur / masquer / grandir / respawn).
+            if just_tapped {
+                let start = start_pos
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(obj.transform.position);
+                crate::scene::apply_tap_action(obj, start, time);
+            }
+            // Game feel : les collectibles encore visibles tournent sur eux-mêmes.
+            crate::scene::animate_collectible(obj, time);
+            if obj.script.trim().is_empty() {
+                continue;
+            }
+            // Créature synchronisée par le serveur (`Combat::attackable`, cf.
+            // `AppState::network_snapshot`/`scene::demos::MMORPG_CREATURES`) : un
+            // client connecté ne doit pas dupliquer sa simulation localement (sa
+            // patrouille/morsure tourne réellement côté serveur, cf. `is_online_
+            // client`), seulement se fier aux `EntityDelta` reçus. En solo et côté
+            // serveur (jamais de `net_client`), rien ne change.
+            if online_client
+                && obj.controller.is_none()
+                && obj.combat.as_ref().is_some_and(|c| c.attackable)
+                && creature_is_server_synced(
+                    self.net_conn.net_creature_last_snapshot.get(&idx).copied(),
+                    net_check_now,
+                    CREATURE_SNAPSHOT_TIMEOUT,
+                )
+            {
+                continue;
+            }
+            // `mlua`/`lua-src` ne ciblent pas `wasm32-unknown-unknown` (cf. Cargo.toml,
+            // Sprint 114) : sur le web, les scripts tournent sur `scripting_web`
+            // (backend `rilua`, Sprint 137) — même contrat que `scripting::run_script`
+            // ci-dessous, cf. sa doc pour ce qui diffère en interne.
+            #[cfg(target_arch = "wasm32")]
+            {
+                let key = scripting_web::script_key(&obj.script);
+                let func = match self.scripting.script_cache_web.get(&key) {
+                    Some(f) => *f,
+                    None => match self.scripting.lua_web.load(&obj.script) {
+                        Ok(f) => {
+                            // Ancrage dans la table `registry` de `rilua` (racine GC) :
+                            // sans ça, le cache Rust (`script_cache_web`) garde un
+                            // handle invisible du GC, ramassé à la première collecte
+                            // complète — cf. la doc d'`anchor_compiled_function`.
+                            if let Err(e) = scripting_web::anchor_compiled_function(
+                                &mut self.scripting.lua_web,
+                                key,
+                                f,
+                            ) {
+                                log::error!("Ancrage GC du script '{}' : {e}", obj.name);
+                                continue;
+                            }
+                            self.scripting.script_cache_web.insert(key, f);
+                            f
+                        }
+                        Err(e) => {
+                            log::error!("Compilation du script '{}' : {e}", obj.name);
+                            continue;
+                        }
+                    },
+                };
+                let tapped = self.touch.tapped_obj == Some(idx);
+                let mut destroy_requested = false;
+                let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
+                let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
+                if let Err(e) = scripting_web::run_script_web(
+                    &mut self.scripting.lua_web,
+                    &func,
+                    &mut obj.transform,
+                    &mut obj.color,
+                    &mut obj.animation,
+                    dt,
+                    time,
+                    &self.input_state,
+                    tapped,
+                    touch_started,
+                    touching,
+                    touch_ended,
+                    triggered.contains(&idx),
+                    &events_in,
+                    &mut events_out,
+                    &tagged,
+                    &mut spawns_this_obj,
+                    &mut item_adds_this_obj,
+                    &mut destroy_requested,
+                    &mut self.lua_vars,
+                    &mut vibrations,
+                    &mut health,
+                    &mut self.debug_lines,
+                    exited.contains(&idx),
+                    self.physics.as_ref(),
+                    &mut reverb_requests,
+                ) {
+                    log::error!("Script '{}' : {e}", obj.name);
+                }
+                if destroy_requested {
+                    obj.visible = false;
+                }
+                spawn_requests.extend(spawns_this_obj);
+                item_add_requests.extend(item_adds_this_obj);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Récupère (ou compile une seule fois) le chunk associé à cette source.
+                let key = scripting::script_key(&obj.script);
+                let func = match self.scripting.script_cache.get(&key) {
+                    Some(f) => f.clone(),
+                    // Chunk nommé d'après l'objet : sans ça, mlua nomme le chunk
+                    // d'après le call-site Rust (`src/app/simulation.rs:NNN`) et
+                    // les erreurs Lua deviennent illisibles pour l'utilisateur
+                    // (Phase C5, sprint.19matin.md) — avec, elles se lisent
+                    // « script de « Nom » »:ligne: message ».
+                    None => match self
+                        .scripting
+                        .lua
+                        .load(&obj.script)
+                        .set_name(format!("script de « {} »", obj.name))
+                        .into_function()
+                    {
+                        Ok(f) => {
+                            self.scripting.script_cache.insert(key, f.clone());
+                            f
+                        }
+                        Err(e) => {
+                            log::error!("Compilation du script '{}' : {e}", obj.name);
+                            continue;
+                        }
+                    },
+                };
+                let tapped = self.touch.tapped_obj == Some(idx);
+                let mut destroy_requested = false;
+                let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
+                let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
+                if let Err(e) = scripting::run_script(
+                    &self.scripting.lua,
+                    &func,
+                    &mut obj.transform,
+                    &mut obj.color,
+                    &mut obj.animation,
+                    dt,
+                    time,
+                    &self.input_state,
+                    tapped,
+                    touch_started,
+                    touching,
+                    touch_ended,
+                    triggered.contains(&idx),
+                    &events_in,
+                    &mut events_out,
+                    &tagged,
+                    &mut spawns_this_obj,
+                    &mut item_adds_this_obj,
+                    &mut destroy_requested,
+                    &mut self.lua_vars,
+                    &mut vibrations,
+                    &mut health,
+                    &mut self.debug_lines,
+                    exited.contains(&idx),
+                    self.physics.as_ref(),
+                    &mut reverb_requests,
+                ) {
+                    log::error!("Script '{}' : {e}", obj.name);
+                }
+                // `obj:destroy()` : suppression douce, cf. sa doc dans
+                // `run_script` — jamais un retrait de `scene.objects`.
+                if destroy_requested {
+                    obj.visible = false;
+                }
+                spawn_requests.extend(spawns_this_obj);
+                item_add_requests.extend(item_adds_this_obj);
+            }
+        }
+        ScriptRunOutcome {
+            events_out,
+            spawn_requests,
+            item_add_requests,
+            vibrations,
+            reverb_requests,
+            health,
+        }
     }
 
     /// Réécrit dans la scène les poses **exactes** du dernier pas de simulation,
