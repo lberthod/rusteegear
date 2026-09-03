@@ -439,10 +439,10 @@ impl AppState {
             self.hud_health = None;
             self.fx.damage_flash = 0.0;
             self.fx.attack_flash = 0.0;
-            self.attack_cooldown_remaining = 0.0;
-            self.attack_projectile = None;
-            self.attack_charge = None;
-            self.stagger.clear();
+            self.attack.attack_cooldown_remaining = 0.0;
+            self.attack.attack_projectile = None;
+            self.attack.attack_charge = None;
+            self.attack.stagger.clear();
             // Poses d'interpolation de rendu périmées (la scène vient d'être restaurée
             // depuis le snapshot d'édition) : ne surtout pas les mélanger au retour en Play.
             self.sim_poses.sim_prev_poses.clear();
@@ -1623,7 +1623,7 @@ impl AppState {
             // viennent de recalculer.
             let scene = &mut self.scene;
             let prev_poses = &self.sim_poses.sim_curr_poses;
-            self.stagger.retain_mut(|(idx, vel, remaining)| {
+            self.attack.stagger.retain_mut(|(idx, vel, remaining)| {
                 if phys.is_scripted_body(*idx) {
                     // Recul d'un corps scripté (chantier 4.1) : `control`
                     // ignore la liste `scripted` — le knockback était un no-op

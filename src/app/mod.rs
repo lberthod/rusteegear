@@ -570,6 +570,34 @@ pub struct NetConnectionState {
     net_reconnect: Option<network_client::ReconnectState>,
 }
 
+/// Attaque de corps-à-corps du joueur local (roadmap post-audit 2026-09-03, 3.3,
+/// lot 15/N) : cooldown, missile en vol, préparation, reculs encaissés — état de
+/// combat *local* uniquement, distinct de `NetworkPlayersState` (cooldowns/vie des
+/// AUTRES joueurs réseau).
+pub struct PlayerAttackState {
+    /// Temps restant (s) avant la prochaine attaque possible (cf. `Controller::attack_cooldown`).
+    /// Sans ce temporisateur, maintenir le bouton défait instantanément tout ce qui entre
+    /// en portée, sans le moindre risque — verrouillé par un test dédié.
+    attack_cooldown_remaining: f32,
+    /// Missile d'attaque en vol (cf. `Scene::attack_at` → tir à distance) : `None` = pas
+    /// de tir en cours. L'impact réel (mise à mort) n'est résolu qu'à l'arrivée, pas au
+    /// moment du tir — laisse le temps à la cible de continuer d'approcher, donc de
+    /// mordre avant que le coup ne porte (le vrai risque qu'une résolution instantanée
+    /// ne pouvait pas garantir, cf. audit_sprint.md).
+    attack_projectile: Option<AttackProjectile>,
+    /// Préparation d'attaque en cours (cf. `Controller::attack_windup`) : `None` = pas de
+    /// tir en préparation. La cible est verrouillée dès l'appui, mais le missile ne part
+    /// qu'une fois le temps de préparation écoulé — le joueur reste exposé pendant ce
+    /// temps (aucune invulnérabilité), créant enfin un vrai risque en 1 contre 1 (cf.
+    /// audit_sprint.md : le temps de vol du missile seul ne suffisait pas).
+    attack_charge: Option<AttackCharge>,
+    /// Reculs (knockback) en cours : (indice d'objet, vitesse horizontale, temps restant
+    /// en s) — cf. `KNOCKBACK_SPEED`/`KNOCKBACK_DURATION`. Prioritaire sur le pilotage
+    /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
+    /// la frame suivante).
+    stagger: Vec<(usize, Vec3, f32)>,
+}
+
 pub struct NetworkPlayersState {
     /// Joueurs réseau connectés (cf. `multiplayer.rs`) : indice de
     /// l'objet de scène que chacun pilote, dans `scene.objects`.
@@ -890,27 +918,9 @@ pub struct AppState {
     /// autre victoire (course infinie, tour, manches de zombies...) doit juste relancer
     /// la même scène au clic sur « Rejouer », pas basculer vers l'arène de combat.
     pub is_leveled_demo: bool,
-    /// Temps restant (s) avant la prochaine attaque possible (cf. `Controller::attack_cooldown`).
-    /// Sans ce temporisateur, maintenir le bouton défait instantanément tout ce qui entre
-    /// en portée, sans le moindre risque — verrouillé par un test dédié.
-    attack_cooldown_remaining: f32,
-    /// Missile d'attaque en vol (cf. `Scene::attack_at` → tir à distance) : `None` = pas
-    /// de tir en cours. L'impact réel (mise à mort) n'est résolu qu'à l'arrivée, pas au
-    /// moment du tir — laisse le temps à la cible de continuer d'approcher, donc de
-    /// mordre avant que le coup ne porte (le vrai risque qu'une résolution instantanée
-    /// ne pouvait pas garantir, cf. audit_sprint.md).
-    attack_projectile: Option<AttackProjectile>,
-    /// Préparation d'attaque en cours (cf. `Controller::attack_windup`) : `None` = pas de
-    /// tir en préparation. La cible est verrouillée dès l'appui, mais le missile ne part
-    /// qu'une fois le temps de préparation écoulé — le joueur reste exposé pendant ce
-    /// temps (aucune invulnérabilité), créant enfin un vrai risque en 1 contre 1 (cf.
-    /// audit_sprint.md : le temps de vol du missile seul ne suffisait pas).
-    attack_charge: Option<AttackCharge>,
-    /// Reculs (knockback) en cours : (indice d'objet, vitesse horizontale, temps restant
-    /// en s) — cf. `KNOCKBACK_SPEED`/`KNOCKBACK_DURATION`. Prioritaire sur le pilotage
-    /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
-    /// la frame suivante).
-    stagger: Vec<(usize, Vec3, f32)>,
+    /// Attaque de corps-à-corps du joueur local (cooldown, missile en vol,
+    /// préparation, reculs encaissés) — cf. `PlayerAttackState`.
+    attack: PlayerAttackState,
     /// État de simulation par joueur réseau (positions pilotées, vie, frags,
     /// classe, cooldowns...) — cf. `NetworkPlayersState`.
     network: NetworkPlayersState,
@@ -1170,10 +1180,12 @@ impl AppState {
             player_down_count: 0,
             revives_completed: 0,
             is_leveled_demo: false,
-            attack_cooldown_remaining: 0.0,
-            attack_projectile: None,
-            attack_charge: None,
-            stagger: Vec::new(),
+            attack: PlayerAttackState {
+                attack_cooldown_remaining: 0.0,
+                attack_projectile: None,
+                attack_charge: None,
+                stagger: Vec::new(),
+            },
             network: NetworkPlayersState {
                 network_players: HashMap::new(),
                 network_inputs: HashMap::new(),

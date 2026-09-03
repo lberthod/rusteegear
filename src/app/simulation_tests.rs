@@ -1913,7 +1913,9 @@ fn a_scripted_creature_knockback_pushes_it_back_despite_the_chase() {
     app.playing = true;
 
     // Coup encaissé : recul de 8 m/s vers -Z (loin du joueur) pendant 0,25 s.
-    app.stagger.push((ci, Vec3::new(0.0, 0.0, -8.0), 0.25));
+    app.attack
+        .stagger
+        .push((ci, Vec3::new(0.0, 0.0, -8.0), 0.25));
     let z0 = app.scene.objects[ci].transform.position.z;
     for _ in 0..12 {
         app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);

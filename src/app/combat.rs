@@ -294,28 +294,28 @@ impl AppState {
     pub(super) fn update_attack(&mut self, dt: f32) {
         // Temps de recharge de l'attaque : décompte à chaque frame, indépendamment
         // du bouton (sinon le relâcher puis le rappuyer contournerait le temporisateur).
-        if self.attack_cooldown_remaining > 0.0 {
-            self.attack_cooldown_remaining -= dt;
+        if self.attack.attack_cooldown_remaining > 0.0 {
+            self.attack.attack_cooldown_remaining -= dt;
         }
-        if self.attack_projectile.is_none()
-            && self.attack_charge.is_none()
+        if self.attack.attack_projectile.is_none()
+            && self.attack.attack_charge.is_none()
             && let Some(player) = self.player_object()
             && let Some(ctrl) = player.controller.clone()
         {
             let pressed = ((!ctrl.attack_button.is_empty()
                 && self.input_state.buttons.contains(&ctrl.attack_button))
                 || self.input_state.attack)
-                && self.attack_cooldown_remaining <= 0.0;
+                && self.attack.attack_cooldown_remaining <= 0.0;
             if pressed {
                 let p = player.transform.position;
                 let range = ctrl.attack_range;
-                self.attack_cooldown_remaining = ctrl.attack_cooldown;
+                self.attack.attack_cooldown_remaining = ctrl.attack_cooldown;
                 let target = match ctrl.attack_mode {
                     AttackMode::Single => self.scene.nearest_attackable(p, range).map(Some),
                     AttackMode::Zone => self.scene.nearest_attackable(p, range).map(|_| None),
                 };
                 if let Some(target) = target {
-                    self.attack_charge = Some(AttackCharge {
+                    self.attack.attack_charge = Some(AttackCharge {
                         target,
                         range,
                         mode: ctrl.attack_mode,
@@ -339,13 +339,13 @@ impl AppState {
         // missile à vide) ; en mode `Zone`, rien n'est verrouillé à l'avance, donc
         // rien à annuler — la frappe touche ce qui est à portée à la résolution,
         // quitte à ne rien toucher du tout.
-        if let Some(charge) = &mut self.attack_charge {
+        if let Some(charge) = &mut self.attack.attack_charge {
             charge.remaining -= dt;
             let cancel = charge
                 .target
                 .is_some_and(|t| !self.scene.objects.get(t).is_some_and(|o| o.visible));
             if cancel {
-                self.attack_charge = None;
+                self.attack.attack_charge = None;
                 if let Some(fx) = self.attack_fx_index()
                     && let Some(o) = self.scene.objects.get_mut(fx)
                 {
@@ -353,14 +353,15 @@ impl AppState {
                 }
             } else if charge.remaining <= 0.0 {
                 let (target, range, mode) = (charge.target, charge.range, charge.mode);
-                self.attack_charge = None;
+                self.attack.attack_charge = None;
                 if let Some(p) = self.player_position() {
                     match mode {
                         AttackMode::Single => {
                             let target = target.expect(
                                 "mode Single verrouille toujours une cible avant de lancer une préparation",
                             );
-                            self.attack_projectile = Some(AttackProjectile { target, pos: p });
+                            self.attack.attack_projectile =
+                                Some(AttackProjectile { target, pos: p });
                             if let Some(fx) = self.attack_fx_index()
                                 && let Some(o) = self.scene.objects.get_mut(fx)
                             {
@@ -392,7 +393,7 @@ impl AppState {
         // Mise à jour du missile en vol : homing (vise la position courante de la
         // cible), avance à vitesse constante. À l'arrivée (ou si la cible a disparu
         // entre-temps — respawn, autre mise à mort...), résout l'impact.
-        if let Some(proj) = self.attack_projectile.take() {
+        if let Some(proj) = self.attack.attack_projectile.take() {
             let alive = self
                 .scene
                 .objects
@@ -429,7 +430,7 @@ impl AppState {
                             let away = target_pos - p;
                             let dir = Vec3::new(away.x, 0.0, away.z);
                             if dir.length_squared() > 1e-6 {
-                                self.stagger.push((
+                                self.attack.stagger.push((
                                     i,
                                     dir.normalize() * KNOCKBACK_SPEED,
                                     KNOCKBACK_DURATION,
@@ -451,7 +452,7 @@ impl AppState {
                     {
                         o.transform.position = new_pos;
                     }
-                    self.attack_projectile = Some(AttackProjectile {
+                    self.attack.attack_projectile = Some(AttackProjectile {
                         target: proj.target,
                         pos: new_pos,
                     });

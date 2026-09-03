@@ -54,10 +54,10 @@ impl AppState {
         self.round_summary = None;
         self.round_contract_label = None;
         self.fx.wave_banner_flash = 0.0;
-        self.attack_cooldown_remaining = 0.0;
-        self.attack_projectile = None;
-        self.attack_charge = None;
-        self.stagger.clear();
+        self.attack.attack_cooldown_remaining = 0.0;
+        self.attack.attack_projectile = None;
+        self.attack.attack_charge = None;
+        self.attack.stagger.clear();
         self.touch.tapped_obj = None;
         // Remet la manche 1 (révèle ses monstres, masque les suivantes) *avant* de
         // reconstruire la physique, pour que les corps rigides des monstres masqués ne
