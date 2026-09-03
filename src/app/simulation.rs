@@ -924,52 +924,7 @@ impl AppState {
             None => std::collections::HashSet::new(),
         };
         let outcome = self.run_object_scripts(dt, time, &triggered, anim_notify_events);
-        for (kind, n) in outcome.item_add_requests {
-            self.add_item(kind, n);
-        }
-        // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
-        // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
-        self.game_events = outcome.events_out;
-        // `spawn()` : appliqué maintenant que `scene.objects` n'est plus
-        // emprunté — ajout en fin de tableau (jamais d'insertion/retrait ailleurs),
-        // les indices existants (réseau, undo, IA) restent donc valides. Physique
-        // reconstruite une seule fois si des objets ont réellement été ajoutés (coûte
-        // cher, cf. le même garde-fou dans `spawn_network_player`).
-        if !outcome.spawn_requests.is_empty() {
-            for (prefab_ref, pos) in outcome.spawn_requests {
-                let name = format!("Spawn {}", self.scene.objects.len());
-                if let Some(obj) = crate::scene::Scene::instantiate_prefab(&prefab_ref, name, pos) {
-                    self.scene.objects.push(obj);
-                } else {
-                    log::error!("spawn() : prefab introuvable ou invalide ({prefab_ref})");
-                }
-            }
-            self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
-        }
-        // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
-        // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
-        // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
-        if let (Some(prev), Some(cur)) = (self.hud_health, outcome.health)
-            && cur < prev - 1e-4
-        {
-            self.fx.damage_flash = 1.0;
-            self.fx.camera_shake = 1.0;
-            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
-        }
-        self.hud_health = outcome.health;
-        // Le tap n'est exposé qu'une frame.
-        self.touch.tapped_obj = None;
-        self.touch.touch_started_obj = None;
-        self.touch.touch_ended_obj = None;
-        // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
-        for ms in outcome.vibrations {
-            crate::runtime::vibrate(ms);
-        }
-        // Réverbération demandée par les scripts ce tick (Sprint 121) — dernier
-        // appel gagnant, transition douce (0,5 s) plutôt qu'un changement abrupt.
-        if let Some(&mix) = outcome.reverb_requests.last() {
-            self.audio.set_reverb_mix(mix, 0.5);
-        }
+        self.apply_script_outcomes(outcome);
 
         // Attaques à distance des créatures (cf. `creature_attack.rs`) : gèle
         // position/animation de celles en train de viser (annule le déplacement
@@ -1748,6 +1703,58 @@ impl AppState {
             vibrations,
             reverb_requests,
             health,
+        }
+    }
+
+    /// Applique ce que `run_object_scripts` a accumulé pendant le tick — extrait
+    /// tel quel de `sim_step` (plan de découpage, lot 3.1.C), aucun changement de
+    /// comportement.
+    fn apply_script_outcomes(&mut self, outcome: ScriptRunOutcome) {
+        for (kind, n) in outcome.item_add_requests {
+            self.add_item(kind, n);
+        }
+        // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
+        // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
+        self.game_events = outcome.events_out;
+        // `spawn()` : appliqué maintenant que `scene.objects` n'est plus
+        // emprunté — ajout en fin de tableau (jamais d'insertion/retrait ailleurs),
+        // les indices existants (réseau, undo, IA) restent donc valides. Physique
+        // reconstruite une seule fois si des objets ont réellement été ajoutés (coûte
+        // cher, cf. le même garde-fou dans `spawn_network_player`).
+        if !outcome.spawn_requests.is_empty() {
+            for (prefab_ref, pos) in outcome.spawn_requests {
+                let name = format!("Spawn {}", self.scene.objects.len());
+                if let Some(obj) = crate::scene::Scene::instantiate_prefab(&prefab_ref, name, pos) {
+                    self.scene.objects.push(obj);
+                } else {
+                    log::error!("spawn() : prefab introuvable ou invalide ({prefab_ref})");
+                }
+            }
+            self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        }
+        // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
+        // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
+        // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
+        if let (Some(prev), Some(cur)) = (self.hud_health, outcome.health)
+            && cur < prev - 1e-4
+        {
+            self.fx.damage_flash = 1.0;
+            self.fx.camera_shake = 1.0;
+            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+        }
+        self.hud_health = outcome.health;
+        // Le tap n'est exposé qu'une frame.
+        self.touch.tapped_obj = None;
+        self.touch.touch_started_obj = None;
+        self.touch.touch_ended_obj = None;
+        // Retour haptique demandé par les scripts (natif sur mobile, log sur desktop).
+        for ms in outcome.vibrations {
+            crate::runtime::vibrate(ms);
+        }
+        // Réverbération demandée par les scripts ce tick (Sprint 121) — dernier
+        // appel gagnant, transition douce (0,5 s) plutôt qu'un changement abrupt.
+        if let Some(&mix) = outcome.reverb_requests.last() {
+            self.audio.set_reverb_mix(mix, 0.5);
         }
     }
 
