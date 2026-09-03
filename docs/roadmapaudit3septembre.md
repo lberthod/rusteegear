@@ -450,5 +450,5 @@ logique pure), `export::ui` (306 lignes, dont la validation des chemins de bundl
 | 2.4 | Outils hors de `cargo test` (0 ignoré) | M | 🔶 Revu en tentant de l'exécuter : gater les tests VPS sous `net_tests` les ferait tourner contre la prod à chaque push (annulé, `#[ignore]` gardé) ; migrer les 6 régénérateurs (736 lignes, mutent de vrais fichiers d'assets) est plus gros que prévu, reporté à une session dédiée. Détail : section 2.4 ci-dessus |
 | 3.1 | `sim_step` en phases testées | L | ⏳ |
 | 3.2 | `Renderer::render` par passes (goldens) | L | ⏳ |
-| 3.3 | Fin du regroupement `AppState` | M | ⏳ |
+| 3.3 | Fin du regroupement `AppState` | M | 🔶 Lot 14/N (`NetConnectionState`, 15 champs, 163 sites) `e5b2443`, [run 33781176725](https://github.com/lberthod/rusteegear/actions/runs/33781176725) 6/6 vert. Lot 15/N (`PlayerAttackState`, 4 champs, 24 sites) `5131951`. iOS vérifié explicitement en local à chaque lot (`cargo check --target aarch64-apple-ios`), pas seulement en confiance sur le job CI. 94 → 76 champs. Reste surtout un noyau d'orchestration (`scene`, `playing`, `selection`…) sans cluster naturel évident — pas d'objectif « zéro champ » |
 | 3.4 | Tests `readiness::analyze`, `export::ui` | M | ⏳ |
