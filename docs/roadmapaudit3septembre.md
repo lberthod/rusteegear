@@ -324,15 +324,39 @@ après coup dans `packaging/build_apk.sh` avec `apksigner`, mot de passe lu depu
 `deploy_vps.sh`). Générer un nouveau keystore avec un vrai mot de passe à cette occasion ; l'ancien
 n'a signé que des builds de test.
 
-### 2.4 Outils déguisés en tests
+### 2.4 Outils déguisés en tests — revu (2026-09-03), scope réduit
 
-Huit tests `#[ignore = "outil : …"]` (`src/scene/mod_tests.rs` ×5, `src/editor/export.rs` ×1)
+Plan initial (ci-dessous, biffé) revu en tentant de l'exécuter : deux de ses trois volets se
+sont révélés avoir un coût ou un risque plus élevé que prévu à l'écriture du plan.
+
+~~Huit tests `#[ignore = "outil : …"]` (`src/scene/mod_tests.rs` ×5, `src/editor/export.rs` ×1)
 régénèrent `assets/player_scene.json` et le bundle ; deux tests de `src/net/client/native.rs`
 dépendent du VPS. Fonctionnel, mais illisible pour un nouveau venu (« pourquoi 8 ignorés ? »).
 Déplacer les régénérateurs vers `examples/regen_player_scene.rs` (lancé par
 `cargo run --example regen_player_scene`), documenter la commande dans `docs/architecture.md`
 (section assets), et gater les deux tests VPS par la feature `net_tests` plutôt que par `#[ignore]`.
-Critère : `cargo test` affiche `0 ignored`.
+Critère : `cargo test` affiche `0 ignored`.~~
+
+**Tests VPS (`src/net/client/native.rs`, `tls_proof::wss_vps`/`ws_308_hint`) : ne pas gater sous
+`net_tests`.** `net_tests` tourne automatiquement à chaque push dans le job `net-tests` — ces deux
+tests-là frappent le vrai VPS de production (`ws.loicberthod.ch`) sur le vrai réseau, pas un socket
+loopback comme le reste de la feature. Les y ajouter aurait couplé le statut vert/rouge de la CI à
+la disponibilité du VPS et créé une dépendance réseau externe non isolée — exactement ce que
+`net_tests` existe pour éviter (cf. `docs/architecture.md`, section réseau : « `cargo test` reste
+rapide et indépendant d'un environnement CI qui restreint parfois le bind loopback »). Leur
+`#[ignore]` actuel, avec le commentaire qui explique pourquoi et donne la commande manuelle
+(`cargo test --lib tls_proof -- --ignored --nocapture`), est le bon choix : à garder tel quel.
+
+**Régénérateurs (`src/scene/mod_tests.rs` ×5, `src/editor/export.rs` ×1) : migration vers
+`examples/` plus grosse que prévu, à faire à part.** Mesuré : ces fonctions font 36 à 146 lignes
+(736 lignes cumulées), et réécrivent réellement `assets/player_scene.json` et `assets/bundle/` —
+les vrais fichiers de contenu du jeu, pas des fixtures de test. Les déplacer *et* vérifier qu'elles
+fonctionnent encore correctement demanderait de les exécuter contre ces fichiers réels (mutation),
+ce qui n'est pas une vérification à faire à la légère en accompagnement d'un ménage de lisibilité.
+Reporté à une session dédiée, avec sauvegarde des fichiers cibles avant de lancer quoi que ce soit.
+Leur étiquette actuelle (`#[ignore = "outil : …, à lancer explicitement"]`) reste correcte en
+attendant — un nouveau venu qui lit le message comprend déjà que ce sont des outils, pas des tests
+cassés.
 
 ---
 
@@ -420,10 +444,10 @@ logique pure), `export::ui` (306 lignes, dont la validation des chemins de bundl
 | 1.3 | `--all-features` dans Clippy CI + hook pre-push documenté | S | ✅ `787af6b` |
 | 1.4 | Cache `.git/lfs` par `actions/cache` | M | ⏳ |
 | 1.5 | Job `cargo audit` (non bloquant d'abord) | S | ⏳ |
-| 2.1 | `cargo update` en commit isolé | S | ⏳ |
-| 2.2 | 6 corrections de doc (QUICKSTART, README, roadmap d'août) | S | 🔶 QUICKSTART (compteur .glb, date LFS) fait dans `787af6b` ; reste : `docs/roadmapaudit29aout.md` (1.1, « CI verte », 3.4) |
-| 2.3 | Mot de passe keystore hors `Cargo.toml`, nouveau keystore | M | ⏳ |
-| 2.4 | Outils hors de `cargo test` (0 ignoré) | M | ⏳ |
+| 2.1 | `cargo update` en commit isolé | S | ✅ `e60adde` — a révélé une régression `glam` (déprécations `Mat4::*_rh`), corrigée dans le même commit ; goldens de rendu inchangés au pixel près |
+| 2.2 | 6 corrections de doc (QUICKSTART, README, roadmap d'août) | S | ✅ `787af6b` (QUICKSTART) + `bb74d86` (`docs/roadmapaudit29aout.md` : intro, Outillage, 1.1, 3.4) |
+| 2.3 | Mot de passe keystore hors `Cargo.toml`, nouveau keystore | M | ✅ `b5a932b` — `RUSTEEGEAR_KEYSTORE_PASS` obligatoire ; keystore local existant (généré en juin, mdp "android") à régénérer à la prochaine build APK |
+| 2.4 | Outils hors de `cargo test` (0 ignoré) | M | 🔶 Revu en tentant de l'exécuter : gater les tests VPS sous `net_tests` les ferait tourner contre la prod à chaque push (annulé, `#[ignore]` gardé) ; migrer les 6 régénérateurs (736 lignes, mutent de vrais fichiers d'assets) est plus gros que prévu, reporté à une session dédiée. Détail : section 2.4 ci-dessus |
 | 3.1 | `sim_step` en phases testées | L | ⏳ |
 | 3.2 | `Renderer::render` par passes (goldens) | L | ⏳ |
 | 3.3 | Fin du regroupement `AppState` | M | ⏳ |
