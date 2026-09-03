@@ -1939,3 +1939,80 @@ fn a_scripted_creature_knockback_pushes_it_back_despite_the_chase() {
         "après le recul, la chasse doit reprendre vers le joueur ({z1:.2} → {z2:.2})"
     );
 }
+
+/// Lot 3.1.A du plan de découpage (`docs/plan_decoupage_sim_step_et_render.md`) :
+/// un objet sans `animation` ne doit ni paniquer ni produire d'événement — cas
+/// silencieux le plus courant (la majorité des objets d'une scène ne sont pas
+/// skinnés).
+#[test]
+fn advance_animation_clips_ignores_objects_without_animation() {
+    let mut scene = crate::scene::Scene::default();
+    scene.objects.push(SceneObject::default());
+    let events = advance_animation_clips(&mut scene, 1.0 / 60.0);
+    assert!(events.is_empty());
+}
+
+/// Un marqueur strictement entre l'ancien et le nouveau temps de lecture doit
+/// produire l'événement `"anim:<nom>"` — c'est le signal dont dépend, par
+/// exemple, la fenêtre de coup d'une attaque (cf.
+/// `an_anim_notify_gates_the_combat_hit_window`, `src/app/mod_tests.rs`, qui
+/// vérifie le même mécanisme bout en bout via `sim_step`).
+#[test]
+fn advance_animation_clips_reports_a_marker_crossed_this_tick() {
+    let mut imported = crate::scene::ImportedMesh {
+        name: "Guerrier".into(),
+        ..Default::default()
+    };
+    imported
+        .clips
+        .push(crate::scene::import::Clip::without_tracks("attaque", 1.0));
+    imported
+        .notifies
+        .insert("attaque".to_string(), vec![(0.3, "hit_open".to_string())]);
+    let mut scene = crate::scene::Scene::default();
+    scene.imported.push(imported);
+    scene.objects.push(SceneObject {
+        mesh: crate::scene::MeshKind::Imported(0),
+        animation: Some(crate::scene::AnimationState {
+            clip: "attaque".into(),
+            time: 0.25,
+            speed: 1.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    // 0.25 -> 0.25 + 0.1 = 0.35 : franchit le marqueur à 0.3.
+    let events = advance_animation_clips(&mut scene, 0.1);
+    assert_eq!(events, vec!["anim:hit_open".to_string()]);
+}
+
+/// Sans franchissement (le pas de temps reste avant le marqueur), aucun
+/// événement — pas de faux positif qui déclencherait la fenêtre de coup trop tôt.
+#[test]
+fn advance_animation_clips_reports_nothing_before_the_marker() {
+    let mut imported = crate::scene::ImportedMesh {
+        name: "Guerrier".into(),
+        ..Default::default()
+    };
+    imported
+        .clips
+        .push(crate::scene::import::Clip::without_tracks("attaque", 1.0));
+    imported
+        .notifies
+        .insert("attaque".to_string(), vec![(0.3, "hit_open".to_string())]);
+    let mut scene = crate::scene::Scene::default();
+    scene.imported.push(imported);
+    scene.objects.push(SceneObject {
+        mesh: crate::scene::MeshKind::Imported(0),
+        animation: Some(crate::scene::AnimationState {
+            clip: "attaque".into(),
+            time: 0.1,
+            speed: 1.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    // 0.1 -> 0.15 : reste avant le marqueur à 0.3.
+    let events = advance_animation_clips(&mut scene, 0.05);
+    assert!(events.is_empty());
+}

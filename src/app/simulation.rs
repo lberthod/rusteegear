@@ -225,6 +225,44 @@ fn pose_matches(t: &crate::scene::Transform, (p, r, s): (Vec3, Quat, Vec3)) -> b
         && t.rotation.dot(r).abs() > 1.0 - 1e-6
 }
 
+/// Avance la lecture des clips d'animation squelettale : indépendant des
+/// scripts/tap actions (un objet skinné anime, script ou pas). Le bouclage
+/// lui-même vit dans `Clip::sample_joint`, pas ici. Renvoie les marqueurs
+/// (`"anim:<nom>"`) franchis ce tick, à fusionner par l'appelant dans
+/// `events_in` pour une livraison aux scripts dès ce même tick (roadmap
+/// post-audit 2026-09-03, plan de découpage de `sim_step`, lot 3.1.A —
+/// extrait tel quel de `sim_step`, aucun changement de comportement).
+fn advance_animation_clips(scene: &mut crate::scene::Scene, dt: f32) -> Vec<String> {
+    let mut anim_notify_events: Vec<String> = Vec::new();
+    for obj in scene.objects.iter_mut() {
+        if let Some(anim) = obj.animation.as_mut() {
+            let prev_time = anim.time;
+            anim.time += dt * anim.speed;
+            // Fondu enchaîné : le clip quitté continue de jouer pendant
+            // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
+            // `CROSSFADE_SECONDS` — au-delà, plus rien à faire (transition terminée,
+            // `prev_clip` ignoré par le rendu tant que `blend == 1.0`).
+            if anim.blend < 1.0 {
+                anim.prev_time += dt * anim.speed;
+                anim.blend =
+                    (anim.blend + dt / crate::scene::AnimationState::CROSSFADE_SECONDS).min(1.0);
+            }
+            if let crate::scene::MeshKind::Imported(mesh_idx) = obj.mesh
+                && let Some(imported) = scene.imported.get(mesh_idx as usize)
+                && let Some(markers) = imported.notifies.get(&anim.clip)
+                && let Some(clip) = imported.clips.iter().find(|c| c.name == anim.clip)
+            {
+                for name in
+                    crate::scene::notifies_crossed(markers, prev_time, anim.time, clip.duration)
+                {
+                    anim_notify_events.push(format!("anim:{name}"));
+                }
+            }
+        }
+    }
+    anim_notify_events
+}
+
 pub(super) fn clamp_move_vector(mx: f32, my: f32) -> (f32, f32) {
     let len_sq = mx * mx + my * my;
     if len_sq > 1.0 {
@@ -825,43 +863,12 @@ impl AppState {
         // 1. scripts
         self.time += dt;
         let time = self.time;
-        // Avance la lecture des clips d'animation squelettale : indépendant
-        // des scripts/tap actions ci-dessous — un objet skinné anime, script ou pas.
-        // Le bouclage lui-même vit dans `Clip::sample_joint`, pas ici.
         // Marqueurs temporels : accumulés ici, délivrés aux scripts **ce
         // même tick** (fusionnés dans `events_in` plus bas) — contrairement aux
         // événements de gameplay (`game_events`) qui attendent le tick suivant pour
         // rester indépendants de l'ordre des scripts, cette boucle-ci s'exécute
         // entièrement avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
-        let mut anim_notify_events: Vec<String> = Vec::new();
-        let scene = &mut self.scene;
-        for obj in scene.objects.iter_mut() {
-            if let Some(anim) = obj.animation.as_mut() {
-                let prev_time = anim.time;
-                anim.time += dt * anim.speed;
-                // Fondu enchaîné : le clip quitté continue de jouer pendant
-                // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
-                // `CROSSFADE_SECONDS` — au-delà, plus rien à faire (transition terminée,
-                // `prev_clip` ignoré par le rendu tant que `blend == 1.0`).
-                if anim.blend < 1.0 {
-                    anim.prev_time += dt * anim.speed;
-                    anim.blend = (anim.blend
-                        + dt / crate::scene::AnimationState::CROSSFADE_SECONDS)
-                        .min(1.0);
-                }
-                if let crate::scene::MeshKind::Imported(mesh_idx) = obj.mesh
-                    && let Some(imported) = scene.imported.get(mesh_idx as usize)
-                    && let Some(markers) = imported.notifies.get(&anim.clip)
-                    && let Some(clip) = imported.clips.iter().find(|c| c.name == anim.clip)
-                {
-                    for name in
-                        crate::scene::notifies_crossed(markers, prev_time, anim.time, clip.duration)
-                    {
-                        anim_notify_events.push(format!("anim:{name}"));
-                    }
-                }
-            }
-        }
+        let anim_notify_events = advance_animation_clips(&mut self.scene, dt);
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
         // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
         // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les
