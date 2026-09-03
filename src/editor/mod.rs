@@ -2645,6 +2645,31 @@ fn build_ui(
         actions.hud_clicks = hud_widgets(root.ctx(), play_rect, scene, &values, hud_image_cache);
     }
 
+    confirmation_modals(
+        root,
+        confirm_quit,
+        confirm_close_project,
+        pending_autosave_recovery,
+        actions,
+    );
+
+    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
+    // après cette frame, afin de passer par l'historique.
+}
+
+/// Modales bloquantes de confirmation (quitter/fermer un projet avec des
+/// modifications non sauvegardées, proposer la restauration d'un autosave) —
+/// extraites de `build_ui` (roadmap post-audit 2026-08-29, item 2.1) : bloc
+/// entièrement autonome (aucun état partagé avec le reste de l'UI au-delà de
+/// ces paramètres), rendu en overlay via `egui::Modal` donc sans incidence
+/// sur l'ordre de mise en page des panneaux environnants.
+fn confirmation_modals(
+    root: &mut egui::Ui,
+    confirm_quit: bool,
+    confirm_close_project: bool,
+    pending_autosave_recovery: Option<&std::path::Path>,
+    actions: &mut UiActions,
+) {
     // Modale de fermeture avec modifications non sauvegardées (Phase C,
     // `sprint.19matin.md`) : affichée quand la fermeture (croix de la fenêtre ou
     // Fichier › Quitter) a été demandée alors que la scène est modifiée. Modale
@@ -2738,9 +2763,6 @@ fn build_ui(
             actions.dismiss_autosave_recovery = true;
         }
     }
-
-    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
-    // après cette frame, afin de passer par l'historique.
 }
 
 fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
