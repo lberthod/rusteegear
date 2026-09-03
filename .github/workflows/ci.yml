@@ -215,3 +215,25 @@ jobs:
 
       - name: Build lib pour ${{ matrix.target }}
         run: cargo build --lib --target ${{ matrix.target }}
+
+  # Avis de sécurité RustSec sur les dépendances (roadmap post-audit 2026-09-03,
+  # 1.5). `continue-on-error` le temps de vérifier que la base d'avis ne produit
+  # pas de faux positifs bruyants sur ce dépôt — même précaution que le job
+  # `golden` à son introduction (15 runs verts avant de le retirer). Pas de
+  # `lfs: true` : un scan de Cargo.lock n'a besoin d'aucun asset.
+  audit:
+    name: Avis de sécurité (cargo audit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Installer cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit
+        run: cargo audit
