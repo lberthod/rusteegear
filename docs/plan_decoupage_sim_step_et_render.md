@@ -282,7 +282,7 @@ session du 3 septembre plutôt que de le tenter sans plan.
 | 1. `sim_step` A | `advance_animation_clips` | ✅ `c61b22a`, [run 33790239666](https://github.com/lberthod/rusteegear/actions/runs/33790239666) 7/7 vert |
 | 2. `render` B-A/B-B | `build_gizmo_geometry`, `build_debug_geometry` | ✅ `62b9ded`, [run 33795980310](https://github.com/lberthod/rusteegear/actions/runs/33795980310) 7/7 vert. `render` 1125 → ~950 lignes |
 | 2. `render` B-C | `apply_editor_actions` (dispatch des ~90 actions) | ✅ `5504f68` — `render` 1125 → ~530 lignes cumulé |
-| 3. `sim_step` B | `run_object_scripts` | ⏳ |
+| 3. `sim_step` B | `run_object_scripts` | ✅ `7736ffc`, [run 33798670774](https://github.com/lberthod/rusteegear/actions/runs/33798670774) 7/7 vert. `sim_step` ~800 → ~570 lignes cumulé |
 | 4. `render` D | Construction UI (player + éditeur) | ⏳ |
 | 5. `sim_step` C, F | `apply_script_outcomes`, queue de fonction | ⏳ |
 | 6. `render` E, F | Passe d'ombre, passe principale | ⏳ |
