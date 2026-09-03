@@ -10,16 +10,20 @@
 # automatique, mais un état intermédiaire est toujours visible et rejouable.
 #
 # Usage :
-#   scripts/deploy_vps.sh            # déploie HEAD de main
+#   RUSTEEGEAR_VPS_SSH="ubuntu@1.2.3.4" scripts/deploy_vps.sh   # déploie HEAD de main
 #   RUSTEEGEAR_VPS_SSH="ubuntu@1.2.3.4" RUSTEEGEAR_VPS_KEY=~/.ssh/autre_cle \
 #     scripts/deploy_vps.sh          # surcharge hôte/clé
+#
+# RUSTEEGEAR_VPS_SSH est obligatoire (roadmap post-audit 2026-08-29, item 3.1) :
+# pas de valeur par défaut, pour ne pas divulguer l'IP du VPS si ce dépôt
+# devient public un jour.
 #
 # ⚠️ Bump de PROTOCOL_VERSION : ce script redéploie le SERVEUR ; les clients
 # (DMG/APK/IPA/web) doivent être redistribués ensemble, sinon « version
 # incompatible » pour tout le monde (cf. docs/reflexion.md).
 set -euo pipefail
 
-VPS_SSH="${RUSTEEGEAR_VPS_SSH:-ubuntu@179.237.71.235}"
+VPS_SSH="${RUSTEEGEAR_VPS_SSH:?variable requise (ex. RUSTEEGEAR_VPS_SSH=ubuntu@1.2.3.4) — pas de défaut pour éviter de divulguer l’adresse du VPS si ce dépôt devient public}"
 VPS_KEY="${RUSTEEGEAR_VPS_KEY:-$HOME/.ssh/loicberthodvps}"
 VPS_DIR="${RUSTEEGEAR_VPS_DIR:-rusteegear-server}"
 WSS_URL="${RUSTEEGEAR_WSS_URL:-wss://ws.loicberthod.ch}"
