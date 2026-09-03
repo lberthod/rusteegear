@@ -11,6 +11,17 @@ Rust via [rustup](https://rustup.rs). Si tu ne l'as pas :
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+[Git LFS](https://git-lfs.com) — `assets/models/` (826 modèles `.glb`) est
+suivi par Git LFS depuis le 2026-08-30 :
+
+```bash
+brew install git-lfs   # ou apt/dnf/pacman selon la distribution
+git lfs install
+```
+
+Sans ça, `git clone` récupère des pointeurs texte à la place des vrais
+fichiers `.glb` — `doctor.sh` (étape suivante) le détecte.
+
 ## 2. Cloner et vérifier l'environnement
 
 ```bash

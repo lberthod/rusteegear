@@ -86,6 +86,26 @@ else
         "clone incomplet ? re-cloner le dépôt, sans filtre sur assets/"
 fi
 
+# assets/models/*.glb est suivi par Git LFS (roadmap post-audit 2026-08-29,
+# item 1.1) : sans git-lfs installé au moment du clone, ces fichiers restent
+# des pointeurs texte (~130 octets) au lieu du vrai contenu binaire — le
+# moteur planterait à l'import du modèle, pas à la compilation.
+SAMPLE_MODEL="$REPO_DIR/assets/models/fairy_hero.glb"
+if command -v git-lfs >/dev/null 2>&1; then
+    pass "git-lfs présent"
+else
+    fail "git-lfs introuvable (assets/models/*.glb suivis par Git LFS)" \
+        "installer git-lfs (brew install git-lfs / apt install git-lfs), puis : git lfs install && git lfs pull"
+fi
+if [ -f "$SAMPLE_MODEL" ]; then
+    if head -c 30 "$SAMPLE_MODEL" 2>/dev/null | grep -q "^version https://git-lfs"; then
+        fail "assets/models/ non téléchargé (pointeurs Git LFS bruts sur disque)" \
+            "git lfs install && git lfs pull"
+    else
+        pass "assets/models/ contient de vrais fichiers .glb (pas des pointeurs LFS bruts)"
+    fi
+fi
+
 # --- Dossier utilisateur ------------------------------------------------------
 # ~/.motor3derust/ est créé au premier lancement ; ce qui compte ici est que
 # $HOME soit défini et accessible en écriture.
