@@ -159,66 +159,7 @@ impl Renderer {
         // boucles ci-dessous l'incrémentent à chaque `draw_indexed`) — remplace
         // l'ancienne estimation `2 × (plan + plan skinné)`, qui surcomptait les
         // statiques (batchés en plages d'instances, pas un draw par objet).
-        let mut scene_draw_calls: u32 = 0;
-
-        // Passe d'ombre : profondeur de la scène depuis la lumière → carte d'ombre.
-        {
-            let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shadow_pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            spass.set_pipeline(&self.shadow_pipeline);
-            spass.set_bind_group(0, &self.camera_bind_group, &[]);
-            spass.set_bind_group(1, &self.models_bind_group, &[]);
-            // Passe d'ombre : rend les objets hors champ (pas de frustum culling), mais
-            // **ignore les objets invisibles** (ex. pièce ramassée) pour ne pas laisser
-            // d'ombre fantôme. Groupé par mesh, scindé en plages de visibles consécutifs.
-            let plan = &self.draw_plan;
-            let objs = &app.scene.objects;
-            let mut i = 0;
-            while i < plan.len() {
-                let mi = plan[i].mesh;
-                let mut j = i + 1;
-                while j < plan.len() && plan[j].mesh == mi {
-                    j += 1;
-                }
-                if let Some(mesh) = self.resolve_mesh(mi) {
-                    spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                    spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    let mut k = i;
-                    while k < j {
-                        if !objs[plan[k].obj].visible {
-                            k += 1;
-                            continue;
-                        }
-                        let run = k;
-                        while k < j && objs[plan[k].obj].visible {
-                            k += 1;
-                        }
-                        spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
-                        scene_draw_calls += 1;
-                    }
-                }
-                i = j;
-            }
-            // Objets skinnés dans la carte d'ombre (audit du 17 juillet 2026) : pipeline
-            // dédié profondeur seule + skinning, cf. `draw_skinned_shadows` — avant, la
-            // passe d'ombre n'itérait que `draw_plan` et aucun objet skinné ne projetait
-            // d'ombre.
-            scene_draw_calls +=
-                self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
-        }
+        let mut scene_draw_calls: u32 = self.render_shadow_pass(&mut encoder, app);
         if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
             encoder.write_timestamp(&prof.query_set, 1);
         }
@@ -591,6 +532,72 @@ impl Renderer {
             resume,
             player_net_actions,
         }
+    }
+
+    /// Passe de profondeur (carte d'ombre) : dessine `draw_plan` (objets
+    /// statiques visibles, groupés par mesh) puis les objets skinnés. Renvoie
+    /// le nombre de `draw_indexed` réellement émis. Extrait de `render` tel
+    /// quel (plan de découpage, lot 3.2.E), aucun changement de comportement —
+    /// vérifié par les goldens (`golden_render`, `golden_skinning`), pas
+    /// seulement par relecture.
+    fn render_shadow_pass(&self, encoder: &mut wgpu::CommandEncoder, app: &AppState) -> u32 {
+        let mut scene_draw_calls = 0;
+        let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("shadow_pass"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.shadow_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        spass.set_pipeline(&self.shadow_pipeline);
+        spass.set_bind_group(0, &self.camera_bind_group, &[]);
+        spass.set_bind_group(1, &self.models_bind_group, &[]);
+        // Passe d'ombre : rend les objets hors champ (pas de frustum culling), mais
+        // **ignore les objets invisibles** (ex. pièce ramassée) pour ne pas laisser
+        // d'ombre fantôme. Groupé par mesh, scindé en plages de visibles consécutifs.
+        let plan = &self.draw_plan;
+        let objs = &app.scene.objects;
+        let mut i = 0;
+        while i < plan.len() {
+            let mi = plan[i].mesh;
+            let mut j = i + 1;
+            while j < plan.len() && plan[j].mesh == mi {
+                j += 1;
+            }
+            if let Some(mesh) = self.resolve_mesh(mi) {
+                spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                let mut k = i;
+                while k < j {
+                    if !objs[plan[k].obj].visible {
+                        k += 1;
+                        continue;
+                    }
+                    let run = k;
+                    while k < j && objs[plan[k].obj].visible {
+                        k += 1;
+                    }
+                    spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    scene_draw_calls += 1;
+                }
+            }
+            i = j;
+        }
+        // Objets skinnés dans la carte d'ombre (audit du 17 juillet 2026) : pipeline
+        // dédié profondeur seule + skinning, cf. `draw_skinned_shadows` — avant, la
+        // passe d'ombre n'itérait que `draw_plan` et aucun objet skinné ne projetait
+        // d'ombre.
+        scene_draw_calls +=
+            self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
+        scene_draw_calls
     }
 
     /// Construit et pousse dans `self.gizmo_vbuf` la géométrie des gizmos
