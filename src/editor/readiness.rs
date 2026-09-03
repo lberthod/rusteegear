@@ -417,4 +417,173 @@ mod tests {
                 && matches!(c.status, Status::Warn | Status::Fail))
         );
     }
+
+    fn check<'a>(checks: &'a [Check], contains: &str) -> &'a Check {
+        checks
+            .iter()
+            .find(|c| c.label.contains(contains))
+            .unwrap_or_else(|| panic!("aucun check ne contient « {contains} »"))
+    }
+
+    /// Une scène sans le moindre objet doit bloquer l'export (rien à afficher) —
+    /// c'est le premier check, celui qu'un « Analyser » sur un projet vide doit
+    /// toujours faire apparaître en rouge.
+    #[test]
+    fn empty_scene_fails() {
+        let scene = Scene::default();
+        let checks = analyze(&scene, &BuildConfig::default());
+        assert_eq!(check(&checks, "Scène vide").status, Status::Fail);
+    }
+
+    /// Un seul objet par défaut (`MeshKind::Cube`, jamais `Plane`) : pas de sol,
+    /// juste un avertissement (une scène flottante reste exportable, contrairement
+    /// à une scène vide).
+    #[test]
+    fn scene_without_a_plane_warns_about_missing_ground() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject::default());
+        let checks = analyze(&scene, &BuildConfig::default());
+        assert_eq!(check(&checks, "Aucun sol").status, Status::Warn);
+    }
+
+    /// Une lumière entièrement nulle (ambiante, couleur et direction) ne doit
+    /// jamais passer inaperçue : la scène exportée serait rendue noire au premier
+    /// lancement, un des rares cas bloquants (`Fail`) plutôt qu'un simple `Warn`.
+    #[test]
+    fn scene_without_any_light_fails() {
+        let mut scene = Scene::default();
+        scene.light.ambient = 0.0;
+        scene.light.color = [0.0, 0.0, 0.0];
+        scene.light.dir = [0.0, 0.0, 0.0];
+        let checks = analyze(&scene, &BuildConfig::default());
+        assert_eq!(check(&checks, "Aucune lumière").status, Status::Fail);
+    }
+
+    /// Une scène entièrement statique (aucun objet avec un script) reste
+    /// exportable — juste un avertissement, pas un blocage : certaines démos
+    /// (galerie, showroom) n'ont légitimement aucune interactivité.
+    #[test]
+    fn scene_without_any_script_warns_about_static_scene() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject::default());
+        let checks = analyze(&scene, &BuildConfig::default());
+        assert_eq!(check(&checks, "Aucun script").status, Status::Warn);
+    }
+
+    /// Les objets sans collider (`PhysicsKind::None`, le défaut) sont comptés
+    /// nommément, pas juste signalés en bloc — le nombre doit apparaître dans le
+    /// message pour que le créateur sache l'ampleur du problème avant d'aller
+    /// fouiller la scène objet par objet.
+    #[test]
+    fn objects_without_collider_are_counted_in_the_warning() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject::default());
+        scene.objects.push(SceneObject::default());
+        let checks = analyze(&scene, &BuildConfig::default());
+        let c = check(&checks, "sans collider");
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.label.contains('2'));
+    }
+
+    /// Un `bundle_id` invalide (ici sans point, donc un seul segment) doit
+    /// bloquer l'export Android — `cargo-apk`/le Play Store le refuseraient de
+    /// toute façon, mieux vaut le dire avant le build qu'après.
+    #[test]
+    fn invalid_bundle_id_fails() {
+        let config = BuildConfig {
+            bundle_id: "pasunidentifiantvalide".into(),
+            ..Default::default()
+        };
+        let checks = analyze(&Scene::controller_demo(), &config);
+        assert_eq!(check(&checks, "Package ID invalide").status, Status::Fail);
+    }
+
+    /// Un nom d'application vide (ou uniquement des espaces) doit bloquer
+    /// l'export : c'est le nom affiché sur l'appareil, un APK sans nom est
+    /// inacceptable en l'état.
+    #[test]
+    fn empty_app_name_fails() {
+        let config = BuildConfig {
+            app_name: "   ".into(),
+            ..Default::default()
+        };
+        let checks = analyze(&Scene::controller_demo(), &config);
+        assert_eq!(
+            check(&checks, "Nom de l'application manquant").status,
+            Status::Fail
+        );
+    }
+
+    /// Une version vide doit bloquer l'export — sans elle, `versionName` finirait
+    /// vide dans le manifeste Android généré, invalide pour publier une mise à
+    /// jour (le store ne saurait pas si c'est plus récent que la précédente).
+    #[test]
+    fn empty_version_fails() {
+        let config = BuildConfig {
+            version: String::new(),
+            ..Default::default()
+        };
+        let checks = analyze(&Scene::controller_demo(), &config);
+        assert_eq!(check(&checks, "Version manquante").status, Status::Fail);
+    }
+
+    /// `min_sdk` au-delà de `target_sdk` est une configuration Android
+    /// intrinsèquement incohérente (un appareil ciblé ne pourrait jamais
+    /// satisfaire le minimum imposé) : bloquant, pas un simple avertissement.
+    #[test]
+    fn min_sdk_above_target_sdk_fails() {
+        let config = BuildConfig {
+            min_sdk: 34,
+            target_sdk: 33,
+            ..Default::default()
+        };
+        let checks = analyze(&Scene::controller_demo(), &config);
+        let c = check(&checks, "min SDK");
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.label.contains("target SDK"));
+    }
+
+    /// `min_sdk` cohérent mais trop bas (< 24, le plancher recommandé pour
+    /// Vulkan) : n'empêche pas l'export, juste un avertissement — l'app tournera,
+    /// simplement pas au mieux sur les appareils les plus anciens couverts.
+    #[test]
+    fn min_sdk_below_24_warns() {
+        let config = BuildConfig {
+            min_sdk: 21,
+            target_sdk: 33,
+            ..Default::default()
+        };
+        let checks = analyze(&Scene::controller_demo(), &config);
+        assert_eq!(check(&checks, "min SDK").status, Status::Warn);
+    }
+
+    /// Un chemin d'icône renseigné mais qui ne pointe vers aucun fichier réel
+    /// (faute de frappe, fichier déplacé) doit bloquer l'export — distinct du cas
+    /// « aucune icône fournie », qui n'est qu'un avertissement (icône par défaut).
+    #[test]
+    fn icon_path_pointing_to_a_missing_file_fails() {
+        let config = BuildConfig {
+            icon_path: "/chemin/qui/nexiste/vraiment/pas.png".into(),
+            ..Default::default()
+        };
+        let checks = analyze(&Scene::controller_demo(), &config);
+        assert_eq!(check(&checks, "Icône introuvable").status, Status::Fail);
+    }
+
+    /// `summary` doit répartir chaque check dans le bon compartiment (ok, warn,
+    /// fail) sans en perdre ni en dupliquer — vérifié sur un jeu de statuts choisi
+    /// à la main plutôt que sur une vraie scène, pour ne dépendre d'aucun détail
+    /// de `analyze` ci-dessus.
+    #[test]
+    fn summary_counts_each_status_bucket() {
+        let checks = vec![
+            Check::new(Status::Ok, "a"),
+            Check::new(Status::Ok, "b"),
+            Check::new(Status::Warn, "c"),
+            Check::new(Status::Fail, "d"),
+            Check::new(Status::Fail, "e"),
+            Check::new(Status::Fail, "f"),
+        ];
+        assert_eq!(summary(&checks), (2, 1, 3));
+    }
 }
