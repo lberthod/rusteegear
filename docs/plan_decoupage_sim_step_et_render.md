@@ -274,3 +274,17 @@ orchestrateur de 40-60 lignes appelant B2-B11 dans l'ordre.
 Cet ordre place le sous-lot E (ciblage IA) en tout dernier, une fois la méthode éprouvée sur des
 extractions plus sûres — cohérent avec la prudence qui a fait reporter ce chantier lors de la
 session du 3 septembre plutôt que de le tenter sans plan.
+
+## Suivi
+
+| Lot | Description | Statut |
+|---|---|---|
+| 1. `sim_step` A | `advance_animation_clips` | ✅ `c61b22a`, [run 33790239666](https://github.com/lberthod/rusteegear/actions/runs/33790239666) 7/7 vert |
+| 2. `render` B-A/B-B | `build_gizmo_geometry`, `build_debug_geometry` | ✅ `62b9ded`, [run 33795980310](https://github.com/lberthod/rusteegear/actions/runs/33795980310) 7/7 vert. `render` 1125 → ~950 lignes |
+| 2. `render` B-C | `apply_editor_actions` (dispatch des ~90 actions) | ✅ `5504f68` — `render` 1125 → ~530 lignes cumulé |
+| 3. `sim_step` B | `run_object_scripts` | ⏳ |
+| 4. `render` D | Construction UI (player + éditeur) | ⏳ |
+| 5. `sim_step` C, F | `apply_script_outcomes`, queue de fonction | ⏳ |
+| 6. `render` E, F | Passe d'ombre, passe principale | ⏳ |
+| 7. `sim_step` D | Pilotage physique du joueur | ⏳ |
+| 8. `sim_step` E1-E3 | Ciblage et poursuite IA | ⏳ |
