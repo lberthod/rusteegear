@@ -265,16 +265,7 @@ impl ExportPanel {
             .show(ctx, |ui| {
                 ui.label("Exporte un player jouable du jeu créé (scène embarquée).");
                 // Récap de CE qui sera embarqué : évite de builder la mauvaise scène.
-                let controllable = scene
-                    .objects
-                    .iter()
-                    .filter(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
-                    .count();
-                let scripted = scene
-                    .objects
-                    .iter()
-                    .filter(|o| !o.script.trim().is_empty())
-                    .count();
+                let (controllable, scripted) = embed_summary(scene);
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.label(egui::RichText::new("📦 Scène embarquée (au Build)").strong());
                     ui.label(format!(
@@ -386,11 +377,7 @@ impl ExportPanel {
                             .on_hover_text("Qualité basse, ombres off, MSAA off, bloom off, 60 FPS")
                             .clicked()
                         {
-                            self.config.render_quality = RenderQuality::Low;
-                            self.config.shadows = false;
-                            self.config.msaa = 1;
-                            self.config.bloom = false;
-                            self.config.target_fps = 60;
+                            apply_performance_preset(&mut self.config);
                         }
                     });
 
@@ -433,11 +420,7 @@ impl ExportPanel {
                                     self.config.ios_profile = p.to_string_lossy().into_owned();
                                 }
                             }
-                            let prof = std::path::Path::new(&self.config.ios_profile)
-                                .file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| "(aucun)".into());
-                            ui.label(prof);
+                            ui.label(ios_profile_display_name(&self.config.ios_profile));
                         });
                         ui.end_row();
                     });
@@ -596,6 +579,46 @@ impl ExportPanel {
             self.start(target, scene, settings);
         }
     }
+}
+
+/// Compte des objets pilotables (`Controller` avec `input`/`gyro`) et scriptés de
+/// la scène qui sera embarquée — extrait de `ui` (roadmap post-audit 2026-09-03,
+/// 3.4) pour rester testable sans harnais egui : sert au récap affiché et à
+/// l'avertissement « rien ne bougera en jeu » (`controllable == 0 && scripted == 0`).
+fn embed_summary(scene: &Scene) -> (usize, usize) {
+    let controllable = scene
+        .objects
+        .iter()
+        .filter(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
+        .count();
+    let scripted = scene
+        .objects
+        .iter()
+        .filter(|o| !o.script.trim().is_empty())
+        .count();
+    (controllable, scripted)
+}
+
+/// Préréglage « ⚡ Performance » du panneau Rendu (roadmap post-audit
+/// 2026-09-03, 3.4) : qualité basse, ombres/bloom coupés, pas de MSAA, 60 FPS —
+/// ne touche à aucun autre champ de `BuildConfig` (identité, SDK, chemins…).
+fn apply_performance_preset(config: &mut BuildConfig) {
+    config.render_quality = RenderQuality::Low;
+    config.shadows = false;
+    config.msaa = 1;
+    config.bloom = false;
+    config.target_fps = 60;
+}
+
+/// Nom court affiché pour le profil `.mobileprovision` choisi (roadmap
+/// post-audit 2026-09-03, 3.4) : juste le nom de fichier, jamais le chemin
+/// complet ; « (aucun) » si vide ou si le chemin ne se termine pas par un nom de
+/// fichier exploitable (ex. `/`).
+fn ios_profile_display_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "(aucun)".into())
 }
 
 /// Ligne « libellé + sélecteur de fichier PNG + nom court + effacer » pour icône/splash.
@@ -1091,6 +1114,113 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ni objet pilotable ni scripté : `ui` doit afficher l'avertissement « rien
+    /// ne bougera en jeu » — c'est exactement ce que zéro/zéro signifie pour
+    /// l'appelant.
+    #[test]
+    fn embed_summary_is_zero_for_a_scene_with_no_interactivity() {
+        let mut scene = Scene::default();
+        scene.objects.push(crate::scene::SceneObject::default());
+        assert_eq!(embed_summary(&scene), (0, 0));
+    }
+
+    /// Un `Controller` avec `input` compte comme pilotable ; `gyro` seul aussi
+    /// (les deux entrées possibles, indépendamment l'une de l'autre) — mais un
+    /// `Controller` présent sans aucune des deux ne compte pas (objet inerte,
+    /// ex. simple pivot de caméra).
+    #[test]
+    fn embed_summary_counts_controllers_with_input_or_gyro_only() {
+        let mut scene = Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            controller: Some(crate::scene::Controller {
+                gyro: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            controller: Some(crate::scene::Controller::default()),
+            ..Default::default()
+        });
+        assert_eq!(embed_summary(&scene).0, 2);
+    }
+
+    /// Un script réduit à des espaces ne compte pas comme « scripté » — même
+    /// convention de `trim()` que `sim_step`/`readiness::analyze`, pour ne pas
+    /// afficher un récap incohérent avec le reste de l'éditeur.
+    #[test]
+    fn embed_summary_ignores_whitespace_only_scripts() {
+        let mut scene = Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            script: "   \n".into(),
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            script: "obj.y = obj.y + 1".into(),
+            ..Default::default()
+        });
+        assert_eq!(embed_summary(&scene).1, 1);
+    }
+
+    /// Le préréglage performance fixe exactement les 5 champs documentés — et ne
+    /// touche à rien d'autre (identité, SDK…) : un config déjà personnalisé par
+    /// le créateur ne doit pas perdre son nom d'app ou son bundle id en cliquant
+    /// dessus.
+    #[test]
+    fn performance_preset_sets_only_the_documented_fields() {
+        let mut config = BuildConfig {
+            app_name: "MonJeuPerso".into(),
+            bundle_id: "com.exemple.perso".into(),
+            render_quality: RenderQuality::High,
+            shadows: true,
+            msaa: 4,
+            bloom: true,
+            target_fps: 120,
+            ..Default::default()
+        };
+        apply_performance_preset(&mut config);
+        assert!(matches!(config.render_quality, RenderQuality::Low));
+        assert!(!config.shadows);
+        assert_eq!(config.msaa, 1);
+        assert!(!config.bloom);
+        assert_eq!(config.target_fps, 60);
+        // Champs hors préréglage : inchangés.
+        assert_eq!(config.app_name, "MonJeuPerso");
+        assert_eq!(config.bundle_id, "com.exemple.perso");
+    }
+
+    /// Chemin normal : seul le nom de fichier est affiché, jamais le dossier
+    /// (le panneau est étroit, le chemin complet déborderait).
+    #[test]
+    fn ios_profile_display_name_shows_only_the_filename() {
+        assert_eq!(
+            ios_profile_display_name("/Users/dev/Desktop/MonProfil.mobileprovision"),
+            "MonProfil.mobileprovision"
+        );
+    }
+
+    /// Aucun profil choisi : placeholder explicite, pas une chaîne vide qui
+    /// laisserait un espace muet dans l'UI.
+    #[test]
+    fn ios_profile_display_name_placeholder_when_empty() {
+        assert_eq!(ios_profile_display_name(""), "(aucun)");
+    }
+
+    /// Un chemin sans composant de nom de fichier exploitable (`Path::file_name`
+    /// renvoie `None` — la racine `/`, `.`, `..`) retombe sur le même placeholder
+    /// que l'absence de profil, plutôt que de paniquer.
+    #[test]
+    fn ios_profile_display_name_placeholder_when_path_has_no_filename() {
+        assert_eq!(ios_profile_display_name("/"), "(aucun)");
+    }
 
     /// Dossier temporaire unique par test — même raison que `assets::tests::
     /// temp_assets_dir` (tests parallèles, pas de mutation d'état global).
