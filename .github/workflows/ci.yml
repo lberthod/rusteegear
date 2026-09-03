@@ -38,8 +38,13 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      # `--all-features` (pas seulement `--all-targets`) : compile aussi le code
+      # gaté par la feature `net_tests` sans l'exécuter (le job `net-tests`
+      # s'en charge) — roadmap post-audit 2026-09-03, 0.2/0.2 bis : sans ça,
+      # ce code avait pourri en silence pendant six semaines (deux ruptures
+      # de compilation indépendantes).
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Tests
         run: cargo test --all-targets

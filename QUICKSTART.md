@@ -11,8 +11,8 @@ Rust via [rustup](https://rustup.rs). Si tu ne l'as pas :
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-[Git LFS](https://git-lfs.com) — `assets/models/` (826 modèles `.glb`) est
-suivi par Git LFS depuis le 2026-08-30 :
+[Git LFS](https://git-lfs.com) — `assets/models/` (482 modèles `.glb`, plus
+344 aperçus PNG) est suivi par Git LFS depuis le 2026-09-03 :
 
 ```bash
 brew install git-lfs   # ou apt/dnf/pacman selon la distribution
@@ -101,6 +101,24 @@ Verbes console : `timescale`, `pause`, `play`, `stop`, `step`, `tp`, `select`,
 `spawn`, `health`, `net_stats`. Protocole, architecture et limites :
 [docs/PILOT.md](docs/PILOT.md). `--pilot=PORT` ou `RUSTEEGEAR_PILOT=PORT`
 changent le port.
+
+## Avant de pousser
+
+La CI compile aussi le code gaté par la feature `net_tests` (`cargo clippy
+--all-targets --all-features`) sans l'exécuter — un oubli de ce côté est
+invisible localement avec un simple `cargo check`. Pour l'attraper avant de
+pousser (roadmap post-audit 2026-09-03, 1.3) :
+
+```bash
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+En hook automatique :
+
+```bash
+printf '#!/bin/sh\nexec cargo clippy --all-targets --all-features -- -D warnings\n' > .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
 
 ## Dépannage express
 
