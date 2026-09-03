@@ -40,7 +40,11 @@ unwrap (14 whitelistés) et tests du module export tous verts après la vague.*
 
 | # | Action | Statut |
 |---|---|---|
-| 4.1 | Réunifier « les deux jeux » | ✅ **Livré en 6 commits** (`d03581b`→ docs, 2026-07-20, plan d'architecte vérifié ligne à ligne) : grammaire Traqueuse/Meute/Colosse/Furtive sur les 26 créatures servies, patrouille par défaut + chasse ≤ 9 m plafonnée, dégâts de contact, knockback scripté réparé, contrat PV 5/8/11/16 intact (test exact), scène resynchronisée + parité `ai_chaser` en CI, entrée roadmap « preuve du fun » créée. Reste : validation manuelle du ressenti (vitesses dégradables dans la table) |
+| 4.1 | Réunifier « les deux jeux » | ✅ **Livré en 6 commits** (`d03581b`→ docs, 2026-07-20, plan d'architecte vérifié ligne à ligne) : grammaire Traqueuse/Meute/Colosse/Furtive sur les 26 créatures servies, patrouille par défaut + chasse ≤ 9 m plafonnée, dégâts de contact, knockback scripté réparé, contrat PV 5/8/11/16 intact (test exact), scène resynchronisée + parité `ai_chaser` vérifiée par un test unitaire qui
+tourne dans `cargo test --all-targets` (`src/scene/mod_tests.rs:2060-2110`,
+noyé dans la suite globale — pas un job CI dédié isolé, précision ajoutée le
+2026-08-30 après relecture, cf. roadmap post-audit item 3.2), entrée roadmap
+« preuve du fun » créée. Reste : validation manuelle du ressenti (vitesses dégradables dans la table) |
 | 4.2 | Avatar `fairy_hero` + silhouettes | ✅ Avatar restauré (`0506c90`) ; **silhouettes de classe livrées** (`f70df90`, `PROTOCOL_VERSION` 7 : `EntityDelta::class`, teinte+gabarit idempotents côté client, hitbox serveur inchangée) et **VPS redéployé en v7 dans la foulée** (smoke wss vert). ⚠️ Les builds alpha.1-3 (v6) sont désormais refusés proprement (« mettez à jour ») : tagger `v0.1.0-alpha.4` pour redistribuer avant tout test externe |
 | 4.3 | Écran de fin de manche détaillé | ✅ Déjà livré avant l'audit (Phase H Sprint 1, `PROTOCOL_VERSION` 6) — constat d'audit périmé |
 | 4.4 | Surfaces contextuelles | ✅ Bannière de vague (déjà livrée), marqueur allié hors-écran (déjà livré — constat périmé, `ally_down_banner`/`offscreen_edge_position`), bannière « palier atteint » (livrée `9e54a73`) |
