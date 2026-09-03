@@ -442,8 +442,8 @@ logique pure), `export::ui` (306 lignes, dont la validation des chemins de bundl
 | 1.1 | Badge CI README | S | ✅ `8090a6b` |
 | 1.2 | `rust-toolchain.toml` 1.98.0 + `@master` dans ci.yml + badge | S | ✅ `8090a6b` |
 | 1.3 | `--all-features` dans Clippy CI + hook pre-push documenté | S | ✅ `787af6b` |
-| 1.4 | Cache `.git/lfs` par `actions/cache` | M | ⏳ |
-| 1.5 | Job `cargo audit` (non bloquant d'abord) | S | ⏳ |
+| 1.4 | Cache `.git/lfs` par `actions/cache` | M | ✅ `81d1032` — premier run à froid confirmé correct (« Cache not found », `git lfs pull` a récupéré les 482 objets, cache sauvegardé en fin de job) ; les runs suivants réutiliseront le cache |
+| 1.5 | Job `cargo audit` (non bloquant d'abord) | S | ✅ `5b7b755` — vérifié en local avant l'ajout (0 vulnérabilité, 2 avis « unmaintained » informationnels). [Run 33786061629](https://github.com/lberthod/rusteegear/actions/runs/33786061629) 7/7 vert |
 | 2.1 | `cargo update` en commit isolé | S | ✅ `e60adde` — a révélé une régression `glam` (déprécations `Mat4::*_rh`), corrigée dans le même commit ; goldens de rendu inchangés au pixel près. Deuxième régression trouvée seulement en CI (`cpal` 0.17→0.18 tire `libdbus-1-dev` sur Linux, absent des runners macOS où la vérification locale avait tourné) : corrigée dans `15c1fe9`, [run 33768777711](https://github.com/lberthod/rusteegear/actions/runs/33768777711) 6/6 vert |
 | 2.2 | 6 corrections de doc (QUICKSTART, README, roadmap d'août) | S | ✅ `787af6b` (QUICKSTART) + `bb74d86` (`docs/roadmapaudit29aout.md` : intro, Outillage, 1.1, 3.4) |
 | 2.3 | Mot de passe keystore hors `Cargo.toml`, nouveau keystore | M | ✅ `b5a932b` — `RUSTEEGEAR_KEYSTORE_PASS` obligatoire ; keystore local existant (généré en juin, mdp "android") à régénérer à la prochaine build APK |
