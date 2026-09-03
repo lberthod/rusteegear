@@ -2615,6 +2615,66 @@ fn build_ui(
             hud_scale,
         );
     }
+    end_of_round_and_hud_widgets(
+        root,
+        scene,
+        playing,
+        input_state,
+        won,
+        lost,
+        round_summary,
+        round_summary_won,
+        play_rect,
+        locale,
+        hud_scale,
+        hud_preview,
+        hud_health,
+        score,
+        kills,
+        wave,
+        hud_image_cache,
+        actions,
+    );
+
+    confirmation_modals(
+        root,
+        confirm_quit,
+        confirm_close_project,
+        pending_autosave_recovery,
+        actions,
+    );
+
+    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
+    // après cette frame, afin de passer par l'historique.
+}
+
+/// Fin de manche (bouton « Rejouer », `restart_button`), overlay tactile
+/// mobile (`mobile_overlay`) et widgets HUD déclaratifs de la scène
+/// (`hud_widgets`) — extrait de `build_ui` (roadmap post-audit 2026-08-29,
+/// item 2.1, lot 2) : bloc contigu, dépend uniquement de `play_rect`/
+/// `hud_scale` déjà calculés par l'appelant (aperçu mobile), sans lecture ni
+/// écriture d'un autre état de `build_ui`.
+#[allow(clippy::too_many_arguments)] // même style que build_ui : un paramètre par donnée affichée
+fn end_of_round_and_hud_widgets(
+    root: &mut egui::Ui,
+    scene: &mut Scene,
+    playing: &mut bool,
+    input_state: &mut crate::app::PlayerInput,
+    won: bool,
+    lost: bool,
+    round_summary: Option<&[crate::net::protocol::RoundPlayerSummary]>,
+    round_summary_won: bool,
+    play_rect: egui::Rect,
+    locale: crate::app::locale::Locale,
+    hud_scale: f32,
+    hud_preview: &mut HudPreview,
+    hud_health: Option<f32>,
+    score: u32,
+    kills: u32,
+    wave: u32,
+    hud_image_cache: &mut HudImageCache,
+    actions: &mut UiActions,
+) {
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
     // `round_summary_won` prime sur `won` (local, pensé pour un joueur solo)
     // dès qu'un résumé de salon réseau est présent.
@@ -2644,17 +2704,6 @@ fn build_ui(
         };
         actions.hud_clicks = hud_widgets(root.ctx(), play_rect, scene, &values, hud_image_cache);
     }
-
-    confirmation_modals(
-        root,
-        confirm_quit,
-        confirm_close_project,
-        pending_autosave_recovery,
-        actions,
-    );
-
-    // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
-    // après cette frame, afin de passer par l'historique.
 }
 
 /// Modales bloquantes de confirmation (quitter/fermer un projet avec des
