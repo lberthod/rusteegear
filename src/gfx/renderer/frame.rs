@@ -699,168 +699,12 @@ impl Renderer {
         self.prepare_skinned_draws(&app.scene);
 
         // Préparer les lignes du gizmo + marqueurs de lumières (jamais en player/aperçu mobile).
-        let gizmo_count = if app.player || app.device_preview {
-            0
-        } else {
-            let mut verts: Vec<GizmoVertex> = Vec::new();
-            // Marqueur en croix 3D à chaque lumière ponctuelle, teinté par sa couleur.
-            for pl in &app.scene.point_lights {
-                let c = pl.position;
-                let col = pl.color;
-                let s = 0.3;
-                for axis in 0..3 {
-                    let d = axis_dir(axis) * s;
-                    verts.push(GizmoVertex {
-                        position: [c[0] - d.x, c[1] - d.y, c[2] - d.z],
-                        color: col,
-                    });
-                    verts.push(GizmoVertex {
-                        position: [c[0] + d.x, c[1] + d.y, c[2] + d.z],
-                        color: col,
-                    });
-                }
-                // Spot : ligne depuis la lumière le long du cône (visualise l'orientation).
-                if pl.spot_angle > 0.0 {
-                    let dir = glam::Vec3::from_array(pl.spot_dir);
-                    let dir = if dir.length_squared() > 1e-6 {
-                        dir.normalize()
-                    } else {
-                        glam::Vec3::NEG_Y
-                    };
-                    let end = glam::Vec3::from_array(c) + dir * (pl.range * 0.4).max(0.5);
-                    verts.push(GizmoVertex {
-                        position: c,
-                        color: col,
-                    });
-                    verts.push(GizmoVertex {
-                        position: end.to_array(),
-                        color: col,
-                    });
-                }
-            }
-            // Marqueur cyan à la position de la caméra de jeu (si définie).
-            if let Some(gc) = app.scene.game_camera {
-                let pitch = gc.pitch.clamp(-1.54, 1.54);
-                let eye = glam::Vec3::from_array(gc.target)
-                    + glam::Vec3::new(
-                        gc.distance * pitch.cos() * gc.yaw.sin(),
-                        gc.distance * pitch.sin(),
-                        gc.distance * pitch.cos() * gc.yaw.cos(),
-                    );
-                let col = [0.2, 0.85, 0.95];
-                let s = 0.4;
-                for axis in 0..3 {
-                    let d = axis_dir(axis) * s;
-                    verts.push(GizmoVertex {
-                        position: [eye.x - d.x, eye.y - d.y, eye.z - d.z],
-                        color: col,
-                    });
-                    verts.push(GizmoVertex {
-                        position: [eye.x + d.x, eye.y + d.y, eye.z + d.z],
-                        color: col,
-                    });
-                }
-            }
-            // Gizmo de translation d'une lumière sélectionnée (3 axes colorés).
-            if let Some(li) = app.selected_light
-                && !app.gizmo_mode.is_nav()
-                && let Some(pl) = app.scene.point_lights.get(li)
-            {
-                let o = glam::Vec3::from_array(pl.position);
-                let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
-                for (axis, color) in colors.iter().enumerate() {
-                    let end = o + axis_dir(axis) * GIZMO_LEN;
-                    verts.push(GizmoVertex {
-                        position: o.to_array(),
-                        color: *color,
-                    });
-                    verts.push(GizmoVertex {
-                        position: end.to_array(),
-                        color: *color,
-                    });
-                }
-            }
-            // Gizmo de manipulation de l'objet sélectionné (aucun en outil de
-            // navigation : Main/Orbite/Loupe n'éditent pas).
-            if let Some(sel) = app.selection
-                && !app.gizmo_mode.is_nav()
-            {
-                let o = app.scene.objects[sel].transform.position;
-                let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
-                match app.gizmo_mode {
-                    // Déplacer / Redimensionner : 3 segments d'axe.
-                    GizmoMode::Translate | GizmoMode::Scale => {
-                        for (axis, color) in colors.iter().enumerate() {
-                            let end = o + axis_dir(axis) * GIZMO_LEN;
-                            verts.push(GizmoVertex {
-                                position: o.to_array(),
-                                color: *color,
-                            });
-                            verts.push(GizmoVertex {
-                                position: end.to_array(),
-                                color: *color,
-                            });
-                        }
-                    }
-                    // Tourner : 3 anneaux (un par axe).
-                    GizmoMode::Rotate => {
-                        const N: usize = RING_SEGMENTS;
-                        for (axis, color) in colors.iter().enumerate() {
-                            let (u, w) = axis_basis(axis_dir(axis));
-                            for j in 0..N {
-                                let a0 = std::f32::consts::TAU * j as f32 / N as f32;
-                                let a1 = std::f32::consts::TAU * (j + 1) as f32 / N as f32;
-                                let p0 = o + (u * a0.cos() + w * a0.sin()) * GIZMO_LEN;
-                                let p1 = o + (u * a1.cos() + w * a1.sin()) * GIZMO_LEN;
-                                verts.push(GizmoVertex {
-                                    position: p0.to_array(),
-                                    color: *color,
-                                });
-                                verts.push(GizmoVertex {
-                                    position: p1.to_array(),
-                                    color: *color,
-                                });
-                            }
-                        }
-                    }
-                    // Navigation (Main/Orbite/Loupe) : filtrée par le garde
-                    // `is_nav()` ci-dessus, rien à dessiner.
-                    GizmoMode::Pan | GizmoMode::Orbit | GizmoMode::Zoom => {}
-                }
-            }
-            self.queue
-                .write_buffer(&self.gizmo_vbuf, 0, bytemuck::cast_slice(&verts));
-            verts.len() as u32
-        };
+        let gizmo_count = self.build_gizmo_geometry(app);
 
         // Debug drawing : segments accumulés pendant la frame (picking,
         // gameplay), dessinés une fois puis vidés — jamais persistants d'une frame à
         // l'autre, contrairement aux gizmos de manipulation ci-dessus.
-        let debug_count = {
-            let verts: Vec<GizmoVertex> = app
-                .debug_lines
-                .iter()
-                .flat_map(|&(a, b, color)| {
-                    [
-                        GizmoVertex {
-                            position: a.to_array(),
-                            color,
-                        },
-                        GizmoVertex {
-                            position: b.to_array(),
-                            color,
-                        },
-                    ]
-                })
-                .collect();
-            app.debug_lines.clear();
-            if !verts.is_empty() {
-                self.ensure_debug_capacity(verts.len());
-                self.queue
-                    .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
-            }
-            verts.len() as u32
-        };
+        let debug_count = self.build_debug_geometry(app);
 
         let view = frame
             .texture
@@ -1125,5 +969,177 @@ impl Renderer {
             self.read_gpu_pass_timings();
         }
         frame.present();
+    }
+
+    /// Construit et pousse dans `self.gizmo_vbuf` la géométrie des gizmos
+    /// (marqueurs de lumières, caméra de jeu, gizmo de manipulation) — jamais en
+    /// mode player ni en aperçu mobile. Renvoie le nombre de sommets à dessiner
+    /// (lu par `render` pour la passe principale). Extrait de `render` tel quel
+    /// (plan de découpage, `docs/plan_decoupage_sim_step_et_render.md`, lot
+    /// 3.2.A), aucun changement de comportement.
+    fn build_gizmo_geometry(&self, app: &AppState) -> u32 {
+        if app.player || app.device_preview {
+            return 0;
+        }
+        let mut verts: Vec<GizmoVertex> = Vec::new();
+        // Marqueur en croix 3D à chaque lumière ponctuelle, teinté par sa couleur.
+        for pl in &app.scene.point_lights {
+            let c = pl.position;
+            let col = pl.color;
+            let s = 0.3;
+            for axis in 0..3 {
+                let d = axis_dir(axis) * s;
+                verts.push(GizmoVertex {
+                    position: [c[0] - d.x, c[1] - d.y, c[2] - d.z],
+                    color: col,
+                });
+                verts.push(GizmoVertex {
+                    position: [c[0] + d.x, c[1] + d.y, c[2] + d.z],
+                    color: col,
+                });
+            }
+            // Spot : ligne depuis la lumière le long du cône (visualise l'orientation).
+            if pl.spot_angle > 0.0 {
+                let dir = glam::Vec3::from_array(pl.spot_dir);
+                let dir = if dir.length_squared() > 1e-6 {
+                    dir.normalize()
+                } else {
+                    glam::Vec3::NEG_Y
+                };
+                let end = glam::Vec3::from_array(c) + dir * (pl.range * 0.4).max(0.5);
+                verts.push(GizmoVertex {
+                    position: c,
+                    color: col,
+                });
+                verts.push(GizmoVertex {
+                    position: end.to_array(),
+                    color: col,
+                });
+            }
+        }
+        // Marqueur cyan à la position de la caméra de jeu (si définie).
+        if let Some(gc) = app.scene.game_camera {
+            let pitch = gc.pitch.clamp(-1.54, 1.54);
+            let eye = glam::Vec3::from_array(gc.target)
+                + glam::Vec3::new(
+                    gc.distance * pitch.cos() * gc.yaw.sin(),
+                    gc.distance * pitch.sin(),
+                    gc.distance * pitch.cos() * gc.yaw.cos(),
+                );
+            let col = [0.2, 0.85, 0.95];
+            let s = 0.4;
+            for axis in 0..3 {
+                let d = axis_dir(axis) * s;
+                verts.push(GizmoVertex {
+                    position: [eye.x - d.x, eye.y - d.y, eye.z - d.z],
+                    color: col,
+                });
+                verts.push(GizmoVertex {
+                    position: [eye.x + d.x, eye.y + d.y, eye.z + d.z],
+                    color: col,
+                });
+            }
+        }
+        // Gizmo de translation d'une lumière sélectionnée (3 axes colorés).
+        if let Some(li) = app.selected_light
+            && !app.gizmo_mode.is_nav()
+            && let Some(pl) = app.scene.point_lights.get(li)
+        {
+            let o = glam::Vec3::from_array(pl.position);
+            let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
+            for (axis, color) in colors.iter().enumerate() {
+                let end = o + axis_dir(axis) * GIZMO_LEN;
+                verts.push(GizmoVertex {
+                    position: o.to_array(),
+                    color: *color,
+                });
+                verts.push(GizmoVertex {
+                    position: end.to_array(),
+                    color: *color,
+                });
+            }
+        }
+        // Gizmo de manipulation de l'objet sélectionné (aucun en outil de
+        // navigation : Main/Orbite/Loupe n'éditent pas).
+        if let Some(sel) = app.selection
+            && !app.gizmo_mode.is_nav()
+        {
+            let o = app.scene.objects[sel].transform.position;
+            let colors = [[0.9, 0.25, 0.25], [0.25, 0.9, 0.3], [0.3, 0.45, 1.0]];
+            match app.gizmo_mode {
+                // Déplacer / Redimensionner : 3 segments d'axe.
+                GizmoMode::Translate | GizmoMode::Scale => {
+                    for (axis, color) in colors.iter().enumerate() {
+                        let end = o + axis_dir(axis) * GIZMO_LEN;
+                        verts.push(GizmoVertex {
+                            position: o.to_array(),
+                            color: *color,
+                        });
+                        verts.push(GizmoVertex {
+                            position: end.to_array(),
+                            color: *color,
+                        });
+                    }
+                }
+                // Tourner : 3 anneaux (un par axe).
+                GizmoMode::Rotate => {
+                    const N: usize = RING_SEGMENTS;
+                    for (axis, color) in colors.iter().enumerate() {
+                        let (u, w) = axis_basis(axis_dir(axis));
+                        for j in 0..N {
+                            let a0 = std::f32::consts::TAU * j as f32 / N as f32;
+                            let a1 = std::f32::consts::TAU * (j + 1) as f32 / N as f32;
+                            let p0 = o + (u * a0.cos() + w * a0.sin()) * GIZMO_LEN;
+                            let p1 = o + (u * a1.cos() + w * a1.sin()) * GIZMO_LEN;
+                            verts.push(GizmoVertex {
+                                position: p0.to_array(),
+                                color: *color,
+                            });
+                            verts.push(GizmoVertex {
+                                position: p1.to_array(),
+                                color: *color,
+                            });
+                        }
+                    }
+                }
+                // Navigation (Main/Orbite/Loupe) : filtrée par le garde
+                // `is_nav()` ci-dessus, rien à dessiner.
+                GizmoMode::Pan | GizmoMode::Orbit | GizmoMode::Zoom => {}
+            }
+        }
+        self.queue
+            .write_buffer(&self.gizmo_vbuf, 0, bytemuck::cast_slice(&verts));
+        verts.len() as u32
+    }
+
+    /// Pousse dans `self.debug_vbuf` les segments de debug accumulés pendant la
+    /// frame (picking, gameplay) et vide `app.debug_lines` — jamais persistants
+    /// d'une frame à l'autre, contrairement aux gizmos de manipulation. Renvoie
+    /// le nombre de sommets à dessiner. Extrait de `render` tel quel (plan de
+    /// découpage, lot 3.2.B), aucun changement de comportement.
+    fn build_debug_geometry(&mut self, app: &mut AppState) -> u32 {
+        let verts: Vec<GizmoVertex> = app
+            .debug_lines
+            .iter()
+            .flat_map(|&(a, b, color)| {
+                [
+                    GizmoVertex {
+                        position: a.to_array(),
+                        color,
+                    },
+                    GizmoVertex {
+                        position: b.to_array(),
+                        color,
+                    },
+                ]
+            })
+            .collect();
+        app.debug_lines.clear();
+        if !verts.is_empty() {
+            self.ensure_debug_capacity(verts.len());
+            self.queue
+                .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
+        }
+        verts.len() as u32
     }
 }
