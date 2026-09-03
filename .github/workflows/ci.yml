@@ -15,8 +15,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Cache des objets LFS (roadmap post-audit 2026-09-03, 1.4) : sans lui,
+      # chaque run retéléchargeait les 159 Mo d'assets/models/, cinq jobs par
+      # push — de quoi épuiser un quota de bande passante LFS mensuel en
+      # quelques jours (0.3, ci-dessus). `git lfs pull` ne récupère que les
+      # objets absents de `.git/lfs` : la clé change seulement quand un modèle
+      # change, sinon le cache est intégralement réutilisé.
+      - name: Liste des objets LFS (clé de cache)
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Cache LFS
+        uses: actions/cache@v4
         with:
-          lfs: true
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Récupérer les modèles (assets/models/)
+        run: git lfs pull
 
       - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@master
@@ -71,8 +87,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Cache des objets LFS (roadmap post-audit 2026-09-03, 1.4) : sans lui,
+      # chaque run retéléchargeait les 159 Mo d'assets/models/, cinq jobs par
+      # push — de quoi épuiser un quota de bande passante LFS mensuel en
+      # quelques jours (0.3, ci-dessus). `git lfs pull` ne récupère que les
+      # objets absents de `.git/lfs` : la clé change seulement quand un modèle
+      # change, sinon le cache est intégralement réutilisé.
+      - name: Liste des objets LFS (clé de cache)
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Cache LFS
+        uses: actions/cache@v4
         with:
-          lfs: true
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Récupérer les modèles (assets/models/)
+        run: git lfs pull
 
       - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@master
