@@ -27,13 +27,20 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # Dépendances système pour winit/wgpu/egui sur Linux.
+      # Dépendances système pour winit/wgpu/egui sur Linux. libdbus-1-dev
+      # (roadmap post-audit 2026-09-03, 2.1 suite) : `cargo update` a fait
+      # passer `cpal` (audio, via `kira`) à 0.18, qui tire `audio_thread_
+      # priority` sur Linux — lie `libdbus-1-dev` (priorité temps réel du
+      # thread audio via RealtimeKit/D-Bus) au lien, pas seulement à
+      # l'exécution : sans le paquet -dev, même `cargo build`/`cargo test`
+      # échoue (`pkg-config` ne trouve pas dbus-1.pc). Invisible en local sur
+      # macOS, qui n'emprunte pas ce chemin de compilation.
       - name: Dépendances système
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libx11-dev libxkbcommon-dev libwayland-dev \
-            libasound2-dev libudev-dev pkg-config
+            libasound2-dev libudev-dev libdbus-1-dev pkg-config
 
       - name: Format
         run: cargo fmt --all --check
@@ -75,13 +82,20 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # Dépendances système pour winit/wgpu/egui sur Linux.
+      # Dépendances système pour winit/wgpu/egui sur Linux. libdbus-1-dev
+      # (roadmap post-audit 2026-09-03, 2.1 suite) : `cargo update` a fait
+      # passer `cpal` (audio, via `kira`) à 0.18, qui tire `audio_thread_
+      # priority` sur Linux — lie `libdbus-1-dev` (priorité temps réel du
+      # thread audio via RealtimeKit/D-Bus) au lien, pas seulement à
+      # l'exécution : sans le paquet -dev, même `cargo build`/`cargo test`
+      # échoue (`pkg-config` ne trouve pas dbus-1.pc). Invisible en local sur
+      # macOS, qui n'emprunte pas ce chemin de compilation.
       - name: Dépendances système
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libx11-dev libxkbcommon-dev libwayland-dev \
-            libasound2-dev libudev-dev pkg-config
+            libasound2-dev libudev-dev libdbus-1-dev pkg-config
 
       # Couvre aussi les tests TCP du pont Pilot (tests/pilot_bridge.rs),
       # gatés `net_tests` pour la même raison que le réseau : certains
