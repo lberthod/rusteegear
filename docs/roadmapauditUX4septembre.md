@@ -43,7 +43,7 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 - [x] 2.3 Pause : Reprendre / Paramètres / Se déconnecter / Quitter ; libellé « La partie continue » en ligne (P-03)
 - [x] 2.4 Tactile : orbite au glissé sur la moitié droite, stick gauche 2 axes relatif caméra (M-01)
 - [x] 2.5 Tactile : boutons Pause et Carte, ⚙ dans la pause, champs Firebase sortis de l'écran joueur (M-02)
-- [x] 2.6 `safe_area` activé par défaut avec vraies marges système, écran maintenu allumé (M-03) — partiel : safe_area activé dans la scène livrée (marge en %, pas les insets système), wake lock sur le web seulement (Android/iOS restent à faire)
+- [x] 2.6 `safe_area` activé par défaut avec vraies marges système, écran maintenu allumé (M-03) — partiel : safe_area activé dans la scène livrée (marge en %, pas les insets système), wake lock sur le web et `KEEP_SCREEN_ON` sur Android (`397ee93`) ; iOS reste à faire (idleTimerDisabled)
 - [x] 2.7 En Play : touches d'outils Q/T/Y/F désactivées, glissé souris 2 axes, sensibilité (P-04)
 
 ## Vague 3 — Playtest (M, 3 jours + testeurs)
@@ -58,13 +58,13 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 - [x] 4.2 QUICKSTART : budget « ~30 min la première fois », sections pilotage et pré-push déplacées vers `docs/PILOT.md` / `CONTRIBUTING.md` ; `doctor.sh` vérifie la toolchain épinglée (O-01)
 - [x] 4.3 README aligné sur les libellés réels, `docs/guide-createur` supprimé ou réécrit, KNOWN_LIMITATIONS rafraîchi (O-02)
 
-## Vague 5 — Profondeur (XL, après playtest) — lots A `5a0c519` et B (voir hachages ci-dessous)
+## Vague 5 — Profondeur (XL, après playtest) — lots A `5a0c519` et B `397ee93`
 
 - [x] 5.1 Undo des champs de l'Inspecteur (état d'avant l'UI capturé par frame, une entrée par rafale), sélection conservée après undo (E-05) — `5a0c519`
 - [x] 5.2 Éditeur de script dédié (monospace, erreur en ligne) ; liste des clips d'animation dans l'inspecteur (E-06) — `5a0c519`
 - [x] 5.3 Remapping clavier (saut/attaque/tir/soin/pause/carte), palette daltonienne, échelle de l'interface egui (A-01) — `5a0c519` ; la souris garde un seul réglage (sensibilité, 2.7)
-- [x] 5.4 Vocabulaire FR unifié (Aimanter, Compiler l'APK, Lancer sur l'appareil, Journal ADB), tutoiement partout, fenêtres flottantes mémorisées entre deux lancements, menu contextuel de la vue 3D (E-08) — lot B ; « Play/Stop » conservés (convention des éditeurs de jeu)
-- [x] 5.5 Aide en jeu (F1 / bouton ?, contrôles et objectif depuis la table unique), journal de crash affiché aussi en mode joueur (P-06) — lot B
+- [x] 5.4 Vocabulaire FR unifié (Aimanter, Compiler l'APK, Lancer sur l'appareil, Journal ADB), tutoiement partout, fenêtres flottantes mémorisées entre deux lancements, menu contextuel de la vue 3D (E-08) — `397ee93` ; « Play/Stop » conservés (convention des éditeurs de jeu)
+- [x] 5.5 Aide en jeu (F1 / bouton ?, contrôles et objectif depuis la table unique), journal de crash affiché aussi en mode joueur (P-06) — `397ee93`
 - [ ] 5.6 Spectateur actif ou réapparition, minuteur d'attente (P-05) — décision de game design (mort définitive par manche assumée dans le GDD), à trancher au playtest
 
 ## À conserver tel quel
