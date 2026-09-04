@@ -31,11 +31,11 @@ dans la source avec la référence.
 | W-01 | Web : rien n'est persisté (`localStorage` vide après une partie) : pseudo, volumes, langue, remap. Tout le monde s'appelle « Invité0 ». Le stockage passe par `HOME`, inexistant sur wasm. | Constaté ; `src/app/settings.rs:265`, `src/assets.rs:285` | M |
 | E-03 | Cmd+S pendant Play écrase la scène du projet avec l'état simulé ; Suppr / Cmd+D / Cmd+C-V-X restent actifs en Play et en mode joueur (depuis la pause, un joueur peut supprimer un objet). | `src/lib.rs:646,654,634-654`, `src/app/picking.rs:171` | S |
 
-## Vague 0 — Un serveur où l'on peut jouer (M, 2 jours)
+## Vague 0 — Un serveur où l'on peut jouer (M, 2 jours) — fait `a0e0156`
 
-- [ ] 0.1 Quand un joueur rejoint une manche déjà perdue (ou vide), le serveur relance la manche ou fait apparaître le joueur vivant ; le client n'affiche « Manche perdue » qu'après avoir été vivant dans cette manche (S-01)
-- [ ] 0.2 « Rejouer » en ligne demande une nouvelle manche au serveur au lieu de déconnecter ; la bannière de défaite disparaît à la reconnexion (S-01)
-- [ ] 0.3 Vérification : `pilot net connect wss://ws.loicberthod.ch Bot` puis `pilot state` à 30 s doit donner une manche en cours et une vie non nulle ; à rejouer avec la démo web ouverte
+- [x] 0.1 Quand un joueur rejoint une manche déjà perdue (ou vide), le serveur relance la manche ou fait apparaître le joueur vivant ; le client n'affiche « Manche perdue » qu'après avoir été vivant dans cette manche (S-01) — cause réelle : le serveur relançait la manche dans le même tick que la défaite, sans l'annoncer ; désormais intermission de 8 s (`ROUND_INTERMISSION`), `GameEvent::RoundStart`, arrivant sans survivant = manche fraîche, `Lose` ignoré avant tout instantané de la manche
+- [x] 0.2 « Rejouer » en ligne demande une nouvelle manche au serveur au lieu de déconnecter ; la bannière de défaite disparaît à la reconnexion (S-01) — `ClientMsg::RestartRound` (PROTOCOL_VERSION 7 → 8, déploiement VPS + clients à coupler)
+- [x] 0.3 Vérification : `pilot net connect wss://ws.loicberthod.ch Bot` puis `pilot state` à 30 s doit donner une manche en cours et une vie non nulle ; à rejouer avec la démo web ouverte — couvert par 4 tests `net_tests` serveur + 4 tests client ; la vérification sur le serveur public reste à faire après le redéploiement du VPS
 
 ## Vague 1 — Un mode joueur qui tient debout (M, 1 semaine)
 
@@ -58,24 +58,24 @@ dans la source avec la référence.
 - [ ] 2.5 Bannière réseau multi-ligne limitée à 90 % de la largeur (`src/editor/hud.rs:1260`) ; statut « Connecté — N joueurs » au lieu de « joueur 22 »
 - [ ] 2.6 Ping/Pong dans le protocole (+1 de version), latence dans la pastille ; déploiement `scripts/deploy_vps.sh`
 
-## Vague 3 — Éditeur : premier lancement et sécurité du travail (M, 1 semaine)
+## Vague 3 — Éditeur : premier lancement et sécurité du travail (M, 1 semaine) — fait `474ce61`
 
-- [ ] 3.1 Écran d'accueil éditeur sans projet : Premier jeu / Nouveau projet / Récents / Découvrir le hameau ; « Premier jeu » remonté au premier niveau du menu Fichier (E-01)
-- [ ] 3.2 Sans projet ouvert, Cmd+S ouvre « Enregistrer sous… » ; « Enregistrer sous… » devient la cible des Cmd+S suivants ; nom proposé = nom réel de la scène (`src/gfx/renderer/frame.rs:906`, `src/editor/menus.rs:756`)
-- [ ] 3.3 Modale d'autosave : « Ignorer » mémorisé pour ce fichier d'autosave ; chemin brut retiré ; en cas d'échec de restauration, proposer l'autosave précédente (E-02, `src/gfx/renderer/frame.rs:945`)
-- [ ] 3.4 Play/Stop conserve le contexte : caméra d'édition restaurée au Stop, sélection conservée, drapeau « modifié » remis à sa valeur d'avant Play, `playing = false` avant tout changement de scène (constaté : caméra et sélection perdues ; `src/app/simulation.rs:880-928`, `frame.rs:1247`)
-- [ ] 3.5 Undo complet : `SceneSnapshot` avec `light`, `sky`, `hud_layout`, `hud_widgets`, `imported` ; import glTF annulable et marqué modifié ; commandes console dans l'historique ; pas d'entrée d'undo sur un clic sans déplacement (constaté : « • » après un simple clic sur le sol) (`src/app/mod.rs:55-82`, `src/app/persistence.rs:465`, `src/app/picking.rs:63`)
-- [ ] 3.6 Clic dans la hiérarchie = sélection seule, cadrage au double-clic ou F (`src/editor/hierarchy.rs:188`) ; clic droit dans la vue 3D sélectionne l'objet visé avant d'ouvrir le menu (constaté : Cadrer/Dupliquer/Supprimer grisés) ; surbrillance de sélection atténuée pour les grands plans (constaté : tout le viewport jaune quand « Sol » est sélectionné)
-- [ ] 3.7 Confirmations : suppression de groupe (N objets désassignés), journal de crash, bake / limite de lumières ; préset qualité = une seule entrée d'undo ; échec de suppression de prefab remonté (`src/editor/hierarchy.rs:245`, `windows.rs:2247,1641-1652`, `frame.rs:1099`)
-- [ ] 3.8 Chemins d'erreur : projet récent introuvable affiché grisé avec « Localiser / Retirer » ; échec d'ouverture de projet en modale ; `settings.json` corrompu sauvegardé en `.bak` avec toast (`src/app/settings.rs:300-322,380-389`)
+- [x] 3.1 Écran d'accueil éditeur sans projet : Premier jeu / Nouveau projet / Récents / Découvrir le hameau ; « Premier jeu » remonté au premier niveau du menu Fichier (E-01)
+- [x] 3.2 Sans projet ouvert, Cmd+S ouvre « Enregistrer sous… » ; « Enregistrer sous… » devient la cible des Cmd+S suivants ; nom proposé = nom réel de la scène (`src/gfx/renderer/frame.rs:906`, `src/editor/menus.rs:756`)
+- [x] 3.3 Modale d'autosave : « Ignorer » mémorisé pour ce fichier d'autosave ; chemin brut retiré ; en cas d'échec de restauration, proposer l'autosave précédente (E-02, `src/gfx/renderer/frame.rs:945`)
+- [x] 3.4 Play/Stop conserve le contexte : caméra d'édition restaurée au Stop, sélection conservée, drapeau « modifié » remis à sa valeur d'avant Play, `playing = false` avant tout changement de scène (constaté : caméra et sélection perdues ; `src/app/simulation.rs:880-928`, `frame.rs:1247`)
+- [x] 3.5 Undo complet : `SceneSnapshot` avec `light`, `sky`, `hud_layout`, `hud_widgets`, `imported` ; import glTF annulable et marqué modifié ; commandes console dans l'historique ; pas d'entrée d'undo sur un clic sans déplacement (constaté : « • » après un simple clic sur le sol) (`src/app/mod.rs:55-82`, `src/app/persistence.rs:465`, `src/app/picking.rs:63`)
+- [x] 3.6 Clic dans la hiérarchie = sélection seule, cadrage au double-clic ou F (`src/editor/hierarchy.rs:188`) ; clic droit dans la vue 3D sélectionne l'objet visé avant d'ouvrir le menu (constaté : Cadrer/Dupliquer/Supprimer grisés) ; surbrillance de sélection atténuée pour les grands plans (constaté : tout le viewport jaune quand « Sol » est sélectionné) — atténuation de la surbrillance faite côté app (`highlight_of`, 0,25× au-delà d'une demi-diagonale de 20), pas dans le shader
+- [x] 3.7 Confirmations : suppression de groupe (N objets désassignés), journal de crash, bake / limite de lumières ; préset qualité = une seule entrée d'undo ; échec de suppression de prefab remonté (`src/editor/hierarchy.rs:245`, `windows.rs:2247,1641-1652`, `frame.rs:1099`)
+- [x] 3.8 Chemins d'erreur : projet récent introuvable affiché grisé avec « Localiser / Retirer » ; échec d'ouverture de projet en modale ; `settings.json` corrompu sauvegardé en `.bak` avec toast (`src/app/settings.rs:300-322,380-389`)
 
-## Vague 4 — Vocabulaire, menus et documentation (S, 3 jours)
+## Vague 4 — Vocabulaire, menus et documentation (S, 3 jours) — fait `b1507a0`
 
-- [ ] 4.1 Un seul libellé pour l'export (constaté : Fichier « Build & Export… », Outils « Build Android… », toolbar « Compiler l'APK », panneau « Run ») ; « Experimental » → « expérimental » ; « Diagnostic système » dans un seul menu ; « Guide export APK » pointant vers `docs/` (`src/editor/menus.rs:283,667,207,738-742`, `export.rs:477`)
-- [ ] 4.2 Chaînes internes retirées de l'UI (« roadmap UX 5.3 », « Sprint 126 ») ; anglicismes de l'inspecteur (Rigidbody, Input Receiver, Collider/Box, Impostors, Bake lighting) ; noms de touches lisibles dans le remap (« J » plutôt que « KeyJ ») avec détection de doublon et de touche réservée (`src/editor/windows.rs:1025,1678,1088-1106`, `src/app/input.rs:310`)
-- [ ] 4.3 Raccourcis affichés dans les menus Édition et Fichier (constaté : aucun) ; Annuler/Rétablir/Coller grisés quand vides ; Cmd+P Play/Stop, Cmd+Q Quitter, F1 ouvre les raccourcis dans l'éditeur ; Cmd+… laissé passer quand un champ texte a le focus (`src/editor/menus.rs:307-348`, `src/lib.rs:480-525,670`)
-- [ ] 4.4 Chaînes joueur localisées (Inventaire, Sac, Joueurs, Paramètres, Journal de crash) ; légende de la carte sans « M pour fermer » au tactile ; unités sur 💀 🏆 🤝 (`src/editor/hud.rs:348-503`, `src/app/locale.rs:339-347`)
-- [ ] 4.5 Docs : Test A de `TEST_SCENARIO.md` réalisable sans clone (Premier jeu embarqué, étape 10 « Test B ») ; tag de release après la vague 5 (la seule release est `v0.1.0-alpha.3` du 19 juillet, antérieure à toutes les vagues) ; KNOWN_LIMITATIONS à jour (undo inspecteur, écran allumé, spectateur, date) ; section README « Créer son premier jeu » sans le stub `guide-createur` ; référence API Lua complète (emit, on_event, find_tag, save, debug.line, reverb, raycast, overlap_sphere)
+- [x] 4.1 Un seul libellé pour l'export (constaté : Fichier « Build & Export… », Outils « Build Android… », toolbar « Compiler l'APK », panneau « Run ») ; « Experimental » → « expérimental » ; « Diagnostic système » dans un seul menu ; « Guide export APK » pointant vers `docs/` (`src/editor/menus.rs:283,667,207,738-742`, `export.rs:477`)
+- [x] 4.2 Chaînes internes retirées de l'UI (« roadmap UX 5.3 », « Sprint 126 ») ; anglicismes de l'inspecteur (Rigidbody, Input Receiver, Collider/Box, Impostors, Bake lighting) ; noms de touches lisibles dans le remap (« J » plutôt que « KeyJ ») avec détection de doublon et de touche réservée (`src/editor/windows.rs:1025,1678,1088-1106`, `src/app/input.rs:310`)
+- [x] 4.3 Raccourcis affichés dans les menus Édition et Fichier (constaté : aucun) ; Annuler/Rétablir/Coller grisés quand vides ; Cmd+P Play/Stop, Cmd+Q Quitter, F1 ouvre les raccourcis dans l'éditeur ; Cmd+… laissé passer quand un champ texte a le focus (`src/editor/menus.rs:307-348`, `src/lib.rs:480-525,670`)
+- [x] 4.4 Chaînes joueur localisées (Inventaire, Sac, Joueurs, Paramètres, Journal de crash) ; légende de la carte sans « M pour fermer » au tactile ; unités sur 💀 🏆 🤝 (`src/editor/hud.rs:348-503`, `src/app/locale.rs:339-347`)
+- [x] 4.5 Docs : Test A de `TEST_SCENARIO.md` réalisable sans clone (Premier jeu embarqué, étape 10 « Test B ») ; tag de release après la vague 5 (la seule release est `v0.1.0-alpha.3` du 19 juillet, antérieure à toutes les vagues) ; KNOWN_LIMITATIONS à jour (undo inspecteur, écran allumé, spectateur, date) ; section README « Créer son premier jeu » sans le stub `guide-createur` ; référence API Lua complète (emit, on_event, find_tag, save, debug.line, reverb, raycast, overlap_sphere) — le tag de release n'est pas créé (à faire au moment du playtest)
 
 ## Vague 5 — Tactile réel (L, à tester sur appareil)
 
