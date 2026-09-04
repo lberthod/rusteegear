@@ -11,7 +11,7 @@ use crate::time_compat::Instant;
 use super::scripting;
 #[cfg(target_arch = "wasm32")]
 use super::scripting_web;
-use super::{AppState, multiplayer};
+use super::{AppState, NetworkPlayersState, multiplayer};
 #[cfg(target_arch = "wasm32")]
 use rilua::LuaApiMut;
 
@@ -290,6 +290,188 @@ fn advance_animation_clips(scene: &mut crate::scene::Scene, dt: f32) -> Vec<Stri
         }
     }
     anim_notify_events
+}
+
+/// Pilotage physique des objets « pilotables » (joueur local + joueurs
+/// réseau) : vitesse horizontale (joystick + clavier + gyro) et saut,
+/// appliqués avant le pas de simulation, puis orientation/clip d'animation
+/// calculés pour application **après** `phys.step()` par l'appelant (jamais
+/// sur le corps rigide directement, cf. la doc au site d'appel) — ces deux
+/// derniers, comme `any_jump`, ne sont consommés qu'après le ciblage IA qui
+/// suit dans `sim_step`, d'où leur retour ici plutôt qu'une application
+/// immédiate.
+///
+/// Fonction libre plutôt que méthode `&mut self` (plan de découpage, lot
+/// 3.1.D) : `phys` est déjà un emprunt exclusif de `self.physics` au site
+/// d'appel (`if let Some(phys) = &mut self.physics`) — une méthode
+/// supplémentaire prenant `&mut self` entrerait en conflit avec cet emprunt.
+/// Signature à parts explicites (mêmes disjointes que l'original, qui les
+/// empruntait déjà séparément dans le même bloc) pour rester appelable
+/// depuis ce contexte sans réintroduire ce conflit.
+///
+/// Renvoie (player_facing, player_anim, any_jump). Extrait tel quel de
+/// `sim_step`, aucun changement de comportement.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn drive_local_and_networked_players(
+    phys: &mut crate::runtime::physics::Physics,
+    scene: &crate::scene::Scene,
+    network: &NetworkPlayersState,
+    input_state: &super::PlayerInput,
+    camera_yaw: f32,
+    dt: f32,
+) -> (Vec<(usize, f32)>, Vec<(usize, bool)>, bool) {
+    let inp = input_state;
+    // Mouvement combiné joystick/croix directionnelle + clavier (flèches/WASD),
+    // puis tourné selon la caméra (cf. `camera_relative_move`) : « en haut »
+    // sur le joystick éloigne le personnage de la caméra, comme dans un jeu
+    // à la Zelda, quelle que soit sa rotation actuelle.
+    let joy = apply_deadzone(inp.joy, JOYSTICK_DEADZONE);
+    let (raw_mx, raw_my) = clamp_move_vector(
+        joy.0 + inp.key_move.0 + inp.gamepad_move.0,
+        joy.1 + inp.key_move.1 + inp.gamepad_move.1,
+    );
+    let (mx, my) = camera_relative_move(raw_mx, raw_my, camera_yaw);
+    let (tilt, space) = (inp.tilt, inp.jump);
+    let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
+    let mut any_jump = false;
+    // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`) :
+    // chacun a son propre `NetworkInput`, distinct de `input_state`
+    // (qui ne pilote que l'objet « joueur local », clavier/tactile/gyro de
+    // cette instance — ex. l'éditeur desktop, ou un client sans réseau).
+    // Un joueur vaincu (0 PV, GAMEDESIGN_EN_LIGNE.md §3.1) est exclu de
+    // cette table : `net_input` devient `None` pour son objet, qui
+    // retombe alors sur la branche locale ci-dessous (`inp.state`) — sans
+    // effet indésirable sur un serveur headless, dont l'entrée locale
+    // reste toujours neutre (aucun joueur ne pilote le serveur lui-même).
+    // Spectateur immobile jusqu'à la fin de la manche, comme voulu.
+    let network_by_index: HashMap<usize, multiplayer::NetworkInput> = network
+        .network_players
+        .iter()
+        .filter(|(id, _)| network.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
+        .filter_map(|(id, &idx)| network.network_inputs.get(id).map(|inp| (idx, *inp)))
+        .collect();
+    // Orientation du joueur local : calculée ici puis appliquée **après**
+    // `phys.step()` par l'appelant, directement sur `transform.rotation` — jamais
+    // sur le corps rigide (cf. `set_position`/réconciliation réseau, même
+    // principe). Un corps *dynamique* en contact avec le décor (mur, pilier)
+    // dont on impose la rotation à chaque frame via `RigidBody::set_rotation`
+    // déstabilisait le solveur de contacts de rapier — vibrations visibles
+    // dès qu'on combinait beaucoup de rotation et de déplacement en même
+    // temps. Inutile physiquement de toute façon : le collider est une capsule,
+    // parfaitement symétrique autour de l'axe Y, donc une rotation de lacet
+    // ne change jamais sa géométrie de collision.
+    let mut player_facing: Vec<(usize, f32)> = Vec::new();
+    // Clip du héros skinné (Idle/Walk), élu d'après l'intention de
+    // déplacement de CE tick — joueur local comme joueurs réseau :
+    // côté serveur, le clip choisi part tel quel dans
+    // `EntityDelta.anim_clip` et anime le fantôme chez les autres.
+    // Appliqué après la boucle par l'appelant, comme `player_facing` (emprunt
+    // immuable ici) ; sans `AnimationState` (mesh non skinné), no-op.
+    let mut player_anim: Vec<(usize, bool)> = Vec::new();
+    for (idx, obj) in scene.objects.iter().enumerate() {
+        let Some(ctrl) = &obj.controller else {
+            continue;
+        };
+        if !ctrl.input && !ctrl.gyro {
+            continue;
+        }
+        let net_input = network_by_index.get(&idx);
+        let (mx, my, space) = match net_input {
+            Some(n) => (n.move_x.clamp(-1.0, 1.0), n.move_y.clamp(-1.0, 1.0), n.jump),
+            None => (mx, my, space),
+        };
+        let mut vx = 0.0;
+        let mut vz = 0.0;
+        if ctrl.input {
+            vx += mx * ctrl.move_speed;
+            if ctrl.auto_run_speed > 0.0 {
+                // Course automatique (endless runner) : avance en continu en +Z ;
+                // l'entrée verticale du joystick ne fait rien (seul X = voie compte).
+                vz += ctrl.auto_run_speed;
+            } else {
+                vz += -my * ctrl.move_speed;
+            }
+        }
+        if ctrl.gyro && net_input.is_none() {
+            vx += tilt.0 * ctrl.move_speed;
+            vz += -tilt.1 * ctrl.move_speed;
+        }
+        // Avance/recul « tank » (W/S clavier) : le long de l'orientation
+        // *actuelle* du personnage plutôt que de la caméra, contrairement au
+        // reste du déplacement. `-sin(yaw)`/`-cos(yaw)`
+        // = même formule que l'inverse de `camera_relative_move` (yaw=0 ⇒ avant
+        // = -Z, cf. `Physics::face_direction`).
+        if ctrl.input && net_input.is_none() && key_thrust != 0.0 {
+            let yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
+            vx += key_thrust * ctrl.move_speed * -yaw.sin();
+            vz += key_thrust * ctrl.move_speed * -yaw.cos();
+        }
+        // Saut : bouton tactile nommé (joueur local), ou Espace au clavier
+        // (joueur local), ou demandé par l'`Input` réseau de ce joueur.
+        let jump = (!ctrl.jump_button.is_empty()
+            && input_state.buttons.contains(&ctrl.jump_button))
+            || (space && ctrl.input);
+        let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
+        any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
+        if ctrl.input {
+            player_anim.push((idx, vx * vx + vz * vz > 1e-4));
+        }
+        // Oriente le personnage — seulement pour le joueur *local* : les autres
+        // joueurs réseau reçoivent déjà leur orientation du serveur (cf.
+        // `network_client::apply_local_network_position`), l'écraser ici avec
+        // notre propre calcul créerait un conflit d'autorité.
+        // Joueur réseau : son orientation vient de l'`aim_yaw` de son
+        // `Input` — celle que **son** client prédit et affiche, pas un
+        // recalcul local qui entrerait en conflit avec elle.
+        if ctrl.input
+            && let Some(n) = net_input
+        {
+            player_facing.push((idx, n.aim_yaw));
+        }
+        if ctrl.input && net_input.is_none() {
+            let cur_yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
+            let new_yaw = if key_turn != 0.0 {
+                // Rotation « tank » manuelle (A/D) : prioritaire sur la rotation
+                // automatique vers la direction de déplacement, qui se
+                // battrait sinon contre l'intention explicite du joueur.
+                // Vitesse dédiée (`MANUAL_TURN_SPEED`), pas `turn_speed` : ce
+                // dernier (10 rad/s ≈ 570°/s) est calibré pour *rattraper* une
+                // direction, pas pour être **tenu** — tenu, il rend le pilotage
+                // impossible à doser (un quart de tour par frame de retard).
+                cur_yaw + key_turn * MANUAL_TURN_SPEED * dt
+            } else if key_thrust != 0.0 {
+                // W/S « tank » : le personnage garde son orientation, ne tourne
+                // jamais pour « faire face » au déplacement — sinon reculer
+                // (vecteur de vitesse pointant vers l'arrière) le ferait pivoter
+                // à 180° en continu.
+                cur_yaw
+            } else if vx * vx + vz * vz > 1e-6 {
+                // Rotation vers la direction de déplacement en amorti
+                // **exponentiel** (rapide au départ, doux à l'approche) plutôt
+                // qu'à vitesse constante + arrêt sec (`rotate_towards`) : la
+                // vitesse angulaire constante donnait un pivot mécanique qui
+                // « claquait » en fin de course.
+                let target_yaw = (-vx).atan2(-vz);
+                rotate_towards_smooth(cur_yaw, target_yaw, ctrl.turn_speed, dt)
+            } else if !ctrl.fire_button.is_empty() && input_state.gamepad_yaw != 0.0 {
+                // Immobile avec une arme à distance équipée et le stick droit
+                // activement poussé : le personnage suit l'orbite libre de la
+                // caméra plutôt que de garder son cap — sans ça, viser à l'arrêt
+                // en orbitant la caméra désaligne le réticule central
+                // (`editor::crosshair`) de la direction réelle du tir
+                // (`fireball.rs`, qui part de `transform.rotation`, pas de
+                // `camera.yaw`). Gardé au `!= 0.0`, pas juste « immobile » : sans
+                // ce garde-fou, un joueur qui n'a jamais touché le stick droit se
+                // ferait pivoter vers le yaw caméra par défaut, indépendant de sa
+                // vraie orientation de spawn.
+                rotate_towards_smooth(cur_yaw, camera_yaw, ctrl.turn_speed, dt)
+            } else {
+                cur_yaw
+            };
+            player_facing.push((idx, new_yaw));
+        }
+    }
+    (player_facing, player_anim, any_jump)
 }
 
 pub(super) fn clamp_move_vector(mx: f32, my: f32) -> (f32, f32) {
@@ -1004,160 +1186,14 @@ impl AppState {
                 .collect()
         };
         if let Some(phys) = &mut self.physics {
-            // Pilotage des objets « pilotables » : vitesse horizontale (joystick + clavier
-            // + gyro) et saut (bouton tactile ou Espace). Appliqué avant le pas de simulation.
-            let inp = &self.input_state;
-            // Mouvement combiné joystick/croix directionnelle + clavier (flèches/WASD),
-            // puis tourné selon la caméra (cf. `camera_relative_move`) : « en haut »
-            // sur le joystick éloigne le personnage de la caméra, comme dans un jeu
-            // à la Zelda, quelle que soit sa rotation actuelle.
-            let joy = apply_deadzone(inp.joy, JOYSTICK_DEADZONE);
-            let (raw_mx, raw_my) = clamp_move_vector(
-                joy.0 + inp.key_move.0 + inp.gamepad_move.0,
-                joy.1 + inp.key_move.1 + inp.gamepad_move.1,
+            let (player_facing, player_anim, any_jump) = drive_local_and_networked_players(
+                phys,
+                &self.scene,
+                &self.network,
+                &self.input_state,
+                self.camera.yaw,
+                dt,
             );
-            let (mx, my) = camera_relative_move(raw_mx, raw_my, self.camera.yaw);
-            let (tilt, space) = (inp.tilt, inp.jump);
-            let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
-            let mut any_jump = false;
-            // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`) :
-            // chacun a son propre `NetworkInput`, distinct de `self.input_state`
-            // (qui ne pilote que l'objet « joueur local », clavier/tactile/gyro de
-            // cette instance — ex. l'éditeur desktop, ou un client sans réseau).
-            // Un joueur vaincu (0 PV, GAMEDESIGN_EN_LIGNE.md §3.1) est exclu de
-            // cette table : `net_input` devient `None` pour son objet, qui
-            // retombe alors sur la branche locale ci-dessous (`inp.state`) — sans
-            // effet indésirable sur un serveur headless, dont l'entrée locale
-            // reste toujours neutre (aucun joueur ne pilote le serveur lui-même).
-            // Spectateur immobile jusqu'à la fin de la manche, comme voulu.
-            let network_by_index: HashMap<usize, multiplayer::NetworkInput> = self
-                .network
-                .network_players
-                .iter()
-                .filter(|(id, _)| self.network.network_health.get(id).copied().unwrap_or(1.0) > 0.0)
-                .filter_map(|(id, &idx)| self.network.network_inputs.get(id).map(|inp| (idx, *inp)))
-                .collect();
-            // Orientation du joueur local : calculée ici puis appliquée **après**
-            // `phys.step()` ci-dessous, directement sur `transform.rotation` — jamais
-            // sur le corps rigide (cf. `set_position`/réconciliation réseau, même
-            // principe). Un corps *dynamique* en contact avec le décor (mur, pilier)
-            // dont on impose la rotation à chaque frame via `RigidBody::set_rotation`
-            // déstabilisait le solveur de contacts de rapier — vibrations visibles
-            // dès qu'on combinait beaucoup de rotation et de déplacement en même
-            // temps. Inutile physiquement de toute façon : le collider est une capsule,
-            // parfaitement symétrique autour de l'axe Y, donc une rotation de lacet
-            // ne change jamais sa géométrie de collision.
-            let mut player_facing: Vec<(usize, f32)> = Vec::new();
-            // Clip du héros skinné (Idle/Walk), élu d'après l'intention de
-            // déplacement de CE tick — joueur local comme joueurs réseau :
-            // côté serveur, le clip choisi part tel quel dans
-            // `EntityDelta.anim_clip` et anime le fantôme chez les autres.
-            // Appliqué après la boucle, comme `player_facing` (emprunt
-            // immuable ici) ; sans `AnimationState` (mesh non skinné), no-op.
-            let mut player_anim: Vec<(usize, bool)> = Vec::new();
-            for (idx, obj) in self.scene.objects.iter().enumerate() {
-                let Some(ctrl) = &obj.controller else {
-                    continue;
-                };
-                if !ctrl.input && !ctrl.gyro {
-                    continue;
-                }
-                let net_input = network_by_index.get(&idx);
-                let (mx, my, space) = match net_input {
-                    Some(n) => (n.move_x.clamp(-1.0, 1.0), n.move_y.clamp(-1.0, 1.0), n.jump),
-                    None => (mx, my, space),
-                };
-                let mut vx = 0.0;
-                let mut vz = 0.0;
-                if ctrl.input {
-                    vx += mx * ctrl.move_speed;
-                    if ctrl.auto_run_speed > 0.0 {
-                        // Course automatique (endless runner) : avance en continu en +Z ;
-                        // l'entrée verticale du joystick ne fait rien (seul X = voie compte).
-                        vz += ctrl.auto_run_speed;
-                    } else {
-                        vz += -my * ctrl.move_speed;
-                    }
-                }
-                if ctrl.gyro && net_input.is_none() {
-                    vx += tilt.0 * ctrl.move_speed;
-                    vz += -tilt.1 * ctrl.move_speed;
-                }
-                // Avance/recul « tank » (W/S clavier) : le long de l'orientation
-                // *actuelle* du personnage plutôt que de la caméra, contrairement au
-                // reste du déplacement. `-sin(yaw)`/`-cos(yaw)`
-                // = même formule que l'inverse de `camera_relative_move` (yaw=0 ⇒ avant
-                // = -Z, cf. `Physics::face_direction`).
-                if ctrl.input && net_input.is_none() && key_thrust != 0.0 {
-                    let yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
-                    vx += key_thrust * ctrl.move_speed * -yaw.sin();
-                    vz += key_thrust * ctrl.move_speed * -yaw.cos();
-                }
-                // Saut : bouton tactile nommé (joueur local), ou Espace au clavier
-                // (joueur local), ou demandé par l'`Input` réseau de ce joueur.
-                let jump = (!ctrl.jump_button.is_empty()
-                    && self.input_state.buttons.contains(&ctrl.jump_button))
-                    || (space && ctrl.input);
-                let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
-                any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
-                if ctrl.input {
-                    player_anim.push((idx, vx * vx + vz * vz > 1e-4));
-                }
-                // Oriente le personnage — seulement pour le joueur *local* : les autres
-                // joueurs réseau reçoivent déjà leur orientation du serveur (cf.
-                // `network_client::apply_local_network_position`), l'écraser ici avec
-                // notre propre calcul créerait un conflit d'autorité.
-                // Joueur réseau : son orientation vient de l'`aim_yaw` de son
-                // `Input` — celle que **son** client prédit et affiche, pas un
-                // recalcul local qui entrerait en conflit avec elle.
-                if ctrl.input
-                    && let Some(n) = net_input
-                {
-                    player_facing.push((idx, n.aim_yaw));
-                }
-                if ctrl.input && net_input.is_none() {
-                    let cur_yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
-                    let new_yaw = if key_turn != 0.0 {
-                        // Rotation « tank » manuelle (A/D) : prioritaire sur la rotation
-                        // automatique vers la direction de déplacement, qui se
-                        // battrait sinon contre l'intention explicite du joueur.
-                        // Vitesse dédiée (`MANUAL_TURN_SPEED`), pas `turn_speed` : ce
-                        // dernier (10 rad/s ≈ 570°/s) est calibré pour *rattraper* une
-                        // direction, pas pour être **tenu** — tenu, il rend le pilotage
-                        // impossible à doser (un quart de tour par frame de retard).
-                        cur_yaw + key_turn * MANUAL_TURN_SPEED * dt
-                    } else if key_thrust != 0.0 {
-                        // W/S « tank » : le personnage garde son orientation, ne tourne
-                        // jamais pour « faire face » au déplacement — sinon reculer
-                        // (vecteur de vitesse pointant vers l'arrière) le ferait pivoter
-                        // à 180° en continu.
-                        cur_yaw
-                    } else if vx * vx + vz * vz > 1e-6 {
-                        // Rotation vers la direction de déplacement en amorti
-                        // **exponentiel** (rapide au départ, doux à l'approche) plutôt
-                        // qu'à vitesse constante + arrêt sec (`rotate_towards`) : la
-                        // vitesse angulaire constante donnait un pivot mécanique qui
-                        // « claquait » en fin de course.
-                        let target_yaw = (-vx).atan2(-vz);
-                        rotate_towards_smooth(cur_yaw, target_yaw, ctrl.turn_speed, dt)
-                    } else if !ctrl.fire_button.is_empty() && self.input_state.gamepad_yaw != 0.0 {
-                        // Immobile avec une arme à distance équipée et le stick droit
-                        // activement poussé : le personnage suit l'orbite libre de la
-                        // caméra plutôt que de garder son cap — sans ça, viser à l'arrêt
-                        // en orbitant la caméra désaligne le réticule central
-                        // (`editor::crosshair`) de la direction réelle du tir
-                        // (`fireball.rs`, qui part de `transform.rotation`, pas de
-                        // `camera.yaw`). Gardé au `!= 0.0`, pas juste « immobile » : sans
-                        // ce garde-fou, un joueur qui n'a jamais touché le stick droit se
-                        // ferait pivoter vers le yaw caméra par défaut, indépendant de sa
-                        // vraie orientation de spawn.
-                        rotate_towards_smooth(cur_yaw, self.camera.yaw, ctrl.turn_speed, dt)
-                    } else {
-                        cur_yaw
-                    };
-                    player_facing.push((idx, new_yaw));
-                }
-            }
             // Pilotage des « chasseurs » IA (cf. `AiChaser`) : direction directe vers la
             // position courante du joueur, recalculée chaque frame — une vraie poursuite
             // réactive (jeu local vs IA), pas une trajectoire fixe scriptée à l'avance.
