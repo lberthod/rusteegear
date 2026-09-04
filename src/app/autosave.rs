@@ -320,7 +320,12 @@ mod tests {
         // Force une date de modification loin dans le futur : plus récente à
         // coup sûr que n'importe quel fichier de référence créé par ce test.
         let far_future = SystemTime::now() + std::time::Duration::from_secs(3600);
-        let file = std::fs::File::open(&autosave_path).unwrap();
+        // Ouvert en écriture : sur Windows, `set_modified` sur un handle
+        // lecture seule échoue (« Access is denied », job CI editor-windows).
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&autosave_path)
+            .unwrap();
         file.set_modified(far_future).unwrap();
 
         let reference_dir = temp_autosave_dir("recuperation-plus-recente-reference");
@@ -359,7 +364,11 @@ mod tests {
         // La référence est écrite APRÈS l'autosave : elle est donc plus
         // récente, rien à proposer en restauration.
         let far_future = SystemTime::now() + std::time::Duration::from_secs(3600);
-        let file = std::fs::File::open(&reference_path).unwrap();
+        // Même ouverture en écriture que ci-dessus (Windows).
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&reference_path)
+            .unwrap();
         file.set_modified(far_future).unwrap();
 
         let mut app = AppState::new();
