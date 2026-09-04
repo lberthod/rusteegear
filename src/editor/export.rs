@@ -1,4 +1,4 @@
-//! Panneau « Build & Export » : lance les scripts de packaging (`.dmg` / `.apk` / `.ipa`)
+//! Panneau « 📦 Compiler & exporter » (ex-« Build & Export ») : lance les scripts de packaging (`.dmg` / `.apk` / `.ipa`)
 //! depuis l'UI, en thread de fond, avec log streamé.
 
 use std::io::{BufRead, BufReader};
@@ -258,7 +258,9 @@ impl ExportPanel {
         }
 
         let mut open = self.open;
-        egui::Window::new("📦 Build & Export")
+        // Même libellé que les menus et la barre d'outils (roadmap post-audit UX
+        // v2 2026-09-04, 4.1).
+        egui::Window::new("📦 Compiler & exporter")
             .open(&mut open)
             .resizable(true)
             .default_width(440.0)
@@ -474,8 +476,10 @@ impl ExportPanel {
                     }
                     // Build + install + lancement Android sur l'appareil branché.
                     if ui
-                        .add_enabled(!busy, egui::Button::new("📲 Run"))
-                        .on_hover_text("Build Android + installation sur le téléphone (adb)")
+                        .add_enabled(!busy, egui::Button::new("📲 Lancer sur l'appareil"))
+                        .on_hover_text(
+                            "Compile l'APK, l'installe et le lance sur le téléphone branché (adb)",
+                        )
                         .clicked()
                     {
                         self.run_on_device(scene, settings);

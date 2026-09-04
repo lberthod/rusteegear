@@ -6,18 +6,27 @@ apprennent plus que tes conclusions.
 
 ## Avant de commencer
 
+Pour tout le monde :
+
 ```text
-- Niveau en Rust (jamais / notions / régulier / expert) :
+- Variante testée (A = .dmg seul / B = depuis le code source) :
 - Moteurs déjà pratiqués (Unity / Godot / Unreal / Bevy / autre) :
 - Machine (modèle, RAM, GPU) :
 - OS et version :
-- Variante testée (A = .dmg seul / B = source) :
 - Ce que tu construis d'habitude (jeux, outils, web…) :
+```
+
+Test B seulement (le Test A ne touche pas au code) :
+
+```text
+- Niveau en Rust (jamais / notions / régulier / expert) :
+- Version de rustc (`rustc --version`) :
 ```
 
 ## Par étape du [scénario](TEST_SCENARIO.md)
 
-Une ligne par étape (1 à 10) :
+Une ligne par étape. **Test A** : étapes 3 à 9, plus la démo publique de
+l'étape 10 (laisse les lignes 1 et 2 vides). **Test B** : étapes 1 à 10.
 
 | # | Réussi ? (oui/partiel/non) | Temps réel | Blocage rencontré (le cas échéant) | Message d'erreur vu (copie exacte) | As-tu compris comment réparer ? | Difficulté 1-5 |
 | --- | --- | --- | --- | --- | --- | --- |

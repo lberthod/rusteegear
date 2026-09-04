@@ -9,7 +9,7 @@ comparent les résultats (`cargo test official_scripts_match`).
 
 ## Supporté partout (couvert par les tests différentiels)
 
-L'API du moteur :
+L'API du moteur (chaque global est décrit dans [LUA_API.md](LUA_API.md)) :
 
 ```lua
 obj.x, obj.y, obj.z          -- position

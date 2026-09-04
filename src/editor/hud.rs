@@ -345,7 +345,7 @@ pub(super) fn weapon_inventory_panel(
         egui::vec2(24.0, 24.0),
         draggable,
     );
-    egui::Window::new("🎒 Inventaire")
+    egui::Window::new(crate::app::locale::inventory_title(locale))
         .id(egui::Id::new("weapon_inventory"))
         .collapsible(true)
         .default_open(false)
@@ -394,6 +394,7 @@ pub(super) fn item_inventory_panel(
     offset: &mut [f32; 2],
     draggable: bool,
     actions: &mut UiActions,
+    locale: crate::app::locale::Locale,
 ) {
     if items.is_empty() && !draggable {
         return;
@@ -406,7 +407,7 @@ pub(super) fn item_inventory_panel(
         egui::vec2(24.0, 24.0),
         draggable,
     );
-    egui::Window::new("👜 Sac")
+    egui::Window::new(crate::app::locale::bag_title(locale))
         .id(egui::Id::new("item_inventory"))
         .collapsible(true)
         .default_open(false)
@@ -415,7 +416,7 @@ pub(super) fn item_inventory_panel(
         .default_width(200.0)
         .show(ctx, |ui| {
             if items.is_empty() {
-                ui.weak("(vide)");
+                ui.weak(crate::app::locale::bag_empty(locale));
             }
             for &(kind, count) in items {
                 ui.horizontal(|ui| {
@@ -434,7 +435,10 @@ pub(super) fn item_inventory_panel(
                     ui.label(format!("{} ×{}", kind.label(), count));
                     if kind.heal() > 0.0 {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Utiliser").clicked() {
+                            if ui
+                                .small_button(crate::app::locale::use_item_label(locale))
+                                .clicked()
+                            {
                                 actions.use_item = Some(kind);
                             }
                         });
@@ -500,7 +504,7 @@ pub(super) fn multiplayer_roster_panel(
         egui::vec2(24.0, 24.0),
         draggable,
     );
-    egui::Window::new("👥 Joueurs")
+    egui::Window::new(crate::app::locale::players_title(locale))
         .id(egui::Id::new("multiplayer_roster"))
         .collapsible(true)
         .default_open(false)
@@ -559,7 +563,7 @@ pub(super) fn multiplayer_roster_panel(
                         ui.label(display_name);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(format!("💀 {}", kills.unwrap_or(0)));
+                        ui.label(crate::app::locale::frags(locale, kills.unwrap_or(0)));
                     });
                 });
             }
@@ -627,6 +631,7 @@ pub(super) fn hud_preview_overlays(
             &mut hud_layout.item_inventory,
             drag,
             actions,
+            locale,
         );
     }
     if preview.roster {
@@ -836,7 +841,7 @@ pub(super) fn collectibles_hud(
     painter.text(
         egui::pos2(area.right() - 20.0, area.top() + 42.0 * scale),
         Align2::RIGHT_CENTER,
-        format!("🏆 {score}"),
+        crate::app::locale::score(locale, score),
         FontId::proportional(16.0 * scale),
         Color32::from_rgb(150, 220, 255),
     );

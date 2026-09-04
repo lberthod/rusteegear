@@ -6,7 +6,12 @@ Un test (`docs_controls_lists_every_shortcut`) vérifie que chaque raccourci
 de la table apparaît dans cette page : ajouter un raccourci sans le
 documenter ici fait échouer `cargo test`.
 
-Mac : `Cmd` ; Linux/Windows : `Ctrl`.
+Mac : `Cmd` ; Linux/Windows : `Ctrl`. Les menus Fichier et Édition affichent
+ces raccourcis à droite de chaque entrée, lus dans la même table.
+
+`Cmd+S`, `Cmd+Maj+S`, `Cmd+O`, `Cmd+N`, `Cmd+P` et `Cmd+Q` répondent même
+pendant la saisie dans un champ texte ; `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A`
+/ `Cmd+Z` y restent ceux du champ.
 
 ## Éditeur (hors Play)
 
@@ -29,6 +34,9 @@ Mac : `Cmd` ; Linux/Windows : `Ctrl`.
 | `Cmd+Maj+S` | Enregistrer sous… |
 | `Cmd+O` | Ouvrir une scène ou un projet… |
 | `Cmd+N` | Nouveau projet… |
+| `Cmd+P` | Play / Stop (comme les boutons ▶ / ⏹ de la barre d'outils) |
+| `Cmd+Q` | Quitter — confirmation si modifications non enregistrées |
+| `F1` | Fenêtre Raccourcis clavier (en Play : aide en jeu) |
 
 ## Souris (éditeur)
 

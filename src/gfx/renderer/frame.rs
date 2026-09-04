@@ -364,6 +364,9 @@ impl Renderer {
                 scene_dirty: app.scene_dirty,
                 script_errors: &app.script_errors,
                 context_menu_request: std::mem::take(&mut app.context_menu_request),
+                has_undo: app.has_undo(),
+                has_redo: app.has_redo(),
+                has_clipboard: app.has_clipboard(),
             };
             let net_status = app.net_conn.net_status.clone();
             let net_connected = app.is_connected();

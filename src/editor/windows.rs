@@ -650,6 +650,7 @@ pub(super) fn player_map_overlay(
     area: egui::Rect,
     minimap: &crate::app::MinimapData,
     locale: crate::app::locale::Locale,
+    touch: bool,
     zoom: &mut f32,
     pan: &mut [f32; 2],
 ) {
@@ -749,7 +750,7 @@ pub(super) fn player_map_overlay(
             painter.text(
                 egui::pos2(rect.center().x, rect.bottom() - margin * 0.5),
                 Align2::CENTER_CENTER,
-                crate::app::locale::map_legend(locale),
+                crate::app::locale::map_legend(locale, touch),
                 FontId::proportional(15.0),
                 Color32::from_gray(220),
             );
@@ -807,7 +808,7 @@ pub(super) fn settings_window(
         .open(&mut open)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.heading("IA — génération de scripts (Experimental)");
+            ui.heading("IA — génération de scripts (expérimental)");
             ui.label("Clé API DeepSeek");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut settings.deepseek_api_key)
@@ -866,7 +867,8 @@ pub(super) fn settings_window(
 
             ui.add_space(12.0);
             ui.separator();
-            settings_essentials(ui, settings, actions);
+            // L'éditeur reste en français quelle que soit la langue de jeu.
+            settings_essentials(ui, settings, actions, crate::app::locale::Locale::Fr);
         });
     panels.settings = open;
 }
@@ -876,12 +878,17 @@ pub(super) fn settings_window(
 /// (`player_settings_window`) : Firebase (comptes multijoueur), audio, langue,
 /// manette. Exclut la section IA (clé DeepSeek), éditeur seulement — le joueur
 /// en `--player`/mobile n'a pas accès à la génération de scripts Lua.
+///
+/// `locale` traduit les titres de section pour le mode Player (roadmap
+/// post-audit UX v2 2026-09-04, 4.4) ; l'éditeur passe `Locale::Fr`.
 fn settings_essentials(
     ui: &mut egui::Ui,
     settings: &mut crate::app::settings::Settings,
     actions: &mut super::UiActions,
+    locale: crate::app::locale::Locale,
 ) {
-    ui.heading("Multijoueur — comptes (Firebase)");
+    use crate::app::locale::{SettingsSection, settings_heading};
+    ui.heading(settings_heading(locale, SettingsSection::Accounts));
     ui.label("Clé API Web Firebase");
     let resp_fb_key = ui.add(
         egui::TextEdit::singleline(&mut settings.firebase_api_key)
@@ -917,7 +924,7 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
-    ui.heading("Audio");
+    ui.heading(settings_heading(locale, SettingsSection::Audio));
     ui.label("Musique / ambiance");
     if ui
         .add(egui::Slider::new(&mut settings.music_volume, 0.0..=1.0))
@@ -937,7 +944,7 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
-    ui.heading("📁 Démarrage");
+    ui.heading(settings_heading(locale, SettingsSection::Startup));
     if ui
         .checkbox(
             &mut settings.reopen_last_project,
@@ -954,7 +961,7 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
-    ui.heading("♿ Accessibilité");
+    ui.heading(settings_heading(locale, SettingsSection::Accessibility));
     ui.label("Taille du HUD");
     if ui
         .add(egui::Slider::new(&mut settings.hud_scale, 0.6..=2.0))
@@ -1002,7 +1009,7 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
-    ui.heading("🌐 Langue (jeu)");
+    ui.heading(settings_heading(locale, SettingsSection::Language));
     ui.small("Texte affiché en Play (HUD) — pas l'éditeur, qui reste en français.");
     ui.horizontal(|ui| {
         use crate::app::locale::Locale;
@@ -1021,15 +1028,34 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
-    ui.heading("⌨ Clavier");
-    ui.small("Actions de jeu remappables (roadmap UX 5.3). Le déplacement reste WASD / flèches.");
+    ui.heading(settings_heading(locale, SettingsSection::Keyboard));
+    ui.small("Actions de jeu remappables. Le déplacement reste WASD / flèches.");
     let mut kb_changed = false;
-    kb_changed |= key_binding_row(ui, "Saut", &mut settings.keyboard.jump);
-    kb_changed |= key_binding_row(ui, "Attaque", &mut settings.keyboard.attack);
-    kb_changed |= key_binding_row(ui, "Tir", &mut settings.keyboard.fire);
-    kb_changed |= key_binding_row(ui, "Soin", &mut settings.keyboard.heal);
-    kb_changed |= key_binding_row(ui, "Pause", &mut settings.keyboard.pause);
-    kb_changed |= key_binding_row(ui, "Carte", &mut settings.keyboard.map);
+    // Instantané des six touches pour refuser qu'une action en prenne une déjà
+    // utilisée par une autre (roadmap post-audit UX v2 2026-09-04, 4.2).
+    let kb = &settings.keyboard;
+    let snapshot = [
+        kb.jump.clone(),
+        kb.attack.clone(),
+        kb.fire.clone(),
+        kb.heal.clone(),
+        kb.pause.clone(),
+        kb.map.clone(),
+    ];
+    let others = |i: usize| -> Vec<&str> {
+        snapshot
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, s)| s.as_str())
+            .collect()
+    };
+    kb_changed |= key_binding_row(ui, "Saut", &mut settings.keyboard.jump, &others(0));
+    kb_changed |= key_binding_row(ui, "Attaque", &mut settings.keyboard.attack, &others(1));
+    kb_changed |= key_binding_row(ui, "Tir", &mut settings.keyboard.fire, &others(2));
+    kb_changed |= key_binding_row(ui, "Soin", &mut settings.keyboard.heal, &others(3));
+    kb_changed |= key_binding_row(ui, "Pause", &mut settings.keyboard.pause, &others(4));
+    kb_changed |= key_binding_row(ui, "Carte", &mut settings.keyboard.map, &others(5));
     if ui.small_button("Rétablir les touches par défaut").clicked() {
         settings.keyboard = crate::app::settings::KeyboardBindings::default();
         kb_changed = true;
@@ -1041,7 +1067,7 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
-    ui.heading("🎮 Manette");
+    ui.heading(settings_heading(locale, SettingsSection::Gamepad));
     ui.small(
         "Stick gauche : déplacement « tank » (même axes que A/D/W/S). \
          Stick droit : visée (horizontal) et tangage caméra (vertical). \
@@ -1072,6 +1098,7 @@ pub(super) fn player_settings_window(
     open: &mut bool,
     settings: &mut crate::app::settings::Settings,
     actions: &mut super::UiActions,
+    locale: crate::app::locale::Locale,
 ) {
     egui::Window::new("⚙  Paramètres")
         .id(egui::Id::new("player_settings"))
@@ -1079,26 +1106,69 @@ pub(super) fn player_settings_window(
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
         .show(ctx, |ui| {
-            settings_essentials(ui, settings, actions);
+            settings_essentials(ui, settings, actions, locale);
         });
 }
 
 /// Une ligne de remapping clavier (roadmap post-audit UX 2026-09-04, 5.3) —
 /// même principe que `gamepad_binding_row`, sur `input::KEY_NAMES`.
-fn key_binding_row(ui: &mut egui::Ui, action_label: &str, bound: &mut String) -> bool {
+///
+/// Roadmap post-audit UX v2 2026-09-04, 4.2 : libellés lisibles
+/// (`input::key_label`, « Maj gauche » plutôt que `ShiftLeft`) — le nom
+/// technique reste ce qui est enregistré ; les touches de `others` (les autres
+/// actions) sont refusées dans la liste, et une touche déjà prise (ancien
+/// fichier de réglages) s'affiche en rouge ; une touche d'outil de l'éditeur
+/// (`input::EDITOR_TOOL_KEYS`) est signalée, car elle ne répond pas en Play
+/// depuis l'éditeur.
+fn key_binding_row(
+    ui: &mut egui::Ui,
+    action_label: &str,
+    bound: &mut String,
+    others: &[&str],
+) -> bool {
+    use crate::app::input::{EDITOR_TOOL_KEYS, KEY_NAMES, key_label};
     let mut changed = false;
+    let duplicate = others.contains(&bound.as_str());
     ui.horizontal(|ui| {
         ui.label(action_label);
+        let mut shown = egui::RichText::new(key_label(bound));
+        if duplicate {
+            shown = shown.color(egui::Color32::RED);
+        }
         egui::ComboBox::from_id_salt(("key_binding", action_label))
-            .selected_text(bound.as_str())
+            .selected_text(shown)
             .show_ui(ui, |ui| {
-                for name in crate::app::input::KEY_NAMES {
-                    if ui.selectable_label(bound == name, *name).clicked() && bound != name {
+                for name in KEY_NAMES {
+                    let taken = others.contains(name) && bound != name;
+                    if ui
+                        .add_enabled(
+                            !taken,
+                            egui::Button::selectable(bound == name, key_label(name)),
+                        )
+                        .on_disabled_hover_text("Déjà utilisée par une autre action")
+                        .clicked()
+                        && bound != name
+                    {
                         *bound = (*name).to_string();
                         changed = true;
                     }
                 }
             });
+        if duplicate {
+            ui.colored_label(
+                egui::Color32::RED,
+                "⚠ Touche déjà utilisée par une autre action : choisis-en une autre",
+            );
+        } else if EDITOR_TOOL_KEYS.contains(&bound.as_str()) {
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 170, 40),
+                "⚠ Touche d'outil de l'éditeur (Q T Y F G)",
+            )
+            .on_hover_text(
+                "En Play depuis l'éditeur, cette touche change d'outil au lieu de \
+                 déclencher l'action ; elle fonctionne dans le jeu exporté (mode Player).",
+            );
+        }
     });
     changed
 }
@@ -1135,7 +1205,9 @@ pub(super) fn mobile_multiplayer_overlay(
     net_status: &str,
     net_connected: bool,
     actions: &mut UiActions,
+    locale: crate::app::locale::Locale,
 ) {
+    use crate::app::locale as l10n;
     egui::Window::new("🌐")
         .id(egui::Id::new("mobile_multiplayer"))
         .collapsible(true)
@@ -1148,25 +1220,25 @@ pub(super) fn mobile_multiplayer_overlay(
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 56.0))
         .default_width(220.0)
         .show(ctx, |ui| {
-            ui.label("Adresse du serveur");
+            ui.label(l10n::server_address_label(locale));
             ui.add_enabled(
                 !net_connected,
                 egui::TextEdit::singleline(server_url).hint_text("ws://192.168.1.x:7777"),
             );
-            ui.label("Pseudo");
+            ui.label(l10n::nickname_label(locale));
             ui.add_enabled(
                 !net_connected,
                 egui::TextEdit::singleline(name).hint_text("Joueur"),
             );
             ui.add_space(4.0);
             if net_connected {
-                if ui.button("🔌 Se déconnecter").clicked() {
+                if ui.button(l10n::pause_disconnect_label(locale)).clicked() {
                     actions.disconnect_from_server = true;
                 }
             } else {
                 let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
                 if ui
-                    .add_enabled(can_connect, egui::Button::new("▶ Se connecter"))
+                    .add_enabled(can_connect, egui::Button::new(l10n::connect_label(locale)))
                     .clicked()
                 {
                     // Pas de sélecteur de classe/salon/mode ici (overlay
@@ -1183,7 +1255,7 @@ pub(super) fn mobile_multiplayer_overlay(
             }
             ui.add_space(4.0);
             ui.small(if net_status.is_empty() {
-                "Non connecté"
+                l10n::not_connected(locale)
             } else {
                 net_status
             });
@@ -1644,7 +1716,7 @@ pub(super) fn optimize_window(
             }
             if !scene.point_lights.is_empty()
                 && ui
-                    .button("💡 Bake lighting (figer les lumières)")
+                    .button("💡 Figer les lumières (bake)")
                     .on_hover_text(
                         "Fige les lumières ponctuelles en émission statique puis les supprime",
                     )
@@ -1675,7 +1747,7 @@ pub(super) fn optimize_window(
                 actions.perf_mode = true;
             }
             ui.separator();
-            ui.label("Préset qualité (Sprint 126) :");
+            ui.label("Préset qualité :");
             ui.horizontal(|ui| {
                 use crate::app::asset_ops::QualityPreset;
                 if ui
@@ -2217,10 +2289,13 @@ pub(super) fn crash_log_window(
     ctx: &egui::Context,
     open_flag: &mut bool,
     crash_log_text: &mut Option<String>,
+    locale: crate::app::locale::Locale,
 ) {
     let mut open = *open_flag;
     let mut clear = false;
-    egui::Window::new("🩹 Journal de crash")
+    // Titre localisé : la fenêtre s'ouvre aussi en mode Player (roadmap
+    // post-audit UX v2 2026-09-04, 4.4).
+    egui::Window::new(crate::app::locale::crash_log_title(locale))
         .open(&mut open)
         .default_size([480.0, 360.0])
         .show(ctx, |ui| match crash_log_text {

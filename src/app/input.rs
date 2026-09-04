@@ -358,6 +358,63 @@ pub const KEY_NAMES: &[&str] = &[
     "F12",
 ];
 
+/// Touches d'outil de l'éditeur (`lib.rs`, `window_event`) : Main, Orbite,
+/// Loupe, Cadrer, Caméra libre. Lues **avant** les actions de jeu tant qu'on
+/// n'est pas en mode Player — une action remappée dessus ne répond pas en Play
+/// depuis l'éditeur (roadmap post-audit UX v2 2026-09-04, 4.2).
+pub const EDITOR_TOOL_KEYS: &[&str] = &["KeyQ", "KeyT", "KeyY", "KeyF", "KeyG"];
+
+/// Libellé français d'un nom de `KEY_NAMES` pour l'affichage (« Maj gauche »,
+/// « Espace », « J », « 4 ») — le nom technique reste ce qui est enregistré
+/// dans `settings::KeyboardBindings` (roadmap post-audit UX v2 2026-09-04, 4.2).
+pub fn key_label(name: &str) -> String {
+    match name {
+        "Space" => "Espace".into(),
+        "Escape" => "Échap".into(),
+        "Tab" => "Tab".into(),
+        "Enter" => "Entrée".into(),
+        "ShiftLeft" => "Maj gauche".into(),
+        "ControlLeft" => "Ctrl gauche".into(),
+        "AltLeft" => "Alt gauche".into(),
+        _ => name
+            .strip_prefix("Key")
+            .or_else(|| name.strip_prefix("Digit"))
+            .unwrap_or(name)
+            .to_string(),
+    }
+}
+
+#[cfg(test)]
+mod key_label_tests {
+    use super::*;
+
+    /// Chaque touche proposée au remapping a un libellé lisible, sans le
+    /// préfixe technique `Key`/`Digit`.
+    #[test]
+    fn every_key_name_has_a_readable_label() {
+        for name in KEY_NAMES {
+            let label = key_label(name);
+            assert!(!label.is_empty(), "{name}");
+            assert!(
+                !label.starts_with("Key") && !label.starts_with("Digit"),
+                "{name} → {label}"
+            );
+        }
+        assert_eq!(key_label("KeyJ"), "J");
+        assert_eq!(key_label("Digit4"), "4");
+        assert_eq!(key_label("ShiftLeft"), "Maj gauche");
+        assert_eq!(key_label("Space"), "Espace");
+        assert_eq!(key_label("Escape"), "Échap");
+    }
+
+    #[test]
+    fn editor_tool_keys_are_remappable_names() {
+        for key in EDITOR_TOOL_KEYS {
+            assert!(KEY_NAMES.contains(key), "{key} absent de KEY_NAMES");
+        }
+    }
+}
+
 /// Touches de jeu résolues en `KeyCode` — cf. `AppState::keys`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolvedKeys {

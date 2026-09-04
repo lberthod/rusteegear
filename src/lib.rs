@@ -139,6 +139,25 @@ fn axis_from_held(negative: bool, positive: bool) -> f32 {
 }
 
 impl App {
+    /// L'événement est-il l'un des raccourcis d'application que l'on ne laisse
+    /// pas egui « consommer » depuis un champ texte (roadmap post-audit UX v2
+    /// 2026-09-04, 4.3) ? Cmd+S / Cmd+Maj+S / Cmd+O / Cmd+N / Cmd+P / Cmd+Q
+    /// seulement — pas Cmd+C/V/X/A/Z, que egui utilise pour éditer le texte.
+    fn is_app_shortcut(&self, event: &WindowEvent) -> bool {
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        let WindowEvent::KeyboardInput { event: key, .. } = event else {
+            return false;
+        };
+        let st = self.modifiers.state();
+        (st.control_key() || st.super_key())
+            && matches!(
+                key.physical_key,
+                PhysicalKey::Code(
+                    KeyCode::KeyS | KeyCode::KeyO | KeyCode::KeyN | KeyCode::KeyP | KeyCode::KeyQ
+                )
+            )
+    }
+
     /// wasm32 uniquement : récupère le `Renderer` posé par la tâche asynchrone de
     /// `resumed` dès qu'il est prêt — cf. la doc de `pending_renderer`.
     #[cfg(target_arch = "wasm32")]
@@ -491,6 +510,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         #[cfg(target_arch = "wasm32")]
         self.adopt_pending_renderer();
+        // Calculé avant d'emprunter `renderer` (cf. `consumed` plus bas).
+        let app_shortcut = self.is_app_shortcut(&event);
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -503,6 +524,14 @@ impl ApplicationHandler for App {
         } else {
             renderer.on_ui_event(&event)
         };
+        // Raccourcis d'application (Cmd+S / Cmd+Maj+S / Cmd+O / Cmd+N / Cmd+P /
+        // Cmd+Q) : egui les reçoit — et les déclarait « consommés » dès qu'un
+        // champ texte avait le focus, donc Enregistrer ne marchait plus pendant
+        // qu'on tapait un nom (roadmap post-audit UX v2 2026-09-04, 4.3). Il
+        // n'en fait rien dans un champ texte, on les laisse donc passer. Cmd+C /
+        // Cmd+V / Cmd+X / Cmd+A / Cmd+Z restent à egui : ce sont *ses* raccourcis
+        // d'édition de texte.
+        let consumed = consumed && !app_shortcut;
 
         match event {
             // Fermeture (croix de la fenêtre) : passe par `request_quit` — avec des
@@ -686,6 +715,19 @@ impl ApplicationHandler for App {
                         KeyCode::KeyQ if !cmd && !self.state.player && !self.state.fly_look => {
                             self.state.set_gizmo_mode(GizmoMode::Pan)
                         }
+                        // Cmd+Q : même chemin que Fichier › Quitter et la croix de
+                        // la fenêtre — confirmation s'il y a des modifications non
+                        // enregistrées (roadmap post-audit UX v2 2026-09-04, 4.3).
+                        // Sur macOS, le menu par défaut de winit (« Quit », Cmd+Q →
+                        // `terminate:`) est désactivé dans `run()` pour que la
+                        // touche arrive ici au lieu de tuer l'application.
+                        KeyCode::KeyQ if cmd => self.state.request_quit(),
+                        // Cmd+P : Play / Stop, comme les boutons ▶ / ⏹ de la barre
+                        // d'outils (mêmes champs, cf. `editor::toolbar`).
+                        KeyCode::KeyP if cmd && !self.state.player => {
+                            self.state.playing = !self.state.playing;
+                            self.state.paused = false;
+                        }
                         KeyCode::KeyT if !cmd && !self.state.player => {
                             self.state.set_gizmo_mode(GizmoMode::Orbit)
                         }
@@ -733,10 +775,17 @@ impl ApplicationHandler for App {
                         c if c == self.state.keys.jump && self.state.is_locally_defeated() => {
                             self.state.cycle_spectate();
                         }
-                        // Aide en jeu (roadmap post-audit UX 2026-09-04, 5.5).
+                        // Aide en jeu (roadmap post-audit UX 2026-09-04, 5.5) ;
+                        // hors Play, la fenêtre « Raccourcis clavier » de l'éditeur
+                        // (roadmap v2 4.3 — F1 y restait sans effet).
                         KeyCode::F1 => {
+                            let in_game = self.state.playing || self.state.player;
                             if let Some(r) = self.renderer.as_mut() {
-                                r.toggle_help();
+                                if in_game {
+                                    r.toggle_help();
+                                } else {
+                                    r.toggle_shortcuts();
+                                }
                             }
                         }
                         // Overlay Paramètres minimal du mode Player (Sprint 2, config
@@ -1072,7 +1121,19 @@ pub fn run() {
     // qu'un nouvel utilisateur lit doit nommer le produit et sa version — le
     // détail (GPU, scène) suit sur les lignes de log de chaque sous-système.
     log::info!("RusteeGear {}", env!("CARGO_PKG_VERSION"));
-    let event_loop = match EventLoop::new() {
+    // macOS : sans le menu par défaut de winit, dont l'entrée « Quit » (Cmd+Q)
+    // appelle `terminate:` et tue l'application sans passer par la
+    // confirmation « modifications non enregistrées » — Cmd+Q arrive alors au
+    // clavier de `window_event` et suit `request_quit` (roadmap post-audit UX
+    // v2 2026-09-04, 4.3). Les menus de l'application sont ceux d'egui.
+    #[cfg(target_os = "macos")]
+    let event_loop = {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        EventLoop::builder().with_default_menu(false).build()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let event_loop = EventLoop::new();
+    let event_loop = match event_loop {
         Ok(el) => el,
         Err(e) => {
             log::error!("Création de la boucle d'événements impossible : {e}");

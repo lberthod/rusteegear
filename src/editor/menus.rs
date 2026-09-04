@@ -4,9 +4,17 @@
 
 use crate::app::GizmoMode;
 use crate::app::settings::RecentProject;
+use crate::app::shortcuts::{MenuItem, menu_hint};
 use crate::scene::{MeshKind, Scene};
 
-use super::{Panels, UiActions, export};
+use super::{Panels, StatusInfo, UiActions, export};
+
+/// Entrée de menu avec son raccourci grisé à droite (`Button::shortcut_text`),
+/// lu dans la table `shortcuts::SHORTCUTS` plutôt que recopié dans chaque
+/// libellé (roadmap post-audit UX v2 2026-09-04, 4.3).
+fn item(label: &str, shortcut: MenuItem) -> egui::Button<'static> {
+    egui::Button::new(label.to_owned()).shortcut_text(menu_hint(shortcut))
+}
 
 /// Menu « Fichier » : sauvegarde, ouverture, import, export.
 ///
@@ -25,8 +33,8 @@ pub(super) fn menu_fichier(
         // (les sélecteurs « Enregistrer sous… » / « Ouvrir… » sont dans
         // `dialog_save_as` / `dialog_open`, partagés avec les raccourcis clavier)
         if ui
-            .button("✨  Nouveau projet")
-            .on_hover_text("Cmd+N — choix guidé de template (scène vide, démo, niveau de combat)")
+            .add(item("✨  Nouveau projet", MenuItem::NewProject))
+            .on_hover_text("Choix guidé de template (scène vide, démo, niveau de combat)")
             .clicked()
         {
             actions.open_new_project_wizard = true;
@@ -204,7 +212,7 @@ pub(super) fn menu_fichier(
         });
         ui.separator();
         if ui
-            .button("✨  Générer une scène (IA)… — Experimental")
+            .button("✨  Générer une scène (IA)… — expérimental")
             .on_hover_text("Crée une scène complète depuis une description (DeepSeek)")
             .clicked()
         {
@@ -213,22 +221,18 @@ pub(super) fn menu_fichier(
         }
         ui.separator();
         if ui
-            .button("💾  Enregistrer")
-            .on_hover_text("Cmd+S — dans la scène du projet ouvert, sinon ~/motor3derust_scene.json")
+            .add(item("💾  Enregistrer", MenuItem::Save))
+            .on_hover_text("Dans la scène du projet ouvert, sinon ~/motor3derust_scene.json")
             .clicked()
         {
             actions.save = true;
             ui.close();
         }
-        if ui
-            .button("💾  Enregistrer sous…")
-            .on_hover_text("Cmd+Maj+S")
-            .clicked()
-        {
+        if ui.add(item("💾  Enregistrer sous…", MenuItem::SaveAs)).clicked() {
             dialog_save_as(actions);
             ui.close();
         }
-        if ui.button("📂  Ouvrir…").on_hover_text("Cmd+O").clicked() {
+        if ui.add(item("📂  Ouvrir…", MenuItem::Open)).clicked() {
             dialog_open(actions);
             ui.close();
         }
@@ -280,7 +284,13 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         ui.separator();
-        if ui.button("📦  Build & Export…").clicked() {
+        // Un seul libellé pour l'export partout (menus, barre d'outils, titre du
+        // panneau) — roadmap post-audit UX v2 2026-09-04, 4.1.
+        if ui
+            .button("📦  Compiler & exporter…")
+            .on_hover_text("Panneau d'export : .dmg / .apk / .ipa / web")
+            .clicked()
+        {
             export.open = true;
             ui.close();
         }
@@ -294,7 +304,7 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         ui.separator();
-        if ui.button("🚪  Quitter").clicked() {
+        if ui.add(item("🚪  Quitter", MenuItem::Quit)).clicked() {
             actions.quit = true;
             ui.close();
         }
@@ -302,52 +312,73 @@ pub(super) fn menu_fichier(
 }
 
 /// Menu « Édition » : historique et opérations sur la sélection.
-pub(super) fn menu_edition(ui: &mut egui::Ui, selection: &Option<usize>, actions: &mut UiActions) {
+///
+/// Raccourcis affichés à droite et entrées grisées quand elles n'ont rien à
+/// faire — Annuler / Rétablir sans historique, Coller sans presse-papiers
+/// (`status.has_undo`…) — roadmap post-audit UX v2 2026-09-04, 4.3.
+pub(super) fn menu_edition(
+    ui: &mut egui::Ui,
+    selection: &Option<usize>,
+    status: &StatusInfo<'_>,
+    actions: &mut UiActions,
+) {
     ui.menu_button("Édition", |ui| {
-        if ui.button("↩  Annuler").clicked() {
+        if ui
+            .add_enabled(status.has_undo, item("↩  Annuler", MenuItem::Undo))
+            .clicked()
+        {
             actions.undo = true;
             ui.close();
         }
-        if ui.button("↪  Rétablir").clicked() {
+        if ui
+            .add_enabled(status.has_redo, item("↪  Rétablir", MenuItem::Redo))
+            .clicked()
+        {
             actions.redo = true;
             ui.close();
         }
         ui.separator();
         let has = selection.is_some();
         if ui
-            .add_enabled(has, egui::Button::new("✂  Couper"))
+            .add_enabled(has, item("✂  Couper", MenuItem::Cut))
             .clicked()
         {
             actions.cut = true;
             ui.close();
         }
         if ui
-            .add_enabled(has, egui::Button::new("⧉  Copier"))
+            .add_enabled(has, item("⧉  Copier", MenuItem::Copy))
             .clicked()
         {
             actions.copy = true;
             ui.close();
         }
-        if ui.button("📋  Coller").clicked() {
+        if ui
+            .add_enabled(status.has_clipboard, item("📋  Coller", MenuItem::Paste))
+            .clicked()
+        {
             actions.paste = true;
             ui.close();
         }
         if ui
-            .add_enabled(has, egui::Button::new("⧉  Dupliquer"))
+            .add_enabled(has, item("⧉  Dupliquer", MenuItem::Duplicate))
             .clicked()
         {
             actions.duplicate = true;
             ui.close();
         }
         if ui
-            .add_enabled(has, egui::Button::new("🗑  Supprimer"))
+            .add_enabled(has, item("🗑  Supprimer", MenuItem::Delete))
             .clicked()
         {
             actions.delete = *selection;
             ui.close();
         }
         ui.separator();
-        if ui.button("☑  Tout sélectionner").clicked() {
+        if ui
+            .add(item("☑  Tout sélectionner", MenuItem::SelectAll))
+            .clicked()
+        {
             actions.select_all = true;
             ui.close();
         }
@@ -514,7 +545,9 @@ pub(super) fn menu_ajouter(
                         scene.objects[i].physics = P::Static;
                         ui.close();
                     }
-                    if ui.button("⚙  Rigidbody (dynamique)").clicked() {
+                    // « Corps dynamique » plutôt que « Rigidbody » (roadmap post-audit UX
+                    // v2 2026-09-04, 4.2).
+                    if ui.button("⚙  Corps dynamique").clicked() {
                         scene.objects[i].physics = P::Dynamic;
                         ui.close();
                     }
@@ -664,7 +697,8 @@ pub(super) fn menu_outils(
             ui.close();
         }
         ui.separator();
-        if ui.button("🤖  Build Android…").clicked() {
+        // Même libellé que Fichier (roadmap post-audit UX v2 2026-09-04, 4.1).
+        if ui.button("📦  Compiler & exporter…").clicked() {
             export.open = true;
             ui.close();
         }
@@ -688,10 +722,8 @@ pub(super) fn menu_outils(
             panels.readiness_results.clear(); // forcer une nouvelle analyse à l'ouverture
             ui.close();
         }
-        if ui.button("🩺  Diagnostic système").clicked() {
-            panels.diagnostic = true;
-            ui.close();
-        }
+        // « Diagnostic système » n'est plus qu'au menu Aide (roadmap post-audit
+        // UX v2 2026-09-04, 4.1) : une seule porte d'entrée.
         if ui.button("🌐  Multijoueur").clicked() {
             panels.multiplayer = true;
             ui.close();
@@ -707,7 +739,10 @@ pub(super) fn menu_outils(
 /// Menu « Aide » : raccourcis, guide export, diagnostic, à propos.
 pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
     ui.menu_button("Aide", |ui| {
-        if ui.button("⌨  Raccourcis clavier").clicked() {
+        if ui
+            .add(item("⌨  Raccourcis clavier", MenuItem::Shortcuts))
+            .clicked()
+        {
             panels.shortcuts = true;
             ui.close();
         }
@@ -735,9 +770,11 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
             ui.close();
         }
         ui.separator();
+        // Pointe sur le guide lui-même, pas sur la racine du dépôt comme
+        // « Dépôt GitHub » juste dessous (roadmap post-audit UX v2 2026-09-04, 4.1).
         ui.hyperlink_to(
             "📖  Guide export APK",
-            "https://github.com/lberthod/rusteegear",
+            "https://github.com/lberthod/rusteegear/blob/main/packaging/build_android.md",
         );
         ui.hyperlink_to("🐙  Dépôt GitHub", "https://github.com/lberthod/rusteegear");
         ui.separator();

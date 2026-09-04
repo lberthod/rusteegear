@@ -1,14 +1,17 @@
 # Ton premier objet animé — tutoriel de 10 minutes
 
-Prérequis : avoir suivi [QUICKSTART.md](../QUICKSTART.md) (éditeur lancé,
-projet `examples/first_game` ouvert). Chaque étape nomme le
-bouton/menu exact tel qu'il apparaît dans l'éditeur.
+Prérequis : l'éditeur lancé ([QUICKSTART.md](../QUICKSTART.md) §1-3, ou le
+`.dmg`). Chaque étape nomme le bouton/menu exact tel qu'il apparaît dans
+l'éditeur.
 
 ## Étape 1 — Ouvrir le projet exemple
 
-Menu **📂 Ouvrir un projet…** → dossier `examples/first_game`. Tu vois : un
-sol vert, une capsule orange (le joueur), trois caisses, un cube bleuté qui a
-un script, une zone jaune, trois pièces dorées.
+Menu **Fichier ▸ 🎬 Démos ▸ ⭐ Commencer ▸ ⭐ Premier jeu** (embarqué dans
+l'application ; depuis le dépôt, **📂 Ouvrir un projet…** → dossier
+`examples/first_game` revient au même). Si tu sors du QUICKSTART, il est déjà
+ouvert : passe à l'étape 2. Tu vois : un sol vert, une capsule orange (le
+joueur), trois caisses, un cube bleuté qui a un script, une zone jaune, trois
+pièces dorées.
 
 ## Étape 2 — Ajouter un cube
 
@@ -36,6 +39,8 @@ obj.ry = obj.ry + 45 * dt
 
 (`obj.ry` = rotation de l'objet autour de l'axe vertical, en degrés ;
 `dt` = durée de la frame — donc : 45°/seconde, quelle que soit la machine.)
+Tout ce qu'un script peut lire et écrire (`obj.*`, `input`, `emit`,
+`find_tag`, `save`…) est listé dans [LUA_API.md](LUA_API.md).
 
 ## Étape 6 — Play
 
@@ -63,7 +68,8 @@ vérifier : ton cube et son script sont dedans. Ne sauvegarde pas par-dessus
 ## Étape 10 (option) — Aller plus loin
 
 - Deuxième script : copie `examples/first_game/scripts/zone_signal.lua` sur un
-  objet dont tu coches **Trigger** — il réagira au passage du joueur.
+  objet dont tu coches **🎯 Zone de déclenchement** (Inspecteur, section
+  physique) — il réagira au passage du joueur.
 - Export (web, .app, APK) : voir `packaging/EXPORT.md`. *Non couvert par ce
   tutoriel : l'export web/desktop est en cours de re-vérification (Phase C du
   plan de préversion).*

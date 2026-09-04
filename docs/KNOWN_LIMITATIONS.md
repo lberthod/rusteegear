@@ -1,11 +1,15 @@
-# Limitations connues — Developer Preview 1 (19 juillet 2026)
+# Limitations connues — Developer Preview 1 (mise à jour du 4 septembre 2026)
 
 Cette page liste ce qui est **volontairement** absent, partiel ou non validé
 dans cette préversion. Si vous butez sur un point listé ici, ce n'est pas un
 bug à signaler : c'est un choix ou un chantier connu. Tout le reste mérite un
-signalement (Aide → Diagnostic système pour le contexte à joindre).
+signalement (Aide → 📋 Copier le diagnostic pour le contexte à joindre).
 
 ## Matrice de support
+
+Référence unique pour l'état des plateformes : le tableau « Plateformes —
+état honnête » du [README](../README.md#plateformes) renvoie ici pour le
+détail par fonction.
 
 | Fonction | macOS Editor | Web Player | Android | iOS | Server |
 | --- | --- | --- | --- | --- | --- |
@@ -51,13 +55,12 @@ préversion — les libellés du panneau Export le rappellent.
 
 ## Éditeur
 
-- **Undo/redo partiel.** Annulables : création/suppression/duplication
-  d'objets, groupes, manipulations au gizmo (y compris lumières), prefabs,
-  outils d'assets. **Non annulables** : l'édition de champs dans l'Inspecteur
-  (couleur, script, nom, physique…) et l'import glTF (l'objet créé reste
-  supprimable, et cette suppression est annulable). Attention : un Cmd+Z
-  après une saisie dans l'Inspecteur revient à l'état d'avant cette saisie
-  sans avertissement (roadmap UX 04/09/2026, 5.1).
+- **Undo/redo.** Annulables : création/suppression/duplication d'objets,
+  groupes, manipulations au gizmo (y compris lumières), prefabs, outils
+  d'assets et, **depuis le 04/09/2026**, les éditions dans l'Inspecteur
+  (couleur, script, nom, physique…) — une entrée d'historique par rafale de
+  modifications, pas une par frappe. **Reste non annulable** : l'import glTF
+  (l'objet créé reste supprimable, et cette suppression est annulable).
 - **Retours à l'écran (04/09/2026, roadmap UX vague 1).** Sauvegarde,
   import, projet, erreurs de script : toasts en bas à droite + compteur ⛔
   dans la barre d'état ; badge ⛔ sur l'objet dont le script est en erreur.
@@ -66,7 +69,7 @@ préversion — les libellés du panneau Export le rappellent.
   illisible) hors toast, et l'export mobile hors du panneau Build.
 - **Sélection désactivée pendant Play** (décision produit) : repasser en
   Pause ou Stop pour sélectionner.
-- **Génération IA (scène et scripts) : Experimental.** Nécessite une clé API
+- **Génération IA (scène et scripts) : expérimental.** Nécessite une clé API
   externe ; qualité non garantie.
 
 ## Import 3D
@@ -110,11 +113,13 @@ préversion — les libellés du panneau Export le rappellent.
   déconnecter, Quitter (natif). En ligne, la pause est locale — la manche
   continue sans vous, le menu le rappelle.
 - **Tactile** : stick gauche à deux axes, orbite au glissé sur la moitié
-  droite, boutons ⏸ et Carte en haut à droite. Pas encore : maintien de
-  l'écran allumé sur Android/iOS (fait sur le web), retour haptique,
-  orientation verrouillée.
-- **Mort sans réapparition** (décision assumée) : spectateur figé jusqu'à la
-  fin de manche, sans minuteur.
+  droite, boutons ⏸ et Carte en haut à droite. L'écran reste allumé pendant
+  la partie sur le web, Android et iOS (04/09/2026). Pas encore : retour
+  haptique (`vibrate()` ne fait que journaliser), orientation verrouillée.
+- **Mort sans réapparition** (décision assumée) : jusqu'à la fin de manche,
+  la caméra suit un allié vivant (Espace passe au suivant, la bannière
+  « Vaincu » le nomme) ; sans allié vivant, elle reste sur le joueur. Pas de
+  minuteur de réapparition — choix de game design à trancher au playtest.
 
 ## Réseau
 

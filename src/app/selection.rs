@@ -324,6 +324,21 @@ impl AppState {
         self.scene_dirty = false;
     }
 
+    /// Y a-t-il quelque chose à annuler / rétablir / coller ? Lu par l'UI pour
+    /// griser les entrées correspondantes (roadmap post-audit UX v2
+    /// 2026-09-04, 4.3).
+    pub fn has_undo(&self) -> bool {
+        !self.edit_history.undo_stack.is_empty()
+    }
+
+    pub fn has_redo(&self) -> bool {
+        !self.edit_history.redo_stack.is_empty()
+    }
+
+    pub fn has_clipboard(&self) -> bool {
+        !self.edit_history.clipboard.is_empty()
+    }
+
     pub fn undo(&mut self) {
         if let Some(prev) = self.edit_history.undo_stack.pop_back() {
             self.edit_history

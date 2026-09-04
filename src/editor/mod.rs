@@ -410,6 +410,12 @@ pub struct StatusInfo<'a> {
     pub script_errors: &'a std::collections::HashMap<usize, String>,
     /// Clic droit dans la vue 3D cette frame (`AppState::context_menu_request`).
     pub context_menu_request: bool,
+    /// Piles d'historique et presse-papiers non vides (`AppState::has_undo`…) —
+    /// grisent Annuler / Rétablir / Coller dans le menu Édition et la barre
+    /// d'outils (roadmap post-audit UX v2 2026-09-04, 4.3).
+    pub has_undo: bool,
+    pub has_redo: bool,
+    pub has_clipboard: bool,
 }
 
 /// Demande de création de projet posée par l'assistant « Nouveau projet »
@@ -967,6 +973,12 @@ impl Editor {
         self.panels.help = !self.panels.help;
     }
 
+    /// Fenêtre « ⌨ Raccourcis clavier » (F1 hors Play, roadmap post-audit UX
+    /// v2 2026-09-04, 4.3) — F1 dans l'éditeur ne faisait rien.
+    pub fn toggle_shortcuts(&mut self) {
+        self.panels.shortcuts = !self.panels.shortcuts;
+    }
+
     /// Fenêtres flottantes à mémoriser entre deux lancements (roadmap 5.4).
     const PERSISTED_WINDOWS: [&'static str; 8] = [
         "console",
@@ -1215,6 +1227,7 @@ impl Editor {
                 &mut layout.item_inventory,
                 false,
                 &mut actions,
+                locale,
             );
             if let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score, locale, hud_scale);
@@ -1314,6 +1327,7 @@ impl Editor {
                 net_status,
                 net_connected,
                 &mut actions,
+                locale,
             );
             // Écran d'accueil (roadmap 2.1) : par-dessus le HUD, avant toute
             // connexion ; le jeu tourne derrière (créatures en simulation locale).
@@ -1336,18 +1350,18 @@ impl Editor {
                 }
             }
             if *settings_open {
-                windows::player_settings_window(ctx, settings_open, settings, &mut actions);
+                windows::player_settings_window(ctx, settings_open, settings, &mut actions, locale);
             }
             // Aide en jeu (F1 / « ? », roadmap 5.5) et journal de crash — ce
             // dernier n'était câblé que dans l'éditeur : un plantage en mode
             // joueur restait muet.
             windows::help_window(ctx, help_open, locale, mobile.any());
-            windows::crash_log_window(ctx, crash_open, crash_log_text);
+            windows::crash_log_window(ctx, crash_open, crash_log_text, locale);
             // Carte (Phase carte plein écran) : mini-carte permanente en coin,
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
             // (jamais les deux à la fois, cf. doc de `player_map_overlay`).
             if map_open {
-                player_map_overlay(ctx, area, minimap, locale, map_zoom, map_pan);
+                player_map_overlay(ctx, area, minimap, locale, mobile.any(), map_zoom, map_pan);
             } else {
                 player_corner_minimap(ctx, area, minimap, hud_scale);
             }
@@ -1872,7 +1886,13 @@ fn build_ui(
     // Fenêtre « 🧩 Widgets HUD » : ajouter/éditer les widgets déclaratifs de la scène.
     windows::hud_widgets_window(root.ctx(), panels, scene, hud_widget_new_id);
     // Fenêtre « 🩹 Journal de crash » (Sprint 113) : écran volontaire de consultation.
-    windows::crash_log_window(root.ctx(), &mut panels.crash_log, crash_log_text);
+    // L'éditeur reste en français, quelle que soit la langue de jeu choisie.
+    windows::crash_log_window(
+        root.ctx(),
+        &mut panels.crash_log,
+        crash_log_text,
+        crate::app::locale::Locale::Fr,
+    );
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer_window(
         root.ctx(),
@@ -1922,7 +1942,7 @@ fn build_ui(
     windows::prefab_feedback_popup(root.ctx(), panels);
     windows::prefab_delete_confirm_popup(root.ctx(), panels, actions);
 
-    // Fenêtre flottante « Build & Export ».
+    // Fenêtre flottante « 📦 Compiler & exporter ».
     export.ui(root.ctx(), scene, settings);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
     tool_windows(
@@ -2001,7 +2021,7 @@ fn build_ui(
                 has_project,
                 settings.existing_recent_projects(),
             );
-            menu_edition(ui, selection, actions);
+            menu_edition(ui, selection, status, actions);
             menu_ajouter(ui, scene, *selection, actions);
             menu_outils(ui, gizmo_mode, export, panels, actions);
             menu_aide(ui, panels);
@@ -2314,6 +2334,7 @@ fn play_area_and_in_game_hud(
             &mut scene.hud_layout.item_inventory,
             false,
             actions,
+            locale,
         );
     } else if hud_preview.open {
         hud_preview_overlays(
@@ -2643,7 +2664,10 @@ fn inspector_panel(
                         if obj.physics != PhysicsKind::None {
                             ui.horizontal(|ui| {
                                 use crate::runtime::physics::ColliderShape as Cs;
-                                ui.label("Collider").on_hover_text(
+                                // Vocabulaire français (roadmap post-audit UX v2
+                                // 2026-09-04, 4.2) : « Collider »/« Box » → volume de
+                                // collision / boîte.
+                                ui.label("Volume de collision").on_hover_text(
                                     "Forme invisible utilisée pour les collisions physiques \
                                      (rebonds, blocages) — indépendante du mesh visible affiché.",
                                 );
@@ -2654,7 +2678,7 @@ fn inspector_panel(
                                          par défaut, à ne changer qu'en cas de comportement \
                                          physique inattendu.",
                                     );
-                                ui.selectable_value(&mut obj.collider_shape, Cs::Box, "Box");
+                                ui.selectable_value(&mut obj.collider_shape, Cs::Box, "Boîte");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Sphere, "Sphère");
                                 ui.selectable_value(&mut obj.collider_shape, Cs::Capsule, "Capsule");
                                 // TriMesh/ConvexHull : n'ont de sens que pour un modèle importé
@@ -2677,7 +2701,7 @@ fn inspector_panel(
                                         );
                                 }
                             });
-                            ui.checkbox(&mut obj.ccd, "CCD (anti-tunneling)").on_hover_text(
+                            ui.checkbox(&mut obj.ccd, "Anti-traversée (CCD)").on_hover_text(
                                 "Détection de collision continue — pour un objet rapide et \
                                  fin (missile) qui pourrait sinon traverser un mur mince sans \
                                  jamais entrer en collision. Coûteux : à réserver aux objets \
@@ -2816,7 +2840,7 @@ fn inspector_panel(
                                 obj.controller.as_ref().is_some_and(|c| c.input);
                             let mut has_gyro = obj.controller.as_ref().is_some_and(|c| c.gyro);
                             if ui
-                                .checkbox(&mut has_input, "🕹 Input Receiver (joystick)")
+                                .checkbox(&mut has_input, "🕹 Récepteur de joystick")
                                 .on_hover_text(
                                     "L'objet se déplace avec le joystick en Play (plan X/Z)",
                                 )
@@ -3108,7 +3132,14 @@ fn toolbar(
         ui.horizontal_wrapped(|ui| {
             // Play / Pause / Stop distincts (style lecteur).
             if !*playing {
-                if ui.button("▶ Play").clicked() {
+                if ui
+                    .button("▶ Play")
+                    .on_hover_text(format!(
+                        "Play / Stop ({})",
+                        crate::app::shortcuts::menu_hint(crate::app::shortcuts::MenuItem::Play)
+                    ))
+                    .clicked()
+                {
                     *playing = true;
                     *paused = false;
                 }
@@ -3173,12 +3204,24 @@ fn toolbar(
                 actions.focus_selection = true;
             }
             ui.separator();
-            if ui.button("↩").on_hover_text("Annuler (Cmd+Z)").clicked() {
+            // Grisés quand il n'y a rien à annuler/rétablir (roadmap post-audit
+            // UX v2 2026-09-04, 4.3).
+            if ui
+                .add_enabled(status.has_undo, egui::Button::new("↩"))
+                .on_hover_text(format!(
+                    "Annuler ({})",
+                    crate::app::shortcuts::menu_hint(crate::app::shortcuts::MenuItem::Undo)
+                ))
+                .clicked()
+            {
                 actions.undo = true;
             }
             if ui
-                .button("↪")
-                .on_hover_text("Rétablir (Cmd+Maj+Z)")
+                .add_enabled(status.has_redo, egui::Button::new("↪"))
+                .on_hover_text(format!(
+                    "Rétablir ({})",
+                    crate::app::shortcuts::menu_hint(crate::app::shortcuts::MenuItem::Redo)
+                ))
                 .clicked()
             {
                 actions.redo = true;
@@ -3290,11 +3333,15 @@ fn toolbar(
                     actions.set_debug_view = Some(view);
                 }
             }
-            // Build APK + Run Device : différenciateurs du moteur (passent à la ligne si étroit).
+            // Panneau d'export + lancement sur l'appareil : différenciateurs du
+            // moteur (passent à la ligne si étroit). Un seul libellé pour l'export
+            // partout — menus Fichier/Outils, ce bouton, titre du panneau (roadmap
+            // post-audit UX v2 2026-09-04, 4.1) : le bouton ouvre tout le panneau
+            // (.dmg / .apk / .ipa / web), pas seulement la compilation de l'APK.
             ui.separator();
             if ui
-                .selectable_label(export.open, "🤖 Compiler l'APK")
-                .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
+                .selectable_label(export.open, "📦 Compiler & exporter")
+                .on_hover_text("Panneau Compiler & exporter (.dmg / .apk / .ipa / web)")
                 .clicked()
             {
                 export.open = !export.open;
@@ -3302,7 +3349,7 @@ fn toolbar(
             if ui
                 .button("📲 Lancer sur l'appareil")
                 .on_hover_text(
-                    "Build Android + installation/lancement sur le téléphone branché (adb)",
+                    "Compile l'APK, l'installe et le lance sur le téléphone branché (adb)",
                 )
                 .clicked()
             {
@@ -3355,6 +3402,7 @@ fn play_overlays(
             play_rect,
             minimap,
             locale,
+            false,
             &mut panels.map_zoom,
             &mut panels.map_pan,
         );

@@ -3,12 +3,14 @@
 Objectif : voir une scène jouable dans l'éditeur, sans aucune décision à
 prendre. Chaque commande est à copier telle quelle.
 
-Budget réaliste (roadmap post-audit UX 2026-09-04) : **5 minutes de
-manipulation**, plus ce que les outils font tout seuls — installation de
-rustup et Git LFS, clone (~240 Mo), téléchargement de la toolchain épinglée
-1.98.0 (~200 Mo) et **première compilation (~5 minutes sur Apple M4, plus sur
-une machine plus ancienne)**. Les lancements suivants prennent quelques
-secondes.
+Budget réaliste : **5 minutes de manipulation**, plus ce que les outils font
+tout seuls — installation de rustup et Git LFS, clone (~240 Mo),
+téléchargement de la toolchain épinglée 1.98.0 (~200 Mo) et **première
+compilation : 5-10 minutes** (~5 sur Apple M4, plus sur une machine plus
+ancienne). Les lancements suivants prennent **moins de 30 secondes**. Sans
+toolchain Rust, le `.dmg` des [releases GitHub](https://github.com/lberthod/rusteegear/releases)
+saute les étapes 1 à 3 (cf. [docs/TEST_SCENARIO.md](docs/TEST_SCENARIO.md),
+Test A).
 
 ## 1. Prérequis
 
@@ -47,10 +49,10 @@ commande de réparation pour chaque ✗.
 cargo run --profile dev-fast
 ```
 
-⏱️ **La première compilation prend ~5 minutes** (mesuré sur Apple M4 —
+⏱️ **La première compilation prend 5-10 minutes** (~5 mesurées sur Apple M4 —
 compter plus sur une machine plus ancienne). Les lancements suivants
-recompilent en **quelques secondes**. C'est le comportement normal de Rust,
-pas un problème d'installation.
+recompilent en **moins de 30 secondes**. C'est le comportement normal de
+Rust, pas un problème d'installation.
 
 Au démarrage, la console affiche :
 
@@ -59,13 +61,16 @@ RusteeGear 0.1.0
 GPU : <ta carte> (<Metal|Vulkan>)
 ```
 
-et l'éditeur s'ouvre sur la scène de démonstration (le hameau du jeu).
+et l'éditeur s'ouvre sur la scène de démonstration (le hameau du jeu) au
+premier lancement ; ensuite, sur le dernier projet ouvert (réglable dans
+Paramètres ▸ 📁 Démarrage).
 
 ## 4. Ouvrir le projet exemple
 
-1. Menu **📂 Ouvrir un projet…**
-2. Sélectionner le dossier `examples/first_game` (dans le dossier cloné)
-3. Cliquer **Play**
+1. Menu **Fichier ▸ 🎬 Démos ▸ ⭐ Commencer ▸ ⭐ Premier jeu** (le projet
+   est embarqué dans l'application — **📂 Ouvrir un projet…** → dossier
+   `examples/first_game` du clone revient au même)
+2. Cliquer **Play**
 
 ## 5. Jouer
 

@@ -32,11 +32,32 @@ pub fn fire_hint(locale: Locale) -> &'static str {
 /// compteur de frags de `kills` ci-dessus — un assist (dégât porté sur un
 /// monstre achevé par un autre joueur) n'est pas visible séparément alors
 /// qu'il est déjà calculé côté serveur (`app::multiplayer::network_assists`).
-pub fn kills_and_assists(_locale: Locale, kills: u32, assists: u32) -> String {
-    // Icônes seules (💀/🤝) plutôt qu'un libellé traduit : contrairement aux
-    // autres textes du HUD, aucun mot ne se traduit ici, donc pas de branche
-    // par langue à maintenir.
-    format!("💀 {kills} · 🤝 {assists}")
+///
+/// Libellés en toutes lettres à côté des icônes (roadmap post-audit UX v2
+/// 2026-09-04, 4.4) : « 💀 3 · 🤝 1 » ne disait pas ce que comptaient les
+/// deux nombres.
+pub fn kills_and_assists(locale: Locale, kills: u32, assists: u32) -> String {
+    match locale {
+        Locale::Fr => format!("💀 Frags {kills} · 🤝 Aides {assists}"),
+        Locale::En => format!("💀 Frags {kills} · 🤝 Assists {assists}"),
+    }
+}
+
+/// Compteur de frags d'une ligne du classement multijoueur
+/// (`multiplayer_roster_panel`).
+pub fn frags(locale: Locale, kills: u32) -> String {
+    match locale {
+        Locale::Fr => format!("💀 Frags : {kills}"),
+        Locale::En => format!("💀 Frags: {kills}"),
+    }
+}
+
+/// Score de la scène (`collectibles_hud`).
+pub fn score(locale: Locale, score: u32) -> String {
+    match locale {
+        Locale::Fr => format!("🏆 Score : {score}"),
+        Locale::En => format!("🏆 Score: {score}"),
+    }
 }
 
 /// Suffixe « (équipée) » dans l'inventaire d'armes.
@@ -342,10 +363,132 @@ pub fn map_title(locale: Locale) -> &'static str {
 }
 
 /// Légende + rappel du raccourci, affichés en bas de `player_map_overlay`.
-pub fn map_legend(locale: Locale) -> &'static str {
+/// Au tactile (`touch`), pas de touche `M` : la carte se ferme par son bouton
+/// (roadmap post-audit UX v2 2026-09-04, 4.4).
+pub fn map_legend(locale: Locale, touch: bool) -> &'static str {
+    match (locale, touch) {
+        (Locale::Fr, false) => "🔵 Vous · 🟢 Alliés · 🔴 Monstres — M pour fermer",
+        (Locale::Fr, true) => "🔵 Vous · 🟢 Alliés · 🔴 Monstres",
+        (Locale::En, false) => "🔵 You · 🟢 Allies · 🔴 Monsters — M to close",
+        (Locale::En, true) => "🔵 You · 🟢 Allies · 🔴 Monsters",
+    }
+}
+
+// --- Chaînes du mode joueur jusque-là en dur dans `editor/hud.rs` et
+// `editor/windows.rs` (roadmap post-audit UX v2 2026-09-04, 4.4) ---
+
+/// Titre de l'inventaire d'armes (`weapon_inventory_panel`).
+pub fn inventory_title(locale: Locale) -> &'static str {
     match locale {
-        Locale::Fr => "🔵 Vous · 🟢 Alliés · 🔴 Monstres — M pour fermer",
-        Locale::En => "🔵 You · 🟢 Allies · 🔴 Monsters — M to close",
+        Locale::Fr => "🎒 Inventaire",
+        Locale::En => "🎒 Inventory",
+    }
+}
+
+/// Titre du sac d'objets (`item_inventory_panel`).
+pub fn bag_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "👜 Sac",
+        Locale::En => "👜 Bag",
+    }
+}
+
+pub fn bag_empty(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "(vide)",
+        Locale::En => "(empty)",
+    }
+}
+
+/// Bouton « Utiliser » d'un objet consommable du sac.
+pub fn use_item_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Utiliser",
+        Locale::En => "Use",
+    }
+}
+
+/// Titre du classement multijoueur (`multiplayer_roster_panel`).
+pub fn players_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "👥 Joueurs",
+        Locale::En => "👥 Players",
+    }
+}
+
+/// Overlay Multijoueur minimal du mode Player (`mobile_multiplayer_overlay`).
+pub fn server_address_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Adresse du serveur",
+        Locale::En => "Server address",
+    }
+}
+
+pub fn connect_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "▶ Se connecter",
+        Locale::En => "▶ Connect",
+    }
+}
+
+pub fn not_connected(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Non connecté",
+        Locale::En => "Not connected",
+    }
+}
+
+/// Titre de la fenêtre « Journal de crash » (`crash_log_window`), ouverte
+/// aussi en mode Player.
+pub fn crash_log_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🩹 Journal de crash",
+        Locale::En => "🩹 Crash log",
+    }
+}
+
+/// Sections de la fenêtre Paramètres partagée éditeur/joueur
+/// (`settings_essentials`) — l'éditeur passe toujours `Locale::Fr`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsSection {
+    Accounts,
+    Audio,
+    Startup,
+    Accessibility,
+    Language,
+    Keyboard,
+    Gamepad,
+}
+
+impl SettingsSection {
+    pub const ALL: [SettingsSection; 7] = [
+        SettingsSection::Accounts,
+        SettingsSection::Audio,
+        SettingsSection::Startup,
+        SettingsSection::Accessibility,
+        SettingsSection::Language,
+        SettingsSection::Keyboard,
+        SettingsSection::Gamepad,
+    ];
+}
+
+pub fn settings_heading(locale: Locale, section: SettingsSection) -> &'static str {
+    use SettingsSection as S;
+    match (locale, section) {
+        (Locale::Fr, S::Accounts) => "Multijoueur — comptes (Firebase)",
+        (Locale::Fr, S::Audio) => "🔊 Audio",
+        (Locale::Fr, S::Startup) => "📁 Démarrage",
+        (Locale::Fr, S::Accessibility) => "♿ Accessibilité",
+        (Locale::Fr, S::Language) => "🌐 Langue (jeu)",
+        (Locale::Fr, S::Keyboard) => "⌨ Clavier",
+        (Locale::Fr, S::Gamepad) => "🎮 Manette",
+        (Locale::En, S::Accounts) => "Multiplayer — accounts (Firebase)",
+        (Locale::En, S::Audio) => "🔊 Sound",
+        (Locale::En, S::Startup) => "📁 Startup",
+        (Locale::En, S::Accessibility) => "♿ Accessibility",
+        (Locale::En, S::Language) => "🌐 Language (game)",
+        (Locale::En, S::Keyboard) => "⌨ Keyboard",
+        (Locale::En, S::Gamepad) => "🎮 Gamepad",
     }
 }
 
@@ -362,8 +505,12 @@ mod tests {
             weapon_label(Locale::En, "Dague")
         );
         assert_ne!(fire_hint(Locale::Fr), fire_hint(Locale::En));
-        // `kills_and_assists` exclu volontairement : icônes seules (💀/🤝),
-        // aucun mot traduit — cf. sa doc.
+        assert_ne!(
+            kills_and_assists(Locale::Fr, 3, 1),
+            kills_and_assists(Locale::En, 3, 1)
+        );
+        assert_ne!(frags(Locale::Fr, 3), frags(Locale::En, 3));
+        assert_ne!(score(Locale::Fr, 240), score(Locale::En, 240));
         assert_ne!(
             equipped_suffix(Locale::Fr, "Arc"),
             equipped_suffix(Locale::En, "Arc")
@@ -403,7 +550,49 @@ mod tests {
             }
         }
         assert_ne!(map_title(Locale::Fr), map_title(Locale::En));
-        assert_ne!(map_legend(Locale::Fr), map_legend(Locale::En));
+        for touch in [false, true] {
+            assert_ne!(map_legend(Locale::Fr, touch), map_legend(Locale::En, touch));
+        }
+        assert_ne!(inventory_title(Locale::Fr), inventory_title(Locale::En));
+        assert_ne!(bag_title(Locale::Fr), bag_title(Locale::En));
+        assert_ne!(bag_empty(Locale::Fr), bag_empty(Locale::En));
+        assert_ne!(use_item_label(Locale::Fr), use_item_label(Locale::En));
+        assert_ne!(players_title(Locale::Fr), players_title(Locale::En));
+        assert_ne!(
+            server_address_label(Locale::Fr),
+            server_address_label(Locale::En)
+        );
+        assert_ne!(connect_label(Locale::Fr), connect_label(Locale::En));
+        assert_ne!(not_connected(Locale::Fr), not_connected(Locale::En));
+        assert_ne!(crash_log_title(Locale::Fr), crash_log_title(Locale::En));
+        for section in SettingsSection::ALL {
+            assert_ne!(
+                settings_heading(Locale::Fr, section),
+                settings_heading(Locale::En, section),
+                "{section:?}"
+            );
+        }
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 4.4 : la touche `M` n'existe pas
+    /// au tactile, la légende ne doit pas la promettre.
+    #[test]
+    fn map_legend_only_mentions_m_key_with_a_keyboard() {
+        for locale in [Locale::Fr, Locale::En] {
+            assert!(map_legend(locale, false).contains(" M "));
+            assert!(!map_legend(locale, true).contains(" M "));
+        }
+    }
+
+    /// Les compteurs du HUD portent une unité lisible, pas seulement une icône.
+    #[test]
+    fn hud_counters_carry_a_label() {
+        assert!(kills_and_assists(Locale::Fr, 3, 1).contains("Frags 3"));
+        assert!(kills_and_assists(Locale::Fr, 3, 1).contains("Aides 1"));
+        assert!(kills_and_assists(Locale::En, 3, 1).contains("Assists 1"));
+        assert!(score(Locale::Fr, 240).contains("Score"));
+        assert!(score(Locale::En, 240).contains("240"));
+        assert!(frags(Locale::En, 5).contains('5'));
     }
 
     #[test]

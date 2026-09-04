@@ -84,6 +84,14 @@ pub const SHORTCUTS: &[Shortcut] = &[
     sc(Scope::Editor, "`Cmd+Maj+S`", "Enregistrer sous…"),
     sc(Scope::Editor, "`Cmd+O`", "Ouvrir une scène ou un projet…"),
     sc(Scope::Editor, "`Cmd+N`", "Nouveau projet…"),
+    // Roadmap post-audit UX v2 2026-09-04, 4.3.
+    sc(Scope::Editor, "`Cmd+P`", "Play / Stop"),
+    sc(
+        Scope::Editor,
+        "`Cmd+Q`",
+        "Quitter (confirmation si modifications non enregistrées)",
+    ),
+    sc(Scope::Editor, "`F1`", "Fenêtre Raccourcis clavier"),
     sc(
         Scope::Mouse,
         "Clic gauche",
@@ -141,6 +149,97 @@ pub fn by_scope(scope: Scope) -> impl Iterator<Item = &'static Shortcut> {
     SHORTCUTS.iter().filter(move |s| s.scope == scope)
 }
 
+/// Entrées de menu dont l'indication de raccourci (texte grisé à droite du
+/// libellé, `Button::shortcut_text`) est **dérivée** de `SHORTCUTS` plutôt que
+/// recopiée à la main (roadmap post-audit UX v2 2026-09-04, 4.3) — la table
+/// reste la seule source, un raccourci changé ici change aussi dans les menus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuItem {
+    NewProject,
+    Save,
+    SaveAs,
+    Open,
+    Play,
+    Quit,
+    Shortcuts,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    Duplicate,
+    Delete,
+    SelectAll,
+}
+
+impl MenuItem {
+    pub const ALL: [MenuItem; 15] = [
+        MenuItem::NewProject,
+        MenuItem::Save,
+        MenuItem::SaveAs,
+        MenuItem::Open,
+        MenuItem::Play,
+        MenuItem::Quit,
+        MenuItem::Shortcuts,
+        MenuItem::Undo,
+        MenuItem::Redo,
+        MenuItem::Cut,
+        MenuItem::Copy,
+        MenuItem::Paste,
+        MenuItem::Duplicate,
+        MenuItem::Delete,
+        MenuItem::SelectAll,
+    ];
+
+    /// Libellé exact de l'action dans `SHORTCUTS` et rang de la touche quand
+    /// `keys` en regroupe plusieurs (« `Cmd+C` / `Cmd+X` / `Cmd+V` »).
+    const fn source(self) -> (&'static str, usize) {
+        match self {
+            MenuItem::NewProject => ("Nouveau projet…", 0),
+            MenuItem::Save => ("Enregistrer (scène du projet ouvert)", 0),
+            MenuItem::SaveAs => ("Enregistrer sous…", 0),
+            MenuItem::Open => ("Ouvrir une scène ou un projet…", 0),
+            MenuItem::Play => ("Play / Stop", 0),
+            MenuItem::Quit => (
+                "Quitter (confirmation si modifications non enregistrées)",
+                0,
+            ),
+            MenuItem::Shortcuts => ("Fenêtre Raccourcis clavier", 0),
+            MenuItem::Undo => ("Annuler / Rétablir", 0),
+            MenuItem::Redo => ("Annuler / Rétablir", 1),
+            MenuItem::Copy => ("Copier / Couper / Coller", 0),
+            MenuItem::Cut => ("Copier / Couper / Coller", 1),
+            MenuItem::Paste => ("Copier / Couper / Coller", 2),
+            MenuItem::Duplicate => ("Dupliquer la sélection", 0),
+            MenuItem::Delete => ("Supprimer la sélection", 0),
+            MenuItem::SelectAll => ("Tout sélectionner", 0),
+        }
+    }
+}
+
+/// Raccourci d'une entrée de menu, prêt à afficher : « ⌘⇧Z » sur Mac,
+/// « Ctrl+Maj+Z » ailleurs. Chaîne vide si la table ne le connaît pas (le
+/// test `every_menu_item_has_a_hint` garantit que ça n'arrive pas).
+pub fn menu_hint(item: MenuItem) -> String {
+    let (action, part) = item.source();
+    SHORTCUTS
+        .iter()
+        .find(|s| s.action == action)
+        .and_then(|s| s.keys.split(" / ").nth(part))
+        .map(|key| display_keys(&key.replace('`', "")))
+        .unwrap_or_default()
+}
+
+/// Notation d'affichage d'une touche de la table (« Cmd+Maj+Z ») selon la
+/// plateforme : symboles Mac, sinon « Ctrl » à la place de « Cmd ».
+pub fn display_keys(keys: &str) -> String {
+    if cfg!(target_os = "macos") {
+        keys.replace("Cmd+", "⌘").replace("Maj+", "⇧")
+    } else {
+        keys.replace("Cmd", "Ctrl")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +258,31 @@ mod tests {
             missing.is_empty(),
             "docs/CONTROLS.md ne cite pas : {missing:?} — ajouter la ligne au tableau"
         );
+    }
+
+    /// Chaque entrée de menu retrouve sa touche dans la table (roadmap v2 4.3) :
+    /// renommer une action dans `SHORTCUTS` sans mettre `MenuItem::source` à
+    /// jour ferait disparaître l'indication du menu en silence.
+    #[test]
+    fn every_menu_item_has_a_hint() {
+        for item in MenuItem::ALL {
+            let hint = menu_hint(item);
+            assert!(!hint.is_empty(), "{item:?} sans raccourci dans SHORTCUTS");
+            assert!(!hint.contains('`'), "{item:?} : backticks non retirés");
+        }
+        assert_ne!(menu_hint(MenuItem::Undo), menu_hint(MenuItem::Redo));
+        assert_ne!(menu_hint(MenuItem::Copy), menu_hint(MenuItem::Paste));
+        assert_ne!(menu_hint(MenuItem::Save), menu_hint(MenuItem::SaveAs));
+    }
+
+    #[test]
+    fn display_keys_follows_the_platform() {
+        let shown = display_keys("Cmd+Maj+Z");
+        if cfg!(target_os = "macos") {
+            assert_eq!(shown, "⌘⇧Z");
+        } else {
+            assert_eq!(shown, "Ctrl+Maj+Z");
+        }
     }
 
     #[test]

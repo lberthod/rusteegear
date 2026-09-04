@@ -53,6 +53,14 @@ impl Renderer {
         }
     }
 
+    /// Fenêtre « Raccourcis clavier » (F1 hors Play, roadmap post-audit UX v2
+    /// 2026-09-04, 4.3) — même relais.
+    pub fn toggle_shortcuts(&mut self) {
+        if let Some(e) = self.editor.as_mut() {
+            e.toggle_shortcuts();
+        }
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     pub(super) fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();

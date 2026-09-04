@@ -243,7 +243,7 @@ modifiable par une seule personne.
 - **Boucle de jeu complète** : **collectibles** (gemmes tournantes) avec **score ⭐**, **chrono ⏱**, **« 🎉 Gagné en X.Xs ! »** ; contact avec le joueur → script Lua (`obj.triggered`), ex. `damage(999)` pour une zone mortelle.
 - Démo prête à jouer (`Fichier → Démo contrôleur`) + scène **JSON pré-générée** ([assets/examples/demo_controleur.json](assets/examples/demo_controleur.json)).
 
-**API de script Lua** (`mlua` natif + backend `rilua` sur wasm32, chunks compilés en cache)
+**API de script Lua** (`mlua` natif + backend `rilua` sur wasm32, chunks compilés en cache) — référence complète de chaque global : **[docs/LUA_API.md](docs/LUA_API.md)**
 ```lua
 -- Lecture/écriture par objet :
 obj.x/y/z   obj.rx/ry/rz   obj.sx/sy/sz   obj.r/g/b
@@ -591,13 +591,18 @@ le développement). Historique sprint par sprint :
 > Détail sprint par sprint, **à jour en continu** : **[ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)**
 > (c'est la source de vérité sur l'avancement — ce tableau n'en est qu'un résumé).
 
+<a id="plateformes"></a>
 ### Plateformes — état honnête
 
 | Cible | Livrable | Statut |
 |---|---|---|
 | **macOS** | `.dmg` (éditeur complet) | ✅ fonctionne — non signé (clic droit ▸ Ouvrir) |
-| **Android** | `.apk` signé (arm64-v8a) | ✅ s'installe (`adb install`) et tourne en mode player |
-| **iOS** | app signée, installée sur iPhone | ✅ tourne (scène animée + tactile) — signature développeur **personnelle** (pas App Store) |
+| **Web** | player WebGPU ([démo publique](https://lberthod.github.io/rusteegear/)) | ✅ fonctionne (Chrome/Edge) — Lua en sous-ensemble portable |
+| **Android** | `.apk` signé (arm64-v8a) | 🟡 s'installe (`adb install`) et tourne en mode player — non re-vérifié pour la préversion |
+| **iOS** | app signée, installée sur iPhone | 🟡 tourne (scène animée + tactile) — signature développeur **personnelle** (pas App Store), non re-vérifié pour la préversion |
+
+Détail par fonction (rendu, import, Lua, multijoueur, export) et ce qui
+n'a pas été re-validé : **[docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)**.
 
 L'**éditeur** (panneaux egui, gizmos, inspecteur) est **desktop**. Sur mobile, l'app
 démarre en **mode player** : la scène jouable plein écran, caméra au doigt (1 doigt =
@@ -640,7 +645,7 @@ Référence complète (clavier, souris, jeu, tactile, manette) :
 | Tourner la caméra | clic gauche + glisser (sur la vue 3D) ; `T` pour l'orbite libre |
 | Zoomer / déplacer la vue | molette / clic milieu (ou `Maj`) + glisser |
 | Sélectionner un objet | clic sur l'objet, ou dans la hiérarchie |
-| Ajouter un objet | menu **Ajouter** (🧊 Cube, ⚪ Sphère, ▭ Plan…) ou **Ajouter ▸ 🃏 cartes** |
+| Ajouter un objet | menu **Ajouter** (🧊 Cube, ⚪ Sphère, ▦ Plan…) ou **Ajouter ▸ 🃏 Ajouter (cartes)…** |
 | Éditer / supprimer | panneau Inspecteur (droite) ; `Suppr` |
 | Tester / arrêter | ▶ Play / ⏹ Stop (la scène revient à l'état d'avant Play) |
 | Enregistrer / ouvrir | `Cmd+S` (scène du projet ouvert) · `Cmd+Maj+S` · `Cmd+O` · `Cmd+N` |
@@ -675,11 +680,20 @@ localhost uniquement, ~13 ms par commande, testé sans GPU en CI
 <a id="creer-son-jeu"></a>
 ## 🎨 Créer son premier jeu
 
-Vous ne codez pas et voulez juste construire un niveau jouable ? Le guide
-**[docs/guide-createur/index.md](docs/guide-createur/index.md)** vous emmène pas
-à pas, boutons et cases à cocher uniquement : créer une scène → ajouter un
-objet pilotable → HUD (barre de vie, joystick) → export en `.apk` jouable sur
-votre téléphone. Aucune ligne de code, aucun jargon Rust.
+Le chemin d'entrée est unique, sans jargon Rust :
+
+1. **[QUICKSTART.md](QUICKSTART.md)** — lancer l'éditeur et jouer le projet
+   exemple (Fichier ▸ 🎬 Démos ▸ ⭐ Commencer ▸ ⭐ Premier jeu) ;
+2. **[docs/FIRST_GAME.md](docs/FIRST_GAME.md)** — ton premier objet animé en
+   10 minutes : ajouter, placer au gizmo, colorer, scripter, Play/Stop,
+   sauvegarder ;
+3. **[docs/CONTROLS.md](docs/CONTROLS.md)** et
+   **[docs/MENTAL_MODEL.md](docs/MENTAL_MODEL.md)** — tous les contrôles, puis
+   comment le moteur fonctionne, en une page chacun.
+
+(L'ancien guide du créateur a été retiré le 4 septembre 2026 ; sa page
+[docs/guide-createur/index.md](docs/guide-createur/index.md) renvoie vers ce
+parcours.)
 
 (La section « Pourquoi Rust ? » plus haut et l'architecture ci-dessous
 s'adressent plutôt à quelqu'un qui veut comprendre/modifier le moteur
