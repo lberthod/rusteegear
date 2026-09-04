@@ -1144,14 +1144,15 @@ pub(super) fn pause_menu(
     choice
 }
 
-/// Petits boutons tactiles ⏸ / 🗺 en haut à droite (roadmap post-audit UX
-/// 2026-09-04, 2.5) : sans clavier, ni Échap ni M n'existent. Renvoie
-/// `(pause_clicked, map_clicked)`.
-pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool, bool) {
+/// Petits boutons tactiles ⏸ / Carte / ? en haut à droite (roadmap post-audit
+/// UX 2026-09-04, 2.5 et 5.5) : sans clavier, ni Échap, ni M, ni F1
+/// n'existent. Renvoie `(pause_clicked, map_clicked, help_clicked)`.
+pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool, bool, bool) {
     let mut pause = false;
     let mut map = false;
+    let mut help = false;
     egui::Area::new("mobile_top_buttons".into())
-        .fixed_pos(egui::pos2(area.right() - 8.0 - 96.0, area.top() + 12.0))
+        .fixed_pos(egui::pos2(area.right() - 8.0 - 136.0, area.top() + 12.0))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui
@@ -1167,9 +1168,15 @@ pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool
                 {
                     map = true;
                 }
+                if ui
+                    .add_sized([32.0, 32.0], egui::Button::new("?").corner_radius(8.0))
+                    .clicked()
+                {
+                    help = true;
+                }
             });
         });
-    (pause, map)
+    (pause, map, help)
 }
 
 /// Pastille d'état réseau permanente (roadmap post-audit UX 2026-09-04, 2.2) :
@@ -1198,11 +1205,11 @@ pub(super) fn net_status_pill(
     let galley = painter.layout_no_wrap(label.to_string(), font.clone(), Color32::WHITE);
     let w = galley.size().x + 26.0 * scale;
     let h = 20.0 * scale;
-    // À gauche des boutons ⏸/Carte (haut-droite, 96 pt de large), sur la même
-    // ligne — la fenêtre 🌐 repliée occupe y ≈ 56.
+    // À gauche des boutons ⏸/Carte/? (haut-droite, 136 pt de large), sur la
+    // même ligne — la fenêtre 🌐 repliée occupe y ≈ 56.
     let rect = egui::Rect::from_min_size(
         egui::pos2(
-            area.right() - 8.0 - 96.0 - 10.0 - w,
+            area.right() - 8.0 - 136.0 - 10.0 - w,
             area.top() + 12.0 + 6.0,
         ),
         egui::vec2(w, h),

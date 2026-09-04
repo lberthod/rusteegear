@@ -2215,10 +2215,10 @@ pub(super) fn hud_widgets_window(
 /// sinon accessible depuis le menu Aide.
 pub(super) fn crash_log_window(
     ctx: &egui::Context,
-    panels: &mut Panels,
+    open_flag: &mut bool,
     crash_log_text: &mut Option<String>,
 ) {
-    let mut open = panels.crash_log;
+    let mut open = *open_flag;
     let mut clear = false;
     egui::Window::new("🩹 Journal de crash")
         .open(&mut open)
@@ -2227,8 +2227,8 @@ pub(super) fn crash_log_window(
             Some(text) => {
                 ui.label(
                     "RusteeGear a planté lors d'une session précédente. Rien n'est \
-                     envoyé automatiquement : copiez ce texte pour le joindre à un \
-                     rapport de bug si vous le souhaitez, ou fermez pour l'oublier.",
+                     envoyé automatiquement : copie ce texte pour le joindre à un \
+                     rapport de bug si tu le souhaites, ou ferme pour l'oublier.",
                 );
                 ui.separator();
                 egui::ScrollArea::vertical()
@@ -2258,7 +2258,73 @@ pub(super) fn crash_log_window(
         *crash_log_text = None;
         open = false;
     }
-    panels.crash_log = open;
+    *open_flag = open;
+}
+
+/// Aide en jeu (roadmap post-audit UX 2026-09-04, 5.5) : les contrôles de jeu
+/// (et tactiles sur écran tactile) depuis la table unique `app::shortcuts`,
+/// plus l'objectif d'une manche. F1 ou le bouton « ? » l'ouvrent et la ferment.
+pub(super) fn help_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    locale: crate::app::locale::Locale,
+    touch: bool,
+) {
+    if !*open {
+        return;
+    }
+    use crate::app::shortcuts::{Scope, by_scope};
+    let title = match locale {
+        crate::app::locale::Locale::Fr => "❓  Aide",
+        crate::app::locale::Locale::En => "❓  Help",
+    };
+    egui::Window::new(title)
+        .id(egui::Id::new("ingame_help"))
+        .open(open)
+        .collapsible(false)
+        .default_width(380.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(match locale {
+                crate::app::locale::Locale::Fr => {
+                    "Objectif : survivre aux vagues avec ton groupe. À 0 PV tu deviens \
+                     spectateur jusqu'à la fin de la manche — soigne tes alliés (H) et \
+                     reste près d'eux."
+                }
+                crate::app::locale::Locale::En => {
+                    "Goal: survive the waves with your group. At 0 HP you spectate until \
+                     the round ends — heal your allies (H) and stay close."
+                }
+            });
+            ui.separator();
+            let scopes: &[Scope] = if touch {
+                &[Scope::Touch, Scope::Play]
+            } else {
+                &[Scope::Play]
+            };
+            for scope in scopes {
+                ui.strong(scope.title());
+                egui::Grid::new(("help_grid", scope.title()))
+                    .num_columns(2)
+                    .spacing([18.0, 3.0])
+                    .show(ui, |ui| {
+                        for s in by_scope(*scope) {
+                            ui.label(s.keys.replace('`', ""));
+                            ui.label(s.action);
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(6.0);
+            }
+            ui.small(match locale {
+                crate::app::locale::Locale::Fr => {
+                    "F1 ou « ? » pour fermer · touches remappables dans Paramètres"
+                }
+                crate::app::locale::Locale::En => {
+                    "F1 or “?” to close · keys remappable in Settings"
+                }
+            });
+        });
 }
 
 /// Fenêtre « Nouveau projet » (Sprint 113d, formulaire complet depuis le

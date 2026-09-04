@@ -36,6 +36,7 @@ Mac : `Cmd` ; Linux/Windows : `Ctrl`.
 | --- | --- |
 | Clic gauche | Sélectionner (tap < 4 px) ; `Cmd`/`Maj` + clic : sélection additive |
 | Clic gauche + glisser | Tourner la caméra (horizontal) ; sur une poignée : gizmo |
+| Clic droit | Menu contextuel : cadrer, dupliquer, supprimer, ajouter |
 | Clic milieu + glisser, ou `Maj` + glisser | Déplacer la vue (pan), quel que soit l'outil |
 | Molette | Zoom |
 | `Ctrl` pendant un glissé de gizmo | Inverser l'aimantation (snap) |
@@ -54,6 +55,7 @@ Mac : `Cmd` ; Linux/Windows : `Ctrl`.
 | `Échap` | Pause (Reprendre, Rejouer, Paramètres, Se déconnecter, Quitter) |
 | `M` | Carte plein écran |
 | `Tab` | Paramètres (mode Player uniquement) |
+| `F1` | Aide en jeu (contrôles et objectif) |
 | Clic gauche + glisser | Tourner la caméra (deux axes en Play, sensibilité dans Paramètres) |
 
 En mode Player (build joueur, web, mobile), les touches d'outils `Q T Y F G`
@@ -69,6 +71,7 @@ sont désactivées. Saut, attaque, tir, soin, pause et carte se remappent dans
 | Boutons bas-droite | Saut / Feu / Arme / Soin (définis par la scène) |
 | ⏸ (haut-droite) | Pause |
 | Carte (haut-droite) | Carte plein écran |
+| ? (haut-droite) | Aide en jeu |
 
 ## Manette
 

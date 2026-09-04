@@ -787,6 +787,10 @@ pub struct AppState {
     /// sans changement — cf. `push_ui_edit_undo` (roadmap post-audit UX
     /// 2026-09-04, 5.1). Une glissade de curseur = une seule entrée d'undo.
     pub ui_edit_active: bool,
+    /// Clic droit dans la vue 3D (roadmap post-audit UX 2026-09-04, 5.4) :
+    /// l'éditeur ouvre un menu contextuel à la position du pointeur à la
+    /// frame suivante. Consommé par `gfx::renderer::frame`.
+    pub context_menu_request: bool,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1387,6 +1391,7 @@ impl AppState {
             script_errors: HashMap::new(),
             welcome_pending: false,
             ui_edit_active: false,
+            context_menu_request: false,
         }
     }
 

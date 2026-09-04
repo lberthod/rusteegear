@@ -58,13 +58,14 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 - [x] 4.2 QUICKSTART : budget « ~30 min la première fois », sections pilotage et pré-push déplacées vers `docs/PILOT.md` / `CONTRIBUTING.md` ; `doctor.sh` vérifie la toolchain épinglée (O-01)
 - [x] 4.3 README aligné sur les libellés réels, `docs/guide-createur` supprimé ou réécrit, KNOWN_LIMITATIONS rafraîchi (O-02)
 
-## Vague 5 — Profondeur (XL, après playtest)
+## Vague 5 — Profondeur (XL, après playtest) — lots A `5a0c519` et B (voir hachages ci-dessous)
 
-- [ ] 5.1 Undo des champs de l'Inspecteur (snapshot à la perte de focus), sélection conservée après undo (E-05)
-- [ ] 5.2 Éditeur de script dédié (monospace, erreur en ligne) ; liste des clips d'animation dans l'inspecteur (E-06)
-- [ ] 5.3 Remapping clavier/souris, palette daltonienne, échelle du texte egui (A-01)
-- [ ] 5.4 Vocabulaire FR unifié, registre unique, disposition des fenêtres mémorisée, menu contextuel viewport (E-08)
-- [ ] 5.5 Spectateur actif ou réapparition, aide contextuelle en jeu, rapport de crash en mode joueur (P-05, P-06)
+- [x] 5.1 Undo des champs de l'Inspecteur (état d'avant l'UI capturé par frame, une entrée par rafale), sélection conservée après undo (E-05) — `5a0c519`
+- [x] 5.2 Éditeur de script dédié (monospace, erreur en ligne) ; liste des clips d'animation dans l'inspecteur (E-06) — `5a0c519`
+- [x] 5.3 Remapping clavier (saut/attaque/tir/soin/pause/carte), palette daltonienne, échelle de l'interface egui (A-01) — `5a0c519` ; la souris garde un seul réglage (sensibilité, 2.7)
+- [x] 5.4 Vocabulaire FR unifié (Aimanter, Compiler l'APK, Lancer sur l'appareil, Journal ADB), tutoiement partout, fenêtres flottantes mémorisées entre deux lancements, menu contextuel de la vue 3D (E-08) — lot B ; « Play/Stop » conservés (convention des éditeurs de jeu)
+- [x] 5.5 Aide en jeu (F1 / bouton ?, contrôles et objectif depuis la table unique), journal de crash affiché aussi en mode joueur (P-06) — lot B
+- [ ] 5.6 Spectateur actif ou réapparition, minuteur d'attente (P-05) — décision de game design (mort définitive par manche assumée dans le GDD), à trancher au playtest
 
 ## À conserver tel quel
 

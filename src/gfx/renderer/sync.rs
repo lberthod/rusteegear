@@ -46,6 +46,13 @@ impl Renderer {
         }
     }
 
+    /// Aide en jeu (F1, roadmap post-audit UX 2026-09-04, 5.5) — même relais.
+    pub fn toggle_help(&mut self) {
+        if let Some(e) = self.editor.as_mut() {
+            e.toggle_help();
+        }
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     pub(super) fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();

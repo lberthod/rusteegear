@@ -88,6 +88,11 @@ pub struct Settings {
     /// `winit::keyboard::KeyCode` (cf. `input::KEY_NAMES`).
     #[serde(default)]
     pub keyboard: KeyboardBindings,
+    /// Fenêtres flottantes de l'éditeur ouvertes au dernier lancement
+    /// (Console, Profiler, Multijoueur…) — roadmap post-audit UX 2026-09-04,
+    /// 5.4 : avant, tout repartait fermé à chaque démarrage.
+    #[serde(default)]
+    pub open_windows: Vec<String>,
 }
 
 /// Touches des actions de jeu, remappables (roadmap post-audit UX 2026-09-04,
@@ -244,6 +249,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             colorblind: false,
             keyboard: KeyboardBindings::default(),
+            open_windows: Vec::new(),
         }
     }
 }

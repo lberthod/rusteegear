@@ -981,7 +981,7 @@ impl Viewer {
                         ),
                     );
                 } else {
-                    ui.centered_and_justified(|ui| ui.label("Sélectionnez un modèle à gauche"));
+                    ui.centered_and_justified(|ui| ui.label("Sélectionne un modèle à gauche"));
                 }
             });
         });

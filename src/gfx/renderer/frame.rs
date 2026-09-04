@@ -360,6 +360,7 @@ impl Renderer {
                 save_target: &save_target,
                 scene_dirty: app.scene_dirty,
                 script_errors: &app.script_errors,
+                context_menu_request: std::mem::take(&mut app.context_menu_request),
             };
             let net_status = app.net_conn.net_status.clone();
             let net_connected = app.is_connected();
@@ -972,6 +973,9 @@ fn apply_editor_actions(
     }
     if actions.duplicate {
         app.duplicate_selected();
+    }
+    if actions.frame_selected {
+        app.frame_selected();
     }
     if actions.restart {
         *restart = true;

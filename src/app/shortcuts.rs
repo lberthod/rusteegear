@@ -99,6 +99,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
         "Clic milieu + glisser, ou `Maj` + glisser",
         "Déplacer la vue (pan)",
     ),
+    sc(
+        Scope::Mouse,
+        "Clic droit",
+        "Menu contextuel : cadrer, dupliquer, supprimer, ajouter",
+    ),
     sc(Scope::Mouse, "Molette", "Zoom"),
     sc(
         Scope::Mouse,
@@ -119,6 +124,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     sc(Scope::Play, "`Échap`", "Pause"),
     sc(Scope::Play, "`M`", "Carte plein écran"),
     sc(Scope::Play, "`Tab`", "Paramètres (mode Player)"),
+    sc(Scope::Play, "`F1`", "Aide en jeu"),
     sc(Scope::Touch, "Stick gauche", "Se déplacer (deux axes)"),
     sc(
         Scope::Touch,
@@ -127,6 +133,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     ),
     sc(Scope::Touch, "⏸ (haut-droite)", "Pause"),
     sc(Scope::Touch, "Carte (haut-droite)", "Carte plein écran"),
+    sc(Scope::Touch, "? (haut-droite)", "Aide en jeu"),
 ];
 
 /// Les raccourcis d'une portée, dans l'ordre de la table.

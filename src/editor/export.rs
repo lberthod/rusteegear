@@ -482,7 +482,7 @@ impl ExportPanel {
                     }
                     // Logcat de l'appareil (diagnostic crash mobile).
                     if ui
-                        .add_enabled(self.adb_available, egui::Button::new("📋 Logs ADB"))
+                        .add_enabled(self.adb_available, egui::Button::new("📋 Journal ADB"))
                         .on_hover_text("Dernières lignes du logcat de l'appareil branché")
                         .clicked()
                     {

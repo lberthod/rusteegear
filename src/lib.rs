@@ -523,6 +523,16 @@ impl ApplicationHandler for App {
                 // (indispensable sur iOS) : pas de double demande ici.
             }
             _ if consumed => {}
+            // Clic droit dans la vue 3D = menu contextuel (roadmap post-audit UX
+            // 2026-09-04, 5.4) — seulement en édition, et pas au-dessus d'un
+            // panneau egui (`consumed`).
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } if !consumed && !self.state.player && !self.state.playing => {
+                self.state.context_menu_request = true;
+            }
             WindowEvent::MouseInput {
                 state: btn_state,
                 button: button @ (MouseButton::Left | MouseButton::Middle),
@@ -651,6 +661,12 @@ impl ApplicationHandler for App {
                         // Menu pause (Phase J de `sprintreflecion.md`) : sans effet
                         // hors Play (garde dans `toggle_pause`).
                         c if c == self.state.keys.pause => self.state.toggle_pause(),
+                        // Aide en jeu (roadmap post-audit UX 2026-09-04, 5.5).
+                        KeyCode::F1 => {
+                            if let Some(r) = self.renderer.as_mut() {
+                                r.toggle_help();
+                            }
+                        }
                         // Overlay Paramètres minimal du mode Player (Sprint 2, config
                         // hors éditeur) — équivalent clavier du bouton Start de la
                         // manette, pour tester `--player` sur une machine sans
@@ -1080,6 +1096,17 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
             "Chemin de stockage interne Android indisponible : les sauvegardes de \
              partie ne fonctionneront pas cette session."
         ),
+    }
+    // Écran maintenu allumé pendant la partie (roadmap post-audit UX
+    // 2026-09-04, 2.6) : un joueur au stick tactile ne « touche » pas
+    // l'écran au sens du système — sans ce drapeau, le téléphone se mettait
+    // en veille en pleine manche.
+    {
+        use winit::platform::android::activity::WindowManagerFlags;
+        android_app.set_window_flags(
+            WindowManagerFlags::KEEP_SCREEN_ON,
+            WindowManagerFlags::empty(),
+        );
     }
     // Après `set_android_data_dir` : le hook de crash écrit dans `user://`, qui en
     // dépend sur Android (cf. doc de `crash_log::install`).

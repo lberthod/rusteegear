@@ -311,6 +311,10 @@ struct Panels {
     hud_widgets_editor: bool,
     /// Fenêtre « 📝 Script » (éditeur de script dédié, roadmap 5.2).
     script_editor: bool,
+    /// Aide en jeu (F1 / bouton « ? », roadmap 5.5).
+    help: bool,
+    /// Menu contextuel de la vue 3D ouvert à cette position (roadmap 5.4).
+    context_menu: Option<egui::Pos2>,
     /// Résumé (âge, nombre d'objets) de l'autosave proposé en restauration,
     /// calculé une fois par chemin (roadmap post-audit UX 2026-09-04, 1.8).
     autosave_summary: Option<(std::path::PathBuf, String)>,
@@ -404,6 +408,8 @@ pub struct StatusInfo<'a> {
     pub scene_dirty: bool,
     /// Erreurs de script Lua par index d'objet (`AppState::script_errors`).
     pub script_errors: &'a std::collections::HashMap<usize, String>,
+    /// Clic droit dans la vue 3D cette frame (`AppState::context_menu_request`).
+    pub context_menu_request: bool,
 }
 
 /// Demande de création de projet posée par l'assistant « Nouveau projet »
@@ -550,6 +556,8 @@ pub struct UiActions {
     pub mouse_sensitivity: Option<f32>,
     /// Remapping clavier changé (Paramètres › Clavier, roadmap 5.3).
     pub keyboard_bindings: Option<crate::app::settings::KeyboardBindings>,
+    /// Menu contextuel : cadrer la sélection (`AppState::frame_selected`).
+    pub frame_selected: bool,
     /// Réponses à la modale « modifications non sauvegardées » d'un
     /// changement de scène (cf. `SceneSwitch`, `Editor::pending_switch`).
     pub switch_save: bool,
@@ -768,10 +776,12 @@ impl Editor {
         // Ouvre automatiquement le journal de crash s'il y en a un à consulter —
         // l'utilisateur n'a pas à savoir qu'un menu Aide existe pour le trouver.
         let crash_log_text = crate::crash_log::read();
-        let panels = Panels {
+        let settings = crate::app::settings::Settings::load();
+        let mut panels = Panels {
             crash_log: crash_log_text.is_some(),
             ..Default::default()
         };
+        Self::restore_open_windows(&mut panels, &settings.open_windows);
 
         Editor {
             ctx,
@@ -782,7 +792,7 @@ impl Editor {
             hier_new_group: String::new(),
             hier_rename: None,
             panels,
-            settings: crate::app::settings::Settings::load(),
+            settings,
             ai_prompt: String::new(),
             ai_scene_prompt: String::new(),
             ai_scene_replace: true,
@@ -952,6 +962,65 @@ impl Editor {
         self.panels.map_open = !self.panels.map_open;
     }
 
+    /// Aide en jeu (F1) — roadmap post-audit UX 2026-09-04, 5.5.
+    pub fn toggle_help(&mut self) {
+        self.panels.help = !self.panels.help;
+    }
+
+    /// Fenêtres flottantes à mémoriser entre deux lancements (roadmap 5.4).
+    const PERSISTED_WINDOWS: [&'static str; 8] = [
+        "console",
+        "profiler",
+        "shortcuts",
+        "multiplayer",
+        "assets",
+        "scripts",
+        "hud_widgets_editor",
+        "script_editor",
+    ];
+
+    fn open_windows(&self) -> Vec<String> {
+        let p = &self.panels;
+        let flags = [
+            p.console,
+            p.profiler,
+            p.shortcuts,
+            p.multiplayer,
+            p.assets,
+            p.scripts,
+            p.hud_widgets_editor,
+            p.script_editor,
+        ];
+        Self::PERSISTED_WINDOWS
+            .iter()
+            .zip(flags)
+            .filter(|(_, open)| *open)
+            .map(|(name, _)| (*name).to_string())
+            .collect()
+    }
+
+    fn restore_open_windows(panels: &mut Panels, names: &[String]) {
+        let has = |n: &str| names.iter().any(|w| w == n);
+        panels.console = has("console");
+        panels.profiler = has("profiler");
+        panels.shortcuts = has("shortcuts");
+        panels.multiplayer = has("multiplayer");
+        panels.assets = has("assets");
+        panels.scripts = has("scripts");
+        panels.hud_widgets_editor = has("hud_widgets_editor");
+        panels.script_editor = has("script_editor");
+    }
+
+    /// Persiste la liste des fenêtres ouvertes quand elle change (une écriture
+    /// par bascule, pas par frame).
+    fn sync_open_windows(&mut self) {
+        let now = self.open_windows();
+        if now != self.settings.open_windows {
+            self.settings.open_windows = now;
+            self.settings.save();
+        }
+    }
+
     /// Panneau « 📊 Profiler FPS » ouvert ? Lu par `Renderer::render` (Sprint 112)
     /// pour ne payer le coût des timestamp queries GPU que quand ce panneau est
     /// visible — même logique que `fps_history`, qui ne s'accumule aussi que là.
@@ -1059,6 +1128,9 @@ impl Editor {
         let mp_room_code = &mut self.mp_room_code;
         let settings = &mut self.settings;
         let settings_open = &mut self.panels.settings;
+        let help_open = &mut self.panels.help;
+        let crash_open = &mut self.panels.crash_log;
+        let crash_log_text = &mut self.crash_log_text;
         let map_open_ref = &mut self.panels.map_open;
         let map_open = *map_open_ref;
         let map_zoom = &mut self.panels.map_zoom;
@@ -1204,13 +1276,17 @@ impl Editor {
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
-                // ⏸ / 🗺 tactiles (roadmap 2.5) — pas d'Échap ni de M sans clavier.
-                let (pause_clicked, map_clicked) = mobile_top_buttons(ctx, area);
+                // ⏸ / Carte / ? tactiles (roadmap 2.5 et 5.5) — pas d'Échap, de M ni
+                // de F1 sans clavier.
+                let (pause_clicked, map_clicked, help_clicked) = mobile_top_buttons(ctx, area);
                 if pause_clicked {
                     actions.toggle_pause = true;
                 }
                 if map_clicked {
                     *map_open_ref = !*map_open_ref;
+                }
+                if help_clicked {
+                    *help_open = !*help_open;
                 }
             } else {
                 input_state.joy = (0.0, 0.0);
@@ -1260,6 +1336,11 @@ impl Editor {
             if *settings_open {
                 windows::player_settings_window(ctx, settings_open, settings, &mut actions);
             }
+            // Aide en jeu (F1 / « ? », roadmap 5.5) et journal de crash — ce
+            // dernier n'était câblé que dans l'éditeur : un plantage en mode
+            // joueur restait muet.
+            windows::help_window(ctx, help_open, locale, mobile.any());
+            windows::crash_log_window(ctx, crash_open, crash_log_text);
             // Carte (Phase carte plein écran) : mini-carte permanente en coin,
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
             // (jamais les deux à la fois, cf. doc de `player_map_overlay`).
@@ -1555,6 +1636,8 @@ impl Editor {
 
         self.winit_state
             .handle_platform_output(window, output.platform_output.clone());
+        // Fenêtres ouvertes mémorisées (roadmap 5.4).
+        self.sync_open_windows();
         (output, actions)
     }
 
@@ -1703,6 +1786,73 @@ fn build_ui(
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
+    // Menu contextuel de la vue 3D (clic droit, roadmap 5.4).
+    if status.context_menu_request {
+        panels.context_menu = root.ctx().pointer_latest_pos();
+    }
+    if let Some(pos) = panels.context_menu {
+        let has_selection = selection.is_some();
+        let mut close = false;
+        let resp = egui::Area::new(egui::Id::new("viewport-context-menu"))
+            .fixed_pos(pos)
+            .order(egui::Order::Foreground)
+            .show(root.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(180.0);
+                    if ui
+                        .add_enabled(
+                            has_selection,
+                            egui::Button::new("⌖  Cadrer la sélection (F)"),
+                        )
+                        .clicked()
+                    {
+                        actions.frame_selected = true;
+                        close = true;
+                    }
+                    if ui
+                        .add_enabled(has_selection, egui::Button::new("⧉  Dupliquer (Cmd+D)"))
+                        .clicked()
+                    {
+                        actions.duplicate = true;
+                        close = true;
+                    }
+                    if ui
+                        .add_enabled(has_selection, egui::Button::new("🗑  Supprimer (Suppr)"))
+                        .clicked()
+                    {
+                        actions.delete = *selection;
+                        close = true;
+                    }
+                    ui.separator();
+                    for (label, kind) in [
+                        ("🧊  Ajouter un cube", MeshKind::Cube),
+                        ("⚪  Ajouter une sphère", MeshKind::Sphere),
+                        ("▭  Ajouter un plan", MeshKind::Plane),
+                    ] {
+                        if ui.button(label).clicked() {
+                            actions.add = Some(kind);
+                            close = true;
+                        }
+                    }
+                });
+            });
+        // Fermé par un choix, un clic ailleurs ou Échap.
+        let clicked_outside = root.ctx().input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !resp.response.rect.contains(p))
+        });
+        if close || clicked_outside || root.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            panels.context_menu = None;
+        }
+    }
+    // Aide en jeu (F1, roadmap 5.5) — en Play depuis l'éditeur.
+    if *playing {
+        windows::help_window(root.ctx(), &mut panels.help, locale, false);
+    } else {
+        panels.help = false;
+    }
     // Éditeur de script dédié (roadmap post-audit UX 2026-09-04, 5.2).
     windows::script_editor_window(
         root.ctx(),
@@ -1716,7 +1866,7 @@ fn build_ui(
     // Fenêtre « 🧩 Widgets HUD » : ajouter/éditer les widgets déclaratifs de la scène.
     windows::hud_widgets_window(root.ctx(), panels, scene, hud_widget_new_id);
     // Fenêtre « 🩹 Journal de crash » (Sprint 113) : écran volontaire de consultation.
-    windows::crash_log_window(root.ctx(), panels, crash_log_text);
+    windows::crash_log_window(root.ctx(), &mut panels.crash_log, crash_log_text);
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
     multiplayer_window(
         root.ctx(),
@@ -3097,7 +3247,7 @@ fn toolbar(
                 actions.toggle_grid = true;
             }
             if ui
-                .selectable_label(status.snap, "🧲 Snap")
+                .selectable_label(status.snap, "🧲 Aimanter")
                 .on_hover_text(
                     "Aimanter position (pas 0.5) et rotation (pas 15°) au gizmo — \
                      tenir Ctrl pendant un glissé inverse ponctuellement ce réglage",
@@ -3121,14 +3271,14 @@ fn toolbar(
             // Build APK + Run Device : différenciateurs du moteur (passent à la ligne si étroit).
             ui.separator();
             if ui
-                .selectable_label(export.open, "🤖 Build APK")
+                .selectable_label(export.open, "🤖 Compiler l'APK")
                 .on_hover_text("Build & Export (.dmg / .apk / .ipa)")
                 .clicked()
             {
                 export.open = !export.open;
             }
             if ui
-                .button("📲 Run Device")
+                .button("📲 Lancer sur l'appareil")
                 .on_hover_text(
                     "Build Android + installation/lancement sur le téléphone branché (adb)",
                 )
