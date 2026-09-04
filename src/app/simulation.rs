@@ -474,6 +474,223 @@ fn drive_local_and_networked_players(
     (player_facing, player_anim, any_jump)
 }
 
+/// Pilotage et patrouille des créatures IA (`AiChaser`) : direction directe
+/// vers la cible la plus proche parmi `candidate_targets`, plafond de
+/// chasseurs actifs par cible, portées de détection par archétype (Furtive
+/// réduite), éveil sonore Furtive, et chasse « scriptée » (créature à corps
+/// cinématique — écrase la cible de patrouille Lua ancrée sur la position
+/// réellement atteinte au pas précédent). No-op si `candidate_targets` est
+/// vide (aucune cible vivante).
+///
+/// Fonction libre plutôt que méthode `&mut self` (plan de découpage, lot
+/// 3.1.E — dernier lot du plan, le plus dense/le moins testé du moteur) :
+/// même raison que `drive_local_and_networked_players`, `phys` est déjà un
+/// emprunt exclusif de `self.physics` au site d'appel. Extrait tel quel de
+/// `sim_step`, aucun changement de comportement.
+#[allow(clippy::too_many_arguments)]
+fn chase_and_patrol_ai_creatures(
+    phys: &mut crate::runtime::physics::Physics,
+    scene: &mut crate::scene::Scene,
+    sim_curr_poses: &[(Vec3, Quat, Vec3)],
+    candidate_targets: &[Vec3],
+    chase_blocked: &[usize],
+    network_has_players: bool,
+    furtive_awake: &mut std::collections::HashSet<usize>,
+    audio: &mut crate::runtime::audio::Audio,
+    dt: f32,
+) {
+    if candidate_targets.is_empty() {
+        return;
+    }
+    // Cible la plus proche parmi `candidate_targets` pour chaque chasseur
+    // visible (GAMEDESIGN_EN_LIGNE.md §3.2), regroupée par cible choisie
+    // (indice dans `candidate_targets`, pas la position elle-même : sert
+    // au plafond ci-dessous).
+    let mut by_target: HashMap<usize, Vec<(usize, f32)>> = HashMap::new();
+    // Éveils `Furtive` à signaler ce tick (Phase O Sprint 1,
+    // `sprint2audijeu0718.md`) : indices qui viennent de franchir la portée
+    // d'éveil, collectés ici plutôt qu'appliqués en direct dans la boucle
+    // (qui emprunte `scene.objects`) — `furtive_awake`/`audio` sont mis à
+    // jour juste après, une fois la boucle terminée.
+    let mut newly_awake_furtives: Vec<usize> = Vec::new();
+    for (idx, obj) in scene.objects.iter().enumerate() {
+        // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
+        // ne poursuit pas (et n'a de toute façon pas de corps physique tant
+        // qu'il est masqué, cf. le filtre `visible` dans `Physics::build`).
+        let Some(chaser) = obj.ai_chaser.as_ref() else {
+            continue;
+        };
+        if !obj.visible {
+            continue;
+        }
+        // Chantier 4.1 : créature scriptée temporairement hors
+        // chasse (visée gelée, simulation possédée par le
+        // serveur) — elle ne consomme pas non plus de place dans
+        // le plafond de chasseurs actifs.
+        if chase_blocked.contains(&idx) {
+            continue;
+        }
+        let (target_i, dist_sq) = candidate_targets
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| (i, (t - obj.transform.position).length_squared()))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("candidate_targets vérifié non vide ci-dessus");
+        // Portée de détection, **réseau uniquement** (GAMEDESIGN_EN_LIGNE.md) :
+        // le plafond ci-dessus étale l'ARRIVÉE des chasseurs dans le temps, mais avec
+        // un seul joueur solo connecté, il n'empêche pas la convergence
+        // *finale* — au bout d'assez de temps, tous les monstres de la
+        // carte se relaient jusqu'à l'unique cible, même partis de l'autre
+        // bout de l'arène. Volontairement limité au cas réseau
+        // (`network_has_players`) plutôt qu'appliqué partout :
+        // en solo, plusieurs démos (`Scene::brawl_demo` notamment) comptent
+        // sur un chasseur qui **revient toujours** vers le joueur après un
+        // recul (knockback) pour ne pas tomber dans le vide de l'arène —
+        // une portée de détection universelle cassait ce ring-out en
+        // laissant le rival immobile une fois repoussé trop loin (régression
+        // détectée par `brawl_demo_rival_survives_two_hits_then_falls_on_
+        // the_third`, qui ne teste rien de spécifique au réseau).
+        // Créature scriptée (chantier 4.1) : hors de portée, elle
+        // ne freine pas (`control` serait de toute façon un no-op
+        // sur un corps scripté) — elle PATROUILLE, la position
+        // écrite par son script Lua ce tick reste en place. Et sa
+        // portée s'applique en toute circonstance (solo compris) :
+        // la patrouille est le comportement par défaut de la carte
+        // servie, contrairement aux chasseurs dynamiques dont le
+        // ring-out de `brawl_demo` exige un retour permanent.
+        let scripted = phys.is_scripted_body(idx);
+        if (scripted || network_has_players) && dist_sq > CHASER_DETECT_RANGE * CHASER_DETECT_RANGE
+        {
+            if !scripted {
+                phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+            }
+            continue;
+        }
+        // Éveil de l'archétype `Furtive` (GDD §5.4) : portée réduite,
+        // appliquée en toute circonstance (pas seulement en réseau, cf.
+        // `FURTIVE_DETECT_RANGE`) — c'est ce délai court qui permet au
+        // contre-jeu « l'Éclaireur la déclenche de loin » d'exister aussi solo.
+        if chaser.archetype == crate::scene::Archetype::Furtive
+            && dist_sq > FURTIVE_DETECT_RANGE * FURTIVE_DETECT_RANGE
+        {
+            if !scripted {
+                phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+            }
+            continue;
+        }
+        // Transition endormie → active (Phase O Sprint 1) : ce tick est le
+        // premier où cette `Furtive` passe les deux gardes ci-dessus — pas
+        // de ré-armement si le joueur ressort puis revient à portée (une
+        // fois éveillée, elle le reste pour le reste de la partie, comme
+        // `trigger_prev` pour les triggers de zone).
+        if chaser.archetype == crate::scene::Archetype::Furtive && !furtive_awake.contains(&idx) {
+            newly_awake_furtives.push(idx);
+        }
+        by_target.entry(target_i).or_default().push((idx, dist_sq));
+    }
+    // Un son perceptible par éveil (Phase O Sprint 1) : appliqué après la
+    // boucle ci-dessus (qui emprunte `scene.objects`), pas dedans.
+    for idx in newly_awake_furtives {
+        furtive_awake.insert(idx);
+        crate::runtime::sfx::play(audio, crate::runtime::sfx::Sfx::CreatureWake);
+    }
+    // Plafond de chasseurs actifs par cible : sans lui, TOUS les monstres
+    // visibles convergent au même instant sur l'unique joueur présent (le cas
+    // le plus courant en solo), acculant le joueur contre un mur en quelques
+    // secondes sans la moindre fenêtre pour riposter ou fuir.
+    // Recalculé chaque frame par distance : seuls les `MAX_ACTIVE_CHASERS_
+    // PER_TARGET` chasseurs les plus proches d'une cible donnée avancent
+    // réellement ce tick ; les autres restent en place (toujours visibles/
+    // menaçants, juste pas en train de foncer) — un chasseur relégué reprend
+    // la poursuite dès qu'un des premiers meurt ou s'éloigne, sans script ni
+    // état à mémoriser d'une frame à l'autre.
+    // Pas de chasse des créatures **scriptées** (chantier 4.1),
+    // collectés ici (emprunt immuable de la scène pendant la
+    // boucle) puis appliqués juste après — même idiome que
+    // `player_facing`.
+    let mut scripted_chase: Vec<(usize, Vec3, f32)> = Vec::new();
+    for (target_i, mut group) in by_target {
+        group.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let target = candidate_targets[target_i];
+        for (rank, &(idx, _)) in group.iter().enumerate() {
+            let scripted = phys.is_scripted_body(idx);
+            if rank >= MAX_ACTIVE_CHASERS_PER_TARGET {
+                // Un scripté relégué au-delà du plafond PATROUILLE
+                // (position du script laissée en place) au lieu de
+                // freiner — plus vivant, cohérent avec « toujours
+                // menaçants, juste pas en train de foncer ».
+                if !scripted {
+                    phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                }
+                continue;
+            }
+            let obj_pos = scene.objects[idx].transform.position;
+            let ai = scene.objects[idx]
+                .ai_chaser
+                .as_ref()
+                .expect("filtré ci-dessus : cet objet a un ai_chaser");
+            // Multiplicateur d'archétype (GDD §5.4) : Meute/Furtive accélèrent
+            // la poursuite, Colosse la ralentit — cf. `Archetype::speed_multiplier`.
+            let speed = ai.speed * ai.archetype.speed_multiplier();
+            if scripted {
+                scripted_chase.push((idx, target, speed));
+                continue;
+            }
+            let to_target = target - obj_pos;
+            let dir = Vec3::new(to_target.x, 0.0, to_target.z);
+            let (vx, vz) = if dir.length_squared() > 1e-6 {
+                let d = dir.normalize() * speed;
+                (d.x, d.z)
+            } else {
+                (0.0, 0.0)
+            };
+            phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
+        }
+    }
+    // Chasse scriptée : écrase la cible de patrouille que le
+    // script Lua a écrite ce tick, ancrée sur la position
+    // **réellement atteinte** au pas précédent (`sim_curr_poses`,
+    // remplie en fin de `sim_step`) — additionner un pas de chasse
+    // à la position déjà déplacée par le script ferait avancer la
+    // créature à vitesse patrouille + chasse. La hauteur reste
+    // celle écrite par le script (hover/drift préservés) ;
+    // `resolve_scripted_moves` résout ensuite ce déplacement
+    // contre le monde exactement comme la patrouille (glissement
+    // le long des murs, dépénétration bornée).
+    for (idx, target, speed) in scripted_chase {
+        let (base, prev_rot) = sim_curr_poses.get(idx).map(|p| (p.0, p.1)).unwrap_or((
+            scene.objects[idx].transform.position,
+            scene.objects[idx].transform.rotation,
+        ));
+        let to = Vec3::new(target.x - base.x, 0.0, target.z - base.z);
+        let dist = to.length();
+        if dist < 1e-4 {
+            continue;
+        }
+        let step = to / dist * (speed * dt).min(dist);
+        if let Some(obj) = scene.objects.get_mut(idx) {
+            let y = obj.transform.position.y;
+            obj.transform.position = Vec3::new(base.x + step.x, y, base.z + step.z);
+            // Rotation lissée vers la cible (convention yaw=0 ⇒
+            // avant = -Z, cf. `Physics::face_direction`) — jamais
+            // de claquement, cf. la preuve `mmorpg_creatures_
+            // never_teleport_nor_snap_turn`. Ancrée sur la pose du
+            // pas PRÉCÉDENT (comme la position) : le script vient
+            // d'écrire son cap de patrouille ce tick, lisser
+            // depuis ce cap-là ferait « claquer » l'orientation
+            // affichée d'une frame à l'autre (patrouille et chasse
+            // se disputeraient le cap à chaque tick).
+            let cur_yaw = prev_rot.to_euler(EulerRot::YXZ).0;
+            let target_yaw = (-to.x).atan2(-to.z);
+            obj.transform.rotation =
+                Quat::from_rotation_y(rotate_towards_smooth(cur_yaw, target_yaw, 6.0, dt));
+            if let Some(anim) = obj.animation.as_mut() {
+                anim.set_clip("Walk");
+            }
+        }
+    }
+}
+
 pub(super) fn clamp_move_vector(mx: f32, my: f32) -> (f32, f32) {
     let len_sq = mx * mx + my * my;
     if len_sq > 1.0 {
@@ -1197,207 +1414,17 @@ impl AppState {
             // Pilotage des « chasseurs » IA (cf. `AiChaser`) : direction directe vers la
             // position courante du joueur, recalculée chaque frame — une vraie poursuite
             // réactive (jeu local vs IA), pas une trajectoire fixe scriptée à l'avance.
-            if !candidate_targets.is_empty() {
-                // Cible la plus proche parmi `candidate_targets` pour chaque chasseur
-                // visible (GAMEDESIGN_EN_LIGNE.md §3.2), regroupée par cible choisie
-                // (indice dans `candidate_targets`, pas la position elle-même : sert
-                // au plafond ci-dessous).
-                let mut by_target: HashMap<usize, Vec<(usize, f32)>> = HashMap::new();
-                // Éveils `Furtive` à signaler ce tick (Phase O Sprint 1,
-                // `sprint2audijeu0718.md`) : indices qui viennent de franchir la portée
-                // d'éveil, collectés ici plutôt qu'appliqués en direct dans la boucle
-                // (qui emprunte `self.scene.objects`) — `self.furtive_awake`/`self.audio`
-                // sont mis à jour juste après, une fois la boucle terminée.
-                let mut newly_awake_furtives: Vec<usize> = Vec::new();
-                for (idx, obj) in self.scene.objects.iter().enumerate() {
-                    // Un monstre vaincu (invisible) ou d'une manche pas encore révélée
-                    // ne poursuit pas (et n'a de toute façon pas de corps physique tant
-                    // qu'il est masqué, cf. le filtre `visible` dans `Physics::build`).
-                    let Some(chaser) = obj.ai_chaser.as_ref() else {
-                        continue;
-                    };
-                    if !obj.visible {
-                        continue;
-                    }
-                    // Chantier 4.1 : créature scriptée temporairement hors
-                    // chasse (visée gelée, simulation possédée par le
-                    // serveur) — elle ne consomme pas non plus de place dans
-                    // le plafond de chasseurs actifs.
-                    if chase_blocked.contains(&idx) {
-                        continue;
-                    }
-                    let (target_i, dist_sq) = candidate_targets
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &t)| (i, (t - obj.transform.position).length_squared()))
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                        .expect("candidate_targets vérifié non vide ci-dessus");
-                    // Portée de détection, **réseau uniquement** (GAMEDESIGN_EN_LIGNE.md) :
-                    // le plafond ci-dessus étale l'ARRIVÉE des chasseurs dans le temps, mais avec
-                    // un seul joueur solo connecté, il n'empêche pas la convergence
-                    // *finale* — au bout d'assez de temps, tous les monstres de la
-                    // carte se relaient jusqu'à l'unique cible, même partis de l'autre
-                    // bout de l'arène. Volontairement limité au cas réseau
-                    // (`!self.network_players.is_empty()`) plutôt qu'appliqué partout :
-                    // en solo, plusieurs démos (`Scene::brawl_demo` notamment) comptent
-                    // sur un chasseur qui **revient toujours** vers le joueur après un
-                    // recul (knockback) pour ne pas tomber dans le vide de l'arène —
-                    // une portée de détection universelle cassait ce ring-out en
-                    // laissant le rival immobile une fois repoussé trop loin (régression
-                    // détectée par `brawl_demo_rival_survives_two_hits_then_falls_on_
-                    // the_third`, qui ne teste rien de spécifique au réseau).
-                    // Créature scriptée (chantier 4.1) : hors de portée, elle
-                    // ne freine pas (`control` serait de toute façon un no-op
-                    // sur un corps scripté) — elle PATROUILLE, la position
-                    // écrite par son script Lua ce tick reste en place. Et sa
-                    // portée s'applique en toute circonstance (solo compris) :
-                    // la patrouille est le comportement par défaut de la carte
-                    // servie, contrairement aux chasseurs dynamiques dont le
-                    // ring-out de `brawl_demo` exige un retour permanent.
-                    let scripted = phys.is_scripted_body(idx);
-                    if (scripted || !self.network.network_players.is_empty())
-                        && dist_sq > CHASER_DETECT_RANGE * CHASER_DETECT_RANGE
-                    {
-                        if !scripted {
-                            phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
-                        }
-                        continue;
-                    }
-                    // Éveil de l'archétype `Furtive` (GDD §5.4) : portée réduite,
-                    // appliquée en toute circonstance (pas seulement en réseau, cf.
-                    // `FURTIVE_DETECT_RANGE`) — c'est ce délai court qui permet au
-                    // contre-jeu « l'Éclaireur la déclenche de loin » d'exister aussi solo.
-                    if chaser.archetype == crate::scene::Archetype::Furtive
-                        && dist_sq > FURTIVE_DETECT_RANGE * FURTIVE_DETECT_RANGE
-                    {
-                        if !scripted {
-                            phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
-                        }
-                        continue;
-                    }
-                    // Transition endormie → active (Phase O Sprint 1) : ce tick est le
-                    // premier où cette `Furtive` passe les deux gardes ci-dessus — pas
-                    // de ré-armement si le joueur ressort puis revient à portée (une
-                    // fois éveillée, elle le reste pour le reste de la partie, comme
-                    // `trigger_prev` pour les triggers de zone).
-                    if chaser.archetype == crate::scene::Archetype::Furtive
-                        && !self.furtive_awake.contains(&idx)
-                    {
-                        newly_awake_furtives.push(idx);
-                    }
-                    by_target.entry(target_i).or_default().push((idx, dist_sq));
-                }
-                // Un son perceptible par éveil (Phase O Sprint 1) : appliqué après la
-                // boucle ci-dessus (qui emprunte `self.scene.objects`), pas dedans.
-                for idx in newly_awake_furtives {
-                    self.furtive_awake.insert(idx);
-                    crate::runtime::sfx::play(
-                        &mut self.audio,
-                        crate::runtime::sfx::Sfx::CreatureWake,
-                    );
-                }
-                // Plafond de chasseurs actifs par cible : sans lui, TOUS les monstres
-                // visibles convergent au même instant sur l'unique joueur présent (le cas
-                // le plus courant en solo), acculant le joueur contre un mur en quelques
-                // secondes sans la moindre fenêtre pour riposter ou fuir.
-                // Recalculé chaque frame par distance : seuls les `MAX_ACTIVE_CHASERS_
-                // PER_TARGET` chasseurs les plus proches d'une cible donnée avancent
-                // réellement ce tick ; les autres restent en place (toujours visibles/
-                // menaçants, juste pas en train de foncer) — un chasseur relégué reprend
-                // la poursuite dès qu'un des premiers meurt ou s'éloigne, sans script ni
-                // état à mémoriser d'une frame à l'autre.
-                // Pas de chasse des créatures **scriptées** (chantier 4.1),
-                // collectés ici (emprunt immuable de la scène pendant la
-                // boucle) puis appliqués juste après — même idiome que
-                // `player_facing`.
-                let mut scripted_chase: Vec<(usize, Vec3, f32)> = Vec::new();
-                for (target_i, mut group) in by_target {
-                    group.sort_by(|a, b| a.1.total_cmp(&b.1));
-                    let target = candidate_targets[target_i];
-                    for (rank, &(idx, _)) in group.iter().enumerate() {
-                        let scripted = phys.is_scripted_body(idx);
-                        if rank >= MAX_ACTIVE_CHASERS_PER_TARGET {
-                            // Un scripté relégué au-delà du plafond PATROUILLE
-                            // (position du script laissée en place) au lieu de
-                            // freiner — plus vivant, cohérent avec « toujours
-                            // menaçants, juste pas en train de foncer ».
-                            if !scripted {
-                                phys.control(idx, 0.0, 0.0, false, 0.0, 0.0, dt);
-                            }
-                            continue;
-                        }
-                        let obj_pos = self.scene.objects[idx].transform.position;
-                        let ai = self.scene.objects[idx]
-                            .ai_chaser
-                            .as_ref()
-                            .expect("filtré ci-dessus : cet objet a un ai_chaser");
-                        // Multiplicateur d'archétype (GDD §5.4) : Meute/Furtive accélèrent
-                        // la poursuite, Colosse la ralentit — cf. `Archetype::speed_multiplier`.
-                        let speed = ai.speed * ai.archetype.speed_multiplier();
-                        if scripted {
-                            scripted_chase.push((idx, target, speed));
-                            continue;
-                        }
-                        let to_target = target - obj_pos;
-                        let dir = Vec3::new(to_target.x, 0.0, to_target.z);
-                        let (vx, vz) = if dir.length_squared() > 1e-6 {
-                            let d = dir.normalize() * speed;
-                            (d.x, d.z)
-                        } else {
-                            (0.0, 0.0)
-                        };
-                        phys.control(idx, vx, vz, false, 0.0, 0.0, dt);
-                    }
-                }
-                // Chasse scriptée : écrase la cible de patrouille que le
-                // script Lua a écrite ce tick, ancrée sur la position
-                // **réellement atteinte** au pas précédent (`sim_curr_poses`,
-                // remplie en fin de `sim_step`) — additionner un pas de chasse
-                // à la position déjà déplacée par le script ferait avancer la
-                // créature à vitesse patrouille + chasse. La hauteur reste
-                // celle écrite par le script (hover/drift préservés) ;
-                // `resolve_scripted_moves` résout ensuite ce déplacement
-                // contre le monde exactement comme la patrouille (glissement
-                // le long des murs, dépénétration bornée).
-                for (idx, target, speed) in scripted_chase {
-                    let (base, prev_rot) = self
-                        .sim_poses
-                        .sim_curr_poses
-                        .get(idx)
-                        .map(|p| (p.0, p.1))
-                        .unwrap_or((
-                            self.scene.objects[idx].transform.position,
-                            self.scene.objects[idx].transform.rotation,
-                        ));
-                    let to = Vec3::new(target.x - base.x, 0.0, target.z - base.z);
-                    let dist = to.length();
-                    if dist < 1e-4 {
-                        continue;
-                    }
-                    let step = to / dist * (speed * dt).min(dist);
-                    if let Some(obj) = self.scene.objects.get_mut(idx) {
-                        let y = obj.transform.position.y;
-                        obj.transform.position = Vec3::new(base.x + step.x, y, base.z + step.z);
-                        // Rotation lissée vers la cible (convention yaw=0 ⇒
-                        // avant = -Z, cf. `Physics::face_direction`) — jamais
-                        // de claquement, cf. la preuve `mmorpg_creatures_
-                        // never_teleport_nor_snap_turn`. Ancrée sur la pose du
-                        // pas PRÉCÉDENT (comme la position) : le script vient
-                        // d'écrire son cap de patrouille ce tick, lisser
-                        // depuis ce cap-là ferait « claquer » l'orientation
-                        // affichée d'une frame à l'autre (patrouille et chasse
-                        // se disputeraient le cap à chaque tick).
-                        let cur_yaw = prev_rot.to_euler(EulerRot::YXZ).0;
-                        let target_yaw = (-to.x).atan2(-to.z);
-                        obj.transform.rotation = Quat::from_rotation_y(rotate_towards_smooth(
-                            cur_yaw, target_yaw, 6.0, dt,
-                        ));
-                        if let Some(anim) = obj.animation.as_mut() {
-                            anim.set_clip("Walk");
-                        }
-                    }
-                }
-            }
+            chase_and_patrol_ai_creatures(
+                phys,
+                &mut self.scene,
+                &self.sim_poses.sim_curr_poses,
+                &candidate_targets,
+                &chase_blocked,
+                !self.network.network_players.is_empty(),
+                &mut self.furtive_awake,
+                &mut self.audio,
+                dt,
+            );
             // Recul (knockback, cf. `AppState::stagger`) : appliqué en dernier, après le
             // pilotage joystick/IA ci-dessus, pour qu'un coup encaissé cette frame ne soit
             // pas immédiatement écrasé par la vitesse que le joystick ou la poursuite
