@@ -1317,7 +1317,10 @@ fn a_falling_crate_is_reported_inside_a_trigger_zone_without_a_player() {
     // La zone est immatérielle : la caisse repose sur le sol (y ≈ 0.2), pas sur la
     // plaque (dont le haut est à y = 0.3).
     let y = scene.objects[crate_idx].transform.position.y;
-    assert!(y < 0.25, "la caisse doit traverser la zone et se poser au sol (y={y})");
+    assert!(
+        y < 0.25,
+        "la caisse doit traverser la zone et se poser au sol (y={y})"
+    );
 }
 
 #[test]
@@ -1358,7 +1361,10 @@ fn a_kinematic_scripted_walker_is_reported_by_a_trigger_zone() {
     });
     let mut phys = Physics::build(&scene);
     phys.step(1.0 / 60.0, &mut scene);
-    assert!(phys.sensor_overlaps().is_empty(), "loin de la zone au départ");
+    assert!(
+        phys.sensor_overlaps().is_empty(),
+        "loin de la zone au départ"
+    );
     // Déplacement « scripté » : on écrit la position comme le ferait le script,
     // puis on laisse le contrôleur cinématique résoudre le mouvement.
     for _ in 0..10 {
@@ -1387,7 +1393,10 @@ fn raycast_and_overlap_sphere_ignore_trigger_sensors() {
         hit.map(|h| h.index)
     );
     let near = phys.overlap_sphere(Vec3::ZERO, 0.2, u32::MAX);
-    assert!(!near.contains(&plate), "overlap_sphere ignore les capteurs : {near:?}");
+    assert!(
+        !near.contains(&plate),
+        "overlap_sphere ignore les capteurs : {near:?}"
+    );
 }
 
 // --- Articulations (`SceneObject::joint`) ---
@@ -1434,7 +1443,10 @@ fn a_spherical_joint_to_the_world_keeps_the_pendulum_at_constant_length() {
         );
         min_y = min_y.min(p.y);
     }
-    assert!(min_y < -1.0, "le poids doit avoir basculé sous l'ancre (min y={min_y})");
+    assert!(
+        min_y < -1.0,
+        "le poids doit avoir basculé sous l'ancre (min y={min_y})"
+    );
 }
 
 #[test]
@@ -1444,7 +1456,10 @@ fn a_revolute_joint_keeps_the_pendulum_in_its_hinge_plane() {
     for _ in 0..240 {
         phys.step(1.0 / 60.0, &mut scene);
         let p = scene.objects[bob].transform.position;
-        assert!(p.z.abs() < 0.05, "charnière d'axe Z : aucun mouvement hors du plan XY ({p})");
+        assert!(
+            p.z.abs() < 0.05,
+            "charnière d'axe Z : aucun mouvement hors du plan XY ({p})"
+        );
         assert!((p.length() - 2.0).abs() < 0.15, "longueur constante ({p})");
     }
 }
@@ -1462,7 +1477,10 @@ fn a_revolute_joint_respects_its_angular_limits() {
     let p = scene.objects[bob].transform.position;
     // Sans butée, le poids finirait sous l'ancre (y ≈ -2) ; avec 20°, y ≥ -2·sin(20°) ≈ -0.68.
     assert!(p.y > -0.9, "les butées doivent retenir le poids ({p})");
-    assert!(p.y < -0.2, "…mais le laisser descendre jusqu'à la butée ({p})");
+    assert!(
+        p.y < -0.2,
+        "…mais le laisser descendre jusqu'à la butée ({p})"
+    );
 }
 
 #[test]

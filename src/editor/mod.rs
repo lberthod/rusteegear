@@ -3707,13 +3707,12 @@ fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_na
     use crate::scene::{Joint, JointKind};
     ui.collapsing("🔗 Articulation", |ui| {
         let mut enabled = obj.joint.is_some();
-        ui.checkbox(&mut enabled, "Relier cet objet")
-            .on_hover_text(
-                "Articulation physique rapier : soudure (lanterne sur un chariot), \
+        ui.checkbox(&mut enabled, "Relier cet objet").on_hover_text(
+            "Articulation physique rapier : soudure (lanterne sur un chariot), \
                  charnière (porte, pont-levis, pendule) ou rotule (chaîne). L'objet doit \
                  être Dynamique pour bouger ; la cible peut être n'importe quel objet, \
                  ou le monde (cible vide).",
-            );
+        );
         if !enabled {
             obj.joint = None;
             return;
@@ -3735,7 +3734,10 @@ fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_na
             egui::ComboBox::from_id_salt("inspector_joint_target")
                 .selected_text(&current)
                 .show_ui(ui, |ui| {
-                    if ui.selectable_label(joint.target.is_empty(), "(monde)").clicked() {
+                    if ui
+                        .selectable_label(joint.target.is_empty(), "(monde)")
+                        .clicked()
+                    {
                         joint.target.clear();
                     }
                     for name in other_names {
@@ -3752,9 +3754,21 @@ fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_na
         );
         ui.horizontal(|ui| {
             ui.label("Ancre (locale)");
-            ui.add(egui::DragValue::new(&mut joint.anchor.x).speed(0.05).prefix("x "));
-            ui.add(egui::DragValue::new(&mut joint.anchor.y).speed(0.05).prefix("y "));
-            ui.add(egui::DragValue::new(&mut joint.anchor.z).speed(0.05).prefix("z "));
+            ui.add(
+                egui::DragValue::new(&mut joint.anchor.x)
+                    .speed(0.05)
+                    .prefix("x "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut joint.anchor.y)
+                    .speed(0.05)
+                    .prefix("y "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut joint.anchor.z)
+                    .speed(0.05)
+                    .prefix("z "),
+            );
         })
         .response
         .on_hover_text(
@@ -3768,9 +3782,21 @@ fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_na
                 } else {
                     "Ancre cible"
                 });
-                ui.add(egui::DragValue::new(&mut joint.target_anchor.x).speed(0.05).prefix("x "));
-                ui.add(egui::DragValue::new(&mut joint.target_anchor.y).speed(0.05).prefix("y "));
-                ui.add(egui::DragValue::new(&mut joint.target_anchor.z).speed(0.05).prefix("z "));
+                ui.add(
+                    egui::DragValue::new(&mut joint.target_anchor.x)
+                        .speed(0.05)
+                        .prefix("x "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut joint.target_anchor.y)
+                        .speed(0.05)
+                        .prefix("y "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut joint.target_anchor.z)
+                        .speed(0.05)
+                        .prefix("z "),
+                );
             })
             .response
             .on_hover_text(
@@ -3781,9 +3807,21 @@ fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_na
         if joint.kind == JointKind::Revolute {
             ui.horizontal(|ui| {
                 ui.label("Axe");
-                ui.add(egui::DragValue::new(&mut joint.axis.x).speed(0.05).prefix("x "));
-                ui.add(egui::DragValue::new(&mut joint.axis.y).speed(0.05).prefix("y "));
-                ui.add(egui::DragValue::new(&mut joint.axis.z).speed(0.05).prefix("z "));
+                ui.add(
+                    egui::DragValue::new(&mut joint.axis.x)
+                        .speed(0.05)
+                        .prefix("x "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut joint.axis.y)
+                        .speed(0.05)
+                        .prefix("y "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut joint.axis.z)
+                        .speed(0.05)
+                        .prefix("z "),
+                );
             })
             .response
             .on_hover_text("Axe de la charnière, dans le repère de cet objet.");

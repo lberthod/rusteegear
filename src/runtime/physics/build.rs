@@ -255,24 +255,24 @@ impl Physics {
                 continue;
             }
             let collider = shape()
-            // Aucun rebond : un personnage n'est pas une balle (cf. docs/audits/
-            // physics.md pour le mouvement instable observé avec un rebond non nul).
-            // Rien dans le projet ne dépend d'un rebond (aucun mécanisme de type
-            // trampoline).
-            .restitution(0.0)
-            .friction(0.6)
-            // Couches de collision : `Group::from_bits_truncate` ignore silencieusement
-            // les bits au-delà de 32 plutôt que de paniquer sur une valeur mal formée —
-            // un JSON de scène corrompu/ancien ne doit pas faire planter l'entrée en
-            // Play. `And` : les deux objets doivent s'accepter mutuellement (cf. la doc
-            // de `InteractionGroups`), le mode le plus intuitif pour une paire
-            // couche/masque.
-            .collision_groups(InteractionGroups::new(
-                Group::from_bits_truncate(obj.collision_layer),
-                Group::from_bits_truncate(obj.collision_mask),
-                InteractionTestMode::And,
-            ))
-            .build();
+                // Aucun rebond : un personnage n'est pas une balle (cf. docs/audits/
+                // physics.md pour le mouvement instable observé avec un rebond non nul).
+                // Rien dans le projet ne dépend d'un rebond (aucun mécanisme de type
+                // trampoline).
+                .restitution(0.0)
+                .friction(0.6)
+                // Couches de collision : `Group::from_bits_truncate` ignore silencieusement
+                // les bits au-delà de 32 plutôt que de paniquer sur une valeur mal formée —
+                // un JSON de scène corrompu/ancien ne doit pas faire planter l'entrée en
+                // Play. `And` : les deux objets doivent s'accepter mutuellement (cf. la doc
+                // de `InteractionGroups`), le mode le plus intuitif pour une paire
+                // couche/masque.
+                .collision_groups(InteractionGroups::new(
+                    Group::from_bits_truncate(obj.collision_layer),
+                    Group::from_bits_truncate(obj.collision_mask),
+                    InteractionTestMode::And,
+                ))
+                .build();
             let collider_handle = colliders.insert_with_parent(collider, handle, &mut bodies);
             collider_owner.insert(collider_handle, i);
 
@@ -441,8 +441,9 @@ impl Physics {
                                 joint.target
                             );
                         }
-                        let h = *world_anchor
-                            .get_or_insert_with(|| bodies.insert(RigidBodyBuilder::fixed().build()));
+                        let h = *world_anchor.get_or_insert_with(|| {
+                            bodies.insert(RigidBodyBuilder::fixed().build())
+                        });
                         // Repère du corps monde = repère monde : l'ancre est déjà en monde.
                         (h, joint.target_anchor)
                     }

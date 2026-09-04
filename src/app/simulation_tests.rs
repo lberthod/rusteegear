@@ -92,7 +92,10 @@ fn fly_look_turns_the_head_around_a_fixed_eye() {
         "l'œil doit rester fixe ({eye_before} → {eye_after})"
     );
     assert_ne!(app.camera.yaw, yaw_before, "le yaw doit avoir tourné");
-    assert!(app.camera.pitch.abs() <= 1.5, "pitch borné, jamais la verticale");
+    assert!(
+        app.camera.pitch.abs() <= 1.5,
+        "pitch borné, jamais la verticale"
+    );
 }
 
 #[test]

@@ -489,7 +489,12 @@ pub(super) fn run_script_web(
     lua_try!(set_bool(lua, &obj, "exited", exited));
     // Capteurs rapier — même contrat que `scripting::run_script` (cf. sa doc).
     lua_try!(set_bool(lua, &obj, "overlapped", !overlapping.is_empty()));
-    lua_try!(set_num(lua, &obj, "overlap_count", overlapping.len() as f64));
+    lua_try!(set_num(
+        lua,
+        &obj,
+        "overlap_count",
+        overlapping.len() as f64
+    ));
     let names = lua.create_table();
     for (n, name) in overlapping.iter().enumerate() {
         let v = lua.create_string(name.as_bytes());
