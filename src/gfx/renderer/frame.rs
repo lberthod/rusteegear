@@ -164,126 +164,13 @@ impl Renderer {
             encoder.write_timestamp(&prof.query_set, 1);
         }
 
-        {
-            // La passe principale dessine dans `hdr_view` (HDR_FORMAT),
-            // pas directement dans `view` — `self.tonemap()` fait le dernier maillon
-            // vers le format d'affichage, après cette passe. Si le MSAA est actif
-            // (`msaa_color_view`), la passe dessine dans la cible multi-échantillonnée et
-            // se résout vers `hdr_view` (`resolve_target`) — sinon comportement inchangé.
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: self.msaa_color_view.as_ref().unwrap_or(&self.hdr_view),
-                    resolve_target: self.msaa_color_view.as_ref().map(|_| &self.hdr_view),
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.07,
-                            g: 0.08,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            // Aperçu mobile : la scène ne se dessine que dans le rectangle « téléphone ».
-            // (Le clear remplit toute la surface → bandes sombres autour = letterbox.)
-            pass.set_viewport(dx, dy, dw, dh, 0.0, 1.0);
-            pass.set_scissor_rect(dx as u32, dy as u32, dw as u32, dh as u32);
-
-            // Ciel : dessiné en premier, derrière tout le reste.
-            pass.set_pipeline(&self.sky_pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-
-            // Grille de référence au sol (depth-testée), en mode édition uniquement.
-            if app.show_grid && !app.player && !app.device_preview {
-                pass.set_pipeline(&self.grid_pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
-                pass.draw(0..self.grid_count, 0..1);
-            }
-
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(2, &self.shadow_bind_group, &[]);
-            pass.set_bind_group(1, &self.models_bind_group, &[]);
-
-            // Rendu instancié : un draw par lot (mesh+texture), scindé en sous-plages
-            // d'instances visibles consécutives (frustum culling).
-            let plan = &self.draw_plan;
-            let objs = &app.scene.objects;
-            let mut i = 0;
-            while i < plan.len() {
-                let mi = plan[i].mesh;
-                let tex_key = &objs[plan[i].obj].texture;
-                let mut group_end = i + 1;
-                while group_end < plan.len()
-                    && plan[group_end].mesh == mi
-                    && &objs[plan[group_end].obj].texture == tex_key
-                {
-                    group_end += 1;
-                }
-                if let Some(mesh) = self.resolve_mesh(mi) {
-                    let tex = self
-                        .textures
-                        .get(tex_key)
-                        .unwrap_or_else(|| &self.textures[""]);
-                    pass.set_bind_group(3, tex, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                    pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    // Plages contiguës d'instances visibles dans le lot.
-                    let mut k = i;
-                    while k < group_end {
-                        if !plan[k].visible {
-                            k += 1;
-                            continue;
-                        }
-                        let run = k;
-                        while k < group_end && plan[k].visible {
-                            k += 1;
-                        }
-                        pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
-                        scene_draw_calls += 1;
-                    }
-                }
-                i = group_end;
-            }
-
-            // Gizmo de l'objet sélectionné, par-dessus.
-            if gizmo_count > 0 {
-                pass.set_pipeline(&self.gizmo_pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.gizmo_vbuf.slice(..));
-                pass.draw(0..gizmo_count, 0..1);
-            }
-
-            // Debug drawing : même pipeline lignes, buffer dédié.
-            if debug_count > 0 {
-                pass.set_pipeline(&self.gizmo_pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
-                pass.draw(0..debug_count, 0..1);
-            }
-
-            // Objets skinnés : un draw individuel par objet, palettes déjà
-            // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
-            scene_draw_calls +=
-                self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
-        }
+        scene_draw_calls += self.render_main_pass(
+            &mut encoder,
+            app,
+            (dx, dy, dw, dh),
+            gizmo_count,
+            debug_count,
+        );
         if gpu_profiling && let Some(prof) = self.gpu_profiler.as_ref() {
             encoder.write_timestamp(&prof.query_set, 2);
         }
@@ -597,6 +484,142 @@ impl Renderer {
         // d'ombre.
         scene_draw_calls +=
             self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
+        scene_draw_calls
+    }
+
+    /// Passe principale (ciel, grille, objets statiques instanciés, gizmos,
+    /// debug, objets skinnés) — dessine dans `hdr_view` (HDR_FORMAT), jamais
+    /// directement dans la surface d'affichage : `self.tonemap()` fait le
+    /// dernier maillon vers le format d'affichage, après cette passe. Renvoie
+    /// le nombre de `draw_indexed` réellement émis (objets statiques + skinnés
+    /// seulement, pas le ciel/la grille/les gizmos — mêmes conventions que
+    /// `render_shadow_pass`). Extrait de `render` tel quel (plan de découpage,
+    /// lot 3.2.F), aucun changement de comportement — vérifié par les goldens.
+    fn render_main_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        app: &AppState,
+        (dx, dy, dw, dh): (f32, f32, f32, f32),
+        gizmo_count: u32,
+        debug_count: u32,
+    ) -> u32 {
+        let mut scene_draw_calls = 0;
+        // Si le MSAA est actif (`msaa_color_view`), la passe dessine dans la cible
+        // multi-échantillonnée et se résout vers `hdr_view` (`resolve_target`) —
+        // sinon comportement inchangé.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("main_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: self.msaa_color_view.as_ref().unwrap_or(&self.hdr_view),
+                resolve_target: self.msaa_color_view.as_ref().map(|_| &self.hdr_view),
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.07,
+                        g: 0.08,
+                        b: 0.1,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        // Aperçu mobile : la scène ne se dessine que dans le rectangle « téléphone ».
+        // (Le clear remplit toute la surface → bandes sombres autour = letterbox.)
+        pass.set_viewport(dx, dy, dw, dh, 0.0, 1.0);
+        pass.set_scissor_rect(dx as u32, dy as u32, dw as u32, dh as u32);
+
+        // Ciel : dessiné en premier, derrière tout le reste.
+        pass.set_pipeline(&self.sky_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+
+        // Grille de référence au sol (depth-testée), en mode édition uniquement.
+        if app.show_grid && !app.player && !app.device_preview {
+            pass.set_pipeline(&self.grid_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
+            pass.draw(0..self.grid_count, 0..1);
+        }
+
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+        pass.set_bind_group(1, &self.models_bind_group, &[]);
+
+        // Rendu instancié : un draw par lot (mesh+texture), scindé en sous-plages
+        // d'instances visibles consécutives (frustum culling).
+        let plan = &self.draw_plan;
+        let objs = &app.scene.objects;
+        let mut i = 0;
+        while i < plan.len() {
+            let mi = plan[i].mesh;
+            let tex_key = &objs[plan[i].obj].texture;
+            let mut group_end = i + 1;
+            while group_end < plan.len()
+                && plan[group_end].mesh == mi
+                && &objs[plan[group_end].obj].texture == tex_key
+            {
+                group_end += 1;
+            }
+            if let Some(mesh) = self.resolve_mesh(mi) {
+                let tex = self
+                    .textures
+                    .get(tex_key)
+                    .unwrap_or_else(|| &self.textures[""]);
+                pass.set_bind_group(3, tex, &[]);
+                pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                // Plages contiguës d'instances visibles dans le lot.
+                let mut k = i;
+                while k < group_end {
+                    if !plan[k].visible {
+                        k += 1;
+                        continue;
+                    }
+                    let run = k;
+                    while k < group_end && plan[k].visible {
+                        k += 1;
+                    }
+                    pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    scene_draw_calls += 1;
+                }
+            }
+            i = group_end;
+        }
+
+        // Gizmo de l'objet sélectionné, par-dessus.
+        if gizmo_count > 0 {
+            pass.set_pipeline(&self.gizmo_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.gizmo_vbuf.slice(..));
+            pass.draw(0..gizmo_count, 0..1);
+        }
+
+        // Debug drawing : même pipeline lignes, buffer dédié.
+        if debug_count > 0 {
+            pass.set_pipeline(&self.gizmo_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
+            pass.draw(0..debug_count, 0..1);
+        }
+
+        // Objets skinnés : un draw individuel par objet, palettes déjà
+        // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
+        scene_draw_calls +=
+            self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
         scene_draw_calls
     }
 
