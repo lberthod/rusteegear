@@ -10,8 +10,8 @@ use winit::window::Window;
 use super::lod::foliage_lod_mesh;
 use super::mesh::GpuMesh;
 use super::passes::{
-    aabb_visible, culling_radius_for, distance_visible, frustum_planes, is_skinned, mesh_key,
-    render_input_hash,
+    aabb_visible, compute_cascades, culling_radius_for, distance_visible, frustum_planes,
+    is_skinned, mesh_key, render_input_hash,
 };
 #[cfg(test)]
 use super::pipelines::mip_count_for;

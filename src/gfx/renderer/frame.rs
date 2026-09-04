@@ -535,35 +535,62 @@ impl Renderer {
         }
     }
 
-    /// Passe de profondeur (carte d'ombre) : dessine `draw_plan` (objets
-    /// statiques visibles, groupés par mesh) puis les objets skinnés. Renvoie
-    /// le nombre de `draw_indexed` réellement émis. Extrait de `render` tel
-    /// quel (plan de découpage, lot 3.2.E), aucun changement de comportement —
-    /// vérifié par les goldens (`golden_render`, `golden_skinning`), pas
-    /// seulement par relecture.
-    fn render_shadow_pass(&self, encoder: &mut wgpu::CommandEncoder, app: &AppState) -> u32 {
+    /// Passes de profondeur (carte d'ombre en cascade, analyse comparative
+    /// 2026-09-04) : une passe par cascade, chacune dans sa couche du tableau
+    /// (`shadow_layer_views[c]`) avec sa propre view-projection de lumière
+    /// (`cascade_bind_groups[c]`). Dessine `draw_plan` (statiques opaques, groupés
+    /// par mesh) puis les objets skinnés. Partagée par `render` et
+    /// `render_scene_headless` (goldens) — un seul code pour les deux chemins.
+    /// Renvoie le nombre de `draw_indexed` réellement émis (toutes cascades).
+    pub(super) fn render_shadow_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        app: &AppState,
+    ) -> u32 {
         let mut scene_draw_calls = 0;
-        let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("shadow_pass"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.shadow_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+        for (layer_view, cascade_bg) in self
+            .shadow_layer_views
+            .iter()
+            .zip(&self.cascade_bind_groups)
+        {
+            let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow_pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: layer_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        spass.set_pipeline(&self.shadow_pipeline);
-        spass.set_bind_group(0, &self.camera_bind_group, &[]);
-        spass.set_bind_group(1, &self.models_bind_group, &[]);
-        // Passe d'ombre : rend les objets hors champ (pas de frustum culling), mais
-        // **ignore les objets invisibles** (ex. pièce ramassée) pour ne pas laisser
-        // d'ombre fantôme. Groupé par mesh, scindé en plages de visibles consécutifs.
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            spass.set_pipeline(&self.shadow_pipeline);
+            spass.set_bind_group(0, cascade_bg, &[]);
+            spass.set_bind_group(1, &self.models_bind_group, &[]);
+            scene_draw_calls += self.draw_shadow_statics(&mut spass, app);
+            // Objets skinnés dans la carte d'ombre (audit du 17 juillet 2026) :
+            // pipeline dédié profondeur seule + skinning, cf. `draw_skinned_shadows`.
+            scene_draw_calls += self.draw_skinned_shadows(
+                &mut spass,
+                &app.scene,
+                &self.skinned_offsets_scratch,
+                cascade_bg,
+            );
+        }
+        scene_draw_calls
+    }
+
+    /// Statiques opaques de `draw_plan` dans une passe d'ombre déjà configurée :
+    /// rend les objets hors champ (pas de frustum culling — une ombre vient
+    /// souvent de hors champ), mais **ignore les objets invisibles** (ex. pièce
+    /// ramassée) pour ne pas laisser d'ombre fantôme. Groupé par mesh, scindé en
+    /// plages de visibles consécutifs.
+    fn draw_shadow_statics<'p>(&'p self, spass: &mut wgpu::RenderPass<'p>, app: &AppState) -> u32 {
+        let mut draws = 0;
         let plan = &self.draw_plan;
         let objs = &app.scene.objects;
         let mut i = 0;
@@ -587,18 +614,99 @@ impl Renderer {
                         k += 1;
                     }
                     spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
-                    scene_draw_calls += 1;
+                    draws += 1;
                 }
             }
             i = j;
         }
-        // Objets skinnés dans la carte d'ombre (audit du 17 juillet 2026) : pipeline
-        // dédié profondeur seule + skinning, cf. `draw_skinned_shadows` — avant, la
-        // passe d'ombre n'itérait que `draw_plan` et aucun objet skinné ne projetait
-        // d'ombre.
-        scene_draw_calls +=
-            self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
-        scene_draw_calls
+        draws
+    }
+
+    /// Rendu instancié des statiques opaques de `draw_plan` dans une passe
+    /// principale déjà configurée (pipeline, groupes 0/1/2 posés par l'appelant) :
+    /// un draw par lot (mesh+texture), scindé en sous-plages d'instances visibles
+    /// consécutives (frustum culling). Partagé par `render_main_pass` et le chemin
+    /// headless.
+    pub(super) fn draw_static_instanced<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        app: &AppState,
+    ) -> u32 {
+        let mut draws = 0;
+        let plan = &self.draw_plan;
+        let objs = &app.scene.objects;
+        let mut i = 0;
+        while i < plan.len() {
+            let mi = plan[i].mesh;
+            let tex_key = &objs[plan[i].obj].texture;
+            let mut group_end = i + 1;
+            while group_end < plan.len()
+                && plan[group_end].mesh == mi
+                && &objs[plan[group_end].obj].texture == tex_key
+            {
+                group_end += 1;
+            }
+            if let Some(mesh) = self.resolve_mesh(mi) {
+                let tex = self
+                    .textures
+                    .get(tex_key)
+                    .unwrap_or_else(|| &self.textures[""]);
+                pass.set_bind_group(3, tex, &[]);
+                pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+                pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                let mut k = i;
+                while k < group_end {
+                    if !plan[k].visible {
+                        k += 1;
+                        continue;
+                    }
+                    let run = k;
+                    while k < group_end && plan[k].visible {
+                        k += 1;
+                    }
+                    pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
+                    draws += 1;
+                }
+            }
+            i = group_end;
+        }
+        draws
+    }
+
+    /// Passe transparente (analyse comparative 2026-09-04) : les objets
+    /// `opacity < 1` de `draw_plan_transparent`, déjà triés du plus loin au plus
+    /// près par `write_uniforms`, un draw chacun avec `transparent_pipeline`
+    /// (mélange alpha, profondeur lue mais jamais écrite). Appelée en **dernier**
+    /// dans la passe principale, après opaques et skinnés, pour que le mélange
+    /// se fasse sur une image déjà complète.
+    pub(super) fn draw_transparent_objects<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        app: &AppState,
+    ) -> u32 {
+        if self.draw_plan_transparent.is_empty() {
+            return 0;
+        }
+        let mut draws = 0;
+        pass.set_pipeline(&self.transparent_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.models_bind_group, &[]);
+        pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+        for draw in &self.draw_plan_transparent {
+            let Some(mesh) = self.resolve_mesh(draw.mesh) else {
+                continue;
+            };
+            let tex = self
+                .textures
+                .get(&app.scene.objects[draw.obj].texture)
+                .unwrap_or_else(|| &self.textures[""]);
+            pass.set_bind_group(3, tex, &[]);
+            pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+            pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.num_indices, 0, draw.instance..draw.instance + 1);
+            draws += 1;
+        }
+        draws
     }
 
     /// Passe principale (ciel, grille, objets statiques instanciés, gizmos,
@@ -673,46 +781,8 @@ impl Renderer {
         pass.set_bind_group(2, &self.shadow_bind_group, &[]);
         pass.set_bind_group(1, &self.models_bind_group, &[]);
 
-        // Rendu instancié : un draw par lot (mesh+texture), scindé en sous-plages
-        // d'instances visibles consécutives (frustum culling).
-        let plan = &self.draw_plan;
-        let objs = &app.scene.objects;
-        let mut i = 0;
-        while i < plan.len() {
-            let mi = plan[i].mesh;
-            let tex_key = &objs[plan[i].obj].texture;
-            let mut group_end = i + 1;
-            while group_end < plan.len()
-                && plan[group_end].mesh == mi
-                && &objs[plan[group_end].obj].texture == tex_key
-            {
-                group_end += 1;
-            }
-            if let Some(mesh) = self.resolve_mesh(mi) {
-                let tex = self
-                    .textures
-                    .get(tex_key)
-                    .unwrap_or_else(|| &self.textures[""]);
-                pass.set_bind_group(3, tex, &[]);
-                pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                // Plages contiguës d'instances visibles dans le lot.
-                let mut k = i;
-                while k < group_end {
-                    if !plan[k].visible {
-                        k += 1;
-                        continue;
-                    }
-                    let run = k;
-                    while k < group_end && plan[k].visible {
-                        k += 1;
-                    }
-                    pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
-                    scene_draw_calls += 1;
-                }
-            }
-            i = group_end;
-        }
+        // Rendu instancié des statiques opaques (cf. `draw_static_instanced`).
+        scene_draw_calls += self.draw_static_instanced(&mut pass, app);
 
         // Gizmo de l'objet sélectionné, par-dessus.
         if gizmo_count > 0 {
@@ -734,6 +804,8 @@ impl Renderer {
         // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
         scene_draw_calls +=
             self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
+        // Translucides en dernier (mélange sur l'image complète).
+        scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
         scene_draw_calls
     }
 

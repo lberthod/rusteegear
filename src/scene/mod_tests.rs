@@ -161,6 +161,7 @@ fn scene_object_crossfade_renders_differently_from_either_pure_endpoint() {
         prev_clip: "PoseDeLiaisonInexistante".into(), // cf. doc du test
         prev_time: 0.0,
         blend: 1.0,
+        locomotion: None,
     };
     let Some(pure_target) = render_with(base.clone()) else {
         return; // pas de GPU
@@ -2711,4 +2712,121 @@ fn embedded_player_cached_is_a_faithful_independent_copy() {
     a.objects.clear();
     let b = Scene::embedded_player_cached();
     assert_eq!(b.objects.len(), fresh.objects.len());
+}
+
+// --- Locomotion automatique (analyse comparative 2026-09-04) ---
+
+fn loco_anim() -> AnimationState {
+    AnimationState {
+        clip: "Idle".into(),
+        locomotion: Some(Locomotion {
+            idle: "Idle".into(),
+            walk: "Walk".into(),
+            run: "Run".into(),
+            walk_speed: 2.0,
+            run_speed: 6.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Fait avancer `anim` à vitesse horizontale constante `v` (m/s) pendant `n` pas.
+fn advance_at_speed(anim: &mut AnimationState, v: f32, n: usize) {
+    let dt = 1.0 / 60.0;
+    let mut pos = Vec3::ZERO;
+    for _ in 0..n {
+        pos.x += v * dt;
+        assert!(anim.apply_locomotion(pos, dt));
+    }
+}
+
+#[test]
+fn locomotion_at_rest_plays_idle_pure() {
+    let mut anim = loco_anim();
+    advance_at_speed(&mut anim, 0.0, 30);
+    assert_eq!(anim.clip, "Idle");
+    assert_eq!(anim.blend, 1.0, "aucun mélange à l'arrêt");
+    assert!(anim.prev_clip.is_empty());
+}
+
+#[test]
+fn locomotion_at_walk_speed_converges_to_walk_pure() {
+    let mut anim = loco_anim();
+    // Assez de pas pour que le lissage (0,12 s) ait convergé.
+    advance_at_speed(&mut anim, 2.0, 120);
+    assert_eq!(anim.clip, "Walk");
+    assert_eq!(anim.prev_clip, "Idle");
+    assert!(anim.blend > 0.97, "poids de marche ≈ 1, {}", anim.blend);
+}
+
+#[test]
+fn locomotion_between_idle_and_walk_blends_proportionally() {
+    let mut anim = loco_anim();
+    advance_at_speed(&mut anim, 1.0, 120);
+    assert_eq!(
+        (anim.prev_clip.as_str(), anim.clip.as_str()),
+        ("Idle", "Walk")
+    );
+    assert!(
+        (anim.blend - 0.5).abs() < 0.05,
+        "mi-chemin idle/marche, {}",
+        anim.blend
+    );
+}
+
+#[test]
+fn locomotion_beyond_run_speed_plays_run_pure_and_keeps_time_advancing() {
+    let mut anim = loco_anim();
+    advance_at_speed(&mut anim, 8.0, 120);
+    assert_eq!(
+        (anim.prev_clip.as_str(), anim.clip.as_str()),
+        ("Walk", "Run")
+    );
+    assert!(anim.blend > 0.99);
+    assert!(anim.time > 1.0, "le clip de course avance ({})", anim.time);
+    assert!(
+        anim.prev_time > 1.0,
+        "le clip de marche avance aussi ({})",
+        anim.prev_time
+    );
+}
+
+#[test]
+fn locomotion_slowing_down_returns_to_idle_without_restarting_from_zero_each_frame() {
+    let mut anim = loco_anim();
+    advance_at_speed(&mut anim, 2.0, 120);
+    let walk_time = anim.time;
+    advance_at_speed(&mut anim, 0.0, 120);
+    assert_eq!(anim.clip, "Idle");
+    assert_eq!(anim.blend, 1.0);
+    // Le temps idle vaut celui que le clip avait comme `prev_clip` : pas de saut à 0.
+    assert!(
+        anim.time > 0.5,
+        "idle a gardé sa phase ({}) — marche était à {walk_time}",
+        anim.time
+    );
+}
+
+#[test]
+fn locomotion_is_not_serialized_with_its_runtime_speed() {
+    let mut anim = loco_anim();
+    advance_at_speed(&mut anim, 3.0, 60);
+    let json = serde_json::to_string(&anim).unwrap();
+    assert!(!json.contains("last_pos"), "{json}");
+    let back: AnimationState = serde_json::from_str(&json).unwrap();
+    let loco = back.locomotion.unwrap();
+    assert_eq!(loco.speed, 0.0);
+    assert!(loco.last_pos.is_none());
+    assert_eq!(loco.walk_speed, 2.0);
+}
+
+#[test]
+fn without_locomotion_apply_is_a_no_op() {
+    let mut anim = AnimationState {
+        clip: "Idle".into(),
+        ..Default::default()
+    };
+    assert!(!anim.apply_locomotion(Vec3::X, 0.1));
+    assert_eq!(anim.time, 0.0);
 }

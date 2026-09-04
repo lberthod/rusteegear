@@ -3,7 +3,7 @@
 //! Extrait de `renderer.rs` (Sprint 113a) — aucun changement de comportement, les
 //! signatures/corps sont identiques à ceux d'origine.
 
-use super::renderer::GizmoVertex;
+use super::renderer::{CASCADE_COUNT, GizmoVertex};
 use crate::app::AppState;
 use crate::scene::{MeshKind, Scene};
 
@@ -34,6 +34,113 @@ pub(super) fn frustum_planes(vp: glam::Mat4) -> [glam::Vec4; 6] {
         r3 + r2, // près
         r3 - r2, // loin
     ]
+}
+
+/// Distances caméra de fin de chaque cascade d'ombre (m), pour un frustum
+/// `[near, far]` : schéma « practical split » (mélange logarithmique/linéaire,
+/// `lambda`) — la cascade proche est serrée (ombres nettes autour du joueur),
+/// la lointaine couvre le reste. Avec near = 0,1, far = 100 et lambda = 0,75 :
+/// ≈ 9 m, 24 m, 100 m.
+pub(super) fn cascade_split_distances(near: f32, far: f32) -> [f32; CASCADE_COUNT] {
+    const LAMBDA: f32 = 0.75;
+    let n = CASCADE_COUNT as f32;
+    std::array::from_fn(|i| {
+        let p = (i as f32 + 1.0) / n;
+        let log = near * (far / near).powf(p);
+        let lin = near + (far - near) * p;
+        LAMBDA * log + (1.0 - LAMBDA) * lin
+    })
+}
+
+/// Les 8 coins monde de la tranche `[d0, d1]` du frustum de `cam`.
+fn frustum_slice_corners(
+    cam: &crate::gfx::camera::OrbitCamera,
+    d0: f32,
+    d1: f32,
+) -> [glam::Vec3; 8] {
+    let eye = cam.eye();
+    let forward = (cam.target - eye).normalize_or(glam::Vec3::NEG_Z);
+    let right = forward.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
+    let up = right.cross(forward);
+    let tan_half = (cam.fovy * 0.5).tan();
+    let mut out = [glam::Vec3::ZERO; 8];
+    for (k, d) in [d0, d1].into_iter().enumerate() {
+        let hh = d * tan_half;
+        let hw = hh * cam.aspect;
+        let c = eye + forward * d;
+        out[k * 4] = c + right * hw + up * hh;
+        out[k * 4 + 1] = c - right * hw + up * hh;
+        out[k * 4 + 2] = c + right * hw - up * hh;
+        out[k * 4 + 3] = c - right * hw - up * hh;
+    }
+    out
+}
+
+/// Ombres en cascade (analyse comparative 2026-09-04, emprunt Godot/Bevy) : une
+/// caméra orthographique de lumière par tranche du frustum, ajustée sur la
+/// **sphère englobante** de la tranche (stable en rotation de caméra, contrairement
+/// à une boîte serrée qui « respire ») et **calée au texel** (sans ça, l'ombre
+/// scintille à chaque déplacement de caméra). `light_dir` pointe **vers** la
+/// lumière (convention de `Scene::light`). Renvoie les view-projections et les
+/// distances de fin de cascade lues par `main.wgsl` pour choisir la couche.
+pub(super) fn compute_cascades(
+    cam: &crate::gfx::camera::OrbitCamera,
+    light_dir: glam::Vec3,
+    shadow_size: u32,
+) -> ([glam::Mat4; CASCADE_COUNT], [f32; CASCADE_COUNT]) {
+    // Mêmes plans que `OrbitCamera::view_proj`.
+    const NEAR: f32 = 0.1;
+    const FAR: f32 = 100.0;
+    // Marge (m) derrière la tranche, côté lumière : un mur haut hors tranche doit
+    // encore projeter son ombre dedans.
+    const CASTER_MARGIN: f32 = 40.0;
+    let splits = cascade_split_distances(NEAR, FAR);
+    let dir = light_dir.normalize_or(glam::Vec3::Y);
+    let up = if dir.x.abs() < 1e-3 && dir.z.abs() < 1e-3 {
+        glam::Vec3::Z
+    } else {
+        glam::Vec3::Y
+    };
+    let mut vps = [glam::Mat4::IDENTITY; CASCADE_COUNT];
+    let mut d0 = NEAR;
+    for (i, &d1) in splits.iter().enumerate() {
+        let corners = frustum_slice_corners(cam, d0, d1);
+        let center = corners.iter().copied().sum::<glam::Vec3>() / 8.0;
+        let radius = corners
+            .iter()
+            .map(|c| c.distance(center))
+            .fold(0.0f32, f32::max)
+            .max(0.5);
+        // Rayon arrondi au décimètre : la sphère ne change pas de taille à chaque
+        // micro-mouvement de caméra (le calage au texel ci-dessous suppose une
+        // taille de texel stable).
+        let radius = (radius * 10.0).ceil() / 10.0;
+        let view = glam::camera::rh::view::look_at_mat4(
+            center + dir * (radius + CASTER_MARGIN),
+            center,
+            up,
+        );
+        let proj = glam::camera::rh::proj::directx::orthographic(
+            -radius,
+            radius,
+            -radius,
+            radius,
+            0.1,
+            2.0 * radius + CASTER_MARGIN,
+        );
+        let mut vp = proj * view;
+        // Calage au texel : translate la projection pour que l'origine monde tombe
+        // sur un coin de texel — le contenu de la carte ne glisse alors que par
+        // texels entiers quand la caméra bouge.
+        let half = shadow_size as f32 * 0.5;
+        let o = vp * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+        let (tx, ty) = (o.x / o.w * half, o.y / o.w * half);
+        let (dx, dy) = ((tx.round() - tx) / half, (ty.round() - ty) / half);
+        vp = glam::Mat4::from_translation(glam::Vec3::new(dx, dy, 0.0)) * vp;
+        vps[i] = vp;
+        d0 = d1;
+    }
+    (vps, splits)
 }
 
 /// Rayon de culling par distance (mètres) selon la catégorie de mesh — `None` = pas de
@@ -256,6 +363,7 @@ pub(super) fn render_input_hash(app: &AppState) -> u64 {
             o.metallic,
             o.roughness,
             o.emissive,
+            o.opacity,
             app.highlight_of(i),
         ];
         for v in floats {
@@ -323,5 +431,60 @@ mod culling_distance_tests {
         assert!(distance_visible(eye, near, Some(FOLIAGE_LOW_RADIUS)));
         assert!(!distance_visible(eye, far, Some(FOLIAGE_LOW_RADIUS)));
         assert!(distance_visible(eye, far, None));
+    }
+}
+
+#[cfg(test)]
+mod cascade_tests {
+    use super::*;
+    use crate::gfx::camera::OrbitCamera;
+
+    #[test]
+    fn split_distances_are_increasing_and_end_at_far() {
+        let s = cascade_split_distances(0.1, 100.0);
+        assert!(s[0] < s[1] && s[1] < s[2]);
+        assert!((s[2] - 100.0).abs() < 1e-3);
+        // La première cascade reste serrée (ombres nettes autour du joueur).
+        assert!(s[0] < 15.0, "{s:?}");
+    }
+
+    #[test]
+    fn every_cascade_contains_its_frustum_slice() {
+        let mut cam = OrbitCamera::new(16.0 / 9.0);
+        cam.target = glam::Vec3::new(4.0, 1.0, -3.0);
+        cam.yaw = 1.2;
+        cam.pitch = 0.4;
+        let (vps, splits) = compute_cascades(&cam, glam::Vec3::new(0.5, 1.0, 0.3), 2048);
+        let mut d0 = 0.1;
+        for (i, &d1) in splits.iter().enumerate() {
+            for c in frustum_slice_corners(&cam, d0, d1) {
+                let p = vps[i] * c.extend(1.0);
+                let ndc = p.truncate() / p.w;
+                assert!(
+                    ndc.x.abs() <= 1.0 + 1e-3 && ndc.y.abs() <= 1.0 + 1e-3,
+                    "cascade {i} : coin {c} hors carte ({ndc})"
+                );
+                assert!(
+                    (-1e-3..=1.0 + 1e-3).contains(&ndc.z),
+                    "cascade {i} : z {ndc}"
+                );
+            }
+            d0 = d1;
+        }
+    }
+
+    #[test]
+    fn cascades_are_texel_snapped_so_a_small_camera_move_shifts_by_whole_texels() {
+        let mut cam = OrbitCamera::new(1.5);
+        let dir = glam::Vec3::new(0.3, 1.0, 0.2);
+        let (a, _) = compute_cascades(&cam, dir, 1024);
+        cam.target += glam::Vec3::new(0.0123, 0.0, 0.0071);
+        let (b, _) = compute_cascades(&cam, dir, 1024);
+        // L'origine monde reste sur un coin de texel dans les deux cas.
+        for vp in [a[0], b[0]] {
+            let o = vp * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+            let tx = o.x / o.w * 512.0;
+            assert!((tx - tx.round()).abs() < 1e-3, "{tx}");
+        }
     }
 }

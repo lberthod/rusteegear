@@ -24,7 +24,7 @@ pendant la saisie dans un champ texte ; `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A`
 | `T` | Outil Orbite (caméra) |
 | `Y` | Outil Loupe (zoom) |
 | `F` | Cadrer la sélection |
-| `G` | Caméra libre (vol) — flèches + Espace/C pour monter/descendre |
+| `G` | Caméra libre (vol, bascule clavier seul) — flèches + Espace/C pour monter/descendre ; voir aussi le clic droit tenu |
 | `Cmd+Z` / `Cmd+Maj+Z` | Annuler / Rétablir |
 | `Cmd+D` | Dupliquer la sélection |
 | `Cmd+C` / `Cmd+X` / `Cmd+V` | Copier / Couper / Coller |
@@ -45,6 +45,7 @@ pendant la saisie dans un champ texte ; `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A`
 | Clic gauche | Sélectionner (tap < 4 px) ; `Cmd`/`Maj` + clic : sélection additive |
 | Clic gauche + glisser | Tourner la caméra (horizontal) ; sur une poignée : gizmo |
 | Clic droit | Menu contextuel : cadrer, dupliquer, supprimer, ajouter |
+| Clic droit tenu + glisser | Caméra en vol (façon Unity/Godot) : souris = regarder, `W A S D` = se déplacer, `E`/`Q` = monter/descendre, `Maj` = vite |
 | Clic milieu + glisser, ou `Maj` + glisser | Déplacer la vue (pan), quel que soit l'outil |
 | Molette | Zoom |
 | `Ctrl` pendant un glissé de gizmo | Inverser l'aimantation (snap) |

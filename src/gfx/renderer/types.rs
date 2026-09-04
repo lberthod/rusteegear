@@ -76,6 +76,25 @@ pub(crate) struct SceneUniform {
     pub(super) sky_horizon: [f32; 4], // rgb, w inutilisé
     pub(super) sky_zenith: [f32; 4], // rgb, w inutilisé
     pub(super) fog: [f32; 4],        // rgb = couleur, w = densité
+    /// Ombres en cascade (analyse comparative 2026-09-04) : view-projection de la
+    /// lumière par cascade, cf. `passes::compute_cascades`. `light_vp` ci-dessus
+    /// reste la cascade 0 (préfixe lu par les shaders de la passe d'ombre).
+    pub(super) cascade_vp: [[[f32; 4]; 4]; CASCADE_COUNT],
+    /// xyz = distances caméra de fin de chaque cascade, w = 1 / taille de texel.
+    pub(super) cascade_splits: [f32; 4],
+}
+
+/// Nombre de cascades d'ombre — fixé par la taille du tableau dans `main.wgsl`
+/// (`cascade_vp: array<mat4x4<f32>, 3>`) : les deux doivent bouger ensemble.
+pub(crate) const CASCADE_COUNT: usize = 3;
+
+/// Objet translucide à dessiner dans la passe transparente (après les opaques,
+/// trié du plus loin au plus près) — un draw par objet, cf. `draw_transparent_objects`.
+pub(super) struct TransparentDraw {
+    pub(super) obj: usize,
+    /// Index de son `ModelUniform` dans `models_buf` (après statiques et skinnés).
+    pub(super) instance: u32,
+    pub(super) mesh: MeshKind,
 }
 
 /// Paramètre du bloom (groupe dédié du `tonemap_pipeline`) : juste
@@ -319,10 +338,24 @@ pub struct Renderer {
     pub(super) grid_vbuf: wgpu::Buffer,
     pub(super) grid_count: u32,
 
-    // --- ombres (shadow mapping) ---
-    pub(super) shadow_view: wgpu::TextureView,
+    // --- ombres (shadow mapping en cascade) ---
+    /// Une vue 2D par couche, cible de rendu de chaque passe d'ombre. La vue
+    /// **tableau** (échantillonnée par `main.wgsl`) vit dans `shadow_bind_group`.
+    pub(super) shadow_layer_views: Vec<wgpu::TextureView>,
     pub(super) shadow_bind_group: wgpu::BindGroup,
     pub(super) shadow_pipeline: wgpu::RenderPipeline,
+    /// Bind group 0 par cascade : `camera_buf` + une copie de `SceneUniform` dont
+    /// `light_vp` est la matrice de **cette** cascade — les shaders de la passe
+    /// d'ombre (préfixe `light_vp` seul) n'ont ainsi rien à savoir des cascades.
+    pub(super) cascade_bind_groups: Vec<wgpu::BindGroup>,
+    pub(super) cascade_bufs: Vec<wgpu::Buffer>,
+    /// Côté (texels) de chaque couche de la carte d'ombre (`RenderQuality::shadow_size`).
+    pub(super) shadow_size: u32,
+    /// Passe transparente : mêmes shaders que `pipeline`, mélange alpha, pas
+    /// d'écriture de profondeur — cf. `draw_transparent_objects`.
+    pub(super) transparent_pipeline: wgpu::RenderPipeline,
+    /// Objets translucides de la frame, déjà triés du plus loin au plus près.
+    pub(super) draw_plan_transparent: Vec<TransparentDraw>,
 
     // --- textures (groupe 3) ---
     pub(super) tex_layout: wgpu::BindGroupLayout,

@@ -17,7 +17,8 @@ obj.rx, obj.ry, obj.rz       -- rotation (degrés)
 obj.sx, obj.sy, obj.sz       -- échelle
 obj.r, obj.g, obj.b          -- couleur
 obj.tapped, obj.triggered, obj.exited
-obj.anim                     -- clip d'animation
+obj.overlapped, obj.overlap_count, obj.overlap_names   -- capteur de zone : tout corps physique (caisse, créature…), pas seulement le joueur
+obj.anim                     -- clip d'animation (ignoré si « Locomotion auto » est activée sur l'objet)
 obj:destroy()
 
 dt, time                     -- durée de frame, temps de jeu (secondes)

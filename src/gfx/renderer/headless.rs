@@ -106,60 +106,9 @@ impl Renderer {
         // n'aurait été détectable via un benchmark headless.
         let mut scene_draw_calls: u32 = 0;
 
-        // Passe d'ombre — identique à celle de `render()`, sans les gizmos ni l'UI.
-        {
-            let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("headless_shadow_pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            spass.set_pipeline(&self.shadow_pipeline);
-            spass.set_bind_group(0, &self.camera_bind_group, &[]);
-            spass.set_bind_group(1, &self.models_bind_group, &[]);
-            let plan = &self.draw_plan;
-            let objs = &app.scene.objects;
-            let mut i = 0;
-            while i < plan.len() {
-                let mi = plan[i].mesh;
-                let mut j = i + 1;
-                while j < plan.len() && plan[j].mesh == mi {
-                    j += 1;
-                }
-                if let Some(mesh) = self.resolve_mesh(mi) {
-                    spass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                    spass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    let mut k = i;
-                    while k < j {
-                        if !objs[plan[k].obj].visible {
-                            k += 1;
-                            continue;
-                        }
-                        let run = k;
-                        while k < j && objs[plan[k].obj].visible {
-                            k += 1;
-                        }
-                        spass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
-                        scene_draw_calls += 1;
-                    }
-                }
-                i = j;
-            }
-            // Objets skinnés dans la carte d'ombre — même correctif que `render()`
-            // (audit du 17 juillet 2026), appliqué ici aussi pour que les golden
-            // tests capturent les ombres skinnées.
-            scene_draw_calls +=
-                self.draw_skinned_shadows(&mut spass, &app.scene, &self.skinned_offsets_scratch);
-        }
+        // Passes d'ombre (cascades) — le même code que `render()`, sans les
+        // gizmos ni l'UI : un shader d'ombre qui dérive fait dériver les goldens.
+        scene_draw_calls += self.render_shadow_pass(&mut encoder, app);
 
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
         // Dessine dans `hdr_view` ; `self.tonemap()` fait le dernier pas
@@ -208,43 +157,7 @@ impl Renderer {
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
             pass.set_bind_group(1, &self.models_bind_group, &[]);
 
-            let plan = &self.draw_plan;
-            let objs = &app.scene.objects;
-            let mut i = 0;
-            while i < plan.len() {
-                let mi = plan[i].mesh;
-                let tex_key = &objs[plan[i].obj].texture;
-                let mut group_end = i + 1;
-                while group_end < plan.len()
-                    && plan[group_end].mesh == mi
-                    && &objs[plan[group_end].obj].texture == tex_key
-                {
-                    group_end += 1;
-                }
-                if let Some(mesh) = self.resolve_mesh(mi) {
-                    let tex = self
-                        .textures
-                        .get(tex_key)
-                        .unwrap_or_else(|| &self.textures[""]);
-                    pass.set_bind_group(3, tex, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
-                    pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    let mut k = i;
-                    while k < group_end {
-                        if !plan[k].visible {
-                            k += 1;
-                            continue;
-                        }
-                        let run = k;
-                        while k < group_end && plan[k].visible {
-                            k += 1;
-                        }
-                        pass.draw_indexed(0..mesh.num_indices, 0, run as u32..k as u32);
-                        scene_draw_calls += 1;
-                    }
-                }
-                i = group_end;
-            }
+            scene_draw_calls += self.draw_static_instanced(&mut pass, app);
 
             // Debug drawing.
             if debug_count > 0 {
@@ -257,6 +170,8 @@ impl Renderer {
             // Objets skinnés : cf. commentaire équivalent dans `render()`.
             scene_draw_calls +=
                 self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
+            // Translucides en dernier, comme dans `render()`.
+            scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
         }
 
         // Cf. `render()` : `last_frame_draw_calls` sert de source unique à

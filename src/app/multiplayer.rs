@@ -1640,6 +1640,7 @@ mod tests {
             prev_clip: String::new(),
             prev_time: 0.0,
             blend: 1.0,
+            locomotion: None,
         });
 
         let snap = app.network_snapshot(1);

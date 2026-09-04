@@ -32,7 +32,7 @@ const USAGE: &str = "usage : pilot [--port N] <verbe> [args…]\n\
   \u{20}           object duplicate <i> | object damage <i> [n]\n\
   \u{20}           object set <i> <champ> <valeurs…>  (pos/rot/scale/color x y z ;\n\
   \u{20}             visible on|off ; physics none|static|dynamic|kinematic ;\n\
-  \u{20}             metallic/roughness/emissive v ; hp n ; name/tag/script texte)\n\
+  \u{20}             metallic/roughness/emissive/opacity v ; hp n ; name/tag/script texte)\n\
   scène     : scene save [chemin] | scene load <chemin> | scene new\n\
   options   : options [music v] [sfx v] [timescale v] [reduce_shake on|off]\n\
   \u{20}           [hud] [map] [settings] [multi]\n\
@@ -317,6 +317,7 @@ fn object_request(rest: &[String]) -> Result<serde_json::Value, String> {
                 "metallic" => serde_json::json!({"metallic": one()?}),
                 "roughness" => serde_json::json!({"roughness": one()?}),
                 "emissive" => serde_json::json!({"emissive": one()?}),
+                "opacity" => serde_json::json!({"opacity": one()?}),
                 "hp" => serde_json::json!({"hp": one()? as u64}),
                 "name" => serde_json::json!({"name": vals.join(" ")}),
                 "tag" => serde_json::json!({"tag": vals.join(" ")}),

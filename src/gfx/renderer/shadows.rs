@@ -211,6 +211,7 @@ impl Renderer {
         pass: &mut wgpu::RenderPass<'p>,
         scene: &Scene,
         offsets: &[Option<u32>],
+        cascade_bg: &'p wgpu::BindGroup,
     ) -> u32 {
         let mut draws = 0;
         for (&(obj_idx, instance_index), &offset) in self.draw_plan_skinned.iter().zip(offsets) {
@@ -224,7 +225,7 @@ impl Renderer {
                 continue;
             };
             pass.set_pipeline(&self.skinned_shadow_pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(0, cascade_bg, &[]);
             pass.set_bind_group(1, &self.skinned_models_bind_group, &[offset]);
             pass.set_vertex_buffer(0, gpu_mesh.vertex_buf.slice(..));
             pass.set_index_buffer(gpu_mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);

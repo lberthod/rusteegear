@@ -85,6 +85,19 @@ impl RenderQuality {
             4
         }
     }
+
+    /// Côté (texels) de chaque couche de la carte d'ombre en cascade (analyse
+    /// comparative 2026-09-04) : trois couches de 2048² pèsent 48 Mo de VRAM —
+    /// « Basse » descend à 1024² (12 Mo), ce qui reste plus net que l'ancienne
+    /// carte unique de 2048² étirée sur toute la scène, la cascade proche ne
+    /// couvrant que quelques mètres.
+    pub fn shadow_size(self) -> u32 {
+        if matches!(self, RenderQuality::Low) {
+            1024
+        } else {
+            2048
+        }
+    }
 }
 
 #[cfg(test)]

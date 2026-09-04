@@ -112,6 +112,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
         "Clic droit",
         "Menu contextuel : cadrer, dupliquer, supprimer, ajouter",
     ),
+    sc(
+        Scope::Mouse,
+        "Clic droit tenu + glisser",
+        "Caméra en vol : souris = regarder, `W A S D` = se déplacer, `E`/`Q` = monter/descendre, `Maj` = vite",
+    ),
     sc(Scope::Mouse, "Molette", "Zoom"),
     sc(
         Scope::Mouse,

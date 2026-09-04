@@ -3225,6 +3225,15 @@ fn inspector_panel(
                                          l'objet émet sa propre lumière (néon, écran, lave).",
                                     );
                             });
+                            ui.horizontal(|ui| {
+                                ui.label("Opacité");
+                                ui.add(egui::Slider::new(&mut obj.opacity, 0.0..=1.0))
+                                    .on_hover_text(
+                                        "1 = opaque. En dessous, l'objet devient translucide \
+                                         (eau, verre, fantôme) : dessiné après le décor, du plus \
+                                         loin au plus près, sans projeter d'ombre.",
+                                    );
+                            });
                         });
                         ui.separator();
                         ui.collapsing("Audio", |ui| {
@@ -3430,6 +3439,7 @@ fn inspector_panel(
                             })
                             .response
                             .on_hover_text("Clip joué en Play (aussi pilotable en Lua : obj.anim = \"nom\")");
+                            locomotion_editor(ui, obj, &clip_names);
                         }
                         ui.collapsing("Script (Lua)", |ui| {
                             if ui
@@ -4352,6 +4362,83 @@ fn describe_autosave(path: &std::path::Path) -> String {
 /// court terme) : expose `SceneObject::joint` — soudure, charnière ou rotule vers
 /// un autre objet (par nom) ou vers le monde. Les sets de joints rapier existaient
 /// sans jamais être remplis ; c'est ici qu'un créateur les remplit sans code.
+/// Section « 🚶 Locomotion auto » de l'inspecteur (analyse comparative
+/// 2026-09-04, blend 1D vitesse → idle/marche/course) : trois clips et deux
+/// seuils de vitesse, le moteur mélange tout seul selon le déplacement mesuré —
+/// cf. `scene::Locomotion`. Sans script, sans `obj.anim`.
+fn locomotion_editor(
+    ui: &mut egui::Ui,
+    obj: &mut crate::scene::SceneObject,
+    clip_names: &[String],
+) {
+    use crate::scene::{AnimationState, Locomotion};
+    ui.collapsing("🚶 Locomotion auto (idle / marche / course)", |ui| {
+        let mut enabled = obj
+            .animation
+            .as_ref()
+            .is_some_and(|a| a.locomotion.is_some());
+        ui.checkbox(&mut enabled, "Mélanger selon la vitesse")
+            .on_hover_text(
+                "Le clip joué et son fondu sont choisis chaque pas d'après la vitesse \
+                 horizontale mesurée de l'objet : à l'arrêt = idle, à la vitesse de \
+                 marche = marche pure, entre les deux = mélange, etc. Remplace \
+                 obj.anim pour cet objet.",
+            );
+        match (enabled, obj.animation.as_mut()) {
+            (false, Some(a)) => a.locomotion = None,
+            (false, None) => {}
+            (true, Some(a)) => {
+                a.locomotion.get_or_insert_with(Locomotion::default);
+            }
+            (true, None) => {
+                obj.animation = Some(AnimationState {
+                    locomotion: Some(Locomotion::default()),
+                    ..Default::default()
+                });
+            }
+        }
+        let Some(loco) = obj.animation.as_mut().and_then(|a| a.locomotion.as_mut()) else {
+            return;
+        };
+        let pick = |ui: &mut egui::Ui, label: &str, id: &str, slot: &mut String| {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                egui::ComboBox::from_id_salt(id)
+                    .selected_text(if slot.is_empty() {
+                        "(aucun)"
+                    } else {
+                        slot.as_str()
+                    })
+                    .show_ui(ui, |ui| {
+                        for name in clip_names {
+                            if ui.selectable_label(slot == name, name).clicked() {
+                                *slot = name.clone();
+                            }
+                        }
+                    });
+            });
+        };
+        pick(ui, "Idle", "loco_idle", &mut loco.idle);
+        pick(ui, "Marche", "loco_walk", &mut loco.walk);
+        pick(ui, "Course", "loco_run", &mut loco.run);
+        ui.horizontal(|ui| {
+            ui.label("Vitesse marche (m/s)");
+            ui.add(
+                egui::DragValue::new(&mut loco.walk_speed)
+                    .speed(0.05)
+                    .range(0.05..=20.0),
+            );
+            ui.label("course");
+            ui.add(
+                egui::DragValue::new(&mut loco.run_speed)
+                    .speed(0.05)
+                    .range(0.1..=30.0),
+            );
+        });
+        ui.label(format!("Vitesse mesurée : {:.2} m/s", loco.speed));
+    });
+}
+
 fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_names: &[String]) {
     use crate::scene::{Joint, JointKind};
     ui.collapsing("🔗 Articulation", |ui| {

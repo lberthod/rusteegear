@@ -57,6 +57,7 @@ struct VsOut {
     @location(3) world_pos: vec3<f32>,
     @location(4) uv: vec2<f32>,
     @location(5) material: vec3<f32>,
+    @location(6) alpha: f32,
 };
 
 // Mélange linéaire des 4 matrices influentes (« linear blend skinning », le schéma
@@ -92,6 +93,9 @@ fn vs_skinned_main(in: VsIn) -> VsOut {
     out.highlight = model.params.x;
     out.uv = in.uv;
     out.material = model.params.yzw;
+    // Les objets skinnés restent opaques (pas de passe transparente skinnée) :
+    // `model.color.a` vaut 1 pour eux, cf. `write_uniforms`.
+    out.alpha = model.color.a;
     return out;
 }
 

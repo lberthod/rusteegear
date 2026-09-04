@@ -213,16 +213,13 @@ impl Renderer {
             dir = glam::Vec3::Y;
         }
         dir = dir.normalize();
-        // caméra orthographique placée « au niveau de la lumière », regardant l'origine.
-        let up = if dir.x.abs() < 1e-3 && dir.z.abs() < 1e-3 {
-            glam::Vec3::Z
-        } else {
-            glam::Vec3::Y
-        };
-        let view = glam::camera::rh::view::look_at_mat4(dir * 20.0, glam::Vec3::ZERO, up);
-        let proj =
-            glam::camera::rh::proj::directx::orthographic(-12.0, 12.0, -12.0, 12.0, 0.1, 60.0);
-        let light_vp = proj * view;
+        // Ombres en cascade : une caméra orthographique de lumière par tranche du
+        // frustum (cf. `compute_cascades`) — remplace l'ancienne boîte fixe de
+        // 24 m autour de l'origine, qui laissait floues (ou sans ombre) les grandes
+        // cartes. Caméra « pure » (sans recul cosmétique) : les ombres ne doivent
+        // pas tressauter avec le shake d'encaissement.
+        let (cascade_vps, splits) = compute_cascades(&app.camera, dir, self.shadow_size);
+        let light_vp = cascade_vps[0];
         let mut points = [PointLightU {
             pos_range: [0.0; 4],
             color_int: [0.0; 4],
@@ -285,9 +282,26 @@ impl Renderer {
                 app.scene.sky.fog_color[2],
                 app.scene.sky.fog_density.max(0.0),
             ],
+            cascade_vp: cascade_vps.map(|m| m.to_cols_array_2d()),
+            cascade_splits: [
+                splits[0],
+                splits[1],
+                splits[2],
+                1.0 / self.shadow_size.max(1) as f32,
+            ],
         };
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
+        // Une copie par cascade dont `light_vp` est la matrice de la cascade : bind
+        // group 0 des passes d'ombre (cf. `Renderer::cascade_bind_groups`).
+        for (buf, vp) in self.cascade_bufs.iter().zip(cascade_vps) {
+            let cascade_uniform = SceneUniform {
+                light_vp: vp.to_cols_array_2d(),
+                ..scene_uniform
+            };
+            self.queue
+                .write_buffer(buf, 0, bytemuck::bytes_of(&cascade_uniform));
+        }
 
         // Skip-rebuild : si les entrées de rendu (transforms/couleurs/sélection + caméra)
         // sont identiques à la frame précédente, le plan de dessin et le buffer d'instances
@@ -334,6 +348,11 @@ impl Renderer {
             // incompatible avec le batching par instances de ce plan — dessiné à part par
             // `draw_skinned_objects`, jamais ici (sinon il apparaîtrait deux fois).
             if is_skinned(&app.scene, obj.mesh) {
+                continue;
+            }
+            // Objet translucide : hors du lot opaque (et de la passe d'ombre) — dessiné
+            // à part, trié, par `draw_transparent_objects` (plan construit plus bas).
+            if obj.opacity < 1.0 {
                 continue;
             }
             let model = obj.transform.matrix();
@@ -391,6 +410,58 @@ impl Renderer {
                 color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
             });
             self.draw_plan_skinned.push((i, instance_index));
+        }
+
+        // Objets translucides (`opacity < 1`, non skinnés) : après tout le reste dans
+        // `models`, triés du plus loin au plus près de la caméra — l'ordre de dessin
+        // est l'ordre du mélange alpha, un objet proche doit se composer par-dessus
+        // un objet lointain. Le tri est sur `eye` « pure », comme le culling.
+        self.draw_plan_transparent.clear();
+        let mut translucent: Vec<(usize, f32)> = order
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let obj = &app.scene.objects[i];
+                obj.opacity < 1.0 && obj.visible && !is_skinned(&app.scene, obj.mesh)
+            })
+            .map(|i| {
+                (
+                    i,
+                    eye.distance_squared(app.scene.objects[i].transform.position),
+                )
+            })
+            .collect();
+        translucent.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (i, _) in translucent {
+            let obj = &app.scene.objects[i];
+            let model = obj.transform.matrix();
+            let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
+            if !aabb_visible(&planes, model, lmin, lmax) {
+                continue;
+            }
+            let normal3 = glam::Mat3::from_mat4(model).inverse().transpose();
+            let instance = models.len() as u32;
+            models.push(ModelUniform {
+                model: model.to_cols_array_2d(),
+                normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
+                params: [
+                    app.highlight_of(i),
+                    obj.metallic,
+                    obj.roughness,
+                    obj.emissive,
+                ],
+                color: [
+                    obj.color[0],
+                    obj.color[1],
+                    obj.color[2],
+                    obj.opacity.clamp(0.0, 1.0),
+                ],
+            });
+            self.draw_plan_transparent.push(TransparentDraw {
+                obj: i,
+                instance,
+                mesh: obj.mesh,
+            });
         }
 
         if !models.is_empty() {

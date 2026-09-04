@@ -2,6 +2,8 @@
 
 # 🦀 RusteeGear
 
+🇬🇧 **English version: [README.en.md](README.en.md)** · Quick start in English: [QUICKSTART.en.md](QUICKSTART.en.md)
+
 **Le moteur Rust compact pour créer et publier de petits jeux 3D multijoueurs — desktop, mobile et web — avec un serveur autoritaire inclus.**
 
 winit · wgpu · egui — aucun moteur tiers.
@@ -211,14 +213,16 @@ modifiable par une seule personne.
 ## 🎮 Fonctionnalités (disponibles aujourd'hui)
 
 **Rendu**
-- **Rendu 3D** temps réel via `wgpu`, shaders WGSL, depth buffer, **ombres** (shadow map + PCF).
+- **Rendu 3D** temps réel via `wgpu`, shaders WGSL, depth buffer, **ombres en cascade** (3 cascades calées au texel + PCF 5×5 — grandes cartes sans ombres floues).
+- **Transparence** : `opacity` par objet, passe triée arrière → avant en mélange alpha (eau, verre, fantômes, fondu de mort).
 - **Matériaux PBR** par objet (metallic / roughness / emissive) + spéculaire ; **textures** albédo.
 - **Lumières** : directionnelle globale + ambiante, **lumières ponctuelles** et **spots** (cône) — jusqu'à 8.
 - **Rendu instancié** (1 draw par lot mesh+texture) + **frustum culling** CPU + **culling/LOD des lumières** (les 8 plus proches de la caméra).
 - **Chemin de rendu sans allocation par frame** (tampons réutilisés, plan de dessin par index, re-tri paresseux).
 - **Caméra orbitale** ; présentation **vsync** + cadence adaptative (throttle CPU au repos).
 - **Animation squelettale** : import glTF skinné, skinning GPU, **fondu enchaîné** entre
-  clips (`obj.anim` pilotable en Lua), répliquée en multijoueur.
+  clips (`obj.anim` pilotable en Lua), **locomotion auto** (mélange idle / marche / course
+  selon la vitesse mesurée, trois clips et zéro script), répliquée en multijoueur.
 - **Ciel + brouillard** : dégradé horizon/zénith (suit l'orientation de la caméra) et
   brouillard exponentiel, réglables dans l'inspecteur de scène.
 
@@ -228,11 +232,12 @@ modifiable par une seule personne.
 - **Hiérarchie** : groupes (glisser-déposer), filtre, icônes & badges ; **renommage inline**.
 - **Sélection** clic 3D / hiérarchie, **multi-sélection** ; **gizmos** translate/rotate/scale (**multi-objets**, pivot commun).
 - **Agencement** : aligner / distribuer sur un axe, grouper / dégrouper.
-- **Undo / Redo**, couper / copier / coller (Cmd+X/C/V), dupliquer (Cmd+D), tout sélectionner (Cmd+A).
+- **Undo / Redo** (y compris l'Inspecteur et l'import glTF), couper / copier / coller (Cmd+X/C/V), dupliquer (Cmd+D), tout sélectionner (Cmd+A).
+- **Caméra en vol** au clic droit tenu (souris = regarder, WASD + E/Q, Maj = vite), façon Unity/Godot — composer une grande carte sans passer par Blender.
 - **Gestionnaire d'assets** (`asset://`, rassemblement + navigateur), **sérialisation** JSON.
 
 **Runtime de jeu** (Play ▶ / Pause ⏸ / Stop ⏹, aperçu réinitialisable)
-- **Physique** `rapier3d` (Statique / Dynamique) avec **collider explicite** (Auto/Box/Sphère/Capsule).
+- **Physique** `rapier3d` (Statique / Dynamique / Cinématique) avec **collider explicite** (Auto/Box/Sphère/Capsule/Enveloppe convexe/Silhouette exacte), **articulations** (fixe / charnière avec butées / rotule — portes, ponts, pendules, sans code) et **zones de déclenchement en capteurs rapier** (`obj.overlapped`, `obj.overlap_names` : plaque de pression, piège, zone de dépôt, sans joueur ni script côté objet posé).
 - **Audio** `kira` : son par objet, autoplay, **spatialisation** (volume selon distance), cache asynchrone,
   **bus musique/effets séparés + panning + streaming** (Sprint 104) et **randomisation pitch/volume** par déclenchement (Sprint 108).
 - **Caméra de jeu** + **suivi** automatique de l'objet joueur.
@@ -253,6 +258,8 @@ obj.touching       -- presse maintenue sur cet objet (du down au up, même si le
 obj.touch_ended    -- la presse démarrée sur cet objet vient de se terminer, cette frame
 obj.triggered      -- le joueur est entré en contact avec la zone (case « Zone de déclenchement »)
 obj.exited         -- le joueur vient de quitter le contact
+obj.overlapped     -- un corps physique quelconque (caisse, créature, joueur) recoupe la zone (capteur rapier)
+obj.overlap_count, obj.overlap_names[i]   -- combien, et lesquels (noms)
 obj.anim = "run"  -- change le clip joué (objets skinnés), fondu enchaîné automatique
 -- Globales :
 dt, time
@@ -806,8 +813,11 @@ proprement, resauté en connaissance de cause plutôt que de forcer un
 refactor à risque (détail du raisonnement dans
 [ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md#sprint-135)).
 Restent ⬜ : post-effets HDR (122), SSAO (123), variants de shaders (124),
-terrain sculpté (129), particules (132), ombres cascadées (133), IK deux-os
-(134). Puis R (WebXR).
+terrain sculpté (129), particules (132), IK deux-os (134). Puis R (WebXR).
+Les ombres cascadées (133) sont livrées le 4 septembre 2026 avec le lot
+« court terme » de l'**analyse comparative** face à Unity / Unreal / Godot /
+Bevy — [docs/ANALYSE_COMPARATIVE_MOTEURS_2026-09-04.md](docs/ANALYSE_COMPARATIVE_MOTEURS_2026-09-04.md),
+suivi d'exécution dans [docs/roadmapAnalyseComparative4septembre.md](docs/roadmapAnalyseComparative4septembre.md).
 
 ---
 

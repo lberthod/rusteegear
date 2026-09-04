@@ -266,15 +266,21 @@ fn advance_animation_clips(scene: &mut crate::scene::Scene, dt: f32) -> Vec<Stri
     for obj in scene.objects.iter_mut() {
         if let Some(anim) = obj.animation.as_mut() {
             let prev_time = anim.time;
-            anim.time += dt * anim.speed;
-            // Fondu enchaîné : le clip quitté continue de jouer pendant
-            // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
-            // `CROSSFADE_SECONDS` — au-delà, plus rien à faire (transition terminée,
-            // `prev_clip` ignoré par le rendu tant que `blend == 1.0`).
-            if anim.blend < 1.0 {
-                anim.prev_time += dt * anim.speed;
-                anim.blend =
-                    (anim.blend + dt / crate::scene::AnimationState::CROSSFADE_SECONDS).min(1.0);
+            // Locomotion automatique (`AnimationState::locomotion`) : clip et poids
+            // de mélange dérivés de la vitesse mesurée — remplace le fondu
+            // classique ci-dessous pour cet objet (les deux temps avancent dedans).
+            if !anim.apply_locomotion(obj.transform.position, dt) {
+                anim.time += dt * anim.speed;
+                // Fondu enchaîné : le clip quitté continue de jouer pendant
+                // la transition (ne se fige pas), et `blend` avance vers 1.0 sur
+                // `CROSSFADE_SECONDS` — au-delà, plus rien à faire (transition terminée,
+                // `prev_clip` ignoré par le rendu tant que `blend == 1.0`).
+                if anim.blend < 1.0 {
+                    anim.prev_time += dt * anim.speed;
+                    anim.blend = (anim.blend
+                        + dt / crate::scene::AnimationState::CROSSFADE_SECONDS)
+                        .min(1.0);
+                }
             }
             if let crate::scene::MeshKind::Imported(mesh_idx) = obj.mesh
                 && let Some(imported) = scene.imported.get(mesh_idx as usize)

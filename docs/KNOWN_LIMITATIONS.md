@@ -27,8 +27,11 @@ préversion — les libellés du panneau Export le rappellent.
 
 ## Structure et données
 
-- **Éditeur macOS uniquement.** Linux/Windows non testés (wgpu/Vulkan devrait
-  bâtir, mais rien n'est garanti).
+- **Éditeur validé sur macOS.** Depuis le 04/09/2026, la CI **compile** les
+  quatre binaires sur Linux et Windows et **lance** l'éditeur sous Xvfb/lavapipe
+  sur Linux (jobs `editor-linux`/`editor-windows`, `continue-on-error` le
+  temps d'observer quelques runs verts) — aucune validation manuelle sur ces
+  systèmes pour l'instant.
 - **Système de projet partiel (Sprint 3, 19/07/2026).** Un dossier peut
   déclarer un manifeste `project.rusteegear.json` (nom + scène de démarrage) et
   s'ouvrir comme un projet (`AppState::open_project`, menu Fichier › Ouvrir…) ;
@@ -55,12 +58,18 @@ préversion — les libellés du panneau Export le rappellent.
 
 ## Éditeur
 
-- **Undo/redo.** Annulables : création/suppression/duplication d'objets,
-  groupes, manipulations au gizmo (y compris lumières), prefabs, outils
-  d'assets et, **depuis le 04/09/2026**, les éditions dans l'Inspecteur
-  (couleur, script, nom, physique…) — une entrée d'historique par rafale de
-  modifications, pas une par frappe. **Reste non annulable** : l'import glTF
-  (l'objet créé reste supprimable, et cette suppression est annulable).
+- ~~**Undo/redo partiel.**~~ **Corrigé (04/09/2026, roadmap UX 5.1 puis
+  analyse comparative court terme).** Tout est annulable : création/
+  suppression/duplication, groupes, gizmos, prefabs, outils d'assets,
+  **édition de champs dans l'Inspecteur** (une rafale de saisie/glissade =
+  une entrée d'undo, `AppState::push_ui_edit_undo`) et **import glTF**
+  (`finish_import` capture l'état avant d'ajouter l'objet). Nuance : le mesh
+  importé reste chargé en mémoire après un Cmd+Z (réutilisé si l'import est
+  refait), seul l'objet disparaît.
+- **Caméra en vol (04/09/2026, analyse comparative).** Clic droit tenu dans
+  la vue 3D : souris = regarder, WASD = se déplacer, E/Q = monter/descendre,
+  Maj = ×3. Un clic droit sans glisser garde le menu contextuel. Hors Play
+  seulement ; aucune collision avec le décor (choix : c'est un outil d'édition).
 - **Retours à l'écran (04/09/2026, roadmap UX vague 1).** Sauvegarde,
   import, projet, erreurs de script : toasts en bas à droite + compteur ⛔
   dans la barre d'état ; badge ⛔ sur l'objet dont le script est en erreur.
@@ -71,6 +80,37 @@ préversion — les libellés du panneau Export le rappellent.
   Pause ou Stop pour sélectionner.
 - **Génération IA (scène et scripts) : expérimental.** Nécessite une clé API
   externe ; qualité non garantie.
+
+## Rendu (04/09/2026, analyse comparative court terme)
+
+- **Ombres en cascade** : trois cascades (≈ 9 m, 24 m, 100 m), une seule
+  lumière directionnelle. Pas d'ombre au-delà de 100 m ni pour les lumières
+  ponctuelles/spots. Qualité « Basse » : cascades de 1024² au lieu de 2048².
+- **Transparence** : `opacity < 1` sur un objet le fait dessiner dans une
+  passe triée (arrière → avant, mélange alpha, pas d'écriture de profondeur).
+  Limites assumées : tri par **centre d'objet** (deux grandes vitres qui se
+  croisent peuvent se composer dans le mauvais ordre) ; un objet translucide
+  **ne projette pas d'ombre** ; les meshes **skinnés** restent opaques.
+
+## Physique (04/09/2026, analyse comparative court terme)
+
+- **Zones de déclenchement = capteurs rapier.** `obj.overlapped` /
+  `obj.overlap_count` / `obj.overlap_names` voient tout corps physique qui
+  traverse la zone (caisse dynamique, créature cinématique, joueur). Un objet
+  **sans physique** n'est jamais détecté (il n'a pas de collider) ; deux
+  objets statiques ne se détectent pas entre eux. `obj.triggered` garde son
+  ancien sens (le joueur seul, test d'AABB).
+- **Articulations** (Fixe / Charnière / Rotule, inspecteur › Physique › 🔗
+  Articulation) : l'objet porteur doit être **Dynamique** pour bouger ; pas de
+  moteur, pas de ressort, pas de rupture. Une cible sans physique est traitée
+  comme fixe.
+
+## Animation (04/09/2026, analyse comparative court terme)
+
+- **Locomotion auto** (idle / marche / course selon la vitesse mesurée) :
+  mélange 1D à deux clips à la fois ; pas de blend tree général, pas de
+  couches additives, pas d'IK. Sur un objet en locomotion, `obj.anim` est
+  écrasé à chaque pas.
 
 ## Import 3D
 

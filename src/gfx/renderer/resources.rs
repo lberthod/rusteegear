@@ -138,6 +138,15 @@ impl Renderer {
             1
         };
 
+        // Taille de la carte d'ombre : réglage de qualité en fenêtré, valeur de
+        // référence en headless (goldens déterministes, cf. `msaa_samples`).
+        let shadow_size = if window.is_some() {
+            crate::app::build_config::BuildConfig::load()
+                .render_quality
+                .shadow_size()
+        } else {
+            SHADOW_SIZE
+        };
         let bundle = pipelines::build(
             &device,
             &queue,
@@ -145,6 +154,7 @@ impl Renderer {
             size,
             window.as_ref(),
             msaa_samples,
+            shadow_size,
         );
         let PipelineBundle {
             pipeline,
@@ -176,9 +186,12 @@ impl Renderer {
             grid_pipeline,
             grid_vbuf,
             grid_count,
-            shadow_view,
+            shadow_layer_views,
             shadow_bind_group,
             shadow_pipeline,
+            cascade_bind_groups,
+            cascade_bufs,
+            transparent_pipeline,
             tex_layout,
             tex_sampler,
             textures,
@@ -238,9 +251,14 @@ impl Renderer {
             grid_pipeline,
             grid_vbuf,
             grid_count,
-            shadow_view,
+            shadow_layer_views,
             shadow_bind_group,
             shadow_pipeline,
+            cascade_bind_groups,
+            cascade_bufs,
+            shadow_size,
+            transparent_pipeline,
+            draw_plan_transparent: Vec::new(),
             tex_layout,
             tex_sampler,
             textures,

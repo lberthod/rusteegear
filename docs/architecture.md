@@ -46,13 +46,34 @@ autres points d'entrée notables. Structures GPU dans `types.rs` :
 `CameraUniform`, `ModelUniform`, `PointLightU`/`SceneUniform`/
 `BloomUniform`. Shaders sous `src/gfx/shaders/`. La caméra (orbite,
 yaw/pitch/distance) est séparée dans `src/gfx/camera.rs::OrbitCamera`
-(`eye()`, `view_proj()` — NDC wgpu, z ∈ [0,1]).
+(`eye()`, `view_proj()` — NDC wgpu, z ∈ [0,1] ; `look_around()` pour la
+caméra en vol au clic droit).
+
+Ordre d'une frame (`frame.rs`) : passes d'ombre — **une par cascade**
+(`render_shadow_pass`, `CASCADE_COUNT = 3`, matrices calculées par
+`passes::compute_cascades` sur les tranches du frustum, calées au texel) —
+puis passe principale : ciel → grille → statiques opaques instanciés
+(`draw_static_instanced`) → gizmos/debug → skinnés → **translucides**
+(`draw_transparent_objects`, `opacity < 1`, triés arrière → avant par
+`write_uniforms`, `transparent_pipeline` en mélange alpha sans écriture de
+profondeur) → bloom → tone mapping. Le chemin headless (`headless.rs`,
+goldens) appelle les mêmes fonctions de dessin.
 
 ## Modèle scène/assets
 
 `src/scene/mod.rs` — **pas d'ECS** : `Scene` est un `Vec<SceneObject>`, où
 chaque `SceneObject` agrège directement ses composants optionnels
-(`Transform`, `MeshKind`, `Controller`, `Combat`, `AudioSource`, etc.). Sous-
+(`Transform`, `MeshKind`, `Controller`, `Combat`, `AudioSource`, `Joint`
+(articulation rapier), `AnimationState::locomotion` (mélange idle/marche/
+course selon la vitesse), etc.).
+
+Physique (`src/runtime/physics/build.rs`) : un objet `trigger` reçoit un
+collider **capteur** rapier en plus de son solide (ou seul, s'il n'a pas de
+physique) — `Physics::sensor_overlaps` liste les paires (zone, objet) après
+chaque pas, exposées aux scripts en `obj.overlapped`/`overlap_names` ;
+`SceneObject::joint` peuple `ImpulseJointSet` (fixe / révolution / rotule,
+cible par nom ou monde). Les capteurs sont exclus des requêtes
+(`raycast`/`overlap_sphere`) et des contrôleurs cinématiques. Sous-
 modules `demos`/`import`/`persistence`/`prefab`/`queries`.
 
 `src/assets.rs` — trois schémas d'URI, dispatchés par `is_known_scheme` :
@@ -95,7 +116,8 @@ Couverture complète : `cargo test --features net_tests`.
 
 `src/app/scripting.rs::run_script` — exécute le chunk Lua déjà compilé d'un
 objet (cache par hash de source, `script_key`), expose `obj` (position,
-rotation, échelle, couleur, `tapped`/`triggered`/`exited`, `anim`), `dt`,
+rotation, échelle, couleur, `tapped`/`triggered`/`exited`,
+`overlapped`/`overlap_count`/`overlap_names`, `anim`), `dt`,
 `time`, `input`, et une API : `emit`/`on_event` (événements de gameplay,
 décalés d'un tick), `spawn`/`obj:destroy()` (accumulés, appliqués après la
 boucle des scripts), `save.get`/`save.set` (état persistant, cf. section

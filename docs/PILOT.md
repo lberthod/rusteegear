@@ -67,7 +67,7 @@ Au démarrage, l'application annonce en clair :
 | Commande | Effet | Exemple |
 |---|---|---|
 | `object add <cube\|sphere\|plane\|cylinder\|capsule\|terrain>` | Ajoute une primitive (annulable), renvoie son index | `pilot object add cube` |
-| `object set <i> <champ> <valeurs…>` | Modifie un champ : `pos/rot/scale/color x y z`, `visible on\|off`, `physics none\|static\|dynamic\|kinematic`, `metallic/roughness/emissive v`, `hp n`, `name/tag/script texte` | `pilot object set 983 color 1 0 0` |
+| `object set <i> <champ> <valeurs…>` | Modifie un champ : `pos/rot/scale/color x y z`, `visible on\|off`, `physics none\|static\|dynamic\|kinematic`, `metallic/roughness/emissive/opacity v`, `hp n`, `name/tag/script texte` | `pilot object set 983 color 1 0 0` |
 | `object get <i>` | L'objet complet (JSON sérialisé) | `pilot object get 983` |
 | `object delete/duplicate <i>` | Supprime / duplique (annulables) | `pilot object delete 983` |
 | `object damage <i> [n]` | Inflige n dégâts à un objet attaquable, dit s'il est tué | `pilot object damage 42 3` |

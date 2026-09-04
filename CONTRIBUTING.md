@@ -22,6 +22,18 @@ printf '#!/bin/sh\nexec cargo clippy --all-targets --all-features -- -D warnings
 chmod +x .git/hooks/pre-push
 ```
 
+Après un changement de rendu **voulu** (shader, ombres, passes), régénérer
+les images de référence et les relire à l'œil avant de committer :
+
+```bash
+UPDATE_GOLDEN=1 cargo test --test golden_render --test golden_skinning
+```
+
+La CI compile aussi les binaires sur **Linux et Windows** et lance l'éditeur
+sous Xvfb/lavapipe sur Linux (jobs `editor-linux`/`editor-windows`, en
+`continue-on-error` tant qu'ils n'ont pas prouvé leur stabilité) — un échec
+y est un signal, pas encore un blocage.
+
 La CI GitHub (`.github/workflows/ci.yml`) et la publication de la démo web
 (`pages.yml`) utilisent la toolchain épinglée par `rust-toolchain.toml` ;
 monter de version = un commit dédié qui change ce fichier et les deux

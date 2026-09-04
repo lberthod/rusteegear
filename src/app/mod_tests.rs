@@ -469,6 +469,7 @@ fn an_anim_notify_gates_the_combat_hit_window() {
             prev_clip: String::new(),
             prev_time: 0.0,
             blend: 1.0,
+            locomotion: None,
         }),
         script: "\
                 if on_event('anim:hit_open') then save.set('in_window', 1) end\n\
@@ -534,6 +535,7 @@ fn script_setting_obj_anim_starts_a_crossfade() {
         prev_clip: String::new(),
         prev_time: 0.0,
         blend: 1.0,
+        locomotion: None,
     });
     run_script(
         &lua,
@@ -588,6 +590,7 @@ fn script_leaving_obj_anim_untouched_does_not_reset_clip() {
         prev_clip: String::new(),
         prev_time: 0.0,
         blend: 1.0,
+        locomotion: None,
     });
     run_script(
         &lua,

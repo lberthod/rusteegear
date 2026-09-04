@@ -611,6 +611,12 @@ fn apply_object_patch(
                     .ok_or("object set : `emissive` doit être un nombre")?
                     as f32
             }
+            "opacity" => {
+                obj.opacity = value
+                    .as_f64()
+                    .ok_or("object set : `opacity` doit être un nombre (0..1)")?
+                    .clamp(0.0, 1.0) as f32
+            }
             "physics" => {
                 use crate::runtime::physics::PhysicsKind;
                 obj.physics = match value.as_str().unwrap_or_default() {

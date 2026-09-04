@@ -11,8 +11,8 @@ use winit::window::Window;
 use super::mesh::{GpuMesh, Vertex};
 use super::passes::build_grid_verts;
 use super::renderer::{
-    BLOOM_MIP_LEVELS, CameraUniform, DEPTH_FORMAT, GizmoVertex, HDR_FORMAT, JOINT_SLOT_BYTES,
-    MAX_SKINNED_INSTANCES, ModelUniform, SHADOW_SIZE, SceneUniform,
+    BLOOM_MIP_LEVELS, CASCADE_COUNT, CameraUniform, DEPTH_FORMAT, GizmoVertex, HDR_FORMAT,
+    JOINT_SLOT_BYTES, MAX_SKINNED_INSTANCES, ModelUniform, SceneUniform,
 };
 use crate::app::RING_SEGMENTS;
 use crate::editor::Editor;
@@ -402,9 +402,12 @@ pub(super) struct PipelineBundle {
     pub(super) grid_pipeline: wgpu::RenderPipeline,
     pub(super) grid_vbuf: wgpu::Buffer,
     pub(super) grid_count: u32,
-    pub(super) shadow_view: wgpu::TextureView,
+    pub(super) shadow_layer_views: Vec<wgpu::TextureView>,
     pub(super) shadow_bind_group: wgpu::BindGroup,
     pub(super) shadow_pipeline: wgpu::RenderPipeline,
+    pub(super) cascade_bind_groups: Vec<wgpu::BindGroup>,
+    pub(super) cascade_bufs: Vec<wgpu::Buffer>,
+    pub(super) transparent_pipeline: wgpu::RenderPipeline,
     pub(super) tex_layout: wgpu::BindGroupLayout,
     pub(super) tex_sampler: wgpu::Sampler,
     pub(super) textures: HashMap<String, wgpu::BindGroup>,
@@ -430,6 +433,7 @@ pub(super) fn build(
     size: winit::dpi::PhysicalSize<u32>,
     window: Option<&Arc<Window>>,
     sample_count: u32,
+    shadow_size: u32,
 ) -> PipelineBundle {
     let multisample = wgpu::MultisampleState {
         count: sample_count,
@@ -475,13 +479,13 @@ pub(super) fn build(
     let (models_buf, models_bind_group) =
         create_models_buffer(device, &model_layout, models_capacity);
 
-    // --- Carte d'ombre (shadow map) ---
+    // --- Carte d'ombre en cascade (une couche de tableau par cascade) ---
     let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shadow_map"),
         size: wgpu::Extent3d {
-            width: SHADOW_SIZE,
-            height: SHADOW_SIZE,
-            depth_or_array_layers: 1,
+            width: shadow_size,
+            height: shadow_size,
+            depth_or_array_layers: CASCADE_COUNT as u32,
         },
         mip_level_count: 1,
         sample_count: 1,
@@ -490,7 +494,45 @@ pub(super) fn build(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    let shadow_view = shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let shadow_view = shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("shadow_map_array"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let shadow_layer_views: Vec<wgpu::TextureView> = (0..CASCADE_COUNT as u32)
+        .map(|layer| {
+            shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("shadow_map_layer"),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        })
+        .collect();
+    // Bind group 0 par cascade (cf. `Renderer::cascade_bind_groups`).
+    let cascade_bufs: Vec<wgpu::Buffer> = (0..CASCADE_COUNT)
+        .map(|_| create_uniform(device, "cascade_light", std::mem::size_of::<SceneUniform>()))
+        .collect();
+    let cascade_bind_groups: Vec<wgpu::BindGroup> = cascade_bufs
+        .iter()
+        .map(|buf| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cascade_bg"),
+                layout: &camera_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: buf.as_entire_binding(),
+                    },
+                ],
+            })
+        })
+        .collect();
     let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("shadow_sampler"),
         compare: Some(wgpu::CompareFunction::LessEqual),
@@ -506,7 +548,7 @@ pub(super) fn build(
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
                     multisampled: false,
                 },
                 count: None,
@@ -706,6 +748,51 @@ pub(super) fn build(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample,
+        multiview_mask: None,
+        cache: None,
+    });
+
+    // --- Passe transparente (analyse comparative 2026-09-04) : mêmes shaders et
+    // layout que `pipeline`, mais mélange alpha (`ALPHA_BLENDING`) et **pas
+    // d'écriture de profondeur** — les objets translucides se dessinent après tous
+    // les opaques, triés du plus loin au plus près (`write_uniforms`), et ne
+    // masquent rien derrière eux dans le depth buffer.
+    let transparent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("transparent_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Vertex::layout()],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: HDR_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -1347,9 +1434,12 @@ pub(super) fn build(
         grid_pipeline,
         grid_vbuf,
         grid_count,
-        shadow_view,
+        shadow_layer_views,
         shadow_bind_group,
         shadow_pipeline,
+        cascade_bind_groups,
+        cascade_bufs,
+        transparent_pipeline,
         tex_layout,
         tex_sampler,
         textures,

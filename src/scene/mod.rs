@@ -8,7 +8,7 @@ mod persistence;
 mod prefab;
 mod queries;
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::gfx::mesh::{self, MeshData};
@@ -816,6 +816,14 @@ pub struct SceneObject {
     /// Intensité d'émission (0 = aucune ; l'objet « brille » de sa propre couleur).
     #[serde(default)]
     pub emissive: f32,
+    /// Opacité 0..1 (analyse comparative 2026-09-04, passe transparente triée) :
+    /// `1` = opaque, rendu instancié classique ; `< 1` = l'objet quitte le lot
+    /// opaque et se dessine **après**, du plus loin au plus près, en mélange
+    /// alpha sans écriture de profondeur (eau, verre, fantôme, fondu de mort).
+    /// Un objet transparent ne projette pas d'ombre (choix assumé : une ombre
+    /// pleine sous une vitre serait pire que pas d'ombre).
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
     /// Zone de déclenchement : en Play, expose `obj.triggered = true` au script quand
     /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
     #[serde(default)]
@@ -1054,11 +1062,161 @@ pub struct AnimationState {
     /// à un `prev_clip` vide.
     #[serde(default = "default_anim_blend")]
     pub blend: f32,
+    /// Locomotion automatique (analyse comparative 2026-09-04, court terme
+    /// « blend 1D vitesse → idle/marche/course », emprunté à l'`AnimationTree`
+    /// de Godot) : `None` = clip piloté à la main (`clip`, Lua `obj.anim`) ;
+    /// `Some` = le clip et le mélange sont **recalculés chaque pas** depuis la
+    /// vitesse horizontale mesurée de l'objet, cf. `Locomotion::apply`.
+    #[serde(default)]
+    pub locomotion: Option<Locomotion>,
+}
+
+/// Mélange 1D idle → marche → course selon la vitesse horizontale mesurée (m/s),
+/// pour un personnage crédible avec trois clips et zéro script : entre 0 et
+/// `walk_speed`, fondu idle→marche ; entre `walk_speed` et `run_speed`, fondu
+/// marche→course ; au-delà, course pure. La vitesse est lissée
+/// (`SMOOTHING_SECONDS`) pour qu'un arrêt net ne fasse pas claquer la pose.
+///
+/// S'appuie sur les champs de fondu existants d'`AnimationState` (`prev_clip`/
+/// `prev_time`/`blend`) : le rendu (`gfx::renderer::shadows::prepare_skinned_draws`)
+/// n'a rien à connaître de la locomotion, il mélange comme pour un crossfade —
+/// simplement, `blend` n'avance plus tout seul vers 1, il **est** le poids.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Locomotion {
+    /// Clip à l'arrêt (nom de `Clip::name`).
+    #[serde(default)]
+    pub idle: String,
+    /// Clip de marche.
+    #[serde(default)]
+    pub walk: String,
+    /// Clip de course.
+    #[serde(default)]
+    pub run: String,
+    /// Vitesse (m/s) à laquelle la marche est jouée pure.
+    #[serde(default = "default_walk_speed")]
+    pub walk_speed: f32,
+    /// Vitesse (m/s) à laquelle la course est jouée pure.
+    #[serde(default = "default_run_speed")]
+    pub run_speed: f32,
+    /// Dernière position vue (pour dériver la vitesse) — jamais sérialisée.
+    #[serde(skip)]
+    pub last_pos: Option<Vec3>,
+    /// Vitesse horizontale lissée (m/s) — jamais sérialisée ; lisible pour le
+    /// débogage/l'inspecteur.
+    #[serde(skip)]
+    pub speed: f32,
+}
+
+fn default_walk_speed() -> f32 {
+    1.5
+}
+
+fn default_run_speed() -> f32 {
+    4.5
+}
+
+impl Default for Locomotion {
+    fn default() -> Self {
+        Self {
+            idle: "Idle".into(),
+            walk: "Walk".into(),
+            run: "Run".into(),
+            walk_speed: default_walk_speed(),
+            run_speed: default_run_speed(),
+            last_pos: None,
+            speed: 0.0,
+        }
+    }
+}
+
+impl Locomotion {
+    /// Constante de temps du lissage de vitesse (s).
+    pub const SMOOTHING_SECONDS: f32 = 0.12;
+
+    /// Mesure la vitesse horizontale depuis `pos` (position au pas courant) et
+    /// renvoie `(clip_bas, clip_haut, poids)` : `poids = 0` ⇒ `clip_bas` pur,
+    /// `1` ⇒ `clip_haut` pur. Le premier appel (pas de position précédente) mesure 0.
+    pub fn measure(&mut self, pos: Vec3, dt: f32) -> (&str, &str, f32) {
+        let raw = match self.last_pos {
+            Some(prev) if dt > 0.0 => {
+                let d = pos - prev;
+                Vec2::new(d.x, d.z).length() / dt
+            }
+            _ => 0.0,
+        };
+        self.last_pos = Some(pos);
+        // Lissage exponentiel indépendant du framerate.
+        let k = 1.0 - (-dt / Self::SMOOTHING_SECONDS).exp();
+        self.speed += (raw - self.speed) * k;
+        let walk = self.walk_speed.max(0.01);
+        let run = self.run_speed.max(walk + 0.01);
+        if self.speed <= walk {
+            (&self.idle, &self.walk, (self.speed / walk).clamp(0.0, 1.0))
+        } else {
+            (
+                &self.walk,
+                &self.run,
+                ((self.speed - walk) / (run - walk)).clamp(0.0, 1.0),
+            )
+        }
+    }
 }
 
 impl AnimationState {
     /// Durée du fondu enchaîné entre deux clips (secondes).
     pub const CROSSFADE_SECONDS: f32 = 0.2;
+
+    /// Applique la locomotion (si présente) pour ce pas : mesure la vitesse,
+    /// choisit la paire de clips et pose directement `prev_clip`/`clip`/`blend`.
+    /// Les deux temps de lecture avancent en continu (`time`, `prev_time`) pour
+    /// qu'un aller-retour idle↔marche ne redémarre jamais un clip à zéro. Renvoie
+    /// `false` si l'objet n'a pas de locomotion (l'appelant garde alors le fondu
+    /// classique).
+    pub fn apply_locomotion(&mut self, pos: Vec3, dt: f32) -> bool {
+        let Some(loco) = self.locomotion.as_mut() else {
+            return false;
+        };
+        let (lo, hi, w) = loco.measure(pos, dt);
+        let (lo, hi) = (lo.to_string(), hi.to_string());
+        // Poids (quasi) nul : clip bas pur, sans clip fantôme à mélanger (le rendu
+        // ignore `prev_clip` dès que `blend == 1`). Seuil et non `== 0` : la vitesse
+        // lissée décroît exponentiellement et n'atteint jamais zéro exactement.
+        if w <= 0.02 {
+            if self.clip != lo {
+                // Le clip bas vient de « descendre » (ex. marche→idle) : garde la
+                // phase qu'il avait comme `prev_clip` s'il l'était, sinon repart.
+                self.time = if self.prev_clip == lo {
+                    self.prev_time
+                } else {
+                    0.0
+                };
+                self.clip = lo;
+            }
+            self.prev_clip.clear();
+            self.blend = 1.0;
+        } else {
+            if self.clip != hi {
+                let was_prev = self.prev_clip == hi;
+                let hi_time = if was_prev { self.prev_time } else { 0.0 };
+                // L'ancien clip haut devient le bas s'il correspond.
+                if self.clip == lo {
+                    self.prev_time = self.time;
+                } else if self.prev_clip != lo {
+                    self.prev_time = 0.0;
+                }
+                self.time = hi_time;
+                self.clip = hi.clone();
+            }
+            if self.prev_clip != lo {
+                self.prev_clip = lo;
+                self.prev_time = 0.0;
+            }
+            self.blend = w;
+        }
+        self.time += dt * self.speed;
+        self.prev_time += dt * self.speed;
+        true
+    }
 
     /// Change le clip joué, en démarrant un fondu enchaîné depuis le clip actuel si
     /// `clip` diffère réellement (sans effet si on redemande le clip déjà en cours — pas
@@ -1099,6 +1257,7 @@ impl Default for AnimationState {
             prev_clip: String::new(),
             prev_time: 0.0,
             blend: default_anim_blend(),
+            locomotion: None,
         }
     }
 }
@@ -1212,6 +1371,7 @@ impl Default for SceneObject {
             metallic: 0.0,
             roughness: default_roughness(),
             emissive: 0.0,
+            opacity: default_opacity(),
             trigger: false,
             wind: None,
             controller: None,
@@ -1252,6 +1412,10 @@ pub fn hue_to_rgb(h: f32) -> [f32; 3] {
 
 fn default_roughness() -> f32 {
     0.6
+}
+
+fn default_opacity() -> f32 {
+    1.0
 }
 
 fn white() -> [f32; 3] {

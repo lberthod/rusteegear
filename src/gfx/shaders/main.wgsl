@@ -28,6 +28,15 @@ struct Light {
     sky_horizon: vec4<f32>,
     sky_zenith: vec4<f32>,
     fog: vec4<f32>, // rgb = couleur, w = densité (0 = désactivé)
+    // Ombres en cascade (analyse comparative 2026-09-04, court terme) : une
+    // view-projection de lumière par cascade, ajustée sur une tranche du frustum
+    // caméra (proche = serrée = nette, lointaine = large = floue mais couvrante).
+    // `light_vp` ci-dessus reste la cascade 0 pour les shaders qui ne déclarent
+    // que ce préfixe (shadow.wgsl, skinned.wgsl : passe d'ombre).
+    cascade_vp: array<mat4x4<f32>, 3>,
+    // xyz = distance caméra (m) au-delà de laquelle on passe à la cascade suivante
+    // (x : 0→1, y : 1→2, z : fin de la 2 = plus d'ombre) ; w = 1 / taille texel.
+    cascade_splits: vec4<f32>,
 };
 @group(0) @binding(1) var<uniform> light: Light;
 
@@ -40,7 +49,7 @@ struct Model {
 // Tableau d'instances : indexé par @builtin(instance_index).
 @group(1) @binding(0) var<storage, read> models: array<Model>;
 
-@group(2) @binding(0) var shadow_map: texture_depth_2d;
+@group(2) @binding(0) var shadow_map: texture_depth_2d_array;
 @group(2) @binding(1) var shadow_samp: sampler_comparison;
 
 @group(3) @binding(0) var albedo_tex: texture_2d<f32>;
@@ -62,6 +71,7 @@ struct VsOut {
     @location(3) world_pos: vec3<f32>,
     @location(4) uv: vec2<f32>,
     @location(5) material: vec3<f32>, // metallic, roughness, emissive
+    @location(6) alpha: f32,          // opacité (passe transparente ; 1 en opaque)
 };
 
 @vertex
@@ -76,12 +86,23 @@ fn vs_main(in: VsIn) -> VsOut {
     out.world_pos = world.xyz;
     out.uv = in.uv;
     out.material = model.params.yzw;
+    out.alpha = model.color.a;
     return out;
 }
 
-// Facteur d'ombre [0..1] : 1 = pleinement éclairé, 0 = dans l'ombre.
+// Facteur d'ombre [0..1] : 1 = pleinement éclairé, 0 = dans l'ombre. Cascade
+// choisie par la distance à la caméra (`cascade_splits`) ; `select` plutôt
+// qu'un index dynamique dans l'uniform, pour rester trivialement portable
+// (WebGPU/naga) et sans branche divergente autour de l'échantillonnage.
 fn shadow_factor(world_pos: vec3<f32>) -> f32 {
-    let lp = light.light_vp * vec4<f32>(world_pos, 1.0);
+    let view_dist = length(camera.eye.xyz - world_pos);
+    let c1 = f32(view_dist > light.cascade_splits.x);
+    let c2 = f32(view_dist > light.cascade_splits.y);
+    let cascade = i32(c1 + c2);
+    let lp0 = light.cascade_vp[0] * vec4<f32>(world_pos, 1.0);
+    let lp1 = light.cascade_vp[1] * vec4<f32>(world_pos, 1.0);
+    let lp2 = light.cascade_vp[2] * vec4<f32>(world_pos, 1.0);
+    let lp = select(select(lp0, lp1, cascade == 1), lp2, cascade == 2);
     let proj = lp.xyz / lp.w;
     // Hors de la carte d'ombre → considéré éclairé. Calculé en booléen, PAS en
     // retour anticipé : `textureSampleCompare` (boucle PCF plus bas) doit rester
@@ -91,18 +112,22 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
     // `world_pos` — qui varie par fragment — ferait sortir certains threads du
     // quad avant l'appel à la texture, ce qui casse le calcul des dérivées
     // implicites dont dépend l'échantillonnage.
-    let in_bounds =
-        proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z <= 1.0;
+    // Au-delà de la dernière cascade : plus d'ombre du tout (éclairé).
+    let in_bounds = proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0
+        && proj.z <= 1.0 && view_dist <= light.cascade_splits.z;
     let uv = vec2<f32>(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
-    let bias = 0.003;
+    // Biais constant en profondeur normalisée : la plage de profondeur d'une
+    // cascade grandit avec sa taille, donc le biais en mètres aussi — ce qui est
+    // justement ce qu'il faut (les texels lointains sont plus gros).
+    let bias = 0.0025;
     // PCF 5x5 pour adoucir le bord — toujours exécuté, même hors carte d'ombre
     // (le résultat est alors ignoré par le `select` final, cf. ci-dessus).
     var sum = 0.0;
-    let texel = 1.0 / 2048.0;
+    let texel = light.cascade_splits.w;
     for (var dx = -2; dx <= 2; dx = dx + 1) {
         for (var dy = -2; dy <= 2; dy = dy + 1) {
             let o = vec2<f32>(f32(dx), f32(dy)) * texel;
-            sum = sum + textureSampleCompare(shadow_map, shadow_samp, uv + o, proj.z - bias);
+            sum = sum + textureSampleCompare(shadow_map, shadow_samp, uv + o, cascade, proj.z - bias);
         }
     }
     return select(sum / 25.0, 1.0, !in_bounds);
@@ -199,5 +224,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let fog_dist = length(camera.eye.xyz - in.world_pos);
     let fog_amount = clamp(1.0 - exp(-fog_dist * light.fog.w), 0.0, 1.0);
     color = mix(color, light.fog.rgb, fog_amount);
-    return vec4<f32>(color, 1.0);
+    // Alpha = opacité de l'objet : ignoré par le pipeline opaque (`REPLACE`), mélangé
+    // par la passe transparente (`ALPHA_BLENDING`, cf. `transparent_pipeline`).
+    return vec4<f32>(color, in.alpha);
 }

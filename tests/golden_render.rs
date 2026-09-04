@@ -304,6 +304,66 @@ fn scene_bloom() -> Scene {
     }
 }
 
+/// Passe transparente (analyse comparative 2026-09-04) : un cube translucide
+/// devant une sphère opaque — si la passe n'était pas câblée (blend `REPLACE`,
+/// tri absent, opacité ignorée), la sphère disparaîtrait derrière un cube plein.
+fn scene_transparency() -> Scene {
+    let mut scene = scene_primitives_lights();
+    scene.objects.push(SceneObject {
+        name: "Vitre".into(),
+        mesh: MeshKind::Cube,
+        transform: Transform {
+            scale: glam::Vec3::new(2.4, 1.6, 0.2),
+            ..Transform::from_pos(glam::Vec3::new(0.6, 0.2, 1.6))
+        },
+        color: [0.3, 0.8, 1.0],
+        opacity: 0.35,
+        ..Default::default()
+    });
+    scene
+}
+
+#[test]
+fn golden_transparency() {
+    let Some(pixels) = render_headless(scene_transparency()) else {
+        return;
+    };
+    assert_matches_golden("transparency.png", &pixels, WIDTH, HEIGHT);
+}
+
+/// Garde-fou indépendant du golden : la même vitre à opacité 1 masque la sphère,
+/// à 0,35 elle la laisse transparaître — les deux rendus doivent différer nettement
+/// dans la zone de la vitre, et le rendu translucide doit rester plus proche du
+/// rendu **sans** vitre que le rendu opaque ne l'est.
+#[test]
+fn a_translucent_object_lets_the_scene_behind_show_through() {
+    let Some(without) = render_headless(scene_primitives_lights()) else {
+        return;
+    };
+    let mut opaque_scene = scene_transparency();
+    opaque_scene.objects.last_mut().unwrap().opacity = 1.0;
+    let (Some(opaque), Some(translucent)) = (
+        render_headless(opaque_scene),
+        render_headless(scene_transparency()),
+    ) else {
+        return;
+    };
+    let d_opaque = diff_ratio(&without, &opaque);
+    let d_translucent = diff_ratio(&without, &translucent);
+    assert!(
+        d_opaque > 0.02,
+        "la vitre opaque doit couvrir une zone visible ({d_opaque})"
+    );
+    assert!(
+        d_translucent < d_opaque,
+        "translucide ({d_translucent}) doit rester plus proche du fond qu'opaque ({d_opaque})"
+    );
+    assert!(
+        diff_ratio(&opaque, &translucent) > 0.01,
+        "l'opacité doit changer le rendu"
+    );
+}
+
 #[test]
 fn golden_bloom() {
     let Some(pixels) = render_headless(scene_bloom()) else {
