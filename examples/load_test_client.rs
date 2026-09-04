@@ -115,7 +115,9 @@ fn main() {
                         },
                     );
                 }
-                ClientMsg::Leave => {}
+                // Pas de machine à états de manche dans ce banc de charge
+                // (roadmap post-audit UX v2 2026-09-04, 0.2).
+                ClientMsg::Leave | ClientMsg::RestartRound => {}
             }
         }
 

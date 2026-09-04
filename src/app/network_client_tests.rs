@@ -64,6 +64,10 @@ fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
             ClientMsg::Leave => {
                 server_app.despawn_network_player(id);
             }
+            // La relance de manche vit dans `bin/server.rs` (`tick_room`), pas
+            // dans cette boucle minimale (roadmap post-audit UX v2 2026-09-04,
+            // 0.2) — testée là-bas, à travers le vrai socket.
+            ClientMsg::RestartRound => {}
         }
     }
     server_app.advance_play();
@@ -1764,4 +1768,157 @@ fn palier_banner_stays_silent_without_a_known_xp_total() {
     app.check_palier_atteint(&summary);
     assert_eq!(app.fx.palier_flash, 0.0);
     assert_eq!(app.firebase_xp, None);
+}
+
+/// Roadmap post-audit UX v2 2026-09-04, 0.1/0.2 (S-01) : `GameEvent::RoundStart`
+/// efface tout ce qui appartenait à la manche précédente — la bannière de fin
+/// de manche (`round_summary`), les drapeaux locaux de défaite/victoire, la
+/// cause de mort — et ramène le compteur de vague local à la première. Avant
+/// ce message, un client relancé par le serveur gardait « Manche perdue » à
+/// l'écran, vie pleine.
+#[test]
+fn round_start_event_clears_the_round_summary_and_local_round_flags() {
+    use crate::net::protocol::{DeathCause, DeathCauseKind, RoundPlayerSummary};
+
+    let mut app = AppState::new();
+    app.load_zombies_demo();
+    app.playing = true;
+    assert!(app.max_wave() > 0, "la démo zombies a des vagues");
+    app.round_summary = Some(vec![RoundPlayerSummary {
+        player_id: 1,
+        name: "Loïc".to_string(),
+        frags: 0,
+        assists: 0,
+        xp: 0,
+    }]);
+    app.round_summary_won = false;
+    app.round_contract_label = Some("contrat");
+    app.lost = true;
+    app.win_time = Some(12.0);
+    app.death_cause = Some(DeathCause {
+        kind: DeathCauseKind::Monster,
+        distinct_attackers: 1,
+    });
+    app.wave = 3;
+    app.fx.wave_banner_flash = 1.0;
+
+    app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+        crate::net::protocol::GameEvent::RoundStart,
+    ));
+
+    assert!(
+        app.round_summary.is_none(),
+        "bannière de fin de manche effacée"
+    );
+    assert!(app.round_contract_label.is_none());
+    assert!(!app.is_lost(), "défaite locale levée");
+    assert!(!app.has_won(), "victoire locale levée");
+    assert!(app.death_cause.is_none());
+    assert_eq!(app.wave, 1, "compteur de vague local ramené à la première");
+    assert_eq!(app.fx.wave_banner_flash, 0.0);
+}
+
+/// Roadmap post-audit UX v2 2026-09-04, 0.1 : `GameEvent::WaveStart` aligne
+/// le compteur de vague local sur celui du salon (un arrivant en vague 3
+/// affichait « Vague 1 ») — sauf pour une scène locale sans manches
+/// (`wave == 0`), qui n'a rien à aligner.
+#[test]
+fn wave_start_event_aligns_the_local_wave_counter_on_the_room() {
+    let mut app = AppState::new();
+    app.load_zombies_demo();
+    app.playing = true;
+    app.wave = 1;
+    app.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+        crate::net::protocol::GameEvent::WaveStart { wave: 3 },
+    ));
+    assert_eq!(app.wave, 3);
+    assert_eq!(app.fx.wave_banner_wave, 3);
+
+    let mut no_waves = AppState::new();
+    assert_eq!(no_waves.wave, 0, "scène par défaut sans manches");
+    no_waves.handle_server_msg(crate::net::protocol::ServerMsg::Event(
+        crate::net::protocol::GameEvent::WaveStart { wave: 3 },
+    ));
+    assert_eq!(no_waves.wave, 0, "rien à aligner sans système de manches");
+}
+
+/// Roadmap post-audit UX v2 2026-09-04, 0.1 (S-01, vrai socket) : connecté
+/// mais sans encore aucun `Snapshot` de la manche (jamais vivant dedans), une
+/// défaite reçue n'affiche pas « Manche perdue » ; une fois notre vie connue
+/// du serveur, la défaite est bien mémorisée.
+#[cfg(feature = "net_tests")]
+#[test]
+fn a_lose_event_before_any_snapshot_of_the_round_is_ignored() {
+    use crate::net::protocol::RoundPlayerSummary;
+
+    let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+    let mut server_app = AppState::new();
+    server_app.load_zombies_demo();
+    server_app.playing = true;
+    let mut app = connected_app_with_a_player(&net);
+    assert!(app.net_conn.net_local_health.is_none());
+
+    let lose = || {
+        crate::net::protocol::ServerMsg::Event(crate::net::protocol::GameEvent::Lose {
+            summary: vec![RoundPlayerSummary {
+                player_id: 1,
+                name: "Testeur".to_string(),
+                frags: 0,
+                assists: 0,
+                xp: 0,
+            }],
+        })
+    };
+    app.handle_server_msg(lose());
+    assert!(
+        app.round_summary.is_none(),
+        "jamais vivant dans cette manche : pas de bannière de défaite"
+    );
+
+    for tick in 0..5 {
+        std::thread::sleep(Duration::from_millis(20));
+        server_tick(&mut server_app, &net, tick);
+        app.poll_network();
+    }
+    assert!(
+        app.net_conn.net_local_health.is_some_and(|h| h > 0.0),
+        "vivant dans la manche après le premier snapshot"
+    );
+    app.handle_server_msg(lose());
+    assert!(
+        app.round_summary.is_some(),
+        "défaite d'une manche jouée : mémorisée"
+    );
+    assert!(!app.round_summary_won);
+}
+
+/// Roadmap post-audit UX v2 2026-09-04, 0.2 (vrai socket) : « Rejouer » en
+/// ligne envoie `ClientMsg::RestartRound` au serveur et ne relance rien
+/// localement ; hors ligne, `request_round_restart` décline et l'appelant
+/// retombe sur `restart_game`.
+#[cfg(feature = "net_tests")]
+#[test]
+fn request_round_restart_sends_restart_round_only_when_connected() {
+    let mut offline = AppState::new();
+    assert!(
+        !offline.request_round_restart(),
+        "hors ligne : relance locale"
+    );
+
+    let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+    let mut app = connected_app_with_a_player(&net);
+    let (id, join) = net
+        .inbox
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Join attendu côté serveur");
+    assert!(matches!(join, ClientMsg::Join { .. }));
+
+    assert!(app.request_round_restart(), "connecté : demande au serveur");
+    let (restart_id, msg) = net
+        .inbox
+        .recv_timeout(Duration::from_secs(2))
+        .expect("RestartRound attendu côté serveur");
+    assert_eq!(restart_id, id);
+    assert_eq!(msg, ClientMsg::RestartRound);
+    assert!(app.is_connected(), "« Rejouer » en ligne ne déconnecte pas");
 }

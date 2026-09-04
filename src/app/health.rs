@@ -538,6 +538,38 @@ impl AppState {
         self.network.network_health.get(&id).copied()
     }
 
+    /// Force la vie du joueur réseau `id` (bornée à `[0, max]`), sans effet
+    /// s'il n'est pas connu. À `0`, applique la même mort qu'un contact
+    /// monstre (`update_network_health`) : objet masqué (spectateur) et
+    /// `GameEvent::PlayerDown` sans cause — sans le masquage, la régénération
+    /// hors combat le ramènerait aussitôt au-dessus de zéro. Outil des tests
+    /// de salon (`bin/server.rs`, `net_tests` — roadmap post-audit UX v2
+    /// 2026-09-04, 0.3 : « un joueur arrivant dans une manche perdue repart
+    /// vivant ») : décider une défaite sans attendre ~6 s de morsures réelles,
+    /// comme `NetServer::next_player_id` sert aux tests sans rien réserver.
+    pub fn set_network_player_health(&mut self, id: PlayerId, hp: f32) {
+        let Some(&index) = self.network.network_players.get(&id) else {
+            return;
+        };
+        let max_hp = self.max_health_for(id);
+        let hp = hp.clamp(0.0, max_hp);
+        self.network.network_health.insert(id, hp);
+        if hp > 0.0 {
+            return;
+        }
+        if let Some(o) = self.scene.objects.get_mut(index) {
+            o.visible = false;
+        }
+        self.network.recent_damage.remove(&id);
+        self.net_conn
+            .pending_net_events
+            .push(GameEvent::PlayerDown {
+                player_id: id,
+                cause: None,
+            });
+        self.player_down_count += 1;
+    }
+
     /// PV max du joueur réseau `id` (base `MAX_HEALTH` modulée par sa classe,
     /// GDD §3.2 — ex. Éclaireur ×0,70) : `spawn_network_player` la calcule une
     /// fois pour toutes au spawn. `MAX_HEALTH` en repli si `id` est inconnu

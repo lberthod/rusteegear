@@ -57,6 +57,19 @@ const SERVER_TICK: Duration = Duration::from_millis(16); // ~60 Hz
 /// la manche ne se termine jamais, ex. bug de configuration de scène).
 const MAX_DURATION: Duration = Duration::from_secs(1200);
 
+/// Intermission entre une manche décidée (victoire/défaite diffusée) et la
+/// relance du salon (roadmap post-audit UX v2 2026-09-04, 0.1/0.2 — S-01).
+/// Jusqu'ici la relance était **immédiate**, dans le tick même de la
+/// défaite : le joueur recevait `GameEvent::Lose` et se retrouvait réapparu
+/// vivant, vie pleine, dans une manche neuve — le temps de lire « Manche
+/// perdue », les monstres de la manche relancée le rattrapaient déjà, et
+/// rien ne disait au client que la manche avait changé. Le résumé de manche
+/// reste donc affiché ce temps-là ; « Rejouer » (`ClientMsg::RestartRound`)
+/// écourte l'attente, un joueur qui arrive pendant l'intermission relance
+/// aussitôt (cf. `handle_message`). Assez long pour lire frags/XP, assez
+/// court pour ne pas laisser un salon figé.
+const ROUND_INTERMISSION: Duration = Duration::from_secs(8);
+
 /// Adresse d'écoute par défaut ; `RUSTEEGEAR_SERVER_ADDR` pour surcharger (ex. tests
 /// manuels avec plusieurs instances sur la même machine).
 const DEFAULT_ADDR: &str = "127.0.0.1:7777";
@@ -145,6 +158,20 @@ struct Room {
     started: Instant,
     /// Cf. `PlayerActivity` — garde anti-AFK de l'économie d'XP (GDD §8.3).
     activity: HashMap<PlayerId, PlayerActivity>,
+    /// Manche décidée (victoire/défaite déjà diffusée et créditée) en attente
+    /// de relance : instant de la décision, pour mesurer `ROUND_INTERMISSION`
+    /// (roadmap post-audit UX v2 2026-09-04, 0.1). `None` tant que la manche
+    /// court. Garde aussi contre une double diffusion : `is_room_lost()`
+    /// reste vrai à chaque tick de l'intermission.
+    round_end: Option<Instant>,
+    /// « Rejouer » reçu (`ClientMsg::RestartRound`, 0.2) : la relance a lieu
+    /// au prochain tick, **après** la fin de manche éventuelle du même tick,
+    /// pour que `Win`/`Lose` partent toujours avant `RoundStart`.
+    restart_requested: bool,
+    /// Ticks simulés depuis la dernière (re)composition de la manche : un
+    /// salon qui n'a encore jamais tourné n'a pas besoin d'être relancé pour
+    /// son premier arrivant (cf. `handle_message`, `Join`).
+    ticks: u64,
 }
 
 impl Room {
@@ -166,12 +193,16 @@ impl Room {
             last_score,
             started: Instant::now(),
             activity: HashMap::new(),
+            round_end: None,
+            restart_requested: false,
+            ticks: 0,
         }
     }
 
     /// Recharge une manche fraîche **sans déconnecter** les joueurs déjà
-    /// présents : ils sont re-spawnés dans la scène recomposée. Appelé quand
-    /// la manche de ce salon se termine (victoire/défaite) ou dépasse
+    /// présents : ils sont re-spawnés dans la scène recomposée. Appelé (via
+    /// `relaunch`, qui l'annonce aux clients) quand la manche de ce salon se
+    /// termine (victoire/défaite, après l'intermission) ou dépasse
     /// `MAX_DURATION` — seul ce salon repart, les autres salons ne sont pas
     /// affectés.
     fn restart(&mut self) {
@@ -195,6 +226,39 @@ impl Room {
         // Nouvelle manche = nouvelle mesure d'activité (GDD §8.3) : la
         // participation à la manche précédente ne doit pas se reporter.
         self.activity.clear();
+        self.round_end = None;
+        self.restart_requested = false;
+        self.ticks = 0;
+    }
+
+    /// Recompose la manche (`restart`) **et** l'annonce aux joueurs du salon
+    /// (`GameEvent::RoundStart`, roadmap post-audit UX v2 2026-09-04, 0.1) :
+    /// tous viennent d'être réapparus vivants, chaque client efface sa
+    /// bannière de fin de manche. Seul point d'entrée des relances — fin
+    /// d'intermission, « Rejouer », arrivée dans un salon sans survivant —
+    /// pour qu'aucune ne reparte sans prévenir les clients.
+    fn relaunch(&mut self, net: Option<&NetServer>) {
+        self.restart();
+        if let Some(net) = net {
+            net.send_to_many(
+                &self.connected_ids(),
+                &ServerMsg::Event(GameEvent::RoundStart),
+            );
+        }
+    }
+
+    /// Un joueur du salon **autre** que `id` est-il encore en vie ? Décide si
+    /// une relance peut avoir lieu sans couper la manche de quelqu'un : un
+    /// arrivant ou un « Rejouer » relance seulement s'il n'y a plus aucun
+    /// survivant à qui la manche en cours appartient encore (0.1/0.2).
+    fn other_player_alive(&self, id: PlayerId) -> bool {
+        self.lobby.names.keys().any(|&other| {
+            other != id
+                && self
+                    .app
+                    .network_player_health(other)
+                    .is_some_and(|hp| hp > 0.0)
+        })
     }
 
     /// Joueurs actuellement connectés à ce salon (pour cibler les envois —
@@ -353,7 +417,7 @@ fn handle_message(
                         }
                     }
                 }
-                player_room.insert(id, code);
+                player_room.insert(id, code.clone());
                 net.send_to_many(
                     &room.connected_ids(),
                     &ServerMsg::PlayerJoined {
@@ -371,6 +435,33 @@ fn handle_message(
                         objective: room.lobby.objective.unwrap_or_default().to_u8(),
                     }),
                 );
+                // Salon sans survivant (roadmap post-audit UX v2 2026-09-04,
+                // 0.1 — S-01) : manche déjà perdue en intermission, ou manche
+                // abandonnée par ses joueurs (partis en cours de route, le
+                // salon n'est fermé qu'à manche décidée) avec ses monstres
+                // déjà massés là où le dernier joueur se tenait. L'arrivant y
+                // apparaissait au milieu des créatures et mourait en quelques
+                // secondes sans avoir vu venir personne, sa mort décidait
+                // aussitôt une nouvelle défaite, et ainsi de suite. On repart
+                // d'une manche neuve pour lui (et pour les vaincus, réapparus
+                // avec lui). Un salon qui n'a pas encore tourné (`ticks == 0`,
+                // créé par ce `Join`) est déjà neuf ; un salon où quelqu'un se
+                // bat encore n'est pas coupé : l'arrivant rejoint sa manche.
+                if room.ticks > 0 && !room.other_player_alive(id) {
+                    log::info!("[{code}] Manche relancée pour l'arrivant {id} (aucun survivant)");
+                    room.relaunch(Some(net));
+                } else if room.app.wave > 0 {
+                    // Manche en cours : l'arrivant apprend où elle en est (le
+                    // client aligne son compteur de vague dessus, cf.
+                    // `network_client::handle_server_msg`) — jusqu'ici il
+                    // affichait « Vague 1 » quel que soit l'état du salon.
+                    net.send_to(
+                        id,
+                        &ServerMsg::Event(GameEvent::WaveStart {
+                            wave: room.app.wave,
+                        }),
+                    );
+                }
             } else {
                 log::warn!(
                     "Joueur {id} ({name}) : aucun gabarit pilotable dans la scène (salon « {code} »)"
@@ -420,7 +511,249 @@ fn handle_message(
                 &ServerMsg::PlayerLeft { player_id: id },
             );
         }
+        // « Rejouer » en ligne (roadmap post-audit UX v2 2026-09-04, 0.2) :
+        // jusqu'ici le client relançait sa scène **locale** (`restart_game`)
+        // alors que la manche est celle du serveur — bannière conservée,
+        // fantômes et monstres désynchronisés. La relance est différée au
+        // prochain `tick_room` (cf. `Room::restart_requested`). Honorée
+        // pendant l'intermission d'une manche décidée (`round_end`, victoire
+        // comprise — tout le monde y est vivant) ou quand plus aucun autre
+        // joueur ne se bat ; refusée sinon : un vaincu ne coupe pas la manche
+        // de ses alliés, il attend l'issue comme spectateur.
+        ClientMsg::RestartRound => {
+            let Some((code, room)) = player_room
+                .get(&id)
+                .and_then(|code| rooms.get_mut(code).map(|room| (code, room)))
+            else {
+                return;
+            };
+            room.lobby.last_seen.insert(id, Instant::now());
+            if room.round_end.is_none() && room.other_player_alive(id) {
+                log::info!(
+                    "[{code}] Relance demandée par {id} ignorée : d'autres joueurs sont \
+                     encore en vie"
+                );
+                return;
+            }
+            log::info!("[{code}] Relance de la manche demandée par {id}");
+            room.restart_requested = true;
+        }
     }
+}
+
+/// Issue d'un tick de salon (`tick_room`) : le salon continue, ou doit être
+/// fermé par la boucle principale (vide à manche décidée ou en fin
+/// d'intermission — personne à qui relancer).
+#[derive(Debug, PartialEq, Eq)]
+enum RoomTick {
+    Keep,
+    Close,
+}
+
+/// Un tick de simulation du salon `code` : avance la manche, diffuse
+/// snapshot et évènements, détecte la fin de manche (victoire/défaite/arrêt
+/// de sécurité), puis gère l'intermission et la relance. Extrait de `main`
+/// (roadmap post-audit UX v2 2026-09-04, 0.1/0.3) pour que la machine à états
+/// de manche soit testable sans lancer le binaire — comme `handle_message`.
+///
+/// Machine à états d'une manche (S-01) :
+/// 1. manche en cours (`round_end == None`) : `Win`/`Lose` dès qu'elle est
+///    décidée, XP et classement crédités, puis **intermission** ;
+/// 2. intermission (`round_end == Some`) : les joueurs lisent leur résumé,
+///    la simulation continue (spectateurs) mais aucune fin de manche n'est
+///    plus évaluée — `is_room_lost()` resterait vrai à chaque tick ;
+/// 3. relance (`Room::relaunch`) à la fin de `ROUND_INTERMISSION`, ou dès
+///    le tick suivant un « Rejouer » (`restart_requested`) — un arrivant
+///    dans un salon sans survivant relance, lui, directement depuis
+///    `handle_message`.
+///
+/// Jusqu'ici, la relance était immédiate (même tick que la défaite) et
+/// silencieuse : un client recevait `Lose` puis se retrouvait réapparu, vie
+/// pleine, dans une manche neuve dont rien ne lui signalait le départ —
+/// bannière « Manche perdue » figée sur un joueur bien vivant.
+fn tick_room(
+    code: &str,
+    room: &mut Room,
+    net: Option<&NetServer>,
+    firebase: &Option<(FirebaseConfig, AuthSession)>,
+    tick: u32,
+) -> RoomTick {
+    room.app.advance_play();
+    room.update_activity();
+    room.ticks += 1;
+
+    if let Some(net) = net {
+        let ids = room.connected_ids();
+        // Broadcast ciblé (`send_to_many`) : la `Snapshot` — le plus
+        // gros message du protocole — est encodée UNE seule fois par
+        // tick et par salon, au lieu d'un ré-encodage bincode identique
+        // par destinataire (audit réseau 2026-07).
+        let snapshot = ServerMsg::Snapshot(room.app.network_snapshot(tick));
+        net.send_to_many(&ids, &snapshot);
+        // Évènements ponctuels produits par la simulation de ce tick
+        // (monstre vaincu, joueur vaincu...) : diffusés une fois, pour
+        // que les clients réagissent (son/flash) sans comparer deux
+        // snapshots — uniquement aux joueurs *de ce salon*.
+        for event in room.app.take_net_events() {
+            net.send_to_many(&ids, &ServerMsg::Event(event));
+        }
+    }
+
+    if room.app.wave != room.last_wave {
+        log::info!("[{code}] Manche {} révélée", room.app.wave);
+        // Diffuse la bannière de vague (Phase H, Sprint 2, GDD §17.2) :
+        // jusqu'ici `GameEvent::WaveStart` n'était jamais émis par le
+        // serveur, seulement testé au niveau transport
+        // (`net::server_loop`) — le client n'avait donc aucun moyen de
+        // savoir qu'une nouvelle vague venait d'être révélée, sinon en
+        // comparant lui-même deux snapshots. `wave == 0` = scène sans
+        // système de manches (cf. doc de `AppState::wave`), rien à
+        // annoncer dans ce cas.
+        if room.app.wave > 0
+            && let Some(net) = net
+        {
+            net.send_to_many(
+                &room.connected_ids(),
+                &ServerMsg::Event(GameEvent::WaveStart {
+                    wave: room.app.wave,
+                }),
+            );
+        }
+        room.last_wave = room.app.wave;
+    }
+    if room.app.score() != room.last_score {
+        log::info!("[{code}] Score : {}", room.app.score());
+        room.last_score = room.app.score();
+    }
+
+    // Intermission en cours : la manche est déjà décidée et créditée, on
+    // n'évalue plus sa fin (sinon `Lose` repartirait à chaque tick) — on
+    // attend seulement la relance ci-dessous.
+    if room.round_end.is_none() {
+        // `is_room_lost()` (pas `is_lost()`, pensé pour un joueur local
+        // unique) : la défaite n'arrive que si TOUS les joueurs réseau de
+        // CE salon sont vaincus (GAMEDESIGN_EN_LIGNE.md §3.1) — un seul
+        // joueur qui meurt devient spectateur, la manche continue pour
+        // les autres, dans ce salon comme dans les autres.
+        let decided = room.app.has_won() || room.app.is_room_lost();
+        let timed_out = room.started.elapsed() > MAX_DURATION;
+        if decided || timed_out {
+            if decided {
+                log::info!(
+                    "[{code}] Manche terminée : {}, score final {} (en {:.1} s)",
+                    if room.app.has_won() {
+                        "victoire"
+                    } else {
+                        "défaite"
+                    },
+                    room.app.score(),
+                    room.started.elapsed().as_secs_f32()
+                );
+            } else {
+                log::warn!(
+                    "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
+                );
+            }
+            // Contrat du jour (Phase D, Sprint 9) : uniquement sur une
+            // victoire *décidée* — jamais une défaite, jamais un arrêt de
+            // sécurité (`timed_out`, qui n'implique `decided` que si
+            // `has_won()` l'est aussi, cf. la définition de `decided`
+            // ci-dessus). `day` recalculé à chaque manche décidée plutôt
+            // que mémorisé sur `Room` : un contrat commencé la veille et
+            // terminé après minuit ne doit pas être crédité comme celui
+            // d'hier (GDD §3.4 : le contrat du jour est celui du jour où
+            // la manche se termine, pas celui où elle a commencé). Calculé
+            // *avant* la diffusion `GameEvent::Win`/`Lose` ci-dessous : le
+            // client a besoin de savoir si ce contrat est rempli (Phase H,
+            // Sprint 2), pas seulement Firebase (`award_progress`).
+            let day = day_number(SystemTime::now());
+            let contract = (decided && room.app.has_won())
+                .then(|| Contract::of_day(day))
+                .filter(|&c| room.app.contract_completed(c, room.started.elapsed()))
+                .map(|c| (c, day));
+            // Diffuse la fin de manche décidée (Phase L, `sprintreflecion.md` —
+            // trouvé en vérifiant mécaniquement le mode Escorte : jusqu'ici
+            // `GameEvent::Win`/`Lose` n'étaient jamais envoyés, seulement
+            // calculés localement par chaque client complet via sa propre copie
+            // d'`update_round`). Un bot minimal (sans cette simulation locale,
+            // ex. `examples/phase_l_mode_check.rs`) ne pouvait donc jamais
+            // observer de fin de manche par ce biais — corrigé pour que le
+            // serveur, autoritaire, confirme aussi l'issue. Uniquement sur
+            // `decided` (jamais sur un simple `timed_out` sans victoire/défaite
+            // réelle, cf. la définition de `decided` ci-dessus) ; avant toute
+            // relance pour que l'événement parte encore vers les joueurs de la
+            // manche qui vient de se terminer, pas la suivante.
+            // Résumé par joueur (Phase H, Sprint 1) : mêmes frags/assists
+            // que ceux crédités juste après par `award_progress`.
+            if decided && let Some(net) = net {
+                let ids = room.connected_ids();
+                let summary = round_summary(
+                    &room.app,
+                    &room.lobby,
+                    &ids,
+                    &room.activity,
+                    room.app.has_won(),
+                );
+                let event = if room.app.has_won() {
+                    GameEvent::Win {
+                        summary,
+                        contract: contract.map(|(c, _)| c.to_u8()),
+                    }
+                } else {
+                    GameEvent::Lose { summary }
+                };
+                net.send_to_many(&ids, &ServerMsg::Event(event));
+            }
+            award_progress(
+                firebase,
+                &room.lobby,
+                &room.app,
+                room.app.has_won(),
+                &room.activity,
+                contract,
+            );
+            post_leaderboard(firebase, &room.lobby, &room.app);
+            // Une manche décidée ne ferme pas tout le serveur : seul CE
+            // salon repart, les autres continuent — sauf s'il est déjà
+            // vide (dernier joueur parti entre-temps), auquel cas autant
+            // le fermer plutôt que de le faire tourner pour personne.
+            if room.connected_ids().is_empty() {
+                return RoomTick::Close;
+            }
+            if decided {
+                // Intermission (roadmap post-audit UX v2 2026-09-04, 0.1) :
+                // la relance attend `ROUND_INTERMISSION` ou un « Rejouer ».
+                room.round_end = Some(Instant::now());
+            } else {
+                // Arrêt de sécurité : rien à lire, on repart tout de suite.
+                room.relaunch(net);
+            }
+        }
+    }
+
+    // Relance (roadmap post-audit UX v2 2026-09-04, 0.1/0.2) : fin
+    // d'intermission, ou « Rejouer » reçu depuis le dernier tick
+    // (`ClientMsg::RestartRound`, cf. `handle_message`) — après la fin de
+    // manche éventuelle ci-dessus, pour que `Win`/`Lose` partent toujours
+    // avant `RoundStart`.
+    let intermission_over = room
+        .round_end
+        .is_some_and(|at| at.elapsed() >= ROUND_INTERMISSION);
+    if room.restart_requested || intermission_over {
+        if room.connected_ids().is_empty() {
+            return RoomTick::Close;
+        }
+        log::info!(
+            "[{code}] Nouvelle manche ({})",
+            if room.restart_requested {
+                "« Rejouer »"
+            } else {
+                "fin d'intermission"
+            }
+        );
+        room.relaunch(net);
+    }
+    RoomTick::Keep
 }
 
 /// Retire, dans chaque salon, les joueurs réseau sans le moindre message
@@ -818,145 +1151,8 @@ fn main() {
 
         let mut to_close: Vec<String> = Vec::new();
         for (code, room) in rooms.iter_mut() {
-            room.app.advance_play();
-            room.update_activity();
-
-            if let Some(net) = &net {
-                let ids = room.connected_ids();
-                // Broadcast ciblé (`send_to_many`) : la `Snapshot` — le plus
-                // gros message du protocole — est encodée UNE seule fois par
-                // tick et par salon, au lieu d'un ré-encodage bincode identique
-                // par destinataire (audit réseau 2026-07).
-                let snapshot = ServerMsg::Snapshot(room.app.network_snapshot(tick));
-                net.send_to_many(&ids, &snapshot);
-                // Évènements ponctuels produits par la simulation de ce tick
-                // (monstre vaincu, joueur vaincu...) : diffusés une fois, pour
-                // que les clients réagissent (son/flash) sans comparer deux
-                // snapshots — uniquement aux joueurs *de ce salon*.
-                for event in room.app.take_net_events() {
-                    net.send_to_many(&ids, &ServerMsg::Event(event));
-                }
-            }
-
-            if room.app.wave != room.last_wave {
-                log::info!("[{code}] Manche {} révélée", room.app.wave);
-                // Diffuse la bannière de vague (Phase H, Sprint 2, GDD §17.2) :
-                // jusqu'ici `GameEvent::WaveStart` n'était jamais émis par le
-                // serveur, seulement testé au niveau transport
-                // (`net::server_loop`) — le client n'avait donc aucun moyen de
-                // savoir qu'une nouvelle vague venait d'être révélée, sinon en
-                // comparant lui-même deux snapshots. `wave == 0` = scène sans
-                // système de manches (cf. doc de `AppState::wave`), rien à
-                // annoncer dans ce cas.
-                if room.app.wave > 0
-                    && let Some(net) = &net
-                {
-                    net.send_to_many(
-                        &room.connected_ids(),
-                        &ServerMsg::Event(GameEvent::WaveStart {
-                            wave: room.app.wave,
-                        }),
-                    );
-                }
-                room.last_wave = room.app.wave;
-            }
-            if room.app.score() != room.last_score {
-                log::info!("[{code}] Score : {}", room.app.score());
-                room.last_score = room.app.score();
-            }
-
-            // `is_room_lost()` (pas `is_lost()`, pensé pour un joueur local
-            // unique) : la défaite n'arrive que si TOUS les joueurs réseau de
-            // CE salon sont vaincus (GAMEDESIGN_EN_LIGNE.md §3.1) — un seul
-            // joueur qui meurt devient spectateur, la manche continue pour
-            // les autres, dans ce salon comme dans les autres.
-            let decided = room.app.has_won() || room.app.is_room_lost();
-            let timed_out = room.started.elapsed() > MAX_DURATION;
-            if decided || timed_out {
-                if decided {
-                    log::info!(
-                        "[{code}] Manche terminée : {}, score final {} (en {:.1} s)",
-                        if room.app.has_won() {
-                            "victoire"
-                        } else {
-                            "défaite"
-                        },
-                        room.app.score(),
-                        room.started.elapsed().as_secs_f32()
-                    );
-                } else {
-                    log::warn!(
-                        "[{code}] Arrêt de sécurité : durée maximale de manche atteinte sans issue"
-                    );
-                }
-                // Contrat du jour (Phase D, Sprint 9) : uniquement sur une
-                // victoire *décidée* — jamais une défaite, jamais un arrêt de
-                // sécurité (`timed_out`, qui n'implique `decided` que si
-                // `has_won()` l'est aussi, cf. la définition de `decided`
-                // ci-dessus). `day` recalculé à chaque manche décidée plutôt
-                // que mémorisé sur `Room` : un contrat commencé la veille et
-                // terminé après minuit ne doit pas être crédité comme celui
-                // d'hier (GDD §3.4 : le contrat du jour est celui du jour où
-                // la manche se termine, pas celui où elle a commencé). Calculé
-                // *avant* la diffusion `GameEvent::Win`/`Lose` ci-dessous : le
-                // client a besoin de savoir si ce contrat est rempli (Phase H,
-                // Sprint 2), pas seulement Firebase (`award_progress`).
-                let day = day_number(SystemTime::now());
-                let contract = (decided && room.app.has_won())
-                    .then(|| Contract::of_day(day))
-                    .filter(|&c| room.app.contract_completed(c, room.started.elapsed()))
-                    .map(|c| (c, day));
-                // Diffuse la fin de manche décidée (Phase L, `sprintreflecion.md` —
-                // trouvé en vérifiant mécaniquement le mode Escorte : jusqu'ici
-                // `GameEvent::Win`/`Lose` n'étaient jamais envoyés, seulement
-                // calculés localement par chaque client complet via sa propre copie
-                // d'`update_round`). Un bot minimal (sans cette simulation locale,
-                // ex. `examples/phase_l_mode_check.rs`) ne pouvait donc jamais
-                // observer de fin de manche par ce biais — corrigé pour que le
-                // serveur, autoritaire, confirme aussi l'issue. Uniquement sur
-                // `decided` (jamais sur un simple `timed_out` sans victoire/défaite
-                // réelle, cf. la définition de `decided` ci-dessus) ; avant
-                // `room.restart()` pour que l'événement parte encore vers les
-                // joueurs de la manche qui vient de se terminer, pas la suivante.
-                // Résumé par joueur (Phase H, Sprint 1) : mêmes frags/assists
-                // que ceux crédités juste après par `award_progress`.
-                if decided && let Some(net) = &net {
-                    let ids = room.connected_ids();
-                    let summary = round_summary(
-                        &room.app,
-                        &room.lobby,
-                        &ids,
-                        &room.activity,
-                        room.app.has_won(),
-                    );
-                    let event = if room.app.has_won() {
-                        GameEvent::Win {
-                            summary,
-                            contract: contract.map(|(c, _)| c.to_u8()),
-                        }
-                    } else {
-                        GameEvent::Lose { summary }
-                    };
-                    net.send_to_many(&ids, &ServerMsg::Event(event));
-                }
-                award_progress(
-                    &firebase,
-                    &room.lobby,
-                    &room.app,
-                    room.app.has_won(),
-                    &room.activity,
-                    contract,
-                );
-                post_leaderboard(&firebase, &room.lobby, &room.app);
-                // Une manche décidée ne ferme pas tout le serveur : seul CE
-                // salon repart, les autres continuent — sauf s'il est déjà
-                // vide (dernier joueur parti entre-temps), auquel cas autant
-                // le fermer plutôt que de le faire tourner pour personne.
-                if room.connected_ids().is_empty() {
-                    to_close.push(code.clone());
-                } else {
-                    room.restart();
-                }
+            if tick_room(code, room, net.as_ref(), &firebase, tick) == RoomTick::Close {
+                to_close.push(code.clone());
             }
         }
         for code in to_close {
@@ -1231,6 +1427,9 @@ mod tests {
             last_score: 0,
             started: Instant::now(),
             activity: HashMap::new(),
+            round_end: None,
+            restart_requested: false,
+            ticks: 0,
         }
     }
 
@@ -1723,5 +1922,341 @@ mod tests {
         // ici on vérifie juste la partie qu'expose `handle_message` :
         // plus aucun joueur connecté, prêt à être fermé au prochain tour de boucle.
         assert!(rooms["ephemere"].connected_ids().is_empty());
+    }
+
+    /// Connecte un client au salon par défaut et traite son `Join` comme le
+    /// ferait `main` (roadmap post-audit UX v2 2026-09-04, 0.3) : renvoie le
+    /// client et son `PlayerId`.
+    fn join_default_lobby(
+        net: &NetServer,
+        rooms: &mut HashMap<String, Room>,
+        player_room: &mut HashMap<PlayerId, String>,
+        name: &str,
+    ) -> (NetClient, PlayerId) {
+        let url = format!("ws://{}", net.local_addr);
+        let client = NetClient::connect(&url, name, None).expect("connexion du client");
+        let ServerMsg::Welcome { player_id } = client
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Welcome attendu")
+        else {
+            panic!("premier message attendu : Welcome");
+        };
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join attendu côté serveur");
+        assert_eq!(id, player_id);
+        test_handle_message(rooms, player_room, net, id, msg);
+        (client, player_id)
+    }
+
+    /// Draine la boîte de réception d'un client jusqu'au premier
+    /// `ServerMsg::Event` vérifiant `pred` (snapshots et autres messages
+    /// ignorés), ou `None` passé `timeout`.
+    fn wait_for_event(
+        client: &NetClient,
+        timeout: Duration,
+        pred: impl Fn(&GameEvent) -> bool,
+    ) -> Option<GameEvent> {
+        let deadline = Instant::now() + timeout;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match client.inbox.recv_timeout(left) {
+                Ok(ServerMsg::Event(e)) if pred(&e) => return Some(e),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
+    /// Un tick de la manche du salon par défaut, comme `main` (sans Firebase).
+    fn tick_default_room(
+        rooms: &mut HashMap<String, Room>,
+        net: &NetServer,
+        tick: u32,
+    ) -> RoomTick {
+        let room = rooms.get_mut(DEFAULT_LOBBY).expect("salon par défaut");
+        tick_room(DEFAULT_LOBBY, room, Some(net), &None, tick)
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 0.1/0.3 (S-01 : « tout nouvel
+    /// arrivant voit “Manche perdue” ») : un joueur qui rejoint un salon dont
+    /// la manche est perdue (intermission, plus aucun survivant) repart dans
+    /// une manche **neuve**, vivant — et le vaincu réapparaît avec lui ; les
+    /// deux en sont prévenus (`GameEvent::RoundStart`). Vérifie aussi que
+    /// l'intermission ne rediffuse pas `Lose` à chaque tick.
+    #[test]
+    fn a_late_joiner_in_a_lost_round_gets_a_fresh_round_and_is_alive() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let (alice, alice_id) = join_default_lobby(&net, &mut rooms, &mut player_room, "Alice");
+        assert_eq!(tick_default_room(&mut rooms, &net, 0), RoomTick::Keep);
+
+        // Alice meurt (seule dans le salon) : la manche est perdue.
+        rooms
+            .get_mut(DEFAULT_LOBBY)
+            .unwrap()
+            .app
+            .set_network_player_health(alice_id, 0.0);
+        assert_eq!(tick_default_room(&mut rooms, &net, 1), RoomTick::Keep);
+        assert!(
+            wait_for_event(&alice, Duration::from_secs(2), |e| matches!(
+                e,
+                GameEvent::Lose { .. }
+            ))
+            .is_some(),
+            "la défaite doit être diffusée à Alice"
+        );
+        assert!(
+            rooms[DEFAULT_LOBBY].round_end.is_some(),
+            "manche décidée : intermission en cours"
+        );
+        // Intermission : la manche n'est plus relancée dans le tick de la
+        // défaite, et `Lose` ne repart pas à chaque tick.
+        for tick in 2..5 {
+            assert_eq!(tick_default_room(&mut rooms, &net, tick), RoomTick::Keep);
+        }
+        assert!(
+            wait_for_event(&alice, Duration::from_millis(200), |e| matches!(
+                e,
+                GameEvent::Lose { .. } | GameEvent::RoundStart
+            ))
+            .is_none(),
+            "ni seconde défaite ni relance tant que l'intermission court"
+        );
+        assert_eq!(
+            rooms[DEFAULT_LOBBY].app.network_player_health(alice_id),
+            Some(0.0),
+            "Alice reste vaincue pendant l'intermission"
+        );
+
+        // Bob arrive dans ce salon sans survivant : manche neuve pour tous.
+        let (bob, bob_id) = join_default_lobby(&net, &mut rooms, &mut player_room, "Bob");
+        let room = &rooms[DEFAULT_LOBBY];
+        assert!(
+            room.round_end.is_none(),
+            "la manche relancée n'est plus décidée"
+        );
+        assert_eq!(room.ticks, 0, "manche recomposée à l'arrivée de Bob");
+        assert!(
+            room.app
+                .network_player_health(bob_id)
+                .is_some_and(|hp| hp > 0.0),
+            "Bob apparaît vivant"
+        );
+        assert!(
+            room.app
+                .network_player_health(alice_id)
+                .is_some_and(|hp| hp > 0.0),
+            "Alice réapparaît vivante avec lui"
+        );
+        assert!(!room.app.is_room_lost(), "plus de défaite de salon");
+        for client in [&alice, &bob] {
+            assert!(
+                wait_for_event(client, Duration::from_secs(2), |e| matches!(
+                    e,
+                    GameEvent::RoundStart
+                ))
+                .is_some(),
+                "chaque joueur du salon apprend la nouvelle manche"
+            );
+        }
+        // Et la manche relancée court normalement : pas de défaite fantôme.
+        assert_eq!(tick_default_room(&mut rooms, &net, 5), RoomTick::Keep);
+        assert!(rooms[DEFAULT_LOBBY].round_end.is_none());
+        assert!(
+            wait_for_event(&bob, Duration::from_millis(200), |e| matches!(
+                e,
+                GameEvent::Lose { .. }
+            ))
+            .is_none(),
+            "aucune défaite héritée de la manche précédente pour l'arrivant"
+        );
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 0.2/0.3 : « Rejouer » en ligne
+    /// (`ClientMsg::RestartRound`) fait repartir une nouvelle manche au tick
+    /// suivant, sans attendre la fin de l'intermission — le joueur est
+    /// réapparu vivant et reçoit `GameEvent::RoundStart`.
+    #[test]
+    fn a_restart_request_while_online_starts_a_new_round() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let (alice, alice_id) = join_default_lobby(&net, &mut rooms, &mut player_room, "Alice");
+        assert_eq!(tick_default_room(&mut rooms, &net, 0), RoomTick::Keep);
+        rooms
+            .get_mut(DEFAULT_LOBBY)
+            .unwrap()
+            .app
+            .set_network_player_health(alice_id, 0.0);
+        assert_eq!(tick_default_room(&mut rooms, &net, 1), RoomTick::Keep);
+        assert!(
+            wait_for_event(&alice, Duration::from_secs(2), |e| matches!(
+                e,
+                GameEvent::Lose { .. }
+            ))
+            .is_some()
+        );
+        assert!(rooms[DEFAULT_LOBBY].round_end.is_some());
+
+        // « Rejouer » à travers le vrai socket.
+        alice.send(&ClientMsg::RestartRound);
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("RestartRound attendu côté serveur");
+        assert_eq!(id, alice_id);
+        assert_eq!(msg, ClientMsg::RestartRound);
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        assert!(
+            rooms[DEFAULT_LOBBY].restart_requested,
+            "la relance est différée au prochain tick"
+        );
+
+        assert_eq!(tick_default_room(&mut rooms, &net, 2), RoomTick::Keep);
+        let room = &rooms[DEFAULT_LOBBY];
+        assert!(
+            room.round_end.is_none(),
+            "nouvelle manche, plus d'intermission"
+        );
+        assert!(!room.restart_requested, "demande consommée");
+        assert_eq!(room.ticks, 0, "manche recomposée");
+        assert!(
+            room.app
+                .network_player_health(alice_id)
+                .is_some_and(|hp| hp > 0.0),
+            "Alice réapparaît vivante"
+        );
+        assert!(
+            wait_for_event(&alice, Duration::from_secs(2), |e| matches!(
+                e,
+                GameEvent::RoundStart
+            ))
+            .is_some(),
+            "le client apprend la nouvelle manche (sa bannière tombe)"
+        );
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 0.2/0.3 : un vaincu ne coupe pas
+    /// la manche de ses alliés encore debout (« Rejouer » ignoré tant que
+    /// quelqu'un d'autre se bat) ; une fois tout le monde vaincu, la fin de
+    /// l'intermission relance d'elle-même, pour tous.
+    #[test]
+    fn a_restart_request_is_ignored_while_an_ally_fights_and_the_intermission_relaunches() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let (alice, alice_id) = join_default_lobby(&net, &mut rooms, &mut player_room, "Alice");
+        let (bob, bob_id) = join_default_lobby(&net, &mut rooms, &mut player_room, "Bob");
+        assert_eq!(tick_default_room(&mut rooms, &net, 0), RoomTick::Keep);
+
+        // Alice meurt, Bob se bat encore : pas de défaite de salon.
+        rooms
+            .get_mut(DEFAULT_LOBBY)
+            .unwrap()
+            .app
+            .set_network_player_health(alice_id, 0.0);
+        assert_eq!(tick_default_room(&mut rooms, &net, 1), RoomTick::Keep);
+        assert!(rooms[DEFAULT_LOBBY].round_end.is_none());
+
+        alice.send(&ClientMsg::RestartRound);
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("RestartRound attendu côté serveur");
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        assert!(
+            !rooms[DEFAULT_LOBBY].restart_requested,
+            "Bob se bat encore : la demande d'Alice est ignorée"
+        );
+        assert_eq!(tick_default_room(&mut rooms, &net, 2), RoomTick::Keep);
+        let room = &rooms[DEFAULT_LOBBY];
+        assert!(room.ticks > 0, "la manche de Bob n'a pas été coupée");
+        assert_eq!(room.app.network_player_health(alice_id), Some(0.0));
+        assert!(
+            wait_for_event(&bob, Duration::from_millis(200), |e| matches!(
+                e,
+                GameEvent::RoundStart
+            ))
+            .is_none()
+        );
+
+        // Bob meurt à son tour : défaite, puis intermission écoulée ⇒ relance.
+        rooms
+            .get_mut(DEFAULT_LOBBY)
+            .unwrap()
+            .app
+            .set_network_player_health(bob_id, 0.0);
+        assert_eq!(tick_default_room(&mut rooms, &net, 3), RoomTick::Keep);
+        for client in [&alice, &bob] {
+            assert!(
+                wait_for_event(client, Duration::from_secs(2), |e| matches!(
+                    e,
+                    GameEvent::Lose { .. }
+                ))
+                .is_some(),
+                "défaite diffusée aux deux"
+            );
+        }
+        // Simule la fin de l'intermission sans dormir `ROUND_INTERMISSION`.
+        rooms.get_mut(DEFAULT_LOBBY).unwrap().round_end = Some(Instant::now() - ROUND_INTERMISSION);
+        assert_eq!(tick_default_room(&mut rooms, &net, 4), RoomTick::Keep);
+        let room = &rooms[DEFAULT_LOBBY];
+        assert!(room.round_end.is_none());
+        for id in [alice_id, bob_id] {
+            assert!(
+                room.app
+                    .network_player_health(id)
+                    .is_some_and(|hp| hp > 0.0),
+                "joueur {id} réapparu vivant"
+            );
+        }
+        for client in [&alice, &bob] {
+            assert!(
+                wait_for_event(client, Duration::from_secs(2), |e| matches!(
+                    e,
+                    GameEvent::RoundStart
+                ))
+                .is_some()
+            );
+        }
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 0.1 : à manche décidée, un salon
+    /// que tout le monde a quitté se ferme à la fin de l'intermission plutôt
+    /// que d'être relancé pour personne.
+    #[test]
+    fn an_empty_room_closes_at_the_end_of_the_intermission() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        rooms.insert(DEFAULT_LOBBY.to_string(), zombies_room());
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        let (alice, alice_id) = join_default_lobby(&net, &mut rooms, &mut player_room, "Alice");
+        rooms
+            .get_mut(DEFAULT_LOBBY)
+            .unwrap()
+            .app
+            .set_network_player_health(alice_id, 0.0);
+        assert_eq!(tick_default_room(&mut rooms, &net, 0), RoomTick::Keep);
+        assert!(rooms[DEFAULT_LOBBY].round_end.is_some());
+
+        alice.send(&ClientMsg::Leave);
+        let (id, msg) = net
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Leave attendu côté serveur");
+        test_handle_message(&mut rooms, &mut player_room, &net, id, msg);
+        rooms.get_mut(DEFAULT_LOBBY).unwrap().round_end = Some(Instant::now() - ROUND_INTERMISSION);
+        assert_eq!(tick_default_room(&mut rooms, &net, 1), RoomTick::Close);
     }
 }

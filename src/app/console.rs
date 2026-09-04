@@ -162,6 +162,11 @@ impl AppState {
             "restart" => {
                 if !self.playing {
                     "impossible : pas en Play".into()
+                } else if self.request_round_restart() {
+                    // En ligne (roadmap post-audit UX v2 2026-09-04, 0.2) :
+                    // même chemin que le bouton « Rejouer », la manche est
+                    // celle du serveur.
+                    "nouvelle manche demandée au serveur".into()
                 } else {
                     self.restart_game();
                     "manche redémarrée".into()

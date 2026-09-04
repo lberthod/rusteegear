@@ -95,7 +95,11 @@ impl Renderer {
         // Bouton de fin de partie : « Niveau suivant » uniquement pour la démo contrôleur
         // à niveaux ; sinon « Rejouer » — y compris une victoire par manches (zombies) ou
         // par ligne d'arrivée (course infinie/tour), qui doivent juste relancer la scène.
-        if restart {
+        // En ligne (roadmap post-audit UX v2 2026-09-04, 0.2), la manche est
+        // celle du serveur : on lui demande une nouvelle manche
+        // (`request_round_restart`) au lieu de relancer la scène locale — la
+        // bannière tombe au `GameEvent::RoundStart` qu'il renvoie.
+        if restart && !app.request_round_restart() {
             if app.has_won() && app.is_leveled_demo {
                 app.next_level();
             } else {

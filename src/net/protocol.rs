@@ -43,7 +43,15 @@ pub type PlayerId = u32;
 /// 2026-07-20) : `EntityDelta` gagne `class: Option<u8>` — sans elle, un
 /// client ne connaissait jamais la classe des autres joueurs et tous les
 /// fantômes étaient identiques à l'écran.
-pub const PROTOCOL_VERSION: u32 = 7;
+/// v8 (roadmap post-audit UX v2 2026-09-04, vague 0 — S-01 « tout nouvel
+/// arrivant voit “Manche perdue” ») : `ClientMsg` gagne `RestartRound`
+/// (« Rejouer » en ligne demande une nouvelle manche au serveur au lieu de
+/// relancer la scène locale, cf. `AppState::request_round_restart`) et
+/// `GameEvent` gagne `RoundStart` (le serveur annonce chaque nouvelle manche
+/// d'un salon — jusqu'ici le client n'avait aucun moyen de savoir que la
+/// manche perdue avait été relancée, et gardait sa bannière de défaite
+/// alors qu'il était déjà réapparu vivant).
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
@@ -234,6 +242,15 @@ pub enum ClientMsg {
     },
     /// Déconnexion volontaire (quitte le salon proprement).
     Leave,
+    /// « Rejouer » en ligne (roadmap post-audit UX v2 2026-09-04, 0.2,
+    /// `PROTOCOL_VERSION` 8) : demande au serveur de relancer la manche du
+    /// salon **maintenant**, sans attendre la fin de l'intermission qui suit
+    /// une manche décidée (`bin/server.rs::ROUND_INTERMISSION`). Honoré
+    /// seulement si aucun *autre* joueur du salon n'est encore en vie (manche
+    /// déjà perdue/gagnée, ou demandeur seul) — un spectateur ne peut pas
+    /// couper la manche de ses alliés encore debout. Ajouté en fin d'enum
+    /// (même invariant d'ordre bincode que `Join`, cf. la doc de l'enum).
+    RestartRound,
 }
 
 /// Message envoyé par le serveur à un ou plusieurs clients.
@@ -472,6 +489,18 @@ pub enum GameEvent {
     RoundObjective {
         objective: u8,
     },
+    /// Nouvelle manche dans ce salon (roadmap post-audit UX v2 2026-09-04,
+    /// 0.1/0.2, `PROTOCOL_VERSION` 8) : envoyé à tous les joueurs du salon
+    /// chaque fois que `Room::restart` (`bin/server.rs`) recompose la scène —
+    /// fin d'intermission après une manche décidée, `ClientMsg::RestartRound`,
+    /// ou arrivée d'un joueur dans un salon dont plus personne n'est en vie.
+    /// Tous les joueurs connectés viennent d'être réapparus vivants : le
+    /// client efface sa bannière de fin de manche (`AppState::round_summary`)
+    /// et ses drapeaux locaux de manche (cf. `begin_online_round`). Sans ce
+    /// message, un client gardait « Manche perdue » à l'écran alors que le
+    /// serveur l'avait déjà relancé, vie pleine (S-01). Précède le
+    /// `WaveStart { wave: 1 }` de la manche relancée (émis au tick suivant).
+    RoundStart,
 }
 
 /// Erreur de (dé)sérialisation d'un message réseau.
@@ -588,6 +617,12 @@ mod tests {
         round_trip(ClientMsg::Leave);
     }
 
+    /// v8 (roadmap post-audit UX v2 2026-09-04, 0.2) : « Rejouer » en ligne.
+    #[test]
+    fn client_msg_restart_round_round_trips() {
+        round_trip(ClientMsg::RestartRound);
+    }
+
     #[test]
     fn server_msg_welcome_round_trips() {
         round_trip(ServerMsg::Welcome { player_id: 42 });
@@ -684,6 +719,8 @@ mod tests {
                 distinct_attackers: 2,
             }),
         }));
+        // v8 (roadmap post-audit UX v2 2026-09-04, 0.1) : nouvelle manche.
+        round_trip(ServerMsg::Event(GameEvent::RoundStart));
     }
 
     #[test]

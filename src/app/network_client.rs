@@ -226,6 +226,60 @@ impl AppState {
         self.is_connected() && self.net_conn.net_local_health.is_some_and(|h| h <= 0.0)
     }
 
+    /// « Rejouer » en ligne (roadmap post-audit UX v2 2026-09-04, 0.2 —
+    /// S-01) : demande une nouvelle manche au serveur (`ClientMsg::RestartRound`)
+    /// et renvoie `true` ; `false` hors ligne, l'appelant relance alors sa
+    /// partie locale (`restart_game`). Jusqu'ici « Rejouer » relançait la
+    /// scène **locale** même connecté — la manche, elle, est celle du
+    /// serveur : bannière de défaite conservée, scène locale désynchronisée
+    /// des snapshots. La bannière tombe à la réception de
+    /// `GameEvent::RoundStart` (`begin_online_round`), pas ici : le serveur
+    /// peut différer (ou refuser, si des alliés se battent encore) la relance.
+    pub fn request_round_restart(&mut self) -> bool {
+        if !self.is_connected() {
+            return false;
+        }
+        let Some(client) = &self.net_conn.net_client else {
+            return false;
+        };
+        client.send(&crate::net::protocol::ClientMsg::RestartRound);
+        true
+    }
+
+    /// Nouvelle manche annoncée par le serveur (`GameEvent::RoundStart`,
+    /// roadmap post-audit UX v2 2026-09-04, 0.1/0.2) : efface tout ce qui
+    /// appartenait à la manche précédente — résumé de fin de manche
+    /// (`round_summary`, la bannière « Manche perdue/gagnée »), drapeaux
+    /// locaux de victoire/défaite, cause de mort, compteurs et vie connus du
+    /// serveur (rafraîchis par le prochain `Snapshot`), effets visuels, et
+    /// remet le compteur de vague local à la première (`update_waves` ne fait
+    /// qu'avancer). Ne touche ni à la scène ni aux fantômes : positions et
+    /// visibilités viennent des snapshots du serveur, seul autoritaire —
+    /// contrairement à `restart_game`, qui restaure `play_snapshot` en bloc
+    /// et rendrait obsolètes les indices des fantômes (`remote_players`).
+    pub(crate) fn begin_online_round(&mut self) {
+        self.round_summary = None;
+        self.round_summary_won = false;
+        self.round_contract_label = None;
+        self.lost = false;
+        self.win_time = None;
+        self.death_cause = None;
+        self.spectate_cursor = 0;
+        self.time = 0.0;
+        self.respawn_queue.clear();
+        // Vie de la simulation locale : à `Some(0.0)`, `advance_play`
+        // redéclarerait `lost` au tick suivant (cf. `restart_game`).
+        self.hud_health = None;
+        self.net_conn.net_local_health = None;
+        self.net_conn.net_local_kills = None;
+        self.net_conn.net_local_assists = None;
+        self.fx.damage_flash = 0.0;
+        self.fx.camera_shake = 0.0;
+        self.fx.ally_down_flash = 0.0;
+        self.fx.wave_banner_flash = 0.0;
+        self.wave = if self.max_wave() > 0 { 1 } else { 0 };
+    }
+
     /// Frags à afficher au HUD (brique de progression pour un futur MMORPG) :
     /// le compteur individualisé du serveur si connecté (`net_local_kills`,
     /// `None` avant le premier snapshot ⇒ 0 affiché), sinon le score solo
@@ -879,17 +933,47 @@ impl AppState {
                     contract.map(|c| crate::app::multiplayer::Contract::from_u8(c).label());
             }
             ServerMsg::Event(crate::net::protocol::GameEvent::Lose { summary }) => {
+                // « Manche perdue » seulement si nous avons été vivant dans
+                // cette manche (roadmap post-audit UX v2 2026-09-04, 0.1 —
+                // S-01) : connecté sans encore aucun `Snapshot` depuis le
+                // `Join`/`RoundStart` (`net_local_health` vide), cette défaite
+                // est celle d'une manche à laquelle nous n'avons pas pris
+                // part — le serveur ne l'envoie plus dans ce cas, mais un
+                // serveur antérieur, ou un croisement de messages, ne doit pas
+                // accueillir un arrivant par une bannière de défaite.
+                if self.net_conn.net_client.is_some() && self.net_conn.net_local_health.is_none() {
+                    log::info!(
+                        "Multijoueur : défaite reçue avant d'avoir joué cette manche — ignorée"
+                    );
+                    return;
+                }
                 self.check_palier_atteint(&summary);
                 self.round_summary = Some(summary);
                 self.round_summary_won = false;
                 self.round_contract_label = None;
             }
+            // Nouvelle manche du salon (roadmap post-audit UX v2 2026-09-04,
+            // 0.1/0.2, `PROTOCOL_VERSION` 8) : le serveur vient de recomposer
+            // sa scène et de nous y réapparaître vivant — la bannière de fin
+            // de manche et nos drapeaux locaux de manche tombent avec elle.
+            ServerMsg::Event(crate::net::protocol::GameEvent::RoundStart) => {
+                self.begin_online_round();
+            }
             // Bannière de vague (Phase H, Sprint 2, GDD §17.2) : jusqu'ici
             // jamais émis par la boucle de jeu (`bin/server.rs`), donc jamais
-            // reçu ici — tombait aussi dans le catch-all.
+            // reçu ici — tombait aussi dans le catch-all. Aligne aussi notre
+            // compteur local sur la vague du serveur (roadmap post-audit UX v2
+            // 2026-09-04, 0.1) : `update_waves` ne fait qu'incrémenter, un
+            // joueur arrivant en vague 3 (le serveur la lui annonce au `Join`)
+            // ou réapparu en vague 1 après une relance affichait sinon la
+            // vague de sa propre simulation, pas celle du salon. `wave == 0`
+            // = scène locale sans manches, rien à aligner.
             ServerMsg::Event(crate::net::protocol::GameEvent::WaveStart { wave }) => {
                 self.fx.wave_banner_flash = 1.0;
                 self.fx.wave_banner_wave = wave;
+                if self.wave > 0 && wave > 0 {
+                    self.wave = wave;
+                }
             }
             // Rejet **fatal** (version de protocole incompatible…) : on affiche
             // la raison et on n'insiste JAMAIS — désarmer la reconnexion
@@ -1405,6 +1489,12 @@ impl AppState {
     pub fn disconnect_from_server(&mut self) {}
 
     pub fn is_connected(&self) -> bool {
+        false
+    }
+
+    /// Jamais en ligne sur iOS : « Rejouer » relance toujours la partie
+    /// locale (roadmap post-audit UX v2 2026-09-04, 0.2).
+    pub fn request_round_restart(&mut self) -> bool {
         false
     }
 
