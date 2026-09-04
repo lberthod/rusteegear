@@ -2697,3 +2697,18 @@ fn the_embedded_scene_player_is_the_skinned_fairy_hero() {
          par la simulation)"
     );
 }
+
+/// Le prototype mis en cache pour le serveur (roadmap post-audit UX v2
+/// 2026-09-04, 0.1 bis) doit être une copie fidèle et indépendante de la
+/// scène embarquée : même nombre d'objets et de modèles, et une mutation de
+/// la copie ne touche pas la suivante.
+#[test]
+fn embedded_player_cached_is_a_faithful_independent_copy() {
+    let fresh = Scene::embedded_player();
+    let mut a = Scene::embedded_player_cached();
+    assert_eq!(a.objects.len(), fresh.objects.len());
+    assert_eq!(a.imported.len(), fresh.imported.len());
+    a.objects.clear();
+    let b = Scene::embedded_player_cached();
+    assert_eq!(b.objects.len(), fresh.objects.len());
+}

@@ -721,6 +721,7 @@ fn state_dump(app: &AppState) -> serde_json::Value {
         "objects": app.scene.objects.len(),
         "selection": app.selection,
         "hud_health": app.hud_health,
+        "spawn_grace": app.play_grace,
         "connected": app.is_connected(),
         // Roadmap post-audit UX v2 2026-09-04, 2.2/2.6 : l'état structuré de
         // la connexion et la latence lissée, vérifiables depuis le pont.

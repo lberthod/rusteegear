@@ -1016,6 +1016,9 @@ impl AppState {
         // que le pont de pilotage fenêtre occultée (qui appelle `advance_play`
         // sans rendu) la voie aussi.
         self.ensure_play_health();
+        if self.playing && !self.paused {
+            self.play_grace = (self.play_grace - dt).max(0.0);
+        }
 
         // Caméra libre de l'éditeur (hors Play) : survole la carte aux flèches +
         // Espace/C (bascule G), ou WASD + E/Q tant que le clic droit est tenu
@@ -1921,14 +1924,21 @@ impl AppState {
         // Détecte un coup encaissé (vie en baisse) pour le retour visuel/sonore (vignette
         // rouge + bip) : déclenché une fois par « coup », pas en continu tant que le
         // contact dure (sinon le son saturerait pendant qu'un ennemi colle au joueur).
-        if let (Some(prev), Some(cur)) = (self.hud_health, outcome.health)
+        let mut next_health = outcome.health;
+        if let (Some(prev), Some(cur)) = (self.hud_health, next_health)
             && cur < prev - 1e-4
         {
-            self.fx.damage_flash = 1.0;
-            self.fx.camera_shake = 1.0;
-            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+            if self.play_grace > 0.0 {
+                // Grâce d'apparition (roadmap v2 0.1 bis) : les morsures
+                // scriptées (`damage()`) sont ignorées le temps de voir venir.
+                next_health = Some(prev);
+            } else {
+                self.fx.damage_flash = 1.0;
+                self.fx.camera_shake = 1.0;
+                crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+            }
         }
-        self.hud_health = outcome.health;
+        self.hud_health = next_health;
         // Le tap n'est exposé qu'une frame.
         self.touch.tapped_obj = None;
         self.touch.touch_started_obj = None;

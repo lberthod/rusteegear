@@ -139,7 +139,7 @@ impl MeshKind {
 /// Géométrie importée d'un fichier glTF. `data`/`aabb`/`skeleton`/`clips` sont
 /// reconstruits au chargement (jamais sérialisés — juste dérivés de `path`, cf.
 /// `reload_imported`).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct ImportedMesh {
     pub name: String,
     pub path: String,
@@ -1268,7 +1268,7 @@ fn default_collision_mask() -> u32 {
     u32::MAX
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Scene {
     pub objects: Vec<SceneObject>,
     #[serde(default)]

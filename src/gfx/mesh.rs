@@ -43,7 +43,7 @@ impl Vertex {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MeshData {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,

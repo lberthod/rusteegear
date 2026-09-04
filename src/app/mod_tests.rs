@@ -1135,6 +1135,9 @@ fn sustained_enemy_contact_drains_health_and_ends_the_game() {
     let mut app = AppState::new();
     app.scene = synthetic_damage_scene();
     app.playing = true;
+    // Vie armée sans grâce d'apparition (roadmap v2 0.1 bis) : on teste le coup.
+    app.hud_health = Some(1.0);
+    app.play_grace = 0.0;
     let mut ended = false;
     for _ in 0..80 {
         app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
@@ -2530,6 +2533,9 @@ fn damage_triggers_flash_that_fades_and_resets_on_stop() {
     let mut app = AppState::new();
     app.scene = synthetic_damage_scene();
     app.playing = true;
+    // Vie armée sans grâce d'apparition (roadmap v2 0.1 bis) : on teste le coup.
+    app.hud_health = Some(1.0);
+    app.play_grace = 0.0;
     app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(0.05);
     app.advance_play();
     // Le pic (1.0) est déclenché par le sim_step qui détecte le coup, mais cette même

@@ -557,7 +557,7 @@ impl AppState {
             let Some(p) = player_pos else { return true };
             let cfg = &RANGED_CREATURE_ATTACKS[s.cfg];
             let hit = s.pos.distance(p + Vec3::Y * SPAWN_UP) <= cfg.radius;
-            if hit {
+            if hit && self.play_grace <= 0.0 {
                 self.hud_health = self.hud_health.map(|h| (h - cfg.damage).max(0.0));
                 self.fx.damage_flash = 1.0;
                 self.fx.camera_shake = 1.0;

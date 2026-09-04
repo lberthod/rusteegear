@@ -219,6 +219,9 @@ impl AppState {
     pub fn disconnect_from_server(&mut self) {
         if let Some(client) = &self.net_conn.net_client {
             client.send(&crate::net::protocol::ClientMsg::Leave);
+            // Journalisé : une déconnexion volontaire doit rester lisible
+            // dans `pilot logs` (diagnostic du 4 septembre, coupure muette).
+            log::info!("Multijoueur : déconnexion volontaire (Leave envoyé)");
         }
         self.reset_network_session();
         self.net_conn.net_last_connect = None;

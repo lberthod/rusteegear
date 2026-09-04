@@ -290,7 +290,7 @@ jobs:
         run: |
           xvfb-run -a --server-args="-screen 0 1280x800x24" \
             timeout 180 ./target/debug/motor3derust --pilot > editor.log 2>&1 &
-          for i in $(seq 1 60); do
+          for i in $(seq 1 80); do
             if ./target/debug/pilot state > state.json 2>/dev/null; then break; fi
             sleep 2
           done
@@ -301,8 +301,10 @@ jobs:
           ./target/debug/pilot state
           ./target/debug/pilot console stop
           pkill -f "motor3derust --pilot" || true
-          tail -n 40 editor.log
 
+      - name: Journal de l'éditeur (toujours, même si le pont n'a pas répondu)
+        if: always()
+        run: tail -n 60 editor.log || true
       - name: Publier la capture d'écran Linux
         if: always()
         uses: actions/upload-artifact@v4

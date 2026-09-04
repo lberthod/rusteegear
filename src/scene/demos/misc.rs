@@ -75,6 +75,22 @@ end"
         }
     }
 
+    /// Copie d'un **prototype** de la scène embarquée, construit une seule
+    /// fois par processus (roadmap post-audit UX v2 2026-09-04, 0.1 bis).
+    /// `embedded_player()` décompresse et ré-analyse les 482 modèles glTF à
+    /// chaque appel : plusieurs secondes sur le VPS, pendant lesquelles le
+    /// serveur ne diffuse plus rien — au-delà du silence toléré par les
+    /// clients (8 s), qui se déconnectaient, se reconnectaient dans un salon
+    /// sans survivant, et déclenchaient une nouvelle relance : boucle
+    /// observée en production le 4 septembre après le déploiement de la
+    /// vague 0. Le clone d'une scène déjà construite prend des millisecondes.
+    /// Réservé au serveur (les clients web n'ont pas la mémoire pour deux
+    /// copies) : cf. `AppState::use_embedded_scene_cached`.
+    pub fn embedded_player_cached() -> Self {
+        static PROTOTYPE: std::sync::OnceLock<Scene> = std::sync::OnceLock::new();
+        PROTOTYPE.get_or_init(Scene::embedded_player).clone()
+    }
+
     /// Scène de démonstration : un sol, un cube, une sphère.
     pub fn demo() -> Self {
         Scene {

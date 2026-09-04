@@ -896,7 +896,7 @@ fn augmented_path() -> String {
 /// exécutable ni de build tooling à détecter dans un navigateur, cf. `detect`
 /// juste plus bas qui traite déjà tout mobile/web comme « export depuis le
 /// desktop uniquement », Sprint 114).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 fn has_cmd(name: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     search_dirs().iter().any(|dir| {
@@ -904,6 +904,20 @@ fn has_cmd(name: &str) -> bool {
         p.metadata()
             .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
+    })
+}
+
+/// Windows : pas de bit exécutable — une commande existe si un fichier
+/// `nom`, `nom.exe`, `nom.cmd` ou `nom.bat` se trouve dans un dossier de
+/// recherche (le job CI « Éditeur Windows » compile ce chemin, Sprint CI).
+#[cfg(windows)]
+fn has_cmd(name: &str) -> bool {
+    search_dirs().iter().any(|dir| {
+        ["", ".exe", ".cmd", ".bat"].iter().any(|ext| {
+            std::path::Path::new(dir)
+                .join(format!("{name}{ext}"))
+                .is_file()
+        })
     })
 }
 

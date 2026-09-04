@@ -35,6 +35,8 @@ impl AppState {
         self.sim_poses.sim_render_poses.clear();
         self.win_time = None;
         self.lost = false;
+        // Nouvelle partie = nouvelle grâce d'apparition (roadmap v2 0.1 bis).
+        self.play_grace = crate::app::health::SPAWN_GRACE_S;
         // Redémarrer depuis le menu pause (Phase J) doit aussi lever la pause —
         // sinon `advance_play` resterait gelé juste après la restauration.
         self.paused = false;

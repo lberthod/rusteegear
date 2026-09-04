@@ -17,6 +17,18 @@ impl AppState {
         self.selection = None;
     }
 
+    /// Variante serveur de `use_embedded_scene` : clone d'un prototype gardé
+    /// en mémoire (`Scene::embedded_player_cached`), pour que la relance d'une
+    /// manche ne coûte que des millisecondes au lieu de recharger tous les
+    /// modèles — sans quoi le serveur restait muet plus longtemps que le
+    /// silence toléré par les clients (roadmap post-audit UX v2 2026-09-04,
+    /// 0.1 bis).
+    pub fn use_embedded_scene_cached(&mut self) {
+        self.scene = Scene::embedded_player_cached();
+        self.scene_file = None;
+        self.selection = None;
+    }
+
     /// Charge la démo mobile prête à jouer (avec historique pour annuler).
     pub fn load_mobile_demo(&mut self) {
         self.push_undo();

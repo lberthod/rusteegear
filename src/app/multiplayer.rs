@@ -490,6 +490,56 @@ impl AppState {
         ];
     }
 
+    /// Dégage la zone d'apparition (roadmap post-audit UX v2 2026-09-04,
+    /// 0.1 bis) : tout monstre `AiChaser` à moins de `SPAWN_SAFE_RADIUS` du
+    /// gabarit du joueur est repoussé sur un anneau à `SPAWN_PUSH_RADIUS`,
+    /// dans sa propre direction (ou une direction dérivée de son indice s'il
+    /// est pile sur le point). Dans le hameau livré, des chasseurs campent
+    /// le point d'apparition : un arrivant idle mourait en ~6 s sans avoir vu
+    /// venir personne, ce qui décidait « Manche perdue » pour tout le salon.
+    /// Appelé par le serveur à chaque début de manche (`Room::restart`) —
+    /// pas en solo : les scènes scriptées (arène, rogue-like) placent leurs
+    /// monstres à dessein près du joueur. Renvoie le nombre de monstres déplacés
+    /// ; la physique doit être reconstruite ensuite par l'appelant si elle
+    /// existe déjà (cf. `hide_local_player_template`).
+    pub fn clear_spawn_area(&mut self) -> usize {
+        const SPAWN_SAFE_RADIUS: f32 = 10.0;
+        const SPAWN_PUSH_RADIUS: f32 = 12.0;
+        let Some(spawn) = self
+            .scene
+            .objects
+            .iter()
+            .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .map(|o| o.transform.position)
+        else {
+            return 0;
+        };
+        let mut moved = 0;
+        for (i, o) in self.scene.objects.iter_mut().enumerate() {
+            if o.ai_chaser.is_none() {
+                continue;
+            }
+            let mut delta = o.transform.position - spawn;
+            delta.y = 0.0;
+            if delta.length() >= SPAWN_SAFE_RADIUS {
+                continue;
+            }
+            let dir = if delta.length() > 1e-3 {
+                delta.normalize()
+            } else {
+                let a = i as f32 * 2.399_963; // angle d'or : répartition régulière
+                glam::Vec3::new(a.cos(), 0.0, a.sin())
+            };
+            o.transform.position = glam::Vec3::new(
+                spawn.x + dir.x * SPAWN_PUSH_RADIUS,
+                o.transform.position.y,
+                spawn.z + dir.z * SPAWN_PUSH_RADIUS,
+            );
+            moved += 1;
+        }
+        moved
+    }
+
     pub fn hide_local_player_template(&mut self) {
         if let Some(o) = self
             .scene
@@ -605,6 +655,10 @@ impl AppState {
         // réseau démarre à pleine vie (celle de sa classe), indépendamment
         // des autres — cf. `app::health`.
         self.network.network_health.insert(id, max_health);
+        // Grâce d'apparition (roadmap v2 0.1 bis), cf. `health::update_network_health`.
+        self.network
+            .network_spawn_grace
+            .insert(id, crate::app::health::SPAWN_GRACE_S);
         // Frags individualisés (brique de progression pour un futur MMORPG) :
         // chaque nouvelle connexion démarre à 0, comme la vie.
         self.network.network_kills.insert(id, 0);
@@ -677,6 +731,7 @@ impl AppState {
         self.network.damage_contributions.clear();
         self.network.network_classes.clear();
         self.network.network_max_health.clear();
+        self.network.network_spawn_grace.clear();
         self.network.network_revive.clear();
     }
 
@@ -1994,5 +2049,54 @@ mod tests {
             Some(1),
             "l'historique de la créature doit avoir été purgé au premier kill résolu"
         );
+    }
+}
+
+#[cfg(test)]
+mod spawn_area_tests {
+    use super::super::AppState;
+    use crate::scene::{Scene, SceneObject};
+    use glam::Vec3;
+
+    /// Un chasseur posé sur le point d'apparition est repoussé hors du rayon
+    /// de sécurité ; un chasseur déjà loin ne bouge pas (roadmap post-audit
+    /// UX v2 2026-09-04, 0.1 bis).
+    #[test]
+    fn chasers_camping_the_spawn_are_pushed_away() {
+        let mut app = AppState::new();
+        let mut scene = Scene::demo();
+        let at = |p: Vec3| crate::scene::Transform {
+            position: p,
+            ..Default::default()
+        };
+        let player = SceneObject {
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            transform: at(Vec3::new(2.0, 0.0, 3.0)),
+            ..Default::default()
+        };
+        let near = SceneObject {
+            ai_chaser: Some(Default::default()),
+            transform: at(Vec3::new(2.5, 0.0, 3.0)),
+            ..Default::default()
+        };
+        let far = SceneObject {
+            ai_chaser: Some(Default::default()),
+            transform: at(Vec3::new(40.0, 0.0, 3.0)),
+            ..Default::default()
+        };
+        scene.objects.push(player);
+        scene.objects.push(near);
+        scene.objects.push(far);
+        app.scene = scene;
+        let moved = app.clear_spawn_area();
+        assert_eq!(moved, 1);
+        let n = app.scene.objects.len();
+        let near_pos = app.scene.objects[n - 2].transform.position;
+        let far_pos = app.scene.objects[n - 1].transform.position;
+        assert!((near_pos - Vec3::new(2.0, 0.0, 3.0)).length() >= 10.0);
+        assert_eq!(far_pos, Vec3::new(40.0, 0.0, 3.0));
     }
 }

@@ -122,6 +122,10 @@ fn deterministic_roll(time: f32, salt: f32) -> f32 {
     x - x.floor()
 }
 
+/// Grâce d'apparition (s), en ligne comme en solo — cf. `network_spawn_grace`
+/// et `AppState::play_grace` (roadmap post-audit UX v2 2026-09-04, 0.1 bis).
+pub const SPAWN_GRACE_S: f32 = 5.0;
+
 impl AppState {
     /// Vie du joueur solo amorcée dès qu'une partie tourne avec un objet
     /// pilotable (roadmap post-audit UX v2 2026-09-04, 1.2). Avant, `hud_health`
@@ -144,6 +148,7 @@ impl AppState {
             .is_some_and(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro));
         if has_controller {
             self.hud_health = Some(1.0);
+            self.play_grace = SPAWN_GRACE_S;
         }
     }
 
@@ -155,11 +160,12 @@ impl AppState {
     /// (`hud_health <= 0` ⇒ `lost`) afficherait « Manche perdue » à la place
     /// de la bannière spectateur.
     pub fn displayed_health(&self) -> Option<f32> {
+        // Le stub réseau iOS n'a pas de vie serveur (cf. `NetConnectionState`).
+        #[cfg(not(target_os = "ios"))]
         if self.is_connected() {
-            self.net_conn.net_local_health
-        } else {
-            self.hud_health
+            return self.net_conn.net_local_health;
         }
+        self.hud_health
     }
     /// Dégâts de contact monstre + régénération passive, pour chaque joueur
     /// réseau — appelée une fois par frame (dt réel) depuis `advance_play`,
@@ -205,7 +211,16 @@ impl AppState {
                 .filter(|&&(_, aabb)| aabbs_touch(aabb, player_aabb))
                 .map(|&(idx, _)| idx)
                 .collect();
-            let touched = !touching.is_empty();
+            // Grâce d'apparition : le temps de voir venir les monstres qui
+            // campent le point d'apparition (roadmap v2 0.1 bis).
+            let in_grace = match self.network.network_spawn_grace.get_mut(&id) {
+                Some(g) if *g > 0.0 => {
+                    *g -= dt;
+                    true
+                }
+                _ => false,
+            };
+            let touched = !touching.is_empty() && !in_grace;
             let max_hp = self.max_health_for(id);
             let was_alive = self
                 .network
@@ -297,6 +312,16 @@ impl AppState {
                 continue;
             };
             if !visible {
+                continue;
+            }
+            // Grâce d'apparition (roadmap v2 0.1 bis) : les mordeuses
+            // attendent aussi — décomptée par `update_network_health`.
+            if self
+                .network
+                .network_spawn_grace
+                .get(&id)
+                .is_some_and(|g| *g > 0.0)
+            {
                 continue;
             }
             for &(creature_idx, bite, creature_aabb) in &biters {
@@ -647,7 +672,7 @@ mod tests {
     use glam::Vec3;
 
     use super::super::AppState;
-    use super::MAX_HEALTH;
+    use super::{MAX_HEALTH, SPAWN_GRACE_S};
     use crate::app::multiplayer::{NetworkInput, PlayerClass};
     use crate::net::protocol::{DeathCauseKind, GameEvent};
     use crate::scene::{AiChaser, Combat, Controller, MeshKind, Scene, SceneObject, Transform};
@@ -747,6 +772,17 @@ mod tests {
         let monster_pos = app.scene.objects[2].transform.position;
         app.scene.objects[index].transform.position = monster_pos;
 
+        // Grâce d'apparition d'abord (roadmap v2 0.1 bis) : aucun dégât.
+        for _ in 0..30 {
+            app.update_network_health(0.05); // 1,5 s de contact sous grâce
+        }
+        assert_eq!(
+            app.network_player_health(1),
+            Some(MAX_HEALTH),
+            "pendant la grâce d'apparition, le contact ne doit rien user"
+        );
+        app.update_network_health(SPAWN_GRACE_S); // la grâce expire
+
         for _ in 0..30 {
             app.update_network_health(0.05); // 1,5 s de contact continu
         }
@@ -756,6 +792,17 @@ mod tests {
             hp < MAX_HEALTH,
             "un contact soutenu avec un monstre visible doit user la vie : {hp}"
         );
+    }
+
+    /// Solo : l'armement de la vie ouvre la même grâce (roadmap post-audit
+    /// UX v2 2026-09-04, 0.1 bis).
+    #[test]
+    fn arming_solo_health_opens_the_spawn_grace() {
+        let mut app = app_with(scene_with_optional_monster(true));
+        app.playing = true;
+        app.ensure_play_health();
+        assert_eq!(app.hud_health, Some(1.0));
+        assert_eq!(app.play_grace, SPAWN_GRACE_S);
     }
 
     #[test]
@@ -787,6 +834,8 @@ mod tests {
         // `advance_play`) — même raison que le test précédent : la physique
         // séparerait les deux corps placés au même point, sans rapport avec
         // ce qu'on vérifie ici.
+        // Grâce d'apparition expirée (roadmap v2 0.1 bis) : on teste la mort.
+        app.network.network_spawn_grace.clear();
         for _ in 0..160 {
             app.update_network_health(0.05);
         }
@@ -816,6 +865,8 @@ mod tests {
         let monster_pos = app.scene.objects[2].transform.position;
         app.scene.objects[index].transform.position = monster_pos;
 
+        // Grâce d'apparition expirée (roadmap v2 0.1 bis) : on teste la mort.
+        app.network.network_spawn_grace.clear();
         for _ in 0..160 {
             app.update_network_health(0.05);
         }
@@ -867,6 +918,8 @@ mod tests {
             });
         }
 
+        // Grâce d'apparition expirée (roadmap v2 0.1 bis) : on teste la mort.
+        app.network.network_spawn_grace.clear();
         for _ in 0..160 {
             app.update_network_health(0.05);
         }

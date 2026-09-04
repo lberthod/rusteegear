@@ -181,7 +181,8 @@ impl Room {
     /// sa santé s'épuise pendant l'attente du premier joueur).
     fn new() -> Self {
         let mut app = AppState::new();
-        app.use_embedded_scene();
+        app.use_embedded_scene_cached();
+        app.clear_spawn_area();
         app.hide_local_player_template();
         app.playing = true;
         let last_wave = app.wave;
@@ -208,7 +209,10 @@ impl Room {
     fn restart(&mut self) {
         let ids: Vec<PlayerId> = self.lobby.names.keys().copied().collect();
         self.app = AppState::new();
-        self.app.use_embedded_scene();
+        self.app.use_embedded_scene_cached();
+        // Zone d'apparition dégagée avant la reconstruction de la physique
+        // (roadmap post-audit UX v2 2026-09-04, 0.1 bis).
+        self.app.clear_spawn_area();
         self.app.hide_local_player_template();
         self.app.playing = true;
         // Le mode de manche vit au niveau du salon (`Lobby::objective`, fixé

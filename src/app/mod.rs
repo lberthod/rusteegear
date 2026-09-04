@@ -817,6 +817,11 @@ pub struct NetworkPlayersState {
     /// sa classe, ex. Éclaireur ×0,70) — remplace la constante plate partout
     /// où la vie est clampée ou testée à pleine vie (cf. `health::max_health_for`).
     network_max_health: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Grâce d'apparition restante (s) par joueur réseau : pas de dégâts de
+    /// contact tant qu'elle court (roadmap post-audit UX v2 2026-09-04, 0.1
+    /// bis — les monstres du hameau sont au contact du point d'apparition et
+    /// tuaient tout arrivant en ~6 s, d'où la « Manche perdue » immédiate).
+    network_spawn_grace: HashMap<crate::net::protocol::PlayerId, f32>,
     /// Réanimation en cours (GDD §8.1, exclusivité Soutien) : pour chaque
     /// **soigneur**, la cible spectatrice qu'il canalise et le temps déjà
     /// accumulé (s) — remis à zéro si la cible change ou si le canal
@@ -1123,6 +1128,11 @@ pub struct AppState {
     pub view_rect_px: (f32, f32, f32, f32),
     /// Barre de vie du HUD (0..1) pilotée par `set_health` ; `None` = pas de barre.
     pub hud_health: Option<f32>,
+    /// Grâce d'apparition solo (s) : pendant ce délai après l'armement de la
+    /// vie (`ensure_play_health`) ou un « Rejouer », les dégâts sont ignorés
+    /// (roadmap post-audit UX v2 2026-09-04, 0.1 bis). Pendant de
+    /// `network_spawn_grace` pour le joueur local.
+    pub play_grace: f32,
     /// Qualité de rendu visée (cf. `build_config::RenderQuality`) : relue depuis la
     /// config persistée à chaque entrée en Play, pilote le nombre de lumières
     /// ponctuelles envoyées au shader (perf en mode interactif « Basse » qualité).
@@ -1448,6 +1458,7 @@ impl AppState {
             device_portrait: true,
             view_rect_px: (0.0, 0.0, 0.0, 0.0),
             hud_health: None,
+            play_grace: 0.0,
             render_quality: crate::app::build_config::BuildConfig::load().render_quality,
             bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
             fx: FxState {
@@ -1482,6 +1493,7 @@ impl AppState {
                 damage_contributions: HashMap::new(),
                 network_classes: HashMap::new(),
                 network_max_health: HashMap::new(),
+                network_spawn_grace: HashMap::new(),
                 network_revive: HashMap::new(),
                 bite_cooldowns: HashMap::new(),
                 recent_damage: HashMap::new(),
