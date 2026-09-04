@@ -247,7 +247,9 @@ jobs:
   # Xvfb avec le rasteriseur Vulkan logiciel de Mesa (lavapipe) et le pont de
   # pilotage (`--pilot`, cf. docs/PILOT.md) : `pilot state` prouve que la
   # fenêtre, le device wgpu et la boucle d'événements tournent ; la capture
-  # d'écran est publiée en artefact pour un contrôle visuel.
+  # d'écran est publiée en artefact pour un contrôle visuel. `libxkbcommon-x11-0`
+  # (run 33885202922) : winit le charge dynamiquement à l'ouverture de la fenêtre X11
+  # et panique s'il manque — le paquet -dev seul ne suffit pas au runtime.
   #
   # `continue-on-error` le temps d'observer quelques runs verts consécutifs
   # (même précaution que `golden` et `audit` à leur introduction) : Windows
@@ -271,7 +273,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libx11-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev \
             libasound2-dev libudev-dev libdbus-1-dev pkg-config \
             libvulkan1 mesa-vulkan-drivers xvfb
 
@@ -321,6 +323,23 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+
+      # Cache + pull LFS comme le job `check` : sans les vrais `.glb`, 43 tests
+      # (import des créatures, démo MMORPG, scène embarquée) échouent sur des
+      # pointeurs texte (run 33885202922). `shell: bash` : le shell par défaut
+      # du runner Windows est pwsh, `cut`/`sort` viennent de Git for Windows.
+      - name: Liste des objets LFS (clé de cache)
+        shell: bash
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Cache LFS
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Récupérer les modèles (assets/models/)
+        run: git lfs pull
 
       - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@master
