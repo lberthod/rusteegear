@@ -36,15 +36,15 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 - [x] 1.8 Modale d'autosave : date + delta au lieu du chemin brut (O-05)
 - [x] 1.9 (découvert en route) `examples/broken_scene` faisait planter l'éditeur (« buffer slices can not be empty ») ; `local_aabb` inondait la Console — corrigés dans le même commit
 
-## Vague 2 — Un joueur qui sait où il est (L, 2 semaines)
+## Vague 2 — Un joueur qui sait où il est (L, 2 semaines) — fait `473e3e9`
 
-- [ ] 2.1 Écran d'accueil joueur : pseudo mémorisé, « Jouer en ligne » / « Jouer seul », salon + classe, serveur repliable ; écran de chargement (P-01, N-01)
-- [ ] 2.2 Pastille réseau permanente + ping dans le HUD, bannières perte / reconnexion, Tab maintenu = roster (P-02)
-- [ ] 2.3 Pause : Reprendre / Paramètres / Se déconnecter / Quitter ; libellé « La partie continue » en ligne (P-03)
-- [ ] 2.4 Tactile : orbite au glissé sur la moitié droite, stick gauche 2 axes relatif caméra (M-01)
-- [ ] 2.5 Tactile : boutons Pause et Carte, ⚙ dans la pause, champs Firebase sortis de l'écran joueur (M-02)
-- [ ] 2.6 `safe_area` activé par défaut avec vraies marges système, écran maintenu allumé (M-03)
-- [ ] 2.7 En Play : touches d'outils Q/T/Y/F désactivées, glissé souris 2 axes, sensibilité (P-04)
+- [x] 2.1 Écran d'accueil joueur : pseudo mémorisé, « Jouer en ligne » / « Jouer seul », salon + classe, serveur repliable ; écran de chargement (P-01, N-01)
+- [x] 2.2 Pastille réseau permanente + ping dans le HUD, bannières perte / reconnexion, Tab maintenu = roster (P-02) — partiel : pastille et bannières faites ; pas de ping (le protocole n'a pas de mesure de latence, changement serveur) ni de Tab = roster
+- [x] 2.3 Pause : Reprendre / Paramètres / Se déconnecter / Quitter ; libellé « La partie continue » en ligne (P-03)
+- [x] 2.4 Tactile : orbite au glissé sur la moitié droite, stick gauche 2 axes relatif caméra (M-01)
+- [x] 2.5 Tactile : boutons Pause et Carte, ⚙ dans la pause, champs Firebase sortis de l'écran joueur (M-02)
+- [x] 2.6 `safe_area` activé par défaut avec vraies marges système, écran maintenu allumé (M-03) — partiel : safe_area activé dans la scène livrée (marge en %, pas les insets système), wake lock sur le web seulement (Android/iOS restent à faire)
+- [x] 2.7 En Play : touches d'outils Q/T/Y/F désactivées, glissé souris 2 axes, sensibilité (P-04)
 
 ## Vague 3 — Playtest (M, 3 jours + testeurs)
 
@@ -52,11 +52,11 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 - [ ] 3.2 3 à 5 testeurs sur `docs/TEST_SCENARIO.md`, dont un non-développeur, sans aide (O-04)
 - [ ] 3.3 Résultats dans `docs/playtests/2026-09-XX.md` ; reprioriser vagues 4-5
 
-## Vague 4 — Une seule vérité documentaire (S, 2 jours)
+## Vague 4 — Une seule vérité documentaire (S, 2 jours) — fait `0c19f8c`
 
-- [ ] 4.1 Table unique des bindings dans le code → fenêtre Raccourcis complète + `docs/CONTROLS.md` (O-03)
-- [ ] 4.2 QUICKSTART : budget « ~30 min la première fois », sections pilotage et pré-push déplacées vers `docs/PILOT.md` / `CONTRIBUTING.md` ; `doctor.sh` vérifie la toolchain épinglée (O-01)
-- [ ] 4.3 README aligné sur les libellés réels, `docs/guide-createur` supprimé ou réécrit, KNOWN_LIMITATIONS rafraîchi (O-02)
+- [x] 4.1 Table unique des bindings dans le code → fenêtre Raccourcis complète + `docs/CONTROLS.md` (O-03)
+- [x] 4.2 QUICKSTART : budget « ~30 min la première fois », sections pilotage et pré-push déplacées vers `docs/PILOT.md` / `CONTRIBUTING.md` ; `doctor.sh` vérifie la toolchain épinglée (O-01)
+- [x] 4.3 README aligné sur les libellés réels, `docs/guide-createur` supprimé ou réécrit, KNOWN_LIMITATIONS rafraîchi (O-02)
 
 ## Vague 5 — Profondeur (XL, après playtest)
 
