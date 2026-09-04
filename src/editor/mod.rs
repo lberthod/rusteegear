@@ -318,6 +318,25 @@ struct Panels {
     /// Résumé (âge, nombre d'objets) de l'autosave proposé en restauration,
     /// calculé une fois par chemin (roadmap post-audit UX 2026-09-04, 1.8).
     autosave_summary: Option<(std::path::PathBuf, String)>,
+    /// La restauration de l'autosave la plus récente a échoué : celle
+    /// proposée maintenant est la précédente (roadmap post-audit UX v2
+    /// 2026-09-04, 3.3) — la modale le dit plutôt que de refaire la même
+    /// question sans explication.
+    autosave_fallback: bool,
+    /// Groupe dont la suppression attend confirmation (roadmap post-audit UX
+    /// v2 2026-09-04, 3.7) — posé par la corbeille de la hiérarchie, lu par
+    /// `windows::group_delete_confirm_popup`.
+    group_pending_delete: Option<String>,
+    /// « Fermer et supprimer » du journal de crash cliqué : confirmation
+    /// avant d'effacer la seule trace du plantage (roadmap 3.7).
+    crash_log_confirm_delete: bool,
+    /// Opération d'optimisation destructive en attente de confirmation
+    /// (bake lighting, limite de lumières — roadmap 3.7).
+    optimize_pending: Option<OptimizeConfirm>,
+    /// Échec d'ouverture ou de création de projet à montrer en modale
+    /// (roadmap post-audit UX v2 2026-09-04, 3.8) — un toast de 5 s ne
+    /// suffit pas pour un chemin et une piste de réparation.
+    open_error: Option<String>,
     /// Fenêtre « 🩹 Journal de crash » (Sprint 113) — ouverte automatiquement au
     /// lancement si `crash_log::read()` a trouvé une trace, sinon accessible depuis
     /// le menu Aide. Écran **volontaire** : rien n'est envoyé nulle part depuis ici,
@@ -374,6 +393,17 @@ struct Panels {
     map_pan: [f32; 2],
 }
 
+/// Opération d'optimisation qui supprime des lumières, à confirmer avec le
+/// compte exact (roadmap post-audit UX v2 2026-09-04, 3.7) — cf.
+/// `windows::optimize_confirm_popup`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OptimizeConfirm {
+    /// Figer `n` lumières ponctuelles en émission puis les supprimer.
+    Bake { lights: usize },
+    /// Ne garder que `keep` lumières sur `lights`.
+    LimitLights { lights: usize, keep: usize },
+}
+
 /// Informations de diagnostic affichées dans le bandeau d'état (lecture seule).
 pub struct StatusInfo<'a> {
     pub fps: f32,
@@ -402,8 +432,13 @@ pub struct StatusInfo<'a> {
     /// « scène seule » — affiché dans la barre d'état (roadmap post-audit UX
     /// 2026-09-04, 1.4 : jusque-là l'UI ne recevait qu'un booléen `has_project`).
     pub project_name: Option<&'a str>,
-    /// Fichier visé par « Enregistrer » (`AppState::save_target`).
-    pub save_target: &'a str,
+    /// Fichier visé par « Enregistrer » (`AppState::save_target`) — `None` :
+    /// scène sans fichier, Cmd+S ouvre « Enregistrer sous… » (roadmap
+    /// post-audit UX v2 2026-09-04, 3.2).
+    pub save_target: Option<&'a str>,
+    /// Nom de fichier proposé par « Enregistrer sous… »
+    /// (`AppState::suggested_save_name`, roadmap 3.2).
+    pub suggested_save_name: &'a str,
     /// Scène modifiée depuis la dernière sauvegarde (`AppState::scene_dirty`).
     pub scene_dirty: bool,
     /// Erreurs de script Lua par index d'objet (`AppState::script_errors`).
@@ -555,6 +590,15 @@ pub struct UiActions {
     /// `AppState::pending_autosave_recovery`).
     pub restore_autosave: bool,
     pub dismiss_autosave_recovery: bool,
+    /// Corbeille d'un groupe dans la hiérarchie : demande de confirmation
+    /// (roadmap post-audit UX v2 2026-09-04, 3.7) — devient `delete_group`
+    /// une fois confirmée.
+    pub request_delete_group: Option<String>,
+    /// Suppression de groupe confirmée (`AppState::delete_group`).
+    pub delete_group: Option<String>,
+    /// « Retirer de la liste » sur un projet récent introuvable (roadmap
+    /// 3.8) — chemin à oublier (`Settings::forget_recent_project`).
+    pub forget_recent_project: Option<String>,
     /// Mode Player : bouton ⏸ tactile / menu pause (roadmap post-audit UX
     /// 2026-09-04, 2.3 et 2.5).
     pub toggle_pause: bool,
@@ -789,7 +833,7 @@ impl Editor {
         };
         Self::restore_open_windows(&mut panels, &settings.open_windows);
 
-        Editor {
+        let mut editor = Editor {
             ctx,
             winit_state,
             renderer,
@@ -826,7 +870,14 @@ impl Editor {
             pending_switch: None,
             net_last_status: None,
             net_banner: None,
+        };
+        // `settings.json` illisible, copié en `.bak` (roadmap post-audit UX v2
+        // 2026-09-04, 3.8) : signalé en toast — journalisé **après** la
+        // création des toasts, qui ne relisent pas ce qui précède.
+        if let Some(warning) = editor.settings.load_warning.take() {
+            log::warn!("{warning}");
         }
+        editor
     }
 
     /// Réglages courants (clé API DeepSeek, config Firebase…) — lecture seule,
@@ -846,6 +897,26 @@ impl Editor {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         self.settings.record_recent_project(name, root, now);
+    }
+
+    /// « Ignorer » dans la modale d'autosave (roadmap post-audit UX v2
+    /// 2026-09-04, 3.3) : mémorisé dans les réglages pour ne pas reposer la
+    /// question à chaque lancement tant qu'aucune autosave plus récente
+    /// n'apparaît.
+    pub(crate) fn ignore_autosave(&mut self, path: &std::path::Path) {
+        self.settings.ignore_autosave(path);
+    }
+
+    /// La restauration de l'autosave la plus récente a échoué et la
+    /// précédente est maintenant proposée (roadmap 3.3) — la modale l'explique.
+    pub(crate) fn note_autosave_fallback(&mut self) {
+        self.panels.autosave_fallback = true;
+    }
+
+    /// Échec d'ouverture/création de projet à montrer en modale (roadmap
+    /// post-audit UX v2 2026-09-04, 3.8).
+    pub(crate) fn set_open_error(&mut self, message: String) {
+        self.panels.open_error = Some(message);
     }
 
     /// Adresse locale par défaut du serveur lancé par l'éditeur (Sprint 7) —
@@ -1144,6 +1215,7 @@ impl Editor {
         let settings_open = &mut self.panels.settings;
         let help_open = &mut self.panels.help;
         let crash_open = &mut self.panels.crash_log;
+        let crash_confirm = &mut self.panels.crash_log_confirm_delete;
         let crash_log_text = &mut self.crash_log_text;
         let map_open_ref = &mut self.panels.map_open;
         let map_open = *map_open_ref;
@@ -1356,7 +1428,7 @@ impl Editor {
             // dernier n'était câblé que dans l'éditeur : un plantage en mode
             // joueur restait muet.
             windows::help_window(ctx, help_open, locale, mobile.any());
-            windows::crash_log_window(ctx, crash_open, crash_log_text, locale);
+            windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
             // Carte (Phase carte plein écran) : mini-carte permanente en coin,
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
             // (jamais les deux à la fois, cf. doc de `player_map_overlay`).
@@ -1446,6 +1518,9 @@ impl Editor {
         // Raccourci de fichier reçu au clavier (`AppState::pending_shortcut`).
         shortcut: Option<crate::app::EditorShortcut>,
         spectating: Option<&str>,
+        // Écran d'accueil de l'éditeur à afficher (`AppState::editor_welcome_pending`,
+        // roadmap post-audit UX v2 2026-09-04, 3.1).
+        editor_welcome: &mut bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         // Échelle de l'interface (Paramètres › Accessibilité, roadmap 5.3).
@@ -1455,7 +1530,9 @@ impl Editor {
         // Cmd+Maj+S / Cmd+O / Cmd+N (roadmap post-audit UX 2026-09-04, 1.1) :
         // même code que les entrées du menu Fichier correspondantes.
         match shortcut {
-            Some(crate::app::EditorShortcut::SaveAs) => menus::dialog_save_as(&mut actions),
+            Some(crate::app::EditorShortcut::SaveAs) => {
+                menus::dialog_save_as(&mut actions, status.suggested_save_name)
+            }
             Some(crate::app::EditorShortcut::Open) => menus::dialog_open(&mut actions),
             Some(crate::app::EditorShortcut::NewProject) => {
                 self.panels.new_project_wizard = true;
@@ -1580,8 +1657,15 @@ impl Editor {
                 toasts,
                 pending_switch_label,
                 spectating,
+                editor_welcome,
             );
         });
+        // « Retirer de la liste » d'un projet récent introuvable (roadmap 3.8) :
+        // traité ici, après l'UI, parce que le menu emprunte `settings` en
+        // lecture pendant la construction.
+        if let Some(path) = actions.forget_recent_project.take() {
+            self.settings.forget_recent_project(&path);
+        }
 
         // Rafraîchissement automatique du chat de salon (Sprint F-12) : tant que
         // la fenêtre Multijoueur reste ouverte, un salon renseigné et Firebase
@@ -1803,9 +1887,17 @@ fn build_ui(
     pending_switch_label: Option<&'static str>,
     // Allié suivi en caméra spectateur (roadmap 5.6).
     spectating: Option<&str>,
+    // Écran d'accueil sans projet (roadmap post-audit UX v2 2026-09-04, 3.1).
+    editor_welcome: &mut bool,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
+    // Écran d'accueil de l'éditeur (roadmap 3.1) : au premier lancement, ou
+    // quand aucun projet n'a été rouvert — les portes d'entrée en clair plutôt
+    // qu'un hameau muet et un sous-sous-menu à découvrir.
+    if *editor_welcome && windows::editor_welcome_window(root.ctx(), settings, actions) {
+        *editor_welcome = false;
+    }
     // Menu contextuel de la vue 3D (clic droit, roadmap 5.4).
     if status.context_menu_request {
         panels.context_menu = root.ctx().pointer_latest_pos();
@@ -1891,6 +1983,7 @@ fn build_ui(
         root.ctx(),
         &mut panels.crash_log,
         crash_log_text,
+        &mut panels.crash_log_confirm_delete,
         crate::app::locale::Locale::Fr,
     );
     // Fenêtre « Multijoueur » (connexion à un serveur RusteeGear).
@@ -1941,6 +2034,13 @@ fn build_ui(
     // pas une action silencieuse).
     windows::prefab_feedback_popup(root.ctx(), panels);
     windows::prefab_delete_confirm_popup(root.ctx(), panels, actions);
+    // Suppression de groupe et optimisations destructives : confirmation
+    // avec le compte exact (roadmap post-audit UX v2 2026-09-04, 3.7).
+    if let Some(name) = actions.request_delete_group.take() {
+        panels.group_pending_delete = Some(name);
+    }
+    windows::group_delete_confirm_popup(root.ctx(), panels, scene, actions);
+    windows::optimize_confirm_popup(root.ctx(), panels, actions);
 
     // Fenêtre flottante « 📦 Compiler & exporter ».
     export.ui(root.ctx(), scene, settings);
@@ -1974,22 +2074,23 @@ fn build_ui(
             // Projet / fichier / état « modifié » (roadmap post-audit UX
             // 2026-09-04, 1.4) : ce que « Enregistrer » va écrire, et si c'est
             // nécessaire — avant, rien de tout cela n'était visible.
-            let file = std::path::Path::new(status.save_target)
-                .file_name()
-                .map(|f| f.to_string_lossy().into_owned())
-                .unwrap_or_else(|| status.save_target.to_string());
+            // Sans fichier lié : « Sans titre », jamais un nom de fichier qui
+            // n'existe pas (roadmap post-audit UX v2 2026-09-04, 3.1/3.2).
+            let file = scene_display_name(status.save_target);
             let dirty = if status.scene_dirty { " •" } else { "" };
             let label = match status.project_name {
                 Some(name) => format!("📁 {name} · {file}{dirty}"),
                 None => format!("📄 {file}{dirty} (sans projet)"),
             };
-            ui.label(label).on_hover_text(if status.scene_dirty {
-                format!(
-                    "Modifications non sauvegardées — Cmd+S enregistre dans\n{}",
-                    status.save_target
-                )
-            } else {
-                format!("Enregistré — Cmd+S écrit dans\n{}", status.save_target)
+            ui.label(label).on_hover_text(match (status.save_target, status.scene_dirty) {
+                (Some(target), true) => {
+                    format!("Modifications non sauvegardées — Cmd+S enregistre dans\n{target}")
+                }
+                (Some(target), false) => format!("Enregistré — Cmd+S écrit dans\n{target}"),
+                (None, true) => {
+                    "Modifications non sauvegardées — Cmd+S ouvre « Enregistrer sous… »".to_string()
+                }
+                (None, false) => "Scène sans fichier — Cmd+S ouvre « Enregistrer sous… »".to_string(),
             });
             // Erreurs non vues depuis la dernière ouverture de la Console
             // (roadmap post-audit UX 2026-09-04, 1.2).
@@ -2019,7 +2120,8 @@ fn build_ui(
                 export,
                 actions,
                 has_project,
-                settings.existing_recent_projects(),
+                settings.recent_projects_with_status(),
+                status.suggested_save_name,
             );
             menu_edition(ui, selection, status, actions);
             menu_ajouter(ui, scene, *selection, actions);
@@ -2177,13 +2279,18 @@ fn build_ui(
             .map(|(_, s)| s.clone())
             .unwrap_or_default()
     });
+    if pending_autosave_recovery.is_none() {
+        panels.autosave_fallback = false;
+    }
     confirmation_modals(
         root,
         confirm_quit,
         confirm_close_project,
         pending_autosave_recovery,
         autosave_summary.as_deref(),
+        panels.autosave_fallback,
         pending_switch_label,
+        &mut panels.open_error,
         actions,
     );
 
@@ -3519,15 +3626,36 @@ fn end_of_round_and_hud_widgets(
 /// entièrement autonome (aucun état partagé avec le reste de l'UI au-delà de
 /// ces paramètres), rendu en overlay via `egui::Modal` donc sans incidence
 /// sur l'ordre de mise en page des panneaux environnants.
+#[allow(clippy::too_many_arguments)] // une modale par paramètre : chacune est un état distinct
 fn confirmation_modals(
     root: &mut egui::Ui,
     confirm_quit: bool,
     confirm_close_project: bool,
     pending_autosave_recovery: Option<&std::path::Path>,
     autosave_summary: Option<&str>,
+    autosave_fallback: bool,
     pending_switch_label: Option<&'static str>,
+    open_error: &mut Option<String>,
     actions: &mut UiActions,
 ) {
+    // Échec d'ouverture/création de projet (roadmap post-audit UX v2
+    // 2026-09-04, 3.8) : le chemin et la cause restent lisibles jusqu'à
+    // « OK » — un toast disparaît avant qu'on ait fini de le lire.
+    if let Some(message) = open_error.clone() {
+        let resp = egui::Modal::new(egui::Id::new("open-error")).show(root.ctx(), |ui| {
+            ui.set_max_width(460.0);
+            ui.heading("Ouverture impossible");
+            ui.label(message);
+            ui.separator();
+            if ui.button("OK").clicked() {
+                *open_error = None;
+            }
+        });
+        if resp.should_close() {
+            *open_error = None;
+        }
+    }
+
     // Changement de scène (Ouvrir, Nouveau projet, Démos, scène vide) demandé
     // alors que la scène est modifiée (roadmap post-audit UX 2026-09-04, 1.5) —
     // même triptyque que Quitter / Fermer le projet.
@@ -3638,13 +3766,32 @@ fn confirmation_modals(
             if let Some(summary) = autosave_summary {
                 ui.label(summary);
             }
-            ui.small(format!("{}", path.display()));
+            // Le chemin brut n'apparaît plus (roadmap post-audit UX v2
+            // 2026-09-04, 3.3) : il reste en infobulle pour qui veut aller
+            // voir le fichier.
+            if autosave_fallback {
+                ui.colored_label(
+                    egui::Color32::from_rgb(240, 180, 90),
+                    "La sauvegarde la plus récente n'a pas pu être lue — voici la précédente.",
+                );
+            }
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("♻  Restaurer").clicked() {
+                if ui
+                    .button("♻  Restaurer")
+                    .on_hover_text(format!("{}", path.display()))
+                    .clicked()
+                {
                     actions.restore_autosave = true;
                 }
-                if ui.button("Ignorer").clicked() {
+                if ui
+                    .button("Ignorer")
+                    .on_hover_text(
+                        "Ne plus proposer cette sauvegarde automatique — une plus récente \
+                         sera de nouveau proposée",
+                    )
+                    .clicked()
+                {
                     actions.dismiss_autosave_recovery = true;
                 }
             });
@@ -3653,6 +3800,20 @@ fn confirmation_modals(
             actions.dismiss_autosave_recovery = true;
         }
     }
+}
+
+/// Nom court de la scène pour la barre d'état : le nom du fichier cible, ou
+/// « Sans titre » sans fichier lié (roadmap post-audit UX v2 2026-09-04, 3.2 —
+/// même règle que `AppState::display_scene_name` pour le titre de la fenêtre).
+fn scene_display_name(save_target: Option<&str>) -> String {
+    save_target
+        .map(|target| {
+            std::path::Path::new(target)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| target.to_string())
+        })
+        .unwrap_or_else(|| "Sans titre".to_string())
 }
 
 /// « il y a 3 min », « il y a 2 h 13 min », « il y a 5 jours » — pour la
@@ -3911,6 +4072,16 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
 
 #[cfg(test)]
 mod tests {
+
+    /// Roadmap 3.2 : sans fichier lié, la barre d'état dit « Sans titre ».
+    #[test]
+    fn scene_display_name_falls_back_to_sans_titre() {
+        assert_eq!(super::scene_display_name(None), "Sans titre");
+        assert_eq!(
+            super::scene_display_name(Some("/tmp/projet/scenes/main.scene.json")),
+            "main.scene.json"
+        );
+    }
 
     #[test]
     fn human_age_reads_like_french_relative_time() {

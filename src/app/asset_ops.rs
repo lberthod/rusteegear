@@ -209,8 +209,13 @@ impl AppState {
     /// `optimize_textures(1024)` + `limit_point_lights(4)`, cf.
     /// `gfx::renderer::render`) en lui donnant des voisins plus/moins agressifs
     /// plutôt qu'un unique niveau tout-ou-rien.
+    ///
+    /// Une seule entrée d'undo pour tout le préset (roadmap post-audit UX v2
+    /// 2026-09-04, 3.7) : chaque étape pousse la sienne, on ne garde que la
+    /// première (l'état d'avant) — un Cmd+Z défait le préset entier.
     pub fn apply_quality_preset(&mut self, preset: QualityPreset) {
         let cfg = preset.config();
+        let depth = self.undo_depth();
         if let Some(max_px) = cfg.max_texture_px {
             self.optimize_textures(max_px);
         }
@@ -223,6 +228,7 @@ impl AppState {
         if cfg.bake_lighting {
             self.bake_lighting();
         }
+        self.squash_undo_since(depth);
     }
 }
 
@@ -356,6 +362,25 @@ mod tests {
         // `limit_point_lights(4)` puis `bake_lighting()` (qui vide le reste) :
         // au final plus aucune lumière ponctuelle dynamique.
         assert!(app.scene.point_lights.is_empty());
+    }
+
+    /// Roadmap 3.7 : un préset est une seule entrée d'undo — un Cmd+Z rend
+    /// toutes les lumières, pas seulement la dernière étape.
+    #[test]
+    fn a_quality_preset_is_a_single_undo_entry() {
+        let mut app = crate::app::AppState::new();
+        app.scene.point_lights.clear();
+        for _ in 0..6 {
+            app.scene
+                .point_lights
+                .push(crate::scene::PointLight::default());
+        }
+        let depth = app.undo_depth();
+        app.apply_quality_preset(QualityPreset::MobileLow);
+        assert!(app.scene.point_lights.is_empty());
+        assert_eq!(app.undo_depth(), depth + 1);
+        app.undo();
+        assert_eq!(app.scene.point_lights.len(), 6);
     }
 
     /// `QualityPreset::MobileHigh` ne touche pas aux lumières (contrairement à

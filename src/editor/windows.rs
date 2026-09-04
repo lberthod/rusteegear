@@ -1711,10 +1711,17 @@ pub(super) fn optimize_window(
                 actions.convert_textures_pot = true;
             }
             ui.separator();
-            if scene.point_lights.len() > 4 && ui.button("Limiter à 4 lumières").clicked() {
-                actions.limit_lights = Some(4);
+            // Les deux opérations suppriment des lumières : confirmation avec
+            // le compte exact (roadmap post-audit UX v2 2026-09-04, 3.7), cf.
+            // `optimize_confirm_popup`.
+            let lights = scene.point_lights.len();
+            if lights > 4 && ui.button("Limiter à 4 lumières").clicked() {
+                panels.optimize_pending = Some(super::OptimizeConfirm::LimitLights {
+                    lights,
+                    keep: 4,
+                });
             }
-            if !scene.point_lights.is_empty()
+            if lights > 0
                 && ui
                     .button("💡 Figer les lumières (bake)")
                     .on_hover_text(
@@ -1722,7 +1729,7 @@ pub(super) fn optimize_window(
                     )
                     .clicked()
             {
-                actions.bake_lighting = true;
+                panels.optimize_pending = Some(super::OptimizeConfirm::Bake { lights });
             }
             ui.separator();
             // Évolutions de rendu non encore implémentées : grisées et explicitées.
@@ -2289,6 +2296,7 @@ pub(super) fn crash_log_window(
     ctx: &egui::Context,
     open_flag: &mut bool,
     crash_log_text: &mut Option<String>,
+    confirm_delete: &mut bool,
     locale: crate::app::locale::Locale,
 ) {
     let mut open = *open_flag;
@@ -2319,8 +2327,18 @@ pub(super) fn crash_log_window(
                     if ui.button("📋 Copier").clicked() {
                         ui.ctx().copy_text(text.clone());
                     }
-                    if ui.button("🗑 Fermer et supprimer").clicked() {
-                        clear = true;
+                    // Confirmation avant d'effacer la seule trace du plantage
+                    // (roadmap post-audit UX v2 2026-09-04, 3.7).
+                    if *confirm_delete {
+                        ui.label("Supprimer définitivement ?");
+                        if ui.button("Oui, supprimer").clicked() {
+                            clear = true;
+                        }
+                        if ui.button("Non").clicked() {
+                            *confirm_delete = false;
+                        }
+                    } else if ui.button("🗑 Fermer et supprimer").clicked() {
+                        *confirm_delete = true;
                     }
                 });
             }
@@ -2331,9 +2349,194 @@ pub(super) fn crash_log_window(
     if clear {
         crate::crash_log::clear();
         *crash_log_text = None;
+        *confirm_delete = false;
         open = false;
     }
+    if !open {
+        *confirm_delete = false;
+    }
     *open_flag = open;
+}
+
+/// Confirmation de suppression d'un groupe de la hiérarchie (roadmap
+/// post-audit UX v2 2026-09-04, 3.7) : dit combien d'objets repassent dans
+/// « Sans groupe » — avant, la corbeille agissait sans un mot ni entrée
+/// d'undo. Même patron que `prefab_delete_confirm_popup`.
+pub(super) fn group_delete_confirm_popup(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    scene: &Scene,
+    actions: &mut UiActions,
+) {
+    let Some(name) = panels.group_pending_delete.clone() else {
+        return;
+    };
+    let members = scene.objects.iter().filter(|o| o.group == name).count();
+    let mut close = false;
+    egui::Window::new("🗑 Supprimer le groupe ?")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(group_delete_prompt(&name, members));
+            ui.horizontal(|ui| {
+                if ui.button("Supprimer").clicked() {
+                    actions.delete_group = Some(name.clone());
+                    close = true;
+                }
+                if ui.button("Annuler").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close {
+        panels.group_pending_delete = None;
+    }
+}
+
+/// Texte de la confirmation de suppression de groupe (cf.
+/// `group_delete_confirm_popup`).
+pub(crate) fn group_delete_prompt(name: &str, members: usize) -> String {
+    match members {
+        0 => format!("Supprimer le groupe « {name} » ? Il ne contient aucun objet."),
+        1 => format!("Supprimer le groupe « {name} » ? Son objet repasse dans Sans groupe."),
+        n => format!("Supprimer le groupe « {name} » ? Ses {n} objets repassent dans Sans groupe."),
+    }
+}
+
+/// Confirmation des optimisations qui suppriment des lumières (roadmap
+/// post-audit UX v2 2026-09-04, 3.7) : bake lighting et « Limiter à N
+/// lumières », avec le compte exact — les deux restent annulables (Cmd+Z),
+/// mais l'utilisateur doit savoir ce qui va disparaître avant de cliquer.
+pub(super) fn optimize_confirm_popup(
+    ctx: &egui::Context,
+    panels: &mut Panels,
+    actions: &mut UiActions,
+) {
+    let Some(pending) = panels.optimize_pending else {
+        return;
+    };
+    let mut close = false;
+    egui::Window::new("💡 Confirmer l'optimisation")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(optimize_confirm_prompt(pending));
+            ui.small("Annulable ensuite avec Cmd+Z.");
+            ui.horizontal(|ui| {
+                if ui.button("Continuer").clicked() {
+                    match pending {
+                        super::OptimizeConfirm::Bake { .. } => actions.bake_lighting = true,
+                        super::OptimizeConfirm::LimitLights { keep, .. } => {
+                            actions.limit_lights = Some(keep)
+                        }
+                    }
+                    close = true;
+                }
+                if ui.button("Annuler").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close {
+        panels.optimize_pending = None;
+    }
+}
+
+/// Texte de `optimize_confirm_popup`.
+pub(crate) fn optimize_confirm_prompt(pending: super::OptimizeConfirm) -> String {
+    match pending {
+        super::OptimizeConfirm::Bake { lights } => format!(
+            "Figer {lights} lumière(s) ponctuelle(s) en émission statique, puis les supprimer \
+             de la scène ?"
+        ),
+        super::OptimizeConfirm::LimitLights { lights, keep } => format!(
+            "Ne garder que {keep} lumière(s) sur {lights} : {} lumière(s) ponctuelle(s) \
+             seront supprimées.",
+            lights.saturating_sub(keep)
+        ),
+    }
+}
+
+/// Écran d'accueil de l'éditeur sans projet (roadmap post-audit UX v2
+/// 2026-09-04, 3.1) : au premier lancement (ou quand aucun projet n'a été
+/// rouvert), les portes d'entrée en clair — ⭐ Premier jeu, ✨ Nouveau projet,
+/// 🕘 Projets récents, 🏘 Découvrir le hameau (la scène chargée derrière).
+/// Renvoie `true` quand l'écran doit se fermer (choix fait, ou fermé).
+pub(super) fn editor_welcome_window(
+    ctx: &egui::Context,
+    settings: &crate::app::settings::Settings,
+    actions: &mut UiActions,
+) -> bool {
+    let mut done = false;
+    let mut open = true;
+    egui::Window::new("Bienvenue dans RusteeGear")
+        .id(egui::Id::new("editor_welcome"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .default_width(380.0)
+        .show(ctx, |ui| {
+            ui.label("Aucun projet ouvert. Par où commencer ?");
+            ui.add_space(8.0);
+            let wide = egui::vec2(ui.available_width().max(340.0), 30.0);
+            if ui
+                .add_sized(
+                    wide,
+                    egui::Button::new("⭐  Premier jeu — le projet tutoriel"),
+                )
+                .on_hover_text(super::menus::FIRST_GAME_HINT)
+                .clicked()
+            {
+                super::menus::open_first_game(actions);
+                done = true;
+            }
+            if ui
+                .add_sized(wide, egui::Button::new("✨  Nouveau projet…"))
+                .on_hover_text(
+                    "Cmd+N — choix guidé de template (scène vide, démo, niveau de combat)",
+                )
+                .clicked()
+            {
+                actions.open_new_project_wizard = true;
+                done = true;
+            }
+            let recents = settings.existing_recent_projects();
+            if !recents.is_empty() {
+                ui.add_space(6.0);
+                ui.label("🕘  Projets récents");
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        for recent in &recents {
+                            if ui
+                                .selectable_label(false, &recent.name)
+                                .on_hover_text(&recent.path)
+                                .clicked()
+                            {
+                                actions.open_project_path = Some(recent.path.clone());
+                                done = true;
+                            }
+                        }
+                    });
+            }
+            ui.add_space(6.0);
+            if ui
+                .add_sized(wide, egui::Button::new("🏘  Découvrir le hameau"))
+                .on_hover_text(
+                    "Explorer la scène du jeu chargée derrière cette fenêtre, sans projet — \
+                     Cmd+S demandera où l'enregistrer",
+                )
+                .clicked()
+            {
+                done = true;
+            }
+            ui.add_space(4.0);
+            ui.small("Retrouve tout ça dans le menu Fichier.");
+        });
+    done || !open
 }
 
 /// Aide en jeu (roadmap post-audit UX 2026-09-04, 5.5) : les contrôles de jeu
@@ -2772,6 +2975,32 @@ pub(super) fn script_editor_window(
 #[cfg(test)]
 mod tests {
     use super::{MinimapProjection, skinned_dropped_status};
+
+    /// Roadmap 3.7 : la confirmation de suppression de groupe dit combien
+    /// d'objets repassent dans « Sans groupe », au singulier comme au pluriel.
+    #[test]
+    fn group_delete_prompt_counts_members() {
+        assert_eq!(
+            super::group_delete_prompt("Décor", 3),
+            "Supprimer le groupe « Décor » ? Ses 3 objets repassent dans Sans groupe."
+        );
+        assert!(super::group_delete_prompt("Décor", 1).contains("Son objet repasse"));
+        assert!(super::group_delete_prompt("Décor", 0).contains("aucun objet"));
+    }
+
+    /// Roadmap 3.7 : bake et limite de lumières annoncent le compte exact.
+    #[test]
+    fn optimize_confirm_prompt_states_the_count() {
+        use super::super::OptimizeConfirm;
+        assert!(
+            super::optimize_confirm_prompt(OptimizeConfirm::Bake { lights: 7 })
+                .contains("7 lumière")
+        );
+        let limit =
+            super::optimize_confirm_prompt(OptimizeConfirm::LimitLights { lights: 7, keep: 4 });
+        assert!(limit.contains("4 lumière(s) sur 7"), "{limit}");
+        assert!(limit.contains("3 lumière(s) ponctuelle(s)"), "{limit}");
+    }
 
     /// Un monde carré cadré sans pan/zoom : son centre doit tomber exactement
     /// au centre du rect écran.

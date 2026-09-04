@@ -46,19 +46,56 @@ use rilua::LuaApiMut;
 use crate::gfx::camera::OrbitCamera;
 use crate::gfx::mesh::MeshData;
 use crate::scene::{
-    GameCamera, MeshKind, MobileControls, PointLight, Scene, SceneObject, Transform,
+    GameCamera, ImportedMesh, MeshKind, MobileControls, PointLight, Scene, SceneObject, Transform,
 };
 
-/// Instantané léger de la scène pour l'undo/redo (sans les meshes importés, lourds
-/// et rarement modifiés) : objets + lumières + caméra de jeu + contrôles + groupes.
+/// Instantané léger de la scène pour l'undo/redo : objets + lumières (ponctuelles
+/// **et** directionnelle/ambiante) + ciel + caméra de jeu + contrôles + groupes +
+/// HUD (disposition et widgets) + la **liste** des meshes importés (roadmap
+/// post-audit UX v2 2026-09-04, 3.5 — avant, annuler ne rendait ni la lumière,
+/// ni le ciel, ni le HUD, et un Cmd+Z après « Nouvelle scène » ressuscitait des
+/// objets dont le mesh importé avait disparu). Les géométries elles-mêmes
+/// (lourdes) ne sont pas copiées : seules leurs références sérialisables
+/// (`ImportedRecord`) le sont, et `restore` ne recharge depuis le disque que ce
+/// qui manque réellement.
 #[derive(Clone)]
 pub(crate) struct SceneSnapshot {
     objects: Vec<SceneObject>,
     groups: Vec<String>,
     point_lights: Vec<PointLight>,
+    light: crate::scene::Light,
+    sky: crate::scene::Sky,
     mobile: MobileControls,
     camera_follow: bool,
     game_camera: Option<GameCamera>,
+    hud_layout: crate::scene::HudLayout,
+    hud_widgets: Vec<crate::scene::HudWidget>,
+    imported: Vec<ImportedRecord>,
+}
+
+/// Référence sérialisable d'un mesh importé (les champs que `Scene::save`
+/// écrit, cf. `ImportedMesh`) — suffisante pour reconstruire la liste
+/// `Scene::imported` à l'identique, en réutilisant les géométries déjà en
+/// mémoire quand elles existent encore.
+#[derive(Clone, PartialEq)]
+pub(crate) struct ImportedRecord {
+    name: String,
+    path: String,
+    notifies: HashMap<String, Vec<(f32, String)>>,
+}
+
+impl ImportedRecord {
+    fn of(m: &ImportedMesh) -> Self {
+        Self {
+            name: m.name.clone(),
+            path: m.path.clone(),
+            notifies: m.notifies.clone(),
+        }
+    }
+
+    fn matches(&self, m: &ImportedMesh) -> bool {
+        self.name == m.name && self.path == m.path && self.notifies == m.notifies
+    }
 }
 
 impl SceneSnapshot {
@@ -67,19 +104,89 @@ impl SceneSnapshot {
             objects: s.objects.clone(),
             groups: s.groups.clone(),
             point_lights: s.point_lights.clone(),
+            light: s.light,
+            sky: s.sky,
             mobile: s.mobile.clone(),
             camera_follow: s.camera_follow,
             game_camera: s.game_camera,
+            hud_layout: s.hud_layout,
+            hud_widgets: s.hud_widgets.clone(),
+            imported: s.imported.iter().map(ImportedRecord::of).collect(),
         }
     }
-    fn restore(self, s: &mut Scene) {
+
+    /// Restaure l'instantané. Renvoie `true` si la liste des meshes importés a
+    /// changé — l'appelant doit alors poser `imported_dirty` pour que le
+    /// renderer reconstruise ses meshes GPU.
+    fn restore(self, s: &mut Scene) -> bool {
         s.objects = self.objects;
         s.groups = self.groups;
         s.point_lights = self.point_lights;
+        s.light = self.light;
+        s.sky = self.sky;
         s.mobile = self.mobile;
         s.camera_follow = self.camera_follow;
         s.game_camera = self.game_camera;
+        s.hud_layout = self.hud_layout;
+        s.hud_widgets = self.hud_widgets;
+        restore_imported(self.imported, s)
     }
+}
+
+/// Ramène `scene.imported` à la liste `records` (cf. `SceneSnapshot::restore`).
+/// Les meshes encore présents (même nom + chemin) sont déplacés tels quels —
+/// aucune relecture de fichier pour un simple « annuler l'import » ; seuls les
+/// meshes absents (ex. annuler « Nouvelle scène ») sont rechargés depuis leur
+/// chemin, comme le ferait `Scene::reload_imported` à l'ouverture. Renvoie
+/// `false` (rien touché) si la liste est déjà identique.
+fn restore_imported(records: Vec<ImportedRecord>, s: &mut Scene) -> bool {
+    let unchanged = records.len() == s.imported.len()
+        && records.iter().zip(&s.imported).all(|(r, m)| r.matches(m));
+    if unchanged {
+        return false;
+    }
+    let mut old: Vec<Option<ImportedMesh>> = std::mem::take(&mut s.imported)
+        .into_iter()
+        .map(Some)
+        .collect();
+    let mut rebuilt = Vec::with_capacity(records.len());
+    for record in records {
+        let reused = old
+            .iter_mut()
+            .find(|slot| {
+                slot.as_ref()
+                    .is_some_and(|m| m.name == record.name && m.path == record.path)
+            })
+            .and_then(Option::take);
+        let mut mesh = match reused {
+            Some(m) => m,
+            None => {
+                let mut m = ImportedMesh {
+                    name: record.name,
+                    path: record.path,
+                    ..Default::default()
+                };
+                match crate::scene::import::load_gltf(&m.path) {
+                    Ok((data, min, max)) => {
+                        m.data = data;
+                        m.aabb_min = min;
+                        m.aabb_max = max;
+                    }
+                    Err(e) => log::error!(
+                        "Rechargement de {} échoué : {e} — l'objet restera sans géométrie.",
+                        m.path
+                    ),
+                }
+                m.load_skinning();
+                m
+            }
+        };
+        mesh.notifies = record.notifies;
+        rebuilt.push(mesh);
+    }
+    s.imported = rebuilt;
+    s.ensure_default_animations();
+    true
 }
 
 /// Résultat d'un import glTF effectué en thread de fond.
@@ -335,6 +442,28 @@ pub struct ScriptingState {
     script_cache_web: HashMap<u64, rilua::Function>,
 }
 
+/// Ce que Play écrase et que Stop doit rendre (roadmap post-audit UX v2
+/// 2026-09-04, 3.4) : le point de vue d'édition (la caméra de jeu ou de suivi
+/// prend le relais en Play), la sélection (vidée en Play pour ne pas laisser
+/// un gizmo en concurrence avec la physique), la caméra libre, et le drapeau
+/// « modifié » (les widgets qui bougent en Play changent l'empreinte UI et le
+/// posaient à tort — cf. `scene_settings_fingerprint`).
+pub(crate) struct EditContext {
+    pub(crate) camera_target: Vec3,
+    pub(crate) camera_distance: f32,
+    pub(crate) camera_yaw: f32,
+    pub(crate) camera_pitch: f32,
+    pub(crate) selection: Option<usize>,
+    pub(crate) selected: Vec<usize>,
+    pub(crate) selected_light: Option<usize>,
+    pub(crate) fly_cam: bool,
+    pub(crate) scene_dirty: bool,
+    /// Empreinte des réglages de scène hors objets à l'entrée en Play : s'ils
+    /// ont changé pendant la partie (lumière, HUD… édités en pause), la scène
+    /// reste marquée modifiée au Stop — seuls les objets sont restaurés.
+    pub(crate) settings_fingerprint: String,
+}
+
 pub struct AiGenState {
     ai_tx: Sender<(usize, Result<String, String>)>,
     ai_rx: Receiver<(usize, Result<String, String>)>,
@@ -390,6 +519,11 @@ pub struct DragState {
     additive: bool,
     /// Lumière en cours de déplacement au gizmo (avec `active_axis`).
     drag_light: Option<usize>,
+    /// Une poignée de gizmo vient d'être saisie mais rien n'a encore bougé :
+    /// l'entrée d'undo n'est poussée qu'au premier vrai déplacement (roadmap
+    /// post-audit UX v2 2026-09-04, 3.5 — avant, un simple clic sur une poignée
+    /// marquait la scène modifiée et ajoutait une entrée d'undo vide).
+    undo_pending: bool,
 }
 
 pub struct TouchState {
@@ -677,8 +811,10 @@ pub struct NetworkPlayersState {
 pub struct AsyncLoadState {
     import_tx: Sender<ImportResult>,
     import_rx: Receiver<ImportResult>,
-    scene_load_tx: Sender<Result<Scene, String>>,
-    scene_load_rx: Receiver<Result<Scene, String>>,
+    /// Scène chargée en thread de fond, avec le chemin dont elle vient (il
+    /// devient la cible de « Enregistrer », cf. `AppState::scene_file`).
+    scene_load_tx: Sender<Result<(String, Scene), String>>,
+    scene_load_rx: Receiver<Result<(String, Scene), String>>,
     /// Vrai après remplacement de la scène : le renderer doit reconstruire les meshes GPU importés.
     imported_dirty: bool,
 }
@@ -751,6 +887,20 @@ pub struct AppState {
     /// `open_project`/`create_project`. `None` en mode « scène seule »
     /// (comportement historique, toujours supporté) — cf. `crate::project`.
     pub current_project: Option<crate::project::ProjectRoot>,
+    /// Fichier auquel la scène courante est liée hors projet (roadmap
+    /// post-audit UX v2 2026-09-04, 3.2) : posé par « Ouvrir… » et par
+    /// « Enregistrer sous… », effacé par une scène neuve/une démo. Cible des
+    /// Cmd+S suivants et du titre de la fenêtre. `None` = scène sans fichier :
+    /// Cmd+S ouvre alors « Enregistrer sous… » au lieu d'écrire en silence
+    /// dans `~/motor3derust_scene.json`.
+    pub scene_file: Option<std::path::PathBuf>,
+    /// Écran d'accueil de l'éditeur à ouvrir (roadmap post-audit UX v2
+    /// 2026-09-04, 3.1) : posé par `lib::make_app` quand aucun projet n'est
+    /// rouvert au démarrage, consommé par `gfx::renderer::frame`.
+    pub editor_welcome_pending: bool,
+    /// Contexte d'édition mis de côté à l'entrée en Play et restauré au Stop
+    /// (roadmap post-audit UX v2 2026-09-04, 3.4) — cf. `EditContext`.
+    pub(crate) edit_context: Option<EditContext>,
     /// Confirmation de fermeture de projet en attente (Sprint 4) : même esprit
     /// que `confirm_quit`, mais pour « Fermer le projet » plutôt que quitter
     /// l'application — posé par `request_close_project` si `scene_dirty`.
@@ -1360,6 +1510,7 @@ impl AppState {
                 drag_pivot: Vec3::ZERO,
                 additive: false,
                 drag_light: None,
+                undo_pending: false,
             },
             edit_history: EditHistoryState {
                 clipboard: Vec::new(),
@@ -1399,6 +1550,9 @@ impl AppState {
                 ai_scene_replace: true,
             },
             current_project: None,
+            scene_file: None,
+            editor_welcome_pending: false,
+            edit_context: None,
             confirm_close_project: false,
             last_autosave: None,
             pending_autosave_recovery: None,

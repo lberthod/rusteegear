@@ -93,6 +93,19 @@ pub struct Settings {
     /// 5.4 : avant, tout repartait fermé à chaque démarrage.
     #[serde(default)]
     pub open_windows: Vec<String>,
+    /// Autosave que l'utilisateur a choisi d'ignorer dans la modale de
+    /// récupération (roadmap post-audit UX v2 2026-09-04, 3.3) — chemin du
+    /// fichier. Tant qu'aucune autosave plus récente n'apparaît, la question
+    /// n'est plus reposée à chaque lancement.
+    #[serde(default)]
+    pub ignored_autosave: Option<String>,
+    /// Avertissement à remonter à l'utilisateur après `load()` (roadmap
+    /// post-audit UX v2 2026-09-04, 3.8) : `settings.json` illisible, copié en
+    /// `.bak` et remplacé par les valeurs par défaut. Jamais sérialisé ;
+    /// consommé (`take`) par l'éditeur pour l'afficher en toast — `load()`
+    /// tourne avant que les toasts n'écoutent le journal.
+    #[serde(skip)]
+    pub load_warning: Option<String>,
 }
 
 /// Touches des actions de jeu, remappables (roadmap post-audit UX 2026-09-04,
@@ -250,6 +263,8 @@ impl Default for Settings {
             colorblind: false,
             keyboard: KeyboardBindings::default(),
             open_windows: Vec::new(),
+            ignored_autosave: None,
+            load_warning: None,
         }
     }
 }
@@ -296,12 +311,37 @@ impl Settings {
     }
 
     /// Comme `load`, mais avec un chemin de fichier explicite (isolation des
-    /// tests — même patron que `assets::read_user_bytes_at`).
+    /// tests — même patron que `assets::read_user_bytes_at`). Un fichier
+    /// présent mais illisible (JSON corrompu) est mis de côté en
+    /// `settings.json.bak` et signalé via `load_warning` (roadmap post-audit
+    /// UX v2 2026-09-04, 3.8) — avant, les réglages repartaient de zéro en
+    /// silence et le fichier était écrasé à la première sauvegarde.
     fn load_from(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        match serde_json::from_str::<Self>(&text) {
+            Ok(settings) => settings,
+            Err(e) => {
+                let backup = path.with_extension("json.bak");
+                let saved = std::fs::copy(path, &backup).is_ok();
+                let mut settings = Self::default();
+                let warning = if saved {
+                    format!(
+                        "Réglages illisibles ({e}) : l'ancien fichier a été copié en {} et les \
+                         valeurs par défaut sont utilisées.",
+                        backup.display()
+                    )
+                } else {
+                    format!(
+                        "Réglages illisibles ({e}) : valeurs par défaut utilisées (copie de \
+                         secours impossible)."
+                    )
+                };
+                settings.load_warning = Some(warning);
+                settings
+            }
+        }
     }
 
     /// Persiste les réglages (crée le dossier parent au besoin).
@@ -373,19 +413,53 @@ impl Settings {
         self.save();
     }
 
-    /// Projets récents dont le manifeste existe encore sur disque — un dossier
-    /// supprimé, déplacé ou sur un volume débranché depuis la dernière
-    /// ouverture est ignoré silencieusement plutôt que de proposer une entrée
-    /// qui échouerait à l'ouverture (Sprint 4).
+    /// Projets récents dont le manifeste existe encore sur disque — pour la
+    /// réouverture automatique au démarrage et l'assistant « Nouveau projet »
+    /// (Sprint 4). Le menu Fichier, lui, montre aussi les disparus, grisés
+    /// (`recent_projects_with_status`, roadmap 3.8).
     pub fn existing_recent_projects(&self) -> Vec<&RecentProject> {
+        self.recent_projects_with_status()
+            .into_iter()
+            .filter_map(|(p, exists)| exists.then_some(p))
+            .collect()
+    }
+
+    /// Tous les projets récents, avec « le manifeste existe encore » (roadmap
+    /// post-audit UX v2 2026-09-04, 3.8) — un projet déplacé ou sur un volume
+    /// débranché est affiché grisé avec « Localiser… / Retirer de la liste »
+    /// plutôt que filtré en silence.
+    pub fn recent_projects_with_status(&self) -> Vec<(&RecentProject, bool)> {
         self.recent_projects
             .iter()
-            .filter(|p| {
-                Path::new(&p.path)
+            .map(|p| {
+                let exists = Path::new(&p.path)
                     .join(crate::project::MANIFEST_FILE)
-                    .exists()
+                    .exists();
+                (p, exists)
             })
             .collect()
+    }
+
+    /// Retire `path` des projets récents et persiste. Sans effet si absent.
+    pub fn forget_recent_project(&mut self, path: &str) {
+        let before = self.recent_projects.len();
+        self.recent_projects.retain(|p| p.path != path);
+        if self.recent_projects.len() != before {
+            self.save();
+        }
+    }
+
+    /// L'autosave `path` a-t-elle été ignorée explicitement (roadmap 3.3) ?
+    pub fn is_autosave_ignored(&self, path: &Path) -> bool {
+        self.ignored_autosave
+            .as_deref()
+            .is_some_and(|ignored| Path::new(ignored) == path)
+    }
+
+    /// Mémorise l'autosave ignorée et persiste (roadmap 3.3).
+    pub fn ignore_autosave(&mut self, path: &Path) {
+        self.ignored_autosave = Some(path.to_string_lossy().into_owned());
+        self.save();
     }
 }
 
@@ -607,6 +681,74 @@ mod tests {
             settings.recent_projects[0].name,
             format!("Jeu {}", Settings::MAX_RECENT_PROJECTS + 4)
         );
+    }
+
+    /// Roadmap 3.8 : un `settings.json` corrompu est copié en `.bak`, les
+    /// valeurs par défaut prennent le relais et l'utilisateur en est averti.
+    #[test]
+    fn a_corrupt_settings_file_is_backed_up_and_reported() {
+        let path = temp_settings_path("corrupt");
+        std::fs::write(&path, "<<< pas du json >>>").unwrap();
+        let loaded = Settings::load_from(&path);
+        assert_eq!(loaded.deepseek_model, default_model());
+        let warning = loaded
+            .load_warning
+            .as_deref()
+            .expect("un avertissement doit être posé");
+        assert!(warning.contains(".bak"), "{warning}");
+        let backup = path.with_extension("json.bak");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "<<< pas du json >>>",
+            "la copie de secours doit conserver le contenu d'origine"
+        );
+        // Un fichier sain ne pose pas d'avertissement.
+        Settings::default().save_to(&path);
+        assert!(Settings::load_from(&path).load_warning.is_none());
+    }
+
+    /// Roadmap 3.3 : l'autosave ignorée est reconnue par son chemin exact ;
+    /// une autre (plus récente) sera de nouveau proposée.
+    #[test]
+    fn ignored_autosave_matches_only_its_own_path() {
+        let mut settings = Settings::default();
+        let a = std::path::Path::new("/tmp/autosave/000000000001.json");
+        let b = std::path::Path::new("/tmp/autosave/000000000002.json");
+        assert!(!settings.is_autosave_ignored(a));
+        settings.ignored_autosave = Some(a.to_string_lossy().into_owned());
+        assert!(settings.is_autosave_ignored(a));
+        assert!(!settings.is_autosave_ignored(b));
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(back.is_autosave_ignored(a));
+    }
+
+    /// Roadmap 3.8 : `recent_projects_with_status` garde les disparus (grisés
+    /// dans le menu) là où `existing_recent_projects` les filtre.
+    #[test]
+    fn recent_projects_with_status_keeps_vanished_entries_flagged() {
+        let dir = std::env::temp_dir().join("motor3derust-test-recent-status");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(crate::project::MANIFEST_FILE), "{}").unwrap();
+        let mut settings = Settings::default();
+        settings.upsert_recent_project("Encore là", &dir, 1);
+        settings.upsert_recent_project(
+            "Disparu",
+            std::path::Path::new("/inexistant/nulle-part"),
+            2,
+        );
+        let status = settings.recent_projects_with_status();
+        assert_eq!(status.len(), 2);
+        assert_eq!((status[0].0.name.as_str(), status[0].1), ("Disparu", false));
+        assert_eq!(
+            (status[1].0.name.as_str(), status[1].1),
+            ("Encore là", true)
+        );
+        settings
+            .recent_projects
+            .retain(|p| p.path != "/inexistant/nulle-part");
+        assert_eq!(settings.recent_projects_with_status().len(), 1);
     }
 
     /// `existing_recent_projects` ignore silencieusement les dossiers dont le

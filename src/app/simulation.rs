@@ -805,6 +805,73 @@ impl AppState {
         true
     }
 
+    /// Arrêt **synchrone** de Play (roadmap post-audit UX v2 2026-09-04, 3.4) :
+    /// à appeler avant tout changement de scène (Ouvrir, Démos, Nouvelle
+    /// scène…) demandé pendant une partie. Sans ça, `advance_play` détectait
+    /// le front de sortie *après* le remplacement de la scène et réécrivait
+    /// par-dessus les objets de l'ancienne (`play_snapshot`). Sans effet hors
+    /// Play.
+    pub fn stop_play(&mut self) {
+        if !self.playing && !self.was_playing {
+            return;
+        }
+        self.playing = false;
+        if self.was_playing {
+            self.on_play_stopped();
+        }
+        self.was_playing = false;
+    }
+
+    /// Front de sortie de Play : restaure les objets d'avant la partie et le
+    /// contexte d'édition (caméra, sélection, drapeau « modifié » — roadmap
+    /// 3.4). Le drapeau reprend sa valeur d'avant Play, sauf si les réglages
+    /// de scène hors objets (lumière, HUD… édités en pause) ont changé entre
+    /// temps : ceux-là ne sont pas restaurés, ils restent à enregistrer.
+    fn on_play_stopped(&mut self) {
+        self.scene.objects = self.play_snapshot.clone();
+        // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
+        self.clear_network_players();
+        self.clear_fireballs();
+        self.clear_creature_shots();
+        self.physics = None;
+        self.paused = false;
+        self.hud_health = None;
+        self.fx.damage_flash = 0.0;
+        self.fx.attack_flash = 0.0;
+        self.attack.attack_cooldown_remaining = 0.0;
+        self.attack.attack_projectile = None;
+        self.attack.attack_charge = None;
+        self.attack.stagger.clear();
+        // Poses d'interpolation de rendu périmées (la scène vient d'être restaurée
+        // depuis le snapshot d'édition) : ne surtout pas les mélanger au retour en Play.
+        self.sim_poses.sim_prev_poses.clear();
+        self.sim_poses.sim_curr_poses.clear();
+        self.sim_poses.sim_render_poses.clear();
+        self.wave = 0;
+        self.win_time = None;
+        self.lost = false;
+        self.clear_selection();
+        self.audio.stop_all();
+        if let Some(ctx) = self.edit_context.take() {
+            self.camera.target = ctx.camera_target;
+            self.camera.distance = ctx.camera_distance;
+            self.camera.yaw = ctx.camera_yaw;
+            self.camera.pitch = ctx.camera_pitch;
+            self.fly_cam = ctx.fly_cam;
+            let len = self.scene.objects.len();
+            self.selected = ctx.selected.into_iter().filter(|&i| i < len).collect();
+            self.selection = ctx
+                .selection
+                .filter(|&i| i < len)
+                .or_else(|| self.selected.first().copied());
+            self.selected_light = ctx
+                .selected_light
+                .filter(|&i| i < self.scene.point_lights.len());
+            let settings_changed = ctx.settings_fingerprint != self.scene_settings_fingerprint();
+            self.scene_dirty = ctx.scene_dirty || settings_changed;
+        }
+    }
+
     /// En mode Play : scripts Lua + simulation physique (delta-time).
     /// Au démarrage de Play, capture l'état ; à l'arrêt, le restaure.
     pub fn advance_play(&mut self) {
@@ -831,6 +898,21 @@ impl AppState {
 
         // transitions Edit <-> Play
         if self.playing && !self.was_playing {
+            // Contexte d'édition mis de côté avant que Play ne touche à la
+            // caméra et à la sélection (roadmap post-audit UX v2 2026-09-04,
+            // 3.4) — rendu par `on_play_stopped`.
+            self.edit_context = Some(super::EditContext {
+                camera_target: self.camera.target,
+                camera_distance: self.camera.distance,
+                camera_yaw: self.camera.yaw,
+                camera_pitch: self.camera.pitch,
+                selection: self.selection,
+                selected: self.selected.clone(),
+                selected_light: self.selected_light,
+                fly_cam: self.fly_cam,
+                scene_dirty: self.scene_dirty,
+                settings_fingerprint: self.scene_settings_fingerprint(),
+            });
             self.play_snapshot = self.scene.objects.clone();
             // Manche 1 révélée, suivantes masquées, *avant* de construire la physique
             // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
@@ -895,30 +977,7 @@ impl AppState {
                 }
             }
         } else if !self.playing && self.was_playing {
-            self.scene.objects = self.play_snapshot.clone();
-            // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
-            self.clear_network_players();
-            self.clear_fireballs();
-            self.clear_creature_shots();
-            self.physics = None;
-            self.paused = false;
-            self.hud_health = None;
-            self.fx.damage_flash = 0.0;
-            self.fx.attack_flash = 0.0;
-            self.attack.attack_cooldown_remaining = 0.0;
-            self.attack.attack_projectile = None;
-            self.attack.attack_charge = None;
-            self.attack.stagger.clear();
-            // Poses d'interpolation de rendu périmées (la scène vient d'être restaurée
-            // depuis le snapshot d'édition) : ne surtout pas les mélanger au retour en Play.
-            self.sim_poses.sim_prev_poses.clear();
-            self.sim_poses.sim_curr_poses.clear();
-            self.sim_poses.sim_render_poses.clear();
-            self.wave = 0;
-            self.win_time = None;
-            self.lost = false;
-            self.clear_selection();
-            self.audio.stop_all();
+            self.on_play_stopped();
         }
         if self.playing && !self.was_playing {
             // Une sélection/gizmo laissé actif depuis l'éditeur resterait cliquable et

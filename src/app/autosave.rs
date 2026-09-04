@@ -57,13 +57,14 @@ impl AppState {
     }
 
     /// Chemin de référence pour « la dernière sauvegarde manuelle connue »
-    /// (Sprint 6, 6.4) : la scène du projet ouvert si un projet est ouvert,
-    /// sinon l'emplacement de sauvegarde rapide par défaut. Sa date de
-    /// modification sur disque sert de repère — pas besoin d'un état
-    /// persisté séparé, le fichier lui-même porte l'information.
+    /// (Sprint 6, 6.4) : la scène du projet ouvert, sinon le fichier lié
+    /// (`scene_file`, roadmap 3.2), sinon l'emplacement historique de
+    /// sauvegarde rapide. Sa date de modification sur disque sert de repère —
+    /// pas besoin d'un état persisté séparé, le fichier lui-même porte
+    /// l'information.
     fn manual_save_reference_path(&self) -> PathBuf {
-        match &self.current_project {
-            Some(p) => p.main_scene_path.clone(),
+        match self.save_target() {
+            Some(target) => PathBuf::from(target),
             None => PathBuf::from(super::scene_path()),
         }
     }
@@ -88,6 +89,12 @@ impl AppState {
             Some(reference_mtime) if newest_mtime <= reference_mtime => None,
             _ => Some(newest),
         }
+    }
+
+    /// Autosave antérieure à `path` (cf. `previous_autosave`) — exposée ici
+    /// parce que le module `autosave` est privé à `app`.
+    pub fn previous_autosave(path: &Path) -> Option<PathBuf> {
+        previous_autosave(path)
     }
 
     /// Charge `autosave_path` comme scène courante (restauration après crash,
@@ -152,6 +159,22 @@ fn latest_autosave(dir: &Path) -> Option<PathBuf> {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .collect();
+    entries.sort();
+    entries.pop()
+}
+
+/// Autosave immédiatement antérieure à `path` dans le même dossier (roadmap
+/// post-audit UX v2 2026-09-04, 3.3) : proposée quand la restauration de la
+/// plus récente échoue (fichier tronqué par le crash lui-même, par exemple),
+/// plutôt que de refermer la modale sur un échec. `None` s'il n'y en a pas.
+pub(crate) fn previous_autosave(path: &Path) -> Option<PathBuf> {
+    let dir = path.parent()?;
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json") && p.as_path() < path)
         .collect();
     entries.sort();
     entries.pop()
@@ -333,6 +356,42 @@ mod tests {
         let dir = temp_autosave_dir("aucun-autosave");
         let app = AppState::new();
         assert_eq!(app.detect_pending_autosave_recovery_at(&dir), None);
+    }
+
+    /// Roadmap 3.3 : l'autosave « précédente » est la plus récente strictement
+    /// antérieure à celle passée ; la plus ancienne n'en a pas.
+    #[test]
+    fn previous_autosave_walks_back_one_file_at_a_time() {
+        let dir = temp_autosave_dir("precedente");
+        std::fs::create_dir_all(&dir).unwrap();
+        for ts in ["000000000001", "000000000002", "000000000003"] {
+            std::fs::write(dir.join(format!("{ts}.json")), "{}").unwrap();
+        }
+        // Un fichier qui n'est pas une autosave JSON n'entre pas dans la chaîne.
+        std::fs::write(dir.join("000000000002.tmp"), "").unwrap();
+        let newest = dir.join("000000000003.json");
+        let second = previous_autosave(&newest).expect("une autosave précédente");
+        assert_eq!(second, dir.join("000000000002.json"));
+        let first = previous_autosave(&second).expect("encore une");
+        assert_eq!(first, dir.join("000000000001.json"));
+        assert_eq!(previous_autosave(&first), None);
+    }
+
+    /// Roadmap 3.2/3.3 : hors projet, la référence « dernière sauvegarde
+    /// manuelle » suit le fichier lié par « Enregistrer sous… », pas
+    /// l'emplacement historique.
+    #[test]
+    fn manual_save_reference_follows_the_bound_scene_file() {
+        let mut app = AppState::new();
+        assert!(
+            app.manual_save_reference_path()
+                .ends_with("motor3derust_scene.json")
+        );
+        app.scene_file = Some(PathBuf::from("/tmp/mon-niveau.json"));
+        assert_eq!(
+            app.manual_save_reference_path(),
+            PathBuf::from("/tmp/mon-niveau.json")
+        );
     }
 
     #[test]

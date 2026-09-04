@@ -4,6 +4,26 @@ use glam::Vec3;
 
 use super::AppState;
 
+/// Noms acceptés par `demo <nom>` (cf. `run_console_command`).
+const DEMO_NAMES: &[&str] = &[
+    "mmorpg",
+    "gameplay",
+    "controleur",
+    "controller",
+    "tower",
+    "temple",
+    "zombies",
+    "mobile",
+    "roguelike",
+    "brawl",
+    "boss",
+    "escorte",
+    "survie",
+    "components",
+    "hameau",
+    "player",
+];
+
 impl AppState {
     /// Demande l'exécution d'exactement un pas fixe de simulation à la prochaine frame,
     /// même en pause (bouton « ⏭ » de la toolbar). Sans effet si l'app n'est
@@ -95,6 +115,12 @@ impl AppState {
                     return "aucun objet cible : sélectionnez un objet ou lancez le Play".into();
                 };
                 let pos = Vec3::new(xyz[0], xyz[1], xyz[2]);
+                // Hors Play, la téléportation est une édition comme une autre :
+                // annulable et marquée modifiée (roadmap post-audit UX v2
+                // 2026-09-04, 3.5). En Play, les objets sont restaurés au Stop.
+                if !self.playing {
+                    self.push_undo();
+                }
                 self.scene.objects[target].transform.position = pos;
                 format!(
                     "« {} » téléporté à ({:.2}, {:.2}, {:.2})",
@@ -108,7 +134,10 @@ impl AppState {
                 let name = args.join(" ");
                 match self.scene.objects.iter().position(|o| o.name == name) {
                     Some(i) => {
-                        self.selection = Some(i);
+                        // Même chemin que le clic (roadmap 3.5) : `selection` et
+                        // `selected` restent cohérents pour le gizmo et l'inspecteur.
+                        self.selected_light = None;
+                        self.select_single(i);
                         format!("« {name} » sélectionné (index {i})")
                     }
                     None => format!("aucun objet nommé « {name} »"),
@@ -196,6 +225,26 @@ impl AppState {
             },
             // `demo <nom>` : charge une des scènes de démo du menu Fichier —
             // même liste que `src/app/demos.rs`, pour piloter les audits sans UI.
+            // Même garde que le menu (roadmap post-audit UX v2 2026-09-04, 3.5) :
+            // une scène modifiée n'est pas écrasée sans un mot — ici pas de
+            // modale (la console sert aussi au pilotage automatisé), on demande
+            // `--force` explicitement.
+            // En Play, une démo remplace la scène : on sort proprement de Play
+            // d'abord (`stop_play`, roadmap 3.4 — sinon le front de sortie
+            // réécrivait les objets de l'ancienne scène par-dessus la nouvelle),
+            // puis la commande repasse par les gardes ci-dessous.
+            "demo"
+                if (self.playing || self.was_playing)
+                    && args.first().is_some_and(|n| DEMO_NAMES.contains(n)) =>
+            {
+                self.stop_play();
+                self.run_console_command(cmd)
+            }
+            "demo" if self.scene_dirty && !self.playing && !args.contains(&"--force") => {
+                "scène modifiée et non enregistrée : enregistre d'abord (Cmd+S), \
+                 ou `demo <nom> --force` pour l'écraser"
+                    .into()
+            }
             "demo" => match args.first().copied() {
                 Some("mmorpg") => {
                     self.load_mmorpg_demo();
@@ -521,6 +570,56 @@ mod tests {
         assert!(!err.is_empty());
         let runtime_err = app.eval_lua("error('exprès')").unwrap_err();
         assert!(runtime_err.contains("exprès"), "erreur : {runtime_err}");
+    }
+
+    /// Roadmap 3.5 : `demo` respecte la même garde que le menu — une scène
+    /// modifiée n'est pas écrasée sans `--force`.
+    #[test]
+    fn console_demo_refuses_to_overwrite_a_dirty_scene_without_force() {
+        let mut app = AppState::new();
+        app.scene.objects.push(SceneObject {
+            name: "Témoin".into(),
+            ..Default::default()
+        });
+        app.scene_dirty = true;
+        let msg = app.run_console_command("demo mobile");
+        assert!(msg.contains("--force"), "message obtenu : {msg}");
+        assert!(
+            app.scene.objects.iter().any(|o| o.name == "Témoin"),
+            "scène intacte"
+        );
+        assert_eq!(
+            app.run_console_command("demo mobile --force"),
+            "démo mobile chargée"
+        );
+        assert!(app.scene.objects.iter().all(|o| o.name != "Témoin"));
+        assert_eq!(app.scene_file, None, "une démo n'est liée à aucun fichier");
+    }
+
+    /// Roadmap 3.4 : `demo` en Play sort d'abord proprement de Play, la scène
+    /// de la démo n'est pas réécrite par le snapshot de l'ancienne.
+    #[test]
+    fn console_demo_during_play_stops_play_before_switching() {
+        let mut app = AppState::new();
+        app.run_console_command("demo mobile --force");
+        app.scene_dirty = false;
+        let before = app.scene.objects.clone();
+        app.playing = true;
+        app.advance_play();
+        assert!(app.was_playing);
+        assert_eq!(
+            app.run_console_command("demo controleur"),
+            "démo contrôleur chargée"
+        );
+        assert!(!app.playing && !app.was_playing);
+        let after = app.scene.objects.clone();
+        app.advance_play();
+        assert_eq!(
+            app.scene.objects.len(),
+            after.len(),
+            "aucun front de sortie tardif ne doit restaurer l'ancienne scène"
+        );
+        assert_ne!(before.len(), after.len());
     }
 
     #[test]

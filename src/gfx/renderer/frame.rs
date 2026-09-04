@@ -351,6 +351,7 @@ impl Renderer {
         } else {
             let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
             let save_target = app.save_target();
+            let suggested_save_name = app.suggested_save_name();
             let shortcut = app.pending_shortcut.take();
             let spectating = app.spectate_target().map(|(n, _)| n);
             let status = crate::editor::StatusInfo {
@@ -364,7 +365,8 @@ impl Renderer {
                 gpu_draw_calls,
                 skinned_dropped: self.skinned_dropped_count(),
                 project_name: app.current_project.as_ref().map(|p| p.name.as_str()),
-                save_target: &save_target,
+                save_target: save_target.as_deref(),
+                suggested_save_name: &suggested_save_name,
                 scene_dirty: app.scene_dirty,
                 script_errors: &app.script_errors,
                 context_menu_request: std::mem::take(&mut app.context_menu_request),
@@ -451,6 +453,7 @@ impl Renderer {
                 app.pending_autosave_recovery.as_deref(),
                 shortcut,
                 spectating.as_deref(),
+                &mut app.editor_welcome_pending,
             );
             apply_editor_actions(
                 app,
@@ -861,9 +864,12 @@ fn apply_editor_actions(
     restart: &mut bool,
 ) {
     if app.ui_scene_fingerprint() != ui_fingerprint_before {
-        match pre_ui_snapshot {
-            Some(before) => app.push_ui_edit_undo(before),
-            None => app.scene_dirty = true,
+        // En Play (pas d'instantané) : rien à marquer, les objets sont
+        // restaurés au Stop et les réglages de scène édités en pause y sont
+        // détectés par `on_play_stopped` (roadmap post-audit UX v2
+        // 2026-09-04, 3.4 — avant, chaque frame de Play posait « • »).
+        if let Some(before) = pre_ui_snapshot {
+            app.push_ui_edit_undo(before);
         }
     } else {
         app.end_ui_edit();
@@ -880,14 +886,18 @@ fn apply_editor_actions(
         perform_scene_switch(app, editor, switch);
     }
     if actions.switch_save {
+        let had_target = app.save_target().is_some();
         app.save();
         // `save` ne baisse `scene_dirty` que sur succès : en cas d'échec on
         // garde la scène courante (et la modale disparaît, l'erreur est en toast).
+        // Sans fichier lié (roadmap 3.2), `save` ouvre « Enregistrer sous… » à
+        // la frame suivante : le changement reste en attente et repart dès que
+        // `save_path` a réussi (cf. plus bas).
         if !app.scene_dirty {
             if let Some(switch) = editor.pending_switch.take() {
                 perform_scene_switch(app, editor, switch);
             }
-        } else {
+        } else if had_target {
             editor.pending_switch = None;
         }
     }
@@ -912,6 +922,18 @@ fn apply_editor_actions(
     }
     if let Some(path) = actions.save_path {
         app.save_to(&path);
+        // « Enregistrer sous… » demandé par une modale (changement de scène ou
+        // Quitter sans fichier lié, roadmap 3.2) : l'action attendue reprend
+        // une fois le fichier écrit.
+        if !app.scene_dirty {
+            if let Some(switch) = editor.pending_switch.take() {
+                perform_scene_switch(app, editor, switch);
+            }
+            if app.confirm_quit {
+                app.confirm_quit = false;
+                app.should_quit = true;
+            }
+        }
     }
     if actions.close_project {
         app.request_close_project();
@@ -968,10 +990,28 @@ fn apply_editor_actions(
         && let Some(path) = app.pending_autosave_recovery.take()
         && let Err(e) = app.restore_autosave(&path)
     {
-        log::error!("Restauration de l'autosave échouée : {e}");
+        // Échec (fichier tronqué par le crash lui-même, par exemple) : la
+        // modale reste et propose l'autosave précédente s'il y en a une
+        // (roadmap post-audit UX v2 2026-09-04, 3.3) — avant, elle se
+        // refermait sur l'erreur et le travail restait sur disque sans issue.
+        match AppState::previous_autosave(&path) {
+            Some(previous) => {
+                log::error!(
+                    "Restauration de l'autosave échouée : {e} — la sauvegarde précédente est proposée."
+                );
+                app.pending_autosave_recovery = Some(previous);
+                editor.note_autosave_fallback();
+            }
+            None => log::error!(
+                "Restauration de l'autosave échouée : {e} — aucune sauvegarde plus ancienne."
+            ),
+        }
     }
-    if actions.dismiss_autosave_recovery {
-        app.pending_autosave_recovery = None;
+    if actions.dismiss_autosave_recovery
+        && let Some(path) = app.pending_autosave_recovery.take()
+    {
+        // « Ignorer » mémorisé pour ce fichier (roadmap 3.3).
+        editor.ignore_autosave(&path);
     }
     if let Some(path) = actions.import {
         app.import_gltf(&path);
@@ -1103,7 +1143,20 @@ fn apply_editor_actions(
         app.sync_prefab_instances();
     }
     if let Some((scope, name)) = actions.delete_prefab {
-        crate::assets::delete_prefab(&scope, &name);
+        // Échec remonté en toast (roadmap post-audit UX v2 2026-09-04, 3.7) —
+        // avant, le booléen était ignoré et le prefab restait dans la liste
+        // sans explication.
+        if crate::assets::delete_prefab(&scope, &name) {
+            log::info!("Prefab « {name} » supprimé.");
+        } else {
+            log::error!(
+                "Suppression du prefab « {name} » impossible : fichier introuvable ou \
+                 protégé en écriture."
+            );
+        }
+    }
+    if let Some(name) = actions.delete_group {
+        app.delete_group(&name);
     }
     if actions.quit {
         app.request_quit();
@@ -1117,13 +1170,18 @@ fn apply_editor_actions(
         app.should_quit = true;
     }
     if actions.quit_save {
-        app.confirm_quit = false;
+        let had_target = app.save_target().is_some();
         app.save();
         // `save` ne baisse `scene_dirty` que sur succès : en cas d'échec
         // (disque plein, chemin illisible…), on reste ouvert plutôt que de
         // quitter en perdant la scène — l'erreur est visible dans la console.
+        // Sans fichier lié, « Enregistrer sous… » s'ouvre à la frame suivante
+        // et `confirm_quit` reste posé jusqu'à ce que `save_path` ait réussi.
         if !app.scene_dirty {
+            app.confirm_quit = false;
             app.should_quit = true;
+        } else if had_target {
+            app.confirm_quit = false;
         }
     }
     if actions.launch_glb_viewer {
@@ -1256,6 +1314,10 @@ fn perform_scene_switch(
     switch: crate::editor::SceneSwitch,
 ) {
     use crate::editor::{DemoKind, SceneSwitch};
+    // Sortie propre de Play avant de remplacer la scène (roadmap post-audit
+    // UX v2 2026-09-04, 3.4) : sinon le front de sortie détecté à la frame
+    // suivante réécrivait les objets de l'ancienne scène par-dessus la nouvelle.
+    app.stop_play();
     match switch {
         SceneSwitch::LoadDefault => {
             app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
@@ -1280,7 +1342,17 @@ fn perform_scene_switch(
                         log::info!("Projet « {} » ouvert ({count} objets)", project.name);
                     }
                 }
-                Err(e) => log::error!("Ouverture du projet échouée : {e}"),
+                // Modale plutôt que toast (roadmap post-audit UX v2
+                // 2026-09-04, 3.8) : le chemin et la cause doivent rester
+                // lisibles le temps de comprendre.
+                Err(e) => {
+                    let msg = format!(
+                        "Le projet n'a pas pu être ouvert.\n\n{}\n\n{e}",
+                        dir.display()
+                    );
+                    log::error!("Ouverture du projet échouée : {e}");
+                    editor.set_open_error(msg);
+                }
             }
         }
         SceneSwitch::CreateProject(req) => {
@@ -1291,7 +1363,15 @@ fn perform_scene_switch(
                     }
                     log::info!("Projet créé dans {}", root.display());
                 }
-                Err(e) => log::error!("Création du projet échouée : {e}"),
+                Err(e) => {
+                    let msg = format!(
+                        "Le projet « {} » n'a pas pu être créé dans\n{}\n\n{e}",
+                        req.name,
+                        req.location.display()
+                    );
+                    log::error!("Création du projet échouée : {e}");
+                    editor.set_open_error(msg);
+                }
             }
         }
         SceneSwitch::NewScene => app.new_scene(),

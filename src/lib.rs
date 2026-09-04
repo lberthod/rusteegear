@@ -588,6 +588,10 @@ impl ApplicationHandler for App {
                     // touches restent comptées pour le jeu (`keys_held` intact).
                     self.recompute_action_buttons();
                     if !self.right_drag_moved && !self.state.player && !self.state.playing {
+                        // L'objet sous le curseur est sélectionné d'abord (roadmap
+                        // post-audit UX v2 2026-09-04, 3.6) : le menu agit sur ce
+                        // qu'on vise, pas sur une sélection antérieure.
+                        self.state.select_under_cursor();
                         self.state.context_menu_request = true;
                     }
                 }
@@ -1058,8 +1062,15 @@ fn make_app(player: bool) -> App {
         if !reopened {
             // Sinon, la scène de base du MMORPG (`assets/player_scene.json`,
             // embarquée — la même que jouent le site web et les builds Player),
-            // pas la petite démo par défaut.
+            // pas la petite démo par défaut — derrière l'écran d'accueil de
+            // l'éditeur (roadmap post-audit UX v2 2026-09-04, 3.1 : Premier
+            // jeu / Nouveau projet / Récents / Découvrir le hameau), sur les
+            // plateformes où projets et sélecteurs de fichiers existent.
             app.state.load_embedded_player_scene();
+            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+            {
+                app.state.editor_welcome_pending = true;
+            }
         }
         // `clear_history` évite qu'un Ctrl+Z juste après l'ouverture ramène la
         // scène vide interne.
@@ -1164,7 +1175,13 @@ pub fn run() {
     // silence. Le mode Player joue la scène embarquée, pas la scène éditée :
     // pas de notion de « travail non sauvegardé » à y récupérer.
     if !player {
-        app.state.pending_autosave_recovery = app.state.detect_pending_autosave_recovery();
+        // Une autosave explicitement ignorée n'est pas reproposée (roadmap
+        // post-audit UX v2 2026-09-04, 3.3) — une plus récente le sera.
+        let settings = crate::app::settings::Settings::load();
+        app.state.pending_autosave_recovery = app
+            .state
+            .detect_pending_autosave_recovery()
+            .filter(|path| !settings.is_autosave_ignored(path));
     }
     // Pont de pilotage externe (opt-in explicite : éval Lua = exécution de code
     // arbitraire — jamais actif sans demande, et annoncé en clair dans les logs).

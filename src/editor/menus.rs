@@ -16,18 +16,41 @@ fn item(label: &str, shortcut: MenuItem) -> egui::Button<'static> {
     egui::Button::new(label.to_owned()).shortcut_text(menu_hint(shortcut))
 }
 
+/// Infobulle de « ⭐ Premier jeu » (menu Fichier, sous-menu Démos, écran
+/// d'accueil).
+pub(super) const FIRST_GAME_HINT: &str = "Ouvre le projet tutoriel `examples/first_game` : sol, joueur pilotable, \
+     caisses, cube tournant scripté, zone d'éveil, pièces à ramasser — la \
+     meilleure porte d'entrée pour découvrir l'éditeur";
+
+/// « ⭐ Premier jeu » : ouvre le projet tutoriel — dépôt source si présent,
+/// sinon copie embarquée dans le dossier utilisateur (cf.
+/// `project::first_game_dir`). Partagé entre le menu Fichier (premier niveau
+/// et sous-menu Démos) et l'écran d'accueil (roadmap post-audit UX v2
+/// 2026-09-04, 3.1).
+pub(super) fn open_first_game(actions: &mut UiActions) {
+    match crate::project::first_game_dir() {
+        Ok(path) => {
+            actions.open_project_path = Some(path.to_string_lossy().into_owned());
+        }
+        Err(e) => log::error!("Projet « Premier jeu » indisponible : {e}"),
+    }
+}
+
 /// Menu « Fichier » : sauvegarde, ouverture, import, export.
 ///
 /// `has_project` (Sprint 4) grise « Fermer le projet »/« Dupliquer »/« Révéler
-/// dans le Finder » quand aucun projet n'est ouvert. `recents` (déjà filtrée
-/// des chemins disparus par `Settings::existing_recent_projects`) alimente le
-/// sous-menu « Projets récents ».
+/// dans le Finder » quand aucun projet n'est ouvert. `recents` (tous les
+/// projets récents, avec « existe encore » — `Settings::recent_projects_with_status`)
+/// alimente le sous-menu « Projets récents » : les disparus y sont grisés avec
+/// « Localiser… / Retirer de la liste » (roadmap post-audit UX v2 2026-09-04,
+/// 3.8). `suggested_save_name` : nom proposé par « Enregistrer sous… » (3.2).
 pub(super) fn menu_fichier(
     ui: &mut egui::Ui,
     export: &mut export::ExportPanel,
     actions: &mut UiActions,
     has_project: bool,
-    recents: Vec<&RecentProject>,
+    recents: Vec<(&RecentProject, bool)>,
+    suggested_save_name: &str,
 ) {
     ui.menu_button("Fichier", |ui| {
         // (les sélecteurs « Enregistrer sous… » / « Ouvrir… » sont dans
@@ -40,6 +63,16 @@ pub(super) fn menu_fichier(
             actions.open_new_project_wizard = true;
             ui.close();
         }
+        // Au premier niveau (roadmap post-audit UX v2 2026-09-04, 3.1) : la
+        // porte d'entrée ne se cache plus dans Démos ▸ Commencer.
+        if ui
+            .button("⭐  Premier jeu")
+            .on_hover_text(FIRST_GAME_HINT)
+            .clicked()
+        {
+            open_first_game(actions);
+            ui.close();
+        }
         // Les démos sont regroupées dans un sous-menu pour ne pas noyer les vraies
         // actions fichier ; la scène MMORPG (scène centrale du projet, chargée au
         // démarrage) est en tête pour pouvoir la recharger facilement.
@@ -47,21 +80,10 @@ pub(super) fn menu_fichier(
             ui.menu_button("⭐  Commencer", |ui| {
                 if ui
                     .button("⭐  Premier jeu")
-                    .on_hover_text(
-                        "Ouvre le projet tutoriel `examples/first_game` : sol, joueur pilotable, \
-                         caisses, cube tournant scripté, zone d'éveil, pièces à ramasser — la \
-                         meilleure porte d'entrée pour découvrir l'éditeur",
-                    )
+                    .on_hover_text(FIRST_GAME_HINT)
                     .clicked()
                 {
-                    // Dépôt source si présent, sinon copie embarquée dans le dossier
-                    // utilisateur (cf. `project::first_game_dir`).
-                    match crate::project::first_game_dir() {
-                        Ok(path) => {
-                            actions.open_project_path = Some(path.to_string_lossy().into_owned());
-                        }
-                        Err(e) => log::error!("Projet « Premier jeu » indisponible : {e}"),
-                    }
+                    open_first_game(actions);
                     ui.close();
                 }
                 if ui
@@ -222,14 +244,17 @@ pub(super) fn menu_fichier(
         ui.separator();
         if ui
             .add(item("💾  Enregistrer", MenuItem::Save))
-            .on_hover_text("Dans la scène du projet ouvert, sinon ~/motor3derust_scene.json")
+            .on_hover_text(
+                "Dans la scène du projet ouvert ou le fichier ouvert ; sans fichier, \
+                 ouvre « Enregistrer sous… »",
+            )
             .clicked()
         {
             actions.save = true;
             ui.close();
         }
         if ui.add(item("💾  Enregistrer sous…", MenuItem::SaveAs)).clicked() {
-            dialog_save_as(actions);
+            dialog_save_as(actions, suggested_save_name);
             ui.close();
         }
         if ui.add(item("📂  Ouvrir…", MenuItem::Open)).clicked() {
@@ -249,11 +274,49 @@ pub(super) fn menu_fichier(
         }
         if !recents.is_empty() {
             ui.menu_button("🕘  Projets récents", |ui| {
-                for recent in &recents {
-                    if ui.button(&recent.name).on_hover_text(&recent.path).clicked() {
-                        actions.open_project_path = Some(recent.path.clone());
-                        ui.close();
+                for (recent, exists) in &recents {
+                    if *exists {
+                        if ui.button(&recent.name).on_hover_text(&recent.path).clicked() {
+                            actions.open_project_path = Some(recent.path.clone());
+                            ui.close();
+                        }
+                        continue;
                     }
+                    // Projet déplacé ou sur un volume débranché (roadmap
+                    // post-audit UX v2 2026-09-04, 3.8) : grisé et explicite,
+                    // avec de quoi le retrouver ou l'oublier — avant, il
+                    // disparaissait de la liste sans un mot.
+                    ui.add_enabled(
+                        false,
+                        egui::Button::new(format!("{} — Introuvable", recent.name)),
+                    )
+                    .on_disabled_hover_text(format!("Absent de {}", recent.path));
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        if ui
+                            .small_button("Localiser…")
+                            .on_hover_text("Choisir le dossier où ce projet se trouve maintenant")
+                            .clicked()
+                        {
+                            #[cfg(not(any(
+                                target_os = "ios",
+                                target_os = "android",
+                                target_arch = "wasm32"
+                            )))]
+                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                                // L'ancienne entrée est oubliée ; l'ouverture réussie
+                                // enregistre la nouvelle (`note_recent_project`).
+                                actions.forget_recent_project = Some(recent.path.clone());
+                                actions.open_project_path =
+                                    Some(dir.to_string_lossy().into_owned());
+                            }
+                            ui.close();
+                        }
+                        if ui.small_button("Retirer de la liste").clicked() {
+                            actions.forget_recent_project = Some(recent.path.clone());
+                            ui.close();
+                        }
+                    });
                 }
             });
         }
@@ -785,21 +848,23 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
     });
 }
 
-/// Sélecteur « Enregistrer sous… » — partagé entre le menu Fichier et Cmd+Maj+S
-/// (roadmap post-audit UX 2026-09-04, 1.1). Pose `actions.save_path` si un
-/// fichier est choisi ; sans effet sur mobile/web (pas de sélecteur natif).
-pub(super) fn dialog_save_as(actions: &mut UiActions) {
+/// Sélecteur « Enregistrer sous… » — partagé entre le menu Fichier, Cmd+Maj+S
+/// (roadmap post-audit UX 2026-09-04, 1.1) et Cmd+S sans fichier lié (roadmap
+/// v2, 3.2). Propose `suggested_name` (le vrai nom de la scène courante, pas
+/// toujours « scene.json »). Pose `actions.save_path` si un fichier est
+/// choisi ; sans effet sur mobile/web (pas de sélecteur natif).
+pub(super) fn dialog_save_as(actions: &mut UiActions, suggested_name: &str) {
     #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     if let Some(p) = rfd::FileDialog::new()
         .add_filter("Scène JSON", &["json"])
-        .set_file_name("scene.json")
+        .set_file_name(suggested_name)
         .save_file()
     {
         actions.save_path = Some(p.to_string_lossy().into_owned());
     }
     #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
     {
-        let _ = actions;
+        let _ = (actions, suggested_name);
     }
 }
 

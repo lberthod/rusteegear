@@ -60,7 +60,10 @@ pub(super) fn hierarchy_panel(
         ui.heading("Hiérarchie");
         ui.weak(format!("({})", scene.objects.len()));
     });
-    ui.small("Glisser un objet sur un autre : réordonner · sur un groupe : ranger.");
+    ui.small(
+        "Clic : sélectionner · double-clic ou F : cadrer · glisser sur un objet : réordonner · \
+         sur un groupe : ranger.",
+    );
     ui.add(
         egui::TextEdit::singleline(filter)
             .hint_text("🔎 filtrer…")
@@ -90,7 +93,6 @@ pub(super) fn hierarchy_panel(
 
     // Mutations différées (appliquées après l'UI pour éviter les conflits d'emprunt).
     let mut moves: Vec<(usize, String)> = Vec::new();
-    let mut delete_group: Option<String> = None;
     let mut commit_rename: Vec<(usize, String)> = Vec::new();
 
     egui::ScrollArea::vertical()
@@ -171,8 +173,10 @@ pub(super) fn hierarchy_panel(
                                     {
                                         actions.reorder = Some((*src, i));
                                     }
-                                    // Clic gauche : sélectionne + recentre la caméra (comportement
-                                    // standard d'une hiérarchie) ; clic droit : menu d'options.
+                                    // Clic gauche : sélection seule ; double-clic (ou F) :
+                                    // cadrer (roadmap post-audit UX v2 2026-09-04, 3.6 — avant,
+                                    // chaque clic déplaçait la caméra, on perdait son point de
+                                    // vue rien qu'en parcourant la liste) ; clic droit : menu.
                                     if resp.clicked() {
                                         let m = ui.input(|inp| inp.modifiers);
                                         // La sélection d'un objet exclut celle d'une lumière :
@@ -190,11 +194,13 @@ pub(super) fn hierarchy_panel(
                                         } else {
                                             *selection = Some(i);
                                             *selected = vec![i];
-                                            actions.focus_selection = true;
                                         }
                                     }
                                     if resp.double_clicked() {
-                                        *rename = Some((i, obj.name.clone()));
+                                        *selected_light = None;
+                                        *selection = Some(i);
+                                        *selected = vec![i];
+                                        actions.focus_selection = true;
                                     }
                                     egui::Popup::context_menu(&resp).show(|ui| {
                                         ui.set_min_width(180.0);
@@ -223,9 +229,17 @@ pub(super) fn hierarchy_panel(
                                     ui.weak("  (déposer ici)");
                                 }
                             });
-                        // Bouton de suppression pour les groupes utilisateur.
-                        if sec.is_some() && ui.small_button("🗑").clicked() {
-                            delete_group = Some(gname.clone());
+                        // Bouton de suppression pour les groupes utilisateur :
+                        // confirmation d'abord (roadmap post-audit UX v2
+                        // 2026-09-04, 3.7), la suppression passe ensuite par
+                        // `AppState::delete_group` (annulable).
+                        if sec.is_some()
+                            && ui
+                                .small_button("🗑")
+                                .on_hover_text("Supprimer le groupe (ses objets restent)")
+                                .clicked()
+                        {
+                            actions.request_delete_group = Some(gname.clone());
                         }
                     });
                 });
@@ -242,14 +256,6 @@ pub(super) fn hierarchy_panel(
     for (idx, g) in moves {
         if let Some(o) = scene.objects.get_mut(idx) {
             o.group = g;
-        }
-    }
-    if let Some(g) = delete_group {
-        scene.groups.retain(|x| x != &g);
-        for o in &mut scene.objects {
-            if o.group == g {
-                o.group.clear();
-            }
         }
     }
     // Renommage validé.
@@ -358,13 +364,14 @@ mod tests {
     }
 
     /// Bout en bout sur le *vrai* panneau : un clic deux-frames quelque part sur
-    /// la ligne du seul objet de la scène doit le sélectionner ET demander le
-    /// recentrage caméra. Comme la position exacte de la ligne dépend du style,
-    /// on balaye verticalement : au moins une ordonnée doit toucher la ligne, et
-    /// chaque fois que la sélection se déclenche, le recentrage doit suivre.
+    /// la ligne du seul objet de la scène doit le sélectionner SANS déplacer la
+    /// caméra (roadmap post-audit UX v2 2026-09-04, 3.6 : le cadrage est réservé
+    /// au double-clic et à F). Comme la position exacte de la ligne dépend du
+    /// style, on balaye verticalement : au moins une ordonnée doit toucher la
+    /// ligne, et la sélection ne doit jamais demander le recentrage.
     #[test]
     #[allow(deprecated)] // même harnais headless que `clicked_after_two_frame_press`
-    fn clicking_a_row_of_the_real_hierarchy_panel_selects_and_focuses() {
+    fn clicking_a_row_of_the_real_hierarchy_panel_selects_without_focusing() {
         let mut any_hit = false;
         for y in (60..280).step_by(4) {
             let ctx = egui::Context::default();
@@ -445,8 +452,9 @@ mod tests {
                 any_hit = true;
                 assert_eq!(selected, vec![0], "l'ensemble sélectionné doit suivre");
                 assert!(
-                    actions.focus_selection,
-                    "sélectionner depuis la hiérarchie doit demander le recentrage caméra"
+                    !actions.focus_selection,
+                    "un simple clic dans la hiérarchie ne doit plus déplacer la caméra \
+                     (double-clic ou F pour cadrer)"
                 );
             }
         }

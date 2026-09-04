@@ -2928,3 +2928,68 @@ fn a_served_scene_creature_chases_a_network_player_in_range_and_hurts_on_contact
         "au contact, la créature doit blesser le joueur (vie {hp0:.2} → {hp1:.2})"
     );
 }
+
+/// Roadmap 3.2 : sans projet ni fichier lié, il n'y a pas de cible de
+/// sauvegarde — Cmd+S demande « Enregistrer sous… » et le titre dit « Sans
+/// titre », jamais un `motor3derust_scene.json` qui n'existe pas.
+#[test]
+fn save_without_a_bound_file_requests_save_as_and_titles_sans_titre() {
+    let mut app = AppState::new();
+    assert_eq!(app.save_target(), None);
+    assert_eq!(app.display_scene_name(), "Sans titre");
+    assert_eq!(app.suggested_save_name(), "scene.json");
+    assert!(app.window_title().starts_with("Sans titre"));
+    app.scene_dirty = true;
+    app.save();
+    assert_eq!(app.pending_shortcut, Some(EditorShortcut::SaveAs));
+    assert!(app.scene_dirty, "rien n'a été écrit");
+}
+
+/// Roadmap 3.2 : après « Enregistrer sous… », le fichier choisi devient la
+/// cible des Cmd+S suivants et du titre ; une scène neuve s'en détache.
+#[test]
+fn save_to_binds_the_scene_file_for_later_saves() {
+    let dir = std::env::temp_dir().join("motor3derust-test-save-as");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("mon-niveau.json");
+    let path_str = path.to_string_lossy().into_owned();
+    let mut app = AppState::new();
+    app.scene_dirty = true;
+    app.save_to(&path_str);
+    assert!(path.is_file());
+    assert!(!app.scene_dirty);
+    assert_eq!(app.save_target().as_deref(), Some(path_str.as_str()));
+    assert_eq!(app.suggested_save_name(), "mon-niveau.json");
+    assert!(app.window_title().starts_with("mon-niveau.json"));
+    // Cmd+S écrit maintenant là, sans passer par le sélecteur.
+    app.scene_dirty = true;
+    app.pending_shortcut = None;
+    app.save();
+    assert_eq!(app.pending_shortcut, None);
+    assert!(!app.scene_dirty);
+    app.new_scene();
+    assert_eq!(app.save_target(), None, "scène neuve : plus de fichier lié");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Roadmap 3.5 : un import glTF entre dans l'historique et marque la scène
+/// modifiée (même quand le fichier est introuvable : le chemin saisi compte).
+#[test]
+fn a_gltf_import_is_undoable_and_marks_the_scene_dirty() {
+    let mut app = AppState::new();
+    app.scene_dirty = false;
+    let objects = app.scene.objects.len();
+    let depth = app.undo_depth();
+    app.finish_import(
+        "/inexistant/robot.glb".into(),
+        crate::gfx::mesh::MeshData::default(),
+        Vec3::ZERO,
+        Vec3::ONE,
+    );
+    assert_eq!(app.scene.objects.len(), objects + 1);
+    assert_eq!(app.undo_depth(), depth + 1);
+    assert!(app.scene_dirty);
+    app.undo();
+    assert_eq!(app.scene.objects.len(), objects);
+}

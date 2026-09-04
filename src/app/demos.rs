@@ -1,6 +1,10 @@
 //! Chargeurs de démo/scène embarquée : chaque fonction remplace `scene` par une des
 //! démos prédéfinies (`crate::scene::Scene::*_demo`) et réinitialise l'état de jeu
 //! associé (vie, manches, sélection). Extrait de `app/mod.rs`.
+//!
+//! Chaque chargeur détache aussi la scène de son fichier (`scene_file = None`,
+//! roadmap post-audit UX v2 2026-09-04, 3.2) : une démo n'est pas le fichier
+//! ouvert juste avant, Cmd+S doit redemander où enregistrer.
 
 use super::AppState;
 use crate::scene::Scene;
@@ -9,6 +13,7 @@ impl AppState {
     /// Charge la scène embarquée (jeu exporté) à la place de la démo : appelé en mode Player.
     pub fn use_embedded_scene(&mut self) {
         self.scene = Scene::embedded_player();
+        self.scene_file = None;
         self.selection = None;
     }
 
@@ -16,6 +21,7 @@ impl AppState {
     pub fn load_mobile_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::mobile_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.is_leveled_demo = false;
         self.clear_selection();
@@ -25,6 +31,7 @@ impl AppState {
     pub fn load_gameplay_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::gameplay_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -40,6 +47,7 @@ impl AppState {
         self.level = 1;
         self.push_undo();
         self.scene = Scene::controller_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -55,6 +63,7 @@ impl AppState {
     pub fn load_tower_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::tower_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -70,6 +79,7 @@ impl AppState {
     pub fn load_temple_run_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::temple_run_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -85,6 +95,7 @@ impl AppState {
     pub fn load_zombies_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::zombies_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -101,6 +112,7 @@ impl AppState {
     pub fn load_embedded_player_scene(&mut self) {
         self.push_undo();
         self.scene = Scene::embedded_player();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -116,6 +128,7 @@ impl AppState {
     pub fn load_mmorpg_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::mmorpg_demo();
+        self.scene_file = None;
         // Créatures retirées de la scène ouverte dans l'éditeur (17 juillet 2026,
         // demande utilisateur) : le zoo du pack « Ultimate Monsters » n'apparaît
         // plus au démarrage ni via Démos → MMORPG. Seuls les **objets** sont
@@ -176,6 +189,7 @@ impl AppState {
     pub fn load_roguelike_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::roguelike_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -192,6 +206,7 @@ impl AppState {
     pub fn load_brawl_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::brawl_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;
@@ -210,6 +225,7 @@ impl AppState {
     pub fn load_boss_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::boss_demo();
+        self.scene_file = None;
         self.objective = crate::app::multiplayer::RoundObjective::Boss;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
@@ -229,6 +245,7 @@ impl AppState {
     pub fn load_escorte_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::escorte_demo();
+        self.scene_file = None;
         self.objective = crate::app::multiplayer::RoundObjective::Escorte;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
@@ -248,6 +265,7 @@ impl AppState {
     pub fn load_survie_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::zombies_demo();
+        self.scene_file = None;
         self.objective = crate::app::multiplayer::RoundObjective::Survie;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
@@ -264,6 +282,7 @@ impl AppState {
     pub fn load_components_demo(&mut self) {
         self.push_undo();
         self.scene = Scene::components_demo();
+        self.scene_file = None;
         self.async_load.imported_dirty = true;
         self.hud_health = None;
         self.fx.damage_flash = 0.0;

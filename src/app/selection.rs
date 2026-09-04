@@ -88,14 +88,38 @@ impl AppState {
         }
     }
 
-    /// Facteur de surbrillance d'un objet : primaire = 1.0, autre sélectionné = 0.55.
+    /// Facteur de surbrillance d'un objet : primaire = 1.0, autre sélectionné = 0.55,
+    /// atténué pour les très grands objets (roadmap post-audit UX v2 2026-09-04,
+    /// 3.6 — sélectionner le « Sol » de 90 × 90 noyait tout le viewport en jaune,
+    /// le gizmo et la hiérarchie suffisent à montrer ce qui est sélectionné).
     pub fn highlight_of(&self, i: usize) -> f32 {
-        if self.selection == Some(i) {
+        let base = if self.selection == Some(i) {
             1.0
         } else if self.selected.contains(&i) {
             0.55
         } else {
-            0.0
+            return 0.0;
+        };
+        base * self.highlight_attenuation(i)
+    }
+
+    /// Demi-diagonale monde au-delà de laquelle la teinte de sélection est
+    /// réduite (`HIGHLIGHT_LARGE_FACTOR`) : un objet plus grand que ça remplit
+    /// de toute façon une bonne part de l'écran.
+    pub(crate) const HIGHLIGHT_LARGE_EXTENT: f32 = 20.0;
+    /// Teinte résiduelle d'un grand objet sélectionné (cf. `highlight_of`).
+    pub(crate) const HIGHLIGHT_LARGE_FACTOR: f32 = 0.25;
+
+    fn highlight_attenuation(&self, i: usize) -> f32 {
+        let Some(o) = self.scene.objects.get(i) else {
+            return 1.0;
+        };
+        let (lmin, lmax) = self.scene.local_aabb(o.mesh);
+        let half = (lmax - lmin) * 0.5 * o.transform.scale;
+        if half.length() > Self::HIGHLIGHT_LARGE_EXTENT {
+            Self::HIGHLIGHT_LARGE_FACTOR
+        } else {
+            1.0
         }
     }
 
@@ -344,9 +368,7 @@ impl AppState {
             self.edit_history
                 .redo_stack
                 .push(SceneSnapshot::capture(&self.scene));
-            prev.restore(&mut self.scene);
-            self.ui_edit_active = false;
-            self.clamp_selection_after_history();
+            self.apply_history_snapshot(prev);
         }
     }
 
@@ -355,10 +377,59 @@ impl AppState {
             self.edit_history
                 .undo_stack
                 .push_back(SceneSnapshot::capture(&self.scene));
-            next.restore(&mut self.scene);
-            self.ui_edit_active = false;
-            self.clamp_selection_after_history();
+            self.apply_history_snapshot(next);
         }
+    }
+
+    /// Applique un instantané d'historique ; si la liste des meshes importés a
+    /// changé (annuler un import, annuler « Nouvelle scène »), demande au
+    /// renderer de reconstruire ses meshes GPU (roadmap 3.5).
+    fn apply_history_snapshot(&mut self, snapshot: SceneSnapshot) {
+        if snapshot.restore(&mut self.scene) {
+            self.async_load.imported_dirty = true;
+        }
+        self.ui_edit_active = false;
+        self.clamp_selection_after_history();
+    }
+
+    /// Profondeur courante de la pile d'undo — couplé à `squash_undo_since`
+    /// pour qu'une opération composée (préset qualité, roadmap post-audit UX
+    /// v2 2026-09-04, 3.7) ne laisse qu'une seule entrée.
+    pub(crate) fn undo_depth(&self) -> usize {
+        self.edit_history.undo_stack.len()
+    }
+
+    /// Ne garde, au-dessus de `depth`, que la **première** entrée poussée depuis
+    /// (l'état d'avant l'opération composée) : les instantanés intermédiaires
+    /// sont retirés, un seul Cmd+Z revient à l'état de départ.
+    pub(crate) fn squash_undo_since(&mut self, depth: usize) {
+        self.edit_history.undo_stack.truncate(depth + 1);
+    }
+
+    /// Supprime un groupe : ses objets repassent dans « Sans groupe »
+    /// (roadmap post-audit UX v2 2026-09-04, 3.7 — la hiérarchie mutait la
+    /// scène directement, sans entrée d'undo ni confirmation).
+    pub fn delete_group(&mut self, name: &str) {
+        if !self.scene.groups.iter().any(|g| g == name) {
+            return;
+        }
+        self.push_undo();
+        self.scene.groups.retain(|g| g != name);
+        for o in &mut self.scene.objects {
+            if o.group == name {
+                o.group.clear();
+            }
+        }
+    }
+
+    /// Nombre d'objets rangés dans le groupe `name` (pour la confirmation de
+    /// suppression).
+    pub fn group_member_count(&self, name: &str) -> usize {
+        self.scene
+            .objects
+            .iter()
+            .filter(|o| o.group == name)
+            .count()
     }
 
     // --- édition d'objets (avec historique) ---
@@ -413,11 +484,13 @@ impl AppState {
     }
 
     /// Nouveau projet : vide la scène (avec historique pour pouvoir annuler).
+    /// La scène neuve n'est liée à aucun fichier (roadmap 3.2).
     pub fn new_scene(&mut self) {
         self.push_undo();
         self.scene.objects.clear();
         self.scene.imported.clear();
         self.scene.groups.clear();
+        self.scene_file = None;
         self.clear_selection();
     }
 
@@ -769,6 +842,149 @@ mod tests {
         assert_eq!(app.highlight_of(1), 1.0); // primaire
         assert_eq!(app.highlight_of(0), 0.55); // autre sélectionné
         assert_eq!(app.highlight_of(2), 0.0); // non sélectionné
+    }
+
+    /// Roadmap 3.6 : un très grand objet (le « Sol » 90 × 90) n'est plus
+    /// teinté à pleine intensité — sa surbrillance est atténuée, sans
+    /// disparaître.
+    #[test]
+    fn highlight_is_attenuated_for_very_large_objects() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "Sol".into(),
+            mesh: MeshKind::Plane,
+            transform: Transform {
+                scale: Vec3::splat(90.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        app.scene.objects.push(SceneObject {
+            name: "Caisse".into(),
+            mesh: MeshKind::Cube,
+            ..Default::default()
+        });
+        app.select_single(0);
+        let big = app.highlight_of(0);
+        assert!(
+            (big - AppState::HIGHLIGHT_LARGE_FACTOR).abs() < 1e-6,
+            "grand objet atténué : {big}"
+        );
+        app.select_single(1);
+        assert_eq!(app.highlight_of(1), 1.0, "petit objet : pleine teinte");
+    }
+
+    /// Roadmap 3.5 : annuler rend aussi la lumière directionnelle, le ciel et
+    /// les widgets HUD — pas seulement les objets.
+    #[test]
+    fn undo_covers_light_sky_and_hud() {
+        let mut app = AppState::new();
+        let ambient0 = app.scene.light.ambient;
+        let fog0 = app.scene.sky.fog_density;
+        let widgets0 = app.scene.hud_widgets.len();
+        app.push_undo();
+        app.scene.light.ambient = ambient0 + 0.5;
+        app.scene.sky.fog_density = fog0 + 0.2;
+        app.scene.hud_widgets.push(crate::scene::HudWidget {
+            id: "test".into(),
+            ..Default::default()
+        });
+        app.undo();
+        assert_eq!(app.scene.light.ambient, ambient0);
+        assert_eq!(app.scene.sky.fog_density, fog0);
+        assert_eq!(app.scene.hud_widgets.len(), widgets0);
+        app.redo();
+        assert_eq!(app.scene.hud_widgets.len(), widgets0 + 1);
+        assert_eq!(app.scene.sky.fog_density, fog0 + 0.2);
+    }
+
+    /// Roadmap 3.5 : annuler « Nouvelle scène » ramène la liste des meshes
+    /// importés (sans quoi les objets `Imported` restaurés pointaient dans le
+    /// vide) et demande la reconstruction GPU.
+    #[test]
+    fn undo_restores_the_imported_mesh_list_after_new_scene() {
+        let mut app = AppState::new();
+        app.scene.imported.push(crate::scene::ImportedMesh {
+            name: "robot".into(),
+            path: "/inexistant/robot.glb".into(),
+            ..Default::default()
+        });
+        app.scene.objects.push(SceneObject {
+            name: "Robot".into(),
+            mesh: MeshKind::Imported(0),
+            ..Default::default()
+        });
+        app.new_scene();
+        assert!(app.scene.imported.is_empty());
+        app.async_load.imported_dirty = false;
+        app.undo();
+        assert_eq!(app.scene.imported.len(), 1);
+        assert_eq!(app.scene.imported[0].name, "robot");
+        assert_eq!(app.scene.imported[0].path, "/inexistant/robot.glb");
+        assert!(
+            app.async_load.imported_dirty,
+            "le renderer doit reconstruire ses meshes GPU"
+        );
+        // Annuler une simple édition n'y touche pas : pas de reconstruction.
+        app.push_undo();
+        app.scene.objects[0].transform.position.x += 1.0;
+        app.async_load.imported_dirty = false;
+        app.undo();
+        assert!(!app.async_load.imported_dirty);
+    }
+
+    /// Roadmap 3.7 : supprimer un groupe désassigne ses objets, compte juste
+    /// et reste annulable.
+    #[test]
+    fn delete_group_unassigns_members_and_is_undoable() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        app.scene.groups.push("Décor".into());
+        for i in 0..3 {
+            app.scene.objects.push(SceneObject {
+                name: format!("Arbre {i}"),
+                group: if i < 2 {
+                    "Décor".into()
+                } else {
+                    String::new()
+                },
+                ..Default::default()
+            });
+        }
+        assert_eq!(app.group_member_count("Décor"), 2);
+        let depth = app.undo_depth();
+        app.delete_group("Inconnu");
+        assert_eq!(app.undo_depth(), depth, "groupe inconnu : aucune entrée");
+        app.delete_group("Décor");
+        assert!(app.scene.groups.is_empty());
+        assert!(app.scene.objects.iter().all(|o| o.group.is_empty()));
+        app.undo();
+        assert_eq!(app.scene.groups, vec!["Décor".to_string()]);
+        assert_eq!(app.group_member_count("Décor"), 2);
+    }
+
+    /// Roadmap 3.7 : `squash_undo_since` ne garde que l'état d'avant une
+    /// opération composée — un seul Cmd+Z la défait entière.
+    #[test]
+    fn squash_undo_since_collapses_a_compound_operation() {
+        let mut app = AppState::new();
+        app.scene.objects.clear();
+        let depth = app.undo_depth();
+        for i in 0..3 {
+            app.push_undo();
+            app.scene.objects.push(SceneObject {
+                name: format!("Étape {i}"),
+                ..Default::default()
+            });
+        }
+        app.squash_undo_since(depth);
+        assert_eq!(app.undo_depth(), depth + 1);
+        app.undo();
+        assert!(
+            app.scene.objects.is_empty(),
+            "un seul undo revient au départ"
+        );
     }
 
     #[test]

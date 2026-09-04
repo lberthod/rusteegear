@@ -248,6 +248,81 @@ fn entering_play_clears_a_selection_left_over_from_the_editor() {
     );
 }
 
+/// Roadmap 3.4 : Stop rend le point de vue d'édition, la sélection et le
+/// drapeau « modifié » tels qu'ils étaient avant Play.
+#[test]
+fn stop_restores_the_editor_camera_selection_and_dirty_flag() {
+    let mut app = AppState::new();
+    app.scene.objects.push(crate::scene::SceneObject {
+        name: "Caisse".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        ..Default::default()
+    });
+    let idx = app.scene.objects.len() - 1;
+    app.select_single(idx);
+    app.camera.target = glam::Vec3::new(3.0, 1.0, -2.0);
+    app.camera.distance = 12.5;
+    app.camera.yaw = 0.7;
+    app.camera.pitch = 0.4;
+    app.scene_dirty = false;
+
+    app.playing = true;
+    app.advance_play();
+    assert!(app.selection.is_none(), "sélection vidée pendant Play");
+    // Play bouge la caméra et « salit » la scène (widgets, physique…).
+    app.camera.target = glam::Vec3::ZERO;
+    app.camera.distance = 3.0;
+    app.camera.yaw = 0.0;
+    app.camera.pitch = 0.0;
+    app.scene_dirty = true;
+
+    app.playing = false;
+    app.advance_play();
+    assert_eq!(app.camera.target, glam::Vec3::new(3.0, 1.0, -2.0));
+    assert_eq!(app.camera.distance, 12.5);
+    assert_eq!(app.camera.yaw, 0.7);
+    assert_eq!(app.camera.pitch, 0.4);
+    assert_eq!(app.selection, Some(idx), "sélection rendue au Stop");
+    assert!(
+        !app.scene_dirty,
+        "drapeau « modifié » remis à sa valeur d'avant Play"
+    );
+    assert!(app.edit_context.is_none());
+}
+
+/// Roadmap 3.4 : une édition faite en pause sur les réglages de scène (lumière,
+/// HUD…) n'est pas restaurée au Stop — elle doit donc rester à enregistrer.
+#[test]
+fn stop_keeps_the_scene_dirty_when_settings_changed_during_play() {
+    let mut app = AppState::new();
+    app.scene_dirty = false;
+    app.playing = true;
+    app.advance_play();
+    app.scene.light.ambient += 0.3;
+    app.playing = false;
+    app.advance_play();
+    assert!(
+        app.scene_dirty,
+        "la lumière éditée en pause reste à enregistrer"
+    );
+}
+
+/// Roadmap 3.4 : `stop_play` est synchrone — après l'appel, plus aucun front
+/// de sortie n'est en attente, un changement de scène peut suivre sans risque.
+#[test]
+fn stop_play_is_synchronous_and_idempotent() {
+    let mut app = AppState::new();
+    let objects_before = app.scene.objects.len();
+    app.playing = true;
+    app.advance_play();
+    app.stop_play();
+    assert!(!app.playing && !app.was_playing);
+    assert_eq!(app.scene.objects.len(), objects_before);
+    // Sans Play en cours : sans effet.
+    app.stop_play();
+    assert!(!app.playing);
+}
+
 #[test]
 fn player_input_combines_keyboard_and_touch_tank_axes() {
     // Le pavé tactile W/A/S/D et le clavier alimentent les mêmes axes « tank »

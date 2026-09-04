@@ -175,37 +175,53 @@ impl AppState {
     }
 
     /// Cible de « 💾 Enregistrer » / Cmd+S : la scène de démarrage du projet
-    /// ouvert, sinon l'emplacement historique `~/motor3derust_scene.json`
-    /// (roadmap post-audit UX 2026-09-04, 1.1 — avant, Enregistrer ignorait le
-    /// projet et écrivait toujours dans le fichier personnel : quelqu'un qui
-    /// ouvrait `examples/first_game`, modifiait et enregistrait ne retrouvait
-    /// rien dans son projet).
-    pub fn save_target(&self) -> String {
+    /// ouvert (roadmap post-audit UX 2026-09-04, 1.1), sinon le fichier auquel
+    /// la scène est liée (« Ouvrir… » / « Enregistrer sous… », roadmap
+    /// post-audit UX v2 2026-09-04, 3.2). `None` : scène sans fichier —
+    /// avant, Cmd+S écrivait alors en silence dans `~/motor3derust_scene.json`,
+    /// et la barre de titre affichait ce nom même quand le fichier n'existait pas.
+    pub fn save_target(&self) -> Option<String> {
         match &self.current_project {
-            Some(project) => project.main_scene_path.to_string_lossy().into_owned(),
-            None => scene_path(),
+            Some(project) => Some(project.main_scene_path.to_string_lossy().into_owned()),
+            None => self
+                .scene_file
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
         }
     }
 
-    /// Sauvegarde rapide vers `save_target()`.
+    /// Nom de fichier proposé par « Enregistrer sous… » : celui de la cible
+    /// courante s'il y en a une, sinon un nom générique (roadmap 3.2 — avant,
+    /// toujours « scene.json »).
+    pub fn suggested_save_name(&self) -> String {
+        self.save_target()
+            .and_then(|t| {
+                std::path::Path::new(&t)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "scene.json".to_string())
+    }
+
+    /// Sauvegarde rapide vers `save_target()`. Sans cible (scène sans fichier),
+    /// demande à l'éditeur d'ouvrir « Enregistrer sous… » (roadmap 3.2) —
+    /// `scene_dirty` reste posé tant que rien n'a été écrit.
     pub fn save(&mut self) {
-        let path = self.save_target();
-        self.save_to(&path);
+        match self.save_target() {
+            Some(path) => self.save_to(&path),
+            None => self.pending_shortcut = Some(super::EditorShortcut::SaveAs),
+        }
     }
 
     /// Titre de la fenêtre de l'éditeur (roadmap post-audit UX 2026-09-04, 1.4) :
     /// « Projet — scène.json • RusteeGear », le point signalant des
-    /// modifications non sauvegardées (convention macOS). Mode player : le nom
-    /// du produit seul.
+    /// modifications non sauvegardées (convention macOS). Sans fichier :
+    /// « Sans titre » (roadmap 3.2). Mode player : le nom du produit seul.
     pub fn window_title(&self) -> String {
         if self.player {
             return "RusteeGear".to_string();
         }
-        let target = self.save_target();
-        let file = std::path::Path::new(&target)
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| target.clone());
+        let file = self.display_scene_name();
         let dirty = if self.scene_dirty { " •" } else { "" };
         match &self.current_project {
             Some(project) => format!("{} — {file}{dirty} · RusteeGear", project.name),
@@ -213,17 +229,55 @@ impl AppState {
         }
     }
 
+    /// Nom court de la scène pour le titre et la barre d'état : le nom du
+    /// fichier cible, ou « Sans titre » (roadmap 3.2).
+    pub fn display_scene_name(&self) -> String {
+        self.save_target()
+            .map(|target| {
+                std::path::Path::new(&target)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or(target)
+            })
+            .unwrap_or_else(|| "Sans titre".to_string())
+    }
+
     /// Sauvegarde la scène en JSON vers un chemin donné (« Enregistrer sous »).
     /// Ne baisse le drapeau « non sauvegardé » (`scene_dirty`) que sur succès :
-    /// après un échec, fermer la fenêtre doit continuer d'alerter.
+    /// après un échec, fermer la fenêtre doit continuer d'alerter. Sur succès,
+    /// hors projet, le chemin devient la cible des Cmd+S suivants (roadmap 3.2).
     pub fn save_to(&mut self, path: &str) {
         match self.scene.save(path) {
             Ok(()) => {
                 self.scene_dirty = false;
+                if self.current_project.is_none() {
+                    self.scene_file = Some(std::path::PathBuf::from(path));
+                }
                 log::info!("Scène sauvegardée dans {path}");
             }
             Err(e) => log::error!("Échec sauvegarde : {e}"),
         }
+    }
+
+    /// Empreinte des réglages de scène **hors objets** (lumière, ciel, contrôles,
+    /// caméra de jeu, HUD, groupes) — ce que Stop ne restaure pas depuis
+    /// `play_snapshot`. Comparée entre l'entrée en Play et le Stop pour
+    /// rendre au drapeau « modifié » sa valeur d'avant Play sans masquer une
+    /// édition faite en pause (roadmap post-audit UX v2 2026-09-04, 3.4).
+    pub(crate) fn scene_settings_fingerprint(&self) -> String {
+        let s = &self.scene;
+        serde_json::to_string(&(
+            &s.light,
+            &s.sky,
+            &s.point_lights,
+            &s.mobile,
+            s.camera_follow,
+            &s.game_camera,
+            &s.hud_layout,
+            &s.hud_widgets,
+            &s.groups,
+        ))
+        .unwrap_or_default()
     }
 
     /// Empreinte JSON des parties de la scène éditables directement par les widgets
@@ -257,11 +311,13 @@ impl AppState {
     }
 
     /// Charge une scène depuis un chemin JSON donné, en thread de fond (sans bloquer
-    /// le rendu). Le résultat est appliqué dans `poll_imports`.
+    /// le rendu). Le résultat est appliqué dans `poll_imports`, qui lie alors la
+    /// scène à ce chemin (`scene_file`, roadmap 3.2).
     pub fn load_from(&mut self, path: &str) {
         let tx = self.async_load.scene_load_tx.clone();
         let path = path.to_string();
         std::thread::spawn(move || {
+            let sent_path = path.clone();
             // Erreur enrichie du chemin et d'une piste de réparation (Phase C5,
             // sprint.19matin.md) : « Échec chargement : expected value » sans le
             // fichier concerné n'est pas diagnosticable par l'utilisateur.
@@ -274,7 +330,7 @@ impl AppState {
                 })
                 .map(|mut s| {
                     s.reload_imported();
-                    s
+                    (sent_path, s)
                 });
             let _ = tx.send(res);
         });
@@ -289,6 +345,7 @@ impl AppState {
         let mut s = Scene::load(path).map_err(|e| format!("{path} : {e}"))?;
         s.reload_imported();
         self.scene = s;
+        self.scene_file = Some(std::path::PathBuf::from(path));
         self.clear_selection();
         self.async_load.imported_dirty = true;
         self.scene_dirty = false;
@@ -449,8 +506,9 @@ impl AppState {
         // scènes chargées en arrière-plan (Load) prêtes cette frame
         while let Ok(res) = self.async_load.scene_load_rx.try_recv() {
             match res {
-                Ok(s) => {
+                Ok((path, s)) => {
                     self.scene = s;
+                    self.scene_file = Some(std::path::PathBuf::from(path));
                     self.clear_selection();
                     self.async_load.imported_dirty = true;
                     // Une scène fraîchement chargée depuis le disque est, par
@@ -462,7 +520,11 @@ impl AppState {
         }
     }
 
-    fn finish_import(&mut self, path: String, data: MeshData, min: Vec3, max: Vec3) {
+    pub(super) fn finish_import(&mut self, path: String, data: MeshData, min: Vec3, max: Vec3) {
+        // Annulable et marqué modifié (roadmap post-audit UX v2 2026-09-04,
+        // 3.5) — avant, un import n'entrait pas dans l'historique et ne posait
+        // pas le drapeau « non sauvegardé ».
+        self.push_undo();
         let name = std::path::Path::new(&path)
             .file_stem()
             .and_then(|s| s.to_str())

@@ -60,7 +60,10 @@ impl AppState {
                     let origin = Vec3::from_array(pl.position);
                     if let Some(axis) = self.pick_axis_at(origin, cx, cy) {
                         if let Some(p) = self.axis_drag_param(origin, axis_dir(axis), cx, cy) {
-                            self.push_undo(); // déplacement de lumière annulable
+                            // Déplacement de lumière annulable — l'entrée d'undo
+                            // n'est poussée qu'au premier vrai déplacement
+                            // (`undo_pending`, roadmap 3.5).
+                            self.drag.undo_pending = true;
                             self.active_axis = Some(axis);
                             self.drag.drag_light = Some(li);
                             self.drag.drag_start_t = p;
@@ -80,7 +83,9 @@ impl AppState {
                                 if let Some(ang) =
                                     self.ring_drag_angle(origin, axis_dir(axis), cx, cy)
                                 {
-                                    self.push_undo(); // un seul snapshot par manipulation
+                                    // un seul snapshot par manipulation, poussé au
+                                    // premier vrai déplacement (roadmap 3.5)
+                                    self.drag.undo_pending = true;
                                     self.active_axis = Some(axis);
                                     self.drag.drag_start_angle = ang;
                                     self.drag.drag_orig_pos = origin;
@@ -95,7 +100,7 @@ impl AppState {
                                 if let Some(p) =
                                     self.axis_drag_param(origin, axis_dir(axis), cx, cy)
                                 {
-                                    self.push_undo();
+                                    self.drag.undo_pending = true;
                                     self.active_axis = Some(axis);
                                     self.drag.drag_start_t = p;
                                     self.drag.drag_orig_pos = origin;
@@ -127,6 +132,9 @@ impl AppState {
                     self.touch.touch_ended_obj = Some(i);
                 }
                 if self.active_axis.take().is_some() {
+                    // Relâché sans avoir bougé : aucune entrée d'undo, la scène
+                    // n'est pas marquée modifiée (roadmap 3.5).
+                    self.drag.undo_pending = false;
                     self.drag.drag_light = None;
                     self.drag.press_cursor = None;
                     return;
@@ -195,6 +203,20 @@ impl AppState {
                 self.drag.press_cursor = None;
             }
             InputEvent::PointerMove { x, y } => {
+                // Première vraie manipulation d'une poignée de gizmo : c'est
+                // maintenant que l'état d'avant entre dans l'historique (roadmap
+                // post-audit UX v2 2026-09-04, 3.5) — un clic sans déplacement
+                // (< 1 px) ne laisse aucune trace.
+                if self.active_axis.is_some()
+                    && self.drag.undo_pending
+                    && self
+                        .drag
+                        .press_cursor
+                        .is_none_or(|(px, py)| (px - x).hypot(py - y) >= 1.0)
+                {
+                    self.drag.undo_pending = false;
+                    self.push_undo();
+                }
                 // Déplacement d'une lumière sélectionnée (translate uniquement).
                 if let (Some(axis), Some(li)) = (self.active_axis, self.drag.drag_light) {
                     let a = axis_dir(axis);
@@ -473,6 +495,33 @@ impl AppState {
         Some(v.dot(w).atan2(v.dot(u)))
     }
 
+    /// Clic droit dans la vue 3D (roadmap post-audit UX v2 2026-09-04, 3.6) :
+    /// sélectionne ce qui est sous le curseur **avant** que le menu contextuel
+    /// ne s'ouvre — avant, Cadrer/Dupliquer/Supprimer y étaient grisés tant
+    /// qu'on n'avait pas d'abord cliqué gauche. Un objet déjà dans la
+    /// multi-sélection la conserve (le menu agit alors sur tout l'ensemble) ;
+    /// le vide ne désélectionne rien. Renvoie `true` si la sélection a changé.
+    pub fn select_under_cursor(&mut self) -> bool {
+        let Some((cx, cy)) = self.drag.last_cursor else {
+            return false;
+        };
+        if let Some(li) = self.pick_light(cx, cy) {
+            let changed = self.selected_light != Some(li) || self.selection.is_some();
+            self.selected_light = Some(li);
+            self.clear_selection();
+            return changed;
+        }
+        match self.pick(cx, cy) {
+            Some(i) if self.selected.contains(&i) => false,
+            Some(i) => {
+                self.selected_light = None;
+                self.select_single(i);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Lance un rayon depuis le curseur et renvoie l'objet le plus proche touché.
     fn pick(&self, px: f64, py: f64) -> Option<usize> {
         let (origin, dir) = self.ray(px, py);
@@ -692,6 +741,64 @@ mod tests {
             "le glissé Main doit déplacer la cible caméra"
         );
         assert_eq!(app.camera.distance, dist0, "pan sans zoom");
+    }
+
+    /// Roadmap 3.6 : le clic droit sélectionne ce qui est sous le curseur
+    /// avant d'ouvrir le menu contextuel ; dans le vide, il ne touche à rien.
+    #[test]
+    fn right_click_selects_the_object_under_the_cursor() {
+        use crate::scene::{MeshKind, SceneObject};
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.scene.objects.clear();
+        app.scene.objects.push(SceneObject {
+            name: "cube".into(),
+            mesh: MeshKind::Cube,
+            ..Default::default()
+        });
+        app.clear_selection();
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        assert!(app.select_under_cursor());
+        assert_eq!(app.selection, Some(0));
+        // Déjà sélectionné : rien ne change (multi-sélection conservée).
+        assert!(!app.select_under_cursor());
+        // Dans le vide : la sélection reste.
+        app.handle_input(InputEvent::PointerMove { x: 2.0, y: 2.0 });
+        assert!(!app.select_under_cursor());
+        assert_eq!(app.selection, Some(0));
+    }
+
+    /// Roadmap 3.5 : saisir une poignée de gizmo sans la déplacer ne laisse
+    /// ni entrée d'undo ni scène « modifiée » ; le premier vrai déplacement
+    /// en pousse exactement une.
+    #[test]
+    fn gizmo_click_without_movement_leaves_no_undo_entry() {
+        let mut app = AppState::new();
+        app.set_viewport(800, 600);
+        app.select_single(0);
+        app.scene_dirty = false;
+        let depth = app.edit_history.undo_stack.len();
+        // Poignée saisie (comme le fait `PointerDown` sur un axe), pas encore bougée.
+        app.handle_input(InputEvent::PointerMove { x: 400.0, y: 300.0 });
+        app.drag.press_cursor = Some((400.0, 300.0));
+        app.active_axis = Some(0);
+        app.drag.undo_pending = true;
+        app.handle_input(InputEvent::PointerUp);
+        assert_eq!(app.edit_history.undo_stack.len(), depth, "clic sans glissé");
+        assert!(!app.scene_dirty);
+        assert!(!app.drag.undo_pending);
+        // Même saisie, puis un déplacement d'un demi-pixel : toujours rien…
+        app.drag.press_cursor = Some((400.0, 300.0));
+        app.active_axis = Some(0);
+        app.drag.undo_pending = true;
+        app.handle_input(InputEvent::PointerMove { x: 400.4, y: 300.0 });
+        assert_eq!(app.edit_history.undo_stack.len(), depth);
+        // … puis un vrai déplacement : une seule entrée, une seule fois.
+        app.handle_input(InputEvent::PointerMove { x: 420.0, y: 300.0 });
+        app.handle_input(InputEvent::PointerMove { x: 440.0, y: 300.0 });
+        assert_eq!(app.edit_history.undo_stack.len(), depth + 1);
+        assert!(app.scene_dirty);
+        app.handle_input(InputEvent::PointerUp);
     }
 
     /// Clic milieu / Maj+glisser (`pan: true`) : pan disponible dans n'importe
