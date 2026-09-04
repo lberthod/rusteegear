@@ -37,26 +37,26 @@ dans la source avec la référence.
 - [x] 0.2 « Rejouer » en ligne demande une nouvelle manche au serveur au lieu de déconnecter ; la bannière de défaite disparaît à la reconnexion (S-01) — `ClientMsg::RestartRound` (PROTOCOL_VERSION 7 → 8, déploiement VPS + clients à coupler)
 - [x] 0.3 Vérification : `pilot net connect wss://ws.loicberthod.ch Bot` puis `pilot state` à 30 s doit donner une manche en cours et une vie non nulle ; à rejouer avec la démo web ouverte — couvert par 4 tests `net_tests` serveur + 4 tests client ; la vérification sur le serveur public reste à faire après le redéploiement du VPS
 
-## Vague 1 — Un mode joueur qui tient debout (M, 1 semaine)
+## Vague 1 — Un mode joueur qui tient debout (M, 1 semaine) — fait `d8cda9a`
 
-- [ ] 1.1 Construire l'overlay joueur indépendamment de `mobile.any()` ; ne dessiner stick et boutons que si un événement tactile a été reçu (ou `cfg` mobile) ; l'aide choisit la section Tactile / Clavier sur le même critère (J-01)
-- [ ] 1.2 Vie initialisée en solo (`hud_health = Some(1.0)` dès qu'il y a un contrôleur), `health_bar: true` et `attack_button` remis dans la scène livrée, `hud_health` alimenté depuis `net_local_health` en ligne ; même HUD sur web et desktop (J-02)
-- [ ] 1.3 Paramètres joueur réduits à Audio / Accessibilité / Langue / Clavier / Manette, dans une `ScrollArea`, opaques et exclusifs avec l'aide et le menu pause (J-03)
-- [ ] 1.4 Accueil joueur : jeu figé et HUD masqué derrière la modale (constaté : vague 1/4, monstres en mouvement, pastille « Hors ligne » visibles avant tout choix) ; boutons ⚙ et ? ; pseudo limité à 32 caractères avec compteur ; salon filtré `[A-Za-z0-9_-]` ; description des classes ; serveur modifiable dans une section repliable ; classe, salon et dernier choix mémorisés ; fenêtre 🌐 retirée du mode joueur (`src/editor/windows.rs:2571-2634`, `1131-1190`)
-- [ ] 1.5 Menu pause : « Menu principal » qui repose `welcome_pending` ; « Rejouer » renommé « Recommencer la partie » avec confirmation ; contrôles tactiles masqués pendant la pause (`src/editor/hud.rs:1108-1132`, `src/editor/mod.rs:1279-1283`)
-- [ ] 1.6 Tab maintenu = classement (constaté : Tab ne fait rien, egui consomme la touche) ; Paramètres uniquement via la pause (`src/lib.rs:679`)
-- [ ] 1.7 Persistance web : `Settings::load/save` et `crash_log` sur `localStorage` derrière un adaptateur ; pseudo par défaut unique (« Invité » + 4 chiffres) (W-01)
-- [ ] 1.8 Raccourcis d'édition (Suppr, Cmd+D/C/V/X/A/Z) inactifs en mode joueur ; Cmd+S et 💾 inactifs en Play dans l'éditeur (E-03)
-- [ ] 1.9 Spectateur : message et caméra quand plus aucun allié n'est vivant ; bouton tactile « Saut » cycle les alliés ; texte composé depuis la touche réelle (`src/app/mod.rs:1694`, `src/lib.rs:664`)
+- [x] 1.1 Construire l'overlay joueur indépendamment de `mobile.any()` ; ne dessiner stick et boutons que si un événement tactile a été reçu (ou `cfg` mobile) ; l'aide choisit la section Tactile / Clavier sur le même critère (J-01)
+- [x] 1.2 Vie initialisée en solo (`hud_health = Some(1.0)` dès qu'il y a un contrôleur), `health_bar: true` et `attack_button` remis dans la scène livrée, `hud_health` alimenté depuis `net_local_health` en ligne ; même HUD sur web et desktop (J-02) — cause de l'écart web/desktop : `scripting_web.rs` renseignait la vie du HUD sans condition ; parité rétablie
+- [x] 1.3 Paramètres joueur réduits à Audio / Accessibilité / Langue / Clavier / Manette, dans une `ScrollArea`, opaques et exclusifs avec l'aide et le menu pause (J-03)
+- [x] 1.4 Accueil joueur : jeu figé et HUD masqué derrière la modale (constaté : vague 1/4, monstres en mouvement, pastille « Hors ligne » visibles avant tout choix) ; boutons ⚙ et ? ; pseudo limité à 32 caractères avec compteur ; salon filtré `[A-Za-z0-9_-]` ; description des classes ; serveur modifiable dans une section repliable ; classe, salon et dernier choix mémorisés ; fenêtre 🌐 retirée du mode joueur (`src/editor/windows.rs:2571-2634`, `1131-1190`)
+- [x] 1.5 Menu pause : « Menu principal » qui repose `welcome_pending` ; « Rejouer » renommé « Recommencer la partie » avec confirmation ; contrôles tactiles masqués pendant la pause (`src/editor/hud.rs:1108-1132`, `src/editor/mod.rs:1279-1283`)
+- [x] 1.6 Tab maintenu = classement (constaté : Tab ne fait rien, egui consomme la touche) ; Paramètres uniquement via la pause (`src/lib.rs:679`) — Tab lue au niveau winit avant egui (qui la consommait pour la navigation de focus)
+- [x] 1.7 Persistance web : `Settings::load/save` et `crash_log` sur `localStorage` derrière un adaptateur ; pseudo par défaut unique (« Invité » + 4 chiffres) (W-01) — `assets::persisted_read/write/remove` : fichier en natif, `localStorage` sur wasm ; pseudo invité à 4 chiffres réellement variés (l'ancien tirage ne donnait que des multiples de 1000)
+- [x] 1.8 Raccourcis d'édition (Suppr, Cmd+D/C/V/X/A/Z) inactifs en mode joueur ; Cmd+S et 💾 inactifs en Play dans l'éditeur (E-03)
+- [x] 1.9 Spectateur : message et caméra quand plus aucun allié n'est vivant ; bouton tactile « Saut » cycle les alliés ; texte composé depuis la touche réelle (`src/app/mod.rs:1694`, `src/lib.rs:664`)
 
-## Vague 2 — Un réseau honnête (L, 2 semaines, redéploiement VPS)
+## Vague 2 — Un réseau honnête (L, 2 semaines, redéploiement VPS) — fait `27efb65`
 
-- [ ] 2.1 Connexion asynchrone avec timeout 5 s (constaté par code : `ready_rx.recv()` bloque le thread de rendu, `src/net/client/native.rs:154`)
-- [ ] 2.2 Pastille dérivée de `net_connection_state()` et non de `is_connected()` + test de sous-chaîne « … » (constaté : « Connexion… » puis vert avant tout `Welcome`) (`src/editor/mod.rs:1120-1126`)
-- [ ] 2.3 Serveur plein → `JoinRejected { "serveur plein" }` avant fermeture, sans relance de reconnexion (`src/net/server_loop.rs:71-78`)
-- [ ] 2.4 Tout refus ou abandon de reconnexion ramène à l'accueil avec l'erreur affichée (`src/app/network_client.rs:900-905`)
-- [ ] 2.5 Bannière réseau multi-ligne limitée à 90 % de la largeur (`src/editor/hud.rs:1260`) ; statut « Connecté — N joueurs » au lieu de « joueur 22 »
-- [ ] 2.6 Ping/Pong dans le protocole (+1 de version), latence dans la pastille ; déploiement `scripts/deploy_vps.sh`
+- [x] 2.1 Connexion asynchrone avec timeout 5 s (constaté par code : `ready_rx.recv()` bloque le thread de rendu, `src/net/client/native.rs:154`) — `Handshake { Pending, Open, Failed }` partagé natif/web, `CONNECT_TIMEOUT` 5 s
+- [x] 2.2 Pastille dérivée de `net_connection_state()` et non de `is_connected()` + test de sous-chaîne « … » (constaté : « Connexion… » puis vert avant tout `Welcome`) (`src/editor/mod.rs:1120-1126`)
+- [x] 2.3 Serveur plein → `JoinRejected { "serveur plein" }` avant fermeture, sans relance de reconnexion (`src/net/server_loop.rs:71-78`)
+- [x] 2.4 Tout refus ou abandon de reconnexion ramène à l'accueil avec l'erreur affichée (`src/app/network_client.rs:900-905`)
+- [x] 2.5 Bannière réseau multi-ligne limitée à 90 % de la largeur (`src/editor/hud.rs:1260`) ; statut « Connecté — N joueurs » au lieu de « joueur 22 »
+- [x] 2.6 Ping/Pong dans le protocole (+1 de version), latence dans la pastille ; déploiement `scripts/deploy_vps.sh` — `Ping`/`Pong` ajoutés en fin d'énumération sans nouveau bump (la version 8 de la vague 0 n'est pas encore déployée) ; le redéploiement VPS reste à faire
 
 ## Vague 3 — Éditeur : premier lancement et sécurité du travail (M, 1 semaine) — fait `474ce61`
 
