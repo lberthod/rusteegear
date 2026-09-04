@@ -2,12 +2,15 @@
 //! depuis l'UI, en thread de fond, avec log streamé.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 
 use crate::app::build_config::{BuildConfig, RenderQuality};
 use crate::app::settings::Settings;
 use crate::scene::Scene;
+
+use super::file_dialogs::{DialogRequest, DialogTarget, ExportAsset, FileDialogs};
 
 /// Racine du projet, figée à la compilation : les scripts `packaging/*.sh` y résident,
 /// quel que soit le répertoire courant (qui vaut « / » quand l'app tourne en `.app`).
@@ -54,6 +57,19 @@ enum LogMsg {
     Done(bool),
 }
 
+/// Processus de packaging partagé entre le thread qui lit sa sortie et le
+/// bouton « Annuler » (roadmap post-audit UX v2 2026-09-04, 6.3). `None` une
+/// fois le processus attendu (`wait`) par le thread.
+type SharedChild = Arc<Mutex<Option<Child>>>;
+
+/// Verrou sans `unwrap` (budget Sprint 113b) : un thread de lecture qui aurait
+/// paniqué en tenant le verrou n'empêche pas d'annuler.
+fn lock_child(child: &SharedChild) -> std::sync::MutexGuard<'_, Option<Child>> {
+    child
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// État persistant du panneau (vit dans `Editor`).
 pub struct ExportPanel {
     pub open: bool,
@@ -62,6 +78,13 @@ pub struct ExportPanel {
     log: Vec<String>,
     rx: Option<Receiver<LogMsg>>,
     running: Option<Target>,
+    /// Processus de packaging en cours, partagé avec le thread qui lit sa
+    /// sortie — pour « Annuler » (roadmap post-audit UX v2 2026-09-04, 6.3).
+    /// `None` entre deux exports.
+    child: Option<SharedChild>,
+    /// « Annuler » cliqué : le `Done(false)` qui suit est une annulation, pas
+    /// un échec.
+    cancelled: bool,
     /// Pré-requis détectés une fois au démarrage : `Ok` = prêt, `Err` = ce qui manque.
     prereqs: [(Target, Result<(), String>); 4],
     /// Android : installer l'APK sur l'appareil branché (adb) après le build.
@@ -83,6 +106,19 @@ impl ExportPanel {
     pub fn config(&self) -> &BuildConfig {
         &self.config
     }
+
+    /// Retour du sélecteur « Choisir .mobileprovision… » (roadmap 6.1).
+    pub(super) fn set_ios_profile(&mut self, path: String) {
+        self.config.ios_profile = path;
+    }
+
+    /// Retour du sélecteur d'icône/splash (roadmap 6.1).
+    pub(super) fn set_asset_path(&mut self, asset: ExportAsset, path: String) {
+        match asset {
+            ExportAsset::Icon => self.config.icon_path = path,
+            ExportAsset::Splash => self.config.splash_path = path,
+        }
+    }
 }
 
 impl Default for ExportPanel {
@@ -99,6 +135,8 @@ impl ExportPanel {
             log: Vec::new(),
             rx: None,
             running: None,
+            child: None,
+            cancelled: false,
             prereqs: [
                 (Target::Macos, detect(Target::Macos)),
                 (Target::Android, detect(Target::Android)),
@@ -120,6 +158,26 @@ impl ExportPanel {
             .find(|(t, _)| *t == target)
             .map(|(_, r)| r.clone())
             .unwrap_or(Ok(()))
+    }
+
+    /// Interrompt l'export en cours (roadmap post-audit UX v2 2026-09-04,
+    /// 6.3) : tue le script de packaging **et son groupe de processus** (cargo,
+    /// gradle, xcodebuild… lancés par lui — `kill` du seul bash laisserait
+    /// les enfants tourner et le journal continuer), vide la file « Tout
+    /// exporter ». Le thread de lecture voit les tuyaux se fermer et envoie
+    /// `Done(false)`, affiché « annulé » grâce à `cancelled`.
+    fn cancel(&mut self) {
+        let Some(child) = self.child.as_ref() else {
+            return;
+        };
+        self.cancelled = true;
+        self.queue.clear();
+        if let Some(c) = lock_child(child).as_mut() {
+            kill_process_tree(c);
+        }
+        let label = self.running.map(Target::label).unwrap_or("export");
+        self.log.push("⏹ Annulation demandée…".to_string());
+        log::info!("Export « {label} » annulé.");
     }
 
     /// Démarre un export en arrière-plan (un seul à la fois).
@@ -180,7 +238,10 @@ impl ExportPanel {
                 Target::Ios => true,
                 Target::Macos | Target::Web => false,
             };
-        self.rx = Some(run(target, cfg, install));
+        let (rx, child) = run(target, cfg, install);
+        self.rx = Some(rx);
+        self.child = Some(child);
+        self.cancelled = false;
         self.running = Some(target);
         self.last_ok = false;
     }
@@ -230,7 +291,13 @@ impl ExportPanel {
     }
 
     /// Construit la fenêtre egui (à appeler chaque frame avec le contexte).
-    pub fn ui(&mut self, ctx: &egui::Context, scene: &Scene, settings: &Settings) {
+    pub(super) fn ui(
+        &mut self,
+        ctx: &egui::Context,
+        scene: &Scene,
+        settings: &Settings,
+        dialogs: &mut FileDialogs,
+    ) {
         // Récupère les lignes de log produites par le thread de build.
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
@@ -245,12 +312,15 @@ impl ExportPanel {
                         self.log.push(
                             if ok {
                                 "✅ Export terminé."
+                            } else if self.cancelled {
+                                "⏹ Export annulé."
                             } else {
                                 "❌ Export échoué (voir le journal)."
                             }
                             .to_string(),
                         );
                         self.running = None;
+                        self.child = None;
                         self.last_ok = ok;
                     }
                 }
@@ -330,8 +400,20 @@ impl ExportPanel {
                                 ui.end_row();
                             });
                         // Icône + splash : sélection de fichiers PNG.
-                        asset_picker(ui, "Icône (PNG)", &mut self.config.icon_path);
-                        asset_picker(ui, "Splash (PNG)", &mut self.config.splash_path);
+                        asset_picker(
+                            ui,
+                            "Icône (PNG)",
+                            &mut self.config.icon_path,
+                            ExportAsset::Icon,
+                            dialogs,
+                        );
+                        asset_picker(
+                            ui,
+                            "Splash (PNG)",
+                            &mut self.config.splash_path,
+                            ExportAsset::Splash,
+                            dialogs,
+                        );
                     });
 
                 // --- 🎨 Rendu ---
@@ -414,13 +496,13 @@ impl ExportPanel {
                         ui.label("Profil");
                         ui.horizontal(|ui| {
                             if ui.button("Choisir .mobileprovision…").clicked() {
-                                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-                                if let Some(p) = rfd::FileDialog::new()
-                                    .add_filter("Profil", &["mobileprovision"])
-                                    .pick_file()
-                                {
-                                    self.config.ios_profile = p.to_string_lossy().into_owned();
-                                }
+                                dialogs.open(
+                                    DialogRequest::PickFile {
+                                        filter: "Profil",
+                                        extensions: &["mobileprovision"],
+                                    },
+                                    DialogTarget::IosProfile,
+                                );
                             }
                             ui.label(ios_profile_display_name(&self.config.ios_profile));
                         });
@@ -547,6 +629,16 @@ impl ExportPanel {
             }
             if self.running == Some(target) {
                 ui.spinner();
+                // Annulable (roadmap post-audit UX v2 2026-09-04, 6.3) —
+                // avant, un export lancé par erreur bloquait le panneau jusqu'à
+                // la fin d'un build de plusieurs minutes.
+                if ui
+                    .button("⏹ Annuler")
+                    .on_hover_text("Interrompt le script de packaging en cours")
+                    .clicked()
+                {
+                    self.cancel();
+                }
             }
         });
         // Android / iOS : option d'installation directe sur l'appareil branché.
@@ -625,18 +717,26 @@ fn ios_profile_display_name(path: &str) -> String {
         .unwrap_or_else(|| "(aucun)".into())
 }
 
-/// Ligne « libellé + sélecteur de fichier PNG + nom court + effacer » pour icône/splash.
-fn asset_picker(ui: &mut egui::Ui, label: &str, path: &mut String) {
+/// Ligne « libellé + sélecteur de fichier PNG + nom court + effacer » pour
+/// icône/splash. Le chemin choisi revient par `ExportPanel::set_asset_path`
+/// (sélecteur asynchrone, roadmap 6.1).
+fn asset_picker(
+    ui: &mut egui::Ui,
+    label: &str,
+    path: &mut String,
+    asset: ExportAsset,
+    dialogs: &mut FileDialogs,
+) {
     ui.horizontal(|ui| {
         ui.label(label);
         if ui.button("Choisir…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-            if let Some(p) = rfd::FileDialog::new()
-                .add_filter("Image PNG", &["png"])
-                .pick_file()
-            {
-                *path = p.to_string_lossy().into_owned();
-            }
+            dialogs.open(
+                DialogRequest::PickFile {
+                    filter: "Image PNG",
+                    extensions: &["png"],
+                },
+                DialogTarget::ExportAsset(asset),
+            );
         }
         if !path.is_empty() && ui.button("✕").clicked() {
             path.clear();
@@ -1050,10 +1150,29 @@ fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(data.to_vec())
 }
 
-/// Lance le script de packaging en thread de fond ; renvoie le canal de log.
+/// Tue un processus de packaging et tout son groupe (cf. `ExportPanel::cancel`).
+/// Le script tourne dans son propre groupe (`process_group(0)` dans `run`) :
+/// `kill -TERM -- -<pid>` atteint bash **et** ses enfants. Puis `kill()` sur
+/// le bash lui-même, au cas où il ignorerait SIGTERM.
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", "--", &format!("-{}", child.id())])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+/// Lance le script de packaging en thread de fond ; renvoie le canal de log et
+/// le processus partagé (pour « Annuler », roadmap 6.3).
 /// La `BuildConfig` est transmise via variables d'environnement.
-fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
+fn run(target: Target, cfg: BuildConfig, install: bool) -> (Receiver<LogMsg>, SharedChild) {
     let (tx, rx) = channel();
+    let shared: SharedChild = Arc::new(Mutex::new(None));
+    let slot = Arc::clone(&shared);
     // iOS + installation = chemin xcodebuild/devicectl dédié (build + signature + install).
     let script = if target == Target::Ios && install {
         "packaging/install_ios_device.sh"
@@ -1083,6 +1202,13 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             .env("MSAA", cfg.msaa.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Groupe de processus dédié : « Annuler » peut tuer bash et tous ses
+        // enfants d'un coup (`kill_process_tree`).
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         // Signature iOS : ne surcharge que les champs renseignés.
         if !cfg.ios_team_id.is_empty() {
             cmd.env("TEAM_ID", &cfg.ios_team_id);
@@ -1106,6 +1232,10 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
 
         // stderr lu dans un thread parallèle, fusionné au flux principal.
         let stderr = child.stderr.take();
+        let stdout = child.stdout.take();
+        // Publié pour « Annuler » une fois les tuyaux pris : le verrou n'est
+        // jamais tenu pendant la lecture.
+        *lock_child(&slot) = Some(child);
         let tx_err = tx.clone();
         let err_handle = stderr.map(|err| {
             std::thread::spawn(move || {
@@ -1115,7 +1245,7 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             })
         });
 
-        if let Some(out) = child.stdout.take() {
+        if let Some(out) = stdout {
             for line in BufReader::new(out).lines().map_while(Result::ok) {
                 let _ = tx.send(LogMsg::Line(line));
             }
@@ -1124,10 +1254,13 @@ fn run(target: Target, cfg: BuildConfig, install: bool) -> Receiver<LogMsg> {
             let _ = h.join();
         }
 
-        let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+        let ok = lock_child(&slot)
+            .take()
+            .and_then(|mut child| child.wait().ok())
+            .is_some_and(|status| status.success());
         let _ = tx.send(LogMsg::Done(ok));
     });
-    rx
+    (rx, shared)
 }
 
 #[cfg(test)]

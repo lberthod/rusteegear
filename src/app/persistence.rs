@@ -174,6 +174,15 @@ impl AppState {
         self.restart_game();
     }
 
+    /// Applique les réglages de vue persistés (roadmap post-audit UX v2
+    /// 2026-09-04, 6.4) — au démarrage de l'éditeur, cf. `Settings::editor_view`.
+    pub fn apply_editor_view(&mut self, view: &super::settings::EditorView) {
+        self.show_grid = view.grid;
+        self.snap = view.snap;
+        self.gizmo_mode = view.gizmo;
+        self.debug_view = view.debug_view;
+    }
+
     /// Cible de « 💾 Enregistrer » / Cmd+S : la scène de démarrage du projet
     /// ouvert (roadmap post-audit UX 2026-09-04, 1.1), sinon le fichier auquel
     /// la scène est liée (« Ouvrir… » / « Enregistrer sous… », roadmap
@@ -352,22 +361,106 @@ impl AppState {
         Ok(self.scene.objects.len())
     }
 
-    /// Ouvre un projet (Sprint 3) : charge et valide
-    /// `<dir>/project.rusteegear.json`, résout sa scène de démarrage, la charge,
-    /// puis pose `current_project`. Synchrone comme `load_from_blocking` — un
-    /// projet s'ouvre sur une action utilisateur déliberée (menu, wizard), pas
-    /// dans un chemin sensible à la latence comme le pont de pilotage ; pas
-    /// besoin du thread de fond de `load_from`.
-    pub fn open_project(&mut self, dir: &std::path::Path) -> Result<usize, String> {
+    /// Lit le manifeste d'un projet et charge sa scène de démarrage — la partie
+    /// **sans état** de l'ouverture, partagée par `open_project` (synchrone) et
+    /// `open_project_async` (thread de fond, roadmap post-audit UX v2
+    /// 2026-09-04, 6.1). Ne touche pas `self` : peut tourner hors du thread UI.
+    fn read_project(dir: &std::path::Path) -> Result<(crate::project::ProjectRoot, Scene), String> {
         let manifest = crate::project::ProjectManifest::load(dir)?;
         let scene_path = manifest.resolve_main_scene(dir)?;
-        let count = self.load_from_blocking(&scene_path.to_string_lossy())?;
-        self.current_project = Some(crate::project::ProjectRoot {
-            name: manifest.name,
-            root: dir.to_path_buf(),
-            main_scene_path: scene_path,
+        let path = scene_path.to_string_lossy().into_owned();
+        let mut scene = Scene::load(&path).map_err(|e| format!("{path} : {e}"))?;
+        scene.reload_imported();
+        Ok((
+            crate::project::ProjectRoot {
+                name: manifest.name,
+                root: dir.to_path_buf(),
+                main_scene_path: scene_path,
+            },
+            scene,
+        ))
+    }
+
+    /// Installe un projet lu par `read_project` : scène, fichier lié, sélection,
+    /// drapeaux, `current_project`. Renvoie le nombre d'objets.
+    fn install_project(&mut self, project: crate::project::ProjectRoot, scene: Scene) -> usize {
+        self.scene = scene;
+        self.scene_file = Some(project.main_scene_path.clone());
+        self.clear_selection();
+        self.async_load.imported_dirty = true;
+        self.scene_dirty = false;
+        self.current_project = Some(project);
+        self.scene.objects.len()
+    }
+
+    /// Ouvre un projet **en thread de fond** (roadmap post-audit UX v2
+    /// 2026-09-04, 6.1) : la barre d'état affiche « Ouverture de X… » et les
+    /// panneaux sont grisés (`busy_label`) jusqu'à ce que `poll_imports`
+    /// installe la scène — avant, `open_project` bloquait le rendu le temps de
+    /// lire une scène de plusieurs Mo. Le résultat (récents, modale d'erreur)
+    /// est à relever par `take_project_open_outcome`. Ignoré si une ouverture
+    /// ou une duplication est déjà en cours.
+    pub fn open_project_async(&mut self, dir: &std::path::Path) {
+        if self.async_load.busy.is_some() {
+            log::warn!("Une opération de projet est déjà en cours — ouverture ignorée.");
+            return;
+        }
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| dir.display().to_string());
+        self.async_load.busy = Some(format!("Ouverture de {name}…"));
+        let tx = self.async_load.project_tx.clone();
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            let res = Self::read_project(&dir).map_err(|e| (dir, e));
+            let _ = tx.send(res);
         });
-        Ok(count)
+    }
+
+    /// Résultat de la dernière `open_project_async` terminée : `Ok(nombre
+    /// d'objets)` ou `Err((dossier, message))` — consommé une fois par
+    /// `gfx::renderer` pour noter le projet dans les récents ou ouvrir la
+    /// modale d'erreur (même suite qu'après `open_project`).
+    pub fn take_project_open_outcome(
+        &mut self,
+    ) -> Option<Result<usize, (std::path::PathBuf, String)>> {
+        self.async_load.project_outcome.take()
+    }
+
+    /// Libellé de la tâche de fond en cours pour la barre d'état (roadmap
+    /// 6.1/6.2) : ouverture/duplication de projet d'abord (bloquantes), sinon
+    /// « Import de X… » (le premier des imports glTF en cours, avec le nombre
+    /// des autres), sinon `None`.
+    pub fn busy_label(&self) -> Option<String> {
+        if let Some(busy) = &self.async_load.busy {
+            return Some(busy.clone());
+        }
+        let first = self.async_load.importing.first()?;
+        let others = self.async_load.importing.len() - 1;
+        Some(if others == 0 {
+            format!("Import de {first}…")
+        } else {
+            format!("Import de {first}… (+{others})")
+        })
+    }
+
+    /// Un libellé de `busy_label` désigne-t-il une tâche qui va remplacer la
+    /// scène (ouverture/duplication de projet) ? L'éditeur grise alors ses
+    /// panneaux ; un import glTF ne bloque rien.
+    pub fn busy_label_blocks_ui(label: &str) -> bool {
+        label.starts_with("Ouverture de ") || label.starts_with("Duplication de ")
+    }
+
+    /// Ouvre un projet (Sprint 3) : charge et valide
+    /// `<dir>/project.rusteegear.json`, résout sa scène de démarrage, la charge,
+    /// puis pose `current_project`. Synchrone comme `load_from_blocking` — pour
+    /// le démarrage (dernier projet rouvert), la création de projet (scène
+    /// tout juste écrite, lecture immédiate) et les tests ; l'éditeur, lui,
+    /// passe par `open_project_async` (roadmap 6.1).
+    pub fn open_project(&mut self, dir: &std::path::Path) -> Result<usize, String> {
+        let (project, scene) = Self::read_project(dir)?;
+        Ok(self.install_project(project, scene))
     }
 
     /// Crée un projet (Sprint 4) : dossier `<location>/<nom assaini>/`, peuplé
@@ -452,12 +545,19 @@ impl AppState {
     /// avec un manifeste renommé — le projet ouvert dans l'éditeur n'est pas
     /// affecté (pas de bascule automatique sur la copie, comme un « Dupliquer »
     /// de Finder). Erreur si aucun projet n'est ouvert ou si la destination
-    /// existe déjà.
+    /// existe déjà. Synchrone (tests, pilotage) ; l'éditeur passe par
+    /// `duplicate_project_async` (roadmap 6.1).
     pub fn duplicate_project(&mut self) -> Result<std::path::PathBuf, String> {
         let project = self
             .current_project
             .clone()
             .ok_or("aucun projet ouvert à dupliquer")?;
+        Self::copy_project(&project)
+    }
+
+    /// Copie du projet sur disque (`<nom> copie`, manifeste renommé) — partie
+    /// sans état de `duplicate_project`, exécutable hors du thread UI.
+    fn copy_project(project: &crate::project::ProjectRoot) -> Result<std::path::PathBuf, String> {
         let new_name = format!("{} copie", project.name);
         let parent = project
             .root
@@ -475,10 +575,41 @@ impl AppState {
         Ok(dst)
     }
 
-    /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le rendu).
+    /// `duplicate_project` en thread de fond (roadmap post-audit UX v2
+    /// 2026-09-04, 6.1) : « Duplication de X… » dans la barre d'état, panneaux
+    /// grisés, résultat journalisé (toast) par `poll_imports` — copier un
+    /// dossier d'assets de plusieurs centaines de Mo figeait la fenêtre.
+    pub fn duplicate_project_async(&mut self) {
+        let Some(project) = self.current_project.clone() else {
+            log::error!("Duplication du projet échouée : aucun projet ouvert à dupliquer");
+            return;
+        };
+        if self.async_load.busy.is_some() {
+            log::warn!("Une opération de projet est déjà en cours — duplication ignorée.");
+            return;
+        }
+        self.async_load.busy = Some(format!("Duplication de {}…", project.name));
+        let tx = self.async_load.duplicate_tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Self::copy_project(&project));
+        });
+    }
+
+    /// Nom court d'un fichier pour la barre d'état (« Import de X… »).
+    fn short_file_name(path: &str) -> String {
+        std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string())
+    }
+
+    /// Lance l'import d'un modèle glTF/GLB en thread de fond (sans bloquer le
+    /// rendu). « Import de X… » reste dans la barre d'état jusqu'au résultat
+    /// (roadmap post-audit UX v2 2026-09-04, 6.2).
     pub fn import_gltf(&mut self, path: &str) {
         let tx = self.async_load.import_tx.clone();
         let p = path.to_string();
+        self.async_load.importing.push(Self::short_file_name(path));
         std::thread::spawn(move || {
             // Même principe que `load_from` (Phase C5) : l'erreur cite le fichier
             // et une piste — un « Import glTF échoué : invalid magic » sans chemin
@@ -491,16 +622,36 @@ impl AppState {
                          (export Blender : glTF 2.0) ? La scène n'a pas été modifiée."
                     )
                 });
-            let _ = tx.send(res);
+            let _ = tx.send((p, res));
         });
     }
 
     /// Récupère les imports terminés et les ajoute à la scène (appelé chaque frame).
     pub(super) fn poll_imports(&mut self) {
-        while let Ok(res) = self.async_load.import_rx.try_recv() {
+        while let Ok((requested, res)) = self.async_load.import_rx.try_recv() {
+            let name = Self::short_file_name(&requested);
+            if let Some(pos) = self.async_load.importing.iter().position(|n| *n == name) {
+                self.async_load.importing.remove(pos);
+            }
             match res {
                 Ok((path, data, min, max)) => self.finish_import(path, data, min, max),
                 Err(e) => log::error!("Import glTF échoué : {e}"),
+            }
+        }
+        // projet ouvert en arrière-plan (roadmap 6.1) prêt cette frame
+        while let Ok(res) = self.async_load.project_rx.try_recv() {
+            self.async_load.busy = None;
+            self.async_load.project_outcome = Some(match res {
+                Ok((project, scene)) => Ok(self.install_project(project, scene)),
+                Err(e) => Err(e),
+            });
+        }
+        // duplication de projet en arrière-plan (roadmap 6.1) terminée
+        while let Ok(res) = self.async_load.duplicate_rx.try_recv() {
+            self.async_load.busy = None;
+            match res {
+                Ok(dst) => log::info!("Projet dupliqué dans {}", dst.display()),
+                Err(e) => log::error!("Duplication du projet échouée : {e}"),
             }
         }
         // scènes chargées en arrière-plan (Load) prêtes cette frame
@@ -530,6 +681,9 @@ impl AppState {
             .and_then(|s| s.to_str())
             .unwrap_or("Modèle")
             .to_string();
+        // Toast de fin d'import (roadmap post-audit UX v2 2026-09-04, 6.2) —
+        // ce module est dans le filtre des toasts (`editor::toasts`).
+        log::info!("« {name} » importé ({} triangles)", data.indices.len() / 3);
         let idx = self.scene.imported.len() as u32;
         let mut imported = ImportedMesh {
             name: name.clone(),

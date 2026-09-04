@@ -41,6 +41,15 @@ fn object_badges(obj: &crate::scene::SceneObject) -> String {
     b
 }
 
+/// Nom retenu à la validation d'un renommage : espaces rognés, et `None` si
+/// vide — un objet sans nom est introuvable dans la hiérarchie, le renommage
+/// est alors refusé et l'ancien nom conservé (roadmap post-audit UX v2
+/// 2026-09-04, 6.5).
+fn accepted_rename(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Hiérarchie ergonomique : recherche, **groupes définis par l'utilisateur** avec
 /// glisser-déposer des objets, icônes et badges (physique/script/audio).
 #[allow(clippy::too_many_arguments)] // panneau d'UI : états distincts à muter
@@ -94,6 +103,14 @@ pub(super) fn hierarchy_panel(
     // Mutations différées (appliquées après l'UI pour éviter les conflits d'emprunt).
     let mut moves: Vec<(usize, String)> = Vec::new();
     let mut commit_rename: Vec<(usize, String)> = Vec::new();
+    let mut cancel_rename = false;
+    // Objets affichés toutes sections confondues — pour l'état « aucun
+    // résultat » du filtre (roadmap post-audit UX v2 2026-09-04, 6.5).
+    let mut shown = 0usize;
+    // Échap lu **avant** le champ de renommage : `TextEdit` consomme la touche
+    // en rendant le focus, et `lost_focus()` seul ne distingue pas Entrée
+    // d'Échap (roadmap 6.5 — avant, Échap validait le renommage).
+    let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -113,6 +130,7 @@ pub(super) fn hierarchy_panel(
                             && (needle.is_empty() || o.name.to_lowercase().contains(&needle))
                     })
                     .collect();
+                shown += items.len();
 
                 // La zone de dépôt couvre tout le groupe : déposer un objet l'y assigne.
                 let (_, payload) = ui.dnd_drop_zone::<usize, ()>(egui::Frame::default(), |ui| {
@@ -132,8 +150,10 @@ pub(super) fn hierarchy_panel(
                                                 .desired_width(f32::INFINITY),
                                         );
                                         r.request_focus();
-                                        // Valide à la perte de focus (Entrée ou clic ailleurs).
-                                        if r.lost_focus() {
+                                        // Échap annule ; Entrée ou clic ailleurs valide.
+                                        if escape_pressed {
+                                            cancel_rename = true;
+                                        } else if r.lost_focus() {
                                             commit_rename.push((*ri, buf.clone()));
                                         }
                                         continue;
@@ -249,6 +269,14 @@ pub(super) fn hierarchy_panel(
             }
             if scene.objects.is_empty() {
                 ui.weak("(scène vide)");
+            } else if shown == 0 && !needle.is_empty() {
+                // Filtre sans résultat (roadmap 6.5) : le dire, et offrir la
+                // sortie — avant, des groupes vides sans explication.
+                ui.add_space(6.0);
+                ui.label(format!("Aucun objet ne correspond à « {} »", filter.trim()));
+                if ui.button("Effacer le filtre").clicked() {
+                    filter.clear();
+                }
             }
         });
 
@@ -258,9 +286,12 @@ pub(super) fn hierarchy_panel(
             o.group = g;
         }
     }
-    // Renommage validé.
-    if let Some((idx, name)) = commit_rename.into_iter().next() {
-        if let Some(o) = scene.objects.get_mut(idx) {
+    // Renommage : annulé par Échap, validé sinon — un nom vide est refusé,
+    // l'objet garde son nom (roadmap 6.5).
+    if cancel_rename {
+        *rename = None;
+    } else if let Some((idx, name)) = commit_rename.into_iter().next() {
+        if let (Some(o), Some(name)) = (scene.objects.get_mut(idx), accepted_rename(&name)) {
             o.name = name;
         }
         *rename = None;
@@ -321,6 +352,18 @@ pub(super) fn hierarchy_panel(
 
 #[cfg(test)]
 mod tests {
+    /// Roadmap 6.5 : un nom vide (ou fait d'espaces) est refusé, les autres
+    /// sont rognés.
+    #[test]
+    fn empty_rename_is_refused_and_names_are_trimmed() {
+        assert_eq!(super::accepted_rename(""), None);
+        assert_eq!(super::accepted_rename("   "), None);
+        assert_eq!(
+            super::accepted_rename("  Caisse 2 "),
+            Some("Caisse 2".to_string())
+        );
+    }
+
     /// Rejoue un clic réaliste (appui à une frame, relâchement à la suivante,
     /// pointeur immobile) sur un widget construit par `build`, et rapporte
     /// `clicked()` observé à la frame du relâchement.

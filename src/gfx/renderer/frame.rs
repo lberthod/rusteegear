@@ -387,6 +387,27 @@ impl Renderer {
                 Some(output)
             }
         } else {
+            // Ouverture de projet en thread de fond terminée (roadmap
+            // post-audit UX v2 2026-09-04, 6.1) : même suite qu'après
+            // `open_project` — récents, journal, ou modale d'erreur (3.8).
+            if let Some(outcome) = app.take_project_open_outcome() {
+                match outcome {
+                    Ok(count) => {
+                        if let Some(project) = &app.current_project {
+                            editor.note_recent_project(&project.name, &project.root);
+                            log::info!("Projet « {} » ouvert ({count} objets)", project.name);
+                        }
+                    }
+                    Err((dir, e)) => {
+                        let msg = format!(
+                            "Le projet n'a pas pu être ouvert.\n\n{}\n\n{e}",
+                            dir.display()
+                        );
+                        log::error!("Ouverture du projet échouée : {e}");
+                        editor.set_open_error(msg);
+                    }
+                }
+            }
             let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
             let save_target = app.save_target();
             let suggested_save_name = app.suggested_save_name();
@@ -411,6 +432,8 @@ impl Renderer {
                 has_undo: app.has_undo(),
                 has_redo: app.has_redo(),
                 has_clipboard: app.has_clipboard(),
+                busy: app.busy_label(),
+                autosave_age_secs: app.autosave_age_secs(),
             };
             let net_status = app.net_conn.net_status.clone();
             let net_connected = app.is_connected();
@@ -1000,10 +1023,9 @@ fn apply_editor_actions(
         }
     }
     if actions.duplicate_project {
-        match app.duplicate_project() {
-            Ok(dst) => log::info!("Projet dupliqué dans {}", dst.display()),
-            Err(e) => log::error!("Duplication du projet échouée : {e}"),
-        }
+        // Thread de fond + « Duplication de X… » (roadmap 6.1) ; le résultat
+        // est journalisé par `poll_imports`.
+        app.duplicate_project_async();
     }
     if actions.reveal_project_in_finder
         && let Some(project) = &app.current_project
@@ -1236,7 +1258,9 @@ fn apply_editor_actions(
     }
     if let Some(cmd) = actions.console_command {
         let result = app.run_console_command(&cmd);
-        log::info!("> {cmd}\n{result}");
+        // Cible non toastée (roadmap post-audit UX v2 2026-09-04, 6.2) : la
+        // réponse se lit dans la Console, d'où la commande vient.
+        log::info!(target: crate::editor::toasts::CONSOLE_TARGET, "> {cmd}\n{result}");
     }
     if let Some(clip) = actions.play_audio {
         app.play_audio(&clip);
@@ -1266,6 +1290,14 @@ fn apply_editor_actions(
         app.reorder_object(from, to);
     }
     if actions.focus_selection {
+        app.frame_selected();
+    }
+    // Ligne du contrôle qualité APK cliquée (roadmap 6.3) : sélectionner et
+    // cadrer l'objet fautif.
+    if let Some(i) = actions.focus_object
+        && i < app.scene.objects.len()
+    {
+        app.select_single(i);
         app.frame_selected();
     }
     if let Some((idx, req)) = actions.ai_generate {
@@ -1373,25 +1405,10 @@ fn perform_scene_switch(
             } else {
                 picked
             };
-            match app.open_project(dir) {
-                Ok(count) => {
-                    if let Some(project) = &app.current_project {
-                        editor.note_recent_project(&project.name, &project.root);
-                        log::info!("Projet « {} » ouvert ({count} objets)", project.name);
-                    }
-                }
-                // Modale plutôt que toast (roadmap post-audit UX v2
-                // 2026-09-04, 3.8) : le chemin et la cause doivent rester
-                // lisibles le temps de comprendre.
-                Err(e) => {
-                    let msg = format!(
-                        "Le projet n'a pas pu être ouvert.\n\n{}\n\n{e}",
-                        dir.display()
-                    );
-                    log::error!("Ouverture du projet échouée : {e}");
-                    editor.set_open_error(msg);
-                }
-            }
+            // Thread de fond + « Ouverture de X… » (roadmap post-audit UX v2
+            // 2026-09-04, 6.1) ; la suite (récents, ou modale d'erreur 3.8) est
+            // traitée au retour par `take_project_open_outcome`, plus haut.
+            app.open_project_async(dir);
         }
         SceneSwitch::CreateProject(req) => {
             match app.create_project(&req.location, &req.name, req.template) {

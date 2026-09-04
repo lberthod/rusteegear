@@ -2,17 +2,19 @@
 //! Encapsule toute la plomberie egui-winit / egui-wgpu.
 
 pub mod export;
+mod file_dialogs;
 mod hierarchy;
 mod hud;
 mod menus;
 mod readiness;
-mod toasts;
+pub mod toasts;
 mod windows;
 
 use egui::ViewportId;
 use glam::{EulerRot, Quat};
 use winit::window::Window;
 
+use file_dialogs::{DialogTarget, FileDialogs};
 use hierarchy::hierarchy_panel;
 use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
@@ -236,16 +238,29 @@ pub struct Editor {
     /// vaincu, un appui (front montant) passe à l'allié suivant, comme la
     /// touche de saut au clavier (`lib.rs`).
     jump_touch_was_held: bool,
+    /// Sélecteurs de fichiers natifs en cours (asynchrones, roadmap post-audit
+    /// UX v2 2026-09-04, 6.1) — relevés en tête de `run`.
+    file_dialogs: FileDialogs,
+    /// Dernière écriture de la disposition egui (fenêtres, panneaux) sur
+    /// disque — cf. `save_layout` (roadmap 6.4).
+    last_layout_save: crate::time_compat::Instant,
 }
 
 impl Drop for Editor {
     /// Sprint 7 : un serveur local oublié en arrière-plan après avoir fermé
     /// l'éditeur serait un processus fantôme qui garde le port occupé (et
     /// tourne pour rien) — `stop_local_server` tue et attend le process.
+    /// La disposition des fenêtres est écrite une dernière fois (roadmap 6.4).
     fn drop(&mut self) {
         self.stop_local_server();
+        self.save_layout();
     }
 }
+
+/// Intervalle entre deux écritures de la disposition egui pendant la session
+/// (roadmap 6.4) — en plus de l'écriture à la fermeture, pour qu'un plantage
+/// ou un `kill` ne perde pas une disposition soignée.
+const LAYOUT_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Intervalle minimal entre deux rafraîchissements automatiques du chat de
 /// salon (Sprint F-12) : assez court pour rester réactif, assez long pour ne
@@ -297,6 +312,10 @@ struct Panels {
     readiness: bool,
     /// Résultats du dernier « APK Readiness Check » (vide tant qu'on n'a pas analysé).
     readiness_results: Vec<readiness::Check>,
+    /// Dernière ligne du contrôle qualité cliquée `(ligne, rang de l'objet)` —
+    /// un nouveau clic sur la même ligne passe à l'objet suivant (roadmap
+    /// post-audit UX v2 2026-09-04, 6.3).
+    readiness_cursor: Option<(usize, usize)>,
     /// Fenêtre « Paramètres » (clé API…).
     settings: bool,
     /// Fenêtre « Générer une scène (IA) ».
@@ -459,6 +478,26 @@ pub struct StatusInfo<'a> {
     pub has_undo: bool,
     pub has_redo: bool,
     pub has_clipboard: bool,
+    /// Tâche de fond en cours à afficher dans la barre d'état — « Ouverture de
+    /// X… », « Duplication de X… », « Import de X… » (`AppState::busy_label`,
+    /// roadmap post-audit UX v2 2026-09-04, 6.1/6.2). Ouverture/duplication
+    /// grisent aussi les panneaux le temps de finir.
+    pub busy: Option<String>,
+    /// Secondes écoulées depuis la dernière sauvegarde automatique réussie
+    /// (`AppState::autosave_age_secs`, roadmap 6.2) — affichée discrètement
+    /// dans la barre d'état.
+    pub autosave_age_secs: Option<u64>,
+}
+
+impl StatusInfo<'_> {
+    /// La tâche de fond en cours va remplacer la scène (ouverture/duplication
+    /// de projet) : les panneaux sont grisés le temps qu'elle finisse. Un
+    /// import glTF ne bloque rien (il s'ajoute à la scène courante).
+    pub fn busy_blocks_ui(&self) -> bool {
+        self.busy
+            .as_deref()
+            .is_some_and(crate::app::AppState::busy_label_blocks_ui)
+    }
 }
 
 /// Demande de création de projet posée par l'assistant « Nouveau projet »
@@ -764,6 +803,9 @@ pub struct UiActions {
     /// dessus (même effet que la touche F), pour voir immédiatement ce qu'on
     /// vient de sélectionner sans chercher à l'écran.
     pub focus_selection: bool,
+    /// Sélectionner **et** cadrer cet objet — ligne du contrôle qualité APK
+    /// cliquée (roadmap post-audit UX v2 2026-09-04, 6.3).
+    pub focus_object: Option<usize>,
     /// Toolbar « Run Device » : ouvrir le panneau de build et installer sur l'appareil.
     pub run_device: bool,
     /// Menu « Paramètres projet » : ouvrir aussi la fenêtre Paramètres (clé IA…).
@@ -819,6 +861,10 @@ pub struct UiActions {
 impl Editor {
     pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat, window: &Window) -> Self {
         let ctx = egui::Context::default();
+        // Disposition de la session précédente (position/taille de chaque
+        // fenêtre flottante, largeur des panneaux, sections repliées) —
+        // roadmap post-audit UX v2 2026-09-04, 6.4.
+        load_layout(&ctx);
         let winit_state = egui_winit::State::new(
             ctx.clone(),
             ViewportId::ROOT,
@@ -895,6 +941,8 @@ impl Editor {
             net_banner: None,
             pause_restart_confirm: false,
             jump_touch_was_held: false,
+            file_dialogs: FileDialogs::default(),
+            last_layout_save: crate::time_compat::Instant::now(),
         };
         // `settings.json` illisible, copié en `.bak` (roadmap post-audit UX v2
         // 2026-09-04, 3.8) : signalé en toast — journalisé **après** la
@@ -1687,13 +1735,42 @@ impl Editor {
         // même code que les entrées du menu Fichier correspondantes.
         match shortcut {
             Some(crate::app::EditorShortcut::SaveAs) => {
-                menus::dialog_save_as(&mut actions, status.suggested_save_name)
+                menus::dialog_save_as(&mut self.file_dialogs, status.suggested_save_name)
             }
-            Some(crate::app::EditorShortcut::Open) => menus::dialog_open(&mut actions),
+            Some(crate::app::EditorShortcut::Open) => {
+                menus::dialog_open(&mut self.file_dialogs, &mut actions)
+            }
             Some(crate::app::EditorShortcut::NewProject) => {
                 self.panels.new_project_wizard = true;
             }
             None => {}
+        }
+        // Sélecteurs de fichiers refermés depuis la frame précédente (roadmap
+        // post-audit UX v2 2026-09-04, 6.1) : leur réponse devient l'action ou
+        // la mutation qu'un sélecteur bloquant produisait autrefois sur place.
+        for (target, path) in self.file_dialogs.poll() {
+            if let Some(path) = path {
+                apply_dialog_result(
+                    target,
+                    path,
+                    scene,
+                    &mut actions,
+                    &mut self.export,
+                    &mut self.panels,
+                );
+            }
+        }
+        // Réglages de vue persistés (grille, aimantation, outil, vue de debug —
+        // roadmap 6.4) : une écriture par changement, pas par frame.
+        let view_now = crate::app::settings::EditorView {
+            grid: status.grid,
+            snap: status.snap,
+            gizmo: *gizmo_mode,
+            debug_view: status.debug_view,
+        };
+        if view_now != self.settings.editor_view {
+            self.settings.editor_view = view_now;
+            self.settings.save();
         }
 
         // Sprint 7 : lu avant les emprunts `&mut self.<champ>` ci-dessous (des
@@ -1726,6 +1803,7 @@ impl Editor {
         let hud_image_cache = &mut self.hud_image_cache;
         let hud_widget_new_id = &mut self.hud_widget_new_id;
         let crash_log_text = &mut self.crash_log_text;
+        let file_dialogs = &mut self.file_dialogs;
         self.toasts.pump(panels.console);
         let toasts = &mut self.toasts;
         let pending_switch_label = self.pending_switch.as_ref().map(|s| s.label());
@@ -1814,8 +1892,14 @@ impl Editor {
                 pending_switch_label,
                 spectating,
                 editor_welcome,
+                file_dialogs,
             );
         });
+        // Disposition egui écrite périodiquement (roadmap 6.4), cf.
+        // `LAYOUT_SAVE_INTERVAL`.
+        if self.last_layout_save.elapsed() >= LAYOUT_SAVE_INTERVAL {
+            self.save_layout();
+        }
         // « Retirer de la liste » d'un projet récent introuvable (roadmap 3.8) :
         // traité ici, après l'UI, parce que le menu emprunte `settings` en
         // lecture pendant la construction.
@@ -2045,6 +2129,8 @@ fn build_ui(
     spectating: Option<&str>,
     // Écran d'accueil sans projet (roadmap post-audit UX v2 2026-09-04, 3.1).
     editor_welcome: &mut bool,
+    // Sélecteurs de fichiers asynchrones (roadmap 6.1).
+    dialogs: &mut FileDialogs,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -2179,7 +2265,7 @@ fn build_ui(
         actions,
     );
     // Fenêtre « Nouveau projet » guidée (Sprint 113d).
-    windows::new_project_wizard_window(root.ctx(), panels, settings, actions);
+    windows::new_project_wizard_window(root.ctx(), panels, settings, actions, dialogs);
     // Fenêtre « Ajouter un objet » simplifiée (Sprint 113d).
     windows::add_object_cards_window(root.ctx(), panels, scene, actions);
     optimize_window(root.ctx(), panels, scene, actions);
@@ -2199,7 +2285,7 @@ fn build_ui(
     windows::optimize_confirm_popup(root.ctx(), panels, actions);
 
     // Fenêtre flottante « 📦 Compiler & exporter ».
-    export.ui(root.ctx(), scene, settings);
+    export.ui(root.ctx(), scene, settings, dialogs);
     // Fenêtres des menus « Aide » et « Outils » (raccourcis, diagnostic, console, profiler, qualité APK).
     tool_windows(
         root.ctx(),
@@ -2248,6 +2334,24 @@ fn build_ui(
                 }
                 (None, false) => "Scène sans fichier — Cmd+S ouvre « Enregistrer sous… »".to_string(),
             });
+            // Tâche de fond (ouverture/duplication de projet, import glTF —
+            // roadmap post-audit UX v2 2026-09-04, 6.1/6.2) : avant, la
+            // fenêtre se figeait sans un mot le temps de l'opération.
+            if let Some(busy) = &status.busy {
+                ui.separator();
+                ui.spinner();
+                ui.label(busy);
+            }
+            // Dernière sauvegarde automatique réussie, discrète (roadmap 6.2) —
+            // avant, l'autosave tournait sans aucune trace à l'écran.
+            if let Some(age) = status.autosave_age_secs {
+                ui.separator();
+                ui.weak(format!("💾 auto {}", human_age(age)))
+                    .on_hover_text(
+                        "Sauvegarde automatique (toutes les 2 min quand la scène est modifiée), \
+                         proposée en restauration au prochain lancement si besoin",
+                    );
+            }
             // Erreurs non vues depuis la dernière ouverture de la Console
             // (roadmap post-audit UX 2026-09-04, 1.2).
             if toasts.unseen_errors > 0 {
@@ -2268,6 +2372,14 @@ fn build_ui(
         });
     });
 
+    // Ouverture/duplication de projet en cours (roadmap 6.1) : menus,
+    // barre d'outils, hiérarchie et inspecteur grisés jusqu'au résultat — la
+    // scène va être remplacée, une édition maintenant serait perdue. La barre
+    // d'état ci-dessus reste lisible (elle porte l'indicateur).
+    if status.busy_blocks_ui() {
+        root.disable();
+    }
+
     // --- Barre de menus (style application de bureau) ---
     egui::Panel::top("menubar").show_inside(root, |ui| {
         ui.horizontal(|ui| {
@@ -2275,13 +2387,14 @@ fn build_ui(
                 ui,
                 export,
                 actions,
+                dialogs,
                 has_project,
                 settings.recent_projects_with_status(),
                 status.suggested_save_name,
                 *playing,
             );
             menu_edition(ui, selection, status, actions);
-            menu_ajouter(ui, scene, *selection, actions);
+            menu_ajouter(ui, scene, *selection, actions, dialogs);
             menu_outils(ui, gizmo_mode, export, panels, actions);
             menu_aide(ui, panels);
         });
@@ -2349,7 +2462,7 @@ fn build_ui(
 
     if show_panels {
         inspector_panel(
-            root, scene, selection, status, panels, settings, ai_prompt, *playing, actions,
+            root, scene, selection, status, panels, settings, ai_prompt, *playing, actions, dialogs,
         );
     }
 
@@ -2637,6 +2750,7 @@ fn inspector_panel(
     ai_prompt: &mut String,
     playing: bool,
     actions: &mut UiActions,
+    dialogs: &mut FileDialogs,
 ) {
     // Pendant Play, l'inspecteur reste éditable mais tout est écrasé au Stop
     // (retour au `play_snapshot`) : fond teinté + mention, comme Unity
@@ -2838,13 +2952,13 @@ fn inspector_panel(
                         ui.horizontal(|ui| {
                             ui.label("Texture");
                             if ui.button("Choisir…").clicked() {
-                                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-                                if let Some(p) = rfd::FileDialog::new()
-                                    .add_filter("Image", &["png", "jpg", "jpeg"])
-                                    .pick_file()
-                                {
-                                    obj.texture = p.to_string_lossy().into_owned();
-                                }
+                                dialogs.open(
+                                    file_dialogs::DialogRequest::PickFile {
+                                        filter: "Image",
+                                        extensions: &["png", "jpg", "jpeg"],
+                                    },
+                                    DialogTarget::ObjectTexture { index: i },
+                                );
                             }
                             if !obj.texture.is_empty() && ui.button("✕").clicked() {
                                 obj.texture.clear();
@@ -3052,7 +3166,6 @@ fn inspector_panel(
                         });
                         ui.separator();
                         ui.collapsing("Audio", |ui| {
-                            use crate::scene::AudioSource;
                             let clip = obj
                                 .audio
                                 .as_ref()
@@ -3060,14 +3173,16 @@ fn inspector_panel(
                                 .unwrap_or_default();
                             ui.horizontal(|ui| {
                                 if ui.button("Choisir un son…").clicked() {
-                                    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-                                    if let Some(p) = rfd::FileDialog::new()
-                                        .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
-                                        .pick_file()
-                                    {
-                                        obj.audio.get_or_insert_with(AudioSource::default).clip =
-                                            p.to_string_lossy().into_owned();
-                                    }
+                                    dialogs.open(
+                                        file_dialogs::DialogRequest::PickFile {
+                                            filter: "Audio",
+                                            extensions: &["wav", "ogg", "flac", "mp3"],
+                                        },
+                                        DialogTarget::ObjectAudio {
+                                            index: i,
+                                            normalize: false,
+                                        },
+                                    );
                                 }
                                 if !clip.is_empty() && ui.button("▶ Tester").clicked() {
                                     actions.play_audio = Some(clip.to_string());
@@ -3362,7 +3477,14 @@ fn inspector_panel(
                         }
                     }
                     _ => {
-                        ui.label("Aucun objet sélectionné.");
+                        // État vide utile (roadmap post-audit UX v2 2026-09-04,
+                        // 6.5) : dire quoi faire, et offrir le premier geste.
+                        ui.label(
+                            "Clique un objet dans la vue 3D ou la hiérarchie — ou ajoute-en un :",
+                        );
+                        if ui.button("➕ Cube").clicked() {
+                            actions.add = Some(MeshKind::Cube);
+                        }
                     }
                 }
                     });
@@ -3973,6 +4095,122 @@ fn confirmation_modals(
 /// Nom court de la scène pour la barre d'état : le nom du fichier cible, ou
 /// « Sans titre » sans fichier lié (roadmap post-audit UX v2 2026-09-04, 3.2 —
 /// même règle que `AppState::display_scene_name` pour le titre de la fenêtre).
+/// Réponse d'un sélecteur de fichiers refermé (roadmap post-audit UX v2
+/// 2026-09-04, 6.1) : reproduit exactement ce que le sélecteur bloquant faisait
+/// sur place — action `UiActions`, champ de l'objet, du panneau d'export ou du
+/// formulaire « Nouveau projet ». Un objet disparu entre-temps (supprimé
+/// pendant que le sélecteur était ouvert) est ignoré sans panique.
+fn apply_dialog_result(
+    target: DialogTarget,
+    path: std::path::PathBuf,
+    scene: &mut Scene,
+    actions: &mut UiActions,
+    export: &mut export::ExportPanel,
+    panels: &mut Panels,
+) {
+    let text = path.to_string_lossy().into_owned();
+    match target {
+        DialogTarget::OpenSceneOrProject => {
+            if crate::project::is_manifest_path(&path) {
+                actions.open_project_path = Some(text);
+            } else {
+                actions.load_path = Some(text);
+            }
+        }
+        DialogTarget::SaveAs => actions.save_path = Some(text),
+        DialogTarget::OpenProjectFolder => actions.open_project_path = Some(text),
+        DialogTarget::LocateRecent { forget } => {
+            actions.forget_recent_project = Some(forget);
+            actions.open_project_path = Some(text);
+        }
+        DialogTarget::ImportGltf => actions.import = Some(text),
+        DialogTarget::ObjectTexture { index } => {
+            if let Some(obj) = scene.objects.get_mut(index) {
+                obj.texture = text;
+            }
+        }
+        DialogTarget::ObjectAudio { index, normalize } => {
+            if let Some(obj) = scene.objects.get_mut(index) {
+                // Normalisation de loudness à l'import (Sprint 126) : mesure le
+                // gain une fois ici plutôt qu'à chaque lecture — `1.0` (aucun
+                // changement) si le fichier ne se lit pas encore ; `clip` pointe
+                // dessus quand même, l'éditeur gère un chemin audio invalide.
+                let gain = if normalize {
+                    std::fs::read(&path)
+                        .map(|bytes| crate::runtime::audio::normalize_gain(&bytes))
+                        .unwrap_or(1.0)
+                } else {
+                    obj.audio.as_ref().map(|a| a.gain).unwrap_or(1.0)
+                };
+                let audio = obj
+                    .audio
+                    .get_or_insert_with(crate::scene::AudioSource::default);
+                audio.clip = text;
+                audio.gain = gain;
+            }
+        }
+        DialogTarget::IosProfile => export.set_ios_profile(text),
+        DialogTarget::ExportAsset(asset) => export.set_asset_path(asset, text),
+        DialogTarget::NewProjectLocation => panels.new_project_location = Some(path),
+    }
+}
+
+/// Fichier de disposition egui (positions/tailles des fenêtres flottantes,
+/// largeur des panneaux, sections repliées) — roadmap post-audit UX v2
+/// 2026-09-04, 6.4. À côté de `settings.json` ; `None` sans dossier applicatif.
+/// Format RON comme eframe : la mémoire egui contient des maps à clés non
+/// textuelles (`ViewportIdMap`), que serde_json refuse de sérialiser.
+fn layout_path() -> Option<std::path::PathBuf> {
+    Some(crate::assets::app_data_dir()?.join("editor_layout.ron"))
+}
+
+/// Restaure la disposition de la session précédente dans `ctx` (cf.
+/// `layout_path`). Un fichier absent est le cas normal du premier lancement ;
+/// un fichier illisible (autre version d'egui) est ignoré avec un avertissement
+/// — la disposition par défaut reprend, rien n'est perdu d'important.
+fn load_layout(ctx: &egui::Context) {
+    let Some(path) = layout_path() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    match ron::from_str::<egui::Memory>(&text) {
+        Ok(memory) => ctx.memory_mut(|m| *m = memory),
+        Err(e) => log::warn!(
+            "Disposition de l'éditeur illisible ({}) : {e} — disposition par défaut.",
+            path.display()
+        ),
+    }
+}
+
+impl Editor {
+    /// Écrit la disposition egui courante (cf. `load_layout`) — à la fermeture
+    /// et toutes les `LAYOUT_SAVE_INTERVAL`. Silencieux en cas d'échec
+    /// d'écriture : un simple confort, pas une donnée utilisateur.
+    fn save_layout(&mut self) {
+        self.last_layout_save = crate::time_compat::Instant::now();
+        let Some(path) = layout_path() else {
+            return;
+        };
+        let text = match self.ctx.memory(ron::to_string) {
+            Ok(text) => text,
+            Err(e) => {
+                // Une fois par session suffit : la disposition n'est qu'un confort.
+                crate::log_buffer::warn_once(
+                    "editor_layout",
+                    &format!("Disposition de l'éditeur non enregistrable : {e}"),
+                );
+                return;
+            }
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, text);
+    }
+}
+
 fn scene_display_name(save_target: Option<&str>) -> String {
     save_target
         .map(|target| {
@@ -4240,6 +4478,160 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
 
 #[cfg(test)]
 mod tests {
+
+    /// Roadmap 6.1 : la réponse d'un sélecteur asynchrone produit exactement
+    /// l'action ou la mutation que le sélecteur bloquant faisait sur place.
+    #[test]
+    fn dialog_results_become_the_same_actions_as_the_old_blocking_pickers() {
+        let mut scene = Scene::default();
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Cube".into(),
+            ..Default::default()
+        });
+        let mut actions = UiActions::default();
+        let mut export = export::ExportPanel::new();
+        let mut panels = Panels::default();
+        let p = |s: &str| std::path::PathBuf::from(s);
+
+        apply_dialog_result(
+            DialogTarget::OpenSceneOrProject,
+            p("/tmp/x/scene.json"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(actions.load_path.as_deref(), Some("/tmp/x/scene.json"));
+        apply_dialog_result(
+            DialogTarget::OpenSceneOrProject,
+            p("/tmp/x/project.rusteegear.json"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(
+            actions.open_project_path.as_deref(),
+            Some("/tmp/x/project.rusteegear.json")
+        );
+        apply_dialog_result(
+            DialogTarget::LocateRecent {
+                forget: "/old".into(),
+            },
+            p("/new"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(actions.forget_recent_project.as_deref(), Some("/old"));
+        assert_eq!(actions.open_project_path.as_deref(), Some("/new"));
+        apply_dialog_result(
+            DialogTarget::SaveAs,
+            p("/tmp/out.json"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(actions.save_path.as_deref(), Some("/tmp/out.json"));
+        apply_dialog_result(
+            DialogTarget::ImportGltf,
+            p("/tmp/m.glb"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(actions.import.as_deref(), Some("/tmp/m.glb"));
+
+        // Champs d'objet, y compris un index disparu (aucune panique).
+        apply_dialog_result(
+            DialogTarget::ObjectTexture { index: 0 },
+            p("/tmp/t.png"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(scene.objects[0].texture, "/tmp/t.png");
+        apply_dialog_result(
+            DialogTarget::ObjectAudio {
+                index: 0,
+                normalize: true,
+            },
+            p("/tmp/absent.wav"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        let audio = scene.objects[0].audio.as_ref().expect("clip posé");
+        assert_eq!(audio.clip, "/tmp/absent.wav");
+        assert_eq!(audio.gain, 1.0, "fichier illisible : gain neutre");
+        apply_dialog_result(
+            DialogTarget::ObjectTexture { index: 42 },
+            p("/tmp/t.png"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+
+        // Panneau d'export et formulaire de projet.
+        apply_dialog_result(
+            DialogTarget::IosProfile,
+            p("/tmp/dev.mobileprovision"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(export.config().ios_profile, "/tmp/dev.mobileprovision");
+        apply_dialog_result(
+            DialogTarget::ExportAsset(file_dialogs::ExportAsset::Splash),
+            p("/tmp/splash.png"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(export.config().splash_path, "/tmp/splash.png");
+        apply_dialog_result(
+            DialogTarget::NewProjectLocation,
+            p("/tmp/projets"),
+            &mut scene,
+            &mut actions,
+            &mut export,
+            &mut panels,
+        );
+        assert_eq!(panels.new_project_location, Some(p("/tmp/projets")));
+    }
+
+    /// Roadmap 6.4 : la mémoire egui (fenêtres, panneaux) fait l'aller-retour
+    /// par le format du fichier de disposition — serde_json, lui, refuse ses
+    /// maps à clés non textuelles, d'où RON.
+    #[test]
+    fn egui_memory_round_trips_through_the_layout_format() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::Window::new("Fenêtre test")
+                .default_pos([120.0, 80.0])
+                .show(root.ctx(), |ui| {
+                    ui.label("x");
+                });
+        });
+        let text = ctx
+            .memory(ron::to_string)
+            .expect("mémoire egui sérialisable en RON");
+        let back: egui::Memory = ron::from_str(&text).expect("mémoire egui relisible");
+        let id = egui::Id::new("Fenêtre test");
+        assert_eq!(
+            back.area_rect(id).map(|r| r.min),
+            ctx.memory(|m| m.area_rect(id).map(|r| r.min)),
+            "la position de la fenêtre survit à l'aller-retour"
+        );
+    }
 
     /// Roadmap 3.2 : sans fichier lié, la barre d'état dit « Sans titre ».
     #[test]

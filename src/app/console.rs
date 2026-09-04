@@ -4,6 +4,24 @@ use glam::Vec3;
 
 use super::AppState;
 
+/// Aide de la Console (`help`, roadmap post-audit UX v2 2026-09-04, 6.5) :
+/// une ligne par commande, dans l'ordre de `run_console_command`.
+pub const CONSOLE_HELP: &str = "Commandes de la console :\n\
+  help                       cette liste\n\
+  timescale <v>              vitesse du temps simulé (0 = figé, 1 = normal, max 8)\n\
+  pause · play · stop        piloter le mode Play\n\
+  step [n]                   avancer de n pas fixes en pause\n\
+  tp <x> <y> <z>             téléporter la sélection\n\
+  select <nom>               sélectionner un objet par son nom\n\
+  spawn <prefab> <x> <y> <z> instancier un prefab\n\
+  health                     état de la barre de vie\n\
+  weapon <i>                 choisir l'arme i\n\
+  demo <nom> [--force]       charger une démo (mmorpg, gameplay, controleur, tower, temple, zombies, mobile, roguelike, brawl, boss, escorte, survie, components, hameau)\n\
+  restart                    recommencer la manche\n\
+  undo · redo                annuler / rétablir\n\
+  music <0..1> · sfx <0..1>  volumes\n\
+  net_stats                  état de la connexion réseau";
+
 /// Noms acceptés par `demo <nom>` (cf. `run_console_command`).
 const DEMO_NAMES: &[&str] = &[
     "mmorpg",
@@ -41,7 +59,7 @@ impl AppState {
     /// Commandes : `timescale <v>`, `pause`, `play`, `stop`, `step [n]`,
     /// `tp <x> <y> <z>`, `select <nom>`, `spawn <prefab> <x> <y> <z>`,
     /// `health`, `weapon <i>`, `demo <nom>`, `undo`, `redo`, `music <v>`,
-    /// `sfx <v>`, `net_stats`.
+    /// `sfx <v>`, `net_stats` — et `help`, qui les liste (`CONSOLE_HELP`).
     pub fn run_console_command(&mut self, cmd: &str) -> String {
         let mut parts = cmd.split_whitespace();
         let Some(name) = parts.next() else {
@@ -49,6 +67,7 @@ impl AppState {
         };
         let args: Vec<&str> = parts.collect();
         match name {
+            "help" | "?" | "aide" => CONSOLE_HELP.to_string(),
             "timescale" => match args.first().and_then(|a| a.parse::<f32>().ok()) {
                 Some(v) => {
                     self.time_scale = v.clamp(0.0, 8.0);
@@ -329,8 +348,9 @@ impl AppState {
                 }
             }
             other => format!(
-                "commande inconnue : « {other} » — timescale, pause, play, stop, step, tp, \
-                 select, spawn, health, weapon, demo, restart, undo, redo, music, sfx, net_stats"
+                "commande inconnue : « {other} » — tape help pour la liste (timescale, pause, \
+                 play, stop, step, tp, select, spawn, health, weapon, demo, restart, undo, redo, \
+                 music, sfx, net_stats)"
             ),
         }
     }
@@ -404,6 +424,37 @@ fn format_lua_value(v: &mlua::Value) -> String {
 mod tests {
     use super::*;
     use crate::scene::SceneObject;
+
+    /// Roadmap 6.5 : `help` liste chaque commande connue, et une commande
+    /// inconnue renvoie vers `help`.
+    #[test]
+    fn console_help_lists_every_command_and_unknown_points_to_it() {
+        let mut app = AppState::new();
+        let help = app.run_console_command("help");
+        for cmd in [
+            "timescale",
+            "pause",
+            "play",
+            "stop",
+            "step",
+            "tp",
+            "select",
+            "spawn",
+            "health",
+            "weapon",
+            "demo",
+            "restart",
+            "undo",
+            "redo",
+            "music",
+            "sfx",
+            "net_stats",
+        ] {
+            assert!(help.contains(cmd), "help ne mentionne pas {cmd}");
+        }
+        assert_eq!(app.run_console_command("aide"), help);
+        assert!(app.run_console_command("zork").contains("help"));
+    }
 
     #[test]
     fn console_timescale_sets_and_clamps() {

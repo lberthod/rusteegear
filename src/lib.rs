@@ -42,6 +42,10 @@ struct App {
     /// dans `renderer` au prochain événement via `adopt_pending_renderer`.
     #[cfg(target_arch = "wasm32")]
     pending_renderer: std::rc::Rc<std::cell::RefCell<Option<Renderer>>>,
+    /// Première frame déjà signalée à la coquille web (`signal_web_ready`,
+    /// roadmap post-audit UX v2 2026-09-04, 6.6).
+    #[cfg(target_arch = "wasm32")]
+    web_ready_signaled: bool,
     state: AppState,
     modifiers: winit::event::Modifiers,
     /// Dernier titre posé sur la fenêtre (cf. `AppState::window_title`) — on ne
@@ -583,6 +587,15 @@ impl ApplicationHandler for App {
                     }
                 }
                 renderer.render(&mut self.state);
+                // Première frame présentée (roadmap post-audit UX v2
+                // 2026-09-04, 6.6) : la coquille web (`packaging/web/index.html`)
+                // masque son voile de chargement sur ce signal plutôt qu'après
+                // un délai fixe — `window.__rusteegear_ready = true`.
+                #[cfg(target_arch = "wasm32")]
+                if !self.web_ready_signaled {
+                    self.web_ready_signaled = true;
+                    signal_web_ready();
+                }
                 // Fermeture demandée par le menu Fichier → Quitter.
                 if self.state.should_quit {
                     event_loop.exit();
@@ -1070,6 +1083,9 @@ fn make_app(player: bool) -> App {
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         {
             let settings = crate::app::settings::Settings::load();
+            // Grille, aimantation, outil, vue de debug de la dernière session
+            // (roadmap post-audit UX v2 2026-09-04, 6.4).
+            app.state.apply_editor_view(&settings.editor_view);
             if settings.reopen_last_project
                 && let Some(recent) = settings.existing_recent_projects().first()
             {
@@ -1284,6 +1300,20 @@ pub fn run_web() {
     let app = make_app(true);
     use winit::platform::web::EventLoopExtWebSys;
     event_loop.spawn_app(app);
+}
+
+/// Signale à la coquille web (`packaging/web/index.html`) que le moteur a
+/// présenté sa première frame : `window.__rusteegear_ready = true`, sondé par
+/// la page pour masquer le voile de chargement au bon moment plutôt qu'après
+/// un délai fixe (roadmap post-audit UX v2 2026-09-04, 6.6). Silencieux si
+/// l'objet global n'est pas accessible (page hôte inattendue).
+#[cfg(target_arch = "wasm32")]
+fn signal_web_ready() {
+    let _ = js_sys::Reflect::set(
+        &js_sys::global(),
+        &wasm_bindgen::JsValue::from_str("__rusteegear_ready"),
+        &wasm_bindgen::JsValue::TRUE,
+    );
 }
 
 /// Point d'entrée Android (appelé par android-activity via la NativeActivity).

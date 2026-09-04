@@ -45,6 +45,11 @@ impl Status {
 pub struct Check {
     pub status: Status,
     pub label: String,
+    /// Indices (`Scene::objects`) des objets concernés, quand la vérification
+    /// en désigne — la ligne devient cliquable vers l'objet fautif (roadmap
+    /// post-audit UX v2 2026-09-04, 6.3). Vide pour les vérifications
+    /// globales (éclairage, identité de build…).
+    pub objects: Vec<usize>,
 }
 
 impl Check {
@@ -52,8 +57,30 @@ impl Check {
         Self {
             status,
             label: label.into(),
+            objects: Vec::new(),
         }
     }
+
+    /// Même chose, en désignant les objets concernés (cf. `objects`).
+    fn with_objects(status: Status, label: impl Into<String>, objects: Vec<usize>) -> Self {
+        Self {
+            status,
+            label: label.into(),
+            objects,
+        }
+    }
+}
+
+/// Indices des objets dont `pred` est vraie — pour désigner les fautifs
+/// d'une vérification (cf. `Check::objects`).
+fn objects_where(scene: &Scene, pred: impl Fn(&crate::scene::SceneObject) -> bool) -> Vec<usize> {
+    scene
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| pred(o))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Analyse complète. La lecture des dimensions de textures touche le disque, donc
@@ -113,15 +140,13 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
     });
 
     // --- Physique / colliders ---
-    let no_collider = scene
-        .objects
-        .iter()
-        .filter(|o| o.physics == PhysicsKind::None)
-        .count();
+    let without_collider = objects_where(scene, |o| o.physics == PhysicsKind::None);
+    let no_collider = without_collider.len();
     if no_collider > 0 {
-        checks.push(Check::new(
+        checks.push(Check::with_objects(
             Status::Warn,
             format!("{no_collider} objet(s) sans collider (pas de physique)"),
+            without_collider,
         ));
     } else if !scene.objects.is_empty() {
         checks.push(Check::new(Status::Ok, "Tous les objets ont un collider"));
@@ -134,28 +159,33 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
         .map(|o| o.texture.trim())
         .filter(|t| !t.is_empty())
         .collect();
-    let mut too_big = 0;
-    let mut missing = 0;
+    let mut too_big_textures: Vec<&str> = Vec::new();
+    let mut missing_textures: Vec<&str> = Vec::new();
     for tex in &textures {
         match texture_dimensions(tex) {
             Some((w, h)) => {
                 if w > MAX_TEXTURE_PX || h > MAX_TEXTURE_PX {
-                    too_big += 1;
+                    too_big_textures.push(tex);
                 }
             }
-            None => missing += 1,
+            None => missing_textures.push(tex),
         }
     }
+    let (too_big, missing) = (too_big_textures.len(), missing_textures.len());
+    // Objets qui utilisent l'une des textures fautives (roadmap 6.3).
+    let users_of = |paths: &[&str]| objects_where(scene, |o| paths.contains(&o.texture.trim()));
     if missing > 0 {
-        checks.push(Check::new(
+        checks.push(Check::with_objects(
             Status::Fail,
             format!("{missing} texture(s) introuvable(s) sur le disque"),
+            users_of(&missing_textures),
         ));
     }
     if too_big > 0 {
-        checks.push(Check::new(
+        checks.push(Check::with_objects(
             Status::Fail,
             format!("{too_big} texture(s) > {MAX_TEXTURE_PX} px (incompatibles mobile)"),
+            users_of(&too_big_textures),
         ));
     }
     if missing == 0 && too_big == 0 {
@@ -191,19 +221,29 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
     }
 
     // --- Budget polycount (Sprint 126) ---
-    let heavy_meshes: Vec<&str> = scene
+    let heavy_indices: Vec<u32> = scene
         .imported
         .iter()
-        .filter(|m| m.data.indices.len() / 3 > MAX_TRIS_PER_MESH)
+        .enumerate()
+        .filter(|(_, m)| m.data.indices.len() / 3 > MAX_TRIS_PER_MESH)
+        .map(|(i, _)| i as u32)
+        .collect();
+    let heavy_meshes: Vec<&str> = heavy_indices
+        .iter()
+        .filter_map(|&i| scene.imported.get(i as usize))
         .map(|m| m.name.as_str())
         .collect();
     if !heavy_meshes.is_empty() {
-        checks.push(Check::new(
+        checks.push(Check::with_objects(
             Status::Warn,
             format!(
                 "{} mesh(es) > {MAX_TRIS_PER_MESH} triangles : {}",
                 heavy_meshes.len(),
                 heavy_meshes.join(", ")
+            ),
+            objects_where(
+                scene,
+                |o| matches!(o.mesh, MeshKind::Imported(i) if heavy_indices.contains(&i)),
             ),
         ));
     } else if !scene.imported.is_empty() {
@@ -239,7 +279,21 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
         .copied()
         .collect();
     if !oversized.is_empty() {
-        checks.push(Check::new(
+        let heavy_imports: Vec<u32> = scene
+            .imported
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| oversized.contains(&m.path.trim()))
+            .map(|(i, _)| i as u32)
+            .collect();
+        let users = objects_where(scene, |o| {
+            oversized.contains(&o.texture.trim())
+                || o.audio
+                    .as_ref()
+                    .is_some_and(|a| oversized.contains(&a.clip.trim()))
+                || matches!(o.mesh, MeshKind::Imported(i) if heavy_imports.contains(&i))
+        });
+        checks.push(Check::with_objects(
             Status::Warn,
             format!(
                 "{} asset(s) > {} Mio : {}",
@@ -247,6 +301,7 @@ pub fn analyze(scene: &Scene, config: &BuildConfig) -> Vec<Check> {
                 MAX_ASSET_BYTES / (1024 * 1024),
                 oversized.join(", ")
             ),
+            users,
         ));
     }
 
@@ -483,6 +538,29 @@ mod tests {
         let c = check(&checks, "sans collider");
         assert_eq!(c.status, Status::Warn);
         assert!(c.label.contains('2'));
+        // Les fautifs sont désignés (ligne cliquable, roadmap 6.3).
+        assert_eq!(c.objects, vec![0, 1]);
+    }
+
+    /// Roadmap 6.3 : une texture introuvable désigne les objets qui l'utilisent,
+    /// pas les autres ; les vérifications globales ne désignent personne.
+    #[test]
+    fn missing_texture_check_points_at_the_objects_using_it() {
+        let mut scene = Scene::default();
+        scene.objects.push(SceneObject::default());
+        scene.objects.push(SceneObject {
+            texture: "/nulle/part/absente.png".into(),
+            ..Default::default()
+        });
+        scene.objects.push(SceneObject {
+            texture: "/nulle/part/absente.png".into(),
+            ..Default::default()
+        });
+        let checks = analyze(&scene, &BuildConfig::default());
+        let c = check(&checks, "introuvable(s) sur le disque");
+        assert_eq!(c.status, Status::Fail);
+        assert_eq!(c.objects, vec![1, 2]);
+        assert!(check(&checks, "Package ID").objects.is_empty());
     }
 
     /// Un `bundle_id` invalide (ici sans point, donc un seul segment) doit

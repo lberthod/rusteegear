@@ -50,10 +50,29 @@ impl AppState {
     /// contrôle `scene_dirty`/intervalle est fait par `maybe_autosave`) puis
     /// met à jour `last_autosave`.
     pub(crate) fn maybe_autosave_at(&mut self, autosave_dir: &Path) {
-        if let Err(e) = write_autosave(&self.scene, autosave_dir) {
-            log::warn!("autosave impossible : {e}");
+        let now = crate::time_compat::Instant::now();
+        match write_autosave(&self.scene, autosave_dir) {
+            Ok(path) => {
+                // Visible dans la barre d'état (« 💾 auto il y a 2 min »,
+                // roadmap post-audit UX v2 2026-09-04, 6.2) — pas de toast :
+                // toutes les deux minutes, ce serait du bruit. `debug` pour ne
+                // pas non plus remplir la Console.
+                self.last_autosave_ok = Some(now);
+                log::debug!(
+                    "Sauvegarde auto ({} objets) dans {}",
+                    self.scene.objects.len(),
+                    path.display()
+                );
+            }
+            Err(e) => log::warn!("autosave impossible : {e}"),
         }
-        self.last_autosave = Some(crate::time_compat::Instant::now());
+        self.last_autosave = Some(now);
+    }
+
+    /// Secondes écoulées depuis la dernière sauvegarde automatique réussie
+    /// (roadmap 6.2), `None` tant qu'aucune n'a eu lieu cette session.
+    pub fn autosave_age_secs(&self) -> Option<u64> {
+        self.last_autosave_ok.map(|t| t.elapsed().as_secs())
     }
 
     /// Chemin de référence pour « la dernière sauvegarde manuelle connue »
@@ -286,6 +305,8 @@ mod tests {
         // (On ne peut pas rediriger `maybe_autosave` vers `dir` — elle résout
         // `app_data_dir()` en dur — donc on vérifie juste `last_autosave`.)
         assert!(app.last_autosave.is_some());
+        // Réussie : l'âge est disponible pour la barre d'état (roadmap 6.2).
+        assert!(app.autosave_age_secs().is_some());
     }
 
     #[test]

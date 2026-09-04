@@ -89,6 +89,18 @@ fn shorten(text: &str) -> String {
     out
 }
 
+/// Cible de log à utiliser pour une confirmation explicite adressée à
+/// l'utilisateur depuis n'importe quel module (`log::info!(target:
+/// FEEDBACK_TARGET, …)`) — « Diagnostic copié », « Journal de crash copié »…
+/// Toujours affichée en toast (roadmap post-audit UX v2 2026-09-04, 6.2),
+/// et dans la Console comme toute ligne de journal.
+pub const FEEDBACK_TARGET: &str = "motor3derust::editor::feedback";
+
+/// Cible de log **jamais** affichée en toast au niveau `info` : la sortie des
+/// commandes de la Console (`> help …`), lue dans la Console elle-même
+/// (roadmap 6.2 — avant, chaque commande produisait un toast).
+pub const CONSOLE_TARGET: &str = "motor3derust::console";
+
 /// Un événement de log mérite-t-il un toast ? Règle documentée en tête de module.
 fn wants_toast(ev: &LogEvent) -> bool {
     if !ev.target.starts_with("motor3derust") {
@@ -97,7 +109,8 @@ fn wants_toast(ev: &LogEvent) -> bool {
     match ev.level {
         log::Level::Error | log::Level::Warn => true,
         log::Level::Info => {
-            ev.target.contains("persistence")
+            ev.target == FEEDBACK_TARGET
+                || ev.target.contains("persistence")
                 || ev.target.contains("autosave")
                 || ev.target.contains("renderer::frame")
                 || ev.target.contains("project")
@@ -217,7 +230,7 @@ impl Toasts {
 
     /// Nombre de toasts actuellement affichés (tests).
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.items.len()
     }
 }
@@ -280,6 +293,17 @@ mod tests {
             log::Level::Info,
             "motor3derust",
             "RusteeGear 0.1.0"
+        )));
+        // Roadmap 6.2 : confirmations explicites oui, sortie console non.
+        assert!(wants_toast(&ev(
+            log::Level::Info,
+            FEEDBACK_TARGET,
+            "Diagnostic copié"
+        )));
+        assert!(!wants_toast(&ev(
+            log::Level::Info,
+            CONSOLE_TARGET,
+            "> help"
         )));
     }
 

@@ -7,6 +7,7 @@ use crate::scene::{
     HudAnchor, HudBinding, HudWidget, HudWidgetKind, MAX_POINT_LIGHTS, MeshKind, PointLight, Scene,
 };
 
+use super::file_dialogs::{DialogRequest, DialogTarget, FileDialogs};
 use super::hud::clamp_hud_scale;
 use super::{HudPreview, Panels, StatusInfo, UiActions, export, readiness};
 
@@ -31,18 +32,18 @@ pub(super) fn tool_windows(
                 crate::log_buffer::clear();
             }
             ui.separator();
-            // Champ de commande : `timescale <valeur>`, `pause`, `play`, `step`, `tp <x> <y> <z>`,
-            // `net_stats` (cf. AppState::run_console_command — liste complète en survol).
+            // Champ de commande : `help` liste tout (cf. `AppState::run_console_command`,
+            // roadmap post-audit UX v2 2026-09-04, 6.5).
             ui.horizontal(|ui| {
                 let resp = ui
                     .add(
                         egui::TextEdit::singleline(console_input)
-                            .hint_text("timescale 0.5 · pause · play · step · tp 0 1 0 · net_stats")
+                            .hint_text("help · timescale 0.5 · pause · play · step · tp 0 1 0")
                             .desired_width(ui.available_width() - 70.0),
                     )
                     .on_hover_text(
-                        "Commandes : timescale <v> · pause · play · stop · step · \
-                         tp <x> <y> <z> · net_stats",
+                        "Tape help pour la liste des commandes (timescale, pause, play, stop, \
+                         step, tp, select, spawn, demo, net_stats…)",
                     );
                 let submit = ui.button("Exécuter").clicked()
                     || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
@@ -57,7 +58,12 @@ pub(super) fn tool_windows(
                 .stick_to_bottom(true)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for line in crate::log_buffer::snapshot() {
+                    let lines = crate::log_buffer::snapshot();
+                    // État vide utile (roadmap 6.5) : dire quoi taper.
+                    if lines.is_empty() {
+                        ui.weak("Journal vide. Tape help pour la liste des commandes.");
+                    }
+                    for line in lines {
                         ui.monospace(line);
                     }
                 });
@@ -191,19 +197,51 @@ pub(super) fn tool_windows(
                 );
             }
             ui.separator();
+            let mut focus: Option<(usize, usize)> = None;
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for c in &panels.readiness_results {
+                    for (row, c) in panels.readiness_results.iter().enumerate() {
                         ui.horizontal(|ui| {
                             ui.label(c.status.icon());
-                            ui.label(&c.label);
+                            if c.objects.is_empty() {
+                                ui.label(&c.label);
+                                return;
+                            }
+                            // Ligne cliquable vers l'objet fautif (roadmap
+                            // post-audit UX v2 2026-09-04, 6.3) : sélectionne
+                            // et cadre le premier concerné ; un nouveau clic
+                            // passe au suivant.
+                            let names: Vec<&str> = c
+                                .objects
+                                .iter()
+                                .filter_map(|&i| scene.objects.get(i))
+                                .map(|o| o.name.as_str())
+                                .collect();
+                            let resp = ui
+                                .add(egui::Button::new(&c.label).frame(false))
+                                .on_hover_text(format!(
+                                    "Cliquer pour sélectionner et cadrer : {}",
+                                    names.join(", ")
+                                ));
+                            if resp.clicked() {
+                                let next = match panels.readiness_cursor {
+                                    Some((r, k)) if r == row => (k + 1) % c.objects.len(),
+                                    _ => 0,
+                                };
+                                focus = Some((row, next));
+                            }
                         });
                     }
                 });
+            if let Some((row, k)) = focus {
+                panels.readiness_cursor = Some((row, k));
+                actions.focus_object = panels.readiness_results[row].objects.get(k).copied();
+            }
         });
     if do_analyze {
         panels.readiness_results = readiness::analyze(scene, export.config());
+        panels.readiness_cursor = None;
     }
 
     // Alimentée par la table unique `app::shortcuts::SHORTCUTS` (roadmap
@@ -2275,6 +2313,13 @@ pub(super) fn crash_log_window(
                 ui.horizontal(|ui| {
                     if ui.button("📋 Copier").clicked() {
                         ui.ctx().copy_text(text.clone());
+                        // Confirmé en toast (roadmap post-audit UX v2
+                        // 2026-09-04, 6.2) — avant, rien ne disait que le
+                        // presse-papiers avait bien reçu le journal.
+                        log::info!(
+                            target: super::toasts::FEEDBACK_TARGET,
+                            "Journal de crash copié dans le presse-papiers."
+                        );
                     }
                     // Confirmation avant d'effacer la seule trace du plantage
                     // (roadmap post-audit UX v2 2026-09-04, 3.7).
@@ -2566,6 +2611,7 @@ pub(super) fn new_project_wizard_window(
     panels: &mut Panels,
     settings: &crate::app::settings::Settings,
     actions: &mut UiActions,
+    dialogs: &mut FileDialogs,
 ) {
     let mut open = panels.new_project_wizard;
     let mut close_after = false;
@@ -2585,11 +2631,11 @@ pub(super) fn new_project_wizard_window(
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "(non choisi)".to_string());
                 ui.add(egui::Label::new(egui::RichText::new(label).monospace()).truncate());
-                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-                if ui.button("📁  Choisir…").clicked()
-                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
-                {
-                    panels.new_project_location = Some(dir);
+                // Asynchrone (roadmap 6.1) : la réponse arrive dans
+                // `panels.new_project_location` à la frame où le sélecteur se
+                // referme (`DialogTarget::NewProjectLocation`).
+                if ui.button("📁  Choisir…").clicked() {
+                    dialogs.open(DialogRequest::PickFolder, DialogTarget::NewProjectLocation);
                 }
             });
             ui.add_space(8.0);

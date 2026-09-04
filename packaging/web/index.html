@@ -12,6 +12,12 @@
       progression, message d'erreur lisible avec la marche à suivre, rappel des
       touches, plein écran, et redimensionnement du rendu avec la fenêtre.
       Le moteur cherche le canvas par son id `rustee-canvas` (cf. src/lib.rs).
+      Roadmap post-audit UX v2 2026-09-04, 6.6 : le voile se retire sur la
+      première frame réellement présentée (`window.__rusteegear_ready`, posé
+      par src/lib.rs) et non après un délai ; `fail()` le réaffiche ; le bouton
+      plein écran est en bas à droite pour ne pas recouvrir le « ? » du HUD ;
+      clic droit sans menu contextuel ; téléchargement surveillé (« Réessayer »
+      s'il ne progresse plus) ; orientation et clavier virtuel suivis.
     -->
     <style>
       html, body { margin: 0; height: 100%; background: #12141a; color: #e6e8e3;
@@ -37,7 +43,14 @@
       #err a { color: #e8763b; }
       #boot.failed #bar { display: none; }
       #boot.failed #err { display: block; }
-      #fs { position: fixed; top: 8px; right: 8px; width: 30px; height: 30px; border: 0; border-radius: 6px;
+      #retry { display: none; margin-top: 10px; padding: 8px 18px; border: 0; border-radius: 6px;
+        background: #e8763b; color: #12141a; font: inherit; font-weight: 600; cursor: pointer; }
+      #retry:hover, #retry:focus-visible { background: #f0925f; outline: none; }
+      #boot.stalled #retry { display: inline-block; }
+      /* Bas-droite (roadmap 6.6) : le HUD du moteur place ses boutons « ? » et
+         pause en haut à droite, un bouton HTML au même endroit les recouvrait. */
+      #fs { position: fixed; bottom: max(8px, env(safe-area-inset-bottom)); right: max(8px, env(safe-area-inset-right));
+        width: 30px; height: 30px; border: 0; border-radius: 6px;
         background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
       #fs:hover, #fs:focus-visible { background: rgba(232, 118, 59, .8); outline: none; }
       body.running #fs { display: block; }
@@ -56,6 +69,7 @@
         <h2 id="err-title"></h2>
         <p id="err-body"></p>
         <p><code id="err-detail"></code></p>
+        <button id="retry" type="button">Réessayer</button>
         <p>Sans navigateur compatible, la version macOS se télécharge sur
           <a href="https://github.com/lberthod/rusteegear" rel="noopener">github.com/lberthod/rusteegear</a>.</p>
       </div>
@@ -73,16 +87,26 @@
       let failed = false;
 
       function setStatus(text) { statusEl.textContent = text; }
-      function fail(title, body, detail) {
+      // Réaffiche le voile même s'il a déjà été retiré du flux (`display:none`
+      // après le fondu) : un échec tardif du GPU ne doit pas laisser un canvas
+      // noir sans explication (roadmap 6.6).
+      function showBoot() {
+        boot.style.display = "flex";
+        boot.classList.remove("hidden");
+        document.body.classList.remove("running");
+      }
+      function fail(title, body, detail, retryable) {
         if (failed) return;
         failed = true;
-        boot.classList.remove("hidden");
+        showBoot();
         boot.classList.add("failed");
+        if (retryable) boot.classList.add("stalled");
         $("err-title").textContent = title;
         $("err-body").textContent = body;
         $("err-detail").textContent = detail ? String(detail) : "";
         setStatus("");
       }
+      $("retry").addEventListener("click", () => location.reload());
 
       // Le moteur signale ses échecs d'initialisation par `log::error!` (console) :
       // on les relaie à l'écran plutôt que de laisser une page noire.
@@ -106,7 +130,22 @@
         }
       });
 
+      // Chien de garde du téléchargement (roadmap 6.6) : sans aucun octet
+      // reçu pendant STALL_MS, on le dit et on propose de recharger — avant, une
+      // connexion tombée laissait la barre figée pour toujours.
+      const STALL_MS = 20_000;
+      let stallTimer = null;
+      function armStallWatchdog() {
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          fail("Le téléchargement semble bloqué",
+            "Aucune donnée reçue depuis 20 secondes. Vérifier la connexion, puis réessayer.",
+            "", true);
+        }, STALL_MS);
+      }
+
       async function fetchWithProgress(url) {
+        armStallWatchdog();
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status} sur ${url}`);
         // Servi compressé (GitHub Pages : gzip) : Content-Length est la taille
@@ -120,6 +159,8 @@
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (failed) throw new Error("téléchargement interrompu");
+          armStallWatchdog();
           chunks.push(value);
           got += value.length;
           const mb = (got / 1048576).toFixed(1);
@@ -132,6 +173,7 @@
             setStatus(`Téléchargement du jeu… ${mb} Mo`);
           }
         }
+        clearTimeout(stallTimer);
         const bytes = new Uint8Array(got);
         let offset = 0;
         for (const c of chunks) { bytes.set(c, offset); offset += c.length; }
@@ -146,6 +188,13 @@
         canvas.style.height = `${window.innerHeight}px`;
       }
       window.addEventListener("resize", fitCanvas);
+      // Rotation du téléphone et clavier virtuel (roadmap 6.6) : `resize` seul
+      // arrive parfois avant que les dimensions ne soient à jour.
+      window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 100));
+      if (window.visualViewport) window.visualViewport.addEventListener("resize", fitCanvas);
+      // Le clic droit pilote la caméra dans le jeu : pas de menu contextuel du
+      // navigateur par-dessus (roadmap 6.6).
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
       $("fs").addEventListener("click", () => {
         const el = document.documentElement;
@@ -181,9 +230,14 @@
         if (failed) return;
         setStatus("Initialisation du GPU…");
         // Le renderer s'initialise de façon asynchrone après `init` ; un échec
-        // arrive par console.error (relayé ci-dessus). Sans échec, on laisse la
-        // place au jeu.
-        setTimeout(() => {
+        // arrive par console.error (relayé ci-dessus). Le moteur pose
+        // `window.__rusteegear_ready` à sa première frame présentée (src/lib.rs,
+        // roadmap 6.6) : c'est ce signal qui retire le voile — le délai fixe
+        // reste un repli (ancien moteur, ou signal perdu) pour ne jamais laisser
+        // le voile sur un jeu qui tourne.
+        const READY_FALLBACK_MS = 6000;
+        const start = performance.now();
+        function reveal() {
           if (failed) return;
           fitCanvas();
           boot.classList.add("hidden");
@@ -193,7 +247,13 @@
           // Après le fondu, retirer l'overlay du flux : un onglet en arrière-plan
           // peut geler la transition CSS et laisser un voile sur le jeu.
           setTimeout(() => { if (!failed) boot.style.display = "none"; }, 500);
-        }, 900);
+        }
+        function pollReady() {
+          if (failed) return;
+          if (window.__rusteegear_ready || performance.now() - start > READY_FALLBACK_MS) reveal();
+          else setTimeout(pollReady, 50);
+        }
+        pollReady();
       }
 
       main().catch((e) => {

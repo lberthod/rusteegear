@@ -7,6 +7,7 @@ use crate::app::settings::RecentProject;
 use crate::app::shortcuts::{MenuItem, menu_hint};
 use crate::scene::{MeshKind, Scene};
 
+use super::file_dialogs::{DialogRequest, DialogTarget, FileDialogs};
 use super::{Panels, StatusInfo, UiActions, export};
 
 /// Entrée de menu avec son raccourci grisé à droite (`Button::shortcut_text`),
@@ -44,10 +45,13 @@ pub(super) fn open_first_game(actions: &mut UiActions) {
 /// alimente le sous-menu « Projets récents » : les disparus y sont grisés avec
 /// « Localiser… / Retirer de la liste » (roadmap post-audit UX v2 2026-09-04,
 /// 3.8). `suggested_save_name` : nom proposé par « Enregistrer sous… » (3.2).
+/// Les sélecteurs de fichiers passent par `dialogs` (asynchrones, roadmap 6.1).
+#[allow(clippy::too_many_arguments)] // menu : un paramètre par état distinct
 pub(super) fn menu_fichier(
     ui: &mut egui::Ui,
     export: &mut export::ExportPanel,
     actions: &mut UiActions,
+    dialogs: &mut FileDialogs,
     has_project: bool,
     recents: Vec<(&RecentProject, bool)>,
     suggested_save_name: &str,
@@ -259,11 +263,11 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         if ui.add(item("💾  Enregistrer sous…", MenuItem::SaveAs)).clicked() {
-            dialog_save_as(actions, suggested_save_name);
+            dialog_save_as(dialogs, suggested_save_name);
             ui.close();
         }
         if ui.add(item("📂  Ouvrir…", MenuItem::Open)).clicked() {
-            dialog_open(actions);
+            dialog_open(dialogs, actions);
             ui.close();
         }
         if ui
@@ -271,10 +275,7 @@ pub(super) fn menu_fichier(
             .on_hover_text("Choisir directement le dossier d'un projet, sans passer par son manifeste")
             .clicked()
         {
-            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                actions.open_project_path = Some(dir.to_string_lossy().into_owned());
-            }
+            dialogs.open(DialogRequest::PickFolder, DialogTarget::OpenProjectFolder);
             ui.close();
         }
         if !recents.is_empty() {
@@ -303,18 +304,15 @@ pub(super) fn menu_fichier(
                             .on_hover_text("Choisir le dossier où ce projet se trouve maintenant")
                             .clicked()
                         {
-                            #[cfg(not(any(
-                                target_os = "ios",
-                                target_os = "android",
-                                target_arch = "wasm32"
-                            )))]
-                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                                // L'ancienne entrée est oubliée ; l'ouverture réussie
-                                // enregistre la nouvelle (`note_recent_project`).
-                                actions.forget_recent_project = Some(recent.path.clone());
-                                actions.open_project_path =
-                                    Some(dir.to_string_lossy().into_owned());
-                            }
+                            // L'ancienne entrée est oubliée une fois le dossier
+                            // choisi ; l'ouverture réussie enregistre la nouvelle
+                            // (`note_recent_project`).
+                            dialogs.open(
+                                DialogRequest::PickFolder,
+                                DialogTarget::LocateRecent {
+                                    forget: recent.path.clone(),
+                                },
+                            );
                             ui.close();
                         }
                         if ui.small_button("Retirer de la liste").clicked() {
@@ -342,13 +340,13 @@ pub(super) fn menu_fichier(
         });
         ui.separator();
         if ui.button("📥  Importer glTF…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-            if let Some(p) = rfd::FileDialog::new()
-                .add_filter("glTF", &["glb", "gltf"])
-                .pick_file()
-            {
-                actions.import = Some(p.to_string_lossy().into_owned());
-            }
+            dialogs.open(
+                DialogRequest::PickFile {
+                    filter: "glTF",
+                    extensions: &["glb", "gltf"],
+                },
+                DialogTarget::ImportGltf,
+            );
             ui.close();
         }
         ui.separator();
@@ -508,6 +506,7 @@ pub(super) fn menu_ajouter(
     scene: &mut Scene,
     selection: Option<usize>,
     actions: &mut UiActions,
+    dialogs: &mut FileDialogs,
 ) {
     use crate::scene::{MAX_POINT_LIGHTS, PointLight};
     ui.menu_button("Ajouter", |ui| {
@@ -642,27 +641,20 @@ pub(super) fn menu_ajouter(
                 .on_hover_text("Choisit un son joué par l'objet sélectionné")
                 .clicked()
             {
-                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-                if let Some(i) = sel
-                    && let Some(p) = rfd::FileDialog::new()
-                        .add_filter("Audio", &["wav", "ogg", "flac", "mp3"])
-                        .pick_file()
-                {
-                    // Normalisation de loudness à l'import (Sprint 126) : mesure le
-                    // gain une fois ici plutôt qu'à chaque lecture — `AudioSource.gain`
-                    // porte le résultat, appliqué par `AppState::sim_step` au moment de
-                    // jouer le clip (cf. sa doc). `1.0` (aucun changement) si le fichier
-                    // ne se lit pas encore (chemin invalide, format non supporté) —
-                    // laisse `clip` pointer dessus quand même, le reste de l'éditeur
-                    // gère déjà un chemin audio invalide sans planter.
-                    let gain = std::fs::read(&p)
-                        .map(|bytes| crate::runtime::audio::normalize_gain(&bytes))
-                        .unwrap_or(1.0);
-                    let audio = scene.objects[i]
-                        .audio
-                        .get_or_insert_with(crate::scene::AudioSource::default);
-                    audio.clip = p.to_string_lossy().into_owned();
-                    audio.gain = gain;
+                // Normalisation de loudness à l'import (Sprint 126) : mesurée au
+                // retour du sélecteur (`Editor::apply_dialog_result`,
+                // `ObjectAudio { normalize: true }`), cf. `AudioSource.gain`.
+                if let Some(i) = sel {
+                    dialogs.open(
+                        DialogRequest::PickFile {
+                            filter: "Audio",
+                            extensions: &["wav", "ogg", "flac", "mp3"],
+                        },
+                        DialogTarget::ObjectAudio {
+                            index: i,
+                            normalize: true,
+                        },
+                    );
                 }
                 ui.close();
             }
@@ -834,7 +826,11 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
             .clicked()
         {
             ui.ctx().copy_text(crate::log_buffer::diagnostic_report());
-            log::info!("Diagnostic copié dans le presse-papiers.");
+            // Confirmé en toast (roadmap post-audit UX v2 2026-09-04, 6.2).
+            log::info!(
+                target: super::toasts::FEEDBACK_TARGET,
+                "Diagnostic copié dans le presse-papiers."
+            );
             ui.close();
         }
         ui.separator();
@@ -856,42 +852,40 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
 /// Sélecteur « Enregistrer sous… » — partagé entre le menu Fichier, Cmd+Maj+S
 /// (roadmap post-audit UX 2026-09-04, 1.1) et Cmd+S sans fichier lié (roadmap
 /// v2, 3.2). Propose `suggested_name` (le vrai nom de la scène courante, pas
-/// toujours « scene.json »). Pose `actions.save_path` si un fichier est
-/// choisi ; sans effet sur mobile/web (pas de sélecteur natif).
-pub(super) fn dialog_save_as(actions: &mut UiActions, suggested_name: &str) {
-    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-    if let Some(p) = rfd::FileDialog::new()
-        .add_filter("Scène JSON", &["json"])
-        .set_file_name(suggested_name)
-        .save_file()
-    {
-        actions.save_path = Some(p.to_string_lossy().into_owned());
-    }
-    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
-    {
-        let _ = (actions, suggested_name);
-    }
+/// toujours « scene.json »). Asynchrone (roadmap 6.1) : `actions.save_path`
+/// est posé à la frame où le sélecteur se referme (`DialogTarget::SaveAs`) ;
+/// sans effet sur mobile/web (pas de sélecteur natif).
+pub(super) fn dialog_save_as(dialogs: &mut FileDialogs, suggested_name: &str) {
+    dialogs.open(
+        DialogRequest::SaveFile {
+            filter: "Scène JSON",
+            extensions: &["json"],
+            file_name: suggested_name.to_string(),
+        },
+        DialogTarget::SaveAs,
+    );
 }
 
 /// Sélecteur « Ouvrir… » — partagé entre le menu Fichier et Cmd+O. Sprint 3 :
 /// une scène seule (comportement historique) et un projet (son manifeste
 /// `project.rusteegear.json`) partagent ce même sélecteur — `load_path` /
-/// `open_project_path` sont distingués ici selon le nom du fichier choisi, et
-/// traités par `gfx::renderer`.
-pub(super) fn dialog_open(actions: &mut UiActions) {
+/// `open_project_path` sont distingués au retour (`DialogTarget::OpenSceneOrProject`)
+/// selon le nom du fichier choisi, et traités par `gfx::renderer`.
+pub(super) fn dialog_open(dialogs: &mut FileDialogs, actions: &mut UiActions) {
+    let request = DialogRequest::PickFile {
+        filter: "Projet ou scène RusteeGear",
+        extensions: &["json"],
+    };
+    let target = DialogTarget::OpenSceneOrProject;
     #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-    if let Some(p) = rfd::FileDialog::new()
-        .add_filter("Projet ou scène RusteeGear", &["json"])
-        .pick_file()
     {
-        if crate::project::is_manifest_path(&p) {
-            actions.open_project_path = Some(p.to_string_lossy().into_owned());
-        } else {
-            actions.load_path = Some(p.to_string_lossy().into_owned());
-        }
+        let _ = &actions;
+        dialogs.open(request, target);
     }
+    // Pas de sélecteur natif : la scène par défaut est rechargée, comme avant.
     #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
     {
+        let _ = (&dialogs, request, target);
         actions.load = true;
     }
 }

@@ -99,6 +99,12 @@ pub struct Settings {
     /// n'est plus reposée à chaque lancement.
     #[serde(default)]
     pub ignored_autosave: Option<String>,
+    /// Réglages de vue de l'éditeur (grille, aimantation, outil actif, vue de
+    /// debug) retrouvés au lancement suivant — roadmap post-audit UX v2
+    /// 2026-09-04, 6.4. Les positions/tailles de fenêtres et largeurs de
+    /// panneaux, elles, passent par la mémoire egui (`editor_layout.json`).
+    #[serde(default)]
+    pub editor_view: EditorView,
     /// Avertissement à remonter à l'utilisateur après `load()` (roadmap
     /// post-audit UX v2 2026-09-04, 3.8) : `settings.json` illisible, copié en
     /// `.bak` et remplacé par les valeurs par défaut. Jamais sérialisé ;
@@ -281,11 +287,43 @@ impl Default for Settings {
             keyboard: KeyboardBindings::default(),
             open_windows: Vec::new(),
             ignored_autosave: None,
+            editor_view: EditorView::default(),
             load_warning: None,
             player_class: 0,
             player_room: String::new(),
             last_play_online: true,
             server_url: String::new(),
+        }
+    }
+}
+
+/// Réglages de vue de l'éditeur persistés (roadmap post-audit UX v2
+/// 2026-09-04, 6.4) — cf. `Settings::editor_view`. Écrits par `Editor::run`
+/// à chaque changement, appliqués à `AppState` au démarrage
+/// (`AppState::apply_editor_view`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorView {
+    #[serde(default = "default_true")]
+    pub grid: bool,
+    #[serde(default)]
+    pub snap: bool,
+    #[serde(default = "default_gizmo")]
+    pub gizmo: crate::app::GizmoMode,
+    #[serde(default)]
+    pub debug_view: crate::app::DebugView,
+}
+
+fn default_gizmo() -> crate::app::GizmoMode {
+    crate::app::GizmoMode::Translate
+}
+
+impl Default for EditorView {
+    fn default() -> Self {
+        Self {
+            grid: true,
+            snap: false,
+            gizmo: default_gizmo(),
+            debug_view: crate::app::DebugView::default(),
         }
     }
 }
@@ -515,6 +553,28 @@ mod tests {
 
     /// Round-trip JSON pur (`serde_json`, pas `Settings::save`/`load` qui
     /// touchent le vrai `$HOME` de la machine — à éviter dans un test).
+    /// Roadmap 6.4 : un `settings.json` d'avant garde la vue par défaut ; une
+    /// vue modifiée fait l'aller-retour.
+    #[test]
+    fn editor_view_defaults_when_absent_and_round_trips() {
+        let old: Settings = serde_json::from_str("{}").expect("json vide valide");
+        assert_eq!(old.editor_view, EditorView::default());
+        assert!(old.editor_view.grid);
+
+        let s = Settings {
+            editor_view: EditorView {
+                grid: false,
+                snap: true,
+                gizmo: crate::app::GizmoMode::Rotate,
+                debug_view: crate::app::DebugView::Normals,
+            },
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).expect("sérialisable");
+        let back: Settings = serde_json::from_str(&json).expect("relisible");
+        assert_eq!(back.editor_view, s.editor_view);
+    }
+
     #[test]
     fn music_and_sfx_volume_round_trip_at_full_volume_by_default() {
         let settings = Settings::default();

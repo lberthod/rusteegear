@@ -189,8 +189,15 @@ fn restore_imported(records: Vec<ImportedRecord>, s: &mut Scene) -> bool {
     true
 }
 
-/// Résultat d'un import glTF effectué en thread de fond.
-type ImportResult = Result<(String, MeshData, Vec3, Vec3), String>;
+/// Résultat d'un import glTF effectué en thread de fond, avec le chemin
+/// demandé (pour retirer « Import de X… » de la barre d'état même en cas
+/// d'échec, roadmap post-audit UX v2 2026-09-04, 6.2).
+type ImportResult = (String, Result<(String, MeshData, Vec3, Vec3), String>);
+
+/// Résultat d'une ouverture de projet en thread de fond (roadmap 6.1) :
+/// projet + scène de démarrage chargée, ou `(dossier, erreur)`.
+pub type ProjectOpenResult =
+    Result<(crate::project::ProjectRoot, Scene), (std::path::PathBuf, String)>;
 
 /// Rectangle `(x, y, largeur, hauteur)` d'un écran de téléphone (ratio 1080×2340,
 /// ≈ 19.5:9) centré dans une zone `width × height`, avec une petite marge.
@@ -842,6 +849,22 @@ pub struct AsyncLoadState {
     scene_load_rx: Receiver<Result<(String, Scene), String>>,
     /// Vrai après remplacement de la scène : le renderer doit reconstruire les meshes GPU importés.
     imported_dirty: bool,
+    /// Ouverture de projet en thread de fond (roadmap post-audit UX v2
+    /// 2026-09-04, 6.1), cf. `AppState::open_project_async`.
+    project_tx: Sender<ProjectOpenResult>,
+    project_rx: Receiver<ProjectOpenResult>,
+    /// Résultat d'ouverture à remonter à l'éditeur (récents, modale d'erreur)
+    /// — cf. `AppState::take_project_open_outcome`.
+    project_outcome: Option<Result<usize, (std::path::PathBuf, String)>>,
+    /// Duplication de projet en thread de fond (roadmap 6.1), cf.
+    /// `AppState::duplicate_project_async`.
+    duplicate_tx: Sender<Result<std::path::PathBuf, String>>,
+    duplicate_rx: Receiver<Result<std::path::PathBuf, String>>,
+    /// Tâche bloquante en cours (« Ouverture de X… », « Duplication de X… »)
+    /// pour la barre d'état, `None` au repos.
+    busy: Option<String>,
+    /// Noms des fichiers glTF en cours d'import (« Import de X… », roadmap 6.2).
+    importing: Vec<String>,
 }
 
 pub struct FirebaseAuthState {
@@ -934,6 +957,10 @@ pub struct AppState {
     /// premier. Sert à espacer les écritures de `AppState::AUTOSAVE_INTERVAL`
     /// (cf. `autosave::maybe_autosave`).
     last_autosave: Option<crate::time_compat::Instant>,
+    /// Dernière sauvegarde automatique **réussie** (roadmap post-audit UX v2
+    /// 2026-09-04, 6.2) — affichée discrètement dans la barre d'état ;
+    /// `last_autosave` ci-dessus compte aussi les échecs (cadence des essais).
+    last_autosave_ok: Option<crate::time_compat::Instant>,
     /// Autosave à proposer en restauration au démarrage (Sprint 6), posé une
     /// fois par `lib::run()` juste après la création de l'app (cf.
     /// `AppState::pending_autosave_recovery`). `None` : rien à proposer, ou
@@ -1245,7 +1272,7 @@ pub struct AppState {
 /// Mode de manipulation du gizmo (touches W / E / R) ou outil de navigation
 /// caméra (Main / Orbite / Loupe) — un seul outil actif à la fois, choisi dans
 /// la barre d'outils.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GizmoMode {
     Translate,
     Rotate,
@@ -1270,7 +1297,7 @@ impl GizmoMode {
 /// visualisation directe d'une grandeur du pipeline. Encodé en `f32` (0/1/2) dans un canal
 /// inutilisé de l'uniform d'éclairage (`SceneUniform::ambient.y`) plutôt que d'agrandir
 /// l'uniform — cf. `write_uniforms` et `main.wgsl`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum DebugView {
     #[default]
     Shaded,
@@ -1328,6 +1355,8 @@ impl AppState {
     pub fn new() -> Self {
         let (tx, rx) = channel();
         let (scene_tx, scene_rx) = channel();
+        let (project_tx, project_rx) = channel();
+        let (duplicate_tx, duplicate_rx) = channel();
         let (ai_tx, ai_rx) = channel();
         let (ai_scene_tx, ai_scene_rx) = channel();
         let (firebase_tx, firebase_rx) = channel();
@@ -1587,6 +1616,13 @@ impl AppState {
                 scene_load_tx: scene_tx,
                 scene_load_rx: scene_rx,
                 imported_dirty: false,
+                project_tx,
+                project_rx,
+                project_outcome: None,
+                duplicate_tx,
+                duplicate_rx,
+                busy: None,
+                importing: Vec::new(),
             },
             ai: AiGenState {
                 ai_tx,
@@ -1602,6 +1638,7 @@ impl AppState {
             edit_context: None,
             confirm_close_project: false,
             last_autosave: None,
+            last_autosave_ok: None,
             pending_autosave_recovery: None,
             pending_shortcut: None,
             script_errors: HashMap::new(),
