@@ -73,6 +73,13 @@ struct ScriptAccum {
     /// `set_health`/`damage` — même sémantique « base + dégâts cumulés » que
     /// `scripting::run_script`.
     hud: f32,
+    /// `set_health`/`damage` appelés pendant ce script — sans ça, `hud` valait
+    /// toujours quelque chose et `health_out` devenait `Some(1.0)` dès qu'un
+    /// objet scripté existait : la démo web affichait une barre de vie que le
+    /// desktop (`scripting::run_script`, qui ne renseigne `health_out` que si
+    /// un script a touché à la vie) n'affichait pas (roadmap post-audit UX v2
+    /// 2026-09-04, 1.2 — même HUD sur les deux builds).
+    hud_touched: bool,
     debug_lines: Vec<(Vec3, Vec3, [f32; 3])>,
     events_out: Vec<String>,
     spawn_out: Vec<(String, Vec3)>,
@@ -249,7 +256,11 @@ fn host_reverb(state: &mut LuaState) -> LuaResult<u32> {
 
 fn host_set_health(state: &mut LuaState) -> LuaResult<u32> {
     let v = arg_f32(state, 0)?.clamp(0.0, 1.0);
-    ACCUM.with(|a| a.borrow_mut().hud = v);
+    ACCUM.with(|a| {
+        let mut a = a.borrow_mut();
+        a.hud = v;
+        a.hud_touched = true;
+    });
     Ok(0)
 }
 
@@ -258,6 +269,7 @@ fn host_damage(state: &mut LuaState) -> LuaResult<u32> {
     ACCUM.with(|a| {
         let mut a = a.borrow_mut();
         a.hud = (a.hud - v).clamp(0.0, 1.0);
+        a.hud_touched = true;
     });
     Ok(0)
 }
@@ -571,7 +583,9 @@ pub(super) fn run_script_web(
         }
         vib_out.extend(a.vib.iter().copied());
         reverb_out.extend(a.reverb.iter().copied());
-        *health_out = Some(a.hud);
+        if a.hud_touched {
+            *health_out = Some(a.hud);
+        }
         debug_out.extend(a.debug_lines.iter().copied());
     });
 

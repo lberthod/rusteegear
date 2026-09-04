@@ -300,10 +300,10 @@ impl App {
         inp.gamepad_pitch = gp.look_y;
         // Bascules sur front montant (Select = masquer le HUD) — routées vers
         // l'éditeur via le renderer, seul accès. Start : fenêtre Multijoueur en
-        // éditeur desktop, mais overlay Paramètres minimal en mode Player (Sprint
-        // 2, config hors éditeur) — `mobile_multiplayer_overlay` du mode Player
-        // est un panneau toujours affiché, indépendant de `panels.multiplayer`,
-        // donc ce bouton y est libre pour un autre usage.
+        // éditeur desktop, mais Paramètres en mode Player (Sprint 2, config
+        // hors éditeur) — le mode Player n'a pas de fenêtre Multijoueur (écran
+        // d'accueil et menu pause à la place, roadmap post-audit UX v2
+        // 2026-09-04, 1.4), donc ce bouton y est libre pour un autre usage.
         if gp.menu
             && !self.gamepad_menu_was_held
             && let Some(r) = self.renderer.as_mut()
@@ -512,18 +512,36 @@ impl ApplicationHandler for App {
         self.adopt_pending_renderer();
         // Calculé avant d'emprunter `renderer` (cf. `consumed` plus bas).
         let app_shortcut = self.is_app_shortcut(&event);
+        // Un doigt a touché l'écran : l'interface tactile devient celle à
+        // dessiner (`AppState::touch_ui_active`, roadmap post-audit UX v2
+        // 2026-09-04, 1.1).
+        if matches!(event, WindowEvent::Touch(_)) {
+            self.state.touch_seen = true;
+        }
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
 
-        // En mode player sans contrôles tactiles, egui n'intercepte rien. Mais si la
-        // scène a un joystick/boutons, on laisse egui traiter l'évènement (et il
-        // n'est « consommé » pour le jeu que si un contrôle l'a effectivement utilisé).
-        let consumed = if self.state.player && !self.state.scene.mobile.any() {
-            false
-        } else {
-            renderer.on_ui_event(&event)
-        };
+        // Tab en mode Player = classement tant qu'elle est tenue (roadmap v2
+        // 1.6), lue **avant** egui : il consommait la touche pour déplacer le
+        // focus entre widgets, et « Tab ne faisait rien ». Paramètres passent
+        // par le menu pause.
+        if self.state.player
+            && let WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } = &event
+            && key_event.physical_key
+                == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Tab)
+        {
+            self.state.roster_held = key_event.state == ElementState::Pressed;
+            return;
+        }
+
+        // egui reçoit tout, en éditeur comme en mode Player (roadmap v2 1.1 :
+        // l'overlay joueur — accueil, pause, aide — existe pour toute scène,
+        // il n'est plus conditionné aux contrôles tactiles) ; un événement n'est
+        // « consommé » pour le jeu que si un widget l'a effectivement utilisé.
+        let consumed = renderer.on_ui_event(&event);
         // Raccourcis d'application (Cmd+S / Cmd+Maj+S / Cmd+O / Cmd+N / Cmd+P /
         // Cmd+Q) : egui les reçoit — et les déclarait « consommés » dès qu'un
         // champ texte avait le focus, donc Enregistrer ne marchait plus pendant
@@ -680,10 +698,17 @@ impl ApplicationHandler for App {
             // l'orbite caméra, qui bougerait la vue au lieu de déplacer le
             // personnage. L'orbite tactile reste réservée à l'éditeur/l'aperçu
             // (sans contrôles mobiles).
-            WindowEvent::Touch(touch) if !(self.state.player && self.state.scene.mobile.any()) => {
+            WindowEvent::Touch(touch)
+                if !(self.state.player
+                    && self.state.scene.mobile.any()
+                    && self.state.touch_ui_active()) =>
+            {
                 self.handle_touch(touch);
             }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m,
+            // Fenêtre quittée Tab enfoncée : winit n'enverra pas le relâchement,
+            // le classement (roadmap v2 1.6) ne doit pas rester affiché.
+            WindowEvent::Focused(false) => self.state.roster_held = false,
             WindowEvent::KeyboardInput {
                 event: key_event, ..
             } => {
@@ -742,13 +767,20 @@ impl ApplicationHandler for App {
                         // Caméra libre (« vol libre »/noclip) de l'éditeur : voir
                         // partout sur la carte hors Play, cf. `AppState::toggle_fly_cam`.
                         KeyCode::KeyG if !cmd && !self.state.player => self.state.toggle_fly_cam(),
-                        KeyCode::KeyZ if cmd && st.shift_key() => self.state.redo(),
-                        KeyCode::KeyZ if cmd => self.state.undo(),
-                        KeyCode::KeyD if cmd => self.state.duplicate_selected(),
-                        KeyCode::KeyC if cmd => self.state.copy_selected(),
-                        KeyCode::KeyV if cmd => self.state.paste(),
-                        KeyCode::KeyX if cmd => self.state.cut_selected(),
-                        KeyCode::KeyA if cmd => self.state.select_all(),
+                        // Raccourcis d'édition : jamais en mode Player (roadmap
+                        // post-audit UX v2 2026-09-04, 1.8) — depuis la pause, un
+                        // joueur pouvait dupliquer ou supprimer un objet.
+                        KeyCode::KeyZ if cmd && st.shift_key() && !self.state.player => {
+                            self.state.redo()
+                        }
+                        KeyCode::KeyZ if cmd && !self.state.player => self.state.undo(),
+                        KeyCode::KeyD if cmd && !self.state.player => {
+                            self.state.duplicate_selected()
+                        }
+                        KeyCode::KeyC if cmd && !self.state.player => self.state.copy_selected(),
+                        KeyCode::KeyV if cmd && !self.state.player => self.state.paste(),
+                        KeyCode::KeyX if cmd && !self.state.player => self.state.cut_selected(),
+                        KeyCode::KeyA if cmd && !self.state.player => self.state.select_all(),
                         // Raccourcis de fichier (roadmap post-audit UX 2026-09-04,
                         // 1.1) : absents jusque-là, Enregistrer/Ouvrir/Nouveau
                         // passaient obligatoirement par le menu. Hors mode player
@@ -756,7 +788,12 @@ impl ApplicationHandler for App {
                         KeyCode::KeyS if cmd && st.shift_key() && !self.state.player => {
                             self.state.pending_shortcut = Some(crate::app::EditorShortcut::SaveAs)
                         }
-                        KeyCode::KeyS if cmd && !self.state.player => self.state.save(),
+                        // …et pas pendant Play (roadmap v2 1.8) : enregistrer
+                        // écrasait la scène du projet avec l'état simulé — le
+                        // bouton 💾 de la barre d'outils est grisé de même.
+                        KeyCode::KeyS if cmd && !self.state.player && !self.state.playing => {
+                            self.state.save()
+                        }
                         KeyCode::KeyO if cmd && !self.state.player => {
                             self.state.pending_shortcut = Some(crate::app::EditorShortcut::Open)
                         }
@@ -764,7 +801,9 @@ impl ApplicationHandler for App {
                             self.state.pending_shortcut =
                                 Some(crate::app::EditorShortcut::NewProject)
                         }
-                        KeyCode::Backspace | KeyCode::Delete => self.state.delete_selected(),
+                        KeyCode::Backspace | KeyCode::Delete if !self.state.player => {
+                            self.state.delete_selected()
+                        }
                         // Sélection directe de l'arme à distance (cf.
                         // `app::fireball::RANGED_WEAPONS`) — le pendant tactile
                         // est le bouton « Arme », qui cycle.
@@ -790,16 +829,6 @@ impl ApplicationHandler for App {
                                 } else {
                                     r.toggle_shortcuts();
                                 }
-                            }
-                        }
-                        // Overlay Paramètres minimal du mode Player (Sprint 2, config
-                        // hors éditeur) — équivalent clavier du bouton Start de la
-                        // manette, pour tester `--player` sur une machine sans
-                        // manette branchée. Gardé par `self.state.player` : `Tab`
-                        // reste sans effet particulier en éditeur desktop.
-                        KeyCode::Tab if self.state.player => {
-                            if let Some(r) = self.renderer.as_mut() {
-                                r.toggle_player_settings();
                             }
                         }
                         // Carte plein écran (joueur/alliés/monstres), cf.
@@ -1111,16 +1140,26 @@ fn pilot_port_requested<I: Iterator<Item = String>>(args: I, env: Option<&str>) 
     }
 }
 
-/// Pseudo généré au hasard (« InvitéNNNN ») pour la connexion automatique en
-/// mode Player — évite d'exiger une saisie manuelle juste pour rejoindre le
-/// serveur par défaut. Basé sur l'horloge plutôt qu'une dépendance `rand`
-/// (aucune autre n'existe déjà dans le projet pour ce besoin ponctuel).
+/// Pseudo généré au hasard (« InvitéNNNN », quatre chiffres) pour l'écran
+/// d'accueil du mode Player, tiré une fois puis persisté dans
+/// `Settings::player_name` (roadmap post-audit UX v2 2026-09-04, 1.7). Basé
+/// sur l'horloge plutôt qu'une dépendance `rand` (aucune n'existe dans le
+/// projet pour ce besoin ponctuel) — les microsecondes brassées par un
+/// multiplicateur, parce que `subsec_nanos() % 10000` ne donnait que des
+/// multiples de 1000 sur macOS (« Invité7000 », « Invité0 » à l'audit).
 pub(crate) fn guest_name() -> String {
-    let nanos = crate::time_compat::SystemTime::now()
+    let micros = crate::time_compat::SystemTime::now()
         .duration_since(crate::time_compat::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
+        .map(|d| d.as_micros() as u64)
         .unwrap_or(0);
-    format!("Invité{}", nanos % 10000)
+    format!("Invité{:04}", guest_digits(micros))
+}
+
+/// Quatre chiffres dérivés d'un horodatage (cf. `guest_name`) : brassage
+/// multiplicatif (constante de Knuth) pour que deux lancements proches ne
+/// partagent pas les mêmes chiffres de tête.
+fn guest_digits(seed: u64) -> u64 {
+    (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) % 10000
 }
 
 /// Point d'entrée desktop (et iOS via le bin).
@@ -1299,6 +1338,21 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Roadmap post-audit UX v2 2026-09-04, 1.7 : le pseudo invité a quatre
+    /// chiffres (zéro-paddé) et deux horodatages voisins donnent des chiffres
+    /// différents — pas seulement des multiples de 1000.
+    #[test]
+    fn guest_name_has_four_varied_digits() {
+        let name = guest_name();
+        assert!(name.starts_with("Invité"), "{name}");
+        assert_eq!(name.chars().count(), "Invité".chars().count() + 4, "{name}");
+        let digits: std::collections::HashSet<u64> = (0..50u64)
+            .map(|i| guest_digits(1_700_000_000_000_000 + i))
+            .collect();
+        assert!(digits.len() > 40, "{digits:?}");
+        assert!(digits.iter().any(|d| d % 1000 != 0), "{digits:?}");
+    }
 
     #[test]
     fn the_editor_opens_directly_on_the_embedded_player_scene_with_a_clean_history() {

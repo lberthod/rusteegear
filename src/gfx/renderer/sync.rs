@@ -31,8 +31,9 @@ impl Renderer {
         }
     }
 
-    /// Bascule l'overlay Paramètres minimal du mode Player (bouton Start de la
-    /// manette ou touche Tab, en mode `--player`/mobile — Sprint 2) — même relais.
+    /// Bascule les Paramètres du mode Player (bouton Start de la manette, en
+    /// mode `--player`/mobile — Sprint 2 ; au clavier, via le menu pause depuis
+    /// la roadmap post-audit UX v2 2026-09-04, 1.6) — même relais.
     pub fn toggle_player_settings(&mut self) {
         if let Some(e) = self.editor.as_mut() {
             e.toggle_player_settings();

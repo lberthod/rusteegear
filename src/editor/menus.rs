@@ -51,6 +51,10 @@ pub(super) fn menu_fichier(
     has_project: bool,
     recents: Vec<(&RecentProject, bool)>,
     suggested_save_name: &str,
+    // Play en cours (roadmap post-audit UX v2 2026-09-04, 1.8) : « Enregistrer »
+    // est grisé, comme 💾 et Cmd+S — enregistrer écrasait la scène du projet
+    // avec l'état simulé.
+    playing: bool,
 ) {
     ui.menu_button("Fichier", |ui| {
         // (les sélecteurs « Enregistrer sous… » / « Ouvrir… » sont dans
@@ -243,11 +247,12 @@ pub(super) fn menu_fichier(
         }
         ui.separator();
         if ui
-            .add(item("💾  Enregistrer", MenuItem::Save))
+            .add_enabled(!playing, item("💾  Enregistrer", MenuItem::Save))
             .on_hover_text(
                 "Dans la scène du projet ouvert ou le fichier ouvert ; sans fichier, \
                  ouvre « Enregistrer sous… »",
             )
+            .on_disabled_hover_text("Arrête la partie pour enregistrer")
             .clicked()
         {
             actions.save = true;

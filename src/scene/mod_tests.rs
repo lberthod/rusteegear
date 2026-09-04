@@ -2050,6 +2050,32 @@ fn sync_embedded_scene_hameau_from_the_demo() {
     );
 }
 
+/// Roadmap post-audit UX v2 2026-09-04, 1.2 : la scène livrée a une barre de
+/// vie et un bouton d'attaque — sans eux, le solo n'avait aucun enjeu (J
+/// n'attaquait rien, `health_bar: false`). Charge le JSON par le vrai chemin
+/// (`embedded_player`, qui retomberait sur `Scene::demo` s'il était invalide :
+/// d'où la vérification qu'on a bien la scène du MMORPG, pas le repli).
+#[test]
+fn the_embedded_scene_has_a_health_bar_and_an_attack_button() {
+    let embedded = Scene::embedded_player();
+    assert!(
+        embedded
+            .objects
+            .iter()
+            .any(|o| o.name.starts_with("Créature")),
+        "le JSON embarqué n'a pas chargé (repli sur la démo)"
+    );
+    assert!(embedded.mobile.health_bar);
+    let player = embedded
+        .objects
+        .iter()
+        .find(|o| o.controller.as_ref().is_some_and(|c| c.input))
+        .expect("un objet pilotable");
+    let ctrl = player.controller.as_ref().unwrap();
+    assert_eq!(ctrl.attack_button, "Attaque");
+    assert_eq!(ctrl.jump_button, "Saut");
+}
+
 /// Garde-fou compagnon de `sync_embedded_scene_creatures_from_the_demo` :
 /// les créatures de la scène embarquée doivent rester **identiques** à
 /// celles de `Scene::mmorpg_demo`

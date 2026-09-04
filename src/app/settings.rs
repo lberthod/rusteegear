@@ -106,6 +106,23 @@ pub struct Settings {
     /// tourne avant que les toasts n'écoutent le journal.
     #[serde(skip)]
     pub load_warning: Option<String>,
+    /// Classe choisie à l'écran d'accueil du mode Player (roadmap post-audit
+    /// UX v2 2026-09-04, 1.4), au format réseau (`PlayerClass::to_u8`) —
+    /// restaurée au lancement suivant.
+    #[serde(default)]
+    pub player_class: u8,
+    /// Code de salon saisi à l'écran d'accueil (vide = salon public), roadmap v2 1.4.
+    #[serde(default)]
+    pub player_room: String,
+    /// Dernier choix à l'écran d'accueil : `true` = « Jouer en ligne »,
+    /// `false` = « Jouer seul » (roadmap v2 1.4) — le bouton correspondant est
+    /// mis en avant au lancement suivant.
+    #[serde(default = "default_true")]
+    pub last_play_online: bool,
+    /// Adresse du serveur modifiée dans la section « Serveur » de l'accueil
+    /// (roadmap v2 1.4) ; vide = `network_client::DEFAULT_SERVER_URL`.
+    #[serde(default)]
+    pub server_url: String,
 }
 
 /// Touches des actions de jeu, remappables (roadmap post-audit UX 2026-09-04,
@@ -265,40 +282,83 @@ impl Default for Settings {
             open_windows: Vec::new(),
             ignored_autosave: None,
             load_warning: None,
+            player_class: 0,
+            player_room: String::new(),
+            last_play_online: true,
+            server_url: String::new(),
         }
     }
 }
 
 impl Settings {
-    /// Chemin du fichier de réglages : `app_data_dir()/settings.json`, par
-    /// plateforme (cf. `assets::app_data_dir` — Android via `set_android_data_dir`,
-    /// sinon `~/.motor3derust/`, comme avant ce Sprint 1 côté desktop). Avant ce
-    /// Sprint, cette fonction résolvait `$HOME` en dur : sur Android (où `$HOME`
-    /// n'existe pas), elle renvoyait toujours `None`, donc `load()`/`save()`
-    /// dégradaient silencieusement en no-op — le joueur mobile perdait tout
-    /// réglage (Firebase, manette, volumes) à chaque redémarrage.
-    fn path() -> Option<PathBuf> {
-        Some(crate::assets::app_data_dir()?.join("settings.json"))
-    }
+    /// Nom du fichier (natif) ou de la clé `localStorage` (web) des réglages,
+    /// cf. `assets::persisted_read` (roadmap post-audit UX v2 2026-09-04, 1.7).
+    const STORE_NAME: &'static str = "settings.json";
+    /// Copie de secours d'un `settings.json` illisible (roadmap post-audit UX
+    /// v2 2026-09-04, 3.8), dans le même stockage que l'original.
+    const BACKUP_NAME: &'static str = "settings.json.bak";
 
-    /// Charge les réglages depuis le disque ; à défaut de fichier existant, ceux embarqués à
-    /// l'export (Sprint 3 de PHASE A — `assets::default_settings_json`, clé Firebase pré-remplie
-    /// pour un `.app`/APK qui fonctionne sans saisie manuelle), ou sinon les valeurs par défaut.
+    /// Charge les réglages depuis le stockage persistant : `app_data_dir()/
+    /// settings.json` par plateforme (cf. `assets::app_data_dir` — Android via
+    /// `set_android_data_dir`, sinon `~/.motor3derust/`), et `localStorage` sur
+    /// le web via l'adaptateur `assets::persisted_read`/`persisted_write`
+    /// (roadmap post-audit UX v2 2026-09-04, 1.7 — avant, `$HOME` résolu en
+    /// dur renvoyait `None` sur Android comme sur wasm32 : `load()`/`save()`
+    /// dégradaient en no-op et le joueur perdait tout réglage à chaque
+    /// redémarrage). À défaut, ceux embarqués à l'export (Sprint 3 de PHASE A —
+    /// `assets::default_settings_json`, clé Firebase pré-remplie pour un
+    /// `.app`/APK qui fonctionne sans saisie manuelle), ou sinon les valeurs
+    /// par défaut.
     pub fn load() -> Self {
-        let Some(p) = Self::path() else {
-            return Self::from_bundled_defaults();
-        };
-        if p.exists() {
-            return Self::load_from(&p);
+        let dir = crate::assets::app_data_dir();
+        if let Some(bytes) = crate::assets::persisted_read(dir.clone(), Self::STORE_NAME) {
+            return Self::parse(&bytes, dir);
         }
         let defaults = Self::from_bundled_defaults();
         // Persisté seulement si l'export a réellement embarqué une config par défaut : sinon
         // (développement, aucun `default_settings.json` dans le bundle), premier lancement
         // silencieux comme avant ce Sprint 3 — pas d'écriture avant un `save()` explicite.
         if crate::assets::default_settings_json().is_some() {
-            defaults.save_to(&p);
+            defaults.save();
         }
         defaults
+    }
+
+    /// JSON → réglages. Un contenu présent mais illisible (JSON corrompu,
+    /// fichier tronqué, non UTF-8) est mis de côté en `settings.json.bak` —
+    /// via `persisted_write`, donc à côté de l'original, fichier ou
+    /// `localStorage` (roadmap v2 1.7) — et signalé via `load_warning`
+    /// (roadmap post-audit UX v2 2026-09-04, 3.8) : avant, les réglages
+    /// repartaient de zéro en silence et le fichier était écrasé à la première
+    /// sauvegarde. `dir` = dossier de l'original (natif), ignoré sur le web.
+    fn parse(bytes: &[u8], dir: Option<PathBuf>) -> Self {
+        let error = match std::str::from_utf8(bytes)
+            .map_err(|e| e.to_string())
+            .and_then(|s| serde_json::from_str::<Self>(s).map_err(|e| e.to_string()))
+        {
+            Ok(settings) => return settings,
+            Err(e) => e,
+        };
+        let backup = dir
+            .as_ref()
+            .map(|d| d.join(Self::BACKUP_NAME).display().to_string())
+            .unwrap_or_else(|| Self::BACKUP_NAME.to_string());
+        let saved = crate::assets::persisted_write(dir, Self::BACKUP_NAME, bytes).is_ok();
+        let warning = if saved {
+            format!(
+                "Réglages illisibles ({error}) : l'ancien fichier a été copié en {backup} et \
+                 les valeurs par défaut sont utilisées."
+            )
+        } else {
+            format!(
+                "Réglages illisibles ({error}) : valeurs par défaut utilisées (copie de \
+                 secours impossible)."
+            )
+        };
+        Self {
+            load_warning: Some(warning),
+            ..Self::default()
+        }
     }
 
     /// Réglages d'un premier lancement : ceux embarqués à l'export s'il y en a (JSON partiel —
@@ -311,48 +371,34 @@ impl Settings {
     }
 
     /// Comme `load`, mais avec un chemin de fichier explicite (isolation des
-    /// tests — même patron que `assets::read_user_bytes_at`). Un fichier
-    /// présent mais illisible (JSON corrompu) est mis de côté en
-    /// `settings.json.bak` et signalé via `load_warning` (roadmap post-audit
-    /// UX v2 2026-09-04, 3.8) — avant, les réglages repartaient de zéro en
-    /// silence et le fichier était écrasé à la première sauvegarde.
+    /// tests — même patron que `assets::read_user_bytes_at`) : fichier absent
+    /// (première utilisation) = valeurs par défaut, fichier illisible = `parse`
+    /// (copie `.bak` à côté, `load_warning` posé).
+    #[cfg(test)]
     fn load_from(path: &std::path::Path) -> Self {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Self::default();
-        };
-        match serde_json::from_str::<Self>(&text) {
-            Ok(settings) => settings,
-            Err(e) => {
-                let backup = path.with_extension("json.bak");
-                let saved = std::fs::copy(path, &backup).is_ok();
-                let mut settings = Self::default();
-                let warning = if saved {
-                    format!(
-                        "Réglages illisibles ({e}) : l'ancien fichier a été copié en {} et les \
-                         valeurs par défaut sont utilisées.",
-                        backup.display()
-                    )
-                } else {
-                    format!(
-                        "Réglages illisibles ({e}) : valeurs par défaut utilisées (copie de \
-                         secours impossible)."
-                    )
-                };
-                settings.load_warning = Some(warning);
-                settings
-            }
+        match std::fs::read(path) {
+            Ok(bytes) => Self::parse(&bytes, path.parent().map(Path::to_path_buf)),
+            Err(_) => Self::default(),
         }
     }
 
-    /// Persiste les réglages (crée le dossier parent au besoin).
+    /// Persiste les réglages (crée le dossier parent au besoin ; `localStorage`
+    /// sur le web, cf. `assets::persisted_write`).
     pub fn save(&self) {
-        if let Some(p) = Self::path() {
-            self.save_to(&p);
+        if let Ok(json) = serde_json::to_string_pretty(self)
+            && let Err(e) = crate::assets::persisted_write(
+                crate::assets::app_data_dir(),
+                Self::STORE_NAME,
+                json.as_bytes(),
+            )
+        {
+            log::warn!("réglages non enregistrés : {e}");
         }
     }
 
     /// Comme `save`, mais avec un chemin de fichier explicite (isolation des
     /// tests — même patron que `assets::write_user_bytes_at`).
+    #[cfg(test)]
     fn save_to(&self, path: &std::path::Path) {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -572,6 +618,36 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).expect("désérialisable");
         assert_eq!(back.hud_scale, 1.5);
         assert!(back.reduce_shake);
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 1.4 : classe, salon, dernier choix
+    /// et adresse serveur de l'écran d'accueil survivent à un aller-retour, et
+    /// un ancien fichier sans ces champs charge avec « en ligne » par défaut.
+    #[test]
+    fn welcome_choices_round_trip_and_default_to_online() {
+        let settings = Settings {
+            player_class: 2,
+            player_room: "amis-42".to_string(),
+            last_play_online: false,
+            server_url: "ws://192.168.1.10:7777".to_string(),
+            ..Settings::default()
+        };
+        let back = Settings::parse(serde_json::to_string(&settings).unwrap().as_bytes(), None);
+        assert_eq!(back.player_class, 2);
+        assert_eq!(back.player_room, "amis-42");
+        assert!(!back.last_play_online);
+        assert_eq!(back.server_url, "ws://192.168.1.10:7777");
+
+        let old = Settings::parse(br#"{"deepseek_api_key": ""}"#, None);
+        assert!(old.last_play_online);
+        assert_eq!(old.player_class, 0);
+        assert!(old.player_room.is_empty());
+        assert!(old.server_url.is_empty());
+        // Contenu illisible, sans dossier (web sans `localStorage`, `$HOME`
+        // absent) : valeurs par défaut et avertissement, jamais de panique.
+        let broken = Settings::parse(b"\xff\xfe", None);
+        assert!(broken.player_name.is_empty());
+        assert!(broken.load_warning.is_some());
     }
 
     /// `mute_player`/`unmute_player` : ajoutent/retirent sans doublon, sans

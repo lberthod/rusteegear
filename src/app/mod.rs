@@ -976,6 +976,14 @@ pub struct AppState {
     /// 2026-09-04, 5.6) : index dans la liste triée des alliés vivants, la
     /// touche de saut passe au suivant — cf. `spectate_target`.
     pub spectate_cursor: usize,
+    /// Au moins un `WindowEvent::Touch` reçu depuis le lancement (roadmap
+    /// post-audit UX v2 2026-09-04, 1.1) — cf. `touch_ui_active`. Posé par
+    /// `lib.rs`, jamais rebaissé : un écran tactile ne disparaît pas.
+    pub touch_seen: bool,
+    /// Tab maintenue en mode Player (roadmap v2 1.6) : le classement des
+    /// joueurs s'affiche déplié tant que c'est vrai. Posé/levé par `lib.rs`
+    /// **avant** egui, qui consommerait sinon Tab pour la navigation au focus.
+    pub roster_held: bool,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1602,6 +1610,8 @@ impl AppState {
             ui_edit_active: false,
             context_menu_request: false,
             spectate_cursor: 0,
+            touch_seen: false,
+            roster_held: false,
         }
     }
 
@@ -1762,9 +1772,22 @@ impl AppState {
     /// et `is_active`, réutilisé tel quel plutôt qu'un second mécanisme de gel.
     /// Sans effet hors Play (rien à mettre en pause).
     pub fn toggle_pause(&mut self) {
-        if self.playing {
+        // Écran d'accueil ouvert (roadmap post-audit UX v2 2026-09-04, 1.4) :
+        // le jeu est déjà gelé derrière, Échap ne doit pas le relancer.
+        if self.playing && !self.welcome_pending {
             self.paused = !self.paused;
         }
+    }
+
+    /// L'interface tactile est-elle celle à dessiner (roadmap post-audit UX v2
+    /// 2026-09-04, 1.1) ? Vrai sur Android/iOS d'office, ailleurs dès qu'un
+    /// doigt a touché l'écran (`touch_seen`). Un seul critère pour le stick et
+    /// les boutons (`editor::hud::mobile_overlay`), la section « Tactile » de
+    /// l'aide, la légende de la carte et le texte spectateur — avant, tout
+    /// dépendait de `scene.mobile.any()`, donc un desktop à la souris voyait un
+    /// stick et l'aide tactile dès que la scène déclarait des boutons.
+    pub fn touch_ui_active(&self) -> bool {
+        cfg!(any(target_os = "android", target_os = "ios")) || self.touch_seen
     }
 
     /// Sensibilité souris (Paramètres), bornée à [0.2, 4] — cf. `mouse_sensitivity`.
@@ -1922,9 +1945,16 @@ impl AppState {
     /// Point que la caméra de suivi vise : l'allié spectaté si vaincu, sinon
     /// le joueur.
     pub fn camera_focus_position(&self) -> Option<Vec3> {
-        self.spectate_target()
-            .map(|(_, p)| p)
-            .or_else(|| self.player_position())
+        if let Some((_, p)) = self.spectate_target() {
+            return Some(p);
+        }
+        // Vaincu sans allié vivant (roadmap post-audit UX v2 2026-09-04,
+        // 1.9) : la caméra reste où elle est plutôt que de sauter sur notre
+        // corps masqué — le serveur relance une manche sous peu.
+        if self.is_locally_defeated() {
+            return None;
+        }
+        self.player_position()
     }
 
     /// État live du cycle de vie du toucher pour un objet (touch_started,

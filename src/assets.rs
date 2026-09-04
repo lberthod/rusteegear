@@ -330,7 +330,82 @@ pub(crate) fn safe_join(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 /// (cf. `safe_join`), ou si le fichier n'existe pas encore (première utilisation —
 /// pas une erreur).
 pub fn read_user_bytes(name: &str) -> Option<Vec<u8>> {
-    read_user_bytes_at(&user_dir()?, name)
+    persisted_read(user_dir(), name)
+}
+
+// --- Adaptateur de stockage persistant (roadmap post-audit UX v2 2026-09-04,
+// 1.7) : sur le web, `$HOME` n'existe pas et `app_data_dir()` vaut `None`, donc
+// réglages (`app::settings::Settings`), journal de crash (`crash_log`) et
+// sauvegardes (`user://`) étaient perdus à chaque rechargement — tout le monde
+// s'appelait « Invité0 ». Ici, un seul point de bascule : fichier sous `dir`
+// en natif, `localStorage` (clé préfixée) en wasm32 ; `dir` y est ignoré.
+// Les appelants restent écrits une seule fois, sans `#[cfg]`.
+
+/// Préfixe des clés `localStorage` — évite toute collision avec une autre page
+/// servie sur la même origine.
+#[cfg(target_arch = "wasm32")]
+const WEB_STORAGE_PREFIX: &str = "rusteegear.";
+
+#[cfg(target_arch = "wasm32")]
+fn web_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+/// Lit `name` dans le stockage persistant : `dir/name` en natif (`None` si
+/// `dir` est indisponible, si le nom s'évade du dossier ou si le fichier n'existe
+/// pas encore), `localStorage["rusteegear.<name>"]` sur le web.
+pub fn persisted_read(dir: Option<PathBuf>, name: &str) -> Option<Vec<u8>> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = dir;
+        let value = web_storage()?
+            .get_item(&format!("{WEB_STORAGE_PREFIX}{name}"))
+            .ok()??;
+        Some(value.into_bytes())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        read_user_bytes_at(&dir?, name)
+    }
+}
+
+/// Écrit `data` sous `name` dans le stockage persistant (cf. `persisted_read`).
+/// Sur le web, `localStorage` ne stocke que du texte : un contenu non UTF-8
+/// est refusé plutôt que corrompu (réglages JSON et journal de crash sont du
+/// texte, les sauvegardes de partie aussi).
+pub fn persisted_write(dir: Option<PathBuf>, name: &str, data: &[u8]) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = dir;
+        let text = std::str::from_utf8(data)
+            .map_err(|_| "contenu non textuel : impossible dans localStorage".to_string())?;
+        web_storage()
+            .ok_or_else(|| "localStorage indisponible".to_string())?
+            .set_item(&format!("{WEB_STORAGE_PREFIX}{name}"), text)
+            .map_err(|_| "écriture localStorage refusée (quota ?)".to_string())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let dir = dir.ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
+        write_user_bytes_at(&dir, name, data)
+    }
+}
+
+/// Supprime `name` du stockage persistant — sans effet s'il n'existait pas.
+pub fn persisted_remove(dir: Option<PathBuf>, name: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = dir;
+        if let Some(storage) = web_storage() {
+            let _ = storage.remove_item(&format!("{WEB_STORAGE_PREFIX}{name}"));
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(target) = dir.and_then(|d| safe_join(&d, name)) {
+            let _ = std::fs::remove_file(target);
+        }
+    }
 }
 
 /// Comme `read_user_bytes`, mais avec un dossier explicite plutôt que le vrai
@@ -344,8 +419,7 @@ pub fn read_user_bytes_at(dir: &std::path::Path, name: &str) -> Option<Vec<u8>> 
 
 /// Écrit `data` dans `user://<nom>`, en créant le dossier utilisateur si besoin.
 pub fn write_user_bytes(name: &str, data: &[u8]) -> Result<(), String> {
-    let dir = user_dir().ok_or_else(|| "dossier utilisateur indisponible".to_string())?;
-    write_user_bytes_at(&dir, name, data)
+    persisted_write(user_dir(), name, data)
 }
 
 /// Comme `write_user_bytes`, mais avec un dossier explicite (Sprint 105a-3,
@@ -565,6 +639,26 @@ mod tests {
     /// Dossier temporaire unique par test (pas de mutation de `$HOME`/état global —
     /// les tests tournent en parallèle dans le même process, cf. `register_asset_at`
     /// et consorts, paramétrés par répertoire pour cette raison).
+    /// Adaptateur de stockage (roadmap post-audit UX v2 2026-09-04, 1.7) :
+    /// en natif, `persisted_write`/`persisted_read`/`persisted_remove` font un
+    /// aller-retour sur le dossier passé, et un dossier absent (`None`, comme
+    /// `app_data_dir()` sans `$HOME`) refuse d'écrire sans paniquer.
+    #[test]
+    fn persisted_round_trip_and_remove_on_a_simulated_directory() {
+        let dir = temp_assets_dir("persisted");
+        assert!(persisted_read(Some(dir.clone()), "settings.json").is_none());
+        persisted_write(Some(dir.clone()), "settings.json", b"{\"a\":1}").unwrap();
+        assert_eq!(
+            persisted_read(Some(dir.clone()), "settings.json").as_deref(),
+            Some(&b"{\"a\":1}"[..])
+        );
+        persisted_remove(Some(dir.clone()), "settings.json");
+        assert!(persisted_read(Some(dir), "settings.json").is_none());
+        assert!(persisted_write(None, "settings.json", b"x").is_err());
+        assert!(persisted_read(None, "settings.json").is_none());
+        persisted_remove(None, "settings.json");
+    }
+
     fn temp_assets_dir(tag: &str) -> std::path::PathBuf {
         use std::hash::{BuildHasher, Hash, Hasher};
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();

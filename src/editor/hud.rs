@@ -492,7 +492,6 @@ pub(super) fn multiplayer_roster_panel(
     locale: crate::app::locale::Locale,
     colorblind: bool,
 ) {
-    use egui::Color32;
     if roster.is_empty() {
         return;
     }
@@ -511,63 +510,72 @@ pub(super) fn multiplayer_roster_panel(
         .resizable(false)
         .fixed_pos(pos)
         .default_width(220.0)
-        .show(ctx, |ui| {
-            for (name, health, kills, is_self) in roster_display_order(roster) {
-                ui.horizontal(|ui| {
-                    // Mini barre de vie : fond gris, remplissage vert→rouge selon la vie.
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(36.0, 10.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 2.0, Color32::from_gray(60));
-                    if let Some(h) = health {
-                        let h = h.clamp(0.0, 1.0);
-                        let fill = egui::Rect::from_min_size(
-                            rect.min,
-                            egui::vec2(rect.width() * h, rect.height()),
-                        );
-                        let color = if colorblind {
-                            health_color(h, true)
-                        } else if h > 0.5 {
-                            Color32::from_rgb(110, 200, 110)
-                        } else if h > 0.25 {
-                            Color32::from_rgb(230, 180, 80)
-                        } else {
-                            Color32::from_rgb(220, 90, 80)
-                        };
-                        ui.painter().rect_filled(fill, 2.0, color);
-                        // PHASE I Sprint 2 (accessibilité §16.6, colorblind) : la
-                        // couleur vert/jaune/rouge de la barre n'est ici que
-                        // décorative — le pourcentage numérique porte la même
-                        // information indépendamment de la teinte perçue.
-                        ui.small(health_percent_label(h));
-                    }
-                    // Spectateur (0 PV, GDD §5.3/§9.1) : grisé — jamais la
-                    // seule information (le nom et la barre de vie vide le
-                    // disent aussi), juste une distinction visuelle du reste
-                    // du roster, réclamée explicitement par le GDD.
-                    let is_spectator = health.is_some_and(|h| h <= 0.0);
-                    let display_name = if is_spectator {
-                        format!("🕯 {name}")
-                    } else {
-                        name.clone()
-                    };
-                    if *is_self {
-                        let text = crate::app::locale::you_suffix(locale, &display_name);
-                        if is_spectator {
-                            ui.label(egui::RichText::new(text).color(Color32::from_gray(140)));
-                        } else {
-                            ui.strong(text);
-                        }
-                    } else if is_spectator {
-                        ui.label(egui::RichText::new(display_name).color(Color32::from_gray(140)));
-                    } else {
-                        ui.label(display_name);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(crate::app::locale::frags(locale, kills.unwrap_or(0)));
-                    });
-                });
+        .show(ctx, |ui| roster_rows(ui, roster, locale, colorblind));
+}
+
+/// Une ligne par joueur (barre de vie, pourcentage, nom, frags) — partagée par
+/// le panneau replié et le classement de Tab (roadmap v2 1.6).
+fn roster_rows(
+    ui: &mut egui::Ui,
+    roster: &[RosterEntry],
+    locale: crate::app::locale::Locale,
+    colorblind: bool,
+) {
+    use egui::Color32;
+    for (name, health, kills, is_self) in roster_display_order(roster) {
+        ui.horizontal(|ui| {
+            // Mini barre de vie : fond gris, remplissage vert→rouge selon la vie.
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 10.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 2.0, Color32::from_gray(60));
+            if let Some(h) = health {
+                let h = h.clamp(0.0, 1.0);
+                let fill = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width() * h, rect.height()),
+                );
+                let color = if colorblind {
+                    health_color(h, true)
+                } else if h > 0.5 {
+                    Color32::from_rgb(110, 200, 110)
+                } else if h > 0.25 {
+                    Color32::from_rgb(230, 180, 80)
+                } else {
+                    Color32::from_rgb(220, 90, 80)
+                };
+                ui.painter().rect_filled(fill, 2.0, color);
+                // PHASE I Sprint 2 (accessibilité §16.6, colorblind) : la
+                // couleur vert/jaune/rouge de la barre n'est ici que
+                // décorative — le pourcentage numérique porte la même
+                // information indépendamment de la teinte perçue.
+                ui.small(health_percent_label(h));
             }
+            // Spectateur (0 PV, GDD §5.3/§9.1) : grisé — jamais la
+            // seule information (le nom et la barre de vie vide le
+            // disent aussi), juste une distinction visuelle du reste
+            // du roster, réclamée explicitement par le GDD.
+            let is_spectator = health.is_some_and(|h| h <= 0.0);
+            let display_name = if is_spectator {
+                format!("🕯 {name}")
+            } else {
+                name.clone()
+            };
+            if *is_self {
+                let text = crate::app::locale::you_suffix(locale, &display_name);
+                if is_spectator {
+                    ui.label(egui::RichText::new(text).color(Color32::from_gray(140)));
+                } else {
+                    ui.strong(text);
+                }
+            } else if is_spectator {
+                ui.label(egui::RichText::new(display_name).color(Color32::from_gray(140)));
+            } else {
+                ui.label(display_name);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(crate::app::locale::frags(locale, kills.unwrap_or(0)));
+            });
         });
+    }
 }
 
 /// Dessine les overlays cochés dans `HudPreview` par-dessus la zone de jeu, en
@@ -894,6 +902,10 @@ pub(super) fn lose_banner(
 /// `lose_banner` (`self.lost`, pensé pour un joueur local unique touchant une
 /// zone mortelle) : ici la manche **continue** pour les autres, ce n'est pas
 /// une défaite de salon — pas de bouton Rejouer, juste l'attente.
+///
+/// Roadmap post-audit UX v2 2026-09-04, 1.9 : `spectating` = allié suivi ;
+/// `None` = plus aucun allié vivant (message dédié, la caméra reste en place) ;
+/// `switch_key` = touche de saut réelle ou bouton tactile « Saut ».
 pub(super) fn defeated_banner(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -901,6 +913,7 @@ pub(super) fn defeated_banner(
     locale: crate::app::locale::Locale,
     scale: f32,
     spectating: Option<&str>,
+    switch_key: &str,
 ) {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
@@ -937,16 +950,25 @@ pub(super) fn defeated_banner(
         FontId::proportional(15.0 * scale),
         Color32::from_white_alpha(200),
     );
-    // Caméra spectateur (roadmap 5.6) : qui l'on suit, et comment changer.
-    if let Some(name) = spectating {
-        painter.text(
-            egui::pos2(area.center().x, waiting_y + 24.0 * scale),
-            Align2::CENTER_CENTER,
-            crate::app::locale::spectating(locale, name),
-            FontId::proportional(14.0 * scale),
+    // Caméra spectateur (roadmap 5.6) : qui l'on suit, et comment changer —
+    // ou, sans allié vivant, pourquoi la caméra ne bouge pas (roadmap v2 1.9).
+    let (line, color) = match spectating {
+        Some(name) => (
+            crate::app::locale::spectating(locale, name, switch_key),
             Color32::from_rgb(160, 200, 255),
-        );
-    }
+        ),
+        None => (
+            crate::app::locale::no_ally_alive(locale).to_string(),
+            Color32::from_rgb(230, 200, 120),
+        ),
+    };
+    painter.text(
+        egui::pos2(area.center().x, waiting_y + 24.0 * scale),
+        Align2::CENTER_CENTER,
+        line,
+        FontId::proportional(14.0 * scale),
+        color,
+    );
 }
 
 /// Bannière brève (haut de l'écran, ne recouvre jamais le réticule — GDD
@@ -1061,8 +1083,26 @@ pub(super) struct PauseChoice {
     pub resume: bool,
     pub restart: bool,
     pub settings: bool,
+    /// « Menu principal » (roadmap post-audit UX v2 2026-09-04, 1.5) :
+    /// déconnexion si en ligne, retour à l'écran d'accueil — présent aussi sur
+    /// le web, où « Quitter » n'existe pas.
+    pub main_menu: bool,
     pub disconnect: bool,
     pub quit: bool,
+}
+
+/// Voile sombre de la pause, seul (roadmap post-audit UX v2 2026-09-04, 1.3) :
+/// quand Paramètres ou l'Aide sont ouverts depuis la pause, les boutons du
+/// menu se cachent (ils passaient sous le panneau translucide) mais le jeu
+/// reste visiblement figé.
+pub(super) fn pause_veil(ctx: &egui::Context, area: egui::Rect) {
+    // Couche `Background` (première couche egui, au-dessus de la 3D) : sur
+    // `Foreground`, le voile recouvrait les boutons eux-mêmes.
+    ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("hud_pause_veil"),
+    ))
+    .rect_filled(area, 0.0, egui::Color32::from_black_alpha(150));
 }
 
 /// Menu pause (Phase J, `sprintreflecion.md`), affiché uniquement quand
@@ -1070,12 +1110,18 @@ pub(super) struct PauseChoice {
 /// UX 2026-09-04, 2.3 : Reprendre / Redémarrer / Paramètres / Se déconnecter
 /// (si en ligne) / Quitter (natif seulement — un onglet web se ferme lui-même),
 /// et le rappel qu'en ligne la partie continue sans vous (la pause est locale).
+///
+/// Roadmap post-audit UX v2 2026-09-04, 1.5 : « Recommencer la partie » demande
+/// une confirmation (`restart_confirm` : premier clic → le bouton devient
+/// « Confirmer ? », second clic → `restart` ; tout autre bouton annule), et
+/// « Menu principal » ramène à l'écran d'accueil.
 pub(super) fn pause_menu(
     ctx: &egui::Context,
     area: egui::Rect,
     locale: crate::app::locale::Locale,
     scale: f32,
     online: bool,
+    restart_confirm: &mut bool,
 ) -> PauseChoice {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
@@ -1084,13 +1130,8 @@ pub(super) fn pause_menu(
         egui::Id::new("hud_pause_title"),
     ));
     // Voile sombre : les boutons restent lisibles sur un décor clair (herbe,
-    // ciel). Couche `Background` (première couche egui, au-dessus de la 3D) :
-    // sur `Foreground`, le voile recouvrait les boutons eux-mêmes.
-    ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Background,
-        egui::Id::new("hud_pause_veil"),
-    ))
-    .rect_filled(area, 0.0, Color32::from_black_alpha(150));
+    // ciel).
+    pause_veil(ctx, area);
     painter.text(
         egui::pos2(area.center().x, area.center().y - 110.0 * scale),
         Align2::CENTER_CENTER,
@@ -1108,20 +1149,29 @@ pub(super) fn pause_menu(
         );
     }
     let mut choice = PauseChoice::default();
-    let btn_size = [190.0 * scale, 42.0 * scale];
+    // Second clic sur « Recommencer » : `restart_pressed` est traité après la
+    // boucle, une fois `restart_confirm` connu.
+    let mut restart_pressed = false;
+    let btn_size = [210.0 * scale, 42.0 * scale];
     let step = 50.0 * scale;
+    let restart_label = if *restart_confirm {
+        crate::app::locale::confirm_label(locale)
+    } else {
+        crate::app::locale::restart_round_label(locale)
+    };
     let mut entries: Vec<(&str, &mut bool)> = vec![
         (
             crate::app::locale::resume_button_label(locale),
             &mut choice.resume,
         ),
-        (
-            crate::app::locale::restart_button_label(locale, false),
-            &mut choice.restart,
-        ),
+        (restart_label, &mut restart_pressed),
         (
             crate::app::locale::pause_settings_label(locale),
             &mut choice.settings,
+        ),
+        (
+            crate::app::locale::main_menu_label(locale),
+            &mut choice.main_menu,
         ),
     ];
     if online {
@@ -1135,35 +1185,62 @@ pub(super) fn pause_menu(
         crate::app::locale::pause_quit_label(locale),
         &mut choice.quit,
     ));
+    let mut other_clicked = false;
     egui::Area::new("pause_menu_btns".into())
         .fixed_pos(egui::pos2(
-            area.center().x - 95.0 * scale,
+            area.center().x - 105.0 * scale,
             area.center().y - 50.0 * scale,
         ))
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = step - btn_size[1];
-            for (label, flag) in entries {
+            for (i, (label, flag)) in entries.into_iter().enumerate() {
                 // Fond clair explicite : les boutons egui par défaut se fondent
-                // dans le voile sombre.
+                // dans le voile sombre. Le « Confirmer ? » est teinté pour
+                // signaler l'action irréversible.
+                let fill = if i == 1 && *restart_confirm {
+                    Color32::from_rgb(150, 70, 60)
+                } else {
+                    Color32::from_rgb(70, 74, 84)
+                };
                 let btn = egui::Button::new(
                     egui::RichText::new(label)
                         .size(18.0 * scale)
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(70, 74, 84))
+                .fill(fill)
                 .stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(140)));
                 if ui.add_sized(btn_size, btn).clicked() {
                     *flag = true;
+                    if i != 1 {
+                        other_clicked = true;
+                    }
                 }
             }
         });
+    if restart_pressed {
+        if *restart_confirm {
+            choice.restart = true;
+            *restart_confirm = false;
+        } else {
+            *restart_confirm = true;
+        }
+    } else if other_clicked {
+        *restart_confirm = false;
+    }
     choice
 }
 
-/// Petits boutons tactiles ⏸ / Carte / ? en haut à droite (roadmap post-audit
-/// UX 2026-09-04, 2.5 et 5.5) : sans clavier, ni Échap, ni M, ni F1
-/// n'existent. Renvoie `(pause_clicked, map_clicked, help_clicked)`.
-pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool, bool, bool) {
+/// Petits boutons ⏸ / Carte / ? en haut à droite (roadmap post-audit UX
+/// 2026-09-04, 2.5 et 5.5) : sans clavier, ni Échap, ni M, ni F1 n'existent —
+/// et à la souris ils restent pratiques, donc dessinés sur desktop aussi
+/// (roadmap v2 1.1). Pendant la pause (`paused`), seul ⏸ reste (roadmap v2
+/// 1.5) : Carte et Aide passent par le menu. Renvoie `(pause_clicked,
+/// map_clicked, help_clicked)`.
+pub(super) fn mobile_top_buttons(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    paused: bool,
+) -> (bool, bool, bool) {
     let mut pause = false;
     let mut map = false;
     let mut help = false;
@@ -1176,6 +1253,9 @@ pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool
                     .clicked()
                 {
                     pause = true;
+                }
+                if paused {
+                    return;
                 }
                 // Texte plutôt que 🗺 : le glyphe manque à la fonte embarquée.
                 if ui
@@ -1193,6 +1273,41 @@ pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool
             });
         });
     (pause, map, help)
+}
+
+/// Classement déplié tant que Tab est maintenue (roadmap post-audit UX v2
+/// 2026-09-04, 1.6) — même contenu que le panneau « Joueurs » replié en coin
+/// (`multiplayer_roster_panel`), centré et sans repli ; en solo (`roster`
+/// vide), une ligne pour soi et le rappel qu'il n'y a personne d'autre.
+pub(super) fn roster_overlay(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    roster: &[RosterEntry],
+    self_name: &str,
+    kills: u32,
+    locale: crate::app::locale::Locale,
+    colorblind: bool,
+) {
+    egui::Window::new(crate::app::locale::roster_title(locale))
+        .id(egui::Id::new("roster_overlay"))
+        .collapsible(false)
+        .resizable(false)
+        .title_bar(true)
+        .fixed_pos(egui::pos2(area.center().x - 150.0, area.top() + 60.0))
+        .default_width(300.0)
+        .show(ctx, |ui| {
+            if roster.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.strong(crate::app::locale::you_suffix(locale, self_name));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(crate::app::locale::frags(locale, kills));
+                    });
+                });
+                ui.small(crate::app::locale::roster_solo_hint(locale));
+            } else {
+                roster_rows(ui, roster, locale, colorblind);
+            }
+        });
 }
 
 /// Pastille d'état réseau permanente (roadmap post-audit UX 2026-09-04, 2.2) :

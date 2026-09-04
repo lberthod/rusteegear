@@ -382,6 +382,11 @@ pub struct Renderer {
     /// chargeable).
     pub(super) failed_textures: std::collections::HashSet<String>,
 
+    /// L'écran d'accueil du mode Player était ouvert à la frame précédente
+    /// (roadmap post-audit UX v2 2026-09-04, 1.4) : sert à lever le gel
+    /// (`AppState::paused`) exactement quand il se ferme — cf. `frame.rs`.
+    pub(super) welcome_was_pending: bool,
+
     // --- profiler GPU (Sprint 112) ---
     /// `None` si l'adaptateur ne supporte pas `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
     pub(super) gpu_profiler: Option<GpuProfiler>,

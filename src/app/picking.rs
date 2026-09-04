@@ -314,11 +314,16 @@ impl AppState {
                             // En Play (roadmap post-audit UX 2026-09-04, 2.7) : deux axes,
                             // bornés comme la manette et le tactile, et sensibilité réglable
                             // (`mouse_sensitivity`) — avant, aucun réglage et pas de tangage.
-                            // Player avec contrôles tactiles : la caméra est pilotée par
-                            // la zone d'orbite de l'overlay (`PlayerInput::touch_look`),
-                            // jamais par ce chemin — sinon un même glissé compterait deux
-                            // fois (egui + ici) sur le web ou en aperçu mobile.
-                            _ if self.player && self.scene.mobile.any() => {}
+                            // Player avec contrôles tactiles **affichés** : la caméra est
+                            // pilotée par la zone d'orbite de l'overlay
+                            // (`PlayerInput::touch_look`), jamais par ce chemin — sinon un
+                            // même glissé compterait deux fois (egui + ici) sur le web ou
+                            // en aperçu mobile. À la souris sans écran tactile (roadmap
+                            // post-audit UX v2 2026-09-04, 1.1), l'overlay n'est pas
+                            // dessiné : ce chemin reste le seul à tourner la caméra.
+                            _ if self.player
+                                && self.scene.mobile.any()
+                                && self.touch_ui_active() => {}
                             _ => {
                                 let s = 0.005 * self.fx.mouse_sensitivity;
                                 self.camera.yaw -= dx * s;

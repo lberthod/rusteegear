@@ -51,9 +51,10 @@ pub fn read() -> Option<String> {
 /// Supprime le journal après consultation, pour ne pas le reproposer indéfiniment
 /// une fois vu (bouton « Fermer » de l'écran dédié).
 pub fn clear() {
-    if let Some(dir) = crate::assets::user_dir() {
-        let _ = std::fs::remove_file(dir.join(CRASH_LOG_FILE));
-    }
+    // Adaptateur de stockage (roadmap post-audit UX v2 2026-09-04, 1.7) :
+    // `localStorage` sur le web, fichier ailleurs — comme `read`/`install`,
+    // qui passent par `assets::read_user_bytes`/`write_user_bytes`.
+    crate::assets::persisted_remove(crate::assets::user_dir(), CRASH_LOG_FILE);
 }
 
 #[cfg(test)]

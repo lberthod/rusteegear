@@ -868,26 +868,21 @@ pub(super) fn settings_window(
             ui.add_space(12.0);
             ui.separator();
             // L'éditeur reste en français quelle que soit la langue de jeu.
-            settings_essentials(ui, settings, actions, crate::app::locale::Locale::Fr);
+            settings_editor_sections(ui, settings);
+            ui.add_space(12.0);
+            ui.separator();
+            settings_player_sections(ui, settings, actions, crate::app::locale::Locale::Fr);
         });
     panels.settings = open;
 }
 
-/// Partie de la fenêtre Paramètres commune à l'éditeur complet
-/// (`settings_window`) et à l'overlay minimal du mode Player
-/// (`player_settings_window`) : Firebase (comptes multijoueur), audio, langue,
-/// manette. Exclut la section IA (clé DeepSeek), éditeur seulement — le joueur
-/// en `--player`/mobile n'a pas accès à la génération de scripts Lua.
-///
-/// `locale` traduit les titres de section pour le mode Player (roadmap
-/// post-audit UX v2 2026-09-04, 4.4) ; l'éditeur passe `Locale::Fr`.
-fn settings_essentials(
-    ui: &mut egui::Ui,
-    settings: &mut crate::app::settings::Settings,
-    actions: &mut super::UiActions,
-    locale: crate::app::locale::Locale,
-) {
-    use crate::app::locale::{SettingsSection, settings_heading};
+/// Sections de la fenêtre Paramètres réservées à l'éditeur (roadmap post-audit
+/// UX v2 2026-09-04, 1.3) : comptes Firebase et « Rouvrir le dernier projet ».
+/// Un joueur en `--player`/web/mobile n'a ni projet ni raison de voir une clé
+/// API en première section — avant, c'était le cas.
+fn settings_editor_sections(ui: &mut egui::Ui, settings: &mut crate::app::settings::Settings) {
+    use crate::app::locale::{Locale, SettingsSection, settings_heading};
+    let locale = Locale::Fr;
     ui.heading(settings_heading(locale, SettingsSection::Accounts));
     ui.label("Clé API Web Firebase");
     let resp_fb_key = ui.add(
@@ -924,6 +919,37 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
+    ui.heading(settings_heading(locale, SettingsSection::Startup));
+    if ui
+        .checkbox(
+            &mut settings.reopen_last_project,
+            "Rouvrir le dernier projet au démarrage",
+        )
+        .on_hover_text(
+            "Décoché : l'éditeur s'ouvre sur la scène de démonstration (le hameau), \
+             comme avant. Sans projet récent, la démo s'affiche dans tous les cas.",
+        )
+        .changed()
+    {
+        settings.save();
+    }
+}
+
+/// Sections communes à l'éditeur (`settings_window`) et au mode Player
+/// (`player_settings_window`) : Audio, Accessibilité, Langue, Clavier, Manette
+/// — le jeu de réglages qu'un joueur a le droit de toucher (roadmap post-audit
+/// UX v2 2026-09-04, 1.3). Exclut IA (clé DeepSeek), Firebase et Démarrage,
+/// éditeur seulement (`settings_editor_sections`).
+///
+/// `locale` traduit les titres de section pour le mode Player (roadmap v2
+/// 4.4) ; l'éditeur passe `Locale::Fr`.
+fn settings_player_sections(
+    ui: &mut egui::Ui,
+    settings: &mut crate::app::settings::Settings,
+    actions: &mut super::UiActions,
+    locale: crate::app::locale::Locale,
+) {
+    use crate::app::locale::{SettingsSection, settings_heading};
     ui.heading(settings_heading(locale, SettingsSection::Audio));
     ui.label("Musique / ambiance");
     if ui
@@ -940,23 +966,6 @@ fn settings_essentials(
     {
         settings.save();
         actions.sfx_volume = Some(settings.sfx_volume);
-    }
-
-    ui.add_space(12.0);
-    ui.separator();
-    ui.heading(settings_heading(locale, SettingsSection::Startup));
-    if ui
-        .checkbox(
-            &mut settings.reopen_last_project,
-            "Rouvrir le dernier projet au démarrage",
-        )
-        .on_hover_text(
-            "Décoché : l'éditeur s'ouvre sur la scène de démonstration (le hameau), \
-             comme avant. Sans projet récent, la démo s'affiche dans tous les cas.",
-        )
-        .changed()
-    {
-        settings.save();
     }
 
     ui.add_space(12.0);
@@ -1087,12 +1096,12 @@ fn settings_essentials(
     }
 }
 
-/// Overlay Paramètres minimal pour le mode Player (`--player`/mobile/web) : même
-/// contenu que `settings_essentials` (Firebase, audio, langue, manette), sans la
-/// section IA de l'éditeur — permet de configurer un compte Firebase et la
-/// manette sans jamais ouvrir l'éditeur complet (Sprint 2, config hors éditeur).
-/// Ouverture/fermeture : bouton Start de la manette ou touche Tab (cf.
-/// `Editor::toggle_player_settings`, `App::recompute_action_buttons`).
+/// Paramètres du mode Player (`--player`/mobile/web) : Audio, Accessibilité,
+/// Langue, Clavier, Manette (`settings_player_sections`) — ni IA, ni Firebase,
+/// ni réglage d'éditeur (roadmap post-audit UX v2 2026-09-04, 1.3). Fond
+/// opaque (le panneau translucide laissait lire le jeu à travers), défilement
+/// vertical borné à 80 % de l'écran, ouverture depuis le menu pause, l'écran
+/// d'accueil ou le bouton Start de la manette (`Editor::toggle_player_settings`).
 pub(super) fn player_settings_window(
     ctx: &egui::Context,
     open: &mut bool,
@@ -1100,13 +1109,21 @@ pub(super) fn player_settings_window(
     actions: &mut super::UiActions,
     locale: crate::app::locale::Locale,
 ) {
+    let mut frame = egui::Frame::window(&ctx.global_style());
+    frame.fill = frame.fill.to_opaque();
+    let max_height = ctx.content_rect().height() * 0.8 - 40.0;
     egui::Window::new("⚙  Paramètres")
         .id(egui::Id::new("player_settings"))
         .open(open)
         .resizable(false)
+        .frame(frame)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
         .show(ctx, |ui| {
-            settings_essentials(ui, settings, actions, locale);
+            egui::ScrollArea::vertical()
+                .max_height(max_height.max(120.0))
+                .show(ui, |ui| {
+                    settings_player_sections(ui, settings, actions, locale);
+                });
         });
 }
 
@@ -1192,74 +1209,6 @@ fn gamepad_binding_row(ui: &mut egui::Ui, action_label: &str, bound: &mut String
             });
     });
     changed
-}
-
-/// Overlay Multijoueur minimal pour le mode Player (mobile/APK) : adresse +
-/// pseudo + connecter/déconnecter, replié par défaut pour ne pas gêner le
-/// joystick. Pas de compte Firebase/chat/classement ici (cf.
-/// `multiplayer_window`, l'équivalent complet côté éditeur desktop).
-pub(super) fn mobile_multiplayer_overlay(
-    ctx: &egui::Context,
-    server_url: &mut String,
-    name: &mut String,
-    net_status: &str,
-    net_connected: bool,
-    actions: &mut UiActions,
-    locale: crate::app::locale::Locale,
-) {
-    use crate::app::locale as l10n;
-    egui::Window::new("🌐")
-        .id(egui::Id::new("mobile_multiplayer"))
-        .collapsible(true)
-        .default_open(false)
-        .resizable(false)
-        // Décalage vertical généreux (pas seulement 8 px) : en plein écran immersif
-        // (NativeActivity Android), la zone de rendu passe sous la barre de statut
-        // système — un petit décalage laisserait l'icône 🌐 cachée dessous, invisible
-        // et donc impossible à toucher.
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 56.0))
-        .default_width(220.0)
-        .show(ctx, |ui| {
-            ui.label(l10n::server_address_label(locale));
-            ui.add_enabled(
-                !net_connected,
-                egui::TextEdit::singleline(server_url).hint_text("ws://192.168.1.x:7777"),
-            );
-            ui.label(l10n::nickname_label(locale));
-            ui.add_enabled(
-                !net_connected,
-                egui::TextEdit::singleline(name).hint_text("Joueur"),
-            );
-            ui.add_space(4.0);
-            if net_connected {
-                if ui.button(l10n::pause_disconnect_label(locale)).clicked() {
-                    actions.disconnect_from_server = true;
-                }
-            } else {
-                let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
-                if ui
-                    .add_enabled(can_connect, egui::Button::new(l10n::connect_label(locale)))
-                    .clicked()
-                {
-                    // Pas de sélecteur de classe/salon/mode ici (overlay
-                    // minimal, cf. sa doc) : Assaut, salon par défaut et
-                    // Vagues, comme avant les Sprints 3/20/21.
-                    actions.connect_to_server = Some((
-                        server_url.clone(),
-                        name.clone(),
-                        crate::app::multiplayer::PlayerClass::Assault,
-                        String::new(),
-                        crate::app::multiplayer::RoundObjective::Vagues,
-                    ));
-                }
-            }
-            ui.add_space(4.0);
-            ui.small(if net_status.is_empty() {
-                l10n::not_connected(locale)
-            } else {
-                net_status
-            });
-        });
 }
 
 /// Fenêtre « Multijoueur » : adresse du serveur + pseudo, connexion/déconnexion
@@ -2832,13 +2781,39 @@ fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
         });
 }
 
+/// Code de salon acceptable pour l'écran d'accueil (roadmap post-audit UX v2
+/// 2026-09-04, 1.4) : vide (salon public) ou `[A-Za-z0-9_-]{1,MAX_LOBBY_LEN}`
+/// — le charset exact de `net::protocol::valid_join_fields`, vérifié ici avant
+/// d'envoyer pour afficher l'erreur en ligne plutôt qu'un refus du serveur.
+pub(crate) fn room_code_is_valid(room: &str) -> bool {
+    room.is_empty()
+        || (room.chars().count() <= crate::net::protocol::MAX_LOBBY_LEN
+            && room
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+}
+
+/// Ce que l'écran d'accueil a décidé (cf. `player_welcome_window`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WelcomeChoice {
+    Online,
+    Solo,
+}
+
 /// Écran d'accueil du mode Player (roadmap post-audit UX 2026-09-04, 2.1) :
 /// pseudo (mémorisé dans `Settings::player_name`), classe, salon, puis
-/// « Jouer en ligne » (connexion au serveur `server_url`, même chemin que le
-/// bouton de l'overlay 🌐) ou « Jouer seul ». Avant, le player se connectait
-/// tout seul au serveur public sous « InvitéNNNN » sans rien demander, et
-/// jouer hors-ligne n'était possible que par variable d'environnement.
-/// Renvoie `true` quand un choix a été fait (l'appelant ferme l'écran).
+/// « Jouer en ligne » (connexion au serveur `server_url`) ou « Jouer seul ».
+/// Avant, le player se connectait tout seul au serveur public sous
+/// « InvitéNNNN » sans rien demander, et jouer hors-ligne n'était possible que
+/// par variable d'environnement.
+///
+/// Roadmap post-audit UX v2 2026-09-04, 1.4 : pseudo limité à
+/// `protocol::MAX_NAME_LEN` avec compteur, boutons désactivés sur pseudo vide,
+/// salon filtré (`room_code_is_valid`) avec erreur en ligne, description de la
+/// classe choisie, adresse du serveur modifiable dans une section repliable,
+/// boutons ⚙ / ? (Paramètres et Aide), et `last_online` met en avant le dernier
+/// choix. Renvoie `Some(choix)` quand un choix a été fait (l'appelant ferme
+/// l'écran et persiste classe/salon/serveur/choix).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn player_welcome_window(
     ctx: &egui::Context,
@@ -2846,25 +2821,55 @@ pub(super) fn player_welcome_window(
     name: &mut String,
     class: &mut crate::app::multiplayer::PlayerClass,
     room: &mut String,
-    server_url: &str,
+    server_url: &mut String,
+    last_online: bool,
     error: Option<&str>,
     locale: crate::app::locale::Locale,
     actions: &mut UiActions,
-) -> bool {
+    settings_open: &mut bool,
+    help_open: &mut bool,
+) -> Option<WelcomeChoice> {
     use crate::app::locale as l;
-    let mut done = false;
+    use crate::net::protocol::MAX_NAME_LEN;
+    let mut choice = None;
+    let mut frame = egui::Frame::window(&ctx.global_style());
+    frame.fill = frame.fill.to_opaque();
     egui::Window::new("RusteeGear")
         .id(egui::Id::new("player_welcome"))
         .collapsible(false)
         .resizable(false)
         .title_bar(true)
-        .fixed_pos(egui::pos2(area.center().x - 170.0, area.center().y - 150.0))
-        .default_width(340.0)
+        .frame(frame)
+        .fixed_pos(egui::pos2(area.center().x - 190.0, area.center().y - 190.0))
+        .default_width(380.0)
         .show(ctx, |ui| {
-            ui.label(l::welcome_subtitle(locale));
+            ui.horizontal(|ui| {
+                ui.label(l::welcome_subtitle(locale));
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .button("⚙")
+                    .on_hover_text(l::pause_settings_label(locale))
+                    .clicked()
+                {
+                    *settings_open = !*settings_open;
+                    *help_open = false;
+                }
+                if ui.button(l::help_label(locale)).clicked() {
+                    *help_open = !*help_open;
+                    *settings_open = false;
+                }
+            });
             ui.add_space(8.0);
             ui.label(l::nickname_label(locale));
-            ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(name)
+                        .char_limit(MAX_NAME_LEN)
+                        .desired_width(ui.available_width() - 48.0),
+                );
+                ui.small(format!("{}/{MAX_NAME_LEN}", name.chars().count()));
+            });
             ui.horizontal(|ui| {
                 ui.label(l::class_label(locale));
                 egui::ComboBox::from_id_salt("welcome_class")
@@ -2875,38 +2880,71 @@ pub(super) fn player_welcome_window(
                         }
                     });
             });
+            ui.small(l::class_description(locale, *class));
             ui.label(l::room_label(locale));
             ui.add(egui::TextEdit::singleline(room).desired_width(f32::INFINITY));
+            let room_ok = room_code_is_valid(room.trim());
+            if !room_ok {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 110, 90),
+                    l::room_invalid(locale),
+                );
+            }
+            egui::CollapsingHeader::new(l::server_section_title(locale))
+                .id_salt("welcome_server")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(l::server_address_label(locale));
+                    ui.add(
+                        egui::TextEdit::singleline(server_url)
+                            .hint_text(crate::app::network_client::DEFAULT_SERVER_URL)
+                            .desired_width(f32::INFINITY),
+                    );
+                    if server_url.trim() != crate::app::network_client::DEFAULT_SERVER_URL
+                        && ui.small_button("↺").clicked()
+                    {
+                        *server_url = crate::app::network_client::DEFAULT_SERVER_URL.to_string();
+                    }
+                });
             ui.add_space(10.0);
-            let can_play = !name.trim().is_empty();
+            let has_name = !name.trim().is_empty();
+            let can_online = has_name && room_ok && !server_url.trim().is_empty();
+            let primary = |label: &str| {
+                egui::Button::new(egui::RichText::new(label).size(17.0))
+                    .min_size(egui::vec2(170.0, 36.0))
+            };
+            let secondary =
+                |label: &str| egui::Button::new(label).min_size(egui::vec2(120.0, 36.0));
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        can_play,
-                        egui::Button::new(
-                            egui::RichText::new(l::play_online_label(locale)).size(17.0),
-                        )
-                        .min_size(egui::vec2(170.0, 36.0)),
-                    )
-                    .clicked()
-                {
+                let online_btn = if last_online {
+                    primary(l::play_online_label(locale))
+                } else {
+                    secondary(l::play_online_label(locale))
+                };
+                let solo_btn = if last_online {
+                    secondary(l::play_solo_label(locale))
+                } else {
+                    primary(l::play_solo_label(locale))
+                };
+                let (online, solo) = if last_online {
+                    let online = ui.add_enabled(can_online, online_btn).clicked();
+                    (online, ui.add_enabled(has_name, solo_btn).clicked())
+                } else {
+                    let solo = ui.add_enabled(has_name, solo_btn).clicked();
+                    (ui.add_enabled(can_online, online_btn).clicked(), solo)
+                };
+                if online {
                     actions.connect_to_server = Some((
-                        server_url.to_string(),
+                        server_url.trim().to_string(),
                         name.trim().to_string(),
                         *class,
                         room.trim().to_string(),
                         crate::app::multiplayer::RoundObjective::Vagues,
                     ));
-                    done = true;
+                    choice = Some(WelcomeChoice::Online);
                 }
-                if ui
-                    .add(
-                        egui::Button::new(l::play_solo_label(locale))
-                            .min_size(egui::vec2(120.0, 36.0)),
-                    )
-                    .clicked()
-                {
-                    done = true;
+                if solo {
+                    choice = Some(WelcomeChoice::Solo);
                 }
             });
             // Raison du retour ici (roadmap post-audit UX v2 2026-09-04, 2.4) :
@@ -2916,10 +2954,9 @@ pub(super) fn player_welcome_window(
                 ui.colored_label(egui::Color32::from_rgb(240, 115, 106), format!("⚠ {err}"));
             }
             ui.add_space(6.0);
-            ui.small(server_url);
             ui.small(l::controls_hint(locale));
         });
-    done
+    choice
 }
 
 /// Éditeur de script dédié (roadmap post-audit UX 2026-09-04, 5.2) : fenêtre
@@ -2981,7 +3018,7 @@ pub(super) fn script_editor_window(
 
 #[cfg(test)]
 mod tests {
-    use super::{MinimapProjection, skinned_dropped_status};
+    use super::{MinimapProjection, room_code_is_valid, skinned_dropped_status};
 
     /// Roadmap 3.7 : la confirmation de suppression de groupe dit combien
     /// d'objets repassent dans « Sans groupe », au singulier comme au pluriel.
@@ -3044,6 +3081,29 @@ mod tests {
             p.x < rect.center().x - 0.01,
             "pan positif en x doit décaler le centre du monde vers la gauche du rect : {p:?}"
         );
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 1.4 : le salon accepte vide,
+    /// lettres, chiffres, `-`, `_` — rien d'autre (même charset que le
+    /// protocole), et pas plus de `MAX_LOBBY_LEN` caractères.
+    #[test]
+    fn room_code_validation_matches_the_protocol_charset() {
+        assert!(room_code_is_valid(""));
+        assert!(room_code_is_valid("amis-42_b"));
+        assert!(!room_code_is_valid("salon du soir"));
+        assert!(!room_code_is_valid("a/b"));
+        assert!(!room_code_is_valid("été"));
+        assert!(!room_code_is_valid(
+            &"x".repeat(crate::net::protocol::MAX_LOBBY_LEN + 1)
+        ));
+        assert!(room_code_is_valid(
+            &"x".repeat(crate::net::protocol::MAX_LOBBY_LEN)
+        ));
+        // Le protocole est d'accord sur les mêmes exemples.
+        for room in ["", "amis-42_b"] {
+            assert!(crate::net::protocol::valid_join_fields("Bob", room, None).is_ok());
+        }
+        assert!(crate::net::protocol::valid_join_fields("Bob", "a/b", None).is_err());
     }
 
     /// Zéro objet ignoré : affichage neutre, pas de couleur d'alerte.

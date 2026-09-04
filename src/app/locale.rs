@@ -223,11 +223,23 @@ pub fn restart_button_label(locale: Locale, won: bool) -> &'static str {
     }
 }
 
-/// Caméra spectateur sur un allié (roadmap 5.6).
-pub fn spectating(locale: Locale, name: &str) -> String {
+/// Caméra spectateur sur un allié (roadmap 5.6). `key` est la touche de saut
+/// réelle (`input::key_label`, remappable) ou le bouton tactile « Saut » —
+/// roadmap post-audit UX v2 2026-09-04, 1.9 : le texte promettait « Espace »
+/// quel que soit le remapping.
+pub fn spectating(locale: Locale, name: &str, key: &str) -> String {
     match locale {
-        Locale::Fr => format!("Spectateur : {name} — Espace pour changer d'allié"),
-        Locale::En => format!("Spectating: {name} — Space to switch ally"),
+        Locale::Fr => format!("Spectateur : {name} — {key} pour changer d'allié"),
+        Locale::En => format!("Spectating: {name} — {key} to switch ally"),
+    }
+}
+
+/// Vaincu sans plus aucun allié vivant (roadmap v2 1.9) : la caméra reste où
+/// elle est, le serveur relance une manche.
+pub fn no_ally_alive(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Aucun allié en vie — nouvelle manche imminente",
+        Locale::En => "No ally alive — a new round is about to start",
     }
 }
 
@@ -252,6 +264,30 @@ pub fn pause_settings_label(locale: Locale) -> &'static str {
     match locale {
         Locale::Fr => "⚙ Paramètres",
         Locale::En => "⚙ Settings",
+    }
+}
+
+/// Menu pause, roadmap post-audit UX v2 2026-09-04, 1.5 : « Recommencer la
+/// partie » (au lieu de « Rejouer », ambigu avec le bouton de fin de manche)
+/// demande une confirmation ; « Menu principal » ramène à l'écran d'accueil.
+pub fn restart_round_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🔄 Recommencer la partie",
+        Locale::En => "🔄 Restart the game",
+    }
+}
+
+pub fn confirm_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Confirmer ?",
+        Locale::En => "Confirm?",
+    }
+}
+
+pub fn main_menu_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "⌂ Menu principal",
+        Locale::En => "⌂ Main menu",
     }
 }
 
@@ -303,6 +339,66 @@ pub fn room_label(locale: Locale) -> &'static str {
     match locale {
         Locale::Fr => "Salon (vide = public)",
         Locale::En => "Room (empty = public)",
+    }
+}
+
+/// Une ligne par classe sous le sélecteur de l'accueil (roadmap v2 1.4),
+/// d'après les modificateurs de `multiplayer::PlayerClass`.
+pub fn class_description(
+    locale: Locale,
+    class: crate::app::multiplayer::PlayerClass,
+) -> &'static str {
+    use crate::app::multiplayer::PlayerClass as C;
+    match (locale, class) {
+        (Locale::Fr, C::Assault) => "Assaut : équilibré — trois armes à distance, mêlée normale",
+        (Locale::Fr, C::Scout) => "Éclaireur : vitesse +25 %, saut +30 %, PV max −30 %",
+        (Locale::Fr, C::Support) => {
+            "Soutien : soin ×2,5, seul à réanimer — vitesse −15 %, dégâts −30 %"
+        }
+        (Locale::En, C::Assault) => "Assault: balanced — three ranged weapons, normal melee",
+        (Locale::En, C::Scout) => "Scout: speed +25%, jump +30%, max HP −30%",
+        (Locale::En, C::Support) => {
+            "Support: healing ×2.5, the only one who revives — speed −15%, damage −30%"
+        }
+    }
+}
+
+/// Section repliable « Serveur » de l'accueil (roadmap v2 1.4).
+pub fn server_section_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Serveur",
+        Locale::En => "Server",
+    }
+}
+
+/// Code de salon refusé (roadmap v2 1.4) : même charset que
+/// `net::protocol::valid_join_fields`.
+pub fn room_invalid(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Lettres, chiffres, « - » et « _ » seulement",
+        Locale::En => "Letters, digits, “-” and “_” only",
+    }
+}
+
+/// Classement affiché tant que Tab est maintenue (roadmap v2 1.6).
+pub fn roster_title(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🏆 Classement",
+        Locale::En => "🏆 Leaderboard",
+    }
+}
+
+pub fn roster_solo_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Partie solo — pas d'autre joueur",
+        Locale::En => "Solo game — no other player",
+    }
+}
+
+pub fn help_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "? Aide",
+        Locale::En => "? Help",
     }
 }
 
@@ -555,6 +651,32 @@ mod tests {
                 );
             }
         }
+        assert_ne!(
+            spectating(Locale::Fr, "Alice", "Espace"),
+            spectating(Locale::En, "Alice", "Espace")
+        );
+        assert_ne!(no_ally_alive(Locale::Fr), no_ally_alive(Locale::En));
+        assert_ne!(
+            restart_round_label(Locale::Fr),
+            restart_round_label(Locale::En)
+        );
+        assert_ne!(confirm_label(Locale::Fr), confirm_label(Locale::En));
+        assert_ne!(main_menu_label(Locale::Fr), main_menu_label(Locale::En));
+        for class in crate::app::multiplayer::PlayerClass::ALL {
+            assert_ne!(
+                class_description(Locale::Fr, class),
+                class_description(Locale::En, class),
+                "{class:?}"
+            );
+        }
+        assert_ne!(
+            server_section_title(Locale::Fr),
+            server_section_title(Locale::En)
+        );
+        assert_ne!(room_invalid(Locale::Fr), room_invalid(Locale::En));
+        assert_ne!(roster_title(Locale::Fr), roster_title(Locale::En));
+        assert_ne!(roster_solo_hint(Locale::Fr), roster_solo_hint(Locale::En));
+        assert_ne!(help_label(Locale::Fr), help_label(Locale::En));
         assert_ne!(map_title(Locale::Fr), map_title(Locale::En));
         for touch in [false, true] {
             assert_ne!(map_legend(Locale::Fr, touch), map_legend(Locale::En, touch));
@@ -583,6 +705,20 @@ mod tests {
                 settings_heading(Locale::Fr, section),
                 settings_heading(Locale::En, section),
                 "{section:?}"
+            );
+        }
+    }
+
+    /// Roadmap post-audit UX v2 2026-09-04, 1.9 : le texte spectateur cite la
+    /// touche réelle (remappée ou bouton tactile), jamais « Espace » en dur.
+    #[test]
+    fn spectating_hint_names_the_key_it_is_given() {
+        for locale in [Locale::Fr, Locale::En] {
+            let text = spectating(locale, "Bob", "Saut");
+            assert!(text.contains("Bob") && text.contains("Saut"), "{text}");
+            assert!(
+                !text.contains("Espace") && !text.contains("Space"),
+                "{text}"
             );
         }
     }

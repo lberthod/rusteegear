@@ -261,6 +261,7 @@ impl Renderer {
             skinning_scratch: crate::scene::import::SkinningScratch::default(),
             skinned_dropped_last_frame: 0,
             failed_textures: std::collections::HashSet::new(),
+            welcome_was_pending: false,
             gpu_profiler,
             gpu_pass_timings_ms: Vec::new(),
             last_frame_draw_calls: 0,

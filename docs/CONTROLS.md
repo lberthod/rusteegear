@@ -60,9 +60,10 @@ pendant la saisie dans un champ texte ; `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A`
 | `K` | Tirer (arme à distance) |
 | `H` | Soigner l'allié blessé le plus proche |
 | `1` `2` `3` | Choisir l'arme (Boule de feu / Éclair / Boulet) |
-| `Échap` | Pause (Reprendre, Rejouer, Paramètres, Se déconnecter, Quitter) |
+| `Échap` | Pause (Reprendre, Recommencer la partie, Paramètres, Menu principal, Se déconnecter, Quitter) |
 | `M` | Carte plein écran |
-| `Tab` | Paramètres (mode Player uniquement) |
+| `Tab` | Classement des joueurs, tant que la touche est maintenue (mode Player) ; les Paramètres s'ouvrent depuis le menu pause |
+| `Espace` (vaincu) | Allié spectateur suivant |
 | `F1` | Aide en jeu (contrôles et objectif) |
 | Clic gauche + glisser | Tourner la caméra (deux axes en Play, sensibilité dans Paramètres) |
 
@@ -72,11 +73,16 @@ sont désactivées. Saut, attaque, tir, soin, pause et carte se remappent dans
 
 ## Tactile (mobile, web sur écran tactile)
 
+Le stick et les boutons n'apparaissent que sur un écran tactile (Android, iOS,
+ou dès qu'un doigt a touché l'écran) ; les boutons ⏸ / Carte / ? restent
+disponibles à la souris.
+
 | Geste | Action |
 | --- | --- |
 | Stick gauche | Se déplacer (deux axes, relatif à la caméra) |
 | Glisser sur la moitié droite de l'écran | Tourner la caméra |
 | Boutons bas-droite | Saut / Feu / Arme / Soin (définis par la scène) |
+| Saut (vaincu) | Allié spectateur suivant |
 | ⏸ (haut-droite) | Pause |
 | Carte (haut-droite) | Carte plein écran |
 | ? (haut-droite) | Aide en jeu |

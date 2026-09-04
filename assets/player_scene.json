@@ -46883,7 +46883,7 @@
         "turn_speed": 10.0,
         "jump_button": "Saut",
         "jump_height": 1.5,
-        "attack_button": "",
+        "attack_button": "Attaque",
         "fire_button": "Feu",
         "weapon_button": "Arme",
         "heal_button": "Soin",
@@ -62746,7 +62746,7 @@
       "Soin"
     ],
     "touch_zone": false,
-    "health_bar": false,
+    "health_bar": true,
     "safe_area": true
   },
   "camera_follow": true,

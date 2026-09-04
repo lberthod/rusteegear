@@ -19,14 +19,14 @@ use hud::{
     damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
     item_inventory_panel, kills_hud, lose_banner, mobile_overlay, mobile_top_buttons,
     multiplayer_roster_panel, net_event_banner, net_status_pill, palier_banner, pause_menu,
-    restart_button, round_summary_banner, scene_has_ranged_weapon, touch_feedback, wave_hud,
-    wave_start_banner, weapon_hud, weapon_inventory_panel,
+    pause_veil, restart_button, roster_overlay, round_summary_banner, scene_has_ranged_weapon,
+    touch_feedback, wave_hud, wave_start_banner, weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
-    ai_scene_window, asset_browser_window, device_bezel, hud_preview_window,
-    mobile_multiplayer_overlay, multiplayer_window, optimize_window, play_area_rect,
-    player_corner_minimap, player_map_overlay, scripts_window, settings_window, tool_windows,
+    ai_scene_window, asset_browser_window, device_bezel, hud_preview_window, multiplayer_window,
+    optimize_window, play_area_rect, player_corner_minimap, player_map_overlay, scripts_window,
+    settings_window, tool_windows,
 };
 
 use crate::app::GizmoMode;
@@ -228,6 +228,14 @@ pub struct Editor {
     /// 2026-09-04, 2.2.
     net_last_status: Option<String>,
     net_banner: Option<(String, crate::time_compat::Instant)>,
+    /// « Recommencer la partie » du menu pause attend son second clic
+    /// (roadmap post-audit UX v2 2026-09-04, 1.5) ; remis à faux dès que le
+    /// menu se ferme.
+    pause_restart_confirm: bool,
+    /// Bouton tactile de saut tenu à la frame précédente (roadmap v2 1.9) :
+    /// vaincu, un appui (front montant) passe à l'allié suivant, comme la
+    /// touche de saut au clavier (`lib.rs`).
+    jump_touch_was_held: bool,
 }
 
 impl Drop for Editor {
@@ -674,6 +682,12 @@ pub struct UiActions {
     )>,
     /// Fenêtre Multijoueur : « Se déconnecter » demandé.
     pub disconnect_from_server: bool,
+    /// « Menu principal » du menu pause (roadmap post-audit UX v2 2026-09-04,
+    /// 1.5) : déconnexion, partie relancée, retour à l'écran d'accueil.
+    pub main_menu: bool,
+    /// Bouton tactile de saut pressé alors qu'on est vaincu (roadmap v2 1.9) :
+    /// allié spectateur suivant, comme la touche de saut au clavier.
+    pub cycle_spectate: bool,
     /// Fenêtre Multijoueur : « Démarrer un serveur local » demandé (Sprint 7).
     pub start_local_server: bool,
     /// Fenêtre Multijoueur : « Arrêter le serveur local » demandé (Sprint 7).
@@ -832,6 +846,15 @@ impl Editor {
             ..Default::default()
         };
         Self::restore_open_windows(&mut panels, &settings.open_windows);
+        // Choix de l'écran d'accueil restaurés (roadmap post-audit UX v2
+        // 2026-09-04, 1.4) : serveur, classe et salon du dernier lancement.
+        let mp_server_url = if settings.server_url.trim().is_empty() {
+            crate::app::network_client::DEFAULT_SERVER_URL.to_string()
+        } else {
+            settings.server_url.clone()
+        };
+        let mp_class = crate::app::multiplayer::PlayerClass::from_u8(settings.player_class);
+        let mp_room_code = settings.player_room.clone();
 
         let mut editor = Editor {
             ctx,
@@ -847,13 +870,13 @@ impl Editor {
             ai_scene_prompt: String::new(),
             ai_scene_replace: true,
             ai_history: Vec::new(),
-            mp_server_url: crate::app::network_client::DEFAULT_SERVER_URL.to_string(),
+            mp_server_url,
             mp_name: String::new(),
-            mp_class: crate::app::multiplayer::PlayerClass::Assault,
+            mp_class,
             mp_email: String::new(),
             mp_password: String::new(),
             mp_lobby_code: "default".to_string(),
-            mp_room_code: String::new(),
+            mp_room_code,
             mp_objective: crate::app::multiplayer::RoundObjective::Vagues,
             mp_chat_input: String::new(),
             console_input: String::new(),
@@ -870,6 +893,8 @@ impl Editor {
             pending_switch: None,
             net_last_status: None,
             net_banner: None,
+            pause_restart_confirm: false,
+            jump_touch_was_held: false,
         };
         // `settings.json` illisible, copié en `.bak` (roadmap post-audit UX v2
         // 2026-09-04, 3.8) : signalé en toast — journalisé **après** la
@@ -1020,15 +1045,21 @@ impl Editor {
         self.panels.hud_hidden = !self.panels.hud_hidden;
     }
 
-    /// Ouvre/ferme l'overlay Paramètres minimal du mode Player (Sprint 2, config
-    /// hors éditeur) — bouton Start de la manette ou touche Tab, uniquement en
-    /// mode `--player`/mobile (cf. `App::recompute_action_buttons`). Réutilise le
+    /// Ouvre/ferme les Paramètres du mode Player (Sprint 2, config hors
+    /// éditeur) — bouton Start de la manette, menu pause ou bouton ⚙ de
+    /// l'accueil (plus Tab, réservée au classement : roadmap post-audit UX v2
+    /// 2026-09-04, 1.6), uniquement en mode `--player`/mobile. Réutilise le
     /// même indicateur `panels.settings` que la fenêtre Paramètres complète de
     /// l'éditeur desktop : les deux chemins (`run` et `run_player_overlay`) sont
     /// mutuellement exclusifs par frame (cf. `Renderer::render`), donc aucun
     /// conflit d'état entre les deux usages de ce champ.
     pub fn toggle_player_settings(&mut self) {
         self.panels.settings = !self.panels.settings;
+        // Paramètres, Aide et menu pause sont exclusifs (roadmap post-audit UX
+        // v2 2026-09-04, 1.3) — l'aide s'empilait par-dessus les paramètres.
+        if self.panels.settings {
+            self.panels.help = false;
+        }
     }
 
     /// Ouvre/ferme la carte plein écran du mode Player (touche `M`, cf.
@@ -1042,6 +1073,10 @@ impl Editor {
     /// Aide en jeu (F1) — roadmap post-audit UX 2026-09-04, 5.5.
     pub fn toggle_help(&mut self) {
         self.panels.help = !self.panels.help;
+        // Exclusif avec Paramètres (roadmap v2 1.3), cf. `toggle_player_settings`.
+        if self.panels.help {
+            self.panels.settings = false;
+        }
     }
 
     /// Fenêtre « ⌨ Raccourcis clavier » (F1 hors Play, roadmap post-audit UX
@@ -1133,6 +1168,8 @@ impl Editor {
         input_state: &mut crate::app::PlayerInput,
         device_preview: bool,
         device_portrait: bool,
+        // Vie à afficher (`AppState::displayed_health`, roadmap v2 1.2) : celle
+        // du serveur en ligne, la vie solo sinon.
         hud_health: Option<f32>,
         damage_flash: f32,
         ally_down_flash: f32,
@@ -1175,19 +1212,46 @@ impl Editor {
         welcome_error: Option<&str>,
         // Allié suivi en caméra spectateur (`AppState::spectate_target`, roadmap 5.6).
         spectating: Option<&str>,
+        // Interface tactile à dessiner (`AppState::touch_ui_active`, roadmap v2 1.1).
+        touch_ui: bool,
+        // Tab maintenue : classement déplié (roadmap v2 1.6).
+        roster_held: bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx
             .set_zoom_factor(self.settings.ui_scale.clamp(0.6, 2.0));
         let mobile = &scene.mobile;
-        // Pseudo pré-rempli une seule fois : celui mémorisé, sinon un invité.
+        // Pseudo pré-rempli une seule fois : celui mémorisé, sinon un invité
+        // généré **et persisté** (roadmap post-audit UX v2 2026-09-04, 1.7) —
+        // avant, chaque lancement tirait un nouvel « InvitéNNNN ».
         if *welcome_pending && self.mp_name.trim().is_empty() {
-            self.mp_name = if self.settings.player_name.trim().is_empty() {
-                crate::guest_name()
-            } else {
-                self.settings.player_name.clone()
-            };
+            if self.settings.player_name.trim().is_empty() {
+                self.settings.player_name = crate::guest_name();
+                self.settings.save();
+            }
+            self.mp_name = self.settings.player_name.clone();
         }
+        if !paused {
+            self.pause_restart_confirm = false;
+        }
+        // Texte spectateur (roadmap v2 1.9) : la touche de saut réelle, ou le
+        // bouton tactile de la scène.
+        let jump_button = scene
+            .objects
+            .iter()
+            .find_map(|o| {
+                o.controller
+                    .as_ref()
+                    .filter(|c| c.input)
+                    .map(|c| c.jump_button.clone())
+            })
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| "Saut".to_string());
+        let switch_key = if touch_ui && mobile.any() {
+            jump_button.clone()
+        } else {
+            crate::app::input::key_label(&self.settings.keyboard.jump)
+        };
         let mut actions = UiActions::default();
         // Bannière d'événement réseau (roadmap 2.2) : à chaque changement de
         // `net_status` (sauf le tout premier), le texte s'affiche 3,5 s en haut.
@@ -1226,6 +1290,9 @@ impl Editor {
         let map_open = *map_open_ref;
         let map_zoom = &mut self.panels.map_zoom;
         let map_pan = &mut self.panels.map_pan;
+        let restart_confirm = &mut self.pause_restart_confirm;
+        let jump_touch_was_held = &mut self.jump_touch_was_held;
+        let hud_image_cache = &mut self.hud_image_cache;
         let output = self.ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
             let hud_scale = settings.hud_scale;
@@ -1233,6 +1300,69 @@ impl Editor {
             if device_preview {
                 device_bezel(ctx, area);
                 touch_feedback(ctx, area);
+            }
+            // Écran d'accueil (roadmap 2.1 ; v2 1.4) : seul par-dessus la 3D —
+            // pas de HUD, de pastille ni de contrôles tactiles derrière (le jeu
+            // est gelé par `gfx::renderer::frame`), juste Paramètres/Aide s'ils
+            // ont été ouverts depuis ses boutons ⚙ / ?.
+            if *welcome_pending {
+                input_state.joy = (0.0, 0.0);
+                input_state.touch_thrust = 0.0;
+                input_state.touch_turn = 0.0;
+                input_state.touch_look = (0.0, 0.0);
+                input_state.buttons.clear();
+                if let Some(choice) = windows::player_welcome_window(
+                    ctx,
+                    area,
+                    mp_name,
+                    mp_class,
+                    mp_room_code,
+                    mp_server_url,
+                    settings.last_play_online,
+                    welcome_error,
+                    locale,
+                    &mut actions,
+                    settings_open,
+                    help_open,
+                ) {
+                    *welcome_pending = false;
+                    *settings_open = false;
+                    *help_open = false;
+                    // Choix mémorisés (roadmap v2 1.4) : pseudo, classe, salon,
+                    // serveur, en ligne / seul.
+                    let online = choice == windows::WelcomeChoice::Online;
+                    let server =
+                        if mp_server_url.trim() == crate::app::network_client::DEFAULT_SERVER_URL {
+                            String::new()
+                        } else {
+                            mp_server_url.trim().to_string()
+                        };
+                    let changed = settings.player_name != mp_name.trim()
+                        || settings.player_class != mp_class.to_u8()
+                        || settings.player_room != mp_room_code.trim()
+                        || settings.last_play_online != online
+                        || settings.server_url != server;
+                    if changed {
+                        settings.player_name = mp_name.trim().to_string();
+                        settings.player_class = mp_class.to_u8();
+                        settings.player_room = mp_room_code.trim().to_string();
+                        settings.last_play_online = online;
+                        settings.server_url = server;
+                        settings.save();
+                    }
+                }
+                if *settings_open {
+                    windows::player_settings_window(
+                        ctx,
+                        settings_open,
+                        settings,
+                        &mut actions,
+                        locale,
+                    );
+                }
+                windows::help_window(ctx, help_open, locale, touch_ui && mobile.any());
+                windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
+                return;
             }
             if damage_flash > 0.0 {
                 damage_vignette(ctx, area, damage_flash);
@@ -1326,26 +1456,45 @@ impl Editor {
             } else if lost {
                 lose_banner(ctx, area, locale, hud_scale);
             } else if defeated {
-                defeated_banner(ctx, area, death_cause, locale, hud_scale, spectating);
+                defeated_banner(
+                    ctx,
+                    area,
+                    death_cause,
+                    locale,
+                    hud_scale,
+                    spectating,
+                    &switch_key,
+                );
             } else if paused {
                 // Menu pause (Phase J, `sprintreflecion.md`) : exclusif avec les
                 // bannières de fin de manche ci-dessus, jamais simultané en pratique
-                // (`AppState::toggle_pause` ne s'arme qu'en Play actif).
-                let choice = pause_menu(ctx, area, locale, hud_scale, net_connected);
-                if choice.resume {
-                    *resume = true;
-                }
-                if choice.restart {
-                    *restart = true;
-                }
-                if choice.settings {
-                    *settings_open = true;
-                }
-                if choice.disconnect {
-                    actions.disconnect_from_server = true;
-                }
-                if choice.quit {
-                    actions.quit = true;
+                // (`AppState::toggle_pause` ne s'arme qu'en Play actif). Paramètres
+                // ou Aide ouverts depuis le menu : les boutons se retirent, le
+                // voile reste (roadmap v2 1.3).
+                if *settings_open || *help_open {
+                    pause_veil(ctx, area);
+                } else {
+                    let choice =
+                        pause_menu(ctx, area, locale, hud_scale, net_connected, restart_confirm);
+                    if choice.resume {
+                        *resume = true;
+                    }
+                    if choice.restart {
+                        *restart = true;
+                    }
+                    if choice.settings {
+                        *settings_open = true;
+                        *help_open = false;
+                    }
+                    if choice.main_menu {
+                        actions.main_menu = true;
+                    }
+                    if choice.disconnect {
+                        actions.disconnect_from_server = true;
+                    }
+                    if choice.quit {
+                        actions.quit = true;
+                    }
                 }
             }
             if wave_banner_flash > 0.0 {
@@ -1366,26 +1515,40 @@ impl Editor {
             if round_over && restart_button(ctx, area, round_display_won, locale, hud_scale) {
                 *restart = true;
             }
-            if mobile.any() {
+            // Stick et boutons tactiles : seulement si l'écran est tactile
+            // (roadmap v2 1.1 — un desktop à la souris n'a rien à en faire) et
+            // hors pause (roadmap v2 1.5).
+            if touch_ui && mobile.any() && !paused {
                 mobile_overlay(ctx, area, mobile, input_state);
-                // ⏸ / Carte / ? tactiles (roadmap 2.5 et 5.5) — pas d'Échap, de M ni
-                // de F1 sans clavier.
-                let (pause_clicked, map_clicked, help_clicked) = mobile_top_buttons(ctx, area);
-                if pause_clicked {
-                    actions.toggle_pause = true;
+                // Vaincu : le bouton de saut passe à l'allié suivant (roadmap
+                // v2 1.9), sur front montant comme la touche clavier.
+                let jump_held = input_state.buttons.contains(&jump_button);
+                if defeated && jump_held && !*jump_touch_was_held {
+                    actions.cycle_spectate = true;
                 }
-                if map_clicked {
-                    *map_open_ref = !*map_open_ref;
-                }
-                if help_clicked {
-                    *help_open = !*help_open;
-                }
+                *jump_touch_was_held = jump_held;
             } else {
                 input_state.joy = (0.0, 0.0);
                 input_state.touch_thrust = 0.0;
                 input_state.touch_turn = 0.0;
                 input_state.touch_look = (0.0, 0.0);
                 input_state.buttons.clear();
+                *jump_touch_was_held = false;
+            }
+            // ⏸ / Carte / ? (roadmap 2.5 et 5.5) — sans clavier, ni Échap, ni M,
+            // ni F1 ; utiles à la souris aussi, donc pour toute scène (roadmap v2 1.1).
+            let (pause_clicked, map_clicked, help_clicked) = mobile_top_buttons(ctx, area, paused);
+            if pause_clicked {
+                actions.toggle_pause = true;
+            }
+            if map_clicked {
+                *map_open_ref = !*map_open_ref;
+            }
+            if help_clicked {
+                *help_open = !*help_open;
+                if *help_open {
+                    *settings_open = false;
+                }
             }
             // Pastille réseau permanente + bannière d'événement (roadmap 2.2).
             let net_label = match (net_kind, net_rtt_ms) {
@@ -1398,49 +1561,35 @@ impl Editor {
             if let Some((text, alpha)) = &net_banner {
                 net_event_banner(ctx, area, text, *alpha, hud_scale);
             }
-            mobile_multiplayer_overlay(
-                ctx,
-                mp_server_url,
-                mp_name,
-                net_status,
-                net_connected,
-                &mut actions,
-                locale,
-            );
-            // Écran d'accueil (roadmap 2.1) : par-dessus le HUD, avant toute
-            // connexion ; le jeu tourne derrière (créatures en simulation locale).
-            if *welcome_pending
-                && windows::player_welcome_window(
+            // La fenêtre 🌐 (adresse + pseudo) a disparu du mode Player
+            // (roadmap v2 1.4) : l'écran d'accueil et « Menu principal » la
+            // remplacent ; l'éditeur garde sa fenêtre Multijoueur complète.
+            // Classement déplié tant que Tab est maintenue (roadmap v2 1.6).
+            if roster_held {
+                roster_overlay(
                     ctx,
                     area,
+                    roster,
                     mp_name,
-                    mp_class,
-                    mp_room_code,
-                    mp_server_url,
-                    welcome_error,
+                    kills,
                     locale,
-                    &mut actions,
-                )
-            {
-                *welcome_pending = false;
-                if settings.player_name != mp_name.trim() {
-                    settings.player_name = mp_name.trim().to_string();
-                    settings.save();
-                }
+                    settings.colorblind,
+                );
             }
             if *settings_open {
                 windows::player_settings_window(ctx, settings_open, settings, &mut actions, locale);
             }
             // Aide en jeu (F1 / « ? », roadmap 5.5) et journal de crash — ce
             // dernier n'était câblé que dans l'éditeur : un plantage en mode
-            // joueur restait muet.
-            windows::help_window(ctx, help_open, locale, mobile.any());
+            // joueur restait muet. Section « Tactile » sur le même critère que
+            // le stick (roadmap v2 1.1).
+            windows::help_window(ctx, help_open, locale, touch_ui && mobile.any());
             windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
             // Carte (Phase carte plein écran) : mini-carte permanente en coin,
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
             // (jamais les deux à la fois, cf. doc de `player_map_overlay`).
             if map_open {
-                player_map_overlay(ctx, area, minimap, locale, mobile.any(), map_zoom, map_pan);
+                player_map_overlay(ctx, area, minimap, locale, touch_ui, map_zoom, map_pan);
             } else {
                 player_corner_minimap(ctx, area, minimap, hud_scale);
             }
@@ -1450,7 +1599,7 @@ impl Editor {
                 kills,
                 wave,
             };
-            actions.hud_clicks = hud_widgets(ctx, area, scene, &values, &mut self.hud_image_cache);
+            actions.hud_clicks = hud_widgets(ctx, area, scene, &values, hud_image_cache);
         });
         self.winit_state
             .handle_platform_output(window, output.platform_output.clone());
@@ -2129,6 +2278,7 @@ fn build_ui(
                 has_project,
                 settings.recent_projects_with_status(),
                 status.suggested_save_name,
+                *playing,
             );
             menu_edition(ui, selection, status, actions);
             menu_ajouter(ui, scene, *selection, actions);
@@ -2251,6 +2401,7 @@ fn build_ui(
             wave_banner_flash,
             wave_banner_wave,
             spectating,
+            &crate::app::input::key_label(&settings.keyboard.jump),
         );
     }
     end_of_round_and_hud_widgets(
@@ -3341,7 +3492,14 @@ fn toolbar(
                 actions.redo = true;
             }
             ui.separator();
-            if ui.button("💾").on_hover_text("Enregistrer").clicked() {
+            // Inactif pendant Play (roadmap post-audit UX v2 2026-09-04, 1.8) :
+            // enregistrer écrasait la scène du projet avec l'état simulé.
+            if ui
+                .add_enabled(!*playing, egui::Button::new("💾"))
+                .on_hover_text("Enregistrer")
+                .on_disabled_hover_text("Arrête la partie pour enregistrer")
+                .clicked()
+            {
                 actions.save = true;
             }
             ui.separator();
@@ -3502,6 +3660,8 @@ fn play_overlays(
     wave_banner_flash: f32,
     wave_banner_wave: u32,
     spectating: Option<&str>,
+    // Touche de saut réelle pour le texte spectateur (roadmap v2 1.9).
+    switch_key: &str,
 ) {
     // Carte (mini-carte permanente + plein écran sur `M`) : les deux vues
     // vivent dans `editor/windows.rs` et n'étaient jusqu'ici câblées que dans
@@ -3555,6 +3715,7 @@ fn play_overlays(
             locale,
             hud_scale,
             spectating,
+            switch_key,
         );
     }
     if wave_banner_flash > 0.0 {

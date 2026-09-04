@@ -81,6 +81,18 @@ impl Renderer {
             if actions.quit {
                 app.request_quit();
             }
+            // « Menu principal » (roadmap post-audit UX v2 2026-09-04, 1.5) :
+            // on coupe la connexion, on relance la partie locale et on revient
+            // à l'écran d'accueil, qui gèle le jeu (cf. plus bas).
+            if actions.main_menu {
+                app.disconnect_from_server();
+                app.restart_game();
+                app.welcome_pending = true;
+            }
+            // Bouton tactile de saut, vaincu (roadmap v2 1.9).
+            if actions.cycle_spectate {
+                app.cycle_spectate();
+            }
             if let Some(v) = actions.mouse_sensitivity {
                 app.set_mouse_sensitivity(v);
             }
@@ -116,6 +128,20 @@ impl Renderer {
         // Chronométré pour le bilan de perf périodique (cf. `log_perf_window`) :
         // départage les à-coups côté simulation (scripts/physique/réseau) des
         // à-coups côté rendu/présentation (le reste de la frame).
+        // Écran d'accueil ouvert (roadmap post-audit UX v2 2026-09-04, 1.4) :
+        // le jeu est gelé derrière (pas de monstres en mouvement ni de
+        // chrono de vague) — la pause, que `advance_play` respecte déjà, sert
+        // de gel ; elle se lève quand l'accueil se ferme. `paused` est aussi
+        // ce qui fait basculer la boucle en `wait` (`is_active`), donc
+        // l'accueil ne consomme pas un cœur à 60 Hz.
+        if app.player {
+            if app.welcome_pending {
+                app.paused = true;
+            } else if self.welcome_was_pending {
+                app.paused = false;
+            }
+            self.welcome_was_pending = app.welcome_pending;
+        }
         let sim_start = Instant::now();
         app.advance_play();
         app.note_sim_duration(sim_start.elapsed());
@@ -276,8 +302,16 @@ impl Renderer {
         let mut restart = false;
         let mut resume = false;
         let mut player_net_actions = None;
+        // Overlay joueur pour **toute** scène (roadmap post-audit UX v2
+        // 2026-09-04, 1.1) — il n'existait que si `scene.mobile.any()` : un jeu
+        // exporté sans contrôles tactiles n'avait ni accueil, ni pause, ni
+        // pastille, ni aide, ni carte. Le stick et les boutons, eux, ne se
+        // dessinent que si l'écran est tactile (`touch_ui_active`).
         let full_output = if app.player {
-            if app.scene.mobile.any() {
+            {
+                let touch_ui = app.touch_ui_active();
+                let roster_held = app.roster_held;
+                let displayed_health = app.displayed_health();
                 let net_status = app.net_conn.net_status.clone();
                 let net_connected = app.is_connected();
                 let net_hud = app.net_hud_info();
@@ -301,7 +335,7 @@ impl Renderer {
                     &mut app.input_state,
                     app.device_preview,
                     app.device_portrait,
-                    app.hud_health,
+                    displayed_health,
                     app.fx.damage_flash,
                     app.fx.ally_down_flash,
                     ally_marker,
@@ -337,6 +371,8 @@ impl Renderer {
                     &mut app.welcome_pending,
                     welcome_error.as_deref(),
                     spectating.as_deref(),
+                    touch_ui,
+                    roster_held,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -349,8 +385,6 @@ impl Renderer {
                 }
                 player_net_actions = Some(actions);
                 Some(output)
-            } else {
-                None
             }
         } else {
             let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();

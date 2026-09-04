@@ -667,7 +667,10 @@ fn player_dump(app: &AppState) -> serde_json::Value {
         "pos": app.player_position().map(|p| [p.x, p.y, p.z]),
         "weapon": app.selected_weapon_label(),
         "weapon_index": app.selected_weapon(),
-        "health": app.hud_health,
+        // Ce que le HUD affiche (roadmap post-audit UX v2 2026-09-04, 1.2) :
+        // la vie serveur en ligne, la vie solo sinon — `hud_health` brut reste
+        // dans `state`.
+        "health": app.displayed_health(),
         "score": app.score(),
         "wave": app.wave,
         "won": app.has_won(),

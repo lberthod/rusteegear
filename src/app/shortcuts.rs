@@ -131,7 +131,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
     sc(Scope::Play, "`1` `2` `3`", "Choisir l'arme"),
     sc(Scope::Play, "`Échap`", "Pause"),
     sc(Scope::Play, "`M`", "Carte plein écran"),
-    sc(Scope::Play, "`Tab`", "Paramètres (mode Player)"),
+    // Roadmap post-audit UX v2 2026-09-04, 1.6 : Tab ouvrait les Paramètres
+    // (et egui la consommait) ; Paramètres passent par le menu pause.
+    sc(Scope::Play, "`Tab`", "Classement (maintenu, mode Player)"),
     sc(Scope::Play, "`F1`", "Aide en jeu"),
     sc(Scope::Touch, "Stick gauche", "Se déplacer (deux axes)"),
     sc(
@@ -139,6 +141,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
         "Glisser sur la moitié droite de l'écran",
         "Tourner la caméra",
     ),
+    sc(Scope::Touch, "Saut (vaincu)", "Allié spectateur suivant"),
     sc(Scope::Touch, "⏸ (haut-droite)", "Pause"),
     sc(Scope::Touch, "Carte (haut-droite)", "Carte plein écran"),
     sc(Scope::Touch, "? (haut-droite)", "Aide en jeu"),

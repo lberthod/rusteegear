@@ -123,6 +123,44 @@ fn deterministic_roll(time: f32, salt: f32) -> f32 {
 }
 
 impl AppState {
+    /// Vie du joueur solo amorcée dès qu'une partie tourne avec un objet
+    /// pilotable (roadmap post-audit UX v2 2026-09-04, 1.2). Avant, `hud_health`
+    /// restait `None` tant qu'aucun script Lua n'appelait `damage()` : les
+    /// créatures de la scène livrée (`creature_attack`, `hud_health.map(…)`)
+    /// ne blessaient jamais, la défaite (`simulation`, `h <= 0`) ne pouvait pas
+    /// arriver, et le HUD n'avait pas de barre de vie — un solo sans enjeu.
+    /// Idempotent, appelé à chaque tour d'`advance_play` : après
+    /// `restart_game` (qui remet `None`) la vie repart pleine au tour suivant.
+    /// Sans objet pilotable visible (serveur headless en attente d'un joueur,
+    /// cf. `waiting_for_the_first_player_never_drains_health_via_monster_scripts`)
+    /// rien n'est amorcé.
+    pub fn ensure_play_health(&mut self) {
+        if !self.playing || self.hud_health.is_some() || self.lost {
+            return;
+        }
+        let has_controller = self
+            .player_index()
+            .and_then(|i| self.scene.objects.get(i))
+            .is_some_and(|o| o.controller.as_ref().is_some_and(|c| c.input || c.gyro));
+        if has_controller {
+            self.hud_health = Some(1.0);
+        }
+    }
+
+    /// Vie à afficher au HUD (roadmap v2 1.2) : en ligne, celle que le serveur
+    /// connaît (`net_local_health`, seule vérité — `hud_health` continue de se
+    /// régénérer localement sans rien savoir des coups reçus côté serveur) ;
+    /// sinon la vie solo. Même principe que `displayed_kill_count`. On ne
+    /// recopie pas la valeur serveur dans `hud_health` : la défaite locale
+    /// (`hud_health <= 0` ⇒ `lost`) afficherait « Manche perdue » à la place
+    /// de la bannière spectateur.
+    pub fn displayed_health(&self) -> Option<f32> {
+        if self.is_connected() {
+            self.net_conn.net_local_health
+        } else {
+            self.hud_health
+        }
+    }
     /// Dégâts de contact monstre + régénération passive, pour chaque joueur
     /// réseau — appelée une fois par frame (dt réel) depuis `advance_play`,
     /// après `update_fireballs` (les dégâts à distance du tick sont déjà

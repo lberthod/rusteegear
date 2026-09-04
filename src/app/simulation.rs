@@ -1011,6 +1011,11 @@ impl AppState {
             self.fly_cam = false;
         }
         self.was_playing = self.playing;
+        // Vie solo amorcée dès qu'un objet pilotable joue (roadmap post-audit
+        // UX v2 2026-09-04, 1.2) — ici et non dans `Renderer::render`, pour
+        // que le pont de pilotage fenêtre occultée (qui appelle `advance_play`
+        // sans rendu) la voie aussi.
+        self.ensure_play_health();
 
         // Caméra libre de l'éditeur (hors Play) : survole la carte aux flèches +
         // Espace/C (bascule G), ou WASD + E/Q tant que le clic droit est tenu
