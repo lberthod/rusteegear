@@ -87,14 +87,14 @@ dans la source avec la référence.
 - [ ] 5.6 Souris en mode joueur : sensibilité appliquée à `touch_look`, glissé plein écran, curseur capturé pendant le jeu (`src/app/picking.rs:299`, `src/app/simulation.rs:1213`)
 - [ ] 5.7 Doc de `dual_stick` réécrite (elle décrit encore le stick bridé à un axe) (`src/scene/mobile.rs:21-29`)
 
-## Vague 6 — Confort éditeur (M, 1 semaine)
+## Vague 6 — Confort éditeur (M, 1 semaine) — fait `21cfa21`
 
-- [ ] 6.1 Sélecteurs de fichiers asynchrones (`rfd::AsyncFileDialog`) ; ouverture et duplication de projet hors du thread UI avec état « Ouverture de X… » (`src/editor/menus.rs:241-776`, `src/app/persistence.rs:304-413`)
-- [ ] 6.2 Import glTF : « Import de X… » dans la barre d'état puis toast « X importé » ; autosave visible (« Sauvegarde auto à 14:32 ») ; « Copier le diagnostic » confirmé par toast ; sortie console non toastée (`src/app/persistence.rs:422-524`, `src/app/autosave.rs:56`, `src/editor/toasts.rs:99`)
-- [ ] 6.3 Export annulable (`child.kill()`) ; contrôle qualité APK cliquable vers l'objet fautif (`src/editor/export.rs:1059`, `readiness.rs:47`)
-- [ ] 6.4 Persistance des vues : grille, aimantation, outil, largeur des panneaux, position et taille de toutes les fenêtres (`src/app/mod.rs:1004`, `src/editor/mod.rs:971-1012`)
-- [ ] 6.5 États vides utiles : inspecteur (« Clique un objet ou Ajouter ▸ Cube »), filtre sans résultat, console (« tape help ») ; Échap annule un renommage, nom vide refusé (`src/editor/mod.rs:3061`, `hierarchy.rs:132,220-236`, `windows.rs:55`)
-- [ ] 6.6 Coquille web : `fail()` réaffiche le voile (`boot.style.display`), voile masqué sur la première frame du moteur plutôt qu'un délai, bouton ⛶ déplacé hors du « ? » du HUD, `contextmenu` neutralisé, timeout de téléchargement avec « Réessayer », `orientationchange` écouté (`packaging/web/index.html:40,148,186-196`)
+- [x] 6.1 Sélecteurs de fichiers asynchrones (`rfd::AsyncFileDialog`) ; ouverture et duplication de projet hors du thread UI avec état « Ouverture de X… » (`src/editor/menus.rs:241-776`, `src/app/persistence.rs:304-413`)
+- [x] 6.2 Import glTF : « Import de X… » dans la barre d'état puis toast « X importé » ; autosave visible (« Sauvegarde auto à 14:32 ») ; « Copier le diagnostic » confirmé par toast ; sortie console non toastée (`src/app/persistence.rs:422-524`, `src/app/autosave.rs:56`, `src/editor/toasts.rs:99`) — l'autosave s'affiche en âge relatif (« 💾 auto il y a 2 min »), pas d'horloge locale dans le crate
+- [x] 6.3 Export annulable (`child.kill()`) ; contrôle qualité APK cliquable vers l'objet fautif (`src/editor/export.rs:1059`, `readiness.rs:47`)
+- [x] 6.4 Persistance des vues : grille, aimantation, outil, largeur des panneaux, position et taille de toutes les fenêtres (`src/app/mod.rs:1004`, `src/editor/mod.rs:971-1012`) — disposition egui complète persistée en RON (`editor_layout.ron`, sauvegarde toutes les 30 s et à la fermeture)
+- [x] 6.5 États vides utiles : inspecteur (« Clique un objet ou Ajouter ▸ Cube »), filtre sans résultat, console (« tape help ») ; Échap annule un renommage, nom vide refusé (`src/editor/mod.rs:3061`, `hierarchy.rs:132,220-236`, `windows.rs:55`)
+- [x] 6.6 Coquille web : `fail()` réaffiche le voile (`boot.style.display`), voile masqué sur la première frame du moteur plutôt qu'un délai, bouton ⛶ déplacé hors du « ? » du HUD, `contextmenu` neutralisé, timeout de téléchargement avec « Réessayer », `orientationchange` écouté (`packaging/web/index.html:40,148,186-196`) — non vérifié dans un navigateur avant le déploiement Pages suivant
 
 ## Vague 7 — Playtest (M, 3 jours + testeurs) — inchangée
 
