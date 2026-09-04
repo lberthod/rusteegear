@@ -44,13 +44,23 @@ wasm-bindgen --target web \
 
 if command -v wasm-opt >/dev/null 2>&1; then
     echo "▶ wasm-opt -Oz…"
-    # --all-features (plutôt qu'un --enable-* choisi à la main) : le binaire
-    # émis par rustc utilise déjà bulk-memory/nontrapping-float-to-int/etc.,
-    # et un jeu de features incomplet fait planter wasm-opt à la validation.
-    # --all-features fait correspondre exactement les capacités activées par
-    # rustc pour wasm32-unknown-unknown, sans devoir les lister à la main à
-    # chaque montée de version de rustc/wasm-bindgen.
-    wasm-opt -Oz --all-features \
+    # Liste EXPLICITE des propositions wasm (roadmap post-audit UX 2026-09-04, 0.2).
+    # `--all-features` autorisait wasm-opt à réécrire le module avec des
+    # propositions que les navigateurs n'activent pas encore (compact-imports,
+    # types 0x0…) : le .wasm passait la validation de binaryen puis échouait à
+    # `WebAssembly.instantiateStreaming()` dans Chrome — démo publique noire du
+    # 3 au 4 septembre 2026. Ces six propositions sont exactement ce que rustc
+    # émet pour wasm32-unknown-unknown (1.98) + ce que wasm-bindgen 0.2.125
+    # produit ; toutes sont supportées par Chrome, Firefox et Safari récents.
+    # Monter de version rustc = re-vérifier cette liste (le workflow Pages
+    # valide le .wasm avec node avant de publier).
+    wasm-opt -Oz \
+        --enable-bulk-memory \
+        --enable-sign-ext \
+        --enable-mutable-globals \
+        --enable-nontrapping-float-to-int \
+        --enable-reference-types \
+        --enable-multivalue \
         -o packaging/web/pkg/motor3derust_bg.wasm \
         packaging/web/pkg/motor3derust_bg.wasm
 else

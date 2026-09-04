@@ -31,9 +31,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installer la toolchain Rust (+ wasm32)
-        uses: dtolnay/rust-toolchain@stable
+      # Même toolchain épinglée que ci.yml : `rust-toolchain.toml` prime sur le canal
+      # demandé ici, donc installer `stable` + wasm32 ne suffisait pas (roadmap
+      # post-audit UX 2026-09-04, 0.1 — Pages rouge du 3 au 4 septembre).
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
@@ -58,6 +62,10 @@ jobs:
         run: |
           mkdir -p site
           ./packaging/build_web.sh
+          # Garde-fou (roadmap post-audit UX 2026-09-04, 0.2) : un .wasm que V8
+          # refuse sans flag expérimental ne doit jamais être publié — c'est
+          # exactement ce qui a rendu la démo noire du 3 au 4 septembre.
+          node -e "const fs=require('fs');const b=fs.readFileSync('packaging/web/pkg/motor3derust_bg.wasm');if(!WebAssembly.validate(b)){console.error('✗ .wasm refusé par V8 (proposition non supportée) — cf. packaging/build_web.sh');process.exit(1)}console.log('✓ .wasm valide,',(b.length/1048576).toFixed(1),'Mo')"
           cp packaging/web/index.html site/
           cp -r packaging/web/pkg site/pkg
           cargo doc --no-deps --lib

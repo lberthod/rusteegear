@@ -2,17 +2,193 @@
 <html lang="fr">
   <head>
     <meta charset="utf-8" />
-    <title>RusteeGear</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>RusteeGear — démo multijoueur</title>
+    <!--
+      Page hôte de la démo web (roadmap post-audit UX 2026-09-04, 0.3).
+      Avant : un canvas nu et `init()` — 23 Mo à télécharger sans aucun retour,
+      et une page noire à vie si WebGPU manquait ou si le .wasm était refusé.
+      Maintenant : détection WebGPU avant tout téléchargement, barre de
+      progression, message d'erreur lisible avec la marche à suivre, rappel des
+      touches, plein écran, et redimensionnement du rendu avec la fenêtre.
+      Le moteur cherche le canvas par son id `rustee-canvas` (cf. src/lib.rs).
+    -->
     <style>
-      html, body { margin: 0; height: 100%; background: #12141a; }
-      #rustee-canvas { display: block; width: 100%; height: 100%; }
+      html, body { margin: 0; height: 100%; background: #12141a; color: #e6e8e3;
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+      #rustee-canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 12px; padding: 24px; text-align: center; background: #12141a;
+        transition: opacity .35s ease; }
+      #boot.hidden { opacity: 0; pointer-events: none; }
+      #boot .logo { font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+      #boot .logo span { color: #e8763b; }
+      #boot .sub { margin: 0; color: #b4bac3; }
+      #bar { width: min(420px, 80vw); height: 6px; background: #262b33; border-radius: 3px; overflow: hidden; }
+      #fill { height: 100%; width: 0; background: #e8763b; transition: width .15s linear; }
+      #status { margin: 0; color: #b4bac3; font-variant-numeric: tabular-nums; }
+      #keys { margin: 18px 0 0; max-width: 60ch; color: #848c98; font-size: 13.5px; }
+      #keys b { color: #e6e8e3; font-weight: 600; }
+      #err { display: none; max-width: 60ch; margin-top: 8px; padding: 14px 18px; text-align: left;
+        background: #3e1f1d; border-left: 4px solid #f0736a; border-radius: 4px; }
+      #err h2 { margin: 0 0 6px; font-size: 17px; }
+      #err p { margin: 0 0 6px; }
+      #err code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; color: #f0b3ad; }
+      #err a { color: #e8763b; }
+      #boot.failed #bar { display: none; }
+      #boot.failed #err { display: block; }
+      #fs { position: fixed; top: 8px; right: 8px; width: 30px; height: 30px; border: 0; border-radius: 6px;
+        background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
+      #fs:hover, #fs:focus-visible { background: rgba(232, 118, 59, .8); outline: none; }
+      body.running #fs { display: block; }
+      @media (prefers-reduced-motion: reduce) { #boot, #fill { transition: none; } }
     </style>
   </head>
   <body>
-    <canvas id="rustee-canvas"></canvas>
+    <canvas id="rustee-canvas" tabindex="0" aria-label="Zone de jeu RusteeGear"></canvas>
+    <button id="fs" type="button" title="Plein écran">⛶</button>
+    <div id="boot" role="status" aria-live="polite">
+      <div class="logo">🦀 Rustee<span>Gear</span></div>
+      <p class="sub">Démo multijoueur, directement dans le navigateur</p>
+      <div id="bar"><div id="fill"></div></div>
+      <p id="status">Vérification du navigateur…</p>
+      <div id="err">
+        <h2 id="err-title"></h2>
+        <p id="err-body"></p>
+        <p><code id="err-detail"></code></p>
+        <p>Sans navigateur compatible, la version macOS se télécharge sur
+          <a href="https://github.com/lberthod/rusteegear" rel="noopener">github.com/lberthod/rusteegear</a>.</p>
+      </div>
+      <p id="keys"><b>WASD</b> ou flèches : se déplacer · <b>Espace</b> : sauter · <b>J</b> : attaquer ·
+        <b>K</b> : tirer · <b>H</b> : se soigner · <b>1 2 3</b> : arme · <b>M</b> : carte · <b>Échap</b> : pause</p>
+    </div>
     <script type="module">
       import init from "./pkg/motor3derust.js";
-      init();
+
+      const $ = (id) => document.getElementById(id);
+      const canvas = $("rustee-canvas");
+      const boot = $("boot");
+      const statusEl = $("status");
+      const fill = $("fill");
+      let failed = false;
+
+      function setStatus(text) { statusEl.textContent = text; }
+      function fail(title, body, detail) {
+        if (failed) return;
+        failed = true;
+        boot.classList.remove("hidden");
+        boot.classList.add("failed");
+        $("err-title").textContent = title;
+        $("err-body").textContent = body;
+        $("err-detail").textContent = detail ? String(detail) : "";
+        setStatus("");
+      }
+
+      // Le moteur signale ses échecs d'initialisation par `log::error!` (console) :
+      // on les relaie à l'écran plutôt que de laisser une page noire.
+      const origError = console.error.bind(console);
+      console.error = (...args) => {
+        origError(...args);
+        const text = args.map(String).join(" ");
+        if (/renderer impossible|adaptateur|Création de la fenêtre impossible/i.test(text)) {
+          fail("Le rendu 3D n'a pas pu démarrer",
+            "Le navigateur a bien WebGPU, mais aucune carte graphique compatible n'a répondu. Sur Chrome, vérifier chrome://gpu ; sur une machine virtuelle ou en accès distant, WebGPU est souvent désactivé.",
+            text);
+        }
+      };
+      window.addEventListener("unhandledrejection", (e) => {
+        const r = e.reason;
+        const msg = r && (r.message || String(r));
+        if (/CompileError|LinkError|instantiate/i.test(msg || "")) {
+          fail("Ce navigateur ne peut pas charger le jeu",
+            "Le module WebAssembly a été refusé. Mettre le navigateur à jour (Chrome ou Edge récent) suffit en général.",
+            msg);
+        }
+      });
+
+      async function fetchWithProgress(url) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status} sur ${url}`);
+        const total = Number(res.headers.get("content-length")) || 0;
+        const reader = res.body.getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          got += value.length;
+          const mb = (got / 1048576).toFixed(1);
+          if (total) {
+            fill.style.width = `${Math.min(100, (got / total) * 100).toFixed(1)}%`;
+            setStatus(`Téléchargement du jeu… ${mb} / ${(total / 1048576).toFixed(1)} Mo`);
+          } else {
+            setStatus(`Téléchargement du jeu… ${mb} Mo`);
+          }
+        }
+        const bytes = new Uint8Array(got);
+        let offset = 0;
+        for (const c of chunks) { bytes.set(c, offset); offset += c.length; }
+        return bytes;
+      }
+
+      // Le rendu suit la fenêtre : winit fige la taille du canvas en style inline
+      // à la création ; on la réécrit à chaque redimensionnement et winit
+      // (ResizeObserver) reconfigure la surface GPU.
+      function fitCanvas() {
+        canvas.style.width = `${window.innerWidth}px`;
+        canvas.style.height = `${window.innerHeight}px`;
+      }
+      window.addEventListener("resize", fitCanvas);
+
+      $("fs").addEventListener("click", () => {
+        const el = document.documentElement;
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (el.requestFullscreen) el.requestFullscreen();
+        canvas.focus();
+      });
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+
+      async function main() {
+        if (!navigator.gpu) {
+          fail("WebGPU n'est pas disponible dans ce navigateur",
+            "La démo a besoin de WebGPU : Chrome ou Edge 113+, Safari 18+, Firefox 141+. Sur un navigateur récent, vérifier que l'accélération matérielle est activée.");
+          return;
+        }
+        setStatus("Téléchargement du jeu…");
+        const bytes = await fetchWithProgress(new URL("./pkg/motor3derust_bg.wasm", import.meta.url));
+        fill.style.width = "100%";
+        setStatus("Compilation et démarrage du moteur…");
+        await init({ module_or_path: bytes });
+        if (failed) return;
+        setStatus("Initialisation du GPU…");
+        // Le renderer s'initialise de façon asynchrone après `init` ; un échec
+        // arrive par console.error (relayé ci-dessus). Sans échec, on laisse la
+        // place au jeu.
+        setTimeout(() => {
+          if (failed) return;
+          fitCanvas();
+          boot.classList.add("hidden");
+          document.body.classList.add("running");
+          canvas.focus();
+          // Après le fondu, retirer l'overlay du flux : un onglet en arrière-plan
+          // peut geler la transition CSS et laisser un voile sur le jeu.
+          setTimeout(() => { if (!failed) boot.style.display = "none"; }, 500);
+        }, 900);
+      }
+
+      main().catch((e) => {
+        const msg = (e && (e.message || String(e))) || "";
+        if (/CompileError|LinkError|Invalid import|instantiate/i.test(msg)) {
+          fail("Ce navigateur ne peut pas charger le jeu",
+            "Le module WebAssembly a été refusé. Mettre le navigateur à jour (Chrome ou Edge récent) suffit en général.",
+            msg);
+        } else {
+          fail("Le jeu n'a pas pu se charger",
+            "Le téléchargement ou le démarrage a échoué. Recharger la page ; si le problème persiste, vérifier la connexion.",
+            msg);
+        }
+      });
     </script>
   </body>
 </html>

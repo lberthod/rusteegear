@@ -70,9 +70,10 @@ préversion — les libellés du panneau Export le rappellent.
 
 - **Lua : sous-ensemble portable** — détail et scripts garantis dans
   [LUA_PORTABLE.md](LUA_PORTABLE.md).
-- **Canvas : taille figée à l'initialisation.** Redimensionner la fenêtre du
-  navigateur après le chargement ne redimensionne pas encore le rendu
-  (correctif en chantier) — recharger la page si besoin.
+- ~~**Canvas : taille figée à l'initialisation.**~~ **Corrigé (04/09/2026,
+  roadmap post-audit UX 0.3)** : la page hôte réécrit la taille du canvas à
+  chaque redimensionnement de la fenêtre et le rendu suit (vérifié dans
+  Chrome 148 : 1280×720 → 900×500 sans rechargement).
 - **Musique en flux absente** (SFX fonctionnels).
 - **WebGPU requis** : Chrome/Edge récents ; Safari/Firefox selon leur support.
 

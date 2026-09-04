@@ -3,6 +3,13 @@
 # commit dédié qui change cette ligne, met à jour `.github/workflows/ci.yml`
 # (toolchain explicite, cf. le job `check`) et corrige les nouveaux lints dans la
 # foulée.
+#
+# `targets` (roadmap post-audit UX 2026-09-04, 0.1) : ce fichier prime sur le canal
+# installé par l'action `dtolnay/rust-toolchain@stable` de `pages.yml`. Sans la cible
+# wasm32 déclarée ici, rustup sélectionne 1.98.0 *sans* cette cible et le build de
+# la démo web échoue (« can't find crate for `core` ») — Pages a été rouge sur les 27
+# pushes du 3 au 4 septembre pour cette seule raison.
 [toolchain]
 channel = "1.98.0"
 components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
