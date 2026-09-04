@@ -294,5 +294,5 @@ spécifiquement, accepté en connaissance de cause. Signalé dans les messages d
 | 5. `sim_step` C | `apply_script_outcomes` | ✅ `ffac132`, [run 33801527708](https://github.com/lberthod/rusteegear/actions/runs/33801527708) 7/7 vert. `sim_step` ~800 → ~525 lignes cumulé. F (queue) reporté après D/E, non actionnable avant |
 | 6. `render` E | Passe d'ombre (`render_shadow_pass`) | ✅ `5afc090`, [run 33802660171](https://github.com/lberthod/rusteegear/actions/runs/33802660171) 7/7 vert, goldens inchangés au pixel près. `render` 1125 → ~310 lignes cumulé |
 | 6. `render` F | Passe principale (`render_main_pass`) | ✅ `87dceed`, [run 33847368675](https://github.com/lberthod/rusteegear/actions/runs/33847368675) 7/7 vert, goldens inchangés. **`render` : 1125 → ~190 lignes, partie B du plan terminée** |
-| 7. `sim_step` D | Pilotage physique du joueur | ⏳ |
+| 7. `sim_step` D | Pilotage physique du joueur (`drive_local_and_networked_players`) | ✅ `764ceda`, [run 33848533899](https://github.com/lberthod/rusteegear/actions/runs/33848533899) 7/7 vert. Sans playtest manuel (décision utilisateur) — 8 tests automatisés ciblés vérifiés (tank controls, gamepad, clip Idle/Walk). `sim_step` ~800 → ~360 lignes cumulé |
 | 8. `sim_step` E1-E3 | Ciblage et poursuite IA | ⏳ |
