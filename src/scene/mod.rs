@@ -907,6 +907,89 @@ pub struct SceneObject {
     /// autre `Combat::attackable`.
     #[serde(default)]
     pub convoy: Option<Convoy>,
+    /// Articulation physique rapier (analyse comparative 2026-09-04, court terme
+    /// « joints exposés dans l'inspecteur ») : `None` pour la grande majorité des
+    /// objets — seuls une porte, un pont suspendu, un pendule… en ont une. Voir
+    /// `Joint` ; construite à l'entrée en Play par `runtime::physics::Physics::build`.
+    #[serde(default)]
+    pub joint: Option<Joint>,
+}
+
+/// Type d'articulation rapier reliant un objet à un autre (ou au monde).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum JointKind {
+    /// Soudure : aucune liberté relative (attacher une lanterne à un chariot).
+    #[default]
+    Fixed,
+    /// Charnière : rotation libre autour d'un seul axe (`Joint::axis`), butées
+    /// optionnelles (`Joint::limits`) — porte, pont-levis, pendule.
+    Revolute,
+    /// Rotule : toutes les rotations libres, translation bloquée — chaîne, lampe
+    /// suspendue.
+    Spherical,
+}
+
+impl JointKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            JointKind::Fixed => "Fixe",
+            JointKind::Revolute => "Charnière",
+            JointKind::Spherical => "Rotule",
+        }
+    }
+}
+
+/// Composant optionnel : articulation physique entre cet objet et `target` (un
+/// autre objet de la scène, par nom) ou le monde (`target` vide). Les sets de
+/// joints rapier existaient dans `Physics` depuis le début mais n'étaient jamais
+/// peuplés — c'est ce champ qui les remplit.
+///
+/// L'objet porteur doit être **dynamique** pour que l'articulation ait un effet
+/// visible (un objet statique ne bouge pas, joint ou pas) ; la cible peut être
+/// n'importe quoi — dynamique (deux caisses soudées), statique (porte sur son
+/// chambranle) ou absente (ancrage dans le vide, pour un pendule).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Joint {
+    #[serde(default)]
+    pub kind: JointKind,
+    /// Nom de l'objet cible (`SceneObject::name`, premier trouvé) ; vide = monde.
+    #[serde(default)]
+    pub target: String,
+    /// Point d'attache dans le repère **local** de cet objet, en unités du mesh
+    /// (avant l'échelle de l'objet, comme les sommets : le haut d'un cube unité
+    /// est `(0, 0.5, 0)`) — l'échelle de l'objet s'applique ensuite.
+    #[serde(default)]
+    pub anchor: Vec3,
+    /// Point d'attache côté cible : repère local de la cible (même convention
+    /// qu'`anchor`), ou coordonnées **monde** si `target` est vide. Ignoré pour
+    /// une soudure (`Fixed`), qui fige la pose relative telle qu'elle est à
+    /// l'entrée en Play.
+    #[serde(default)]
+    pub target_anchor: Vec3,
+    /// Axe de la charnière, repère local de cet objet (`Revolute` seulement).
+    #[serde(default = "default_joint_axis")]
+    pub axis: Vec3,
+    /// Butées angulaires de la charnière en degrés `[min, max]` ; `None` = tour
+    /// complet libre.
+    #[serde(default)]
+    pub limits: Option<[f32; 2]>,
+}
+
+fn default_joint_axis() -> Vec3 {
+    Vec3::Y
+}
+
+impl Default for Joint {
+    fn default() -> Self {
+        Self {
+            kind: JointKind::Fixed,
+            target: String::new(),
+            anchor: Vec3::ZERO,
+            target_anchor: Vec3::ZERO,
+            axis: default_joint_axis(),
+            limits: None,
+        }
+    }
 }
 
 /// Composant optionnel : trajectoire d'un convoi à escorter (GDD_MMORPG.md §4, mode
@@ -1146,6 +1229,7 @@ impl Default for SceneObject {
             prefab: None,
             tag: String::new(),
             convoy: None,
+            joint: None,
         }
     }
 }

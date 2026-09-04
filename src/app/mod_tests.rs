@@ -562,6 +562,7 @@ fn script_setting_obj_anim_starts_a_crossfade() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     let state = anim.unwrap();
@@ -615,6 +616,7 @@ fn script_leaving_obj_anim_untouched_does_not_reset_clip() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     let state = anim.unwrap();
@@ -660,6 +662,7 @@ fn script_reacts_to_tap_and_changes_color() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(col, [0.5, 0.5, 0.5]);
@@ -691,6 +694,7 @@ fn script_reacts_to_tap_and_changes_color() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(col, [1.0, 0.0, 0.0]);
@@ -732,6 +736,7 @@ fn script_reacts_to_trigger() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(t.position.y, 0.0);
@@ -762,6 +767,7 @@ fn script_reacts_to_trigger() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(t.position.y, 9.0);
@@ -807,6 +813,7 @@ fn script_reads_tilt() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert!((t.position.x - 1.0).abs() < 1e-5);
@@ -848,6 +855,7 @@ fn script_sets_health() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(health, Some(0.5));
@@ -890,6 +898,7 @@ fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(health, Some(0.7));
@@ -921,6 +930,7 @@ fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert!(
@@ -956,6 +966,7 @@ fn script_damage_is_relative_and_stacks_across_objects_same_frame() {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
     }
@@ -1013,6 +1024,7 @@ fn controller_demo_enemy_scripts_compile_and_patrol() {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         let mut t1 = e.transform;
@@ -1044,6 +1056,7 @@ fn controller_demo_enemy_scripts_compile_and_patrol() {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert!(
@@ -2601,6 +2614,7 @@ fn controller_demo_lava_boil_script_preserves_collision_scale() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -2651,6 +2665,7 @@ fn script_can_request_vibration() {
         false,
         None,
         &mut Vec::new(),
+        &[],
     )
     .unwrap();
     assert_eq!(vib, vec![80.0]);
@@ -2697,6 +2712,7 @@ fn script_can_request_reverb() {
         false,
         None,
         &mut reverb_out,
+        &[],
     )
     .unwrap();
     assert_eq!(reverb_out, vec![0.6]);

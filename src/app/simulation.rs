@@ -954,8 +954,9 @@ impl AppState {
         self.was_playing = self.playing;
 
         // Caméra libre de l'éditeur (hors Play) : survole la carte aux flèches +
-        // Espace/C, indépendamment de la simulation ci-dessous (gelée hors Play).
-        if !self.playing && self.fly_cam {
+        // Espace/C (bascule G), ou WASD + E/Q tant que le clic droit est tenu
+        // (`fly_look`) — indépendamment de la simulation ci-dessous (gelée hors Play).
+        if !self.playing && (self.fly_cam || self.fly_look) {
             self.update_fly_cam(dt);
         }
 
@@ -1292,10 +1293,18 @@ impl AppState {
     /// toute la carte pour repérer un décor sans passer par Play). Cf. `fly_cam`.
     fn update_fly_cam(&mut self, dt: f32) {
         const FLY_SPEED: f32 = 12.0;
+        /// Maj tenue (`fly_boost`) : traverser une grande carte sans attendre —
+        /// même convention que la caméra de scène d'Unity/Godot.
+        const BOOST: f32 = 3.0;
         let (mx, my) = clamp_move_vector(self.input_state.key_move.0, self.input_state.key_move.1);
         let (wx, wz) = camera_relative_move(mx, my, self.camera.yaw);
         let wy = self.input_state.fly_vertical.clamp(-1.0, 1.0);
-        self.camera.target += Vec3::new(wx, wy, wz) * FLY_SPEED * dt;
+        let speed = if self.fly_boost {
+            FLY_SPEED * BOOST
+        } else {
+            FLY_SPEED
+        };
+        self.camera.target += Vec3::new(wx, wy, wz) * speed * dt;
     }
 
     /// Un pas de simulation à **dt fixe** : scripts Lua, actions au tap, pilotage des
@@ -1580,6 +1589,22 @@ impl AppState {
             .filter(|o| o.visible && !o.tag.is_empty())
             .map(|o| (o.tag.clone(), o.transform.position))
             .collect();
+        // Capteurs rapier des zones `trigger` (`Physics::sensor_overlaps`, analyse
+        // comparative 2026-09-04) : noms des objets qui recoupent chaque zone au
+        // dernier pas de physique — exposés en `obj.overlapped`/`overlap_count`/
+        // `overlap_names`. Instantané pris ici pour la même raison que `tagged`.
+        let overlap_names: HashMap<usize, Vec<String>> = match self.physics.as_ref() {
+            Some(phys) => {
+                let mut map: HashMap<usize, Vec<String>> = HashMap::new();
+                for (zone, other) in phys.sensor_overlaps() {
+                    if let Some(o) = self.scene.objects.get(other) {
+                        map.entry(zone).or_default().push(o.name.clone());
+                    }
+                }
+                map
+            }
+            None => HashMap::new(),
+        };
         // `spawn()`/`obj:destroy()` : accumulés pendant la boucle des
         // scripts, appliqués après — jamais pendant, `scene.objects` est emprunté
         // mutable par l'itération ci-dessous.
@@ -1699,6 +1724,7 @@ impl AppState {
                     exited.contains(&idx),
                     self.physics.as_ref(),
                     &mut reverb_requests,
+                    overlap_names.get(&idx).map(Vec::as_slice).unwrap_or(&[]),
                 ) {
                     let msg = format!("Script '{}' : {e}", obj.name);
                     if prev_script_errors.get(&idx) != Some(&msg) {
@@ -1775,6 +1801,7 @@ impl AppState {
                     exited.contains(&idx),
                     self.physics.as_ref(),
                     &mut reverb_requests,
+                    overlap_names.get(&idx).map(Vec::as_slice).unwrap_or(&[]),
                 ) {
                     let msg = format!("Script '{}' : {e}", obj.name);
                     if prev_script_errors.get(&idx) != Some(&msg) {

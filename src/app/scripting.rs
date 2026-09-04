@@ -53,6 +53,7 @@ pub(super) fn run_script(
     exited: bool,
     physics: Option<&crate::runtime::physics::Physics>,
     reverb_out: &mut Vec<f32>,
+    overlapping: &[String],
 ) -> mlua::Result<()> {
     let (rx, ry, rz) = canonical_euler_xyz(t.rotation);
     let obj = lua.create_table()?;
@@ -78,6 +79,20 @@ pub(super) fn run_script(
     // dans `sim_step`), pas juste « pas en contact » (qui vaudrait aussi tant que le
     // joueur n'est jamais entré).
     obj.set("exited", exited)?;
+    // Capteurs rapier (analyse comparative 2026-09-04) : **tout** corps physique
+    // qui recoupe cette zone `trigger` ce tick — caisse dynamique, créature
+    // cinématique, joueur… — là où `obj.triggered` ne voit que le joueur (test
+    // d'AABB historique, conservé tel quel pour ne rien changer aux créatures qui
+    // mordent au contact). `obj.overlapped` = au moins un ; `obj.overlap_count` ;
+    // `obj.overlap_names` = noms (table 1..n). Plaque de pression, piège, zone
+    // de dépôt d'objet : sans joueur ni script côté objet posé.
+    obj.set("overlapped", !overlapping.is_empty())?;
+    obj.set("overlap_count", overlapping.len())?;
+    let names = lua.create_table()?;
+    for (n, name) in overlapping.iter().enumerate() {
+        names.set(n + 1, name.as_str())?;
+    }
+    obj.set("overlap_names", names)?;
     // `obj.anim` : clip actuellement joué, lu en écriture après l'appel pour
     // piloter la FSM depuis Lua (`obj.anim = "run"` démarre un fondu enchaîné vers ce
     // clip). N'existe que pour les objets skinnés ; ignoré silencieusement sinon, comme
@@ -612,6 +627,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         );
         assert!(
             result.is_err(),
@@ -670,6 +686,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.x, 42.0);
@@ -727,6 +744,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert!((t.position.x - 0.5).abs() < 1e-5);
@@ -762,6 +780,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert!((t2.position.x).abs() < 1e-5);
@@ -806,6 +825,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(debug_out.len(), 2);
@@ -859,6 +879,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(events_out, vec!["porte".to_string()]);
@@ -916,6 +937,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -983,6 +1005,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.x, 42.0);
@@ -1054,6 +1077,7 @@ mod tests {
             false,
             Some(&phys),
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert!(
@@ -1105,6 +1129,7 @@ mod tests {
             false,
             Some(&phys),
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.x, 42.0);
@@ -1148,6 +1173,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.x, 1.0);
@@ -1216,6 +1242,7 @@ mod tests {
             false,
             Some(&phys),
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.x, 1.0, "seule la sphère proche est à 2 m");
@@ -1261,6 +1288,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.y, 0.0);
@@ -1292,6 +1320,7 @@ mod tests {
             true,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(t.position.y, 9.0);
@@ -1337,6 +1366,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
     }
@@ -1447,6 +1477,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(item_add_out, vec![(crate::scene::ItemKind::Potion, 2)]);
@@ -1489,6 +1520,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert!(item_add_out.is_empty());

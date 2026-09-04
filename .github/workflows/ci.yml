@@ -237,3 +237,103 @@ jobs:
 
       - name: cargo audit
         run: cargo audit
+
+  # Éditeur sur Linux et Windows (analyse comparative 2026-09-04, court terme
+  # « Validation CI Windows et Linux du build éditeur ») : jusqu'ici seul macOS
+  # avait déjà *lancé* l'éditeur — Linux ne le compilait qu'en passant (`cargo
+  # test --all-targets` du job `check`) et Windows n'était jamais construit.
+  #
+  # Linux : compile les quatre binaires puis **lance vraiment l'éditeur** sous
+  # Xvfb avec le rasteriseur Vulkan logiciel de Mesa (lavapipe) et le pont de
+  # pilotage (`--pilot`, cf. docs/PILOT.md) : `pilot state` prouve que la
+  # fenêtre, le device wgpu et la boucle d'événements tournent ; la capture
+  # d'écran est publiée en artefact pour un contrôle visuel.
+  #
+  # `continue-on-error` le temps d'observer quelques runs verts consécutifs
+  # (même précaution que `golden` et `audit` à leur introduction) : Windows
+  # n'a jamais été compilé jusqu'ici, et lavapipe n'a jamais été essayé.
+  editor-linux:
+    name: Éditeur Linux (build + lancement Xvfb/lavapipe)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Dépendances système (winit/wgpu/egui + Vulkan logiciel + Xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libasound2-dev libudev-dev libdbus-1-dev pkg-config \
+            libvulkan1 mesa-vulkan-drivers xvfb
+
+      - name: Build des binaires (éditeur, serveur, pilot, glbviewer)
+        run: cargo build --bins
+
+      # L'éditeur démarre sur la scène de démo embarquée ; `pilot state` boucle
+      # jusqu'à ce que le pont réponde (compilation des shaders + création du
+      # device incluses), puis une capture d'écran atteste que le rendu produit
+      # une image. `timeout` garantit que le job ne reste jamais suspendu si la
+      # fenêtre ne s'ouvre pas.
+      - name: Lancer l'éditeur sous Xvfb et interroger le pont de pilotage
+        env:
+          WGPU_BACKEND: vulkan
+          RUST_LOG: info
+        run: |
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            timeout 180 ./target/debug/motor3derust --pilot > editor.log 2>&1 &
+          for i in $(seq 1 60); do
+            if ./target/debug/pilot state > state.json 2>/dev/null; then break; fi
+            sleep 2
+          done
+          cat state.json
+          ./target/debug/pilot screenshot editor-linux.png
+          ./target/debug/pilot console play
+          sleep 2
+          ./target/debug/pilot state
+          ./target/debug/pilot console stop
+          pkill -f "motor3derust --pilot" || true
+          tail -n 40 editor.log
+
+      - name: Publier la capture d'écran Linux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-linux-screenshot
+          path: |
+            editor-linux.png
+            editor.log
+          if-no-files-found: ignore
+
+  editor-windows:
+    name: Éditeur Windows (build + tests lib)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer la toolchain Rust (version épinglée, cf. rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build des binaires (éditeur, serveur, pilot, glbviewer)
+        run: cargo build --bins
+
+      # Les tests qui exigent un GPU se sautent d'eux-mêmes sans adaptateur
+      # (cf. tests/golden_render.rs) ; le reste (scène, physique, scripts,
+      # réseau simulé) tourne tel quel — première validation du code sur les
+      # chemins Windows (séparateurs, `%APPDATA%`, presse-papiers).
+      - name: Tests (lib)
+        run: cargo test --lib

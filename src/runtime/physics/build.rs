@@ -10,6 +10,11 @@ impl Physics {
         let mut kinematic = Vec::new();
         let mut scripted = Vec::new();
         let mut collider_owner = std::collections::HashMap::new();
+        let mut sensors = Vec::new();
+        // Corps de chaque objet (par index de scène), pour relier les articulations
+        // (`SceneObject::joint`) une fois tous les corps créés — `None` pour un
+        // objet sans physique.
+        let mut body_of: Vec<Option<RigidBodyHandle>> = vec![None; scene.objects.len()];
 
         for (i, obj) in scene.objects.iter().enumerate() {
             // Le joueur (joystick/gyro) devient un corps **kinématique** (Sprint
@@ -36,7 +41,13 @@ impl Physics {
             let is_ai =
                 obj.ai_chaser.is_some() && obj.visible && obj.physics != PhysicsKind::Kinematic;
             let controllable = is_player || is_ai;
-            if matches!(obj.physics, PhysicsKind::None) && !controllable {
+            // Zone de déclenchement sans physique propre (analyse comparative
+            // 2026-09-04, « sensors rapier pour les triggers ») : un corps fixe qui
+            // ne porte **qu'un** collider capteur (`sensor_only`) — il ne bloque
+            // rien, mais rapier rapporte tout corps qui le traverse (cf.
+            // `Physics::sensor_overlaps`), joueur ou pas.
+            let sensor_only = matches!(obj.physics, PhysicsKind::None) && !controllable;
+            if sensor_only && !(obj.trigger && obj.visible) {
                 continue;
             }
             // Même garde-fou que `is_ai` ci-dessus, pour un fantôme réseau masqué
@@ -88,6 +99,7 @@ impl Physics {
                 .rotation(Vector::new(rotvec.x, rotvec.y, rotvec.z))
                 .build();
             let handle = bodies.insert(body);
+            body_of[i] = Some(handle);
 
             // demi-dimensions du collider : AABB local mis à l'échelle. `center` :
             // les primitives du moteur sont modélisées centrées sur l'origine
@@ -177,7 +189,7 @@ impl Physics {
             // bande ouest (jamais traversée par le contenu existant, cf. la doc de
             // `gfx::mesh::mmorpg_terrain_local_height`) élimine cette interaction
             // partout ailleurs.
-            let collider = match obj.collider_shape {
+            let shape = || match obj.collider_shape {
                 ColliderShape::Box => cuboid(),
                 ColliderShape::Sphere => ball(),
                 ColliderShape::Capsule => capsule(),
@@ -219,7 +231,30 @@ impl Physics {
                     .translation(Vector::new(center.x, 0.0, center.z)),
                     _ => cuboid(),
                 },
+            };
+            // Capteur de zone (`trigger`) : un collider **supplémentaire**, jamais
+            // à la place du solide — un objet `Static` coché « zone » continue de
+            // bloquer comme avant. `ActiveCollisionTypes::all()` : les zones sont
+            // presque toujours des corps fixes, et rapier ne teste par défaut ni
+            // fixe↔cinématique (le joueur, les créatures scriptées) ni fixe↔fixe.
+            if obj.trigger && obj.visible {
+                let sensor = shape()
+                    .sensor(true)
+                    .active_collision_types(ActiveCollisionTypes::all())
+                    .collision_groups(InteractionGroups::new(
+                        Group::from_bits_truncate(obj.collision_layer),
+                        Group::from_bits_truncate(obj.collision_mask),
+                        InteractionTestMode::And,
+                    ))
+                    .build();
+                let sensor_handle = colliders.insert_with_parent(sensor, handle, &mut bodies);
+                collider_owner.insert(sensor_handle, i);
+                sensors.push((i, sensor_handle));
             }
+            if sensor_only {
+                continue;
+            }
+            let collider = shape()
             // Aucun rebond : un personnage n'est pas une balle (cf. docs/audits/
             // physics.md pour le mouvement instable observé avec un rebond non nul).
             // Rien dans le projet ne dépend d'un rebond (aucun mécanisme de type
@@ -357,6 +392,106 @@ impl Physics {
             }
         }
 
+        // Articulations (`SceneObject::joint`, analyse comparative 2026-09-04) :
+        // reliées maintenant que tous les corps existent. Un ancrage « monde »
+        // (cible vide, ou cible sans corps physique) passe par un corps fixe
+        // créé à la volée à la pose de la cible (ou à l'origine).
+        let mut impulse = ImpulseJointSet::new();
+        let mut world_anchor: Option<RigidBodyHandle> = None;
+        for (i, obj) in scene.objects.iter().enumerate() {
+            let Some(joint) = &obj.joint else {
+                continue;
+            };
+            let Some(h1) = body_of[i] else {
+                log::warn!(
+                    "{} : articulation ignorée — l'objet n'a pas de physique (mettre \
+                     Dynamique pour qu'elle agisse).",
+                    obj.name
+                );
+                continue;
+            };
+            let scale1 = obj.transform.scale;
+            let anchor1 = joint.anchor * scale1;
+            // Cible : (corps, ancre locale à ce corps).
+            let target_idx = (!joint.target.is_empty())
+                .then(|| scene.objects.iter().position(|o| o.name == joint.target))
+                .flatten();
+            let (h2, anchor2) = match target_idx.and_then(|k| body_of[k].map(|h| (k, h))) {
+                Some((k, h)) => (h, joint.target_anchor * scene.objects[k].transform.scale),
+                None => match target_idx {
+                    // Cible nommée mais sans corps : corps fixe posé à sa transform,
+                    // pour que `target_anchor` garde sa convention « locale ».
+                    Some(k) => {
+                        let t = &scene.objects[k].transform;
+                        let (axis, angle) = t.rotation.to_axis_angle();
+                        let rotvec = axis * angle;
+                        let h = bodies.insert(
+                            RigidBodyBuilder::fixed()
+                                .translation(Vector::new(t.position.x, t.position.y, t.position.z))
+                                .rotation(Vector::new(rotvec.x, rotvec.y, rotvec.z))
+                                .build(),
+                        );
+                        (h, joint.target_anchor * t.scale)
+                    }
+                    None => {
+                        if !joint.target.is_empty() {
+                            log::warn!(
+                                "{} : cible d'articulation « {} » introuvable — ancrée au monde.",
+                                obj.name,
+                                joint.target
+                            );
+                        }
+                        let h = *world_anchor
+                            .get_or_insert_with(|| bodies.insert(RigidBodyBuilder::fixed().build()));
+                        // Repère du corps monde = repère monde : l'ancre est déjà en monde.
+                        (h, joint.target_anchor)
+                    }
+                },
+            };
+            if h1 == h2 {
+                log::warn!("{} : articulation vers soi-même ignorée.", obj.name);
+                continue;
+            }
+            let pose1 = *bodies[h1].position();
+            let pose2 = *bodies[h2].position();
+            let data: GenericJoint = match joint.kind {
+                crate::scene::JointKind::Fixed => {
+                    // Soudure qui **préserve la pose relative** de l'entrée en Play :
+                    // le repère commun est l'ancre côté objet, exprimée dans chaque
+                    // corps — sans ça, deux corps d'orientations différentes
+                    // claqueraient l'un sur l'autre au premier pas.
+                    let frame1 = Pose::from_translation(anchor1);
+                    let frame2 = pose2.inv_mul(&(pose1 * frame1));
+                    FixedJointBuilder::new()
+                        .local_frame1(frame1)
+                        .local_frame2(frame2)
+                        .into()
+                }
+                crate::scene::JointKind::Revolute => {
+                    let axis1 = joint.axis.try_normalize().unwrap_or(Vec3::Y);
+                    // Même axe monde vu depuis chaque corps (les deux peuvent être
+                    // orientés différemment).
+                    let world_axis = pose1.rotation * axis1;
+                    let axis2 = pose2.rotation.inverse() * world_axis;
+                    let mut b = GenericJointBuilder::new(JointAxesMask::LOCKED_REVOLUTE_AXES)
+                        .local_axis1(axis1)
+                        .local_axis2(axis2)
+                        .local_anchor1(anchor1)
+                        .local_anchor2(anchor2);
+                    if let Some([lo, hi]) = joint.limits {
+                        let (lo, hi) = (lo.min(hi).to_radians(), lo.max(hi).to_radians());
+                        b = b.limits(JointAxis::AngX, [lo, hi]);
+                    }
+                    b.build()
+                }
+                crate::scene::JointKind::Spherical => SphericalJointBuilder::new()
+                    .local_anchor1(anchor1)
+                    .local_anchor2(anchor2)
+                    .into(),
+            };
+            impulse.insert(h1, h2, data, true);
+        }
+
         // Plus d'itérations solveur que la valeur par défaut (4 → 8) : stabilise
         // les contacts (sol, murs, entre joueurs) — avec `restitution(0.0)` seul,
         // il restait un léger tremblement résiduel au repos/contact prolongé,
@@ -376,7 +511,7 @@ impl Physics {
             islands: IslandManager::new(),
             broad: DefaultBroadPhase::new(),
             narrow: NarrowPhase::new(),
-            impulse: ImpulseJointSet::new(),
+            impulse,
             multibody: MultibodyJointSet::new(),
             ccd: CCDSolver::new(),
             dynamic,
@@ -384,6 +519,7 @@ impl Physics {
             kinematic,
             scripted,
             collider_owner,
+            sensors,
             query_cache: std::cell::RefCell::new(None),
         }
     }

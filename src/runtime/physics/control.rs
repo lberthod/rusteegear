@@ -173,7 +173,13 @@ impl Physics {
         let translation = body.translation();
 
         let desired = Vector::new(nx, vspeed, nz) * dt;
-        let filter = QueryFilter::new().exclude_rigid_body(handle);
+        // `exclude_sensors` : une zone de déclenchement (collider capteur, cf.
+        // `Physics::sensor_overlaps`) est immatérielle — sans ça, le contrôleur
+        // cinématique la traitait comme un mur (constaté : marcheur scripté bloqué
+        // au bord d'une zone, x = 1,74 au lieu de 3).
+        let filter = QueryFilter::new()
+            .exclude_rigid_body(handle)
+            .exclude_sensors();
         let queries = self.broad.as_query_pipeline(
             self.narrow.query_dispatcher(),
             &self.bodies,
@@ -280,7 +286,10 @@ impl Physics {
             let mut desired = target - cur;
             desired.y -= SCRIPTED_FALL_SPEED * dt;
 
-            let filter = QueryFilter::new().exclude_rigid_body(handle);
+            // Même exclusion des capteurs que pour le joueur (ci-dessus).
+            let filter = QueryFilter::new()
+                .exclude_rigid_body(handle)
+                .exclude_sensors();
             let queries = self.broad.as_query_pipeline(
                 self.narrow.query_dispatcher(),
                 &self.bodies,

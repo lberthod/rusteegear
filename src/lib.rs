@@ -61,6 +61,18 @@ struct App {
     /// Touches d'action tenues (Espace/J/K/H) — cf. `recompute_action_buttons`.
     action_keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
 
+    // --- caméra en vol au clic droit (analyse comparative 2026-09-04) ---
+    /// Dernière position connue du curseur (pixels physiques) : les mouvements
+    /// souris de `fly_look` sont des deltas, que winit ne fournit pas sur
+    /// `CursorMoved` (positions absolues seulement).
+    last_cursor: Option<(f64, f64)>,
+    /// Le clic droit en cours a-t-il glissé (> `FLY_LOOK_DRAG_PX`) ? Sans
+    /// glissement, le relâchement ouvre le menu contextuel comme avant ; avec,
+    /// c'était un vol de caméra et aucun menu ne doit surgir au relâchement.
+    right_drag_moved: bool,
+    /// Distance cumulée (pixels) parcourue depuis l'appui du clic droit.
+    right_drag_dist: f64,
+
     // --- manette (Sprint 110) ---
     /// `None` si aucune manette n'a pu être énumérée au lancement (pas de backend
     /// disponible) — le jeu reste jouable au clavier/tactile, cf. `resumed`.
@@ -101,6 +113,12 @@ struct App {
     #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     last_render: Option<std::time::Instant>,
 }
+
+/// Glissement cumulé (pixels physiques) au-delà duquel un clic droit tenu est
+/// un vol de caméra et non un clic : sous ce seuil, le relâchement ouvre le
+/// menu contextuel. Quelques pixels de tremblement de main ne doivent pas
+/// avaler le menu.
+const FLY_LOOK_DRAG_PX: f64 = 4.0;
 
 /// Résout un axe (-1/0/1) à partir de l'état « tenu » des deux touches
 /// opposées. Fonction pure, testable sans dépendre de winit ou d'une fenêtre
@@ -247,9 +265,12 @@ impl App {
         inp.fire = keys.contains(&kb.fire) || gp.fire;
         inp.heal = keys.contains(&kb.heal) || gp.heal;
         // Élévation caméra libre (Espace = monte, C = descend) — cf. `AppState::fly_cam`.
+        // Pendant le vol au clic droit (`fly_look`), E monte et Q descend en plus
+        // (convention Unity/Godot) ; hors vol, E/Q restent des raccourcis d'outil.
+        let fly_look = self.state.fly_look;
         inp.fly_vertical = axis_from_held(
-            keys.contains(&KeyCode::KeyC),
-            keys.contains(&KeyCode::Space),
+            keys.contains(&KeyCode::KeyC) || (fly_look && keys.contains(&KeyCode::KeyQ)),
+            keys.contains(&KeyCode::Space) || (fly_look && keys.contains(&KeyCode::KeyE)),
         );
         inp.weapon_cycle = gp.weapon;
         // Style « action moderne » : stick gauche = intention de déplacement
@@ -522,16 +543,42 @@ impl ApplicationHandler for App {
                 // Le ré-armement du redraw est centralisé dans `about_to_wait`
                 // (indispensable sur iOS) : pas de double demande ici.
             }
+            // Relâchement du clic droit : traité **avant** la garde `consumed` — le
+            // curseur peut finir au-dessus d'un panneau egui pendant un vol de
+            // caméra, et `fly_look` resterait sinon coincé à `true`.
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if self.state.fly_look {
+                    self.state.fly_look = false;
+                    // Les touches de vol (WASD/E/Q) ne doivent pas rester « tenues »
+                    // pour la caméra une fois le bouton relâché : on recalcule les
+                    // axes comme si tout avait été relâché côté caméra — les
+                    // touches restent comptées pour le jeu (`keys_held` intact).
+                    self.recompute_action_buttons();
+                    if !self.right_drag_moved && !self.state.player && !self.state.playing {
+                        self.state.context_menu_request = true;
+                    }
+                }
+            }
             _ if consumed => {}
-            // Clic droit dans la vue 3D = menu contextuel (roadmap post-audit UX
-            // 2026-09-04, 5.4) — seulement en édition, et pas au-dessus d'un
-            // panneau egui (`consumed`).
+            // Clic droit dans la vue 3D (édition seulement, pas au-dessus d'un
+            // panneau egui — `consumed`) : **tenu**, c'est la caméra en vol
+            // (souris = regard, WASD = déplacement, E/Q = monter/descendre, Maj =
+            // vite — analyse comparative 2026-09-04, convention Unity/Godot) ;
+            // **relâché sans avoir glissé**, c'est le menu contextuel (roadmap
+            // post-audit UX 2026-09-04, 5.4), qui s'ouvrait avant dès l'appui.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Right,
                 ..
             } if !consumed && !self.state.player && !self.state.playing => {
-                self.state.context_menu_request = true;
+                self.state.fly_look = true;
+                self.state.fly_boost = self.modifiers.state().shift_key();
+                self.right_drag_moved = false;
+                self.right_drag_dist = 0.0;
             }
             WindowEvent::MouseInput {
                 state: btn_state,
@@ -560,6 +607,23 @@ impl ApplicationHandler for App {
                 // changement de modificateur, potentiellement jamais pendant ce glissé.
                 self.state
                     .set_snap_modifier(self.modifiers.state().control_key());
+                // Caméra en vol (clic droit tenu) : delta souris → regard, cf.
+                // `AppState::fly_look_delta`. Le premier mouvement après l'appui
+                // n'a pas de position précédente fiable si le curseur vient d'un
+                // autre panneau : `last_cursor` est toujours rafraîchi, le delta
+                // ne sert que si les deux positions sont connues.
+                if self.state.fly_look
+                    && let Some((lx, ly)) = self.last_cursor
+                {
+                    let (dx, dy) = (position.x - lx, position.y - ly);
+                    self.right_drag_dist += dx.abs() + dy.abs();
+                    if self.right_drag_dist > FLY_LOOK_DRAG_PX {
+                        self.right_drag_moved = true;
+                    }
+                    self.state.fly_boost = self.modifiers.state().shift_key();
+                    self.state.fly_look_delta(dx as f32, dy as f32);
+                }
+                self.last_cursor = Some((position.x, position.y));
                 self.state.handle_input(InputEvent::PointerMove {
                     x: position.x,
                     y: position.y,
@@ -602,13 +666,16 @@ impl ApplicationHandler for App {
                         // sans cette garde, avancer repasserait silencieusement `gizmo_mode`
                         // à Translate et désactiverait la garde anti-rattrapage de la caméra
                         // de suivi sur l'outil Main/Orbite/Loupe (cf. `advance_play`).
-                        KeyCode::KeyW if !self.state.playing => {
+                        // …et gardés aussi pendant la caméra en vol (clic droit
+                        // tenu, `fly_look`) : W avance, E monte, Q descend — ils ne
+                        // doivent pas changer d'outil en passant.
+                        KeyCode::KeyW if !self.state.playing && !self.state.fly_look => {
                             self.state.set_gizmo_mode(GizmoMode::Translate)
                         }
-                        KeyCode::KeyE if !self.state.playing => {
+                        KeyCode::KeyE if !self.state.playing && !self.state.fly_look => {
                             self.state.set_gizmo_mode(GizmoMode::Rotate)
                         }
-                        KeyCode::KeyR if !cmd && !self.state.playing => {
+                        KeyCode::KeyR if !cmd && !self.state.playing && !self.state.fly_look => {
                             self.state.set_gizmo_mode(GizmoMode::Scale)
                         }
                         // Outils de navigation caméra (Main/Orbite/Loupe) : utiles en Play
@@ -616,7 +683,7 @@ impl ApplicationHandler for App {
                         // Gardés hors mode Player (roadmap post-audit UX 2026-09-04,
                         // 2.7) : dans un build joueur, F recadrait la caméra en plein
                         // combat et Q/T/Y changeaient d'outil d'éditeur sans le dire.
-                        KeyCode::KeyQ if !cmd && !self.state.player => {
+                        KeyCode::KeyQ if !cmd && !self.state.player && !self.state.fly_look => {
                             self.state.set_gizmo_mode(GizmoMode::Pan)
                         }
                         KeyCode::KeyT if !cmd && !self.state.player => {
@@ -727,8 +794,17 @@ impl ApplicationHandler for App {
                     // Touches d'action remappables (`AppState::keys`, roadmap
                     // post-audit UX 2026-09-04, 5.3) ; Espace/C restent aussi
                     // l'élévation de la caméra libre.
+                    // E/Q : élévation de la caméra en vol au clic droit (`fly_look`,
+                    // convention Unity) — tenues dans le même ensemble, lues par
+                    // `recompute_action_buttons` seulement pendant le vol.
                     let is_action_key = self.state.keys.is_held_action(code)
-                        || matches!(code, KeyCode::Space | KeyCode::KeyC);
+                        || matches!(
+                            code,
+                            KeyCode::Space | KeyCode::KeyC | KeyCode::KeyE | KeyCode::KeyQ
+                        );
+                    if is_action_key && self.state.fly_look {
+                        self.state.fly_boost = self.modifiers.state().shift_key();
+                    }
                     if is_action_key {
                         if pressed {
                             self.action_keys_held.insert(code);

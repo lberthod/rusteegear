@@ -74,6 +74,22 @@ impl OrbitCamera {
         self.pitch = (self.pitch + dy * 0.005).clamp(-1.5, 1.5);
     }
 
+    /// Regard libre « à la première personne » (clic droit tenu dans l'éditeur,
+    /// analyse comparative 2026-09-04 — caméra en vol façon Unity/Godot) : tourne
+    /// yaw **et** pitch autour de l'**œil**, pas autour de `target` comme `orbit`.
+    /// L'œil reste rigoureusement immobile ; `target` est recalculé pour que la
+    /// nouvelle direction de vue parte du même point — sans ça, regarder à droite
+    /// ferait tourner la caméra *autour* du décor au lieu de tourner la tête.
+    /// Mêmes bornes de pitch qu'`orbit` (jamais la verticale).
+    pub fn look_around(&mut self, dx: f32, dy: f32) {
+        let eye = self.eye();
+        self.yaw -= dx * 0.004;
+        self.pitch = (self.pitch + dy * 0.004).clamp(-1.5, 1.5);
+        // `eye() = target + offset(yaw, pitch, dist)` ⇒ `target = eye - offset`.
+        let offset = self.eye() - self.target;
+        self.target = eye - offset;
+    }
+
     /// Zoom au glisser (outil 🔍) : vers le haut = avant, vers le bas = arrière.
     /// Mêmes bornes de distance que la molette (cf. `InputEvent::Scroll`).
     pub fn zoom_drag(&mut self, dy: f32) {
@@ -84,5 +100,32 @@ impl OrbitCamera {
         let view = look_at_mat4(self.eye(), self.target, Vec3::Y);
         let proj = directx::perspective(self.fovy, self.aspect, 0.1, 100.0);
         proj * view
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn look_around_keeps_the_eye_in_place_and_moves_the_target() {
+        let mut cam = OrbitCamera::new(1.5);
+        cam.target = Vec3::new(3.0, 1.0, -2.0);
+        let eye = cam.eye();
+        let target = cam.target;
+        cam.look_around(120.0, -40.0);
+        assert!(cam.eye().distance(eye) < 1e-4, "œil fixe");
+        assert!(cam.target.distance(target) > 0.1, "la cible suit le regard");
+        // La distance œil→cible est préservée (on tourne la tête, on ne zoome pas).
+        assert!((cam.eye().distance(cam.target) - cam.distance).abs() < 1e-3);
+    }
+
+    #[test]
+    fn look_around_never_crosses_the_vertical() {
+        let mut cam = OrbitCamera::new(1.0);
+        cam.look_around(0.0, 100_000.0);
+        assert!(cam.pitch <= 1.5);
+        cam.look_around(0.0, -100_000.0);
+        assert!(cam.pitch >= -1.5);
     }
 }

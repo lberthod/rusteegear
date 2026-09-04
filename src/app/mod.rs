@@ -806,6 +806,15 @@ pub struct AppState {
     /// (G), déplacement aux flèches + Espace/C, cf. `update_fly_cam`. Sans effet en Play
     /// (remis à `false` à l'entrée en Play, la caméra de jeu prenant le relais).
     pub fly_cam: bool,
+    /// Caméra en vol au **clic droit tenu** dans la vue 3D (analyse comparative
+    /// 2026-09-04, court terme — convention Unity/Godot) : tant que le bouton est
+    /// enfoncé, la souris tourne la tête (`OrbitCamera::look_around`), WASD/flèches
+    /// déplacent la caméra, E/Q montent/descendent, Maj accélère. Posé/relâché par
+    /// la boucle d'événements (`lib.rs`) ; un clic droit sans glisser reste le menu
+    /// contextuel. Complète `fly_cam` (bascule G, clavier seul) sans le remplacer.
+    pub fly_look: bool,
+    /// Maj tenue pendant `fly_look`/`fly_cam` : vitesse de vol ×3.
+    pub fly_boost: bool,
     /// En pause : reste en mode Play mais gèle la simulation (scripts, physique, temps).
     pub paused: bool,
     /// Demande de fermeture de l'application (menu Fichier → Quitter ou bouton
@@ -1182,6 +1191,8 @@ impl AppState {
             selected: Vec::new(),
             playing: false,
             fly_cam: false,
+            fly_look: false,
+            fly_boost: false,
             paused: false,
             should_quit: false,
             scene_dirty: false,
@@ -1569,6 +1580,15 @@ impl AppState {
         } else {
             1.0
         };
+    }
+
+    /// Mouvement souris pendant le clic droit tenu (`fly_look`) : tourne la tête
+    /// autour de l'œil, hors Play et hors mode Player seulement — en Play la caméra
+    /// de jeu/le suivi joueur gardent la main, comme pour `fly_cam`.
+    pub fn fly_look_delta(&mut self, dx: f32, dy: f32) {
+        if self.fly_look && !self.playing && !self.player {
+            self.camera.look_around(dx, dy);
+        }
     }
 
     pub fn toggle_fly_cam(&mut self) {

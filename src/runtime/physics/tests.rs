@@ -1260,3 +1260,292 @@ fn a_kinematic_scripted_object_with_ai_chaser_stays_a_scripted_body() {
         "un chasseur non kinématique reste un corps contrôlé par vitesse"
     );
 }
+
+// --- Capteurs de zone (analyse comparative 2026-09-04, court terme) ---
+
+/// Plaque de pression : une zone `trigger` **sans physique propre** posée au sol,
+/// et une caisse dynamique lâchée dessus. La zone ne bloque rien (la caisse doit
+/// la traverser et se poser sur le sol), mais rapier doit rapporter la paire.
+fn pressure_plate_scene() -> (Scene, usize, usize) {
+    let mut scene = Scene::default();
+    scene.objects.push(SceneObject {
+        name: "Sol".into(),
+        mesh: crate::scene::MeshKind::Plane,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -0.5, 0.0))
+            .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+        physics: PhysicsKind::Static,
+        ..Default::default()
+    });
+    let plate = scene.objects.len();
+    scene.objects.push(SceneObject {
+        name: "Plaque".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.0, 0.0))
+            .with_scale(Vec3::new(1.0, 0.6, 1.0)),
+        physics: PhysicsKind::None,
+        trigger: true,
+        ..Default::default()
+    });
+    let crate_idx = scene.objects.len();
+    scene.objects.push(SceneObject {
+        name: "Caisse".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.5, 0.0))
+            .with_scale(Vec3::splat(0.4)),
+        physics: PhysicsKind::Dynamic,
+        ..Default::default()
+    });
+    (scene, plate, crate_idx)
+}
+
+#[test]
+fn a_falling_crate_is_reported_inside_a_trigger_zone_without_a_player() {
+    let (mut scene, plate, crate_idx) = pressure_plate_scene();
+    let mut phys = Physics::build(&scene);
+    assert!(
+        phys.sensor_overlaps().is_empty(),
+        "avant tout pas, rien ne se recoupe"
+    );
+    for _ in 0..180 {
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    let overlaps = phys.sensor_overlaps();
+    assert!(
+        overlaps.contains(&(plate, crate_idx)),
+        "la caisse posée sur la plaque doit être rapportée : {overlaps:?}"
+    );
+    // La zone est immatérielle : la caisse repose sur le sol (y ≈ 0.2), pas sur la
+    // plaque (dont le haut est à y = 0.3).
+    let y = scene.objects[crate_idx].transform.position.y;
+    assert!(y < 0.25, "la caisse doit traverser la zone et se poser au sol (y={y})");
+}
+
+#[test]
+fn a_trigger_zone_does_not_report_itself_or_the_static_floor() {
+    let (mut scene, plate, _) = pressure_plate_scene();
+    let mut phys = Physics::build(&scene);
+    for _ in 0..30 {
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    for (zone, other) in phys.sensor_overlaps() {
+        assert_ne!(zone, other, "jamais soi-même");
+        assert_ne!(other, 0, "le sol fixe ne « traverse » pas la zone");
+        assert_eq!(zone, plate);
+    }
+}
+
+#[test]
+fn a_kinematic_scripted_walker_is_reported_by_a_trigger_zone() {
+    // Les créatures scriptées sont des corps cinématiques : rapier ne les teste
+    // pas contre un capteur fixe sans `ActiveCollisionTypes::KINEMATIC_FIXED`.
+    let mut scene = Scene::default();
+    scene.objects.push(SceneObject {
+        name: "Zone".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::new(3.0, 0.0, 0.0))
+            .with_scale(Vec3::splat(2.0)),
+        trigger: true,
+        ..Default::default()
+    });
+    let walker = scene.objects.len();
+    scene.objects.push(SceneObject {
+        name: "Marcheur".into(),
+        mesh: crate::scene::MeshKind::Capsule,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 0.0, 0.0)),
+        physics: PhysicsKind::Kinematic,
+        script: "obj.x = obj.x + 1".into(),
+        ..Default::default()
+    });
+    let mut phys = Physics::build(&scene);
+    phys.step(1.0 / 60.0, &mut scene);
+    assert!(phys.sensor_overlaps().is_empty(), "loin de la zone au départ");
+    // Déplacement « scripté » : on écrit la position comme le ferait le script,
+    // puis on laisse le contrôleur cinématique résoudre le mouvement.
+    for _ in 0..10 {
+        scene.objects[walker].transform.position.x += 0.3;
+        phys.resolve_scripted_moves(1.0 / 60.0, &mut scene);
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    assert!(
+        phys.sensor_overlaps().contains(&(0, walker)),
+        "le marcheur entré dans la zone doit être rapporté ({:?}, x={})",
+        phys.sensor_overlaps(),
+        scene.objects[walker].transform.position.x
+    );
+}
+
+#[test]
+fn raycast_and_overlap_sphere_ignore_trigger_sensors() {
+    let (mut scene, plate, _) = pressure_plate_scene();
+    let mut phys = Physics::build(&scene);
+    phys.step(1.0 / 60.0, &mut scene);
+    // Rayon horizontal à travers la plaque (immatérielle) vers rien : aucun impact.
+    let hit = phys.raycast(Vec3::new(-3.0, 0.0, 0.0), Vec3::X, 6.0, u32::MAX);
+    assert!(
+        hit.as_ref().and_then(|h| h.index) != Some(plate),
+        "un rayon ne doit pas buter sur une zone : {:?}",
+        hit.map(|h| h.index)
+    );
+    let near = phys.overlap_sphere(Vec3::ZERO, 0.2, u32::MAX);
+    assert!(!near.contains(&plate), "overlap_sphere ignore les capteurs : {near:?}");
+}
+
+// --- Articulations (`SceneObject::joint`) ---
+
+fn world_pendulum(kind: crate::scene::JointKind) -> (Scene, usize) {
+    let mut scene = Scene::default();
+    let bob = scene.objects.len();
+    scene.objects.push(SceneObject {
+        name: "Poids".into(),
+        mesh: crate::scene::MeshKind::Sphere,
+        // Poids décalé sur le côté : la gravité le fait osciller sous l'ancre.
+        transform: crate::scene::Transform::from_pos(Vec3::new(2.0, 0.0, 0.0))
+            .with_scale(Vec3::splat(0.3)),
+        physics: PhysicsKind::Dynamic,
+        joint: Some(crate::scene::Joint {
+            kind,
+            target: String::new(),
+            // Ancre côté poids : à 2 m de son centre, en unités locales avant échelle
+            // (échelle 0.3 ⇒ -2/0.3 ≈ -6.667 sur X).
+            anchor: Vec3::new(-2.0 / 0.3, 0.0, 0.0),
+            // Ancre monde à l'origine.
+            target_anchor: Vec3::ZERO,
+            axis: Vec3::Z,
+            limits: None,
+        }),
+        ..Default::default()
+    });
+    (scene, bob)
+}
+
+#[test]
+fn a_spherical_joint_to_the_world_keeps_the_pendulum_at_constant_length() {
+    let (mut scene, bob) = world_pendulum(crate::scene::JointKind::Spherical);
+    let mut phys = Physics::build(&scene);
+    assert_eq!(phys.joint_count(), 1);
+    let mut min_y = f32::MAX;
+    for _ in 0..240 {
+        phys.step(1.0 / 60.0, &mut scene);
+        let p = scene.objects[bob].transform.position;
+        let len = p.length();
+        assert!(
+            (len - 2.0).abs() < 0.15,
+            "longueur du pendule ≈ 2 m attendue, {len} à {p}"
+        );
+        min_y = min_y.min(p.y);
+    }
+    assert!(min_y < -1.0, "le poids doit avoir basculé sous l'ancre (min y={min_y})");
+}
+
+#[test]
+fn a_revolute_joint_keeps_the_pendulum_in_its_hinge_plane() {
+    let (mut scene, bob) = world_pendulum(crate::scene::JointKind::Revolute);
+    let mut phys = Physics::build(&scene);
+    for _ in 0..240 {
+        phys.step(1.0 / 60.0, &mut scene);
+        let p = scene.objects[bob].transform.position;
+        assert!(p.z.abs() < 0.05, "charnière d'axe Z : aucun mouvement hors du plan XY ({p})");
+        assert!((p.length() - 2.0).abs() < 0.15, "longueur constante ({p})");
+    }
+}
+
+#[test]
+fn a_revolute_joint_respects_its_angular_limits() {
+    let (mut scene, bob) = world_pendulum(crate::scene::JointKind::Revolute);
+    // Butées serrées : le poids part à l'horizontale (angle 0) et ne peut
+    // descendre que de 20°.
+    scene.objects[bob].joint.as_mut().unwrap().limits = Some([-20.0, 20.0]);
+    let mut phys = Physics::build(&scene);
+    for _ in 0..240 {
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    let p = scene.objects[bob].transform.position;
+    // Sans butée, le poids finirait sous l'ancre (y ≈ -2) ; avec 20°, y ≥ -2·sin(20°) ≈ -0.68.
+    assert!(p.y > -0.9, "les butées doivent retenir le poids ({p})");
+    assert!(p.y < -0.2, "…mais le laisser descendre jusqu'à la butée ({p})");
+}
+
+#[test]
+fn a_fixed_joint_holds_a_dynamic_crate_against_gravity() {
+    let mut scene = Scene::default();
+    let idx = scene.objects.len();
+    scene.objects.push(SceneObject {
+        name: "Lanterne".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::new(1.0, 3.0, 0.0)),
+        physics: PhysicsKind::Dynamic,
+        joint: Some(crate::scene::Joint {
+            kind: crate::scene::JointKind::Fixed,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut phys = Physics::build(&scene);
+    for _ in 0..120 {
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    let p = scene.objects[idx].transform.position;
+    assert!(
+        p.distance(Vec3::new(1.0, 3.0, 0.0)) < 0.05,
+        "soudée au monde, la caisse ne tombe pas ({p})"
+    );
+}
+
+#[test]
+fn a_fixed_joint_between_two_objects_preserves_their_relative_pose() {
+    let mut scene = Scene::default();
+    scene.objects.push(SceneObject {
+        name: "Sol".into(),
+        mesh: crate::scene::MeshKind::Plane,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -0.5, 0.0))
+            .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+        physics: PhysicsKind::Static,
+        ..Default::default()
+    });
+    // Poteau statique, tourné de 30° : la lanterne soudée doit garder son décalage.
+    scene.objects.push(SceneObject {
+        name: "Poteau".into(),
+        mesh: crate::scene::MeshKind::Cylinder,
+        transform: crate::scene::Transform {
+            rotation: glam::Quat::from_rotation_y(30f32.to_radians()),
+            ..crate::scene::Transform::from_pos(Vec3::new(0.0, 1.0, 0.0))
+        },
+        physics: PhysicsKind::Static,
+        ..Default::default()
+    });
+    let lantern = scene.objects.len();
+    scene.objects.push(SceneObject {
+        name: "Lanterne".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::new(1.5, 2.5, 0.0))
+            .with_scale(Vec3::splat(0.3)),
+        physics: PhysicsKind::Dynamic,
+        joint: Some(crate::scene::Joint {
+            kind: crate::scene::JointKind::Fixed,
+            target: "Poteau".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut phys = Physics::build(&scene);
+    for _ in 0..120 {
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    let p = scene.objects[lantern].transform.position;
+    assert!(
+        p.distance(Vec3::new(1.5, 2.5, 0.0)) < 0.05,
+        "la lanterne reste où elle a été soudée ({p})"
+    );
+}
+
+#[test]
+fn a_joint_on_an_object_without_physics_is_ignored_not_fatal() {
+    let mut scene = Scene::default();
+    scene.objects.push(SceneObject {
+        name: "Décor".into(),
+        joint: Some(crate::scene::Joint::default()),
+        ..Default::default()
+    });
+    let phys = Physics::build(&scene);
+    assert_eq!(phys.joint_count(), 0);
+}

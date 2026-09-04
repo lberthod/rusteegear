@@ -447,6 +447,7 @@ pub(super) fn run_script_web(
     exited: bool,
     physics: Option<&Physics>,
     reverb_out: &mut Vec<f32>,
+    overlapping: &[String],
 ) -> Result<(), String> {
     // Réinitialise l'accumulateur pour cet appel — jamais partagé entre deux
     // scripts (exécution synchrone, non ré-entrante).
@@ -486,6 +487,16 @@ pub(super) fn run_script_web(
     lua_try!(set_bool(lua, &obj, "touch_ended", touch_ended));
     lua_try!(set_bool(lua, &obj, "triggered", triggered));
     lua_try!(set_bool(lua, &obj, "exited", exited));
+    // Capteurs rapier — même contrat que `scripting::run_script` (cf. sa doc).
+    lua_try!(set_bool(lua, &obj, "overlapped", !overlapping.is_empty()));
+    lua_try!(set_num(lua, &obj, "overlap_count", overlapping.len() as f64));
+    let names = lua.create_table();
+    for (n, name) in overlapping.iter().enumerate() {
+        let v = lua.create_string(name.as_bytes());
+        lua_try!(lua.table_raw_set(&names, Val::Num((n + 1) as f64), v));
+    }
+    let names_key = lua.create_string(b"overlap_names");
+    lua_try!(lua.table_raw_set(&obj, names_key, Val::Table(names.gc_ref())));
     lua_try!(set_str(
         lua,
         &obj,
@@ -652,6 +663,7 @@ mod tests {
             exited,
             physics,
             &mut reverb_out,
+            &[],
         )
     }
 
@@ -1054,6 +1066,7 @@ mod tests {
                 false,
                 None,
                 &mut reverb_out,
+                &[],
             )
             .unwrap_or_else(|e| panic!("itération {i} : {e}"));
         }
@@ -1111,6 +1124,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .expect("la fonction ancrée doit rester valide après une collecte complète");
         assert_eq!(t.position.x, 1.0);
@@ -1151,6 +1165,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert!(destroy_out);
@@ -1191,6 +1206,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1237,6 +1253,7 @@ mod tests {
             false,
             None,
             &mut Vec::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(item_add_out, vec![(crate::scene::ItemKind::Potion, 2)]);
@@ -1255,8 +1272,12 @@ mod tests {
         use crate::app::scripting as native;
         use mlua::Lua as NativeLua;
 
-        #[allow(clippy::too_many_arguments)]
         fn run_native(src: &str, t: &mut Transform, col: &mut [f32; 3]) {
+            run_native_ov(src, t, col, &[]);
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn run_native_ov(src: &str, t: &mut Transform, col: &mut [f32; 3], overlapping: &[String]) {
             let lua = NativeLua::new();
             let func = lua.load(src).into_function().unwrap();
             native::run_script(
@@ -1286,11 +1307,16 @@ mod tests {
                 false,
                 None,
                 &mut Vec::new(),
+                overlapping,
             )
             .unwrap();
         }
 
         fn run_web(src: &str, t: &mut Transform, col: &mut [f32; 3]) {
+            run_web_ov(src, t, col, &[]);
+        }
+
+        fn run_web_ov(src: &str, t: &mut Transform, col: &mut [f32; 3], overlapping: &[String]) {
             let mut lua = Lua::new().unwrap();
             let func = lua.load(src).unwrap();
             run_script_web(
@@ -1320,8 +1346,38 @@ mod tests {
                 false,
                 None,
                 &mut Vec::new(),
+                overlapping,
             )
             .unwrap();
+        }
+
+        #[test]
+        fn sensor_overlap_fields_match_between_backends() {
+            // `obj.overlapped`/`overlap_count`/`overlap_names` (capteurs rapier,
+            // analyse comparative 2026-09-04) : même lecture des deux côtés.
+            let src = "obj.x = obj.overlap_count\n\
+                       if obj.overlapped then obj.y = 1 end\n\
+                       obj.z = #obj.overlap_names\n\
+                       if obj.overlap_names[1] == 'Caisse' then obj.r = 0.5 end";
+            let names = vec!["Caisse".to_string(), "Joueur".to_string()];
+            let mut t_native = Transform::from_pos(Vec3::ZERO);
+            let mut t_web = Transform::from_pos(Vec3::ZERO);
+            let mut col_native = [1.0; 3];
+            let mut col_web = [1.0; 3];
+            run_native_ov(src, &mut t_native, &mut col_native, &names);
+            run_web_ov(src, &mut t_web, &mut col_web, &names);
+            for t in [&t_native, &t_web] {
+                assert_eq!(t.position, Vec3::new(2.0, 1.0, 2.0), "{:?}", t.position);
+            }
+            assert_eq!(col_native[0], 0.5);
+            assert_eq!(col_web[0], 0.5);
+            // Sans recouvrement : tout à zéro, `overlapped` faux.
+            let mut t0 = Transform::from_pos(Vec3::ZERO);
+            let mut t1 = Transform::from_pos(Vec3::ZERO);
+            run_native(src, &mut t0, &mut col_native);
+            run_web(src, &mut t1, &mut col_web);
+            assert_eq!(t0.position, Vec3::ZERO);
+            assert_eq!(t1.position, Vec3::ZERO);
         }
 
         #[test]
@@ -1381,6 +1437,7 @@ mod tests {
                 false,
                 None,
                 &mut Vec::new(),
+                &[],
             )
             .unwrap();
         }
@@ -1422,6 +1479,7 @@ mod tests {
                 false,
                 None,
                 &mut Vec::new(),
+                &[],
             )
             .unwrap();
         }

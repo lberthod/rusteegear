@@ -150,11 +150,16 @@ impl Physics {
                 self.narrow.query_dispatcher(),
                 &self.bodies,
                 &self.colliders,
-                QueryFilter::new().groups(InteractionGroups::new(
-                    Group::ALL,
-                    Group::from_bits_truncate(mask),
-                    InteractionTestMode::And,
-                )),
+                // `exclude_sensors` : les zones de déclenchement (capteurs, cf.
+                // `Physics::sensor_overlaps`) sont invisibles aux requêtes — un rayon
+                // de « ligne de vue » ne doit pas buter sur une zone immatérielle.
+                QueryFilter::new()
+                    .exclude_sensors()
+                    .groups(InteractionGroups::new(
+                        Group::ALL,
+                        Group::from_bits_truncate(mask),
+                        InteractionTestMode::And,
+                    )),
             );
             let ray = Ray::new(origin, dir);
             let (handle, toi) = query.cast_ray(&ray, max_toi.max(0.0), true)?;
@@ -177,11 +182,13 @@ impl Physics {
                 self.narrow.query_dispatcher(),
                 &self.bodies,
                 &self.colliders,
-                QueryFilter::new().groups(InteractionGroups::new(
-                    Group::ALL,
-                    Group::from_bits_truncate(mask),
-                    InteractionTestMode::And,
-                )),
+                QueryFilter::new()
+                    .exclude_sensors()
+                    .groups(InteractionGroups::new(
+                        Group::ALL,
+                        Group::from_bits_truncate(mask),
+                        InteractionTestMode::And,
+                    )),
             );
             let ball = Ball::new(radius.max(0.0));
             query

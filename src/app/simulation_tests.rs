@@ -77,6 +77,58 @@ fn fly_cam_moves_the_orbit_target_forward_and_up_while_editing() {
 }
 
 #[test]
+fn fly_look_turns_the_head_around_a_fixed_eye() {
+    // Caméra en vol au clic droit (analyse comparative 2026-09-04) : la souris
+    // tourne le regard **autour de l'œil**, qui ne doit pas bouger — contrairement
+    // à l'orbite, qui tourne autour de `target`.
+    let mut app = AppState::new();
+    app.fly_look = true;
+    let eye_before = app.camera.eye();
+    let yaw_before = app.camera.yaw;
+    app.fly_look_delta(80.0, 30.0);
+    let eye_after = app.camera.eye();
+    assert!(
+        eye_after.distance(eye_before) < 1e-3,
+        "l'œil doit rester fixe ({eye_before} → {eye_after})"
+    );
+    assert_ne!(app.camera.yaw, yaw_before, "le yaw doit avoir tourné");
+    assert!(app.camera.pitch.abs() <= 1.5, "pitch borné, jamais la verticale");
+}
+
+#[test]
+fn fly_look_is_ignored_in_play_and_in_player_mode() {
+    // En Play, la caméra de jeu/le suivi joueur gardent la main (même règle que
+    // `fly_cam`) ; en mode Player, le clic droit n'est pas un outil d'édition.
+    let mut app = AppState::new();
+    app.fly_look = true;
+    app.playing = true;
+    let yaw = app.camera.yaw;
+    app.fly_look_delta(50.0, 0.0);
+    assert_eq!(app.camera.yaw, yaw, "aucun effet en Play");
+    app.playing = false;
+    app.player = true;
+    app.fly_look_delta(50.0, 0.0);
+    assert_eq!(app.camera.yaw, yaw, "aucun effet en mode Player");
+}
+
+#[test]
+fn fly_boost_triples_the_flight_speed() {
+    // Maj tenue pendant le vol : ×3, pour traverser une grande carte.
+    let mut app = AppState::new();
+    app.fly_cam = true;
+    app.camera.yaw = 0.0;
+    app.input_state.key_move = (0.0, 1.0);
+    let start = app.camera.target;
+    app.update_fly_cam(1.0);
+    let slow = app.camera.target.distance(start);
+    app.camera.target = start;
+    app.fly_boost = true;
+    app.update_fly_cam(1.0);
+    let fast = app.camera.target.distance(start);
+    assert!((fast - slow * 3.0).abs() < 1e-3, "slow={slow} fast={fast}");
+}
+
+#[test]
 fn toggle_fly_cam_is_a_no_op_while_playing() {
     // La caméra libre est un outil d'édition : `G` ne doit rien faire en Play,
     // sinon la caméra de jeu et la caméra libre se battraient pour `camera.target`.
@@ -2050,4 +2102,50 @@ fn advance_animation_clips_reports_nothing_before_the_marker() {
     // 0.1 -> 0.15 : reste avant le marqueur à 0.3.
     let events = advance_animation_clips(&mut scene, 0.05);
     assert!(events.is_empty());
+}
+
+#[test]
+fn a_pressure_plate_script_fires_when_a_crate_lands_on_it_without_any_player() {
+    // Bout en bout (analyse comparative 2026-09-04, capteurs rapier) : une zone
+    // `trigger` sans physique, une caisse dynamique qui tombe dessus, aucun joueur
+    // dans la scène — le script de la zone doit voir `obj.overlapped` et le nom.
+    let mut app = AppState::new();
+    app.scene = crate::scene::Scene::default();
+    app.scene.objects.push(crate::scene::SceneObject {
+        name: "Sol".into(),
+        mesh: crate::scene::MeshKind::Plane,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, -0.5, 0.0))
+            .with_scale(Vec3::new(10.0, 1.0, 10.0)),
+        physics: crate::runtime::physics::PhysicsKind::Static,
+        ..Default::default()
+    });
+    let plate = app.scene.objects.len();
+    app.scene.objects.push(crate::scene::SceneObject {
+        name: "Plaque".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+            .with_scale(Vec3::new(1.0, 0.6, 1.0)),
+        trigger: true,
+        script: "if obj.overlapped and obj.overlap_names[1] == 'Caisse' then obj.rz = 45 end"
+            .into(),
+        ..Default::default()
+    });
+    app.scene.objects.push(crate::scene::SceneObject {
+        name: "Caisse".into(),
+        mesh: crate::scene::MeshKind::Cube,
+        transform: crate::scene::Transform::from_pos(Vec3::new(0.0, 1.5, 0.0))
+            .with_scale(Vec3::splat(0.4)),
+        physics: crate::runtime::physics::PhysicsKind::Dynamic,
+        ..Default::default()
+    });
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+    app.playing = true;
+    for _ in 0..180 {
+        app.sim_step(1.0 / 60.0);
+    }
+    let rot = app.scene.objects[plate].transform.rotation;
+    assert!(
+        rot.to_euler(glam::EulerRot::XYZ).2.to_degrees() > 40.0,
+        "le script de la plaque doit avoir réagi à la caisse (rotation {rot:?})"
+    );
 }

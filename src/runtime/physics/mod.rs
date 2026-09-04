@@ -152,12 +152,48 @@ pub struct Physics {
     /// ce qui doit être recopié/piloté chaque frame) — nécessaire pour retrouver
     /// quel objet une requête spatiale (`raycast`/`overlap_sphere`) a touché.
     collider_owner: std::collections::HashMap<ColliderHandle, usize>,
+    /// (index d'objet, collider **capteur**) des zones de déclenchement
+    /// (`SceneObject::trigger`) — cf. `sensor_overlaps`.
+    sensors: Vec<(usize, ColliderHandle)>,
     /// Broad-phase de requête mémoïsée entre deux mutations du monde (cf.
     /// `with_query_broad_phase`) : les sondes des créatures lancent jusqu'à
     /// 60 rayons par tick sur une scène dense — reconstruire la BVH jetable à
     /// chaque appel redevenait O(rayons × colliders). `RefCell` car les requêtes
     /// prennent `&self` ; `Physics` vit dans `AppState`, mono-thread.
     query_cache: std::cell::RefCell<Option<DefaultBroadPhase>>,
+}
+
+impl Physics {
+    /// Paires (zone, objet) dont le collider **capteur** de la zone recoupe
+    /// actuellement un collider de l'objet — tout corps rapier compte (joueur,
+    /// caisse dynamique, créature cinématique…), pas seulement le joueur comme
+    /// l'ancien test d'AABB de `obj.triggered`. Lu après `step` (rapier met à jour
+    /// les intersections de capteurs pendant le pas) ; exposé aux scripts via
+    /// `obj.overlapped`/`obj.overlap_count`/`obj.overlap_names`. Une zone ne se
+    /// détecte jamais elle-même (même corps : rapier ignore la paire).
+    pub fn sensor_overlaps(&self) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for &(zone, handle) in &self.sensors {
+            for (h1, h2, intersecting) in self.narrow.intersection_pairs_with(handle) {
+                if !intersecting {
+                    continue;
+                }
+                let other = if h1 == handle { h2 } else { h1 };
+                if let Some(&owner) = self.collider_owner.get(&other)
+                    && owner != zone
+                    && !out.contains(&(zone, owner))
+                {
+                    out.push((zone, owner));
+                }
+            }
+        }
+        out
+    }
+
+    /// Nombre d'articulations (`SceneObject::joint`) réellement construites.
+    pub fn joint_count(&self) -> usize {
+        self.impulse.len()
+    }
 }
 
 /// Résultat d'un `Physics::raycast` : point d'impact (monde), distance parcourue

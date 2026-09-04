@@ -2523,6 +2523,15 @@ fn inspector_panel(
                                 .unwrap_or_default(),
                             _ => Vec::new(),
                         };
+                        // Noms des autres objets, pour la cible d'une articulation
+                        // (`SceneObject::joint`) — copiés avant l'emprunt mut de l'objet.
+                        let other_names: Vec<String> = scene
+                            .objects
+                            .iter()
+                            .enumerate()
+                            .filter(|(k, _)| *k != i)
+                            .map(|(_, o)| o.name.clone())
+                            .collect();
                         // Activer le joystick après l'emprunt mut de l'objet (cf. plus bas).
                         let mut need_joystick = false;
                         let obj = &mut scene.objects[i];
@@ -2689,6 +2698,7 @@ fn inspector_panel(
                                      (toutes par défaut — 0xFFFFFFFF).",
                                 );
                             });
+                            joint_editor(ui, obj, &other_names);
                         }
                         // `tap_action`/`TapAction` (actions intégrées sans script — Hide,
                         // ChangeColor…) et les indicateurs live du toucher ont été retirés de
@@ -2715,7 +2725,11 @@ fn inspector_panel(
                         // les scènes qui l'utiliseraient déjà en JSON.
                         ui.checkbox(&mut obj.trigger, "🎯 Zone de déclenchement")
                             .on_hover_text(
-                                "En Play, expose obj.triggered au script quand le joueur entre dans sa zone",
+                                "En Play, expose obj.triggered au script quand le joueur entre \
+                                 dans sa zone, et obj.overlapped / obj.overlap_count / \
+                                 obj.overlap_names pour tout corps physique qui la traverse \
+                                 (caisse, créature…) — plaque de pression, piège, zone de dépôt. \
+                                 La zone reste immatérielle : elle ne bloque rien.",
                             );
                         ui.separator();
                         ui.collapsing("Matériau", |ui| {
@@ -2962,7 +2976,8 @@ fn inspector_panel(
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
                                  obj.r/g/b, obj.tapped, obj.touch_started, obj.touching, \
-                                 obj.touch_ended, obj.triggered, dt, time, input.jx/jy, \
+                                 obj.touch_ended, obj.triggered, obj.overlapped, \
+                                 obj.overlap_names, dt, time, input.jx/jy, \
                                  input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1), \
                                  add_item(kind, n)",
                             );
@@ -3634,6 +3649,109 @@ fn describe_autosave(path: &std::path::Path) -> String {
         (None, Some(n)) => format!("Sauvegarde automatique · {n} objets"),
         (None, None) => String::new(),
     }
+}
+
+/// Section « 🔗 Articulation » de l'inspecteur (analyse comparative 2026-09-04,
+/// court terme) : expose `SceneObject::joint` — soudure, charnière ou rotule vers
+/// un autre objet (par nom) ou vers le monde. Les sets de joints rapier existaient
+/// sans jamais être remplis ; c'est ici qu'un créateur les remplit sans code.
+fn joint_editor(ui: &mut egui::Ui, obj: &mut crate::scene::SceneObject, other_names: &[String]) {
+    use crate::scene::{Joint, JointKind};
+    ui.collapsing("🔗 Articulation", |ui| {
+        let mut enabled = obj.joint.is_some();
+        ui.checkbox(&mut enabled, "Relier cet objet")
+            .on_hover_text(
+                "Articulation physique rapier : soudure (lanterne sur un chariot), \
+                 charnière (porte, pont-levis, pendule) ou rotule (chaîne). L'objet doit \
+                 être Dynamique pour bouger ; la cible peut être n'importe quel objet, \
+                 ou le monde (cible vide).",
+            );
+        if !enabled {
+            obj.joint = None;
+            return;
+        }
+        let joint = obj.joint.get_or_insert_with(Joint::default);
+        ui.horizontal(|ui| {
+            ui.label("Type");
+            for kind in [JointKind::Fixed, JointKind::Revolute, JointKind::Spherical] {
+                ui.selectable_value(&mut joint.kind, kind, kind.label());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Cible");
+            let current = if joint.target.is_empty() {
+                "(monde)".to_string()
+            } else {
+                joint.target.clone()
+            };
+            egui::ComboBox::from_id_salt("inspector_joint_target")
+                .selected_text(&current)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(joint.target.is_empty(), "(monde)").clicked() {
+                        joint.target.clear();
+                    }
+                    for name in other_names {
+                        if ui.selectable_label(&joint.target == name, name).clicked() {
+                            joint.target = name.clone();
+                        }
+                    }
+                });
+        })
+        .response
+        .on_hover_text(
+            "Objet auquel s'attacher (par nom, premier trouvé) — vide = ancré dans le vide, \
+             comme un pendule accroché au plafond.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Ancre (locale)");
+            ui.add(egui::DragValue::new(&mut joint.anchor.x).speed(0.05).prefix("x "));
+            ui.add(egui::DragValue::new(&mut joint.anchor.y).speed(0.05).prefix("y "));
+            ui.add(egui::DragValue::new(&mut joint.anchor.z).speed(0.05).prefix("z "));
+        })
+        .response
+        .on_hover_text(
+            "Point d'attache sur cet objet, en unités du mesh avant échelle (le haut d'un \
+             cube est y = 0.5).",
+        );
+        if joint.kind != JointKind::Fixed {
+            ui.horizontal(|ui| {
+                ui.label(if joint.target.is_empty() {
+                    "Ancre (monde)"
+                } else {
+                    "Ancre cible"
+                });
+                ui.add(egui::DragValue::new(&mut joint.target_anchor.x).speed(0.05).prefix("x "));
+                ui.add(egui::DragValue::new(&mut joint.target_anchor.y).speed(0.05).prefix("y "));
+                ui.add(egui::DragValue::new(&mut joint.target_anchor.z).speed(0.05).prefix("z "));
+            })
+            .response
+            .on_hover_text(
+                "Point d'attache côté cible (repère local de la cible, ou coordonnées monde \
+                 sans cible).",
+            );
+        }
+        if joint.kind == JointKind::Revolute {
+            ui.horizontal(|ui| {
+                ui.label("Axe");
+                ui.add(egui::DragValue::new(&mut joint.axis.x).speed(0.05).prefix("x "));
+                ui.add(egui::DragValue::new(&mut joint.axis.y).speed(0.05).prefix("y "));
+                ui.add(egui::DragValue::new(&mut joint.axis.z).speed(0.05).prefix("z "));
+            })
+            .response
+            .on_hover_text("Axe de la charnière, dans le repère de cet objet.");
+            let mut limited = joint.limits.is_some();
+            ui.checkbox(&mut limited, "Butées (°)");
+            if limited {
+                let lim = joint.limits.get_or_insert([-90.0, 90.0]);
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut lim[0]).speed(1.0).prefix("min "));
+                    ui.add(egui::DragValue::new(&mut lim[1]).speed(1.0).prefix("max "));
+                });
+            } else {
+                joint.limits = None;
+            }
+        }
+    });
 }
 
 fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
