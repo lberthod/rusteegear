@@ -109,7 +109,11 @@
       async function fetchWithProgress(url) {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status} sur ${url}`);
-        const total = Number(res.headers.get("content-length")) || 0;
+        // Servi compressé (GitHub Pages : gzip) : Content-Length est la taille
+        // compressée alors que les octets lus sont décompressés — la barre ne
+        // peut pas être exacte, on n'affiche alors que le volume reçu.
+        const compressed = !!res.headers.get("content-encoding");
+        const total = compressed ? 0 : Number(res.headers.get("content-length")) || 0;
         const reader = res.body.getReader();
         const chunks = [];
         let got = 0;
@@ -123,6 +127,8 @@
             fill.style.width = `${Math.min(100, (got / total) * 100).toFixed(1)}%`;
             setStatus(`Téléchargement du jeu… ${mb} / ${(total / 1048576).toFixed(1)} Mo`);
           } else {
+            // Progression indéterminée : ~23 Mo décompressés attendus.
+            fill.style.width = `${Math.min(95, (got / 24_000_000) * 100).toFixed(1)}%`;
             setStatus(`Téléchargement du jeu… ${mb} Mo`);
           }
         }
