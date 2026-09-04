@@ -486,6 +486,7 @@ pub(super) fn multiplayer_roster_panel(
     offset: &mut [f32; 2],
     draggable: bool,
     locale: crate::app::locale::Locale,
+    colorblind: bool,
 ) {
     use egui::Color32;
     if roster.is_empty() {
@@ -519,7 +520,9 @@ pub(super) fn multiplayer_roster_panel(
                             rect.min,
                             egui::vec2(rect.width() * h, rect.height()),
                         );
-                        let color = if h > 0.5 {
+                        let color = if colorblind {
+                            health_color(h, true)
+                        } else if h > 0.5 {
                             Color32::from_rgb(110, 200, 110)
                         } else if h > 0.25 {
                             Color32::from_rgb(230, 180, 80)
@@ -632,7 +635,15 @@ pub(super) fn hud_preview_overlays(
             ("Alice".to_string(), Some(0.45), Some(5), false),
             ("Bob".to_string(), Some(1.0), Some(1), false),
         ];
-        multiplayer_roster_panel(ctx, area, &sample, &mut hud_layout.roster, drag, locale);
+        multiplayer_roster_panel(
+            ctx,
+            area,
+            &sample,
+            &mut hud_layout.roster,
+            drag,
+            locale,
+            false,
+        );
     }
 }
 
@@ -750,7 +761,27 @@ pub(super) fn clamp_hud_scale(scale: f32) -> f32 {
 }
 
 /// Barre de vie du HUD (haut de la zone de jeu), pilotée par `set_health` côté script.
-pub(super) fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32, scale: f32) {
+/// Couleur d'une jauge de vie selon `h` ∈ [0, 1] ; palette daltonienne
+/// (bleu → orange, roadmap post-audit UX 2026-09-04, 5.3) ou vert → rouge.
+pub(super) fn health_color(h: f32, colorblind: bool) -> egui::Color32 {
+    let h = h.clamp(0.0, 1.0);
+    if colorblind {
+        // Bleu (plein) → orange (vide) : distinguables pour les deutéranopes
+        // et protanopes, contrairement au vert/rouge.
+        let lerp = |a: f32, b: f32| (a + (b - a) * (1.0 - h)) as u8;
+        egui::Color32::from_rgb(lerp(60.0, 255.0), lerp(140.0, 150.0), lerp(255.0, 40.0))
+    } else {
+        egui::Color32::from_rgb(((1.0 - h) * 220.0) as u8 + 30, (h * 200.0) as u8 + 30, 50)
+    }
+}
+
+pub(super) fn health_bar(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    h: f32,
+    scale: f32,
+    colorblind: bool,
+) {
     use egui::{Color32, Stroke};
     let scale = clamp_hud_scale(scale);
     let h = h.clamp(0.0, 1.0);
@@ -766,8 +797,7 @@ pub(super) fn health_bar(ctx: &egui::Context, area: egui::Rect, h: f32, scale: f
     );
     painter.rect_filled(bg, 4.0, Color32::from_black_alpha(140));
     let fill = egui::Rect::from_min_size(bg.min, egui::vec2(w * h, bar_h));
-    let col = Color32::from_rgb(((1.0 - h) * 220.0) as u8 + 30, (h * 200.0) as u8 + 30, 50);
-    painter.rect_filled(fill, 4.0, col);
+    painter.rect_filled(fill, 4.0, health_color(h, colorblind));
     painter.rect_stroke(
         bg,
         4.0,

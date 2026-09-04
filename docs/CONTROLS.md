@@ -57,7 +57,8 @@ Mac : `Cmd` ; Linux/Windows : `Ctrl`.
 | Clic gauche + glisser | Tourner la caméra (deux axes en Play, sensibilité dans Paramètres) |
 
 En mode Player (build joueur, web, mobile), les touches d'outils `Q T Y F G`
-sont désactivées.
+sont désactivées. Saut, attaque, tir, soin, pause et carte se remappent dans
+**Paramètres › ⌨ Clavier** ; le déplacement reste WASD / flèches.
 
 ## Tactile (mobile, web sur écran tactile)
 

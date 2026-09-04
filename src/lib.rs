@@ -240,11 +240,12 @@ impl App {
             &bindings,
         );
         let keys = &self.action_keys_held;
+        let kb = self.state.keys;
         let inp = &mut self.state.input_state;
-        inp.jump = keys.contains(&KeyCode::Space) || gp.jump;
-        inp.attack = keys.contains(&KeyCode::KeyJ) || gp.attack;
-        inp.fire = keys.contains(&KeyCode::KeyK) || gp.fire;
-        inp.heal = keys.contains(&KeyCode::KeyH) || gp.heal;
+        inp.jump = keys.contains(&kb.jump) || gp.jump;
+        inp.attack = keys.contains(&kb.attack) || gp.attack;
+        inp.fire = keys.contains(&kb.fire) || gp.fire;
+        inp.heal = keys.contains(&kb.heal) || gp.heal;
         // Élévation caméra libre (Espace = monte, C = descend) — cf. `AppState::fly_cam`.
         inp.fly_vertical = axis_from_held(
             keys.contains(&KeyCode::KeyC),
@@ -649,7 +650,7 @@ impl ApplicationHandler for App {
                         KeyCode::Digit3 if !cmd => self.state.select_weapon(2),
                         // Menu pause (Phase J de `sprintreflecion.md`) : sans effet
                         // hors Play (garde dans `toggle_pause`).
-                        KeyCode::Escape => self.state.toggle_pause(),
+                        c if c == self.state.keys.pause => self.state.toggle_pause(),
                         // Overlay Paramètres minimal du mode Player (Sprint 2, config
                         // hors éditeur) — équivalent clavier du bouton Start de la
                         // manette, pour tester `--player` sur une machine sans
@@ -666,7 +667,9 @@ impl ApplicationHandler for App {
                         // (`self.state.playing`, cf. `build_ui`) : sans ce second
                         // cas, tester la carte nécessitait un vrai build joueur,
                         // impossible à vérifier depuis l'éditeur desktop.
-                        KeyCode::KeyM if self.state.player || self.state.playing => {
+                        c if c == self.state.keys.map
+                            && (self.state.player || self.state.playing) =>
+                        {
                             if let Some(r) = self.renderer.as_mut() {
                                 r.toggle_player_map();
                             }
@@ -700,14 +703,11 @@ impl ApplicationHandler for App {
                     // manette (cf. `recompute_action_buttons`) sans que l'une des deux
                     // sources n'écrase l'état de l'autre au relâchement. C ne sert qu'à
                     // descendre en caméra libre (`fly_vertical`), sans binding manette.
-                    let is_action_key = matches!(
-                        code,
-                        KeyCode::Space
-                            | KeyCode::KeyJ
-                            | KeyCode::KeyK
-                            | KeyCode::KeyH
-                            | KeyCode::KeyC
-                    );
+                    // Touches d'action remappables (`AppState::keys`, roadmap
+                    // post-audit UX 2026-09-04, 5.3) ; Espace/C restent aussi
+                    // l'élévation de la caméra libre.
+                    let is_action_key = self.state.keys.is_held_action(code)
+                        || matches!(code, KeyCode::Space | KeyCode::KeyC);
                     if is_action_key {
                         if pressed {
                             self.action_keys_held.insert(code);

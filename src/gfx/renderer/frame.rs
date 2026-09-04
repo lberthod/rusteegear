@@ -87,6 +87,9 @@ impl Renderer {
             if let Some(v) = actions.reduce_shake {
                 app.set_reduce_shake(v);
             }
+            if let Some(kb) = &actions.keyboard_bindings {
+                app.set_keyboard_bindings(kb);
+            }
         }
 
         // Bouton de fin de partie : « Niveau suivant » uniquement pour la démo contrôleur
@@ -378,6 +381,11 @@ impl Renderer {
             // sans passer par `push_undo` — on compare une empreinte des parties
             // éditables juste avant/après la construction de l'UI de la frame.
             let ui_fingerprint_before = app.ui_scene_fingerprint();
+            // État d'avant l'UI, pour rendre annulables les éditions par widgets
+            // (roadmap post-audit UX 2026-09-04, 5.1) — hors Play, où tout est
+            // écrasé au Stop de toute façon.
+            let pre_ui_snapshot =
+                (!app.playing).then(|| crate::app::SceneSnapshot::capture(&app.scene));
             let (full_output, actions) = editor.run(
                 window,
                 &mut app.scene,
@@ -432,7 +440,14 @@ impl Renderer {
                 app.pending_autosave_recovery.as_deref(),
                 shortcut,
             );
-            apply_editor_actions(app, editor, actions, ui_fingerprint_before, &mut restart);
+            apply_editor_actions(
+                app,
+                editor,
+                actions,
+                ui_fingerprint_before,
+                pre_ui_snapshot,
+                &mut restart,
+            );
             Some(full_output)
         };
         FrameUiOutcome {
@@ -830,10 +845,16 @@ fn apply_editor_actions(
     editor: &mut Editor,
     mut actions: UiActions,
     ui_fingerprint_before: String,
+    pre_ui_snapshot: Option<crate::app::SceneSnapshot>,
     restart: &mut bool,
 ) {
     if app.ui_scene_fingerprint() != ui_fingerprint_before {
-        app.scene_dirty = true;
+        match pre_ui_snapshot {
+            Some(before) => app.push_ui_edit_undo(before),
+            None => app.scene_dirty = true,
+        }
+    } else {
+        app.end_ui_edit();
     }
     // Changements de scène (Ouvrir, Ouvrir un projet, Nouveau projet, Démos,
     // scène vide) : un seul chemin, gardé par la modale « modifications non
@@ -1123,6 +1144,9 @@ fn apply_editor_actions(
     }
     if let Some(v) = actions.mouse_sensitivity {
         app.set_mouse_sensitivity(v);
+    }
+    if let Some(kb) = &actions.keyboard_bindings {
+        app.set_keyboard_bindings(kb);
     }
     if let Some(down) = actions.move_in_list {
         app.move_selected_in_list(down);

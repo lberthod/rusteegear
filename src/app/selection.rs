@@ -268,6 +268,52 @@ impl AppState {
         self.edit_history.redo_stack.clear();
     }
 
+    /// Éditions faites par les widgets de l'UI (Inspecteur, lumières, HUD…) —
+    /// roadmap post-audit UX 2026-09-04, 5.1. Elles mutent la scène sans passer
+    /// par `push_undo` ; l'appelant (`gfx::renderer::frame`) capture l'état
+    /// juste avant l'UI et, si l'empreinte a changé, le pousse ici — une seule
+    /// fois par rafale (`ui_edit_active`), pour qu'une glissade de curseur ou
+    /// une frappe continue restent une entrée d'undo. Avant, un Cmd+Z après
+    /// une saisie ramenait un état antérieur en écrasant la saisie sans
+    /// avertissement.
+    pub(crate) fn push_ui_edit_undo(&mut self, before: SceneSnapshot) {
+        self.scene_dirty = true;
+        if self.ui_edit_active {
+            return;
+        }
+        self.ui_edit_active = true;
+        self.edit_history.undo_stack.push_back(before);
+        if self.edit_history.undo_stack.len() > 50 {
+            self.edit_history.undo_stack.pop_front();
+        }
+        self.edit_history.redo_stack.clear();
+    }
+
+    /// Fin d'une rafale d'éditions UI (frame sans changement d'empreinte).
+    pub(crate) fn end_ui_edit(&mut self) {
+        self.ui_edit_active = false;
+    }
+
+    /// Après un undo/redo, garde la sélection tant que les index existent
+    /// encore — perdre la sélection à chaque Cmd+Z coupait le fil du travail
+    /// (roadmap post-audit UX 2026-09-04, 5.1).
+    fn clamp_selection_after_history(&mut self) {
+        let len = self.scene.objects.len();
+        self.selected.retain(|&i| i < len);
+        if self.selection.is_some_and(|i| i >= len) {
+            self.selection = None;
+        }
+        if self.selection.is_none() {
+            self.selection = self.selected.first().copied();
+        }
+        if self
+            .selected_light
+            .is_some_and(|i| i >= self.scene.point_lights.len())
+        {
+            self.selected_light = None;
+        }
+    }
+
     /// Vide l'historique undo/redo — utilisé au démarrage de l'éditeur pour que
     /// la scène d'ouverture ne soit pas « annulable » vers la scène vide interne.
     /// Repart aussi sur une scène « propre » : la scène d'ouverture vient d'être
@@ -284,8 +330,8 @@ impl AppState {
                 .redo_stack
                 .push(SceneSnapshot::capture(&self.scene));
             prev.restore(&mut self.scene);
-            self.clear_selection();
-            self.selected_light = None;
+            self.ui_edit_active = false;
+            self.clamp_selection_after_history();
         }
     }
 
@@ -295,8 +341,8 @@ impl AppState {
                 .undo_stack
                 .push_back(SceneSnapshot::capture(&self.scene));
             next.restore(&mut self.scene);
-            self.clear_selection();
-            self.selected_light = None;
+            self.ui_edit_active = false;
+            self.clamp_selection_after_history();
         }
     }
 
@@ -504,6 +550,41 @@ fn sanitize_prefab_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// Roadmap post-audit UX 2026-09-04, 5.1 : une édition par widget (ici
+    /// simulée : mutation directe + empreinte d'avant) devient annulable, une
+    /// rafale ne fait qu'une entrée, et la sélection survit à l'undo.
+    #[test]
+    fn ui_edits_are_undoable_once_per_burst_and_keep_the_selection() {
+        let mut app = AppState::new();
+        app.add_object(crate::scene::MeshKind::Cube);
+        app.clear_history();
+        app.selection = Some(0);
+        app.selected = vec![0];
+        // Frame 1 : l'inspecteur change la position.
+        let before = SceneSnapshot::capture(&app.scene);
+        app.scene.objects[0].transform.position.x = 5.0;
+        app.push_ui_edit_undo(before);
+        // Frame 2 : la glissade continue — pas de nouvelle entrée.
+        let before = SceneSnapshot::capture(&app.scene);
+        app.scene.objects[0].transform.position.x = 6.0;
+        app.push_ui_edit_undo(before);
+        assert!(app.scene_dirty);
+        // Frame 3 : rien ne change, fin de rafale.
+        app.end_ui_edit();
+        app.undo();
+        assert_eq!(
+            app.scene.objects[0].transform.position.x, 0.0,
+            "un seul undo annule toute la rafale"
+        );
+        assert_eq!(
+            app.selection,
+            Some(0),
+            "la sélection est conservée après undo"
+        );
+        app.redo();
+        assert_eq!(app.scene.objects[0].transform.position.x, 6.0);
+    }
     use super::*;
     use crate::scene::PointLight;
 

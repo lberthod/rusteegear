@@ -52,7 +52,7 @@ use crate::scene::{
 /// Instantané léger de la scène pour l'undo/redo (sans les meshes importés, lourds
 /// et rarement modifiés) : objets + lumières + caméra de jeu + contrôles + groupes.
 #[derive(Clone)]
-struct SceneSnapshot {
+pub(crate) struct SceneSnapshot {
     objects: Vec<SceneObject>,
     groups: Vec<String>,
     point_lights: Vec<PointLight>,
@@ -62,7 +62,7 @@ struct SceneSnapshot {
 }
 
 impl SceneSnapshot {
-    fn capture(s: &Scene) -> Self {
+    pub(crate) fn capture(s: &Scene) -> Self {
         Self {
             objects: s.objects.clone(),
             groups: s.groups.clone(),
@@ -782,6 +782,11 @@ pub struct AppState {
     /// un pseudo aléatoire sans rien demander. Posé par `lib::make_app`,
     /// baissé par l'overlay (`editor::windows::player_welcome_window`).
     pub welcome_pending: bool,
+    /// Une rafale d'éditions par widgets (Inspecteur…) est en cours : posé
+    /// quand l'empreinte UI change d'une frame à l'autre, levé dès une frame
+    /// sans changement — cf. `push_ui_edit_undo` (roadmap post-audit UX
+    /// 2026-09-04, 5.1). Une glissade de curseur = une seule entrée d'undo.
+    pub ui_edit_active: bool,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -813,6 +818,9 @@ pub struct AppState {
     /// Langue du texte runtime affiché en Play (Sprint 130) — pas l'éditeur, dont l'UI
     /// reste en français (outil de développement). Persistée dans `Settings::locale`.
     pub locale: locale::Locale,
+    /// Touches de jeu résolues (`Settings::keyboard`, roadmap post-audit UX
+    /// 2026-09-04, 5.3) — lues par `lib.rs` à chaque événement clavier.
+    pub keys: input::ResolvedKeys,
     /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
     pub input_state: PlayerInput,
     /// Objets touchés par les entrées tactiles cette frame — cf. `TouchState`.
@@ -1172,6 +1180,7 @@ impl AppState {
             confirm_quit: false,
             player: false,
             locale: initial_settings.locale,
+            keys: input::ResolvedKeys::from_bindings(&initial_settings.keyboard),
             input_state: PlayerInput::default(),
             touch: TouchState {
                 tapped_obj: None,
@@ -1377,6 +1386,7 @@ impl AppState {
             pending_shortcut: None,
             script_errors: HashMap::new(),
             welcome_pending: false,
+            ui_edit_active: false,
         }
     }
 
@@ -1488,6 +1498,11 @@ impl AppState {
     /// `Settings::reduce_shake`).
     pub fn set_reduce_shake(&mut self, v: bool) {
         self.fx.reduce_shake = v;
+    }
+
+    /// Remapping clavier (Paramètres › Clavier) — cf. `keys`.
+    pub fn set_keyboard_bindings(&mut self, b: &settings::KeyboardBindings) {
+        self.keys = input::ResolvedKeys::from_bindings(b);
     }
 
     pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {

@@ -303,3 +303,174 @@ mod tests {
         );
     }
 }
+
+/// Touches proposées au remapping clavier (`settings::KeyboardBindings`) —
+/// noms `Debug` de `winit::keyboard::KeyCode` (roadmap post-audit UX
+/// 2026-09-04, 5.3). WASD et les flèches sont exclus : déplacement fixe.
+pub const KEY_NAMES: &[&str] = &[
+    "Space",
+    "Escape",
+    "Tab",
+    "Enter",
+    "ShiftLeft",
+    "ControlLeft",
+    "AltLeft",
+    "KeyB",
+    "KeyC",
+    "KeyE",
+    "KeyF",
+    "KeyG",
+    "KeyH",
+    "KeyI",
+    "KeyJ",
+    "KeyK",
+    "KeyL",
+    "KeyM",
+    "KeyN",
+    "KeyO",
+    "KeyP",
+    "KeyQ",
+    "KeyR",
+    "KeyT",
+    "KeyU",
+    "KeyV",
+    "KeyX",
+    "KeyY",
+    "KeyZ",
+    "Digit4",
+    "Digit5",
+    "Digit6",
+    "Digit7",
+    "Digit8",
+    "Digit9",
+    "Digit0",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+];
+
+/// Touches de jeu résolues en `KeyCode` — cf. `AppState::keys`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedKeys {
+    pub jump: winit::keyboard::KeyCode,
+    pub attack: winit::keyboard::KeyCode,
+    pub fire: winit::keyboard::KeyCode,
+    pub heal: winit::keyboard::KeyCode,
+    pub pause: winit::keyboard::KeyCode,
+    pub map: winit::keyboard::KeyCode,
+}
+
+impl Default for ResolvedKeys {
+    fn default() -> Self {
+        Self::from_bindings(&crate::app::settings::KeyboardBindings::default())
+    }
+}
+
+impl ResolvedKeys {
+    /// Un nom inconnu retombe sur la touche par défaut de l'action.
+    pub fn from_bindings(b: &crate::app::settings::KeyboardBindings) -> Self {
+        use winit::keyboard::KeyCode;
+        let or = |name: &str, fallback: KeyCode| key_code_from_name(name).unwrap_or(fallback);
+        ResolvedKeys {
+            jump: or(&b.jump, KeyCode::Space),
+            attack: or(&b.attack, KeyCode::KeyJ),
+            fire: or(&b.fire, KeyCode::KeyK),
+            heal: or(&b.heal, KeyCode::KeyH),
+            pause: or(&b.pause, KeyCode::Escape),
+            map: or(&b.map, KeyCode::KeyM),
+        }
+    }
+
+    /// La touche est-elle l'une des actions tenues (saut/attaque/tir/soin) ?
+    pub fn is_held_action(&self, code: winit::keyboard::KeyCode) -> bool {
+        code == self.jump || code == self.attack || code == self.fire || code == self.heal
+    }
+}
+
+/// `KeyCode` depuis son nom `Debug` (`"KeyJ"`, `"Space"`…), pour les noms de
+/// `KEY_NAMES` ; `None` sinon.
+pub fn key_code_from_name(name: &str) -> Option<winit::keyboard::KeyCode> {
+    use winit::keyboard::KeyCode::*;
+    Some(match name {
+        "Space" => Space,
+        "Escape" => Escape,
+        "Tab" => Tab,
+        "Enter" => Enter,
+        "ShiftLeft" => ShiftLeft,
+        "ControlLeft" => ControlLeft,
+        "AltLeft" => AltLeft,
+        "KeyB" => KeyB,
+        "KeyC" => KeyC,
+        "KeyE" => KeyE,
+        "KeyF" => KeyF,
+        "KeyG" => KeyG,
+        "KeyH" => KeyH,
+        "KeyI" => KeyI,
+        "KeyJ" => KeyJ,
+        "KeyK" => KeyK,
+        "KeyL" => KeyL,
+        "KeyM" => KeyM,
+        "KeyN" => KeyN,
+        "KeyO" => KeyO,
+        "KeyP" => KeyP,
+        "KeyQ" => KeyQ,
+        "KeyR" => KeyR,
+        "KeyT" => KeyT,
+        "KeyU" => KeyU,
+        "KeyV" => KeyV,
+        "KeyX" => KeyX,
+        "KeyY" => KeyY,
+        "KeyZ" => KeyZ,
+        "Digit4" => Digit4,
+        "Digit5" => Digit5,
+        "Digit6" => Digit6,
+        "Digit7" => Digit7,
+        "Digit8" => Digit8,
+        "Digit9" => Digit9,
+        "Digit0" => Digit0,
+        "F1" => F1,
+        "F2" => F2,
+        "F3" => F3,
+        "F4" => F4,
+        "F5" => F5,
+        "F6" => F6,
+        "F7" => F7,
+        "F8" => F8,
+        "F9" => F9,
+        "F10" => F10,
+        "F11" => F11,
+        "F12" => F12,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn every_listed_key_name_resolves_and_unknown_names_fall_back() {
+        for name in KEY_NAMES {
+            assert!(key_code_from_name(name).is_some(), "{name}");
+        }
+        let b = crate::app::settings::KeyboardBindings {
+            jump: "Nimporte".into(),
+            fire: "KeyF".into(),
+            ..Default::default()
+        };
+        let r = ResolvedKeys::from_bindings(&b);
+        assert_eq!(r.jump, winit::keyboard::KeyCode::Space);
+        assert_eq!(r.fire, winit::keyboard::KeyCode::KeyF);
+        assert!(r.is_held_action(winit::keyboard::KeyCode::KeyF));
+        assert!(!r.is_held_action(winit::keyboard::KeyCode::KeyK));
+    }
+}

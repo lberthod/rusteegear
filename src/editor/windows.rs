@@ -972,6 +972,25 @@ fn settings_essentials(
         settings.save();
         actions.reduce_shake = Some(settings.reduce_shake);
     }
+    ui.label("Taille de l'interface (panneaux, fenêtres)");
+    if ui
+        .add(egui::Slider::new(&mut settings.ui_scale, 0.6..=2.0))
+        .on_hover_text(
+            "Échelle de tout l'affichage egui — le HUD peint a son propre réglage ci-dessus",
+        )
+        .drag_stopped()
+    {
+        settings.save();
+    }
+    if ui
+        .checkbox(
+            &mut settings.colorblind,
+            "Palette daltonienne (jauges de vie bleu → orange)",
+        )
+        .changed()
+    {
+        settings.save();
+    }
     ui.label("Sensibilité de la caméra (souris, en jeu)");
     if ui
         .add(egui::Slider::new(&mut settings.mouse_sensitivity, 0.2..=4.0).logarithmic(true))
@@ -999,6 +1018,26 @@ fn settings_essentials(
             actions.locale = Some(settings.locale);
         }
     });
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading("⌨ Clavier");
+    ui.small("Actions de jeu remappables (roadmap UX 5.3). Le déplacement reste WASD / flèches.");
+    let mut kb_changed = false;
+    kb_changed |= key_binding_row(ui, "Saut", &mut settings.keyboard.jump);
+    kb_changed |= key_binding_row(ui, "Attaque", &mut settings.keyboard.attack);
+    kb_changed |= key_binding_row(ui, "Tir", &mut settings.keyboard.fire);
+    kb_changed |= key_binding_row(ui, "Soin", &mut settings.keyboard.heal);
+    kb_changed |= key_binding_row(ui, "Pause", &mut settings.keyboard.pause);
+    kb_changed |= key_binding_row(ui, "Carte", &mut settings.keyboard.map);
+    if ui.small_button("Rétablir les touches par défaut").clicked() {
+        settings.keyboard = crate::app::settings::KeyboardBindings::default();
+        kb_changed = true;
+    }
+    if kb_changed {
+        settings.save();
+        actions.keyboard_bindings = Some(settings.keyboard.clone());
+    }
 
     ui.add_space(12.0);
     ui.separator();
@@ -1042,6 +1081,26 @@ pub(super) fn player_settings_window(
         .show(ctx, |ui| {
             settings_essentials(ui, settings, actions);
         });
+}
+
+/// Une ligne de remapping clavier (roadmap post-audit UX 2026-09-04, 5.3) —
+/// même principe que `gamepad_binding_row`, sur `input::KEY_NAMES`.
+fn key_binding_row(ui: &mut egui::Ui, action_label: &str, bound: &mut String) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(action_label);
+        egui::ComboBox::from_id_salt(("key_binding", action_label))
+            .selected_text(bound.as_str())
+            .show_ui(ui, |ui| {
+                for name in crate::app::input::KEY_NAMES {
+                    if ui.selectable_label(bound == name, *name).clicked() && bound != name {
+                        *bound = (*name).to_string();
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
 }
 
 /// Une ligne de remapping manette : libellé d'action + menu déroulant des boutons
@@ -2510,6 +2569,63 @@ pub(super) fn player_welcome_window(
             ui.small(l::controls_hint(locale));
         });
     done
+}
+
+/// Éditeur de script dédié (roadmap post-audit UX 2026-09-04, 5.2) : fenêtre
+/// redimensionnable, police à chasse fixe, erreur Lua de l'objet en ligne,
+/// rappel de l'API — avant, seule une zone de 4 lignes de l'inspecteur
+/// existait, sans erreur affichée. Édite le script de l'objet sélectionné ;
+/// l'undo passe par le mécanisme d'édition UI (`push_ui_edit_undo`).
+pub(super) fn script_editor_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    scene: &mut crate::scene::Scene,
+    selection: Option<usize>,
+    script_errors: &std::collections::HashMap<usize, String>,
+) {
+    if !*open {
+        return;
+    }
+    let title = match selection.and_then(|i| scene.objects.get(i)) {
+        Some(o) => format!("📝  Script de « {} »", o.name),
+        None => "📝  Script".to_string(),
+    };
+    egui::Window::new(title)
+        .id(egui::Id::new("script_editor"))
+        .open(open)
+        .default_size([620.0, 460.0])
+        .resizable(true)
+        .show(ctx, |ui| {
+            let Some(i) = selection.filter(|&i| i < scene.objects.len()) else {
+                ui.label("Sélectionne un objet pour éditer son script.");
+                return;
+            };
+            ui.small(
+                "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, obj.r/g/b, obj.anim, \
+                 obj.tapped/touch_started/touching/touch_ended/triggered/exited, dt, time, \
+                 input.jx/jy, input.btn.<nom>, tilt.x/y, vibrate(ms), set_health(0..1), \
+                 add_item(kind, n), emit(evt), find_tag(tag), obj:destroy(). \
+                 Le script tourne à chaque frame en Play.",
+            );
+            if let Some(err) = script_errors.get(&i) {
+                ui.colored_label(egui::Color32::from_rgb(240, 115, 106), format!("⛔ {err}"));
+            } else {
+                ui.weak("Aucune erreur au dernier tick de Play.");
+            }
+            ui.separator();
+            let obj = &mut scene.objects[i];
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), ui.available_height().max(240.0)],
+                        egui::TextEdit::multiline(&mut obj.script)
+                            .code_editor()
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text("-- ex : obj.ry = obj.ry + dt * 90"),
+                    );
+                });
+        });
 }
 
 #[cfg(test)]

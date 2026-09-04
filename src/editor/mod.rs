@@ -309,6 +309,8 @@ struct Panels {
     hud_hidden: bool,
     /// Fenêtre « 🧩 Widgets HUD » (édition de `Scene::hud_widgets`).
     hud_widgets_editor: bool,
+    /// Fenêtre « 📝 Script » (éditeur de script dédié, roadmap 5.2).
+    script_editor: bool,
     /// Résumé (âge, nombre d'objets) de l'autosave proposé en restauration,
     /// calculé une fois par chemin (roadmap post-audit UX 2026-09-04, 1.8).
     autosave_summary: Option<(std::path::PathBuf, String)>,
@@ -546,6 +548,8 @@ pub struct UiActions {
     pub toggle_pause: bool,
     /// Sensibilité souris (Paramètres, roadmap 2.7) — `AppState::mouse_sensitivity`.
     pub mouse_sensitivity: Option<f32>,
+    /// Remapping clavier changé (Paramètres › Clavier, roadmap 5.3).
+    pub keyboard_bindings: Option<crate::app::settings::KeyboardBindings>,
     /// Réponses à la modale « modifications non sauvegardées » d'un
     /// changement de scène (cf. `SceneSwitch`, `Editor::pending_switch`).
     pub switch_save: bool,
@@ -1013,6 +1017,8 @@ impl Editor {
         welcome_pending: &mut bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
+        self.ctx
+            .set_zoom_factor(self.settings.ui_scale.clamp(0.6, 2.0));
         let mobile = &scene.mobile;
         // Pseudo pré-rempli une seule fois : celui mémorisé, sinon un invité.
         if *welcome_pending && self.mp_name.trim().is_empty() {
@@ -1075,7 +1081,7 @@ impl Editor {
                 palier_banner(ctx, area, palier_flash, palier_level, locale, hud_scale);
             }
             if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
-                health_bar(ctx, area, h, hud_scale);
+                health_bar(ctx, area, h, hud_scale, settings.colorblind);
             }
             // Décalages persistés dans la scène (Scene::hud_layout) : pas de
             // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
@@ -1106,7 +1112,15 @@ impl Editor {
                 locale,
                 hud_scale,
             );
-            multiplayer_roster_panel(ctx, area, roster, &mut layout.roster, false, locale);
+            multiplayer_roster_panel(
+                ctx,
+                area,
+                roster,
+                &mut layout.roster,
+                false,
+                locale,
+                settings.colorblind,
+            );
             if scene_has_ranged_weapon(scene) {
                 crosshair(ctx, area, &mut layout.crosshair, false, hud_scale);
                 weapon_inventory_panel(
@@ -1336,6 +1350,9 @@ impl Editor {
         shortcut: Option<crate::app::EditorShortcut>,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
+        // Échelle de l'interface (Paramètres › Accessibilité, roadmap 5.3).
+        self.ctx
+            .set_zoom_factor(self.settings.ui_scale.clamp(0.6, 2.0));
         let mut actions = UiActions::default();
         // Cmd+Maj+S / Cmd+O / Cmd+N (roadmap post-audit UX 2026-09-04, 1.1) :
         // même code que les entrées du menu Fichier correspondantes.
@@ -1686,6 +1703,14 @@ fn build_ui(
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
+    // Éditeur de script dédié (roadmap post-audit UX 2026-09-04, 5.2).
+    windows::script_editor_window(
+        root.ctx(),
+        &mut panels.script_editor,
+        scene,
+        *selection,
+        status.script_errors,
+    );
     // Fenêtre « 👁 Aperçu HUD » : prévisualiser les overlays de jeu en Édition.
     hud_preview_window(root.ctx(), hud_preview);
     // Fenêtre « 🧩 Widgets HUD » : ajouter/éditer les widgets déclaratifs de la scène.
@@ -2069,7 +2094,7 @@ fn play_area_and_in_game_hud(
         );
     }
     if let Some(h) = hud_health.or_else(|| scene.mobile.health_bar.then_some(1.0)) {
-        health_bar(root.ctx(), play_rect, h, hud_scale);
+        health_bar(root.ctx(), play_rect, h, hud_scale, settings.colorblind);
     }
     if *playing && !panels.hud_hidden {
         // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
@@ -2104,6 +2129,7 @@ fn play_area_and_in_game_hud(
             &mut scene.hud_layout.roster,
             false,
             locale,
+            settings.colorblind,
         );
         if scene_has_ranged_weapon(scene) {
             crosshair(
@@ -2329,6 +2355,17 @@ fn inspector_panel(
                     Some(i) if i < scene.objects.len() => {
                         // Boutons tactiles définis (pour mapper le saut), copiés avant l'emprunt mut.
                         let mobile_buttons = scene.mobile.buttons.clone();
+                        // Clips d'animation du glTF de cet objet (roadmap post-audit UX
+                        // 2026-09-04, 5.2) — avant, seul `obj.anim = "…"` en Lua les
+                        // pilotait, aucune liste dans l'éditeur.
+                        let clip_names: Vec<String> = match scene.objects[i].mesh {
+                            crate::scene::MeshKind::Imported(m) => scene
+                                .imported
+                                .get(m as usize)
+                                .map(|im| im.clips.iter().map(|c| c.name.clone()).collect())
+                                .unwrap_or_default(),
+                            _ => Vec::new(),
+                        };
                         // Activer le joystick après l'emprunt mut de l'objet (cf. plus bas).
                         let mut need_joystick = false;
                         let obj = &mut scene.objects[i];
@@ -2723,7 +2760,48 @@ fn inspector_panel(
                             });
                         });
                         ui.separator();
+                        if !clip_names.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label("Animation");
+                                let current = obj
+                                    .animation
+                                    .as_ref()
+                                    .map(|a| a.clip.clone())
+                                    .filter(|c| !c.is_empty())
+                                    .unwrap_or_else(|| "(pose de liaison)".to_string());
+                                egui::ComboBox::from_id_salt("inspector_anim_clip")
+                                    .selected_text(&current)
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(obj.animation.is_none(), "(pose de liaison)").clicked() {
+                                            obj.animation = None;
+                                        }
+                                        for name in &clip_names {
+                                            let selected = obj.animation.as_ref().is_some_and(|a| &a.clip == name);
+                                            if ui.selectable_label(selected, name).clicked() {
+                                                match &mut obj.animation {
+                                                    Some(a) => a.set_clip(name.clone()),
+                                                    None => {
+                                                        obj.animation = Some(crate::scene::AnimationState {
+                                                            clip: name.clone(),
+                                                            ..Default::default()
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                            })
+                            .response
+                            .on_hover_text("Clip joué en Play (aussi pilotable en Lua : obj.anim = \"nom\")");
+                        }
                         ui.collapsing("Script (Lua)", |ui| {
+                            if ui
+                                .button("📝  Ouvrir dans l'éditeur de script")
+                                .on_hover_text("Fenêtre dédiée, redimensionnable, avec l'erreur en ligne")
+                                .clicked()
+                            {
+                                panels.script_editor = true;
+                            }
                             ui.label(
                                 "Variables : obj.x/y/z, obj.rx/ry/rz (°), obj.sx/sy/sz, \
                                  obj.r/g/b, obj.tapped, obj.touch_started, obj.touching, \

@@ -1222,21 +1222,56 @@ fn creature_1_never_bites_without_contact() {
         .iter()
         .position(|o| o.name == "Joueur")
         .expect("la démo MMORPG doit contenir un « Joueur »");
-    // Loin de toute créature/mur (cf. les spawns `Vec3::new(±3.0, 0.0, ±3.0)`
-    // et le pourtour à `half = 12.0` dans `Scene::mmorpg_demo`).
-    app.scene.objects[player_idx].transform.position = Vec3::new(0.0, 1.0, 9.0);
+    // Isole la Créature 1, comme le test précédent : la démo compte
+    // aujourd'hui des dizaines de créatures dont plusieurs poursuivent le
+    // joueur, et l'ancienne position « loin de tout » (0, 1, 9) — pensée pour
+    // les spawns `±3` d'origine — était en fait à portée de poursuite
+    // (`DEFAULT_CHASE_DISTANCE`) des Créatures 3 et 7, qui arrivaient au
+    // contact en 5 s et mordaient (échec observé sur macOS le 04/09/2026,
+    // roadmap post-audit UX). Le joueur est posé à trois portées de poursuite
+    // de la Créature 1, seule créature laissée visible.
+    let creature_idx = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.name == "Créature")
+        .expect("la démo MMORPG doit contenir une « Créature » (la Créature 1)");
+    // `starts_with("Créature")` sans espace : la démo a aussi une créature
+    // nommée « Créature » tout court.
+    for (i, obj) in app.scene.objects.iter_mut().enumerate() {
+        if obj.name.starts_with("Créature") && i != creature_idx {
+            obj.visible = false;
+        }
+    }
+    let far = app.scene.objects[creature_idx].transform.position
+        + Vec3::new(3.0 * DEFAULT_CHASE_DISTANCE, 1.0, 0.0);
+    app.scene.objects[player_idx].transform.position = far;
     app.hud_health = Some(1.0);
     app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+    app.physics.as_mut().unwrap().set_position(player_idx, far);
 
     let dt = 1.0 / 60.0;
-    for _ in 0..(20 * 60) {
+    for step in 0..(20 * 60) {
         app.sim_step(dt);
+        let health = app.hud_health.unwrap_or(1.0);
+        if health < 1.0 - 1e-4 {
+            // Diagnostic : qui était le plus près quand la vie a baissé ?
+            let pp = app.scene.objects[player_idx].transform.position;
+            let nearest = app
+                .scene
+                .objects
+                .iter()
+                .filter(|o| o.visible && o.name != "Joueur")
+                .map(|o| (o.name.clone(), (o.transform.position - pp).length()))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            panic!(
+                "sans contact, la vie ne doit jamais baisser (aucune créature ne mord à \
+                 distance) — step {step}, vie {health:.3}, objet visible le plus proche : \
+                 {nearest:?}"
+            );
+        }
     }
-    assert_eq!(
-        app.hud_health,
-        Some(1.0),
-        "sans contact, la vie ne doit jamais baisser (aucune créature ne mord à distance)"
-    );
+    assert_eq!(app.hud_health, Some(1.0));
 }
 
 /// Verrouille la répartition des attaques par créature : au contact

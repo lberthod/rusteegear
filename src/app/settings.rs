@@ -75,6 +75,70 @@ pub struct Settings {
     /// 2026-09-04, 2.1) — vide tant qu'il n'a pas été saisi une fois.
     #[serde(default)]
     pub player_name: String,
+    /// Échelle de toute l'interface egui (panneaux de l'éditeur, fenêtres,
+    /// overlays) — roadmap post-audit UX 2026-09-04, 5.3 ; `hud_scale` ne
+    /// touchait que le HUD peint.
+    #[serde(default = "default_sensitivity")]
+    pub ui_scale: f32,
+    /// Palette daltonienne pour les jauges de vie (bleu/orange au lieu de
+    /// vert/rouge), roadmap 5.3.
+    #[serde(default)]
+    pub colorblind: bool,
+    /// Remapping clavier des actions de jeu (roadmap 5.3) — noms de
+    /// `winit::keyboard::KeyCode` (cf. `input::KEY_NAMES`).
+    #[serde(default)]
+    pub keyboard: KeyboardBindings,
+}
+
+/// Touches des actions de jeu, remappables (roadmap post-audit UX 2026-09-04,
+/// 5.3). Le déplacement (WASD/flèches) reste fixe. Noms au format `Debug` de
+/// `winit::keyboard::KeyCode` ; un nom inconnu retombe sur la touche par défaut.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyboardBindings {
+    #[serde(default = "kb_jump")]
+    pub jump: String,
+    #[serde(default = "kb_attack")]
+    pub attack: String,
+    #[serde(default = "kb_fire")]
+    pub fire: String,
+    #[serde(default = "kb_heal")]
+    pub heal: String,
+    #[serde(default = "kb_pause")]
+    pub pause: String,
+    #[serde(default = "kb_map")]
+    pub map: String,
+}
+
+fn kb_jump() -> String {
+    "Space".into()
+}
+fn kb_attack() -> String {
+    "KeyJ".into()
+}
+fn kb_fire() -> String {
+    "KeyK".into()
+}
+fn kb_heal() -> String {
+    "KeyH".into()
+}
+fn kb_pause() -> String {
+    "Escape".into()
+}
+fn kb_map() -> String {
+    "KeyM".into()
+}
+
+impl Default for KeyboardBindings {
+    fn default() -> Self {
+        KeyboardBindings {
+            jump: kb_jump(),
+            attack: kb_attack(),
+            fire: kb_fire(),
+            heal: kb_heal(),
+            pause: kb_pause(),
+            map: kb_map(),
+        }
+    }
 }
 
 fn default_sensitivity() -> f32 {
@@ -177,6 +241,9 @@ impl Default for Settings {
             reopen_last_project: true,
             mouse_sensitivity: 1.0,
             player_name: String::new(),
+            ui_scale: 1.0,
+            colorblind: false,
+            keyboard: KeyboardBindings::default(),
         }
     }
 }
