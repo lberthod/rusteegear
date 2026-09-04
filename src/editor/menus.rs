@@ -46,9 +46,14 @@ pub(super) fn menu_fichier(
                     )
                     .clicked()
                 {
-                    let path =
-                        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/first_game");
-                    actions.open_project_path = Some(path.to_string_lossy().into_owned());
+                    // Dépôt source si présent, sinon copie embarquée dans le dossier
+                    // utilisateur (cf. `project::first_game_dir`).
+                    match crate::project::first_game_dir() {
+                        Ok(path) => {
+                            actions.open_project_path = Some(path.to_string_lossy().into_owned());
+                        }
+                        Err(e) => log::error!("Projet « Premier jeu » indisponible : {e}"),
+                    }
                     ui.close();
                 }
                 if ui

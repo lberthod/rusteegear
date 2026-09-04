@@ -196,6 +196,57 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Dossier du projet exemple « Premier jeu » (roadmap post-audit UX
+/// 2026-09-04, 3.1). En développement (clone du dépôt), c'est
+/// `examples/first_game` du dépôt lui-même — les modifications restent
+/// visibles dans Git. Depuis un binaire installé (`.dmg`), le dépôt n'existe
+/// pas : les fichiers embarqués à la compilation sont écrits une fois dans
+/// `~/.motor3derust/examples/first_game/` (jamais réécrits ensuite : le
+/// projet devient celui de l'utilisateur). Avant, le menu pointait un chemin
+/// figé à la compilation, invalide hors du dépôt.
+pub fn first_game_dir() -> Result<PathBuf, String> {
+    let in_repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/first_game");
+    if in_repo.join(MANIFEST_FILE).is_file() {
+        return Ok(in_repo);
+    }
+    let base = crate::assets::app_data_dir()
+        .ok_or_else(|| "dossier utilisateur introuvable".to_string())?;
+    let dir = base.join("examples").join("first_game");
+    const FILES: &[(&str, &[u8])] = &[
+        (
+            "project.rusteegear.json",
+            include_bytes!("../examples/first_game/project.rusteegear.json"),
+        ),
+        (
+            "scenes/main.scene.json",
+            include_bytes!("../examples/first_game/scenes/main.scene.json"),
+        ),
+        (
+            "scripts/rotating_object.lua",
+            include_bytes!("../examples/first_game/scripts/rotating_object.lua"),
+        ),
+        (
+            "scripts/zone_signal.lua",
+            include_bytes!("../examples/first_game/scripts/zone_signal.lua"),
+        ),
+        (
+            "README.md",
+            include_bytes!("../examples/first_game/README.md"),
+        ),
+    ];
+    for (rel, bytes) in FILES {
+        let path = dir.join(rel);
+        if path.exists() {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{} : {e}", parent.display()))?;
+        }
+        std::fs::write(&path, bytes).map_err(|e| format!("{} : {e}", path.display()))?;
+    }
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

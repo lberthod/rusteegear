@@ -650,6 +650,16 @@ fn asset_picker(ui: &mut egui::Ui, label: &str, path: &mut String) {
 }
 
 /// Détecte les pré-requis d'une cible. `Ok` = prêt à exporter.
+/// Le dépôt source est-il là où le binaire a été compilé ? Les exports lancent
+/// `packaging/*.sh` et écrivent `assets/player_scene.json` dans ce dépôt : un
+/// `.dmg` installé sur une autre machine ne peut pas exporter (roadmap
+/// post-audit UX 2026-09-04, 3.1 — avant, les boutons échouaient en silence).
+fn source_tree_available() -> bool {
+    std::path::Path::new(PROJECT_ROOT)
+        .join("packaging/build_web.sh")
+        .is_file()
+}
+
 fn detect(target: Target) -> Result<(), String> {
     // L'export se pilote depuis le desktop ; rien à sonder sur mobile (pas de processus).
     if cfg!(any(
@@ -658,6 +668,11 @@ fn detect(target: Target) -> Result<(), String> {
         target_arch = "wasm32"
     )) {
         return Err("export depuis le desktop".into());
+    }
+    if !source_tree_available() {
+        return Err(format!(
+            "dépôt source introuvable ({PROJECT_ROOT}) — l'export se lance depuis un clone du dépôt (cargo run)"
+        ));
     }
     match target {
         Target::Macos => {
