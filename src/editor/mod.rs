@@ -17,9 +17,10 @@ use hierarchy::hierarchy_panel;
 use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
     damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
-    item_inventory_panel, kills_hud, lose_banner, mobile_overlay, multiplayer_roster_panel,
-    palier_banner, pause_menu, restart_button, round_summary_banner, scene_has_ranged_weapon,
-    touch_feedback, wave_hud, wave_start_banner, weapon_hud, weapon_inventory_panel,
+    item_inventory_panel, kills_hud, lose_banner, mobile_overlay, mobile_top_buttons,
+    multiplayer_roster_panel, net_event_banner, net_status_pill, palier_banner, pause_menu,
+    restart_button, round_summary_banner, scene_has_ranged_weapon, touch_feedback, wave_hud,
+    wave_start_banner, weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -222,6 +223,11 @@ pub struct Editor {
     toasts: toasts::Toasts,
     /// Changement de scène en attente de confirmation (cf. `SceneSwitch`).
     pub(crate) pending_switch: Option<SceneSwitch>,
+    /// Dernier `net_status` vu par l'overlay joueur et bannière d'événement
+    /// réseau en cours (texte, instant d'apparition) — roadmap post-audit UX
+    /// 2026-09-04, 2.2.
+    net_last_status: Option<String>,
+    net_banner: Option<(String, crate::time_compat::Instant)>,
 }
 
 impl Drop for Editor {
@@ -535,6 +541,11 @@ pub struct UiActions {
     /// `AppState::pending_autosave_recovery`).
     pub restore_autosave: bool,
     pub dismiss_autosave_recovery: bool,
+    /// Mode Player : bouton ⏸ tactile / menu pause (roadmap post-audit UX
+    /// 2026-09-04, 2.3 et 2.5).
+    pub toggle_pause: bool,
+    /// Sensibilité souris (Paramètres, roadmap 2.7) — `AppState::mouse_sensitivity`.
+    pub mouse_sensitivity: Option<f32>,
     /// Réponses à la modale « modifications non sauvegardées » d'un
     /// changement de scène (cf. `SceneSwitch`, `Editor::pending_switch`).
     pub switch_save: bool,
@@ -793,6 +804,8 @@ impl Editor {
             local_server_addr: None,
             toasts: toasts::Toasts::default(),
             pending_switch: None,
+            net_last_status: None,
+            net_banner: None,
         }
     }
 
@@ -996,15 +1009,52 @@ impl Editor {
         wave_banner_wave: u32,
         minimap: &crate::app::MinimapData,
         locale: crate::app::locale::Locale,
+        // Écran d'accueil à afficher (`AppState::welcome_pending`, roadmap 2.1).
+        welcome_pending: &mut bool,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mobile = &scene.mobile;
+        // Pseudo pré-rempli une seule fois : celui mémorisé, sinon un invité.
+        if *welcome_pending && self.mp_name.trim().is_empty() {
+            self.mp_name = if self.settings.player_name.trim().is_empty() {
+                crate::guest_name()
+            } else {
+                self.settings.player_name.clone()
+            };
+        }
         let mut actions = UiActions::default();
+        // Bannière d'événement réseau (roadmap 2.2) : à chaque changement de
+        // `net_status` (sauf le tout premier), le texte s'affiche 3,5 s en haut.
+        if self.net_last_status.as_deref() != Some(net_status) {
+            if self.net_last_status.is_some() && !net_status.is_empty() {
+                self.net_banner =
+                    Some((net_status.to_string(), crate::time_compat::Instant::now()));
+            }
+            self.net_last_status = Some(net_status.to_string());
+        }
+        const NET_BANNER_S: f32 = 3.5;
+        let net_banner = self.net_banner.as_ref().and_then(|(text, t0)| {
+            let age = t0.elapsed().as_secs_f32();
+            (age < NET_BANNER_S).then(|| (text.clone(), 1.0 - (age / NET_BANNER_S).powi(2)))
+        });
+        if net_banner.is_none() {
+            self.net_banner = None;
+        }
+        let net_kind: u8 = if net_connected {
+            0
+        } else if net_status.contains('…') {
+            1
+        } else {
+            2
+        };
         let mp_server_url = &mut self.mp_server_url;
         let mp_name = &mut self.mp_name;
+        let mp_class = &mut self.mp_class;
+        let mp_room_code = &mut self.mp_room_code;
         let settings = &mut self.settings;
         let settings_open = &mut self.panels.settings;
-        let map_open = self.panels.map_open;
+        let map_open_ref = &mut self.panels.map_open;
+        let map_open = *map_open_ref;
         let map_zoom = &mut self.panels.map_zoom;
         let map_pan = &mut self.panels.map_pan;
         let output = self.ctx.run_ui(raw_input, |ui| {
@@ -1103,12 +1153,21 @@ impl Editor {
                 // Menu pause (Phase J, `sprintreflecion.md`) : exclusif avec les
                 // bannières de fin de manche ci-dessus, jamais simultané en pratique
                 // (`AppState::toggle_pause` ne s'arme qu'en Play actif).
-                let (resume_clicked, restart_clicked) = pause_menu(ctx, area, locale, hud_scale);
-                if resume_clicked {
+                let choice = pause_menu(ctx, area, locale, hud_scale, net_connected);
+                if choice.resume {
                     *resume = true;
                 }
-                if restart_clicked {
+                if choice.restart {
                     *restart = true;
+                }
+                if choice.settings {
+                    *settings_open = true;
+                }
+                if choice.disconnect {
+                    actions.disconnect_from_server = true;
+                }
+                if choice.quit {
+                    actions.quit = true;
                 }
             }
             if wave_banner_flash > 0.0 {
@@ -1131,11 +1190,30 @@ impl Editor {
             }
             if mobile.any() {
                 mobile_overlay(ctx, area, mobile, input_state);
+                // ⏸ / 🗺 tactiles (roadmap 2.5) — pas d'Échap ni de M sans clavier.
+                let (pause_clicked, map_clicked) = mobile_top_buttons(ctx, area);
+                if pause_clicked {
+                    actions.toggle_pause = true;
+                }
+                if map_clicked {
+                    *map_open_ref = !*map_open_ref;
+                }
             } else {
                 input_state.joy = (0.0, 0.0);
                 input_state.touch_thrust = 0.0;
                 input_state.touch_turn = 0.0;
+                input_state.touch_look = (0.0, 0.0);
                 input_state.buttons.clear();
+            }
+            // Pastille réseau permanente + bannière d'événement (roadmap 2.2).
+            let net_label = match net_kind {
+                0 => crate::app::locale::net_online(locale),
+                1 => crate::app::locale::net_connecting(locale),
+                _ => crate::app::locale::net_offline(locale),
+            };
+            net_status_pill(ctx, area, net_kind, net_label, hud_scale);
+            if let Some((text, alpha)) = &net_banner {
+                net_event_banner(ctx, area, text, *alpha, hud_scale);
             }
             mobile_multiplayer_overlay(
                 ctx,
@@ -1145,6 +1223,26 @@ impl Editor {
                 net_connected,
                 &mut actions,
             );
+            // Écran d'accueil (roadmap 2.1) : par-dessus le HUD, avant toute
+            // connexion ; le jeu tourne derrière (créatures en simulation locale).
+            if *welcome_pending
+                && windows::player_welcome_window(
+                    ctx,
+                    area,
+                    mp_name,
+                    mp_class,
+                    mp_room_code,
+                    mp_server_url,
+                    locale,
+                    &mut actions,
+                )
+            {
+                *welcome_pending = false;
+                if settings.player_name != mp_name.trim() {
+                    settings.player_name = mp_name.trim().to_string();
+                    settings.save();
+                }
+            }
             if *settings_open {
                 windows::player_settings_window(ctx, settings_open, settings, &mut actions);
             }
@@ -2077,8 +2175,7 @@ fn inspector_panel(
     let mut panel = egui::Panel::right("inspector").default_size(240.0);
     if playing {
         panel = panel.frame(
-            egui::Frame::side_top_panel(root.style())
-                .fill(egui::Color32::from_rgb(52, 40, 30)),
+            egui::Frame::side_top_panel(root.style()).fill(egui::Color32::from_rgb(52, 40, 30)),
         );
     }
     panel
@@ -3283,7 +3380,7 @@ fn describe_autosave(path: &std::path::Path) -> String {
     let age = std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
-        .and_then(|t| crate::time_compat::SystemTime::now().duration_since(t).ok())
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
         .map(|d| human_age(d.as_secs()));
     let objects = crate::scene::Scene::load(&path.to_string_lossy())
         .ok()

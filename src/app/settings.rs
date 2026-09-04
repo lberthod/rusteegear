@@ -67,6 +67,18 @@ pub struct Settings {
     /// projet récent (premier lancement), la démo s'affiche quand même.
     #[serde(default = "default_true")]
     pub reopen_last_project: bool,
+    /// Sensibilité de la caméra à la souris en Play (1.0 = historique) —
+    /// roadmap post-audit UX 2026-09-04, 2.7.
+    #[serde(default = "default_sensitivity")]
+    pub mouse_sensitivity: f32,
+    /// Pseudo du joueur (écran d'accueil du mode Player, roadmap post-audit UX
+    /// 2026-09-04, 2.1) — vide tant qu'il n'a pas été saisi une fois.
+    #[serde(default)]
+    pub player_name: String,
+}
+
+fn default_sensitivity() -> f32 {
+    1.0
 }
 
 fn default_true() -> bool {
@@ -163,6 +175,8 @@ impl Default for Settings {
             muted_players: Vec::new(),
             recent_projects: Vec::new(),
             reopen_last_project: true,
+            mouse_sensitivity: 1.0,
+            player_name: String::new(),
         }
     }
 }

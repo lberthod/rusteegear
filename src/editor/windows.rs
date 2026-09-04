@@ -206,29 +206,31 @@ pub(super) fn tool_windows(
         panels.readiness_results = readiness::analyze(scene, export.config());
     }
 
+    // Alimentée par la table unique `app::shortcuts::SHORTCUTS` (roadmap
+    // post-audit UX 2026-09-04, 4.1) — avant, 8 entrées codées en dur sur ~25
+    // raccourcis réels, et rien sur la souris, le jeu ni le tactile.
     egui::Window::new("⌨  Raccourcis clavier")
         .open(&mut panels.shortcuts)
-        .resizable(false)
+        .default_size([460.0, 520.0])
         .show(ctx, |ui| {
-            egui::Grid::new("shortcuts_grid")
-                .num_columns(2)
-                .spacing([24.0, 6.0])
-                .show(ui, |ui| {
-                    for (k, v) in [
-                        ("W", "Déplacer (translation)"),
-                        ("E", "Tourner (rotation)"),
-                        ("R", "Redimensionner (échelle)"),
-                        ("F", "Recentrer la caméra sur la sélection"),
-                        ("Cmd/Ctrl + Z", "Annuler"),
-                        ("Cmd/Ctrl + Maj + Z", "Rétablir"),
-                        ("Cmd/Ctrl + D", "Dupliquer la sélection"),
-                        ("Suppr", "Supprimer la sélection"),
-                    ] {
-                        ui.strong(k);
-                        ui.label(v);
-                        ui.end_row();
-                    }
-                });
+            use crate::app::shortcuts::{Scope, by_scope};
+            ui.small("Mac : Cmd · Linux/Windows : Ctrl — référence complète : docs/CONTROLS.md");
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for scope in [Scope::Editor, Scope::Mouse, Scope::Play, Scope::Touch] {
+                    ui.add_space(6.0);
+                    ui.heading(scope.title());
+                    egui::Grid::new(("shortcuts_grid", scope.title()))
+                        .num_columns(2)
+                        .spacing([24.0, 4.0])
+                        .show(ui, |ui| {
+                            for s in by_scope(scope) {
+                                ui.strong(s.keys.replace('`', ""));
+                                ui.label(s.action);
+                                ui.end_row();
+                            }
+                        });
+                }
+            });
         });
 
     egui::Window::new("🩺  Diagnostic système")
@@ -969,6 +971,14 @@ fn settings_essentials(
     {
         settings.save();
         actions.reduce_shake = Some(settings.reduce_shake);
+    }
+    ui.label("Sensibilité de la caméra (souris, en jeu)");
+    if ui
+        .add(egui::Slider::new(&mut settings.mouse_sensitivity, 0.2..=4.0).logarithmic(true))
+        .drag_stopped()
+    {
+        settings.save();
+        actions.mouse_sensitivity = Some(settings.mouse_sensitivity);
     }
 
     ui.add_space(12.0);
@@ -2417,6 +2427,89 @@ fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
                 ui.selectable_value(binding, b, format!("{b:?}"));
             }
         });
+}
+
+/// Écran d'accueil du mode Player (roadmap post-audit UX 2026-09-04, 2.1) :
+/// pseudo (mémorisé dans `Settings::player_name`), classe, salon, puis
+/// « Jouer en ligne » (connexion au serveur `server_url`, même chemin que le
+/// bouton de l'overlay 🌐) ou « Jouer seul ». Avant, le player se connectait
+/// tout seul au serveur public sous « InvitéNNNN » sans rien demander, et
+/// jouer hors-ligne n'était possible que par variable d'environnement.
+/// Renvoie `true` quand un choix a été fait (l'appelant ferme l'écran).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn player_welcome_window(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    name: &mut String,
+    class: &mut crate::app::multiplayer::PlayerClass,
+    room: &mut String,
+    server_url: &str,
+    locale: crate::app::locale::Locale,
+    actions: &mut UiActions,
+) -> bool {
+    use crate::app::locale as l;
+    let mut done = false;
+    egui::Window::new("RusteeGear")
+        .id(egui::Id::new("player_welcome"))
+        .collapsible(false)
+        .resizable(false)
+        .title_bar(true)
+        .fixed_pos(egui::pos2(area.center().x - 170.0, area.center().y - 150.0))
+        .default_width(340.0)
+        .show(ctx, |ui| {
+            ui.label(l::welcome_subtitle(locale));
+            ui.add_space(8.0);
+            ui.label(l::nickname_label(locale));
+            ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+            ui.horizontal(|ui| {
+                ui.label(l::class_label(locale));
+                egui::ComboBox::from_id_salt("welcome_class")
+                    .selected_text(class.label())
+                    .show_ui(ui, |ui| {
+                        for c in crate::app::multiplayer::PlayerClass::ALL {
+                            ui.selectable_value(class, c, c.label());
+                        }
+                    });
+            });
+            ui.label(l::room_label(locale));
+            ui.add(egui::TextEdit::singleline(room).desired_width(f32::INFINITY));
+            ui.add_space(10.0);
+            let can_play = !name.trim().is_empty();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        can_play,
+                        egui::Button::new(
+                            egui::RichText::new(l::play_online_label(locale)).size(17.0),
+                        )
+                        .min_size(egui::vec2(170.0, 36.0)),
+                    )
+                    .clicked()
+                {
+                    actions.connect_to_server = Some((
+                        server_url.to_string(),
+                        name.trim().to_string(),
+                        *class,
+                        room.trim().to_string(),
+                        crate::app::multiplayer::RoundObjective::Vagues,
+                    ));
+                    done = true;
+                }
+                if ui
+                    .add(
+                        egui::Button::new(l::play_solo_label(locale))
+                            .min_size(egui::vec2(120.0, 36.0)),
+                    )
+                    .clicked()
+                {
+                    done = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.small(server_url);
+            ui.small(l::controls_hint(locale));
+        });
+    done
 }
 
 #[cfg(test)]

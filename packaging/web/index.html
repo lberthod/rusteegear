@@ -149,6 +149,18 @@
       });
       canvas.addEventListener("pointerdown", () => canvas.focus());
 
+      // Écran maintenu allumé pendant la partie (mobile) — meilleur effort,
+      // l'API peut manquer ou être refusée (roadmap post-audit UX 2026-09-04, 2.6).
+      let wakeLock = null;
+      async function keepScreenOn() {
+        try {
+          if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+        } catch (_) { /* refusé ou non supporté : sans conséquence */ }
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && wakeLock === null) keepScreenOn();
+      });
+
       async function main() {
         if (!navigator.gpu) {
           fail("WebGPU n'est pas disponible dans ce navigateur",
@@ -171,6 +183,7 @@
           boot.classList.add("hidden");
           document.body.classList.add("running");
           canvas.focus();
+          keepScreenOn();
           // Après le fondu, retirer l'overlay du flux : un onglet en arrière-plan
           // peut geler la transition CSS et laisser un voile sur le jeu.
           setTimeout(() => { if (!failed) boot.style.display = "none"; }, 500);

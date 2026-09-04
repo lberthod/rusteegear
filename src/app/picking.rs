@@ -286,12 +286,25 @@ impl AppState {
                             GizmoMode::Pan => self.camera.pan(dx, dy),
                             GizmoMode::Orbit => self.camera.orbit(dx, dy),
                             GizmoMode::Zoom => self.camera.zoom_drag(dy),
-                            // Rotation horizontale seulement (le zoom vient du pinch/molette,
-                            // cf. `InputEvent::Scroll`) : l'angle de plongée (`pitch`) reste fixe,
-                            // façon caméra de suivi à la Zelda — un angle vertical libre rend
-                            // le repère visuel instable (le sol/l'horizon basculent au moindre
-                            // geste). L'outil 🔄 Orbite ci-dessus débloque le pitch sur demande.
-                            _ => self.camera.yaw -= dx * 0.005,
+                            // Édition : rotation horizontale seulement (le zoom vient du
+                            // pinch/molette, cf. `InputEvent::Scroll`), l'angle de plongée
+                            // (`pitch`) reste fixe — l'outil 🔄 Orbite ci-dessus le débloque.
+                            // En Play (roadmap post-audit UX 2026-09-04, 2.7) : deux axes,
+                            // bornés comme la manette et le tactile, et sensibilité réglable
+                            // (`mouse_sensitivity`) — avant, aucun réglage et pas de tangage.
+                            // Player avec contrôles tactiles : la caméra est pilotée par
+                            // la zone d'orbite de l'overlay (`PlayerInput::touch_look`),
+                            // jamais par ce chemin — sinon un même glissé compterait deux
+                            // fois (egui + ici) sur le web ou en aperçu mobile.
+                            _ if self.player && self.scene.mobile.any() => {}
+                            _ => {
+                                let s = 0.005 * self.fx.mouse_sensitivity;
+                                self.camera.yaw -= dx * s;
+                                if self.playing {
+                                    self.camera.pitch =
+                                        (self.camera.pitch + dy * s * 0.6).clamp(0.08, 1.35);
+                                }
+                            }
                         }
                     }
                 }

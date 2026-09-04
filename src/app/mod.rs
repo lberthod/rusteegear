@@ -28,6 +28,7 @@ mod creature_attack;
 mod scripting_web;
 mod selection;
 pub mod settings;
+pub mod shortcuts;
 mod simulation;
 
 use combat::{AttackCharge, AttackProjectile};
@@ -136,6 +137,11 @@ pub struct PlayerInput {
     pub touch_thrust: f32,
     /// Rotation « tank » du pavé tactile (A/D) — même principe que `touch_thrust`.
     pub touch_turn: f32,
+    /// Glissé du doigt sur la moitié droite de l'écran (roadmap post-audit UX
+    /// 2026-09-04, 2.4) : delta en points depuis la frame précédente, consommé
+    /// une fois par frame par la caméra de suivi (`update_effects`) — yaw sur
+    /// x, tangage sur y. Réécrit chaque frame par `editor::mobile_overlay`.
+    pub touch_look: (f32, f32),
     /// Stick gauche de la manette, zone morte + croix directionnelle déjà
     /// résolues (cf. `input::resolve_gamepad_input`) : déplacement **relatif à
     /// la caméra**, comme `joy`/`key_move`, cumulé avec eux avant
@@ -213,6 +219,9 @@ pub struct FxState {
     /// `camera_shake` lui-même — persisté dans `Settings::reduce_shake`
     /// (PHASE I Sprint 1, accessibilité §16.6).
     pub reduce_shake: bool,
+    /// Sensibilité souris de la caméra en Play (`Settings::mouse_sensitivity`,
+    /// roadmap post-audit UX 2026-09-04, 2.7).
+    pub mouse_sensitivity: f32,
     /// Intensité (1 = pic, décroît vers 0) de la bannière « allié à terre »,
     /// déclenchée par `GameEvent::PlayerDown` d'un **autre** joueur réseau
     /// (GDD §5.3 : « la mort d'un allié est un événement de groupe » — jusqu'ici
@@ -767,6 +776,12 @@ pub struct AppState {
     /// champ Script de l'inspecteur. Le journal ne reçoit une ligne que quand le
     /// message d'un objet change (avant : une ligne par frame, ~60/s).
     pub script_errors: HashMap<usize, String>,
+    /// Mode Player : écran d'accueil à afficher (pseudo, en ligne / seul,
+    /// classe, salon) avant toute connexion — roadmap post-audit UX
+    /// 2026-09-04, 2.1. Avant, le player se connectait au serveur public sous
+    /// un pseudo aléatoire sans rien demander. Posé par `lib::make_app`,
+    /// baissé par l'overlay (`editor::windows::player_welcome_window`).
+    pub welcome_pending: bool,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1191,6 +1206,7 @@ impl AppState {
             bloom_enabled: crate::app::build_config::BuildConfig::load().bloom,
             fx: FxState {
                 reduce_shake: initial_settings.reduce_shake,
+                mouse_sensitivity: initial_settings.mouse_sensitivity,
                 ..FxState::default()
             },
             death_cause: None,
@@ -1360,6 +1376,7 @@ impl AppState {
             pending_autosave_recovery: None,
             pending_shortcut: None,
             script_errors: HashMap::new(),
+            welcome_pending: false,
         }
     }
 
@@ -1518,6 +1535,15 @@ impl AppState {
         if self.playing {
             self.paused = !self.paused;
         }
+    }
+
+    /// Sensibilité souris (Paramètres), bornée à [0.2, 4] — cf. `mouse_sensitivity`.
+    pub fn set_mouse_sensitivity(&mut self, v: f32) {
+        self.fx.mouse_sensitivity = if v.is_finite() {
+            v.clamp(0.2, 4.0)
+        } else {
+            1.0
+        };
     }
 
     pub fn toggle_fly_cam(&mut self) {

@@ -73,6 +73,20 @@ impl Renderer {
             if actions.disconnect_from_server {
                 app.disconnect_from_server();
             }
+            // Menu pause / boutons tactiles du mode Player (roadmap post-audit
+            // UX 2026-09-04, 2.3 et 2.5).
+            if actions.toggle_pause {
+                app.toggle_pause();
+            }
+            if actions.quit {
+                app.request_quit();
+            }
+            if let Some(v) = actions.mouse_sensitivity {
+                app.set_mouse_sensitivity(v);
+            }
+            if let Some(v) = actions.reduce_shake {
+                app.set_reduce_shake(v);
+            }
         }
 
         // Bouton de fin de partie : « Niveau suivant » uniquement pour la démo contrôleur
@@ -309,6 +323,7 @@ impl Renderer {
                     app.fx.wave_banner_wave,
                     &minimap,
                     app.locale,
+                    &mut app.welcome_pending,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -1105,6 +1120,9 @@ fn apply_editor_actions(
     }
     if let Some(v) = actions.reduce_shake {
         app.set_reduce_shake(v);
+    }
+    if let Some(v) = actions.mouse_sensitivity {
+        app.set_mouse_sensitivity(v);
     }
     if let Some(down) = actions.move_in_list {
         app.move_selected_in_list(down);

@@ -1201,6 +1201,19 @@ impl AppState {
                 const GAMEPAD_YAW_RATE: f32 = 2.4; // rad/s à plein débattement
                 self.camera.yaw -= yaw_look * GAMEPAD_YAW_RATE * dt;
             }
+            // Orbite au doigt (moitié droite de l'écran, `PlayerInput::touch_look`,
+            // roadmap post-audit UX 2026-09-04, 2.4) : delta en points déjà
+            // intégré sur la frame — pas de `dt`. Mêmes bornes de tangage que la
+            // manette. Avant, le stick tactile était verrouillé sur l'axe
+            // vertical et aucun geste ne tournait la caméra : un joueur
+            // Android/iOS avançait en ligne droite.
+            let (look_x, look_y) = self.input_state.touch_look;
+            if (look_x != 0.0 || look_y != 0.0) && !auto_run {
+                const TOUCH_LOOK_RATE: f32 = 0.006; // rad par point
+                self.camera.yaw -= look_x * TOUCH_LOOK_RATE;
+                self.camera.pitch =
+                    (self.camera.pitch + look_y * TOUCH_LOOK_RATE * 0.6).clamp(0.08, 1.35);
+            }
             // Collision de caméra : rapproche la caméra devant tout décor solide
             // entre la cible et l'œil, pour ne jamais traverser un mur quand le
             // joueur passe près d'un obstacle (cf. `update_camera_collision`).

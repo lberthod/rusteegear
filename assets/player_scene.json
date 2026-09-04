@@ -62747,7 +62747,7 @@
     ],
     "touch_zone": false,
     "health_bar": false,
-    "safe_area": false
+    "safe_area": true
   },
   "camera_follow": true,
   "game_camera": null,

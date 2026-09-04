@@ -602,13 +602,22 @@ impl ApplicationHandler for App {
                         }
                         // Outils de navigation caméra (Main/Orbite/Loupe) : utiles en Play
                         // comme en éditeur, donc jamais gardés par `!self.state.playing`.
-                        KeyCode::KeyQ if !cmd => self.state.set_gizmo_mode(GizmoMode::Pan),
-                        KeyCode::KeyT if !cmd => self.state.set_gizmo_mode(GizmoMode::Orbit),
-                        KeyCode::KeyY if !cmd => self.state.set_gizmo_mode(GizmoMode::Zoom),
-                        KeyCode::KeyF if !cmd => self.state.frame_selected(),
+                        // Gardés hors mode Player (roadmap post-audit UX 2026-09-04,
+                        // 2.7) : dans un build joueur, F recadrait la caméra en plein
+                        // combat et Q/T/Y changeaient d'outil d'éditeur sans le dire.
+                        KeyCode::KeyQ if !cmd && !self.state.player => {
+                            self.state.set_gizmo_mode(GizmoMode::Pan)
+                        }
+                        KeyCode::KeyT if !cmd && !self.state.player => {
+                            self.state.set_gizmo_mode(GizmoMode::Orbit)
+                        }
+                        KeyCode::KeyY if !cmd && !self.state.player => {
+                            self.state.set_gizmo_mode(GizmoMode::Zoom)
+                        }
+                        KeyCode::KeyF if !cmd && !self.state.player => self.state.frame_selected(),
                         // Caméra libre (« vol libre »/noclip) de l'éditeur : voir
                         // partout sur la carte hors Play, cf. `AppState::toggle_fly_cam`.
-                        KeyCode::KeyG if !cmd => self.state.toggle_fly_cam(),
+                        KeyCode::KeyG if !cmd && !self.state.player => self.state.toggle_fly_cam(),
                         KeyCode::KeyZ if cmd && st.shift_key() => self.state.redo(),
                         KeyCode::KeyZ if cmd => self.state.undo(),
                         KeyCode::KeyD if cmd => self.state.duplicate_selected(),
@@ -860,19 +869,24 @@ fn make_app(player: bool) -> App {
         if offline {
             log::info!("Mode hors-ligne (RUSTEEGEAR_OFFLINE) : pas de connexion au serveur.");
         } else {
+            // Écran d'accueil (roadmap post-audit UX 2026-09-04, 2.1) : la
+            // connexion au serveur par défaut n'est plus automatique — le joueur
+            // choisit « Jouer en ligne » (pseudo, classe, salon) ou « Jouer
+            // seul » dans l'overlay (`editor::windows::player_welcome_window`).
             log::info!(
-                "Connexion au serveur multijoueur par défaut : {} (RUSTEEGEAR_OFFLINE=1 pour jouer hors-ligne)",
+                "Écran d'accueil : serveur par défaut {} (RUSTEEGEAR_OFFLINE=1 pour le sauter et jouer hors-ligne)",
                 crate::app::network_client::DEFAULT_SERVER_URL
             );
-            app.state.connect_to_server(
-                crate::app::network_client::DEFAULT_SERVER_URL,
-                &guest_name(),
-            );
+            app.state.welcome_pending = true;
         }
     } else {
         // Dernier projet ouvert d'abord (roadmap post-audit UX 2026-09-04,
         // 1.7 — réglage `reopen_last_project`, projets récents de
         // `Settings`) : reprendre son travail sans repasser par le menu.
+        #[cfg_attr(
+            any(target_os = "ios", target_os = "android", target_arch = "wasm32"),
+            allow(unused_mut)
+        )]
         let mut reopened = false;
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         {
@@ -883,7 +897,10 @@ fn make_app(player: bool) -> App {
                 let path = recent.path.clone();
                 match app.state.open_project(std::path::Path::new(&path)) {
                     Ok(count) => {
-                        log::info!("Projet « {} » rouvert ({count} objets) — {path}", recent.name);
+                        log::info!(
+                            "Projet « {} » rouvert ({count} objets) — {path}",
+                            recent.name
+                        );
                         reopened = true;
                     }
                     Err(e) => log::warn!(
@@ -941,7 +958,7 @@ fn pilot_port_requested<I: Iterator<Item = String>>(args: I, env: Option<&str>) 
 /// mode Player — évite d'exiger une saisie manuelle juste pour rejoindre le
 /// serveur par défaut. Basé sur l'horloge plutôt qu'une dépendance `rand`
 /// (aucune autre n'existe déjà dans le projet pour ce besoin ponctuel).
-fn guest_name() -> String {
+pub(crate) fn guest_name() -> String {
     let nanos = crate::time_compat::SystemTime::now()
         .duration_since(crate::time_compat::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())

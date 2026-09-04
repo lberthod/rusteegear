@@ -156,7 +156,10 @@ impl Toasts {
         let mut dismiss: Option<usize> = None;
         let first = self.items.len().saturating_sub(MAX_VISIBLE);
         egui::Area::new(egui::Id::new("editor-toasts"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -(bottom_inset + 8.0)))
+            .anchor(
+                egui::Align2::RIGHT_BOTTOM,
+                egui::vec2(-12.0, -(bottom_inset + 8.0)),
+            )
             .order(egui::Order::Foreground)
             .interactable(true)
             .show(ctx, |ui| {
@@ -234,18 +237,50 @@ mod tests {
 
     #[test]
     fn engine_errors_and_warnings_toast_but_dependency_noise_does_not() {
-        assert!(wants_toast(&ev(log::Level::Error, "motor3derust::app::persistence", "x")));
-        assert!(wants_toast(&ev(log::Level::Warn, "motor3derust::scene::import", "x")));
-        assert!(!wants_toast(&ev(log::Level::Warn, "egui_wgpu::renderer", "x")));
-        assert!(!wants_toast(&ev(log::Level::Error, "wgpu_core::device", "x")));
+        assert!(wants_toast(&ev(
+            log::Level::Error,
+            "motor3derust::app::persistence",
+            "x"
+        )));
+        assert!(wants_toast(&ev(
+            log::Level::Warn,
+            "motor3derust::scene::import",
+            "x"
+        )));
+        assert!(!wants_toast(&ev(
+            log::Level::Warn,
+            "egui_wgpu::renderer",
+            "x"
+        )));
+        assert!(!wants_toast(&ev(
+            log::Level::Error,
+            "wgpu_core::device",
+            "x"
+        )));
     }
 
     #[test]
     fn only_user_facing_modules_toast_at_info_level() {
-        assert!(wants_toast(&ev(log::Level::Info, "motor3derust::app::persistence", "Scène sauvegardée")));
-        assert!(wants_toast(&ev(log::Level::Info, "motor3derust::gfx::renderer::frame", "Projet dupliqué")));
-        assert!(!wants_toast(&ev(log::Level::Info, "motor3derust::gfx::renderer::resources", "GPU : …")));
-        assert!(!wants_toast(&ev(log::Level::Info, "motor3derust", "RusteeGear 0.1.0")));
+        assert!(wants_toast(&ev(
+            log::Level::Info,
+            "motor3derust::app::persistence",
+            "Scène sauvegardée"
+        )));
+        assert!(wants_toast(&ev(
+            log::Level::Info,
+            "motor3derust::gfx::renderer::frame",
+            "Projet dupliqué"
+        )));
+        assert!(!wants_toast(&ev(
+            log::Level::Info,
+            "motor3derust::gfx::renderer::resources",
+            "GPU : …"
+        )));
+        assert!(!wants_toast(&ev(
+            log::Level::Info,
+            "motor3derust",
+            "RusteeGear 0.1.0"
+        )));
     }
 
     #[test]

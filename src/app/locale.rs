@@ -218,6 +218,112 @@ pub fn resume_button_label(locale: Locale) -> &'static str {
     }
 }
 
+/// Menu pause complet (roadmap post-audit UX 2026-09-04, 2.3).
+pub fn pause_settings_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "⚙ Paramètres",
+        Locale::En => "⚙ Settings",
+    }
+}
+
+pub fn pause_disconnect_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🔌 Se déconnecter",
+        Locale::En => "🔌 Disconnect",
+    }
+}
+
+pub fn pause_quit_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "🚪 Quitter",
+        Locale::En => "🚪 Quit",
+    }
+}
+
+/// La pause est locale : en ligne, le serveur continue la manche.
+pub fn pause_online_note(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "En ligne : la partie continue sans vous",
+        Locale::En => "Online: the round goes on without you",
+    }
+}
+
+/// Écran d'accueil du mode Player (roadmap 2.1).
+pub fn welcome_subtitle(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Petit jeu 3D multijoueur — même partie sur web, mobile et desktop",
+        Locale::En => "Small 3D multiplayer game — same match on web, mobile and desktop",
+    }
+}
+
+pub fn nickname_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Pseudo",
+        Locale::En => "Nickname",
+    }
+}
+
+pub fn class_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Classe",
+        Locale::En => "Class",
+    }
+}
+
+pub fn room_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Salon (vide = public)",
+        Locale::En => "Room (empty = public)",
+    }
+}
+
+pub fn play_online_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "▶ Jouer en ligne",
+        Locale::En => "▶ Play online",
+    }
+}
+
+pub fn play_solo_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Jouer seul",
+        Locale::En => "Play solo",
+    }
+}
+
+pub fn controls_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => {
+            "WASD/flèches : se déplacer · Espace : sauter · J : attaquer · K : tirer · H : se soigner · Échap : pause · M : carte"
+        }
+        Locale::En => {
+            "WASD/arrows: move · Space: jump · J: attack · K: shoot · H: heal · Esc: pause · M: map"
+        }
+    }
+}
+
+/// Libellés de la pastille réseau (roadmap 2.2).
+pub fn net_online(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "En ligne",
+        Locale::En => "Online",
+    }
+}
+
+pub fn net_connecting(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Connexion…",
+        Locale::En => "Connecting…",
+    }
+}
+
+pub fn net_offline(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Hors ligne",
+        Locale::En => "Offline",
+    }
+}
+
 /// Titre de la carte plein écran (`player_map_overlay`), ouverte/fermée à la
 /// touche `M` en mode Player.
 pub fn map_title(locale: Locale) -> &'static str {

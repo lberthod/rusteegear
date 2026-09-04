@@ -1009,58 +1009,225 @@ fn offscreen_edge_position(area: egui::Rect, clip: glam::Vec4) -> Option<egui::P
     Some(area.center() + dir * scale)
 }
 
-/// Menu pause (Phase J, `sprintreflecion.md`) : titre + deux boutons
-/// (Reprendre / Redémarrer), affiché uniquement quand `AppState::paused` est
-/// vrai (cf. `run_player_overlay`). Sur le modèle de `restart_button` mais
-/// avec deux actions distinctes en sortie plutôt qu'un seul bouton.
-/// Renvoie `(resume_clicked, restart_clicked)`.
+/// Choix fait dans le menu pause (cf. `pause_menu`).
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PauseChoice {
+    pub resume: bool,
+    pub restart: bool,
+    pub settings: bool,
+    pub disconnect: bool,
+    pub quit: bool,
+}
+
+/// Menu pause (Phase J, `sprintreflecion.md`), affiché uniquement quand
+/// `AppState::paused` est vrai (cf. `run_player_overlay`). Roadmap post-audit
+/// UX 2026-09-04, 2.3 : Reprendre / Redémarrer / Paramètres / Se déconnecter
+/// (si en ligne) / Quitter (natif seulement — un onglet web se ferme lui-même),
+/// et le rappel qu'en ligne la partie continue sans vous (la pause est locale).
 pub(super) fn pause_menu(
     ctx: &egui::Context,
     area: egui::Rect,
     locale: crate::app::locale::Locale,
     scale: f32,
-) -> (bool, bool) {
+    online: bool,
+) -> PauseChoice {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_pause_title"),
     ));
+    // Voile sombre : les boutons restent lisibles sur un décor clair (herbe,
+    // ciel). Couche `Background` (première couche egui, au-dessus de la 3D) :
+    // sur `Foreground`, le voile recouvrait les boutons eux-mêmes.
+    ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("hud_pause_veil"),
+    ))
+    .rect_filled(area, 0.0, Color32::from_black_alpha(150));
     painter.text(
-        egui::pos2(area.center().x, area.center().y - 60.0 * scale),
+        egui::pos2(area.center().x, area.center().y - 110.0 * scale),
         Align2::CENTER_CENTER,
         crate::app::locale::pause_title(locale),
         FontId::proportional(36.0 * scale),
         Color32::WHITE,
     );
-    let mut resume_clicked = false;
-    let mut restart_clicked = false;
-    let btn_size = [170.0 * scale, 46.0 * scale];
-    egui::Area::new("pause_resume_btn".into())
+    if online {
+        painter.text(
+            egui::pos2(area.center().x, area.center().y - 78.0 * scale),
+            Align2::CENTER_CENTER,
+            crate::app::locale::pause_online_note(locale),
+            FontId::proportional(15.0 * scale),
+            Color32::from_rgb(224, 169, 74),
+        );
+    }
+    let mut choice = PauseChoice::default();
+    let btn_size = [190.0 * scale, 42.0 * scale];
+    let step = 50.0 * scale;
+    let mut entries: Vec<(&str, &mut bool)> = vec![
+        (
+            crate::app::locale::resume_button_label(locale),
+            &mut choice.resume,
+        ),
+        (
+            crate::app::locale::restart_button_label(locale, false),
+            &mut choice.restart,
+        ),
+        (
+            crate::app::locale::pause_settings_label(locale),
+            &mut choice.settings,
+        ),
+    ];
+    if online {
+        entries.push((
+            crate::app::locale::pause_disconnect_label(locale),
+            &mut choice.disconnect,
+        ));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    entries.push((
+        crate::app::locale::pause_quit_label(locale),
+        &mut choice.quit,
+    ));
+    egui::Area::new("pause_menu_btns".into())
         .fixed_pos(egui::pos2(
-            area.center().x - 85.0 * scale,
-            area.center().y - 10.0 * scale,
+            area.center().x - 95.0 * scale,
+            area.center().y - 50.0 * scale,
         ))
         .show(ctx, |ui| {
-            let label = crate::app::locale::resume_button_label(locale);
-            let btn = egui::Button::new(egui::RichText::new(label).size(20.0 * scale));
-            if ui.add_sized(btn_size, btn).clicked() {
-                resume_clicked = true;
+            ui.spacing_mut().item_spacing.y = step - btn_size[1];
+            for (label, flag) in entries {
+                // Fond clair explicite : les boutons egui par défaut se fondent
+                // dans le voile sombre.
+                let btn = egui::Button::new(
+                    egui::RichText::new(label)
+                        .size(18.0 * scale)
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(70, 74, 84))
+                .stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(140)));
+                if ui.add_sized(btn_size, btn).clicked() {
+                    *flag = true;
+                }
             }
         });
-    egui::Area::new("pause_restart_btn".into())
-        .fixed_pos(egui::pos2(
-            area.center().x - 85.0 * scale,
-            area.center().y + 46.0 * scale,
-        ))
+    choice
+}
+
+/// Petits boutons tactiles ⏸ / 🗺 en haut à droite (roadmap post-audit UX
+/// 2026-09-04, 2.5) : sans clavier, ni Échap ni M n'existent. Renvoie
+/// `(pause_clicked, map_clicked)`.
+pub(super) fn mobile_top_buttons(ctx: &egui::Context, area: egui::Rect) -> (bool, bool) {
+    let mut pause = false;
+    let mut map = false;
+    egui::Area::new("mobile_top_buttons".into())
+        .fixed_pos(egui::pos2(area.right() - 8.0 - 96.0, area.top() + 12.0))
         .show(ctx, |ui| {
-            let label = crate::app::locale::restart_button_label(locale, false);
-            let btn = egui::Button::new(egui::RichText::new(label).size(20.0 * scale));
-            if ui.add_sized(btn_size, btn).clicked() {
-                restart_clicked = true;
-            }
+            ui.horizontal(|ui| {
+                if ui
+                    .add_sized([36.0, 32.0], egui::Button::new("⏸").corner_radius(8.0))
+                    .clicked()
+                {
+                    pause = true;
+                }
+                // Texte plutôt que 🗺 : le glyphe manque à la fonte embarquée.
+                if ui
+                    .add_sized([52.0, 32.0], egui::Button::new("Carte").corner_radius(8.0))
+                    .clicked()
+                {
+                    map = true;
+                }
+            });
         });
-    (resume_clicked, restart_clicked)
+    (pause, map)
+}
+
+/// Pastille d'état réseau permanente (roadmap post-audit UX 2026-09-04, 2.2) :
+/// avant, l'état de la connexion n'existait que dans la fenêtre 🌐 repliée —
+/// un serveur injoignable donnait un jeu solo silencieux. `kind` : 0 = en
+/// ligne, 1 = en cours (connexion / reconnexion), 2 = hors ligne.
+pub(super) fn net_status_pill(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    kind: u8,
+    label: &str,
+    scale: f32,
+) {
+    use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_net_pill"),
+    ));
+    let color = match kind {
+        0 => Color32::from_rgb(111, 195, 146),
+        1 => Color32::from_rgb(224, 169, 74),
+        _ => Color32::from_rgb(160, 160, 160),
+    };
+    let font = FontId::proportional(13.0 * scale);
+    let galley = painter.layout_no_wrap(label.to_string(), font.clone(), Color32::WHITE);
+    let w = galley.size().x + 26.0 * scale;
+    let h = 20.0 * scale;
+    // À gauche des boutons ⏸/Carte (haut-droite, 96 pt de large), sur la même
+    // ligne — la fenêtre 🌐 repliée occupe y ≈ 56.
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(
+            area.right() - 8.0 - 96.0 - 10.0 - w,
+            area.top() + 12.0 + 6.0,
+        ),
+        egui::vec2(w, h),
+    );
+    painter.rect_filled(rect, h / 2.0, Color32::from_black_alpha(140));
+    painter.circle_filled(
+        egui::pos2(rect.left() + 10.0 * scale, rect.center().y),
+        4.5 * scale,
+        color,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 19.0 * scale, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        font,
+        Color32::WHITE,
+    );
+}
+
+/// Bannière temporaire d'événement réseau (perte, reconnexion, échec) —
+/// même roadmap 2.2 ; `alpha` ∈ [0, 1] décroissant.
+pub(super) fn net_event_banner(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    text: &str,
+    alpha: f32,
+    scale: f32,
+) {
+    use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_net_banner"),
+    ));
+    let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+    let font = FontId::proportional(16.0 * scale);
+    let galley = painter.layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE);
+    let w = galley.size().x + 32.0 * scale;
+    let h = 30.0 * scale;
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(area.center().x, area.top() + 60.0 * scale),
+        egui::vec2(w, h),
+    );
+    painter.rect_filled(
+        rect,
+        6.0,
+        Color32::from_rgba_unmultiplied(40, 30, 20, a.saturating_sub(40)),
+    );
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        font,
+        Color32::from_rgba_unmultiplied(255, 220, 160, a),
+    );
 }
 
 /// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
@@ -1127,6 +1294,7 @@ pub(super) fn mobile_overlay(
     input.joy = (0.0, 0.0);
     input.touch_thrust = 0.0;
     input.touch_turn = 0.0;
+    input.touch_look = (0.0, 0.0);
     input.buttons.clear();
 
     // Screen Safe Area : rentre les contrôles dans une marge sûre (encoche/bords).
@@ -1204,8 +1372,12 @@ pub(super) fn mobile_overlay(
             });
     } else if cfg.dual_stick {
         let radius = 55.0;
-        // Gauche : avance/recul uniquement (axe vertical, tank thrust) — le
-        // pouce ne dévie jamais latéralement le déplacement.
+        // Gauche : déplacement à deux axes relatif à la caméra (`input.joy`,
+        // même canal que WASD au clavier) — roadmap post-audit UX 2026-09-04,
+        // 2.4. L'ancien verrou sur l'axe vertical (« le pouce ne dévie jamais
+        // latéralement ») datait d'avant l'orbite au doigt ci-dessous : sans
+        // moyen de tourner, un déplacement latéral désorientait ; avec, c'est
+        // le schéma standard stick gauche = déplacement, doigt droit = caméra.
         let left_pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
         egui::Area::new("mobile_joystick_left".into())
             .fixed_pos(left_pos)
@@ -1225,8 +1397,8 @@ pub(super) fn mobile_overlay(
                     if off.length() > radius {
                         off = off.normalized() * radius;
                     }
-                    knob = center + egui::vec2(0.0, off.y); // verrouillé sur l'axe vertical
-                    input.touch_thrust = (-off.y / radius).clamp(-1.0, 1.0); // haut = avance
+                    knob = center + off;
+                    input.joy = (off.x / radius, -off.y / radius); // y inversé : haut = +1
                 }
                 painter.circle_filled(knob, 22.0, Color32::from_white_alpha(200));
             });
@@ -1251,16 +1423,31 @@ pub(super) fn mobile_overlay(
                     if off.length() > radius {
                         off = off.normalized() * radius;
                     }
-                    // Bridé à l'axe vertical (avance/recul) — même principe que le
-                    // stick gauche de `dual_stick` : dévier le pouce latéralement ne
-                    // doit ni faire pivoter le personnage ni entraîner la caméra
-                    // (cf. `camera.yaw` asservi à l'orientation du joueur en mode
-                    // arme à distance, ligne ~630). Retour explicite : le stick
-                    // gauche sert uniquement à avancer/reculer, jamais à tourner.
-                    knob = center + egui::vec2(0.0, off.y);
-                    input.joy = (0.0, -off.y / radius); // y inversé : haut = +1
+                    // Deux axes, relatif à la caméra (roadmap post-audit UX
+                    // 2026-09-04, 2.4) — même schéma que le stick gauche de
+                    // `dual_stick` et que WASD au clavier.
+                    knob = center + off;
+                    input.joy = (off.x / radius, -off.y / radius); // y inversé : haut = +1
                 }
                 painter.circle_filled(knob, 22.0, Color32::from_white_alpha(200));
+            });
+    }
+
+    // --- Orbite au doigt : glisser sur la moitié droite de l'écran tourne la
+    // caméra (roadmap post-audit UX 2026-09-04, 2.4). Couche `Background` :
+    // les boutons et sticks dessinés au-dessus gardent la priorité au toucher,
+    // seul un glissé « dans le vide » arrive ici.
+    if cfg.joystick || cfg.dual_stick || cfg.dpad {
+        let look_rect = egui::Rect::from_min_max(egui::pos2(area.center().x, area.top()), area.max);
+        egui::Area::new("mobile_look".into())
+            .fixed_pos(look_rect.min)
+            .order(egui::Order::Background)
+            .show(ctx, |ui| {
+                let (_, resp) = ui.allocate_exact_size(look_rect.size(), Sense::drag());
+                if resp.dragged() {
+                    let d = resp.drag_delta();
+                    input.touch_look = (d.x, d.y);
+                }
             });
     }
 

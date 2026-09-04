@@ -125,7 +125,10 @@ static ONCE: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None)
 pub fn warn_once(key: &str, msg: &str) -> bool {
     let fresh = ONCE
         .lock()
-        .map(|mut g| g.get_or_insert_with(Default::default).insert(key.to_string()))
+        .map(|mut g| {
+            g.get_or_insert_with(Default::default)
+                .insert(key.to_string())
+        })
         .unwrap_or(true);
     if fresh {
         log::warn!("{msg}");
@@ -204,7 +207,10 @@ mod tests {
         push_event(log::Level::Error, "motor3derust::t", "b".into());
         let (events, next) = events_since(start);
         assert!(events.len() >= 2, "au moins nos deux événements");
-        let ours: Vec<_> = events.iter().filter(|e| e.target == "motor3derust::t").collect();
+        let ours: Vec<_> = events
+            .iter()
+            .filter(|e| e.target == "motor3derust::t")
+            .collect();
         assert_eq!(ours[0].text, "a");
         assert_eq!(ours[1].level, log::Level::Error);
         assert!(next >= start + 2);
