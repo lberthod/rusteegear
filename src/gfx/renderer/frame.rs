@@ -280,6 +280,8 @@ impl Renderer {
             if app.scene.mobile.any() {
                 let net_status = app.net_conn.net_status.clone();
                 let net_connected = app.is_connected();
+                let net_hud = app.net_hud_info();
+                let welcome_error = app.welcome_error.clone();
                 let weapon_label = app.selected_weapon_label();
                 let defeated = app.is_locally_defeated();
                 let kills = app.displayed_kill_count();
@@ -315,6 +317,7 @@ impl Renderer {
                     &mut resume,
                     &net_status,
                     net_connected,
+                    net_hud,
                     weapon_label,
                     defeated,
                     app.death_cause,
@@ -332,6 +335,7 @@ impl Renderer {
                     &minimap,
                     app.locale,
                     &mut app.welcome_pending,
+                    welcome_error.as_deref(),
                     spectating.as_deref(),
                 );
                 if let Some(i) = actions.select_weapon {

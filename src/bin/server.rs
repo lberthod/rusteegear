@@ -538,6 +538,10 @@ fn handle_message(
             log::info!("[{code}] Relance de la manche demandée par {id}");
             room.restart_requested = true;
         }
+        // Sonde de latence (roadmap post-audit UX v2 2026-09-04, 2.6) :
+        // répondue par le transport (`server_loop::handle_connection`), qui
+        // ne la relaie jamais ici — bras de complétude uniquement.
+        ClientMsg::Ping { .. } => {}
     }
 }
 

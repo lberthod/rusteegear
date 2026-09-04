@@ -18,6 +18,7 @@ use wasm_bindgen::closure::Closure;
 use web_sys::{BinaryType, CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
 use super::super::protocol::{self, ClientMsg, ServerMsg};
+use super::Handshake;
 
 /// Connexion réseau côté client à un salon RusteeGear, portage web.
 pub struct NetClient {
@@ -194,6 +195,25 @@ impl NetClient {
     /// `super` et le champ `closed` pour le pourquoi de ce drapeau côté web).
     pub fn is_alive(&self) -> bool {
         !*self.closed.borrow()
+    }
+
+    /// Issue de la poignée de main (contrat commun natif/web, cf. `super` —
+    /// roadmap post-audit UX v2 2026-09-04, 2.1) : `Open` dès l'événement
+    /// `open` du navigateur (même si la connexion meurt ensuite : c'est alors
+    /// `is_alive()` qui le dit), `Failed` sur un `error`/`close` survenu
+    /// **avant** l'ouverture — un serveur injoignable, un `wss://` au
+    /// certificat refusé —, `Pending` sinon. Le navigateur ne détaille pas la
+    /// cause d'un échec (sécurité), la raison reste générique.
+    pub fn handshake(&self) -> Handshake {
+        if *self.open.borrow() {
+            Handshake::Open
+        } else if *self.closed.borrow() {
+            Handshake::Failed(
+                "Serveur injoignable (connexion refusée par le navigateur)".to_string(),
+            )
+        } else {
+            Handshake::Pending
+        }
     }
 }
 

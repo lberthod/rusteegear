@@ -66,8 +66,9 @@ fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
             }
             // La relance de manche vit dans `bin/server.rs` (`tick_room`), pas
             // dans cette boucle minimale (roadmap post-audit UX v2 2026-09-04,
-            // 0.2) — testée là-bas, à travers le vrai socket.
-            ClientMsg::RestartRound => {}
+            // 0.2) — testée là-bas, à travers le vrai socket. Les `Ping` sont
+            // répondus par le transport (`server_loop`), jamais relayés (2.6).
+            ClientMsg::RestartRound | ClientMsg::Ping { .. } => {}
         }
     }
     server_app.advance_play();
@@ -1921,4 +1922,330 @@ fn request_round_restart_sends_restart_round_only_when_connected() {
     assert_eq!(restart_id, id);
     assert_eq!(msg, ClientMsg::RestartRound);
     assert!(app.is_connected(), "« Rejouer » en ligne ne déconnecte pas");
+}
+
+/// Pastille réseau (roadmap post-audit UX v2 2026-09-04, 2.2) : la couleur
+/// se déduit de l'état structuré — seul `Connected` (Welcome reçu) est vert,
+/// poignée de main et reconnexion sont ambre, hors ligne gris.
+#[test]
+fn pill_kind_is_green_only_once_welcomed() {
+    assert_eq!(net_pill_kind(NetConnState::Connected), 0);
+    assert_eq!(net_pill_kind(NetConnState::Connecting), 1);
+    assert_eq!(net_pill_kind(NetConnState::Reconnecting { attempt: 3 }), 1);
+    assert_eq!(net_pill_kind(NetConnState::Offline), 2);
+
+    let mut app = AppState::new();
+    assert_eq!(app.net_hud_info().state, NetConnState::Offline);
+    app.net_conn.net_last_connect = Some((
+        "ws://127.0.0.1:9".to_string(),
+        "Testeur".to_string(),
+        crate::net::protocol::DEFAULT_LOBBY.to_string(),
+        0,
+        0,
+    ));
+    app.schedule_reconnect_attempt();
+    assert_eq!(net_pill_kind(app.net_hud_info().state), 1);
+}
+
+/// Latence lissée (2.6) : le premier échantillon fait foi, les suivants
+/// entrent pour `RTT_SMOOTHING` dans la moyenne mobile — une gigue isolée
+/// ne fait pas sauter la pastille, un changement durable finit par gagner.
+#[test]
+fn rtt_smoothing_seeds_on_the_first_sample_then_averages() {
+    assert_eq!(smooth_rtt(None, 48.0), 48.0);
+    let after_spike = smooth_rtt(Some(48.0), 148.0);
+    assert!((after_spike - 78.0).abs() < 1e-3, "{after_spike}");
+    let mut rtt = Some(48.0);
+    for _ in 0..12 {
+        rtt = Some(smooth_rtt(rtt, 200.0));
+    }
+    assert!(
+        rtt.unwrap() > 195.0,
+        "converge vers la nouvelle valeur : {rtt:?}"
+    );
+
+    // Un `Pong` applique le même lissage à partir de notre horloge.
+    let mut app = AppState::new();
+    // L'horloge des sondes vient de naître (≈ 0 ms) : on la vieillit d'une
+    // seconde pour pouvoir dater un Ping « parti il y a 40 ms ».
+    app.net_conn.net_ping_epoch =
+        crate::time_compat::Instant::now() - std::time::Duration::from_secs(1);
+    let t = app.net_now_ms().saturating_sub(40);
+    app.handle_server_msg(crate::net::protocol::ServerMsg::Pong { t });
+    let measured = app
+        .net_conn
+        .net_rtt_ms
+        .expect("un Pong renseigne la latence");
+    assert!(
+        (38.0..=60.0).contains(&measured),
+        "≈ 40 ms attendu : {measured}"
+    );
+    // Hors ligne, rien à afficher — la pastille ne montre pas une valeur périmée.
+    assert_eq!(app.net_rtt_ms(), None);
+}
+
+/// Statut « Connecté — N joueurs dans le salon » (2.5) : soi compris,
+/// singulier/pluriel, recalculé à chaque arrivée/départ.
+#[test]
+fn connected_status_counts_everyone_in_the_room() {
+    assert_eq!(connected_status(1), "Connecté — 1 joueur dans le salon");
+    assert_eq!(connected_status(0), "Connecté — 1 joueur dans le salon");
+    assert_eq!(connected_status(3), "Connecté — 3 joueurs dans le salon");
+
+    let mut app = AppState::new();
+    app.handle_server_msg(crate::net::protocol::ServerMsg::Welcome { player_id: 22 });
+    assert_eq!(app.net_conn.net_status, connected_status(1));
+    assert!(
+        !app.net_conn.net_status.contains("22"),
+        "l'identifiant interne ne parle à personne"
+    );
+    app.handle_server_msg(crate::net::protocol::ServerMsg::PlayerJoined {
+        player_id: 23,
+        name: "Zoé".to_string(),
+    });
+    assert_eq!(app.net_conn.net_status, connected_status(2));
+    app.handle_server_msg(crate::net::protocol::ServerMsg::PlayerLeft { player_id: 23 });
+    assert_eq!(app.net_conn.net_status, connected_status(1));
+}
+
+/// `JoinRejected` (2.3/2.4) : quel que soit le motif, l'écran d'accueil
+/// revient avec la raison, et aucune reconnexion automatique n'est armée —
+/// le serveur nous refuserait en boucle.
+#[test]
+fn join_rejected_reopens_the_welcome_screen_with_the_reason_and_never_reconnects() {
+    let mut app = AppState::new();
+    app.player = true;
+    app.welcome_pending = false;
+    app.net_conn.net_last_connect = Some((
+        "ws://127.0.0.1:9".to_string(),
+        "Testeur".to_string(),
+        crate::net::protocol::DEFAULT_LOBBY.to_string(),
+        0,
+        0,
+    ));
+    app.handle_server_msg(crate::net::protocol::ServerMsg::JoinRejected {
+        reason: "Serveur plein (trop de connexions simultanées)".to_string(),
+    });
+    assert!(app.welcome_pending, "l'écran d'accueil revient");
+    assert_eq!(
+        app.welcome_error.as_deref(),
+        Some("Serveur plein (trop de connexions simultanées)")
+    );
+    assert!(app.net_conn.net_reconnect.is_none());
+    assert!(app.net_conn.net_last_connect.is_none());
+    app.poll_network();
+    assert!(
+        app.net_conn.net_client.is_none() && app.net_conn.net_reconnect.is_none(),
+        "aucune reconnexion après un refus"
+    );
+
+    // Dans l'éditeur (pas en mode Player), pas d'écran d'accueil à ramener :
+    // la raison reste dans le statut.
+    let mut editor = AppState::new();
+    editor.handle_server_msg(crate::net::protocol::ServerMsg::JoinRejected {
+        reason: "pseudo refusé".to_string(),
+    });
+    assert!(!editor.welcome_pending);
+    assert_eq!(editor.welcome_error.as_deref(), Some("pseudo refusé"));
+    assert_eq!(editor.net_conn.net_status, "pseudo refusé");
+}
+
+/// Reconnexion abandonnée après `MAX_RECONNECT_ATTEMPTS` (2.4) : même
+/// retour à l'écran d'accueil, avec l'explication.
+#[test]
+fn reconnection_abandonment_reopens_the_welcome_screen() {
+    let mut app = AppState::new();
+    app.player = true;
+    app.net_conn.net_last_connect = Some((
+        "ws://127.0.0.1:9".to_string(),
+        "Testeur".to_string(),
+        crate::net::protocol::DEFAULT_LOBBY.to_string(),
+        0,
+        0,
+    ));
+    for _ in 0..=MAX_RECONNECT_ATTEMPTS {
+        app.schedule_reconnect_attempt();
+    }
+    assert!(app.net_conn.net_reconnect.is_none());
+    assert!(app.welcome_pending);
+    assert!(
+        app.welcome_error
+            .as_deref()
+            .is_some_and(|e| e.contains("tentatives")),
+        "{:?}",
+        app.welcome_error
+    );
+}
+
+/// Une poignée de main qui s'éternise (2.1) : au-delà de `CONNECT_TIMEOUT`,
+/// `poll_network` abandonne avec « Serveur injoignable (délai dépassé) »,
+/// sans reconnexion automatique (connexion initiale) et en ramenant l'écran
+/// d'accueil. Serveur TCP qui accepte sans jamais répondre — le pire cas,
+/// celui qui gelait l'écran ~75 s avant.
+#[cfg(feature = "net_tests")]
+#[test]
+fn a_pending_handshake_past_the_timeout_is_abandoned_with_a_clear_message() {
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("ws://{}", silent.local_addr().expect("addr"));
+    let mut app = AppState::new();
+    app.player = true;
+    let t0 = Instant::now();
+    app.connect_to_server(&url, "Patient");
+    assert!(
+        t0.elapsed() < Duration::from_millis(500),
+        "connect_to_server ne gèle plus le thread de rendu"
+    );
+    assert_eq!(
+        app.net_connection_state(),
+        NetConnState::Connecting,
+        "socket lancée, pas de Welcome : « Connexion… », jamais vert"
+    );
+    app.poll_network();
+    assert!(app.net_conn.net_client.is_some(), "encore en attente");
+
+    // Rembobine le début de la poignée de main au-delà du délai : le
+    // prochain `poll_network` tranche sans attendre 5 s réelles.
+    app.net_conn.net_connect_started =
+        Some(Instant::now() - crate::net::client::CONNECT_TIMEOUT - Duration::from_millis(10));
+    app.poll_network();
+    assert!(app.net_conn.net_client.is_none(), "connexion abandonnée");
+    assert!(
+        app.net_conn
+            .net_status
+            .contains(crate::net::client::CONNECT_TIMEOUT_REASON),
+        "{}",
+        app.net_conn.net_status
+    );
+    assert!(
+        app.net_conn.net_reconnect.is_none(),
+        "pas de backoff sur un échec initial"
+    );
+    assert!(app.net_conn.net_last_connect.is_none());
+    assert!(app.welcome_pending);
+    assert!(app.welcome_error.is_some());
+    assert_eq!(app.net_connection_state(), NetConnState::Offline);
+    drop(silent);
+}
+
+/// Port fermé (2.1) : l'échec de la poignée de main remonte au frame
+/// suivant, comme une erreur — pas une boucle de reconnexion.
+#[cfg(feature = "net_tests")]
+#[test]
+fn a_refused_initial_connection_is_reported_without_reconnecting() {
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().expect("addr").port()
+    };
+    let mut app = AppState::new();
+    app.player = true;
+    app.connect_to_server(&format!("ws://127.0.0.1:{port}"), "Refusé");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.net_conn.net_client.is_some() {
+        assert!(Instant::now() < deadline, "l'échec doit remonter vite");
+        std::thread::sleep(Duration::from_millis(10));
+        app.poll_network();
+    }
+    assert!(
+        app.net_conn.net_status.starts_with("Connexion échouée"),
+        "{}",
+        app.net_conn.net_status
+    );
+    assert!(app.net_conn.net_reconnect.is_none());
+    assert!(app.welcome_pending && app.welcome_error.is_some());
+}
+
+/// Serveur plein (2.3, vrai socket) : le refus expliqué (`JoinRejected`)
+/// arrive au client, qui affiche la raison et n'arme **pas** la
+/// reconnexion — avant, la socket fermée sans un mot passait pour une
+/// coupure réseau et déclenchait cinq tentatives inutiles.
+#[cfg(feature = "net_tests")]
+#[test]
+fn a_full_server_rejection_is_explained_and_does_not_trigger_reconnection() {
+    // Plafond par IP à 1 : le premier client (transport brut) l'occupe.
+    let net = NetServer::start_with_ip_cap("127.0.0.1:0", 1).expect("démarrage du serveur");
+    let url = format!("ws://{}", net.local_addr);
+    let first = crate::net::client::NetClient::connect(&url, "Premier", None).expect("connexion");
+    assert!(matches!(
+        first.inbox.recv_timeout(Duration::from_secs(2)),
+        Ok(ServerMsg::Welcome { .. })
+    ));
+
+    let mut app = AppState::new();
+    app.player = true;
+    app.connect_to_server(&url, "DeTrop");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.net_conn.net_client.is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "le refus doit arriver (statut : {})",
+            app.net_conn.net_status
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        app.poll_network();
+    }
+    assert_eq!(
+        app.net_conn.net_status,
+        crate::net::server_loop::SERVER_FULL_REASON,
+        "la raison du serveur est affichée telle quelle"
+    );
+    assert!(
+        app.net_conn.net_reconnect.is_none(),
+        "jamais de backoff après un refus"
+    );
+    assert!(app.net_conn.net_last_connect.is_none());
+    assert!(app.welcome_pending);
+    assert_eq!(
+        app.welcome_error.as_deref(),
+        Some(crate::net::server_loop::SERVER_FULL_REASON)
+    );
+    // Et la boucle ne relance rien toute seule.
+    std::thread::sleep(Duration::from_millis(50));
+    app.poll_network();
+    assert!(app.net_conn.net_client.is_none() && app.net_conn.net_reconnect.is_none());
+    drop(first);
+}
+
+/// Bout-en-bout (vrai socket) : la pastille passe par « Connexion… »
+/// (socket ouverte, pas de Welcome) avant « En ligne », puis la latence
+/// arrive par le premier `Pong` — visible dans le HUD et le pont pilote.
+#[cfg(feature = "net_tests")]
+#[test]
+fn the_pill_turns_green_only_after_welcome_and_then_shows_a_latency() {
+    let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+    let url = format!("ws://{}", net.local_addr);
+    let mut app = AppState::new();
+    app.connect_to_server(&url, "Testeur");
+    assert_eq!(
+        net_pill_kind(app.net_hud_info().state),
+        1,
+        "ambre avant le Welcome"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while app.net_conn.net_player_id.is_none() {
+        assert!(Instant::now() < deadline, "Welcome attendu");
+        std::thread::sleep(Duration::from_millis(10));
+        app.poll_network();
+    }
+    assert_eq!(
+        net_pill_kind(app.net_hud_info().state),
+        0,
+        "vert une fois admis"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while app.net_rtt_ms().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "un Pong doit renseigner la latence"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        app.poll_network();
+    }
+    assert!(
+        app.net_rtt_ms().unwrap() < 500,
+        "latence locale : {:?}",
+        app.net_rtt_ms()
+    );
+    assert!(app.run_console_command("net_stats").contains(" ms"));
 }

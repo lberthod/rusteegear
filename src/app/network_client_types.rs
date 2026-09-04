@@ -114,21 +114,50 @@ pub(crate) fn reconnect_delay(attempt: u32) -> std::time::Duration {
 }
 
 /// État d'une reconnexion automatique en cours (cf. `AppState::net_reconnect`
-/// et la logique dans `poll_network`).
+/// et la logique dans `poll_network`). Plus de tentative « en vol » à
+/// suivre ici (roadmap post-audit UX v2 2026-09-04, 2.1) : `NetClient::
+/// connect_to_lobby` ne bloque plus sur aucune cible, la tentative est le
+/// `net_client` lui-même, dont `poll_network` sonde la poignée de main.
 pub(crate) struct ReconnectState {
     /// Tentative courante (1-indexée, plafonnée à `MAX_RECONNECT_ATTEMPTS`).
     pub(super) attempt: u32,
     /// Prochain essai au plus tôt (backoff, cf. `reconnect_delay`).
     pub(super) next_try: crate::time_compat::Instant,
-    /// Tentative de fond en vol, s'il y en a une : la connexion native est
-    /// **bloquante** (poignée de main TCP/WebSocket complète), elle vit donc
-    /// dans un thread éphémère qui pousse son résultat ici — même patron
-    /// canal + `try_recv` que les imports glTF ou les requêtes IA (cf.
-    /// `net::client::native`). Inutile sur wasm : `connect` n'y bloque
-    /// jamais, l'échec différé arrive par `is_alive()`.
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-    pub(super) pending:
-        Option<std::sync::mpsc::Receiver<Result<crate::net::client::NetClient, String>>>,
+}
+
+/// Cadence des sondes de latence `ClientMsg::Ping` (roadmap post-audit UX v2
+/// 2026-09-04, 2.6) : une toutes les 2 s suffit à une lecture « 48 ms » qui
+/// suit les variations réelles (un changement de réseau se voit en quelques
+/// secondes) pour un coût nul — quelques octets à côté des ~60 `Input`/s.
+pub(super) const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Poids du dernier échantillon dans la moyenne mobile exponentielle de
+/// l'aller-retour (`smooth_rtt`) : 0,3 amortit le jitter d'une sonde isolée
+/// (une valeur double n'entraîne qu'un tiers du saut) tout en convergeant en
+/// ~4 sondes (8 s) sur un changement durable.
+pub(super) const RTT_SMOOTHING: f32 = 0.3;
+
+/// Lissage de l'aller-retour mesuré (ms) : le premier échantillon fait foi
+/// (rien à lisser), les suivants entrent pour `RTT_SMOOTHING` dans une
+/// moyenne mobile exponentielle. Fonction pure, testable sans socket.
+pub(crate) fn smooth_rtt(prev: Option<f32>, sample_ms: f32) -> f32 {
+    match prev {
+        None => sample_ms,
+        Some(p) => p + RTT_SMOOTHING * (sample_ms - p),
+    }
+}
+
+/// Texte de `net_status` une fois admis dans un salon (roadmap post-audit UX
+/// v2 2026-09-04, 2.5) : le nombre de joueurs présents, soi compris — pas
+/// l'identifiant interne (« joueur 22 ») qui ne parlait à personne. Mis à
+/// jour à chaque arrivée/départ, ce qui rejoue la bannière d'événement du
+/// HUD avec le nouveau compte.
+pub(crate) fn connected_status(players_in_room: usize) -> String {
+    if players_in_room <= 1 {
+        "Connecté — 1 joueur dans le salon".to_string()
+    } else {
+        format!("Connecté — {players_in_room} joueurs dans le salon")
+    }
 }
 
 /// État de la connexion multijoueur, pour le HUD et les décisions internes
@@ -144,6 +173,31 @@ pub enum NetConnState {
     Connected,
     /// Connexion perdue, reconnexion automatique en cours.
     Reconnecting { attempt: u32 },
+}
+
+/// Couleur de la pastille réseau du HUD (roadmap post-audit UX v2
+/// 2026-09-04, 2.2) dérivée de l'état **structuré** de la connexion : `0` =
+/// en ligne (vert, `Welcome` reçu), `1` = en cours (ambre : poignée de main,
+/// attente du `Welcome`, reconnexion), `2` = hors ligne (gris). Avant, la
+/// pastille lisait `is_connected()` — vrai dès la socket ouverte — et
+/// cherchait un « … » dans le texte du statut : une socket sans `Welcome`
+/// s'affichait verte. Fonction pure, cf. `editor::hud::net_status_pill`.
+pub fn net_pill_kind(state: NetConnState) -> u8 {
+    match state {
+        NetConnState::Connected => 0,
+        NetConnState::Connecting | NetConnState::Reconnecting { .. } => 1,
+        NetConnState::Offline => 2,
+    }
+}
+
+/// Ce que le HUD joueur a besoin de savoir de la connexion (pastille,
+/// latence) — un seul paramètre à faire passer à `run_player_overlay` plutôt
+/// que trois (roadmap post-audit UX v2 2026-09-04, 2.2/2.6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NetHudInfo {
+    pub state: NetConnState,
+    /// Aller-retour lissé (ms), `None` tant qu'aucun `Pong` n'est arrivé.
+    pub rtt_ms: Option<u32>,
 }
 
 /// Message de chat affichable — représentation universelle (contrairement à

@@ -692,12 +692,16 @@ pub struct NetConnectionState {
     /// répond jamais.
     #[cfg(not(target_os = "ios"))]
     net_last_server_msg: Option<crate::time_compat::Instant>,
-    /// Paramètres `(url, nom, salon)` de la dernière connexion **réussie** —
+    /// Paramètres `(url, nom, salon)` de la dernière connexion **lancée** —
     /// ce que la reconnexion automatique rejoue à l'identique après une
     /// coupure (cf. `network_client::poll_network`). `None` tant qu'on ne
-    /// s'est jamais connecté, et remis à `None` par une déconnexion
-    /// **volontaire** (`disconnect_from_server`) : quitter la partie ne doit
-    /// jamais déclencher une reconnexion dans le dos du joueur.
+    /// s'est jamais connecté, remis à `None` par une déconnexion
+    /// **volontaire** (`disconnect_from_server`) — quitter la partie ne doit
+    /// jamais déclencher une reconnexion dans le dos du joueur — et par
+    /// l'échec de la poignée de main initiale ou un `JoinRejected`
+    /// (`network_client::fail_connection`, roadmap post-audit UX v2
+    /// 2026-09-04, 2.1/2.3) : un serveur injoignable ou qui refuse n'est pas
+    /// une coupure à réparer.
     /// Quatrième champ (Sprint 3, `sprint10audit.md`) : la classe choisie
     /// (`multiplayer::PlayerClass::to_u8`) au `Join` initial — rejouée à
     /// l'identique par la reconnexion automatique, comme le reste du tuple.
@@ -711,6 +715,27 @@ pub struct NetConnectionState {
     /// définitivement abandonnée.
     #[cfg(not(target_os = "ios"))]
     net_reconnect: Option<network_client::ReconnectState>,
+    /// Début de la poignée de main du `net_client` courant (roadmap post-audit
+    /// UX v2 2026-09-04, 2.1) : `poll_network` abandonne une connexion encore
+    /// `Handshake::Pending` au-delà de `net::client::CONNECT_TIMEOUT` — seul
+    /// filet sur le web (le navigateur n'a pas de délai réglable), ceinture
+    /// et bretelles en natif (le thread réseau a le sien). `None` hors
+    /// connexion ou une fois la socket ouverte.
+    #[cfg(not(target_os = "ios"))]
+    net_connect_started: Option<crate::time_compat::Instant>,
+    /// Origine de l'horloge monotone des sondes `ClientMsg::Ping` (2.6) :
+    /// `t` = millisecondes écoulées depuis cet instant, opaque pour le serveur.
+    #[cfg(not(target_os = "ios"))]
+    net_ping_epoch: crate::time_compat::Instant,
+    /// Dernier `Ping` envoyé (cadence `network_client::PING_INTERVAL`) —
+    /// `None` = le prochain part tout de suite (premier après le `Welcome`).
+    #[cfg(not(target_os = "ios"))]
+    net_last_ping_sent: Option<crate::time_compat::Instant>,
+    /// Aller-retour lissé (ms, cf. `network_client::smooth_rtt`), `None`
+    /// tant qu'aucun `Pong` n'est revenu — affiché dans la pastille réseau
+    /// (« 48 ms »), `net_stats` et l'état du pont pilote (`net_rtt_ms`).
+    #[cfg(not(target_os = "ios"))]
+    net_rtt_ms: Option<f32>,
 }
 
 /// Attaque de corps-à-corps du joueur local (roadmap post-audit 2026-09-03, 3.3,
@@ -932,6 +957,12 @@ pub struct AppState {
     /// un pseudo aléatoire sans rien demander. Posé par `lib::make_app`,
     /// baissé par l'overlay (`editor::windows::player_welcome_window`).
     pub welcome_pending: bool,
+    /// Pourquoi l'écran d'accueil est revenu (roadmap post-audit UX v2
+    /// 2026-09-04, 2.4) : `Join` refusé par le serveur (version, pseudo,
+    /// salon, serveur plein), serveur injoignable, reconnexion abandonnée —
+    /// affiché sous les boutons de `player_welcome_window`. Effacé à la
+    /// prochaine tentative de connexion (`connect_to_server_as`).
+    pub welcome_error: Option<String>,
     /// Une rafale d'éditions par widgets (Inspecteur…) est en cours : posé
     /// quand l'empreinte UI change d'une frame à l'autre, levé dès une frame
     /// sans changement — cf. `push_ui_edit_undo` (roadmap post-audit UX
@@ -1457,6 +1488,14 @@ impl AppState {
                 net_last_connect: None,
                 #[cfg(not(target_os = "ios"))]
                 net_reconnect: None,
+                #[cfg(not(target_os = "ios"))]
+                net_connect_started: None,
+                #[cfg(not(target_os = "ios"))]
+                net_ping_epoch: crate::time_compat::Instant::now(),
+                #[cfg(not(target_os = "ios"))]
+                net_last_ping_sent: None,
+                #[cfg(not(target_os = "ios"))]
+                net_rtt_ms: None,
             },
             firebase: FirebaseAuthState {
                 firebase_uid: None,
@@ -1559,6 +1598,7 @@ impl AppState {
             pending_shortcut: None,
             script_errors: HashMap::new(),
             welcome_pending: false,
+            welcome_error: None,
             ui_edit_active: false,
             context_menu_request: false,
             spectate_cursor: 0,

@@ -1149,6 +1149,9 @@ impl Editor {
         resume: &mut bool,
         net_status: &str,
         net_connected: bool,
+        // État structuré de la connexion + latence (roadmap post-audit UX v2
+        // 2026-09-04, 2.2/2.6) : la pastille ne se déduit plus du texte.
+        net_hud: crate::app::network_client::NetHudInfo,
         weapon_label: &str,
         defeated: bool,
         death_cause: Option<crate::net::protocol::DeathCause>,
@@ -1167,6 +1170,9 @@ impl Editor {
         locale: crate::app::locale::Locale,
         // Écran d'accueil à afficher (`AppState::welcome_pending`, roadmap 2.1).
         welcome_pending: &mut bool,
+        // Raison du retour à l'écran d'accueil (`AppState::welcome_error`,
+        // roadmap post-audit UX v2 2026-09-04, 2.4).
+        welcome_error: Option<&str>,
         // Allié suivi en caméra spectateur (`AppState::spectate_target`, roadmap 5.6).
         spectating: Option<&str>,
     ) -> (egui::FullOutput, UiActions) {
@@ -1200,13 +1206,12 @@ impl Editor {
         if net_banner.is_none() {
             self.net_banner = None;
         }
-        let net_kind: u8 = if net_connected {
-            0
-        } else if net_status.contains('…') {
-            1
-        } else {
-            2
-        };
+        // Pastille depuis l'état structuré (roadmap post-audit UX v2
+        // 2026-09-04, 2.2) : une socket sans `Welcome` est « Connexion… »
+        // (ambre), jamais verte — `net_connected` ne sert plus qu'à la
+        // fenêtre 🌐 (Rejoindre/Quitter).
+        let net_kind: u8 = crate::app::network_client::net_pill_kind(net_hud.state);
+        let net_rtt_ms = net_hud.rtt_ms;
         let mp_server_url = &mut self.mp_server_url;
         let mp_name = &mut self.mp_name;
         let mp_class = &mut self.mp_class;
@@ -1383,12 +1388,13 @@ impl Editor {
                 input_state.buttons.clear();
             }
             // Pastille réseau permanente + bannière d'événement (roadmap 2.2).
-            let net_label = match net_kind {
-                0 => crate::app::locale::net_online(locale),
-                1 => crate::app::locale::net_connecting(locale),
-                _ => crate::app::locale::net_offline(locale),
+            let net_label = match (net_kind, net_rtt_ms) {
+                (0, Some(ms)) => crate::app::locale::net_online_with_rtt(locale, ms),
+                (0, None) => crate::app::locale::net_online(locale).to_string(),
+                (1, _) => crate::app::locale::net_connecting(locale).to_string(),
+                _ => crate::app::locale::net_offline(locale).to_string(),
             };
-            net_status_pill(ctx, area, net_kind, net_label, hud_scale);
+            net_status_pill(ctx, area, net_kind, &net_label, hud_scale);
             if let Some((text, alpha)) = &net_banner {
                 net_event_banner(ctx, area, text, *alpha, hud_scale);
             }
@@ -1411,6 +1417,7 @@ impl Editor {
                     mp_class,
                     mp_room_code,
                     mp_server_url,
+                    welcome_error,
                     locale,
                     &mut actions,
                 )

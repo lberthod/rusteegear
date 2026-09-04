@@ -91,6 +91,9 @@ impl AppState {
         objective: crate::app::multiplayer::RoundObjective,
     ) {
         self.disconnect_from_server();
+        // Nouvelle tentative : l'erreur de la précédente n'a plus lieu d'être
+        // affichée (roadmap post-audit UX v2 2026-09-04, 2.4).
+        self.welcome_error = None;
         let room = room.trim();
         let lobby = if room.is_empty() {
             crate::net::protocol::DEFAULT_LOBBY
@@ -107,15 +110,22 @@ impl AppState {
             objective.to_u8(),
         ) {
             Ok(client) => {
-                log::info!("Multijoueur : connecté à {url} sous « {name} »");
+                log::info!("Multijoueur : connexion à {url} sous « {name} » lancée");
                 self.net_conn.net_client = Some(client);
                 self.net_conn.net_status = format!("Connexion à {url}…");
+                // Poignée de main en cours (roadmap post-audit UX v2
+                // 2026-09-04, 2.1) : `connect_to_lobby` ne bloque plus, son
+                // issue est sondée par `poll_network` frame après frame, avec
+                // `CONNECT_TIMEOUT` comme délai — rien ne gèle plus l'écran.
+                let now = crate::time_compat::Instant::now();
+                self.net_conn.net_connect_started = Some(now);
                 // Arme le watchdog dès maintenant (pas au premier message) : un
                 // serveur qui accepte la socket mais ne répond jamais doit finir
                 // par déclencher la reconnexion, pas rester « Connexion… » à vie.
-                self.net_conn.net_last_server_msg = Some(crate::time_compat::Instant::now());
-                // Mémorisé pour la reconnexion automatique (cf. `poll_network`) —
-                // seulement au succès : un échec immédiat reste une erreur
+                self.net_conn.net_last_server_msg = Some(now);
+                // Mémorisé pour la reconnexion automatique (cf. `poll_network`).
+                // Un échec de la poignée de main initiale l'efface aussitôt
+                // (`fail_connection`) : une erreur immédiate reste une erreur
                 // affichée au joueur, pas une boucle de reconnexion.
                 self.net_conn.net_last_connect = Some((
                     url.to_string(),
@@ -134,7 +144,70 @@ impl AppState {
             Err(e) => {
                 log::warn!("Multijoueur : connexion à {url} échouée : {e}");
                 self.net_conn.net_status = format!("Connexion échouée : {e}");
+                self.show_welcome_error(self.net_conn.net_status.clone());
             }
+        }
+    }
+
+    /// Ramène l'écran d'accueil avec la raison de l'échec (roadmap post-audit
+    /// UX v2 2026-09-04, 2.4) — en mode Player seulement : l'éditeur n'a pas
+    /// cet écran, son statut réseau suffit. Sans ça, un `Join` refusé ou une
+    /// reconnexion abandonnée laissait le joueur seul face à un monde en
+    /// simulation locale, l'explication perdue dans une bannière de 3,5 s.
+    fn show_welcome_error(&mut self, reason: String) {
+        self.welcome_error = Some(reason);
+        if self.player {
+            self.welcome_pending = true;
+        }
+    }
+
+    /// Poignée de main échouée ou trop longue (roadmap post-audit UX v2
+    /// 2026-09-04, 2.1) : session nettoyée, puis — s'il s'agissait d'une
+    /// tentative de reconnexion — la suivante est planifiée (le compte de
+    /// tentatives continue) ; sinon c'est un échec de connexion initiale,
+    /// rapporté au joueur sans aucune reconnexion automatique (rien à
+    /// rejouer : le serveur n'a jamais répondu).
+    fn fail_connection(&mut self, reason: &str) {
+        log::warn!("Multijoueur : poignée de main échouée : {reason}");
+        self.reset_network_session();
+        self.net_conn.net_last_server_msg = None;
+        if self.net_conn.net_reconnect.is_some() {
+            self.schedule_reconnect_attempt();
+        } else {
+            self.net_conn.net_last_connect = None;
+            self.net_conn.net_status = format!("Connexion échouée : {reason}");
+            self.show_welcome_error(self.net_conn.net_status.clone());
+        }
+    }
+
+    /// `net_status` « Connecté — N joueurs dans le salon » (roadmap post-audit
+    /// UX v2 2026-09-04, 2.5), recalculé à chaque arrivée/départ tant que
+    /// nous sommes admis (`Welcome` reçu) — soi + fantômes connus.
+    fn refresh_connected_status(&mut self) {
+        if self.net_conn.net_player_id.is_some() {
+            self.net_conn.net_status = connected_status(1 + self.net_conn.remote_players.len());
+        }
+    }
+
+    /// Horloge monotone des sondes de latence (ms depuis `net_ping_epoch`).
+    fn net_now_ms(&self) -> u64 {
+        self.net_conn.net_ping_epoch.elapsed().as_millis() as u64
+    }
+
+    /// Aller-retour lissé vers le serveur (ms entiers), `None` hors ligne ou
+    /// avant le premier `Pong` (roadmap post-audit UX v2 2026-09-04, 2.6).
+    pub fn net_rtt_ms(&self) -> Option<u32> {
+        if !self.is_connected() {
+            return None;
+        }
+        self.net_conn.net_rtt_ms.map(|r| r.round().max(0.0) as u32)
+    }
+
+    /// Ce que le HUD joueur affiche de la connexion (pastille + latence).
+    pub fn net_hud_info(&self) -> NetHudInfo {
+        NetHudInfo {
+            state: self.net_connection_state(),
+            rtt_ms: self.net_rtt_ms(),
         }
     }
 
@@ -176,6 +249,9 @@ impl AppState {
         self.net_conn.net_local_assists = None;
         self.net_conn.net_local_history.clear();
         self.net_conn.net_last_input_sent = None;
+        self.net_conn.net_connect_started = None;
+        self.net_conn.net_last_ping_sent = None;
+        self.net_conn.net_rtt_ms = None;
         // Plus de snapshots à venir : oublie les projectiles serveur et masque le
         // pool, sinon les dernières boules reçues resteraient figées à l'écran.
         self.projectiles.net_projectiles.clear();
@@ -342,8 +418,33 @@ impl AppState {
         // du backoff) — **avant** le early-return ci-dessous, qui masquait
         // jusqu'ici toute vie réseau dès que `net_client` était `None`.
         self.advance_reconnection();
-        if self.net_conn.net_client.is_none() {
+        let Some(client) = &self.net_conn.net_client else {
             return;
+        };
+
+        // Poignée de main en cours (roadmap post-audit UX v2 2026-09-04, 2.1) :
+        // rien à envoyer ni à lire tant que la socket n'est pas ouverte — on
+        // sonde son issue, et on tranche au-delà de `CONNECT_TIMEOUT` (seul
+        // délai sur le web ; en natif le thread réseau a déjà le sien, même
+        // message).
+        match client.handshake() {
+            crate::net::client::Handshake::Open => {
+                self.net_conn.net_connect_started = None;
+            }
+            crate::net::client::Handshake::Pending => {
+                let timed_out = self
+                    .net_conn
+                    .net_connect_started
+                    .is_some_and(|t0| t0.elapsed() >= crate::net::client::CONNECT_TIMEOUT);
+                if timed_out {
+                    self.fail_connection(crate::net::client::CONNECT_TIMEOUT_REASON);
+                }
+                return;
+            }
+            crate::net::client::Handshake::Failed(reason) => {
+                self.fail_connection(&reason);
+                return;
+            }
         }
 
         // Envoie l'input courant du joueur local, déjà tourné selon **notre**
@@ -377,6 +478,24 @@ impl AppState {
                 client.send(&input);
             }
             self.net_conn.net_last_input_sent = Some(now);
+        }
+
+        // Sonde de latence (roadmap post-audit UX v2 2026-09-04, 2.6) : un
+        // `Ping` tout de suite après le `Welcome`, puis toutes les
+        // `PING_INTERVAL` — le `Pong` met à jour `net_rtt_ms` (lissé).
+        let should_ping = self.net_conn.net_player_id.is_some()
+            && self
+                .net_conn
+                .net_last_ping_sent
+                .is_none_or(|last| now.duration_since(last) >= PING_INTERVAL);
+        if should_ping {
+            let ping = crate::net::protocol::ClientMsg::Ping {
+                t: self.net_now_ms(),
+            };
+            if let Some(client) = &self.net_conn.net_client {
+                client.send(&ping);
+            }
+            self.net_conn.net_last_ping_sent = Some(now);
         }
 
         let messages: Vec<crate::net::protocol::ServerMsg> = match &self.net_conn.net_client {
@@ -499,6 +618,10 @@ impl AppState {
             self.net_conn.net_status = format!(
                 "Déconnecté (reconnexion échouée après {MAX_RECONNECT_ATTEMPTS} tentatives)"
             );
+            // Abandon définitif : l'écran d'accueil revient avec l'explication
+            // (roadmap post-audit UX v2 2026-09-04, 2.4), le joueur choisit
+            // de réessayer ou de jouer seul.
+            self.show_welcome_error(self.net_conn.net_status.clone());
             return;
         }
         self.net_conn.net_status = format!(
@@ -507,8 +630,6 @@ impl AppState {
         self.net_conn.net_reconnect = Some(ReconnectState {
             attempt,
             next_try: crate::time_compat::Instant::now() + reconnect_delay(attempt),
-            #[cfg(not(target_arch = "wasm32"))]
-            pending: None,
         });
         // Watchdog désarmé le temps de l'attente : il ne surveille qu'une
         // connexion active, pas un backoff.
@@ -516,52 +637,17 @@ impl AppState {
     }
 
     /// Fait avancer la reconnexion automatique (appelée à chaque frame par
-    /// `poll_network`, avant son early-return « pas de client ») : récolte le
-    /// résultat d'une tentative en vol, ou en lance une nouvelle au terme du
-    /// backoff. Sans effet si connecté ou si aucune reconnexion n'est armée.
+    /// `poll_network`, avant son early-return « pas de client ») : lance la
+    /// tentative suivante au terme du backoff. Sans effet si connecté ou si
+    /// aucune reconnexion n'est armée. La tentative lancée est un
+    /// `net_client` ordinaire dont `poll_network` sonde la poignée de main
+    /// (roadmap post-audit UX v2 2026-09-04, 2.1 — plus de thread éphémère
+    /// ni de branche wasm à part : `connect_to_lobby` ne bloque nulle part) ;
+    /// son échec repasse par `fail_connection`, qui planifie la suivante.
     fn advance_reconnection(&mut self) {
         if self.net_conn.net_client.is_some() || self.net_conn.net_reconnect.is_none() {
             return;
         }
-        // 1. Résultat d'une tentative en vol (natif uniquement : la connexion
-        //    bloquante vit dans un thread éphémère, cf. `ReconnectState::pending`).
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let outcome = self.net_conn.net_reconnect.as_ref().and_then(|s| {
-                let rx = s.pending.as_ref()?;
-                match rx.try_recv() {
-                    Ok(res) => Some(res),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
-                        "le thread de reconnexion s'est arrêté sans répondre".to_string(),
-                    )),
-                }
-            });
-            match outcome {
-                Some(Ok(client)) => {
-                    self.install_reconnected_client(client);
-                    return;
-                }
-                Some(Err(e)) => {
-                    log::warn!("Multijoueur : tentative de reconnexion échouée : {e}");
-                    self.schedule_reconnect_attempt();
-                    return;
-                }
-                None => {
-                    // Tentative toujours en vol : attendre son verdict avant
-                    // d'en lancer une autre.
-                    if self
-                        .net_conn
-                        .net_reconnect
-                        .as_ref()
-                        .is_some_and(|s| s.pending.is_some())
-                    {
-                        return;
-                    }
-                }
-            }
-        }
-        // 2. Backoff écoulé ? → lancer la tentative suivante.
         let now = crate::time_compat::Instant::now();
         if self
             .net_conn
@@ -577,46 +663,18 @@ impl AppState {
             return;
         };
         let uid = self.join_credential();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Connexion bloquante (poignée de main TCP/WebSocket complète) :
-            // jamais sur le thread de rendu — même patron thread éphémère +
-            // canal que les imports glTF ou les requêtes IA.
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let res = crate::net::client::NetClient::connect_to_lobby(
-                    &url,
-                    &name,
-                    uid.as_deref(),
-                    &lobby,
-                    class,
-                    objective,
-                )
-                .map_err(|e| e.to_string());
-                let _ = tx.send(res);
-            });
-            if let Some(s) = self.net_conn.net_reconnect.as_mut() {
-                s.pending = Some(rx);
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // `connect` ne bloque jamais sur cette cible (cf. `net::client::web`) :
-            // appel direct, l'échec réel arrivera par `is_alive()` — la boucle de
-            // détection de `poll_network` enchaînera alors sur la tentative suivante.
-            match crate::net::client::NetClient::connect_to_lobby(
-                &url,
-                &name,
-                uid.as_deref(),
-                &lobby,
-                class,
-                objective,
-            ) {
-                Ok(client) => self.install_reconnected_client(client),
-                Err(e) => {
-                    log::warn!("Multijoueur : tentative de reconnexion échouée : {e}");
-                    self.schedule_reconnect_attempt();
-                }
+        match crate::net::client::NetClient::connect_to_lobby(
+            &url,
+            &name,
+            uid.as_deref(),
+            &lobby,
+            class,
+            objective,
+        ) {
+            Ok(client) => self.install_reconnected_client(client),
+            Err(e) => {
+                log::warn!("Multijoueur : tentative de reconnexion échouée : {e}");
+                self.schedule_reconnect_attempt();
             }
         }
     }
@@ -631,15 +689,13 @@ impl AppState {
     /// synthétique de `server_loop::handle_connection`).
     fn install_reconnected_client(&mut self, client: crate::net::client::NetClient) {
         self.net_conn.net_client = Some(client);
-        // Ré-arme le watchdog : cette connexion neuve a droit à sa pleine
-        // fenêtre de silence avant d'être déclarée morte à son tour.
-        self.net_conn.net_last_server_msg = Some(crate::time_compat::Instant::now());
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(s) = self.net_conn.net_reconnect.as_mut() {
-            s.pending = None;
-        }
-        self.net_conn.net_status =
-            "Reconnexion : transport rétabli, en attente du serveur…".to_string();
+        let now = crate::time_compat::Instant::now();
+        // Poignée de main à suivre (2.1), et watchdog ré-armé : cette
+        // connexion neuve a droit à sa pleine fenêtre de silence avant
+        // d'être déclarée morte à son tour.
+        self.net_conn.net_connect_started = Some(now);
+        self.net_conn.net_last_server_msg = Some(now);
+        self.net_conn.net_status = "Reconnexion : en attente du serveur…".to_string();
     }
 
     /// Réconcilie le joueur local avec la position renvoyée par le serveur : à
@@ -756,7 +812,7 @@ impl AppState {
             ServerMsg::Welcome { player_id } => {
                 log::info!("Multijoueur : bienvenue, joueur {player_id}");
                 self.net_conn.net_player_id = Some(player_id);
-                self.net_conn.net_status = format!("Connecté (joueur {player_id})");
+                self.refresh_connected_status();
                 // Solde une éventuelle reconnexion automatique : le serveur nous
                 // a réadmis (sous un **nouveau** `player_id` — l'ancien avatar a
                 // été retiré à la fermeture de l'ancienne socket), le compteur
@@ -767,6 +823,7 @@ impl AppState {
                 if Some(player_id) != self.net_conn.net_player_id {
                     log::info!("Multijoueur : « {name} » (joueur {player_id}) a rejoint");
                     self.ensure_remote_player(player_id, &name);
+                    self.refresh_connected_status();
                 }
             }
             ServerMsg::PlayerLeft { player_id } => {
@@ -779,6 +836,15 @@ impl AppState {
                     }
                     o.visible = false;
                 }
+                self.refresh_connected_status();
+            }
+            // Sonde de latence de retour (roadmap post-audit UX v2 2026-09-04,
+            // 2.6) : `t` est notre propre horloge, l'aller-retour est la
+            // différence — lissé pour que la pastille ne saute pas à chaque
+            // gigue.
+            ServerMsg::Pong { t } => {
+                let rtt = self.net_now_ms().saturating_sub(t) as f32;
+                self.net_conn.net_rtt_ms = Some(smooth_rtt(self.net_conn.net_rtt_ms, rtt));
             }
             ServerMsg::Snapshot(snap) => {
                 let now = crate::time_compat::Instant::now();
@@ -985,7 +1051,11 @@ impl AppState {
                 self.net_conn.net_reconnect = None;
                 self.net_conn.net_last_connect = None;
                 self.net_conn.net_last_server_msg = None;
-                self.net_conn.net_status = reason;
+                self.net_conn.net_status = reason.clone();
+                // Quel que soit le motif (version, pseudo, salon, serveur
+                // plein) : l'écran d'accueil revient avec la raison (roadmap
+                // post-audit UX v2 2026-09-04, 2.3/2.4).
+                self.show_welcome_error(reason);
             }
         }
     }
@@ -1490,6 +1560,21 @@ impl AppState {
 
     pub fn is_connected(&self) -> bool {
         false
+    }
+
+    pub fn net_connection_state(&self) -> NetConnState {
+        NetConnState::Offline
+    }
+
+    pub fn net_rtt_ms(&self) -> Option<u32> {
+        None
+    }
+
+    pub fn net_hud_info(&self) -> NetHudInfo {
+        NetHudInfo {
+            state: NetConnState::Offline,
+            rtt_ms: None,
+        }
     }
 
     /// Jamais en ligne sur iOS : « Rejouer » relance toujours la partie

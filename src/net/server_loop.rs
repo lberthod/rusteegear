@@ -77,6 +77,21 @@ const MAX_CONNECTIONS_PER_IP: usize = 4;
 /// service par épuisement.
 const MAX_TOTAL_CONNECTIONS: usize = 256;
 
+/// Raison envoyée (`ServerMsg::JoinRejected`) à une connexion refusée pour
+/// dépassement de `MAX_CONNECTIONS_PER_IP`/`MAX_TOTAL_CONNECTIONS` (roadmap
+/// post-audit UX v2 2026-09-04, 2.3) — avant, la socket TCP était fermée
+/// sans un mot et le client, qui ne savait pas distinguer ce refus d'une
+/// coupure réseau, enchaînait cinq tentatives de reconnexion contre un
+/// serveur qui le refuserait à chaque fois.
+pub const SERVER_FULL_REASON: &str =
+    "Serveur plein (trop de connexions simultanées) — réessayez dans quelques instants";
+
+/// Temps accordé à une connexion **refusée** pour terminer sa poignée de main
+/// WebSocket et recevoir `SERVER_FULL_REASON` (2.3) : expliquer le refus
+/// coûte un handshake, qu'un client qui ne répond pas ne doit pas pouvoir
+/// faire durer — la tâche est tranchée à ce délai, quoi qu'il arrive.
+const REJECT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Limiteur de débit à fenêtre glissante **approchée par deux seaux** (audit
 /// réseau 2026-07) : l'ancienne fenêtre « réinitialisée en bloc » laissait un
 /// client émettre jusqu'à ~2× `MAX_MESSAGES_PER_SEC` en concentrant un burst à
@@ -307,9 +322,9 @@ impl NetServer {
                         log::warn!("TCP_NODELAY impossible sur {peer} : {e}");
                     }
 
-                    // Garde-fou anti-DoS basique (Sprint 113c) : refusée avant même la
-                    // poignée de main WebSocket, moins de travail gaspillé qu'un refus
-                    // après handshake pour une IP déjà au plafond.
+                    // Garde-fou anti-DoS basique (Sprint 113c) : décidé avant la
+                    // poignée de main WebSocket et hors des compteurs — une
+                    // connexion refusée n'occupe jamais un créneau.
                     {
                         let mut counts = lock_ip_counts(&accept_ip_counts);
                         // Plafond global (audit 2026-07-20, R3) : vérifié
@@ -322,6 +337,8 @@ impl NetServer {
                                 "Connexion refusée depuis {} : serveur plein ({total} connexions, max {max_total_connections})",
                                 peer.ip()
                             );
+                            drop(counts);
+                            tokio::spawn(reject_full(stream, peer));
                             continue;
                         }
                         let n = counts.entry(peer.ip()).or_insert(0);
@@ -330,6 +347,8 @@ impl NetServer {
                                 "Connexion refusée depuis {} : déjà {n} connexion(s) simultanée(s) (max {max_connections_per_ip})",
                                 peer.ip()
                             );
+                            drop(counts);
+                            tokio::spawn(reject_full(stream, peer));
                             continue;
                         }
                         *n += 1;
@@ -438,6 +457,35 @@ impl NetServer {
     }
 }
 
+/// Refus « serveur plein » expliqué (roadmap post-audit UX v2 2026-09-04,
+/// 2.3) : termine la poignée de main WebSocket, envoie `JoinRejected {
+/// SERVER_FULL_REASON }` et ferme — sans attendre le `Join` du client (le
+/// message est compréhensible quel que soit l'état du client, et un client
+/// qui tarde à le pousser ne doit pas retenir la tâche). Le tout borné par
+/// `REJECT_HANDSHAKE_TIMEOUT` : c'est le seul travail qu'une connexion
+/// hors plafond peut coûter au serveur, et il ne compte dans aucun plafond
+/// (`IpGuard` n'est jamais pris) — l'ancienne fermeture muette coûtait un
+/// `accept` de moins, mais laissait le client dans le noir.
+async fn reject_full(stream: TcpStream, peer: SocketAddr) {
+    let explained = tokio::time::timeout(REJECT_HANDSHAKE_TIMEOUT, async {
+        let ws =
+            tokio_tungstenite::accept_async_with_config(stream, Some(server_ws_config())).await?;
+        let (mut sink, _stream) = ws.split();
+        let rejected = protocol::encode(&ServerMsg::JoinRejected {
+            reason: SERVER_FULL_REASON.to_string(),
+        })?;
+        sink.send(Message::Binary(rejected.into())).await?;
+        sink.close().await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+    .await;
+    match explained {
+        Ok(Ok(())) => log::info!("Refus « serveur plein » expliqué à {peer}"),
+        Ok(Err(e)) => log::info!("Refus « serveur plein » non délivré à {peer} : {e}"),
+        Err(_) => log::info!("Refus « serveur plein » non délivré à {peer} : délai dépassé"),
+    }
+}
+
 async fn handle_connection(
     stream: TcpStream,
     peer: SocketAddr,
@@ -494,6 +542,14 @@ async fn handle_connection(
     log::info!("Joueur {id} ({name}) connecté depuis {peer}");
 
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    // Poignée **faible** gardée par la pompe entrante pour répondre aux `Ping`
+    // sur place (roadmap post-audit UX v2 2026-09-04, 2.6) : la sonde de
+    // latence mesure le transport, pas la file du thread principal ni son
+    // tick. Faible, et non un clone : la seule extrémité forte doit rester
+    // celle de `outboxes`, dont le retrait (`NetServer::disconnect`, fin de
+    // session) ferme le canal et donc la connexion — un clone fort ici
+    // aurait maintenu la socket ouverte pour toujours.
+    let pong_tx = out_tx.downgrade();
     lock_outboxes(&outboxes).insert(id, out_tx);
 
     let welcome = protocol::encode(&ServerMsg::Welcome { player_id: id })?;
@@ -554,6 +610,18 @@ async fn handle_connection(
                     break;
                 }
                 if let Ok(client_msg) = protocol::decode::<ClientMsg>(&bytes) {
+                    // Sonde de latence (2.6) : répondue ici, jamais relayée —
+                    // `t` est opaque, recopié tel quel. Un `Pong` qui ne peut
+                    // plus partir (canal fermé) signifie que la connexion se
+                    // termine de toute façon.
+                    if let ClientMsg::Ping { t } = client_msg {
+                        if let Ok(pong) = protocol::encode(&ServerMsg::Pong { t })
+                            && let Some(tx) = pong_tx.upgrade()
+                        {
+                            let _ = tx.send(pong);
+                        }
+                        continue;
+                    }
                     let is_leave = matches!(client_msg, ClientMsg::Leave);
                     match inbound_tx.try_send((id, client_msg)) {
                         Ok(()) => {}
@@ -1153,24 +1221,37 @@ mod tests {
         }
         assert_eq!(server.connected_count(), MAX_CONNECTIONS_PER_IP);
 
-        // La connexion suivante, toujours depuis 127.0.0.1, dépasse le plafond : soit
-        // la poignée de main échoue (TCP fermé avant le handshake WS), soit elle
-        // n'obtient jamais de Welcome — dans les deux cas, le nombre de clients
-        // effectivement connectés côté serveur ne doit pas dépasser le plafond.
-        if let Ok(over_limit) = NetClient::connect(&url, "OverLimit", None) {
-            let got_welcome = over_limit
-                .inbox
-                .recv_timeout(Duration::from_millis(500))
-                .is_ok();
-            assert!(
-                !got_welcome,
-                "une connexion au-delà du plafond par IP ne doit pas recevoir de Welcome"
-            );
-        }
+        // La connexion suivante, toujours depuis 127.0.0.1, dépasse le plafond :
+        // elle reçoit un `JoinRejected` « serveur plein » (roadmap post-audit
+        // UX v2 2026-09-04, 2.3) puis la fermeture — et le nombre de clients
+        // effectivement connectés côté serveur ne dépasse pas le plafond.
+        let over_limit = NetClient::connect(&url, "OverLimit", None).expect("lancement");
+        assert_rejected_as_full(&over_limit);
         assert_eq!(
             server.connected_count(),
             MAX_CONNECTIONS_PER_IP,
             "le plafond par IP ne doit jamais être dépassé côté serveur"
+        );
+    }
+
+    /// Le refus « serveur plein » (2.3) doit arriver en clair, puis la
+    /// connexion se fermer — jamais un `Welcome`, jamais un silence.
+    fn assert_rejected_as_full(client: &NetClient) {
+        match client.inbox.recv_timeout(Duration::from_secs(2)) {
+            Ok(ServerMsg::JoinRejected { reason }) => {
+                assert_eq!(reason, SERVER_FULL_REASON);
+            }
+            Ok(other) => panic!("JoinRejected « serveur plein » attendu, reçu {other:?}"),
+            Err(_) => panic!("un refus hors plafond doit être expliqué au client"),
+        }
+        let mut waited = Duration::ZERO;
+        while client.is_alive() && waited < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += Duration::from_millis(10);
+        }
+        assert!(
+            !client.is_alive(),
+            "la connexion refusée doit être fermée après l'explication"
         );
     }
 
@@ -1203,20 +1284,53 @@ mod tests {
         }
         assert_eq!(server.connected_count(), total_cap);
 
-        if let Ok(over_limit) = NetClient::connect(&url, "OverLimit", None) {
-            let got_welcome = over_limit
-                .inbox
-                .recv_timeout(Duration::from_millis(500))
-                .is_ok();
-            assert!(
-                !got_welcome,
-                "une connexion au-delà du plafond global ne doit pas recevoir de Welcome"
-            );
-        }
+        let over_limit = NetClient::connect(&url, "OverLimit", None).expect("lancement");
+        assert_rejected_as_full(&over_limit);
         assert_eq!(
             server.connected_count(),
             total_cap,
             "le plafond global ne doit jamais être dépassé côté serveur"
+        );
+    }
+
+    /// Sonde de latence (roadmap post-audit UX v2 2026-09-04, 2.6) : un
+    /// `Ping { t }` reçoit un `Pong { t }` identique, répondu par le
+    /// transport — la boucle de jeu (inbox) n'en voit jamais passer.
+    #[test]
+    fn a_ping_is_answered_with_a_pong_carrying_the_same_stamp_without_reaching_the_inbox() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+        let client = NetClient::connect(&url, "Sondeur", None).expect("connexion du client");
+        assert!(matches!(
+            client.inbox.recv_timeout(Duration::from_secs(2)),
+            Ok(ServerMsg::Welcome { .. })
+        ));
+        let (_, join) = server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join relayé");
+        assert!(matches!(join, ClientMsg::Join { .. }));
+
+        client.send(&ClientMsg::Ping { t: 987_654_321 });
+        let t0 = Instant::now();
+        match client.inbox.recv_timeout(Duration::from_secs(2)) {
+            Ok(ServerMsg::Pong { t }) => assert_eq!(t, 987_654_321, "estampille recopiée"),
+            other => panic!("Pong attendu, reçu {other:?}"),
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(1),
+            "la réponse vient du transport, pas d'un tick différé"
+        );
+        assert!(
+            server
+                .inbox
+                .recv_timeout(Duration::from_millis(200))
+                .is_err(),
+            "un Ping ne doit jamais être relayé à la boucle de jeu"
+        );
+        assert!(
+            client.is_alive(),
+            "sonder la latence ne coupe pas la connexion"
         );
     }
 }

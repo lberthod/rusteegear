@@ -17,12 +17,15 @@
 //! boucle de vie entière de la connexion (pas seulement la connexion
 //! initiale).
 
+use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, channel};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::super::protocol::{self, ClientMsg, ServerMsg};
+use super::{CONNECT_TIMEOUT, CONNECT_TIMEOUT_REASON, Handshake};
 
 /// Connexion réseau côté client à un salon RusteeGear.
 pub struct NetClient {
@@ -30,12 +33,22 @@ pub struct NetClient {
     /// `try_recv` une fois par frame).
     pub inbox: Receiver<ServerMsg>,
     outbox: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    /// Verdict de la poignée de main, poussé une seule fois par le thread
+    /// réseau (roadmap post-audit UX v2 2026-09-04, 2.1) — sondé sans bloquer
+    /// par `handshake()`, qui mémorise le résultat dans `handshake`.
+    ready: Receiver<Result<(), String>>,
+    /// Verdict mémorisé une fois reçu (`None` = encore en attente) : le canal
+    /// ne livre son message qu'une fois, l'état doit survivre aux appels
+    /// suivants.
+    handshake: RefCell<Option<Handshake>>,
 }
 
 impl NetClient {
-    /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) et envoie immédiatement un
-    /// `ClientMsg::Join`. Bloquant le temps de la connexion TCP/WebSocket initiale
-    /// (raisonnable au lancement/join d'un salon, pas dans la boucle de rendu).
+    /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) et envoie un
+    /// `ClientMsg::Join` dès la socket ouverte. **Ne bloque pas** (roadmap
+    /// post-audit UX v2 2026-09-04, 2.1) : rend la main dès la connexion
+    /// lancée, cf. `handshake()` pour en suivre l'issue (et `wait_ready` pour
+    /// les outils en ligne de commande qui préfèrent attendre).
     /// `firebase_uid` : `uid` obtenu par `net::firebase::sign_in`/`sign_up`, si le
     /// joueur s'est connecté avant de rejoindre ; `None` pour une partie
     /// locale/anonyme. Rejoint `protocol::DEFAULT_LOBBY` (le salon partagé par
@@ -96,7 +109,24 @@ impl NetClient {
                 }
             };
             runtime.block_on(async move {
-                let (ws, _response) = match tokio_tungstenite::connect_async(&url).await {
+                // Poignée de main bornée (roadmap post-audit UX v2 2026-09-04,
+                // 2.1) : sans ce délai, une IP filtrée (paquets SYN jetés sans
+                // réponse) laissait `connect_async` attendre le timeout TCP du
+                // système, ~75 s — et le thread de rendu avec lui, à l'époque
+                // où `connect` bloquait dessus.
+                let connected = match tokio::time::timeout(
+                    CONNECT_TIMEOUT,
+                    tokio_tungstenite::connect_async(&url),
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(_elapsed) => {
+                        let _ = ready_tx.send(Err(CONNECT_TIMEOUT_REASON.to_string()));
+                        return;
+                    }
+                };
+                let (ws, _response) = match connected {
                     Ok(v) => v,
                     Err(e) => {
                         let mut msg = e.to_string();
@@ -151,16 +181,53 @@ impl NetClient {
             // d'elle-même quand `NetClient` est droppé.
         });
 
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e.into()),
-            Err(_) => return Err("le thread réseau s'est arrêté avant la connexion".into()),
-        }
-
         Ok(Self {
             inbox: in_rx,
             outbox: out_tx,
+            ready: ready_rx,
+            handshake: RefCell::new(None),
         })
+    }
+
+    /// Issue de la poignée de main, sans bloquer (contrat commun natif/web,
+    /// cf. `super`) : `Pending` tant que le thread réseau n'a rien dit,
+    /// puis `Open` ou `Failed(raison)` — mémorisé, les appels suivants
+    /// rendent le même verdict.
+    pub fn handshake(&self) -> Handshake {
+        if let Some(h) = self.handshake.borrow().as_ref() {
+            return h.clone();
+        }
+        let verdict = match self.ready.try_recv() {
+            Ok(Ok(())) => Handshake::Open,
+            Ok(Err(e)) => Handshake::Failed(e),
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Handshake::Pending,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Handshake::Failed("le thread réseau s'est arrêté avant la connexion".to_string())
+            }
+        };
+        *self.handshake.borrow_mut() = Some(verdict.clone());
+        verdict
+    }
+
+    /// Attend (en bloquant, au plus `timeout`) la fin de la poignée de main —
+    /// pour les outils en ligne de commande (`examples/smoke_vps.rs`,
+    /// `load_test_client.rs`) et les tests, qui n'ont pas de boucle de
+    /// rendu à protéger. `Err(raison)` sur échec ou délai dépassé. Jamais
+    /// appelé par le jeu lui-même, qui sonde `handshake()` frame après frame.
+    pub fn wait_ready(&self, timeout: Duration) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match self.handshake() {
+                Handshake::Open => return Ok(()),
+                Handshake::Failed(e) => return Err(e),
+                Handshake::Pending => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(CONNECT_TIMEOUT_REASON.to_string());
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
     }
 
     /// Envoie un message au serveur (non bloquant : mis en file, transmis par le
@@ -194,9 +261,10 @@ mod tls_proof {
     #[test]
     #[ignore]
     fn wss_vps() {
-        let c = super::NetClient::connect("wss://ws.loicberthod.ch", "TestTLS", None);
-        match c {
-            Ok(_) => println!("OK: connexion wss établie"),
+        let c = super::NetClient::connect("wss://ws.loicberthod.ch", "TestTLS", None)
+            .expect("lancement de la connexion");
+        match c.wait_ready(std::time::Duration::from_secs(10)) {
+            Ok(()) => println!("OK: connexion wss établie"),
             Err(e) => panic!("échec wss: {e}"),
         }
     }
@@ -205,11 +273,77 @@ mod tls_proof {
     #[test]
     #[ignore]
     fn ws_308_hint() {
-        let e = match super::NetClient::connect("ws://ws.loicberthod.ch", "TestTLS", None) {
-            Ok(_) => panic!("aurait dû échouer en ws:// (308 attendu)"),
-            Err(e) => e.to_string(),
+        let c = super::NetClient::connect("ws://ws.loicberthod.ch", "TestTLS", None)
+            .expect("lancement de la connexion");
+        let e = match c.wait_ready(std::time::Duration::from_secs(10)) {
+            Ok(()) => panic!("aurait dû échouer en ws:// (308 attendu)"),
+            Err(e) => e,
         };
         println!("erreur: {e}");
         assert!(e.contains("wss://"));
+    }
+}
+
+/// Poignée de main non bloquante et bornée (roadmap post-audit UX v2
+/// 2026-09-04, 2.1) — vrai socket, derrière `net_tests` comme les autres.
+#[cfg(all(test, feature = "net_tests"))]
+mod handshake_tests {
+    use std::time::{Duration, Instant};
+
+    use super::super::{CONNECT_TIMEOUT, Handshake};
+    use super::NetClient;
+
+    /// Un port fermé : `connect` rend la main tout de suite (jamais bloquant),
+    /// et la poignée de main finit `Failed` avec une raison lisible — pas un
+    /// `Err` synchrone, pas un `Open` mensonger.
+    #[test]
+    fn a_refused_connection_fails_the_handshake_without_blocking_connect() {
+        // Port réservé par un listener aussitôt fermé : personne n'écoute.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        let t0 = Instant::now();
+        let c = NetClient::connect(&format!("ws://127.0.0.1:{port}"), "Refusé", None)
+            .expect("le lancement de la connexion ne peut pas échouer");
+        assert!(
+            t0.elapsed() < Duration::from_millis(500),
+            "connect ne doit plus bloquer le temps de la poignée de main"
+        );
+        let verdict = c.wait_ready(Duration::from_secs(5));
+        let Err(reason) = verdict else {
+            panic!("un port fermé doit faire échouer la poignée de main");
+        };
+        assert!(!reason.is_empty());
+        assert!(matches!(c.handshake(), Handshake::Failed(_)));
+        assert!(!c.is_alive(), "le transport est mort après l'échec");
+    }
+
+    /// Un serveur qui accepte le TCP mais ne répond jamais à la poignée de
+    /// main WebSocket (façade gelée, IP filtrée…) : `CONNECT_TIMEOUT` la
+    /// tranche avec `CONNECT_TIMEOUT_REASON`, au lieu des ~75 s du timeout
+    /// TCP système.
+    #[test]
+    fn a_silent_server_is_abandoned_after_the_connect_timeout() {
+        // Listener jamais `accept`é : la connexion TCP aboutit (backlog du
+        // noyau) mais aucune réponse HTTP/WebSocket ne viendra.
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("ws://{}", silent.local_addr().expect("addr"));
+        let c = NetClient::connect(&url, "Patient", None).expect("lancement");
+        assert_eq!(c.handshake(), Handshake::Pending);
+        let t0 = Instant::now();
+        let verdict = c.wait_ready(CONNECT_TIMEOUT + Duration::from_secs(3));
+        let elapsed = t0.elapsed();
+        assert_eq!(
+            verdict,
+            Err(super::CONNECT_TIMEOUT_REASON.to_string()),
+            "délai dépassé attendu"
+        );
+        assert!(
+            elapsed >= CONNECT_TIMEOUT - Duration::from_millis(200)
+                && elapsed < CONNECT_TIMEOUT + Duration::from_secs(2),
+            "le délai doit être celui de CONNECT_TIMEOUT, pas celui du système : {elapsed:?}"
+        );
+        drop(silent);
     }
 }

@@ -719,6 +719,10 @@ fn state_dump(app: &AppState) -> serde_json::Value {
         "selection": app.selection,
         "hud_health": app.hud_health,
         "connected": app.is_connected(),
+        // Roadmap post-audit UX v2 2026-09-04, 2.2/2.6 : l'état structuré de
+        // la connexion et la latence lissée, vérifiables depuis le pont.
+        "net_state": format!("{:?}", app.net_connection_state()),
+        "net_rtt_ms": app.net_rtt_ms(),
         "player": app.player,
         "player_pos": app.player_position().map(|p| [p.x, p.y, p.z]),
         "weapon": app.selected_weapon_label(),

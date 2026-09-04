@@ -313,8 +313,11 @@ impl AppState {
             "net_stats" => {
                 if self.is_connected() {
                     format!(
-                        "connecté · {} joueur(s) réseau · statut : {}",
+                        "connecté · {} joueur(s) réseau · latence {} · statut : {}",
                         self.network_player_count(),
+                        // Roadmap post-audit UX v2 2026-09-04, 2.6.
+                        self.net_rtt_ms()
+                            .map_or("inconnue".to_string(), |ms| format!("{ms} ms")),
                         if self.net_conn.net_status.is_empty() {
                             "ok"
                         } else {

@@ -50,7 +50,12 @@ pub type PlayerId = u32;
 /// `GameEvent` gagne `RoundStart` (le serveur annonce chaque nouvelle manche
 /// d'un salon — jusqu'ici le client n'avait aucun moyen de savoir que la
 /// manche perdue avait été relancée, et gardait sa bannière de défaite
-/// alors qu'il était déjà réapparu vivant).
+/// alors qu'il était déjà réapparu vivant). Toujours v8 (roadmap post-audit
+/// UX v2 2026-09-04, 2.6, **sans nouveau bump** : la v8 n'a pas encore été
+/// déployée sur le VPS, le changement de format est absorbé par le même
+/// déploiement couplé) : `ClientMsg::Ping { t }` / `ServerMsg::Pong { t }`,
+/// la mesure de latence affichée dans la pastille réseau — ajoutés en fin
+/// d'enum, comme le reste.
 pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
@@ -251,6 +256,15 @@ pub enum ClientMsg {
     /// couper la manche de ses alliés encore debout. Ajouté en fin d'enum
     /// (même invariant d'ordre bincode que `Join`, cf. la doc de l'enum).
     RestartRound,
+    /// Sonde de latence (roadmap post-audit UX v2 2026-09-04, 2.6, v8 sans
+    /// bump — cf. `PROTOCOL_VERSION`) : `t` est une horloge **monotone du
+    /// client** en millisecondes (opaque pour le serveur, qui la renvoie
+    /// telle quelle dans `ServerMsg::Pong`) — le client en déduit son
+    /// aller-retour sans aucune synchronisation d'horloges. Envoyée toutes
+    /// les `app::network_client::PING_INTERVAL` une fois le `Welcome` reçu ;
+    /// répondue par le transport (`server_loop::handle_connection`), jamais
+    /// relayée à la boucle de jeu — la mesure ne dépend pas du tick serveur.
+    Ping { t: u64 },
 }
 
 /// Message envoyé par le serveur à un ou plusieurs clients.
@@ -274,6 +288,12 @@ pub enum ServerMsg {
     /// jamais enchaîner sur une reconnexion automatique (le serveur nous
     /// refuserait en boucle), cf. `app::network_client::handle_server_msg`.
     JoinRejected { reason: String },
+    /// Réponse à `ClientMsg::Ping` (roadmap post-audit UX v2 2026-09-04, 2.6,
+    /// v8 sans bump) : `t` recopié tel quel, le client calcule
+    /// `maintenant − t` = aller-retour transport + file d'attente de la
+    /// connexion (pas le tick de jeu, cf. `ClientMsg::Ping`). Fin d'enum,
+    /// même invariant d'ordre que `JoinRejected`.
+    Pong { t: u64 },
 }
 
 /// État des joueurs réseau pour un tick donné : **pas** un delta par client
@@ -621,6 +641,15 @@ mod tests {
     #[test]
     fn client_msg_restart_round_round_trips() {
         round_trip(ClientMsg::RestartRound);
+    }
+
+    /// v8 sans bump (roadmap post-audit UX v2 2026-09-04, 2.6) : sonde de
+    /// latence, `t` opaque renvoyé tel quel.
+    #[test]
+    fn ping_and_pong_round_trip_with_their_stamp() {
+        round_trip(ClientMsg::Ping { t: 0 });
+        round_trip(ClientMsg::Ping { t: u64::MAX });
+        round_trip(ServerMsg::Pong { t: 1_234_567 });
     }
 
     #[test]

@@ -21,6 +21,12 @@ fn main() {
         // prouve le trajet wss:// réel, pas seulement le port en clair.
         .unwrap_or_else(|| "wss://ws.loicberthod.ch".to_string());
     let client = NetClient::connect(&url, "SmokeTest", None).expect("connexion au serveur");
+    // `connect` ne bloque plus (roadmap post-audit UX v2 2026-09-04, 2.1) :
+    // attend la poignée de main pour distinguer « injoignable » d'un serveur
+    // muet.
+    client
+        .wait_ready(Duration::from_secs(8))
+        .expect("poignée de main avec le serveur");
     let mut got_snapshot = false;
     let mut monsters = 0usize;
     let mut fired = false;

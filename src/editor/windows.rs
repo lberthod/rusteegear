@@ -2847,6 +2847,7 @@ pub(super) fn player_welcome_window(
     class: &mut crate::app::multiplayer::PlayerClass,
     room: &mut String,
     server_url: &str,
+    error: Option<&str>,
     locale: crate::app::locale::Locale,
     actions: &mut UiActions,
 ) -> bool {
@@ -2908,6 +2909,12 @@ pub(super) fn player_welcome_window(
                     done = true;
                 }
             });
+            // Raison du retour ici (roadmap post-audit UX v2 2026-09-04, 2.4) :
+            // Join refusé, serveur injoignable, reconnexion abandonnée.
+            if let Some(err) = error {
+                ui.add_space(4.0);
+                ui.colored_label(egui::Color32::from_rgb(240, 115, 106), format!("⚠ {err}"));
+            }
             ui.add_space(6.0);
             ui.small(server_url);
             ui.small(l::controls_hint(locale));

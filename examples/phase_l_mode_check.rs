@@ -18,6 +18,10 @@ fn check_mode(url: &str, objective: RoundObjective, lobby: &str, watch_secs: u64
     println!("\n=== Mode {objective:?} (salon « {lobby} ») ===");
     let client = NetClient::connect_to_lobby(url, "PhaseLBot", None, lobby, 0, objective.to_u8())
         .unwrap_or_else(|e| panic!("connexion échouée pour {objective:?} : {e}"));
+    // `connect_to_lobby` ne bloque plus (roadmap post-audit UX v2 2026-09-04, 2.1).
+    client
+        .wait_ready(Duration::from_secs(5))
+        .unwrap_or_else(|e| panic!("poignée de main échouée pour {objective:?} : {e}"));
 
     let deadline = Instant::now() + Duration::from_secs(watch_secs);
     let mut got_objective_echo = None;

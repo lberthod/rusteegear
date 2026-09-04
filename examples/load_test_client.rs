@@ -67,6 +67,11 @@ fn main() {
         let url = format!("ws://{addr}");
         let client = NetClient::connect(&url, &format!("Bot{i}"), None)
             .unwrap_or_else(|e| panic!("connexion du bot {i} échouée : {e}"));
+        // `connect` ne bloque plus (roadmap post-audit UX v2 2026-09-04, 2.1) :
+        // un banc de charge veut des bots réellement connectés avant de mesurer.
+        client
+            .wait_ready(Duration::from_secs(5))
+            .unwrap_or_else(|e| panic!("poignée de main du bot {i} échouée : {e}"));
         clients.push(client);
     }
 
@@ -117,7 +122,8 @@ fn main() {
                 }
                 // Pas de machine à états de manche dans ce banc de charge
                 // (roadmap post-audit UX v2 2026-09-04, 0.2).
-                ClientMsg::Leave | ClientMsg::RestartRound => {}
+                // Les `Ping` sont répondus par le transport, jamais relayés.
+                ClientMsg::Leave | ClientMsg::RestartRound | ClientMsg::Ping { .. } => {}
             }
         }
 

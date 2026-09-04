@@ -353,6 +353,12 @@ pub fn net_offline(locale: Locale) -> &'static str {
     }
 }
 
+/// Pastille en ligne avec la latence mesurée (roadmap post-audit UX v2
+/// 2026-09-04, 2.6) : « En ligne · 48 ms ».
+pub fn net_online_with_rtt(locale: Locale, rtt_ms: u32) -> String {
+    format!("{} · {rtt_ms} ms", net_online(locale))
+}
+
 /// Titre de la carte plein écran (`player_map_overlay`), ouverte/fermée à la
 /// touche `M` en mode Player.
 pub fn map_title(locale: Locale) -> &'static str {
@@ -565,6 +571,13 @@ mod tests {
         assert_ne!(connect_label(Locale::Fr), connect_label(Locale::En));
         assert_ne!(not_connected(Locale::Fr), not_connected(Locale::En));
         assert_ne!(crash_log_title(Locale::Fr), crash_log_title(Locale::En));
+        assert_ne!(net_online(Locale::Fr), net_online(Locale::En));
+        assert_ne!(net_connecting(Locale::Fr), net_connecting(Locale::En));
+        assert_ne!(net_offline(Locale::Fr), net_offline(Locale::En));
+        assert_ne!(
+            net_online_with_rtt(Locale::Fr, 48),
+            net_online_with_rtt(Locale::En, 48)
+        );
         for section in SettingsSection::ALL {
             assert_ne!(
                 settings_heading(Locale::Fr, section),
@@ -604,6 +617,8 @@ mod tests {
         assert!(kills_and_assists(Locale::En, 42, 7).contains("42"));
         assert!(wave(Locale::En, 3, 7).contains('3') && wave(Locale::En, 3, 7).contains('7'));
         assert!(remaining(Locale::En, 5).contains('5'));
+        assert!(net_online_with_rtt(Locale::Fr, 48).contains("48 ms"));
+        assert!(net_online_with_rtt(Locale::En, 48).contains("48 ms"));
     }
 
     /// Sprint 2 (`sprint10audit.md`) : « Encerclé/Surrounded » (GDD §16.5) ne

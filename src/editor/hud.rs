@@ -1246,7 +1246,11 @@ pub(super) fn net_status_pill(
 }
 
 /// Bannière temporaire d'événement réseau (perte, reconnexion, échec) —
-/// même roadmap 2.2 ; `alpha` ∈ [0, 1] décroissant.
+/// même roadmap 2.2 ; `alpha` ∈ [0, 1] décroissant. Le texte est replié à
+/// 90 % de la largeur de la zone de jeu et la plaque épouse le texte replié
+/// (roadmap post-audit UX v2 2026-09-04, 2.5) : une raison de refus longue
+/// (« version de protocole … mettez le jeu à jour ») débordait des deux
+/// côtés d'un écran de téléphone en une seule ligne.
 pub(super) fn net_event_banner(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -1254,7 +1258,7 @@ pub(super) fn net_event_banner(
     alpha: f32,
     scale: f32,
 ) {
-    use egui::{Align2, Color32, FontId};
+    use egui::{Color32, FontId};
     let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -1262,25 +1266,25 @@ pub(super) fn net_event_banner(
     ));
     let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
     let font = FontId::proportional(16.0 * scale);
-    let galley = painter.layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE);
-    let w = galley.size().x + 32.0 * scale;
-    let h = 30.0 * scale;
+    let pad_x = 16.0 * scale;
+    let pad_y = 7.0 * scale;
+    let text_color = Color32::from_rgba_unmultiplied(255, 220, 160, a);
+    let max_text_w = (area.width() * 0.9 - 2.0 * pad_x).max(40.0);
+    let galley = painter.layout(text.to_string(), font, text_color, max_text_w);
+    let size = galley.size() + egui::vec2(2.0 * pad_x, 2.0 * pad_y);
     let rect = egui::Rect::from_center_size(
-        egui::pos2(area.center().x, area.top() + 60.0 * scale),
-        egui::vec2(w, h),
+        egui::pos2(
+            area.center().x,
+            area.top() + 60.0 * scale + (size.y - 30.0 * scale) / 2.0,
+        ),
+        size,
     );
     painter.rect_filled(
         rect,
         6.0,
         Color32::from_rgba_unmultiplied(40, 30, 20, a.saturating_sub(40)),
     );
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        font,
-        Color32::from_rgba_unmultiplied(255, 220, 160, a),
-    );
+    painter.galley(rect.min + egui::vec2(pad_x, pad_y), galley, text_color);
 }
 
 /// Bouton tactile « 🔄 Rejouer » centré sous la bannière de fin de partie.
