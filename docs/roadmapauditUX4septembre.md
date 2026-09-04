@@ -24,16 +24,17 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 - [x] 0.2 wasm-opt avec features explicites (bulk-memory, sign-ext, mutable-globals, nontrapping-fptoint) ; étape de test de chargement du `.wasm` dans `pages.yml` (W-01)
 - [x] 0.3 `packaging/web/index.html` : barre de chargement, test `navigator.gpu`, message d'erreur, lien `.dmg` (W-02) ; bonus : plein écran et rendu qui suit la fenêtre (W-03, KNOWN_LIMITATIONS mis à jour)
 
-## Vague 1 — Un éditeur qui parle (M, 1 semaine)
+## Vague 1 — Un éditeur qui parle (M, 1 semaine) — fait `2a84436`
 
-- [ ] 1.1 Enregistrer vise le projet ouvert ; raccourcis Cmd+S / Cmd+Maj+S / Cmd+O / Cmd+N (E-01, O-03)
-- [ ] 1.2 Toasts + compteur d'erreurs cliquable dans la barre d'état, alimentés par `log_buffer` (E-02)
-- [ ] 1.3 Badge d'erreur Lua sur l'objet (hiérarchie) et sous le champ Script (inspecteur), dédupliqué (E-02)
-- [ ] 1.4 Titre de fenêtre « Projet — scène • » + chemin dans la barre d'état (E-03)
-- [ ] 1.5 Garde « modifications non sauvegardées » sur Ouvrir, Ouvrir un projet, Démos, Nouveau projet (E-04)
-- [ ] 1.6 Inspecteur teinté pendant Play + mention « non conservé après Stop » (E-07)
-- [ ] 1.7 Démarrage sur le dernier projet ouvert (ou écran d'accueil Récents / Premier jeu / Hameau / Nouveau) (O-05)
-- [ ] 1.8 Modale d'autosave : date + delta au lieu du chemin brut (O-05)
+- [x] 1.1 Enregistrer vise le projet ouvert ; raccourcis Cmd+S / Cmd+Maj+S / Cmd+O / Cmd+N (E-01, O-03)
+- [x] 1.2 Toasts + compteur d'erreurs cliquable dans la barre d'état, alimentés par `log_buffer` (E-02)
+- [x] 1.3 Badge d'erreur Lua sur l'objet (hiérarchie) et sous le champ Script (inspecteur), dédupliqué (E-02)
+- [x] 1.4 Titre de fenêtre « Projet — scène • » + chemin dans la barre d'état (E-03)
+- [x] 1.5 Garde « modifications non sauvegardées » sur Ouvrir, Ouvrir un projet, Démos, Nouveau projet (E-04)
+- [x] 1.6 Inspecteur teinté pendant Play + mention « non conservé après Stop » (E-07)
+- [x] 1.7 Démarrage sur le dernier projet ouvert (ou écran d'accueil Récents / Premier jeu / Hameau / Nouveau) (O-05)
+- [x] 1.8 Modale d'autosave : date + delta au lieu du chemin brut (O-05)
+- [x] 1.9 (découvert en route) `examples/broken_scene` faisait planter l'éditeur (« buffer slices can not be empty ») ; `local_aabb` inondait la Console — corrigés dans le même commit
 
 ## Vague 2 — Un joueur qui sait où il est (L, 2 semaines)
 
