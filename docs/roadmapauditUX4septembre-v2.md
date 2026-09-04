@@ -37,6 +37,18 @@ dans la source avec la référence.
 - [x] 0.2 « Rejouer » en ligne demande une nouvelle manche au serveur au lieu de déconnecter ; la bannière de défaite disparaît à la reconnexion (S-01) — `ClientMsg::RestartRound` (PROTOCOL_VERSION 7 → 8, déploiement VPS + clients à coupler)
 - [x] 0.3 Vérification : `pilot net connect wss://ws.loicberthod.ch Bot` puis `pilot state` à 30 s doit donner une manche en cours et une vie non nulle ; à rejouer avec la démo web ouverte — couvert par 4 tests `net_tests` serveur + 4 tests client ; la vérification sur le serveur public reste à faire après le redéploiement du VPS
 
+## Vague 0 bis — Manche jouable en production (M, même jour) — fait `6cd0ab1`
+
+Constaté après le redéploiement du VPS avec la vague 0 : « Manche perdue »
+toujours immédiate, connexion qui oscille, serveur à 73 % CPU. Mesuré avec
+un serveur local et un client piloté (`pilot net connect` + `pilot state`).
+
+- [x] 0b.1 La manche était décidée « défaite » ~6 s après l'arrivée d'un joueur idle : chasseurs et créatures mordeuses du hameau campent le point d'apparition. Grâce d'apparition de 5 s (`SPAWN_GRACE_S`, réseau et solo, contact + morsures + `damage()` Lua) et dégagement de la zone d'apparition à chaque manche côté serveur (`AppState::clear_spawn_area`, chasseurs repoussés à 12 m) — la zone n'est pas dégagée en solo, les scènes scriptées placent leurs monstres à dessein
+- [x] 0b.2 Chaque relance rechargeait toute la scène embarquée (décompression + 482 modèles) : plusieurs secondes de silence sur le VPS, au-delà du délai toléré par les clients (8 s), donc déconnexions en boucle. Prototype de scène en cache (`Scene::embedded_player_cached`, `Clone` sur `Scene`), relance en millisecondes
+- [x] 0b.3 CI : stub réseau iOS (`displayed_health`), `has_cmd` Windows, journal de l'éditeur publié par le job Linux même quand le pont ne répond pas (cause encore inconnue au moment du commit, attente portée à 160 s)
+- [ ] 0b.4 Le client considère la connexion perdue quand sa boucle ne tourne plus (fenêtre occultée sous macOS, onglet en arrière-plan) : l'état de la pastille dérive de la fraîcheur des messages. Comportement à revoir (maintenir le réseau hors rendu, ou afficher « en pause » plutôt que « hors ligne ») — hors périmètre de cette journée
+
+
 ## Vague 1 — Un mode joueur qui tient debout (M, 1 semaine) — fait `d8cda9a`
 
 - [x] 1.1 Construire l'overlay joueur indépendamment de `mobile.any()` ; ne dessiner stick et boutons que si un événement tactile a été reçu (ou `cfg` mobile) ; l'aide choisit la section Tactile / Clavier sur le même critère (J-01)
@@ -77,15 +89,15 @@ dans la source avec la référence.
 - [x] 4.4 Chaînes joueur localisées (Inventaire, Sac, Joueurs, Paramètres, Journal de crash) ; légende de la carte sans « M pour fermer » au tactile ; unités sur 💀 🏆 🤝 (`src/editor/hud.rs:348-503`, `src/app/locale.rs:339-347`)
 - [x] 4.5 Docs : Test A de `TEST_SCENARIO.md` réalisable sans clone (Premier jeu embarqué, étape 10 « Test B ») ; tag de release après la vague 5 (la seule release est `v0.1.0-alpha.3` du 19 juillet, antérieure à toutes les vagues) ; KNOWN_LIMITATIONS à jour (undo inspecteur, écran allumé, spectateur, date) ; section README « Créer son premier jeu » sans le stub `guide-createur` ; référence API Lua complète (emit, on_event, find_tag, save, debug.line, reverb, raycast, overlap_sphere) — le tag de release n'est pas créé (à faire au moment du playtest)
 
-## Vague 5 — Tactile réel (L, à tester sur appareil)
+## Vague 5 — Tactile réel (L, à tester sur appareil) — fait `e007e7d` (non vérifié sur appareil)
 
-- [ ] 5.1 Multi-touch : stick + orbite, stick + Feu simultanés (`src/lib.rs:586` désactive `handle_touch` en mode joueur ; egui ne suit qu'un pointeur)
-- [ ] 5.2 Stick flottant, zone morte 12 %, rayon relatif à l'écran, suivi du doigt hors du cercle (`src/editor/hud.rs:1422-1452`)
-- [ ] 5.3 Boutons ⏸ / Carte / ? à 44 pt minimum ; carte plein écran fermable au tactile (`Order::Foreground` au-dessus des boutons) ; pincer pour zoomer (`hud.rs:1170-1183`, `windows.rs:660-683`)
-- [ ] 5.4 Safe area : insets système réels et appliqués à tout le HUD, pas seulement au stick (`hud.rs:1349-1354,1166,1221`) ; orientation et barre d'état déclarées dans l'`Info.plist` iOS (`packaging/build_ios.sh`)
-- [ ] 5.5 Volume par défaut 0,6, touche et bouton muet ; police avec les émojis utilisés ou remplacement par du texte (`src/app/settings.rs:222`, `hud.rs:1175`)
-- [ ] 5.6 Souris en mode joueur : sensibilité appliquée à `touch_look`, glissé plein écran, curseur capturé pendant le jeu (`src/app/picking.rs:299`, `src/app/simulation.rs:1213`)
-- [ ] 5.7 Doc de `dual_stick` réécrite (elle décrit encore le stick bridé à un axe) (`src/scene/mobile.rs:21-29`)
+- [x] 5.1 Multi-touch : stick + orbite, stick + Feu simultanés (`src/lib.rs:586` désactive `handle_touch` en mode joueur ; egui ne suit qu'un pointeur) — rôles par doigt (`src/app/touch.rs`, 10 tests) ; egui ne voit toujours qu'un doigt pour ses fenêtres
+- [x] 5.2 Stick flottant, zone morte 12 %, rayon relatif à l'écran, suivi du doigt hors du cercle (`src/editor/hud.rs:1422-1452`)
+- [x] 5.3 Boutons ⏸ / Carte / ? à 44 pt minimum ; carte plein écran fermable au tactile (`Order::Foreground` au-dessus des boutons) ; pincer pour zoomer (`hud.rs:1170-1183`, `windows.rs:660-683`)
+- [x] 5.4 Safe area : insets système réels et appliqués à tout le HUD, pas seulement au stick (`hud.rs:1349-1354,1166,1221`) ; orientation et barre d'état déclarées dans l'`Info.plist` iOS (`packaging/build_ios.sh`) — insets iOS/Android/web lus mais non vérifiés sur appareil
+- [x] 5.5 Volume par défaut 0,6, touche et bouton muet ; police avec les émojis utilisés ou remplacement par du texte (`src/app/settings.rs:222`, `hud.rs:1175`) — glyphes non couverts remplacés (🧟→👹, 🟢→💚, 🩹→📝, 🤝→🛡), test de couverture de la fonte
+- [x] 5.6 Souris en mode joueur : sensibilité appliquée à `touch_look`, glissé plein écran, curseur capturé pendant le jeu (`src/app/picking.rs:299`, `src/app/simulation.rs:1213`) — pointer lock web et capture du curseur non vérifiés sur appareil
+- [x] 5.7 Doc de `dual_stick` réécrite (elle décrit encore le stick bridé à un axe) (`src/scene/mobile.rs:21-29`)
 
 ## Vague 6 — Confort éditeur (M, 1 semaine) — fait `21cfa21`
 
