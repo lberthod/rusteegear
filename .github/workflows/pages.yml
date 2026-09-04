@@ -45,13 +45,15 @@ jobs:
 
       # Mêmes dépendances système que ci.yml (winit/wgpu/egui) : `cargo doc`
       # compile les dépendances pour extraire leurs signatures, donc a besoin
-      # des mêmes libs natives que `cargo build`.
+      # des mêmes libs natives que `cargo build` — libdbus-1-dev compris depuis
+      # le `cargo update` du 3 septembre (ci.yml l'avait, pas ce fichier :
+      # première exécution après le correctif de toolchain, roadmap UX 0.1).
       - name: Dépendances système
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libx11-dev libxkbcommon-dev libwayland-dev \
-            libasound2-dev libudev-dev pkg-config binaryen
+            libasound2-dev libudev-dev libdbus-1-dev pkg-config binaryen
 
       # Version EXACTE de la crate `wasm-bindgen` du lockfile — le CLI doit
       # matcher, cf. packaging/build_web.sh.
