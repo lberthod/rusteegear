@@ -877,7 +877,7 @@ impl AppState {
             // jeu 3ᵉ personne (plongée douce + recul confortable) si aucune caméra de jeu
             // n'est définie.
             if self.scene.camera_follow
-                && let Some(p) = self.player_position()
+                && let Some(p) = self.camera_focus_position()
             {
                 self.camera.target = p + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0);
                 if self.scene.game_camera.is_none() {
@@ -1139,7 +1139,7 @@ impl AppState {
         // rivée au joueur malgré le glisser de souris.
         if self.scene.camera_follow
             && !self.gizmo_mode.is_nav()
-            && let Some(p) = self.player_position()
+            && let Some(p) = self.camera_focus_position()
         {
             // Forme exponentielle `1 - e^(-k·dt)` plutôt que `k·dt` borné : le taux de
             // rattrapage devient indépendant du framerate (deux frames à 120 Hz lissent

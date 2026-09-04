@@ -791,6 +791,10 @@ pub struct AppState {
     /// l'éditeur ouvre un menu contextuel à la position du pointeur à la
     /// frame suivante. Consommé par `gfx::renderer::frame`.
     pub context_menu_request: bool,
+    /// Allié suivi par la caméra quand on est vaincu (roadmap post-audit UX
+    /// 2026-09-04, 5.6) : index dans la liste triée des alliés vivants, la
+    /// touche de saut passe au suivant — cf. `spectate_target`.
+    pub spectate_cursor: usize,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1392,6 +1396,7 @@ impl AppState {
             welcome_pending: false,
             ui_edit_active: false,
             context_menu_request: false,
+            spectate_cursor: 0,
         }
     }
 
@@ -1668,6 +1673,44 @@ impl AppState {
     /// de pilotage (`crate::pilot`, verbe `player`).
     pub fn player_position(&self) -> Option<Vec3> {
         self.player_object().map(|o| o.transform.position)
+    }
+
+    /// Allié vivant que la caméra suit quand on est vaincu en ligne
+    /// (roadmap post-audit UX 2026-09-04, 5.6) : `(nom, position)`, choisi par
+    /// `spectate_cursor` dans la liste des fantômes réseau encore en vie,
+    /// triée par nom pour rester stable d'un snapshot à l'autre. `None` hors
+    /// défaite ou sans allié vivant — la caméra reste alors sur le joueur.
+    pub fn spectate_target(&self) -> Option<(String, Vec3)> {
+        if !self.is_locally_defeated() {
+            return None;
+        }
+        let mut alive: Vec<(&String, usize)> = self
+            .net_conn
+            .remote_players
+            .values()
+            .filter(|rp| rp.health.is_none_or(|h| h > 0.0))
+            .map(|rp| (&rp.name, rp.scene_index))
+            .collect();
+        if alive.is_empty() {
+            return None;
+        }
+        alive.sort_by(|a, b| a.0.cmp(b.0));
+        let (name, idx) = alive[self.spectate_cursor % alive.len()];
+        let pos = self.scene.objects.get(idx)?.transform.position;
+        Some((name.clone(), pos))
+    }
+
+    /// Passe à l'allié suivant (touche de saut quand on est vaincu).
+    pub fn cycle_spectate(&mut self) {
+        self.spectate_cursor = self.spectate_cursor.wrapping_add(1);
+    }
+
+    /// Point que la caméra de suivi vise : l'allié spectaté si vaincu, sinon
+    /// le joueur.
+    pub fn camera_focus_position(&self) -> Option<Vec3> {
+        self.spectate_target()
+            .map(|(_, p)| p)
+            .or_else(|| self.player_position())
     }
 
     /// État live du cycle de vie du toucher pour un objet (touch_started,

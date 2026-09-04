@@ -288,6 +288,7 @@ impl Renderer {
                     .nearest_downed_ally_position()
                     .map(|p| (app.camera.view_proj(), p));
                 let minimap = app.minimap_data();
+                let spectating = app.spectate_target().map(|(n, _)| n);
                 let (output, actions) = editor.run_player_overlay(
                     window,
                     &app.scene,
@@ -327,6 +328,7 @@ impl Renderer {
                     &minimap,
                     app.locale,
                     &mut app.welcome_pending,
+                    spectating.as_deref(),
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -346,6 +348,7 @@ impl Renderer {
             let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
             let save_target = app.save_target();
             let shortcut = app.pending_shortcut.take();
+            let spectating = app.spectate_target().map(|(n, _)| n);
             let status = crate::editor::StatusInfo {
                 fps: app.fps(),
                 backend: &self.backend,
@@ -440,6 +443,7 @@ impl Renderer {
                 app.confirm_close_project,
                 app.pending_autosave_recovery.as_deref(),
                 shortcut,
+                spectating.as_deref(),
             );
             apply_editor_actions(
                 app,

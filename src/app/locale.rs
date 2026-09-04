@@ -202,6 +202,14 @@ pub fn restart_button_label(locale: Locale, won: bool) -> &'static str {
     }
 }
 
+/// Caméra spectateur sur un allié (roadmap 5.6).
+pub fn spectating(locale: Locale, name: &str) -> String {
+    match locale {
+        Locale::Fr => format!("Spectateur : {name} — Espace pour changer d'allié"),
+        Locale::En => format!("Spectating: {name} — Space to switch ally"),
+    }
+}
+
 /// Titre du menu pause (Phase J, `sprintreflecion.md`), ouvert à la demande
 /// (Échap) pendant une partie — distinct des bannières de fin de manche.
 pub fn pause_title(locale: Locale) -> &'static str {

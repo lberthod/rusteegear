@@ -661,6 +661,11 @@ impl ApplicationHandler for App {
                         // Menu pause (Phase J de `sprintreflecion.md`) : sans effet
                         // hors Play (garde dans `toggle_pause`).
                         c if c == self.state.keys.pause => self.state.toggle_pause(),
+                        // Vaincu : la touche de saut passe à l'allié suivant en
+                        // caméra spectateur (roadmap post-audit UX 2026-09-04, 5.6).
+                        c if c == self.state.keys.jump && self.state.is_locally_defeated() => {
+                            self.state.cycle_spectate();
+                        }
                         // Aide en jeu (roadmap post-audit UX 2026-09-04, 5.5).
                         KeyCode::F1 => {
                             if let Some(r) = self.renderer.as_mut() {
@@ -999,6 +1004,17 @@ pub fn run() {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
+    // iOS : écran maintenu allumé pendant la partie (roadmap post-audit UX
+    // 2026-09-04, 2.6) — au stick tactile, le système ne voit pas d'activité
+    // et éteignait l'écran en pleine manche.
+    #[cfg(target_os = "ios")]
+    if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        // SAFETY : appel UIKit sur le thread principal (`MainThreadMarker`),
+        // avant tout événement de la boucle.
+        unsafe {
+            objc2_ui_kit::UIApplication::sharedApplication(mtm).setIdleTimerDisabled(true);
+        }
+    }
     // Mobile = mode Player (plein écran, sans éditeur) ; desktop via --player ou
     // via la feature `player_build` (utilisée pour exporter un .app jouable).
     let player = std::env::args().any(|a| a == "--player")

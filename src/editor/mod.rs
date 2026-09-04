@@ -1084,6 +1084,8 @@ impl Editor {
         locale: crate::app::locale::Locale,
         // Écran d'accueil à afficher (`AppState::welcome_pending`, roadmap 2.1).
         welcome_pending: &mut bool,
+        // Allié suivi en caméra spectateur (`AppState::spectate_target`, roadmap 5.6).
+        spectating: Option<&str>,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx
@@ -1234,7 +1236,7 @@ impl Editor {
             } else if lost {
                 lose_banner(ctx, area, locale, hud_scale);
             } else if defeated {
-                defeated_banner(ctx, area, death_cause, locale, hud_scale);
+                defeated_banner(ctx, area, death_cause, locale, hud_scale, spectating);
             } else if paused {
                 // Menu pause (Phase J, `sprintreflecion.md`) : exclusif avec les
                 // bannières de fin de manche ci-dessus, jamais simultané en pratique
@@ -1429,6 +1431,7 @@ impl Editor {
         pending_autosave_recovery: Option<&std::path::Path>,
         // Raccourci de fichier reçu au clavier (`AppState::pending_shortcut`).
         shortcut: Option<crate::app::EditorShortcut>,
+        spectating: Option<&str>,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         // Échelle de l'interface (Paramètres › Accessibilité, roadmap 5.3).
@@ -1562,6 +1565,7 @@ impl Editor {
                 local_server_addr.clone(),
                 toasts,
                 pending_switch_label,
+                spectating,
             );
         });
 
@@ -1783,6 +1787,8 @@ fn build_ui(
     toasts: &mut toasts::Toasts,
     // Changement de scène en attente derrière la modale (`SceneSwitch::label`).
     pending_switch_label: Option<&'static str>,
+    // Allié suivi en caméra spectateur (roadmap 5.6).
+    spectating: Option<&str>,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -2115,6 +2121,7 @@ fn build_ui(
             death_cause,
             wave_banner_flash,
             wave_banner_wave,
+            spectating,
         );
     }
     end_of_round_and_hud_widgets(
@@ -3318,6 +3325,7 @@ fn play_overlays(
     death_cause: Option<crate::net::protocol::DeathCause>,
     wave_banner_flash: f32,
     wave_banner_wave: u32,
+    spectating: Option<&str>,
 ) {
     // Carte (mini-carte permanente + plein écran sur `M`) : les deux vues
     // vivent dans `editor/windows.rs` et n'étaient jusqu'ici câblées que dans
@@ -3363,7 +3371,14 @@ fn play_overlays(
     } else if lost {
         lose_banner(root.ctx(), play_rect, locale, hud_scale);
     } else if defeated {
-        defeated_banner(root.ctx(), play_rect, death_cause, locale, hud_scale);
+        defeated_banner(
+            root.ctx(),
+            play_rect,
+            death_cause,
+            locale,
+            hud_scale,
+            spectating,
+        );
     }
     if wave_banner_flash > 0.0 {
         wave_start_banner(

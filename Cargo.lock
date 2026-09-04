@@ -2106,6 +2106,8 @@ dependencies = [
  "log",
  "mlua",
  "notify",
+ "objc2-foundation 0.2.2",
+ "objc2-ui-kit 0.2.2",
  "pollster",
  "rapier3d",
  "rfd",

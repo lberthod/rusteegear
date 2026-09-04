@@ -895,6 +895,7 @@ pub(super) fn defeated_banner(
     cause: Option<crate::net::protocol::DeathCause>,
     locale: crate::app::locale::Locale,
     scale: f32,
+    spectating: Option<&str>,
 ) {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
@@ -931,6 +932,16 @@ pub(super) fn defeated_banner(
         FontId::proportional(15.0 * scale),
         Color32::from_white_alpha(200),
     );
+    // Caméra spectateur (roadmap 5.6) : qui l'on suit, et comment changer.
+    if let Some(name) = spectating {
+        painter.text(
+            egui::pos2(area.center().x, waiting_y + 24.0 * scale),
+            Align2::CENTER_CENTER,
+            crate::app::locale::spectating(locale, name),
+            FontId::proportional(14.0 * scale),
+            Color32::from_rgb(160, 200, 255),
+        );
+    }
 }
 
 /// Bannière brève (haut de l'écran, ne recouvre jamais le réticule — GDD

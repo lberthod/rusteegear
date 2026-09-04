@@ -201,6 +201,13 @@ egui-winit = "0.34.3"
 # repli `#[cfg]` sans compression dans `copy_to_bundle` pour cette cible.
 zstd = "0.13.3"
 
+# iOS : écran maintenu allumé pendant la partie (`UIApplication.idleTimerDisabled`,
+# roadmap post-audit UX 2026-09-04, 2.6) — mêmes versions que celles que winit
+# 0.30 tire déjà (objc2 0.5 / objc2-ui-kit 0.2), donc aucune crate nouvelle.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-foundation = "0.2"
+objc2-ui-kit = { version = "0.2.2", features = ["UIApplication", "UIResponder"] }
+
 # Android : winit a besoin d'un backend android-activity + logger natif.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30.13", features = ["android-native-activity"] }
