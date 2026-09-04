@@ -1230,49 +1230,107 @@ pub(super) fn pause_menu(
     choice
 }
 
-/// Petits boutons ⏸ / Carte / ? en haut à droite (roadmap post-audit UX
+/// Résultat de `mobile_top_buttons` : clics de la frame et rectangle réel
+/// du groupe, mesuré (roadmap post-audit UX v2 2026-09-04, 5.4) pour que la
+/// pastille réseau se place à sa gauche sans largeur codée en dur.
+#[derive(Clone, Copy)]
+pub(super) struct TopButtons {
+    pub pause: bool,
+    pub map: bool,
+    pub help: bool,
+    pub mute: bool,
+    pub rect: egui::Rect,
+}
+
+/// Côté minimal d'un bouton tactile (5.3) : 44 pt, la cible recommandée
+/// par Apple et Google.
+pub(super) const TOUCH_TARGET: f32 = 44.0;
+
+/// Boutons ⏸ / 🔇 / Carte / ? en haut à droite (roadmap post-audit UX
 /// 2026-09-04, 2.5 et 5.5) : sans clavier, ni Échap, ni M, ni F1 n'existent —
 /// et à la souris ils restent pratiques, donc dessinés sur desktop aussi
 /// (roadmap v2 1.1). Pendant la pause (`paused`), seul ⏸ reste (roadmap v2
-/// 1.5) : Carte et Aide passent par le menu. Renvoie `(pause_clicked,
-/// map_clicked, help_clicked)`.
+/// 1.5) : Carte et Aide passent par le menu.
+///
+/// Roadmap post-audit UX v2 2026-09-04, 5.3 : 44 × 44 pt minimum, espacés de
+/// 8 ; `above_map` les remonte en `Order::Tooltip`, au-dessus de la carte
+/// plein écran (`Order::Foreground`, qui les recouvrait — la carte ne se
+/// fermait plus au tactile). 5.5 : 🔇/🔊 coupe ou remet le son (touche `0`).
 pub(super) fn mobile_top_buttons(
     ctx: &egui::Context,
     area: egui::Rect,
     paused: bool,
-) -> (bool, bool, bool) {
-    let mut pause = false;
-    let mut map = false;
-    let mut help = false;
-    egui::Area::new("mobile_top_buttons".into())
-        .fixed_pos(egui::pos2(area.right() - 8.0 - 136.0, area.top() + 12.0))
+    muted: bool,
+    above_map: bool,
+    locale: crate::app::locale::Locale,
+) -> TopButtons {
+    let mut out = TopButtons {
+        pause: false,
+        map: false,
+        help: false,
+        mute: false,
+        rect: egui::Rect::ZERO,
+    };
+    let sq = egui::vec2(TOUCH_TARGET, TOUCH_TARGET);
+    let map_w = 64.0;
+    let spacing = 8.0;
+    // Largeur totale connue d'avance : le groupe est aligné à droite.
+    let width = if paused {
+        TOUCH_TARGET
+    } else {
+        TOUCH_TARGET * 3.0 + map_w + spacing * 3.0
+    };
+    let order = if above_map {
+        egui::Order::Tooltip
+    } else {
+        egui::Order::Middle
+    };
+    let resp = egui::Area::new("mobile_top_buttons".into())
+        .order(order)
+        .fixed_pos(egui::pos2(area.right() - 8.0 - width, area.top() + 8.0))
         .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(spacing, spacing);
             ui.horizontal(|ui| {
                 if ui
-                    .add_sized([36.0, 32.0], egui::Button::new("⏸").corner_radius(8.0))
+                    .add_sized(sq, egui::Button::new("⏸").corner_radius(8.0))
                     .clicked()
                 {
-                    pause = true;
+                    out.pause = true;
                 }
                 if paused {
                     return;
                 }
-                // Texte plutôt que 🗺 : le glyphe manque à la fonte embarquée.
+                // 🔇 (U+1F507) et 🔊 (U+1F50A) sont dans les fontes emoji
+                // embarquées d'egui (cf. `player_hud_glyphs_are_covered`).
+                let glyph = if muted { "🔇" } else { "🔊" };
                 if ui
-                    .add_sized([52.0, 32.0], egui::Button::new("Carte").corner_radius(8.0))
+                    .add_sized(sq, egui::Button::new(glyph).corner_radius(8.0))
+                    .on_hover_text(crate::app::locale::mute_tooltip(locale, muted))
                     .clicked()
                 {
-                    map = true;
+                    out.mute = true;
+                }
+                // « Carte » en toutes lettres : 🗺 est couvert par les fontes
+                // d'egui, mais le mot reste plus clair qu'un pictogramme.
+                if ui
+                    .add_sized(
+                        [map_w, TOUCH_TARGET],
+                        egui::Button::new("Carte").corner_radius(8.0),
+                    )
+                    .clicked()
+                {
+                    out.map = true;
                 }
                 if ui
-                    .add_sized([32.0, 32.0], egui::Button::new("?").corner_radius(8.0))
+                    .add_sized(sq, egui::Button::new("?").corner_radius(8.0))
                     .clicked()
                 {
-                    help = true;
+                    out.help = true;
                 }
             });
         });
-    (pause, map, help)
+    out.rect = resp.response.rect;
+    out
 }
 
 /// Classement déplié tant que Tab est maintenue (roadmap post-audit UX v2
@@ -1320,6 +1378,9 @@ pub(super) fn net_status_pill(
     kind: u8,
     label: &str,
     scale: f32,
+    // Bord gauche réel du groupe ⏸/🔇/Carte/? (`TopButtons::rect`), roadmap
+    // post-audit UX v2 2026-09-04, 5.4 — la largeur n'est plus codée en dur.
+    buttons_left: f32,
 ) {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
@@ -1336,13 +1397,11 @@ pub(super) fn net_status_pill(
     let galley = painter.layout_no_wrap(label.to_string(), font.clone(), Color32::WHITE);
     let w = galley.size().x + 26.0 * scale;
     let h = 20.0 * scale;
-    // À gauche des boutons ⏸/Carte/? (haut-droite, 136 pt de large), sur la
-    // même ligne — la fenêtre 🌐 repliée occupe y ≈ 56.
+    // À gauche du groupe ⏸/🔇/Carte/? mesuré, centrée sur sa ligne de
+    // 44 pt (roadmap v2 5.3/5.4) ; jamais plus à gauche que la zone de jeu.
+    let left = (buttons_left.min(area.right()) - 10.0 - w).max(area.left() + 8.0);
     let rect = egui::Rect::from_min_size(
-        egui::pos2(
-            area.right() - 8.0 - 136.0 - 10.0 - w,
-            area.top() + 12.0 + 6.0,
-        ),
+        egui::pos2(left, area.top() + 8.0 + (TOUCH_TARGET - h) / 2.0),
         egui::vec2(w, h),
     );
     painter.rect_filled(rect, h / 2.0, Color32::from_black_alpha(140));
@@ -1453,215 +1512,192 @@ pub(super) fn touch_feedback(ctx: &egui::Context, area: egui::Rect) {
     painter.circle_filled(p, 7.0, Color32::from_white_alpha(90));
 }
 
-/// Dessine les contrôles tactiles (joystick virtuel + boutons) à l'intérieur de
-/// `area` et met à jour l'état d'entrée lu par les scripts Lua.
+/// Une fenêtre/zone egui (menu pause, Paramètres, carte, boutons du haut…)
+/// occupe-t-elle ce point ? Les couches `Background` (aucune ici depuis la
+/// roadmap v2 5.1) et les peintres de calque du HUD ne comptent pas : seule
+/// une vraie `Area` interactive prend le doigt au jeu.
+pub(crate) fn egui_owns_point(ctx: &egui::Context, p: egui::Pos2) -> bool {
+    ctx.layer_id_at(p)
+        .is_some_and(|l| l.order != egui::Order::Background)
+}
+
+/// Dessine les contrôles tactiles (stick flottant, pavé, boutons) à l'intérieur
+/// de `area` — déjà rentrée des marges sûres par l'appelant (roadmap post-audit
+/// UX v2 2026-09-04, 5.4) — et publie les zones de la frame dans
+/// `input.touch_zones`.
+///
+/// Deux sources d'entrée (roadmap v2 5.1) :
+/// - `tracked` : chaque doigt est suivi par `lib.rs` (`App::handle_player_touch`)
+///   qui écrit lui-même `joy`/`touch_look`/`buttons`/`touch_stick` — ici on ne
+///   fait que dessiner cet état, sans jamais l'écraser ;
+/// - sinon (souris, aperçu mobile de l'éditeur, écran tactile via egui) : le
+///   pointeur unique d'egui pilote tout, un rôle à la fois, décidé là où
+///   l'appui a commencé (`press_origin`) — même géométrie et mêmes fonctions
+///   pures (`app::touch`) que le chemin suivi.
+///
+/// Le stick est flottant (roadmap v2 5.2) : il apparaît là où le pouce se pose
+/// dans sa zone, zone morte de 12 %, rayon `stick_radius`, et le doigt garde
+/// le contrôle en sortant du cercle.
 pub(super) fn mobile_overlay(
     ctx: &egui::Context,
     area: egui::Rect,
     cfg: &crate::scene::MobileControls,
     input: &mut crate::app::PlayerInput,
+    hud_scale: f32,
+    tracked: bool,
+    // Gain de l'orbite au pointeur egui (chemin non suivi, roadmap post-audit
+    // UX v2 2026-09-04, 5.6) : la sensibilité souris des Paramètres en aperçu
+    // éditeur — au doigt suivi (`tracked`), `lib.rs` écrit `touch_look` lui-même
+    // et ce gain est ignoré.
+    look_gain: f32,
 ) {
-    use egui::{Color32, Sense, Stroke, Vec2};
+    use crate::app::touch::{self, PadKey, TouchRole, TouchStick, TouchZones};
+    use egui::{Color32, Stroke};
 
-    input.joy = (0.0, 0.0);
-    input.touch_thrust = 0.0;
-    input.touch_turn = 0.0;
-    input.touch_look = (0.0, 0.0);
-    input.buttons.clear();
+    let zones = TouchZones::layout(area, cfg, clamp_hud_scale(hud_scale));
 
-    // Screen Safe Area : rentre les contrôles dans une marge sûre (encoche/bords).
-    let area = if cfg.safe_area {
-        let inset = (area.width().min(area.height()) * 0.06).min(28.0);
-        area.shrink(inset)
-    } else {
-        area
-    };
-
-    let margin = 32.0;
-
-    // --- Zone tactile plein écran : un tap n'importe où expose input.btn.touch ---
-    if cfg.touch_zone {
-        let down = ctx.input(|i| i.pointer.primary_down());
-        if let Some(p) = ctx.pointer_interact_pos()
-            && down
-            && area.contains(p)
-        {
+    if !tracked {
+        input.joy = (0.0, 0.0);
+        input.touch_thrust = 0.0;
+        input.touch_turn = 0.0;
+        input.touch_look = (0.0, 0.0);
+        input.buttons.clear();
+        let (down, origin, pos, delta) = ctx.input(|i| {
+            (
+                i.pointer.primary_down(),
+                i.pointer.press_origin(),
+                i.pointer.interact_pos(),
+                i.pointer.delta(),
+            )
+        });
+        // Le rôle se décide là où l'appui a commencé — jamais sur une fenêtre
+        // egui (Paramètres, aide…) posée par-dessus la zone de jeu.
+        let origin = origin.filter(|o| down && area.contains(*o) && !egui_owns_point(ctx, *o));
+        let mut stick_active = false;
+        match origin.map(|o| (o, zones.role_at(o))) {
+            Some((o, TouchRole::Stick)) => {
+                let p = pos.unwrap_or(o);
+                input.touch_stick = Some(TouchStick { origin: o, pos: p });
+                input.joy = touch::stick_vector(o, p, zones.stick_radius);
+                stick_active = true;
+            }
+            Some((_, TouchRole::Orbit)) => {
+                input.touch_look = (delta.x * look_gain, delta.y * look_gain);
+            }
+            Some((_, TouchRole::Button(name))) => {
+                input.buttons.insert(name);
+            }
+            Some((_, TouchRole::Pad(key))) => match key {
+                PadKey::Up => input.touch_thrust = 1.0,
+                PadKey::Down => input.touch_thrust = -1.0,
+                PadKey::Left => input.touch_turn = -1.0,
+                PadKey::Right => input.touch_turn = 1.0,
+            },
+            Some((_, TouchRole::None)) | None => {}
+        }
+        if !stick_active {
+            input.touch_stick = None;
+        }
+        // Zone tactile plein écran : un appui n'importe où expose input.btn.touch.
+        if cfg.touch_zone && origin.is_some() {
             input.buttons.insert("touch".to_string());
         }
     }
 
-    // --- Pavé « tank » W/A/S/D (bas-gauche), à la place du joystick si activé :
-    // mêmes contrôles que le clavier desktop — W/S avance/recule le long de
-    // l'orientation *actuelle* du personnage, A/D le fait pivoter. L'ancienne
-    // croix directionnelle écrivait `input.joy` (déplacement caméra-relatif),
-    // un simple doublon discret du joystick — le pavé tank apporte, lui, le
-    // second schéma de contrôle du jeu au tactile.
-    if cfg.dpad {
-        let btn = 56.0;
-        let gap = 6.0;
-        let size = Vec2::splat(btn * 3.0 + gap * 2.0);
-        let pos = egui::pos2(area.left() + margin, area.bottom() - margin - size.y);
-        egui::Area::new("mobile_dpad".into())
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-                let cell = |col: f32, row: f32| {
-                    egui::Rect::from_min_size(
-                        rect.min + Vec2::new(col * (btn + gap), row * (btn + gap)),
-                        Vec2::splat(btn),
-                    )
-                };
-                // Lettres ASCII plutôt que ▲▼◀▶ : les triangles haut/bas manquent de
-                // la fonte embarquée sur Android (rendus en carrés vides).
-                let up = ui.put(cell(1.0, 0.0), egui::Button::new("W").corner_radius(10.0));
-                let left = ui.put(cell(0.0, 1.0), egui::Button::new("A").corner_radius(10.0));
-                let right = ui.put(cell(2.0, 1.0), egui::Button::new("D").corner_radius(10.0));
-                let down = ui.put(cell(1.0, 2.0), egui::Button::new("S").corner_radius(10.0));
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("mobile_overlay"),
+    ));
 
-                let mut thrust = 0.0f32;
-                let mut turn = 0.0f32;
-                if up.is_pointer_button_down_on() {
-                    thrust += 1.0;
-                }
-                if down.is_pointer_button_down_on() {
-                    thrust -= 1.0;
-                }
-                // Convention « tank » du pavé tactile (`touch_turn`) : A = -1,
-                // D = +1 — le clavier de bureau n'utilise plus ce canal depuis le
-                // passage au style « action moderne » (cf. `PlayerInput::key_move`),
-                // mais le pavé mobile le conserve pour ce contrôle dédié.
-                if left.is_pointer_button_down_on() {
-                    turn -= 1.0;
-                }
-                if right.is_pointer_button_down_on() {
-                    turn += 1.0;
-                }
-                // Canaux tactiles dédiés (cf. `PlayerInput::thrust`/`turn`) :
-                // réécrits chaque frame (0 au relâchement), cumulés avec le
-                // clavier sans jamais écraser son état, tenu par événements.
-                input.touch_thrust = thrust;
-                input.touch_turn = turn;
-            });
-    } else if cfg.dual_stick {
-        let radius = 55.0;
-        // Gauche : déplacement à deux axes relatif à la caméra (`input.joy`,
-        // même canal que WASD au clavier) — roadmap post-audit UX 2026-09-04,
-        // 2.4. L'ancien verrou sur l'axe vertical (« le pouce ne dévie jamais
-        // latéralement ») datait d'avant l'orbite au doigt ci-dessous : sans
-        // moyen de tourner, un déplacement latéral désorientait ; avec, c'est
-        // le schéma standard stick gauche = déplacement, doigt droit = caméra.
-        let left_pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
-        egui::Area::new("mobile_joystick_left".into())
-            .fixed_pos(left_pos)
-            .show(ctx, |ui| {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::splat(radius * 2.0), Sense::drag());
-                let center = rect.center();
-                let painter = ui.painter();
-                painter.circle_filled(center, radius, Color32::from_black_alpha(110));
+    // --- Pavé « tank » W/A/S/D (bas-gauche) : mêmes contrôles que le clavier
+    // desktop — W/S avance/recule le long de l'orientation *actuelle* du
+    // personnage, A/D le fait pivoter (`touch_thrust`/`touch_turn`). Lettres
+    // ASCII plutôt que ▲▼◀▶ : les triangles haut/bas manquent aux fontes
+    // embarquées (cf. `player_hud_glyphs_are_covered`).
+    for (key, cell) in &zones.pad {
+        let held = match key {
+            PadKey::Up => input.touch_thrust > 0.0,
+            PadKey::Down => input.touch_thrust < 0.0,
+            PadKey::Left => input.touch_turn < 0.0,
+            PadKey::Right => input.touch_turn > 0.0,
+        };
+        touch_button(&painter, *cell, key.label(), held, 10.0);
+    }
+
+    // --- Stick flottant (roadmap v2 5.2) : dessiné là où le pouce s'est posé ;
+    // au repos, un cercle discret dans le coin rappelle la zone.
+    if zones.stick.is_some() {
+        let radius = zones.stick_radius;
+        match input.touch_stick {
+            Some(TouchStick { origin, pos }) => {
+                let knob = touch::stick_knob(origin, pos, radius);
+                painter.circle_filled(origin, radius, Color32::from_black_alpha(110));
                 painter.circle_stroke(
-                    center,
+                    origin,
                     radius,
                     Stroke::new(2.0_f32, Color32::from_white_alpha(120)),
                 );
-                let mut knob = center;
-                if let Some(p) = resp.interact_pointer_pos() {
-                    let mut off = p - center;
-                    if off.length() > radius {
-                        off = off.normalized() * radius;
-                    }
-                    knob = center + off;
-                    input.joy = (off.x / radius, -off.y / radius); // y inversé : haut = +1
-                }
-                painter.circle_filled(knob, 22.0, Color32::from_white_alpha(200));
-            });
-    } else if cfg.joystick {
-        let radius = 55.0;
-        let pos = egui::pos2(area.left() + margin, area.bottom() - margin - radius * 2.0);
-        egui::Area::new("mobile_joystick".into())
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::splat(radius * 2.0), Sense::drag());
-                let center = rect.center();
-                let painter = ui.painter();
-                painter.circle_filled(center, radius, Color32::from_black_alpha(110));
                 painter.circle_stroke(
-                    center,
-                    radius,
-                    Stroke::new(2.0_f32, Color32::from_white_alpha(120)),
+                    origin,
+                    radius * touch::STICK_DEAD_ZONE,
+                    Stroke::new(1.0_f32, Color32::from_white_alpha(60)),
                 );
-                let mut knob = center;
-                if let Some(p) = resp.interact_pointer_pos() {
-                    let mut off = p - center;
-                    if off.length() > radius {
-                        off = off.normalized() * radius;
-                    }
-                    // Deux axes, relatif à la caméra (roadmap post-audit UX
-                    // 2026-09-04, 2.4) — même schéma que le stick gauche de
-                    // `dual_stick` et que WASD au clavier.
-                    knob = center + off;
-                    input.joy = (off.x / radius, -off.y / radius); // y inversé : haut = +1
-                }
-                painter.circle_filled(knob, 22.0, Color32::from_white_alpha(200));
-            });
+                painter.circle_filled(knob, radius * 0.4, Color32::from_white_alpha(200));
+            }
+            None => {
+                let rest = egui::pos2(
+                    area.left() + touch::CONTROL_MARGIN + radius,
+                    area.bottom() - touch::CONTROL_MARGIN - radius,
+                );
+                painter.circle_filled(rest, radius, Color32::from_black_alpha(50));
+                painter.circle_stroke(
+                    rest,
+                    radius,
+                    Stroke::new(1.5_f32, Color32::from_white_alpha(60)),
+                );
+                painter.circle_filled(rest, radius * 0.4, Color32::from_white_alpha(70));
+            }
+        }
     }
 
-    // --- Orbite au doigt : glisser sur la moitié droite de l'écran tourne la
-    // caméra (roadmap post-audit UX 2026-09-04, 2.4). Couche `Background` :
-    // les boutons et sticks dessinés au-dessus gardent la priorité au toucher,
-    // seul un glissé « dans le vide » arrive ici.
-    if cfg.joystick || cfg.dual_stick || cfg.dpad {
-        let look_rect = egui::Rect::from_min_max(egui::pos2(area.center().x, area.top()), area.max);
-        egui::Area::new("mobile_look".into())
-            .fixed_pos(look_rect.min)
-            .order(egui::Order::Background)
-            .show(ctx, |ui| {
-                let (_, resp) = ui.allocate_exact_size(look_rect.size(), Sense::drag());
-                if resp.dragged() {
-                    let d = resp.drag_delta();
-                    input.touch_look = (d.x, d.y);
-                }
-            });
+    // --- Boutons d'action (grille bas-droite, 2 colonnes — cf.
+    // `TouchZones::layout`) : « maintenus » tant qu'un doigt (ou le pointeur)
+    // reste dessus.
+    for (name, cell) in &zones.buttons {
+        touch_button(&painter, *cell, name, input.buttons.contains(name), 32.0);
     }
 
-    // --- Boutons (bas-droite de la zone de jeu) ---
-    if !cfg.buttons.is_empty() {
-        let btn = 64.0;
-        let spacing = 8.0;
-        // Grille (2 colonnes max) plutôt qu'une seule rangée qui s'allonge avec
-        // le nombre de boutons : au-delà de Saut/Attaque (2 boutons), une rangée
-        // unique — Saut/Feu/Arme/Soin, 4 boutons — déborde assez à gauche pour
-        // chevaucher le pavé tank W/A/S/D sur un téléphone de largeur courante.
-        // Une grille qui pousse en hauteur, jamais en largeur, garde une
-        // empreinte horizontale fixe (2 colonnes) quel que soit le nombre de
-        // boutons.
-        const COLS: usize = 2;
-        let cols = cfg.buttons.len().min(COLS);
-        let rows = cfg.buttons.len().div_ceil(cols);
-        let width = cols as f32 * (btn + spacing) - spacing;
-        let height = rows as f32 * (btn + spacing) - spacing;
-        let pos = egui::pos2(
-            area.right() - margin - width,
-            area.bottom() - margin - height,
-        );
-        egui::Area::new("mobile_buttons".into())
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-                for (i, name) in cfg.buttons.iter().enumerate() {
-                    let (col, row) = (i % cols, i / cols);
-                    let cell = egui::Rect::from_min_size(
-                        rect.min
-                            + Vec2::new(col as f32 * (btn + spacing), row as f32 * (btn + spacing)),
-                        Vec2::splat(btn),
-                    );
-                    let resp = ui.put(cell, egui::Button::new(name).corner_radius(32.0));
-                    // Bouton « maintenu » : actif tant que le pointeur est enfoncé dessus.
-                    if resp.is_pointer_button_down_on() {
-                        input.buttons.insert(name.clone());
-                    }
-                }
-            });
-    }
+    input.touch_zones = Some(zones);
+}
+
+/// Bouton tactile peint (pas un widget egui : au tactile suivi, c'est le rôle
+/// du doigt qui décide, cf. `mobile_overlay`), enfoncé = plus clair.
+fn touch_button(painter: &egui::Painter, cell: egui::Rect, label: &str, held: bool, radius: f32) {
+    use egui::{Align2, Color32, FontId, Stroke};
+    let fill = if held {
+        Color32::from_white_alpha(170)
+    } else {
+        Color32::from_black_alpha(110)
+    };
+    let text = if held {
+        Color32::from_black_alpha(230)
+    } else {
+        Color32::from_white_alpha(230)
+    };
+    painter.rect_filled(cell, radius, fill);
+    painter.rect_stroke(
+        cell,
+        radius,
+        Stroke::new(1.5_f32, Color32::from_white_alpha(120)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        cell.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(16.0),
+        text,
+    );
 }
 
 /// Écran de fin de manche détaillé (Phase H, Sprint 1, GDD §9.2/§17.4) :
@@ -1763,6 +1799,47 @@ mod tests {
     /// du roster (vert >50 %, jaune 25-50 %, rouge <=25 %) — la valeur
     /// numérique est le repère non-couleur, elle ne doit jamais dépendre de
     /// laquelle de ces trois bandes `h` tombe dedans.
+    /// Roadmap post-audit UX v2 2026-09-04, 5.5 : chaque pictogramme du HUD
+    /// et des fenêtres du mode joueur doit exister dans les fontes qu'egui
+    /// embarque (`NotoEmoji-Regular` + `emoji-icon-font`, mêmes octets sur
+    /// Android, iOS, web et desktop — un glyphe absent se rend en carré vide).
+    /// Pas de fonte ajoutée (plusieurs Mo pour un emoji couleur complet) : on
+    /// choisit les glyphes couverts. Manquants constatés, à ne pas réintroduire :
+    /// 🧟 (→ 👹), 🟢 (→ 💚), 🩹 (→ 📝), 🤝 (→ 🛡), ✕ (→ ✖), ▲▼ (→ W/S),
+    /// 🧭, 🗂, ●, ◆, ⬤, ◯, ⏯.
+    #[test]
+    fn player_hud_glyphs_are_covered_by_the_embedded_fonts() {
+        let mut fonts = egui::text::Fonts::new(
+            egui::epaint::text::TextOptions::default(),
+            egui::text::FontDefinitions::default(),
+        );
+        let font = egui::FontId::proportional(14.0);
+        let used = "🗺💀🎉⭐🏆⏱✨🕯📜🔵🔴💚🎒👜👥🌐⚙❓📝⏸🔇🔊🛡👹🔄🎮⌨✖⚠💾🔍🎯";
+        let missing: String = used
+            .chars()
+            .filter(|c| !fonts.has_glyph(&font, *c))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "glyphes absents des fontes egui : {missing}"
+        );
+        // Les chaînes localisées du mode joueur n'utilisent que des glyphes couverts.
+        use crate::app::locale::{self, Locale};
+        for l in [Locale::Fr, Locale::En] {
+            for s in [
+                locale::kills_and_assists(l, 1, 2),
+                locale::map_legend(l, true).to_string(),
+                locale::map_legend(l, false).to_string(),
+                locale::map_title(l).to_string(),
+                locale::crash_log_title(l).to_string(),
+                locale::wave_start_banner(l, 3),
+            ] {
+                let bad: String = s.chars().filter(|c| !fonts.has_glyph(&font, *c)).collect();
+                assert!(bad.is_empty(), "{s:?} : glyphes absents {bad:?}");
+            }
+        }
+    }
+
     #[test]
     fn health_percent_label_matches_the_three_color_tiers() {
         assert_eq!(health_percent_label(1.0), "100%");

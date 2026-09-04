@@ -155,6 +155,13 @@ pub struct Audio {
     /// « retour » de ducking écraserait un réglage utilisateur fait entre-temps
     /// avec l'ancienne valeur.
     music_volume: f32,
+    /// Volume SFX (0..1) réglé par l'utilisateur (`set_sfx_volume`), gardé à
+    /// part pour le rétablir après un `set_muted(false)` (roadmap post-audit UX
+    /// v2 2026-09-04, 5.5).
+    sfx_volume: f32,
+    /// Son coupé (`set_muted`, persisté dans `Settings::muted`) : les pistes
+    /// musique et SFX sont à 0 quel que soit le réglage, qui reste mémorisé.
+    muted: bool,
     /// Mélange (0=layer A, 1=layer B) entre `music_track`/`music_track_b`
     /// (Sprint 121) — combiné avec `music_volume` et l'atténuation de ducking à
     /// chaque tween plutôt que reconstruit depuis zéro, pour ne perdre aucun des
@@ -242,6 +249,8 @@ impl Audio {
             sfx_track,
             reverb,
             music_volume: 1.0,
+            sfx_volume: 1.0,
+            muted: false,
             music_layer_mix: 0.0,
             duck_release_at: None,
             playing: Vec::new(),
@@ -426,7 +435,11 @@ impl Audio {
         } else {
             1.0
         };
-        let base = self.music_volume * duck_factor;
+        let base = if self.muted {
+            0.0
+        } else {
+            self.music_volume * duck_factor
+        };
         if let Some(track) = self.music_track.as_mut() {
             let gain = base * (1.0 - self.music_layer_mix);
             track.set_volume(Decibels(gain_to_db(gain)), tween);
@@ -539,8 +552,28 @@ impl Audio {
     /// Volume (0..1) de la piste effets sonores (Sprint 104, persisté dans
     /// `Settings::sfx_volume`).
     pub fn set_sfx_volume(&mut self, v: f32) {
+        self.sfx_volume = v.clamp(0.0, 1.0);
+        self.apply_sfx_volume();
+    }
+
+    /// Coupe/rétablit musique et SFX d'un coup (roadmap post-audit UX v2
+    /// 2026-09-04, 5.5) sans toucher aux volumes réglés, qui reviennent tels
+    /// quels au rétablissement.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        self.apply_music_volumes(Tween::default());
+        self.apply_sfx_volume();
+    }
+
+    /// Son coupé ? (cf. `set_muted`)
+    pub fn is_muted(&self) -> bool {
+        self.muted
+    }
+
+    fn apply_sfx_volume(&mut self) {
+        let v = if self.muted { 0.0 } else { self.sfx_volume };
         if let Some(track) = self.sfx_track.as_mut() {
-            track.set_volume(Decibels(gain_to_db(v.clamp(0.0, 1.0))), Tween::default());
+            track.set_volume(Decibels(gain_to_db(v)), Tween::default());
         }
     }
 
@@ -684,6 +717,9 @@ mod tests {
         let mut audio = Audio::new();
         audio.set_music_volume(0.5);
         audio.set_sfx_volume(0.0);
+        audio.set_muted(true);
+        assert!(audio.is_muted());
+        audio.set_muted(false);
         audio.play_music_streaming_gain("chemin/inexistant.mp3", 0.5, 0.0);
         audio.stop_all();
     }

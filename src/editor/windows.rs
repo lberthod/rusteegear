@@ -553,7 +553,7 @@ fn minimap_window(ctx: &egui::Context, panels: &mut Panels, minimap: &crate::app
             }
 
             ui.horizontal(|ui| {
-                ui.small("🔵 Vous · 🟢 Alliés · 🔴 Créatures");
+                ui.small("🔵 Vous · 💚 Alliés · 🔴 Créatures");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("🎯 Recentrer").clicked() {
                         panels.minimap_pan = [0.0, 0.0];
@@ -683,6 +683,12 @@ pub(super) fn player_corner_minimap(
 /// reste (pas une `egui::Window`, pour un vrai plein écran sans chrome de
 /// fenêtre) sur toute `area`, avec un fond assombri pour la lisibilité
 /// par-dessus la scène 3D.
+///
+/// Roadmap post-audit UX v2 2026-09-04, 5.3 : bouton ✖ (44 pt) en haut à
+/// droite de la carte — renvoie `true` s'il est cliqué —, et pincer à deux
+/// doigts zoome (`zoom_delta`, calculé par egui depuis ses événements
+/// `Touch` ; avant, seule la molette agissait). Les boutons ⏸/Carte/? sont
+/// dessinés au-dessus (`Order::Tooltip`) par l'appelant.
 pub(super) fn player_map_overlay(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -691,11 +697,12 @@ pub(super) fn player_map_overlay(
     touch: bool,
     zoom: &mut f32,
     pan: &mut [f32; 2],
-) {
+) -> bool {
     use egui::{Align2, Color32, FontId, Sense, Stroke};
     if *zoom <= 0.0 {
         *zoom = 1.0;
     }
+    let mut close = false;
     egui::Area::new(egui::Id::new("player_map_overlay"))
         .order(egui::Order::Foreground)
         .fixed_pos(area.min)
@@ -709,7 +716,15 @@ pub(super) fn player_map_overlay(
             let (min_x, min_z, max_x, max_z) = minimap.bounds;
             let proj = MinimapProjection::new(minimap.bounds, map_rect, *zoom, *pan);
 
-            if response.dragged() && proj.scale > 0.0 {
+            // Pincement (deux doigts) : egui agrège ses événements `Touch` en
+            // `zoom_delta` (1 = rien) ; un pincement en cours ne doit pas
+            // aussi déplacer la vue avec le doigt « pointeur ».
+            let pinch = ui.input(|i| i.multi_touch().map(|m| m.zoom_delta));
+            if let Some(z) = pinch {
+                if z != 1.0 {
+                    *zoom = (*zoom * z).clamp(0.25, 8.0);
+                }
+            } else if response.dragged() && proj.scale > 0.0 {
                 let delta = response.drag_delta();
                 pan[0] -= delta.x / proj.scale;
                 pan[1] -= delta.y / proj.scale;
@@ -723,6 +738,22 @@ pub(super) fn player_map_overlay(
                 if scroll != 0.0 {
                     *zoom = (*zoom * (1.0 + scroll * 0.002)).clamp(0.25, 8.0);
                 }
+            }
+            // ✖ : coin haut-droit de la carte, 44 pt (cible tactile), au-dessus
+            // de la zone glissable — `put` le place dans le même calque.
+            let close_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.right() - 8.0 - 44.0, rect.top() + 8.0),
+                egui::vec2(44.0, 44.0),
+            );
+            if ui
+                .put(
+                    close_rect,
+                    egui::Button::new(egui::RichText::new("✖").size(20.0)).corner_radius(8.0),
+                )
+                .on_hover_text(crate::app::locale::map_close_tooltip(locale))
+                .clicked()
+            {
+                close = true;
             }
             // Recadré après un zoom/pan éventuel ci-dessus (sinon les
             // marqueurs de cette frame utiliseraient encore l'ancien cadrage).
@@ -793,6 +824,7 @@ pub(super) fn player_map_overlay(
                 Color32::from_gray(220),
             );
         });
+    close
 }
 
 /// Rectangle (points egui) de la zone de jeu : écran de téléphone centré dans la

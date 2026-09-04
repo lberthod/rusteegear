@@ -1275,7 +1275,11 @@ impl AppState {
             // manette. Avant, le stick tactile était verrouillé sur l'axe
             // vertical et aucun geste ne tournait la caméra : un joueur
             // Android/iOS avançait en ligne droite.
-            let (look_x, look_y) = self.input_state.touch_look;
+            // Consommé (remis à zéro) ici : `lib.rs` cumule les deltas des
+            // doigts suivis et de la souris capturée entre deux frames
+            // (roadmap post-audit UX v2 2026-09-04, 5.1/5.6) — la sensibilité
+            // souris est déjà appliquée à la source, le tactile reste à 1.
+            let (look_x, look_y) = std::mem::take(&mut self.input_state.touch_look);
             if (look_x != 0.0 || look_y != 0.0) && !auto_run {
                 const TOUCH_LOOK_RATE: f32 = 0.006; // rad par point
                 self.camera.yaw -= look_x * TOUCH_LOOK_RATE;

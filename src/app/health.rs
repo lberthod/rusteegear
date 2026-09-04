@@ -160,7 +160,8 @@ impl AppState {
     /// (`hud_health <= 0` ⇒ `lost`) afficherait « Manche perdue » à la place
     /// de la bannière spectateur.
     pub fn displayed_health(&self) -> Option<f32> {
-        // Le stub réseau iOS n'a pas de vie serveur (cf. `NetConnectionState`).
+        // iOS : pas de client réseau (cf. `NetConnectionState::net_local_health`,
+        // absent sur cette cible) — la vie solo seulement.
         #[cfg(not(target_os = "ios"))]
         if self.is_connected() {
             return self.net_conn.net_local_health;

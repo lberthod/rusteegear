@@ -212,7 +212,16 @@ zstd = "0.13.3"
 # 0.30 tire déjà (objc2 0.5 / objc2-ui-kit 0.2), donc aucune crate nouvelle.
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-foundation = "0.2"
-objc2-ui-kit = { version = "0.2.2", features = ["UIApplication", "UIResponder"] }
+# `UIView`/`UIWindow`/`UIGeometry`/`UIScreen` : `safeAreaInsets` de la fenêtre
+# clé (encoche, indicateur d'accueil), roadmap post-audit UX v2 2026-09-04, 5.4.
+objc2-ui-kit = { version = "0.2.2", features = [
+    "UIApplication",
+    "UIResponder",
+    "UIView",
+    "UIWindow",
+    "UIGeometry",
+    "UIScreen",
+] }
 
 # Android : winit a besoin d'un backend android-activity + logger natif.
 [target.'cfg(target_os = "android")'.dependencies]
@@ -267,6 +276,12 @@ web-sys = { version = "0.3", features = [
     # persistés dans `localStorage` sur le web (`assets::persisted_read`/
     # `persisted_write`) — avant, tout passait par `$HOME`, inexistant en wasm.
     "Storage",
+    # Roadmap post-audit UX v2 2026-09-04, 5.4 : `env(safe-area-inset-*)` lu
+    # sur un élément sonde via `getComputedStyle` (cf. `lib.rs`,
+    # `web_safe_insets`).
+    "HtmlElement",
+    "Node",
+    "CssStyleDeclaration",
 ] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"

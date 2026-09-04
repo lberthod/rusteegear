@@ -34,12 +34,12 @@ pub fn fire_hint(locale: Locale) -> &'static str {
 /// qu'il est déjà calculé côté serveur (`app::multiplayer::network_assists`).
 ///
 /// Libellés en toutes lettres à côté des icônes (roadmap post-audit UX v2
-/// 2026-09-04, 4.4) : « 💀 3 · 🤝 1 » ne disait pas ce que comptaient les
+/// 2026-09-04, 4.4) : « 💀 3 · 🛡 1 » ne disait pas ce que comptaient les
 /// deux nombres.
 pub fn kills_and_assists(locale: Locale, kills: u32, assists: u32) -> String {
     match locale {
-        Locale::Fr => format!("💀 Frags {kills} · 🤝 Aides {assists}"),
-        Locale::En => format!("💀 Frags {kills} · 🤝 Assists {assists}"),
+        Locale::Fr => format!("💀 Frags {kills} · 🛡 Aides {assists}"),
+        Locale::En => format!("💀 Frags {kills} · 🛡 Assists {assists}"),
     }
 }
 
@@ -78,8 +78,8 @@ pub fn you_suffix(locale: Locale, name: &str) -> String {
 
 pub fn wave(locale: Locale, wave: u32, max_wave: u32) -> String {
     match locale {
-        Locale::Fr => format!("🧟 Vague {wave} / {max_wave}"),
-        Locale::En => format!("🧟 Wave {wave} / {max_wave}"),
+        Locale::Fr => format!("👹 Vague {wave} / {max_wave}"),
+        Locale::En => format!("👹 Wave {wave} / {max_wave}"),
     }
 }
 
@@ -186,8 +186,8 @@ pub fn contract_completed(locale: Locale, label: &str) -> String {
 /// s'efface après quelques secondes (`AppState::wave_banner_flash`).
 pub fn wave_start_banner(locale: Locale, wave: u32) -> String {
     match locale {
-        Locale::Fr => format!("🧟 Vague {wave} !"),
-        Locale::En => format!("🧟 Wave {wave}!"),
+        Locale::Fr => format!("👹 Vague {wave} !"),
+        Locale::En => format!("👹 Wave {wave}!"),
     }
 }
 
@@ -464,15 +464,35 @@ pub fn map_title(locale: Locale) -> &'static str {
     }
 }
 
+/// Infobulle du bouton 🔇/🔊 du HUD joueur (roadmap post-audit UX v2
+/// 2026-09-04, 5.5) — la touche `0` fait la même chose au clavier.
+pub fn mute_tooltip(locale: Locale, muted: bool) -> &'static str {
+    match (locale, muted) {
+        (Locale::Fr, false) => "Couper le son (0)",
+        (Locale::Fr, true) => "Remettre le son (0)",
+        (Locale::En, false) => "Mute (0)",
+        (Locale::En, true) => "Unmute (0)",
+    }
+}
+
+/// Infobulle du bouton ✖ de la carte plein écran (roadmap v2 5.3) — au
+/// tactile, rien d'autre ne la ferme.
+pub fn map_close_tooltip(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "Fermer la carte",
+        Locale::En => "Close the map",
+    }
+}
+
 /// Légende + rappel du raccourci, affichés en bas de `player_map_overlay`.
 /// Au tactile (`touch`), pas de touche `M` : la carte se ferme par son bouton
 /// (roadmap post-audit UX v2 2026-09-04, 4.4).
 pub fn map_legend(locale: Locale, touch: bool) -> &'static str {
     match (locale, touch) {
-        (Locale::Fr, false) => "🔵 Vous · 🟢 Alliés · 🔴 Monstres — M pour fermer",
-        (Locale::Fr, true) => "🔵 Vous · 🟢 Alliés · 🔴 Monstres",
-        (Locale::En, false) => "🔵 You · 🟢 Allies · 🔴 Monsters — M to close",
-        (Locale::En, true) => "🔵 You · 🟢 Allies · 🔴 Monsters",
+        (Locale::Fr, false) => "🔵 Vous · 💚 Alliés · 🔴 Monstres — M pour fermer",
+        (Locale::Fr, true) => "🔵 Vous · 💚 Alliés · 🔴 Monstres",
+        (Locale::En, false) => "🔵 You · 💚 Allies · 🔴 Monsters — M to close",
+        (Locale::En, true) => "🔵 You · 💚 Allies · 🔴 Monsters",
     }
 }
 
@@ -544,8 +564,8 @@ pub fn not_connected(locale: Locale) -> &'static str {
 /// aussi en mode Player.
 pub fn crash_log_title(locale: Locale) -> &'static str {
     match locale {
-        Locale::Fr => "🩹 Journal de crash",
-        Locale::En => "🩹 Crash log",
+        Locale::Fr => "📝 Journal de crash",
+        Locale::En => "📝 Crash log",
     }
 }
 
@@ -694,6 +714,19 @@ mod tests {
         assert_ne!(not_connected(Locale::Fr), not_connected(Locale::En));
         assert_ne!(crash_log_title(Locale::Fr), crash_log_title(Locale::En));
         assert_ne!(net_online(Locale::Fr), net_online(Locale::En));
+        assert_ne!(
+            mute_tooltip(Locale::Fr, true),
+            mute_tooltip(Locale::En, true)
+        );
+        assert_ne!(
+            mute_tooltip(Locale::Fr, false),
+            mute_tooltip(Locale::En, false)
+        );
+        assert_ne!(
+            mute_tooltip(Locale::Fr, true),
+            mute_tooltip(Locale::Fr, false)
+        );
+        assert_ne!(map_close_tooltip(Locale::Fr), map_close_tooltip(Locale::En));
         assert_ne!(net_connecting(Locale::Fr), net_connecting(Locale::En));
         assert_ne!(net_offline(Locale::Fr), net_offline(Locale::En));
         assert_ne!(

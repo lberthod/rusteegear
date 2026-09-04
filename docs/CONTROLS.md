@@ -65,7 +65,9 @@ pendant la saisie dans un champ texte ; `Cmd+C` / `Cmd+V` / `Cmd+X` / `Cmd+A`
 | `Tab` | Classement des joueurs, tant que la touche est maintenue (mode Player) ; les Paramètres s'ouvrent depuis le menu pause |
 | `Espace` (vaincu) | Allié spectateur suivant |
 | `F1` | Aide en jeu (contrôles et objectif) |
+| `0` | Couper / remettre le son (mémorisé dans les Paramètres) |
 | Clic gauche + glisser | Tourner la caméra (deux axes en Play, sensibilité dans Paramètres) |
+| Souris (mode Player, desktop) | Le curseur est capturé pendant la partie : bouger la souris tourne la caméra sans cliquer ; `Échap`, la pause, l'accueil, les Paramètres, l'aide, la carte ou la défaite le rendent |
 
 En mode Player (build joueur, web, mobile), les touches d'outils `Q T Y F G`
 sont désactivées. Saut, attaque, tir, soin, pause et carte se remappent dans
@@ -77,14 +79,23 @@ Le stick et les boutons n'apparaissent que sur un écran tactile (Android, iOS,
 ou dès qu'un doigt a touché l'écran) ; les boutons ⏸ / Carte / ? restent
 disponibles à la souris.
 
+Chaque doigt est suivi séparément : stick + caméra, ou stick + Feu, en
+même temps. Le stick est flottant — il apparaît là où le pouce se pose dans
+la moitié gauche de l'écran (sous la barre de vie), avec une zone morte de
+12 % et un rayon proportionnel à l'écran (44 à 90 pt) ; le doigt garde le
+contrôle même en sortant du cercle.
+
 | Geste | Action |
 | --- | --- |
-| Stick gauche | Se déplacer (deux axes, relatif à la caméra) |
-| Glisser sur la moitié droite de l'écran | Tourner la caméra |
-| Boutons bas-droite | Saut / Feu / Arme / Soin (définis par la scène) |
+| Poser le pouce à gauche | Stick flottant : se déplacer (deux axes, relatif à la caméra) |
+| Glisser sur la moitié droite de l'écran | Tourner la caméra (en même temps que le stick) |
+| Boutons bas-droite | Saut / Feu / Arme / Soin (définis par la scène), tenables avec le stick |
+| Pincer sur la carte | Zoomer la carte plein écran |
 | Saut (vaincu) | Allié spectateur suivant |
 | ⏸ (haut-droite) | Pause |
+| 🔇 (haut-droite) | Couper / remettre le son |
 | Carte (haut-droite) | Carte plein écran |
+| ✖ (carte) | Fermer la carte |
 | ? (haut-droite) | Aide en jeu |
 
 ## Manette

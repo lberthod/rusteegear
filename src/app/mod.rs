@@ -30,6 +30,7 @@ mod selection;
 pub mod settings;
 pub mod shortcuts;
 mod simulation;
+pub mod touch;
 
 use combat::{AttackCharge, AttackProjectile};
 
@@ -254,8 +255,20 @@ pub struct PlayerInput {
     /// Glissé du doigt sur la moitié droite de l'écran (roadmap post-audit UX
     /// 2026-09-04, 2.4) : delta en points depuis la frame précédente, consommé
     /// une fois par frame par la caméra de suivi (`update_effects`) — yaw sur
-    /// x, tangage sur y. Réécrit chaque frame par `editor::mobile_overlay`.
+    /// x, tangage sur y. Réécrit chaque frame par `editor::mobile_overlay`
+    /// (souris / aperçu éditeur) ou **cumulé** par `lib.rs` entre deux frames
+    /// (doigts suivis, roadmap post-audit UX v2 2026-09-04, 5.1 ; souris
+    /// capturée, 5.6) — consommé et remis à zéro par `update_effects`.
     pub touch_look: (f32, f32),
+    /// Stick flottant en cours (roadmap post-audit UX v2 2026-09-04, 5.2) :
+    /// centre posé au contact, position du doigt — `None` sans doigt. Écrit
+    /// par `lib.rs` (doigt suivi) ou par `editor::mobile_overlay` (souris),
+    /// lu par le HUD pour dessiner le stick là où le pouce s'est posé.
+    pub touch_stick: Option<touch::TouchStick>,
+    /// Zones tactiles de la dernière frame dessinée (roadmap v2 5.1), publiées
+    /// par `editor::mobile_overlay` pour que `lib.rs` donne son rôle à chaque
+    /// doigt qui se pose — `None` tant que l'overlay n'a pas été dessiné.
+    pub touch_zones: Option<touch::TouchZones>,
     /// Stick gauche de la manette, zone morte + croix directionnelle déjà
     /// résolues (cf. `input::resolve_gamepad_input`) : déplacement **relatif à
     /// la caméra**, comme `joy`/`key_move`, cumulé avec eux avant
@@ -1016,6 +1029,13 @@ pub struct AppState {
     /// joueurs s'affiche déplié tant que c'est vrai. Posé/levé par `lib.rs`
     /// **avant** egui, qui consommerait sinon Tab pour la navigation au focus.
     pub roster_held: bool,
+    /// Marges sûres système en pixels physiques `[haut, droite, bas, gauche]`
+    /// (roadmap post-audit UX v2 2026-09-04, 5.4) : `safeAreaInsets` sur iOS,
+    /// rectangle de contenu sur Android, `env(safe-area-inset-*)` sur le web —
+    /// `None` sur desktop ou tant que la plateforme n'a rien dit. Posé par
+    /// `lib.rs`, converti en points et appliqué à tout le HUD par
+    /// `Editor::run_player_overlay`.
+    pub safe_insets_px: Option<[f32; 4]>,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1382,6 +1402,7 @@ impl AppState {
         let initial_settings = crate::app::settings::Settings::load();
         audio.set_music_volume(initial_settings.music_volume);
         audio.set_sfx_volume(initial_settings.sfx_volume);
+        audio.set_muted(initial_settings.muted);
         // Breakpoints Lua (Sprint 128) : hook installé une fois ici, sur l'instance
         // `Lua` partagée par tous les scripts d'objet — cf. la doc de
         // `scripting::LuaBreakpoints` pour ce que « pause » signifie concrètement
@@ -1661,6 +1682,7 @@ impl AppState {
             spectate_cursor: 0,
             touch_seen: false,
             roster_held: false,
+            safe_insets_px: None,
         }
     }
 
@@ -1761,6 +1783,13 @@ impl AppState {
     /// `Settings::sfx_volume`).
     pub fn set_sfx_volume(&mut self, v: f32) {
         self.audio.set_sfx_volume(v);
+    }
+
+    /// Coupe/rétablit tout le son (touche `0`, bouton 🔇 du HUD — roadmap
+    /// post-audit UX v2 2026-09-04, 5.5), persisté dans `Settings::muted` ;
+    /// les volumes réglés sont conservés derrière.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.audio.set_muted(muted);
     }
 
     /// Langue du texte runtime (Sprint 130, persistée dans `Settings::locale`).

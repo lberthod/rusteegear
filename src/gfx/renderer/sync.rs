@@ -62,6 +62,31 @@ impl Renderer {
         }
     }
 
+    /// Une fenêtre du mode Player est-elle ouverte (`Editor::player_overlay_open`,
+    /// roadmap v2 5.6) ? `false` en headless.
+    pub fn player_overlay_open(&self) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(|e| e.player_overlay_open())
+    }
+
+    /// Coupe/rétablit le son et persiste (`Editor::toggle_mute`, roadmap v2
+    /// 5.5) ; `None` en headless (rien à persister, rien à couper).
+    pub fn toggle_mute(&mut self) -> Option<bool> {
+        self.editor.as_mut().map(|e| e.toggle_mute())
+    }
+
+    /// Points egui par pixel physique (`Editor::pixels_per_point`) — 1 en headless.
+    pub fn ui_pixels_per_point(&self) -> f32 {
+        self.editor.as_ref().map_or(1.0, |e| e.pixels_per_point())
+    }
+
+    /// Une fenêtre egui occupe-t-elle ce point (`Editor::ui_owns_point`) ?
+    /// `false` en headless.
+    pub fn ui_owns_point(&self, p: egui::Pos2) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.ui_owns_point(p))
+    }
+
     /// Garantit que le buffer d'instances peut contenir `n` objets (le recrée s'il faut).
     pub(super) fn sync_objects(&mut self, scene: &Scene) {
         let n = scene.objects.len();

@@ -135,15 +135,24 @@ pub const SHORTCUTS: &[Shortcut] = &[
     // (et egui la consommait) ; Paramètres passent par le menu pause.
     sc(Scope::Play, "`Tab`", "Classement (maintenu, mode Player)"),
     sc(Scope::Play, "`F1`", "Aide en jeu"),
-    sc(Scope::Touch, "Stick gauche", "Se déplacer (deux axes)"),
+    // Roadmap post-audit UX v2 2026-09-04, 5.5 : `M` est la carte, `0` reste libre.
+    sc(Scope::Play, "`0`", "Couper / remettre le son"),
+    sc(
+        Scope::Touch,
+        "Poser le pouce à gauche",
+        "Stick flottant : se déplacer (deux axes)",
+    ),
     sc(
         Scope::Touch,
         "Glisser sur la moitié droite de l'écran",
-        "Tourner la caméra",
+        "Tourner la caméra (en même temps que le stick)",
     ),
+    sc(Scope::Touch, "Pincer sur la carte", "Zoomer la carte"),
     sc(Scope::Touch, "Saut (vaincu)", "Allié spectateur suivant"),
     sc(Scope::Touch, "⏸ (haut-droite)", "Pause"),
+    sc(Scope::Touch, "🔇 (haut-droite)", "Couper / remettre le son"),
     sc(Scope::Touch, "Carte (haut-droite)", "Carte plein écran"),
+    sc(Scope::Touch, "✖ (carte)", "Fermer la carte"),
     sc(Scope::Touch, "? (haut-droite)", "Aide en jeu"),
 ];
 

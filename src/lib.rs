@@ -8,8 +8,11 @@ use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent};
+use winit::event::{
+    DeviceEvent, ElementState, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::CursorGrabMode;
 use winit::window::{Window, WindowId};
 
 pub mod app;
@@ -52,10 +55,35 @@ struct App {
     /// rappelle `set_title` que s'il change (appel système par frame sinon).
     last_title: String,
 
-    // --- état tactile ---
+    // --- état tactile (éditeur / aperçu : 1 doigt = orbite, 2 = pinch) ---
     touches: HashMap<u64, (f64, f64)>,
     orbiting: bool,
     pinch: Option<f32>,
+
+    // --- tactile réel du mode joueur (roadmap post-audit UX v2 2026-09-04, 5.1) ---
+    /// Rôle et dernière position (points egui) de **chaque** doigt posé, par
+    /// identifiant winit — egui ne suit qu'un pointeur, ce suivi séparé est ce
+    /// qui permet stick + orbite ou stick + Feu en même temps. Le rôle est
+    /// décidé au contact (`app::touch::TouchZones::role_at`) et gardé jusqu'au
+    /// relâchement.
+    touch_roles: HashMap<u64, (app::touch::TouchRole, egui::Pos2)>,
+
+    // --- souris en mode joueur (roadmap v2 5.6) ---
+    /// Curseur capturé et masqué pendant la partie (desktop/web) : la souris
+    /// tourne alors la caméra sans cliquer, via `device_event`.
+    cursor_grabbed: bool,
+    /// Faux après un échec de capture (pointer lock refusé hors geste
+    /// utilisateur sur le web, plateforme sans support) : on ne retente qu'au
+    /// prochain clic plutôt qu'à chaque tour de boucle.
+    cursor_grab_retry: bool,
+    /// Fenêtre au premier plan (`WindowEvent::Focused`) — jamais de capture
+    /// sans focus, et relâchée dès qu'il part.
+    window_focused: bool,
+
+    /// Poignée Android (`android_main`) : le rectangle de contenu — la zone non
+    /// couverte par les barres système — sert de marges sûres (roadmap v2 5.4).
+    #[cfg(target_os = "android")]
+    android_app: Option<winit::platform::android::activity::AndroidApp>,
 
     /// Touches de déplacement actuellement enfoncées (WASD + flèches). Sert à
     /// recalculer `key_move`/`tilt` à partir de **toutes** les touches tenues
@@ -252,6 +280,218 @@ impl App {
                 }
                 self.pinch = None;
             }
+        }
+    }
+
+    /// Le mode joueur suit-il chaque doigt lui-même (roadmap post-audit UX v2
+    /// 2026-09-04, 5.1) ? Même critère que le dessin du stick et des boutons
+    /// (`run_player_overlay`) : mode Player, contrôles tactiles dans la scène,
+    /// écran tactile. Sinon (éditeur, aperçu, desktop à la souris), les doigts
+    /// vont à `handle_touch` (orbite/pinch) ou à egui.
+    fn player_touch_tracking(&self) -> bool {
+        self.state.player && self.state.scene.mobile.any() && self.state.touch_ui_active()
+    }
+
+    /// Un doigt en mode joueur (roadmap v2 5.1) : au contact, son rôle est
+    /// décidé par la zone où il se pose (`PlayerInput::touch_zones`, publiées
+    /// par le HUD à la frame précédente) — sauf si une fenêtre egui (pause,
+    /// Paramètres, carte, boutons du haut) occupe ce point, ou si le jeu n'est
+    /// pas en cours : le doigt est alors laissé à egui, qui l'a déjà reçu
+    /// (`on_ui_event` transmet tout). Ensuite : le stick suit son doigt même
+    /// hors du cercle, l'orbite cumule ses deltas dans `touch_look` (consommé
+    /// par `update_effects`), un bouton reste tenu jusqu'au relâchement.
+    ///
+    /// Limite connue : egui ne voit comme pointeur que le **premier** doigt
+    /// posé — un second doigt sur ⏸ pendant que le premier tient le stick
+    /// n'est pas un clic pour egui. Les contrôles de jeu, eux, sont tous
+    /// multi-doigts.
+    fn handle_player_touch(&mut self, touch: Touch) {
+        use app::touch::{PadKey, TouchRole, TouchStick, stick_vector};
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        let ppp = renderer.ui_pixels_per_point().max(0.1);
+        let p = egui::pos2(touch.location.x as f32 / ppp, touch.location.y as f32 / ppp);
+        let egui_owns = renderer.ui_owns_point(p);
+        let gameplay = self.state.playing && !self.state.paused && !self.state.welcome_pending;
+        let inp = &mut self.state.input_state;
+        match touch.phase {
+            TouchPhase::Started => {
+                let role = match (&inp.touch_zones, gameplay && !egui_owns) {
+                    (Some(zones), true) => zones.role_at(p),
+                    _ => TouchRole::None,
+                };
+                if role == TouchRole::Stick {
+                    // Un second doigt dans la zone du stick ne vole pas le
+                    // stick au premier : il n'a pas de rôle.
+                    if self
+                        .touch_roles
+                        .values()
+                        .any(|(r, _)| *r == TouchRole::Stick)
+                    {
+                        self.touch_roles.insert(touch.id, (TouchRole::None, p));
+                        return;
+                    }
+                    inp.touch_stick = Some(TouchStick { origin: p, pos: p });
+                    inp.joy = (0.0, 0.0);
+                }
+                self.touch_roles.insert(touch.id, (role, p));
+            }
+            TouchPhase::Moved => {
+                let Some((role, last)) = self.touch_roles.get_mut(&touch.id) else {
+                    return;
+                };
+                let delta = p - *last;
+                *last = p;
+                match role {
+                    TouchRole::Stick => {
+                        let radius = inp.touch_zones.as_ref().map_or(55.0, |z| z.stick_radius);
+                        if let Some(stick) = inp.touch_stick.as_mut() {
+                            stick.pos = p;
+                            inp.joy = stick_vector(stick.origin, p, radius);
+                        }
+                    }
+                    TouchRole::Orbit => {
+                        inp.touch_look.0 += delta.x;
+                        inp.touch_look.1 += delta.y;
+                    }
+                    TouchRole::Button(_) | TouchRole::Pad(_) | TouchRole::None => {}
+                }
+            }
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                if let Some((TouchRole::Stick, _)) = self.touch_roles.remove(&touch.id) {
+                    inp.touch_stick = None;
+                    inp.joy = (0.0, 0.0);
+                }
+            }
+        }
+        // Boutons, pavé et zone tactile : recalculés depuis **tous** les doigts
+        // encore posés (même principe que `axis_from_held` pour le clavier) —
+        // lever un doigt ne coupe pas un bouton qu'un autre tient encore.
+        inp.buttons.clear();
+        inp.touch_thrust = 0.0;
+        inp.touch_turn = 0.0;
+        for (role, _) in self.touch_roles.values() {
+            match role {
+                TouchRole::Button(name) => {
+                    inp.buttons.insert(name.clone());
+                }
+                TouchRole::Pad(PadKey::Up) => inp.touch_thrust = 1.0,
+                TouchRole::Pad(PadKey::Down) => inp.touch_thrust = -1.0,
+                TouchRole::Pad(PadKey::Left) => inp.touch_turn = -1.0,
+                TouchRole::Pad(PadKey::Right) => inp.touch_turn = 1.0,
+                TouchRole::Stick | TouchRole::Orbit | TouchRole::None => {}
+            }
+        }
+        if inp.touch_zones.as_ref().is_some_and(|z| z.touch_zone)
+            && gameplay
+            && !self.touch_roles.is_empty()
+        {
+            inp.buttons.insert("touch".to_string());
+        }
+    }
+
+    /// Lâche tous les doigts suivis (fenêtre en arrière-plan, pause, accueil) :
+    /// winit n'enverra pas leurs relâchements, le stick ne doit pas rester
+    /// « poussé » (roadmap v2 5.1).
+    fn release_player_touches(&mut self) {
+        if self.touch_roles.is_empty() {
+            return;
+        }
+        self.touch_roles.clear();
+        let inp = &mut self.state.input_state;
+        inp.touch_stick = None;
+        inp.joy = (0.0, 0.0);
+        inp.touch_thrust = 0.0;
+        inp.touch_turn = 0.0;
+        inp.touch_look = (0.0, 0.0);
+        inp.buttons.clear();
+    }
+
+    /// Marges sûres système (roadmap post-audit UX v2 2026-09-04, 5.4), en
+    /// pixels physiques `[haut, droite, bas, gauche]` — relues à chaque
+    /// redimensionnement/rotation et au retour au premier plan :
+    /// - iOS : `safeAreaInsets` de la fenêtre clé UIKit (encoche, indicateur
+    ///   d'accueil), en points × facteur d'échelle ;
+    /// - Android : rectangle de contenu de la `NativeActivity` (zone non
+    ///   couverte par les barres système). Les insets de découpe d'écran
+    ///   (`WindowInsets.displayCutout`, API Java) demanderaient JNI, absent
+    ///   des dépendances : la marge de repli de la scène (`safe_area`) reste le
+    ///   filet pour une encoche en paysage ;
+    /// - web : `env(safe-area-inset-*)` lu par `getComputedStyle` sur un
+    ///   élément sonde (non nul seulement avec `viewport-fit=cover` dans la
+    ///   balise viewport de la page) ;
+    /// - desktop : rien (`None`).
+    fn refresh_safe_insets(&mut self) {
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        let Some(window) = renderer.window.as_ref() else {
+            return;
+        };
+        let insets = platform_safe_insets(
+            window,
+            #[cfg(target_os = "android")]
+            self.android_app.as_ref(),
+        );
+        self.state.safe_insets_px = insets;
+    }
+
+    /// Capture/rend le curseur selon l'état du jeu (roadmap post-audit UX v2
+    /// 2026-09-04, 5.6) : capturé et masqué en mode Player pendant une partie
+    /// à la souris ; rendu à l'accueil, en pause, sur une fenêtre (Paramètres,
+    /// aide, carte, journal), à la défaite/fin de manche, quand la fenêtre perd
+    /// le focus, et jamais en Play de l'éditeur ni sur écran tactile.
+    /// `Locked` d'abord (souris immobile, deltas via `device_event`), sinon
+    /// `Confined` (X11) ; sur le web, `Locked` = `requestPointerLock`, qui
+    /// peut être refusé hors geste utilisateur — on retente au prochain clic.
+    fn update_cursor_grab(&mut self) {
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            return;
+        }
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        let Some(window) = renderer.window.as_ref() else {
+            return;
+        };
+        let s = &self.state;
+        let want = s.player
+            && s.playing
+            && !s.paused
+            && !s.welcome_pending
+            && !s.is_locally_defeated()
+            && !s.is_lost()
+            && !s.has_won()
+            && !s.touch_ui_active()
+            && self.window_focused
+            && !renderer.player_overlay_open();
+        if want == self.cursor_grabbed {
+            return;
+        }
+        if want {
+            if !self.cursor_grab_retry {
+                return;
+            }
+            let grabbed = window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+            match grabbed {
+                Ok(()) => {
+                    window.set_cursor_visible(false);
+                    self.cursor_grabbed = true;
+                }
+                Err(e) => {
+                    log::info!("Capture du curseur impossible ({e}) — la caméra suit le glissé.");
+                    self.cursor_grab_retry = false;
+                }
+            }
+        } else {
+            if let Err(e) = window.set_cursor_grab(CursorGrabMode::None) {
+                log::debug!("Libération du curseur : {e}");
+            }
+            window.set_cursor_visible(true);
+            self.cursor_grabbed = false;
         }
     }
 
@@ -503,7 +743,32 @@ impl ApplicationHandler for App {
     /// Mobile : la surface GPU devient invalide quand l'app passe en arrière-plan.
     /// On lâche le renderer ; `resumed` le reconstruira (l'état applicatif est préservé).
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.release_player_touches();
         self.renderer = None;
+    }
+
+    /// Souris capturée en mode joueur (roadmap post-audit UX v2 2026-09-04,
+    /// 5.6) : les deltas bruts (pixels physiques → points) nourrissent
+    /// `touch_look` avec la sensibilité des Paramètres — même canal et même
+    /// consommation par frame que l'orbite au doigt (`update_effects`).
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
+            && self.cursor_grabbed
+        {
+            let ppp = self
+                .renderer
+                .as_ref()
+                .map_or(1.0, |r| r.ui_pixels_per_point())
+                .max(0.1);
+            let s = self.state.fx.mouse_sensitivity / ppp;
+            self.state.input_state.touch_look.0 += dx as f32 * s;
+            self.state.input_state.touch_look.1 += dy as f32 * s;
+        }
     }
 
     /// Seul émetteur d'événements utilisateur : le réveil du pont de pilotage
@@ -514,8 +779,9 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         #[cfg(target_arch = "wasm32")]
         self.adopt_pending_renderer();
-        // Calculé avant d'emprunter `renderer` (cf. `consumed` plus bas).
+        // Calculés avant d'emprunter `renderer` (cf. `consumed` plus bas).
         let app_shortcut = self.is_app_shortcut(&event);
+        let player_touch = self.player_touch_tracking();
         // Un doigt a touché l'écran : l'interface tactile devient celle à
         // dessiner (`AppState::touch_ui_active`, roadmap post-audit UX v2
         // 2026-09-04, 1.1).
@@ -569,6 +835,14 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 renderer.resize(size);
                 self.state.set_viewport(size.width, size.height);
+                self.refresh_safe_insets();
+            }
+            // Doigts du mode joueur (roadmap v2 5.1) : **avant** la garde
+            // `consumed` — egui déclare consommé tout doigt posé sur une zone
+            // (les boutons du HUD, la carte…), or c'est `handle_player_touch`
+            // qui décide, point par point, ce qui revient à egui et au jeu.
+            WindowEvent::Touch(touch) if player_touch => {
+                self.handle_player_touch(touch);
             }
             WindowEvent::RedrawRequested => {
                 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
@@ -644,11 +918,22 @@ impl ApplicationHandler for App {
                 self.right_drag_moved = false;
                 self.right_drag_dist = 0.0;
             }
+            // Curseur capturé (roadmap v2 5.6) : la caméra suit `device_event`,
+            // pas le glissé — un clic ne doit pas lancer l'orbite de `picking`.
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            } if self.cursor_grabbed => {}
             WindowEvent::MouseInput {
                 state: btn_state,
                 button: button @ (MouseButton::Left | MouseButton::Middle),
                 ..
             } => {
+                // Un clic est un geste utilisateur : la capture refusée plus
+                // tôt (pointer lock web) peut être retentée.
+                if btn_state == ElementState::Pressed {
+                    self.cursor_grab_retry = true;
+                }
                 let ev = if btn_state == ElementState::Pressed {
                     // Cmd/Maj enfoncé au clic = sélection additive (multi-sélection 3D).
                     let st = self.modifiers.state();
@@ -688,10 +973,15 @@ impl ApplicationHandler for App {
                     self.state.fly_look_delta(dx as f32, dy as f32);
                 }
                 self.last_cursor = Some((position.x, position.y));
-                self.state.handle_input(InputEvent::PointerMove {
-                    x: position.x,
-                    y: position.y,
-                });
+                // Curseur capturé en `Confined` (roadmap v2 5.6) : le curseur
+                // bouge encore, mais la caméra est déjà nourrie par
+                // `device_event` — pas de second chemin.
+                if !self.cursor_grabbed {
+                    self.state.handle_input(InputEvent::PointerMove {
+                        x: position.x,
+                        y: position.y,
+                    });
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let d = match delta {
@@ -711,17 +1001,23 @@ impl ApplicationHandler for App {
             // l'orbite caméra, qui bougerait la vue au lieu de déplacer le
             // personnage. L'orbite tactile reste réservée à l'éditeur/l'aperçu
             // (sans contrôles mobiles).
-            WindowEvent::Touch(touch)
-                if !(self.state.player
-                    && self.state.scene.mobile.any()
-                    && self.state.touch_ui_active()) =>
-            {
-                self.handle_touch(touch);
-            }
+            // Les doigts du mode joueur sont partis plus haut (`player_touch_tracking`).
+            WindowEvent::Touch(touch) => self.handle_touch(touch),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m,
             // Fenêtre quittée Tab enfoncée : winit n'enverra pas le relâchement,
-            // le classement (roadmap v2 1.6) ne doit pas rester affiché.
-            WindowEvent::Focused(false) => self.state.roster_held = false,
+            // le classement (roadmap v2 1.6) ne doit pas rester affiché — ni un
+            // doigt suivi (roadmap v2 5.1) ; le curseur est rendu (5.6).
+            WindowEvent::Focused(false) => {
+                self.state.roster_held = false;
+                self.window_focused = false;
+                self.release_player_touches();
+                self.update_cursor_grab();
+            }
+            WindowEvent::Focused(true) => {
+                self.window_focused = true;
+                self.cursor_grab_retry = true;
+                self.refresh_safe_insets();
+            }
             WindowEvent::KeyboardInput {
                 event: key_event, ..
             } => {
@@ -823,6 +1119,15 @@ impl ApplicationHandler for App {
                         KeyCode::Digit1 if !cmd => self.state.select_weapon(0),
                         KeyCode::Digit2 if !cmd => self.state.select_weapon(1),
                         KeyCode::Digit3 if !cmd => self.state.select_weapon(2),
+                        // Son coupé/rétabli (roadmap post-audit UX v2 2026-09-04,
+                        // 5.5) — `M` est la carte, `0` était libre.
+                        KeyCode::Digit0 if !cmd && (self.state.player || self.state.playing) => {
+                            if let Some(muted) =
+                                self.renderer.as_mut().and_then(|r| r.toggle_mute())
+                            {
+                                self.state.set_muted(muted);
+                            }
+                        }
                         // Menu pause (Phase J de `sprintreflecion.md`) : sans effet
                         // hors Play (garde dans `toggle_pause`).
                         c if c == self.state.keys.pause => self.state.toggle_pause(),
@@ -989,6 +1294,12 @@ impl ApplicationHandler for App {
             }
             p.poll(&mut self.state, self.renderer.as_mut());
         }
+        // Souris capturée selon l'état du jeu (roadmap v2 5.6) ; doigts lâchés
+        // dès que la partie n'est plus en cours (pause, accueil — 5.1).
+        self.update_cursor_grab();
+        if !self.state.playing || self.state.paused || self.state.welcome_pending {
+            self.release_player_touches();
+        }
         if let Some(renderer) = &self.renderer
             && let Some(window) = &renderer.window
         {
@@ -1002,6 +1313,100 @@ impl ApplicationHandler for App {
             ));
         }
     }
+}
+
+/// Marges sûres système en pixels physiques (cf. `App::refresh_safe_insets`),
+/// `None` là où la plateforme n'en expose pas.
+#[cfg_attr(
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")),
+    allow(unused_variables)
+)]
+fn platform_safe_insets(
+    window: &Window,
+    #[cfg(target_os = "android")] android_app: Option<
+        &winit::platform::android::activity::AndroidApp,
+    >,
+) -> Option<[f32; 4]> {
+    #[cfg(target_os = "ios")]
+    {
+        let scale = window.scale_factor() as f32;
+        let mtm = objc2_foundation::MainThreadMarker::new()?;
+        let app = objc2_ui_kit::UIApplication::sharedApplication(mtm);
+        // `keyWindow` est déprécié pour les apps multi-scènes ; celle-ci n'a
+        // qu'une fenêtre (winit), c'est bien la sienne.
+        // SAFETY : UIKit sur le thread principal (`MainThreadMarker`), la
+        // fenêtre clé est retenue le temps de lire ses insets.
+        #[allow(deprecated)]
+        let key = unsafe { app.keyWindow() }?;
+        let i = key.safeAreaInsets();
+        Some([i.top, i.right, i.bottom, i.left].map(|v| (v as f32 * scale).max(0.0)))
+    }
+    #[cfg(target_os = "android")]
+    {
+        let r = android_app?.content_rect();
+        let size = window.inner_size();
+        let (w, h) = (size.width as i32, size.height as i32);
+        if r.right <= r.left || r.bottom <= r.top || w <= 0 || h <= 0 {
+            return None;
+        }
+        Some([r.top, w - r.right, h - r.bottom, r.left].map(|v| v.max(0) as f32))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_safe_insets(window.scale_factor() as f32)
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    {
+        None
+    }
+}
+
+/// `env(safe-area-inset-*)` (roadmap post-audit UX v2 2026-09-04, 5.4) : un
+/// `<div>` sonde invisible reçoit les quatre valeurs en `padding`, lues par
+/// `getComputedStyle` (en px CSS → × `scale` pour des pixels physiques), puis
+/// retiré. `None` si la page n'a pas de `<body>` ou refuse la sonde ; `0`
+/// partout sans `viewport-fit=cover` dans la balise viewport (comportement
+/// du navigateur, pas une erreur).
+#[cfg(target_arch = "wasm32")]
+fn web_safe_insets(scale: f32) -> Option<[f32; 4]> {
+    const SIDES: [&str; 4] = ["top", "right", "bottom", "left"];
+    let window = web_sys::window()?;
+    let document = window.document()?;
+    let body = document.body()?;
+    let probe: web_sys::HtmlElement = document.create_element("div").ok()?.dyn_into().ok()?;
+    let style = probe.style();
+    style.set_property("position", "fixed").ok()?;
+    style.set_property("visibility", "hidden").ok()?;
+    style.set_property("pointer-events", "none").ok()?;
+    for side in SIDES {
+        style
+            .set_property(
+                &format!("padding-{side}"),
+                &format!("env(safe-area-inset-{side}, 0px)"),
+            )
+            .ok()?;
+    }
+    body.append_child(&probe).ok()?;
+    let computed = window.get_computed_style(&probe).ok().flatten();
+    let mut out = [0.0f32; 4];
+    if let Some(c) = computed {
+        for (slot, side) in out.iter_mut().zip(SIDES) {
+            let v = c
+                .get_property_value(&format!("padding-{side}"))
+                .unwrap_or_default();
+            *slot = v
+                .trim()
+                .trim_end_matches("px")
+                .parse::<f32>()
+                .unwrap_or(0.0)
+                .max(0.0)
+                * scale;
+        }
+    }
+    if let Err(e) = body.remove_child(&probe) {
+        log::debug!("Sonde safe-area non retirée : {e:?}");
+    }
+    Some(out)
 }
 
 /// Démarre la surveillance du dossier d'assets de projet (Sprint 111), créé au
@@ -1351,7 +1756,12 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
     // dépend sur Android (cf. doc de `crash_log::install`).
     crate::crash_log::install();
 
-    let event_loop = match EventLoop::builder().with_android_app(android_app).build() {
+    // `clone()` : la poignée reste lisible ensuite (`app.android_app`, marges
+    // sûres) — c'est un `Arc`, la copie est gratuite.
+    let event_loop = match EventLoop::builder()
+        .with_android_app(android_app.clone())
+        .build()
+    {
         Ok(el) => el,
         Err(e) => {
             log::error!("Création de la boucle d'événements Android impossible : {e}");
@@ -1360,6 +1770,8 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
     };
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = make_app(true); // mobile = mode player
+    // Marges sûres (roadmap v2 5.4) : `content_rect` se lit sur cette poignée.
+    app.android_app = Some(android_app);
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Boucle d'événements Android terminée sur erreur : {e}");
     }

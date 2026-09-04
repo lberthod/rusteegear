@@ -34,6 +34,10 @@ pub struct Settings {
     /// `runtime::audio::Audio::set_sfx_volume`).
     #[serde(default = "default_volume")]
     pub sfx_volume: f32,
+    /// Son coupé (touche `0`, bouton 🔇 du HUD joueur — roadmap post-audit UX
+    /// v2 2026-09-04, 5.5) ; `music_volume`/`sfx_volume` restent mémorisés.
+    #[serde(default)]
+    pub muted: bool,
     /// Échelle des éléments HUD peints directement (barre de vie, indicateur de
     /// vague, HUD d'arme, frags, réticule, bannières) — PHASE I Sprint 1 (GDD
     /// §16.6, accessibilité minimale). 1.0 = taille actuelle ; ne change que la
@@ -255,8 +259,11 @@ fn default_temperature() -> f32 {
     0.2
 }
 
+/// 0,6 plutôt que 1,0 (roadmap post-audit UX v2 2026-09-04, 5.5) : un jeu
+/// qui démarre à fond sur un téléphone fait sursauter. Un `settings.json`
+/// existant garde sa valeur (le défaut ne vaut que pour un champ absent).
 fn default_volume() -> f32 {
-    1.0
+    0.6
 }
 
 fn default_hud_scale() -> f32 {
@@ -273,6 +280,7 @@ impl Default for Settings {
             firebase_database_url: String::new(),
             music_volume: default_volume(),
             sfx_volume: default_volume(),
+            muted: false,
             hud_scale: default_hud_scale(),
             reduce_shake: false,
             gamepad: GamepadBindings::default(),
@@ -576,14 +584,30 @@ mod tests {
     }
 
     #[test]
-    fn music_and_sfx_volume_round_trip_at_full_volume_by_default() {
+    fn music_and_sfx_volume_round_trip_at_the_default_volume() {
+        // 0,6 par défaut (roadmap post-audit UX v2 2026-09-04, 5.5), son non coupé.
         let settings = Settings::default();
-        assert_eq!(settings.music_volume, 1.0);
-        assert_eq!(settings.sfx_volume, 1.0);
+        assert_eq!(settings.music_volume, 0.6);
+        assert_eq!(settings.sfx_volume, 0.6);
+        assert!(!settings.muted);
         let json = serde_json::to_string(&settings).expect("sérialisable");
         let back: Settings = serde_json::from_str(&json).expect("désérialisable");
-        assert_eq!(back.music_volume, 1.0);
-        assert_eq!(back.sfx_volume, 1.0);
+        assert_eq!(back.music_volume, 0.6);
+        assert_eq!(back.sfx_volume, 0.6);
+    }
+
+    /// Roadmap v2 5.5 : baisser le défaut ne doit pas toucher un réglage déjà
+    /// enregistré — un utilisateur à 1,0 reste à 1,0 ; `muted` absent = son actif.
+    #[test]
+    fn a_saved_full_volume_survives_the_lower_default() {
+        let json = r#"{"music_volume": 1.0, "sfx_volume": 0.9}"#;
+        let settings: Settings = serde_json::from_str(json).expect("lisible");
+        assert_eq!(settings.music_volume, 1.0);
+        assert_eq!(settings.sfx_volume, 0.9);
+        assert!(!settings.muted);
+        let muted: Settings = serde_json::from_str(r#"{"muted": true}"#).expect("lisible");
+        assert!(muted.muted);
+        assert_eq!(muted.music_volume, 0.6);
     }
 
     /// Sprint 104 : un `settings.json` déjà sur le disque d'un utilisateur
@@ -603,8 +627,8 @@ mod tests {
         let settings: Settings = serde_json::from_str(old_json)
             .expect("un ancien settings.json sans les champs volume doit rester lisible");
         assert_eq!(settings.deepseek_api_key, "sk-test");
-        assert_eq!(settings.music_volume, 1.0);
-        assert_eq!(settings.sfx_volume, 1.0);
+        assert_eq!(settings.music_volume, 0.6);
+        assert_eq!(settings.sfx_volume, 0.6);
         assert_eq!(settings.gamepad, GamepadBindings::default());
     }
 

@@ -23,6 +23,19 @@ BUILD_NUMBER="${BUILD_NUMBER:-1}"
 TEAM_ID="${TEAM_ID:-N668CK695Q}"
 IDENTITY="${IDENTITY:-Apple Development: lberthod@gmail.com (32AA99MN7M)}"
 
+# Orientation (roadmap post-audit UX v2 2026-09-04, 5.4) : même variable que
+# build_apk.sh, posée par le panneau Export depuis `BuildConfig::orientation`
+# (`sensor` / `portrait` / `landscape`) — l'app ne déclarait rien et iOS la
+# laissait tourner dans tous les sens, HUD compris.
+case "${ANDROID_ORIENTATION:-sensor}" in
+    portrait)
+        ORIENTATIONS='<string>UIInterfaceOrientationPortrait</string>' ;;
+    landscape)
+        ORIENTATIONS='<string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>' ;;
+    *)
+        ORIENTATIONS='<string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>' ;;
+esac
+
 echo "▶ Compilation Rust pour iOS (release)…"
 cargo build --release --target aarch64-apple-ios
 
@@ -45,6 +58,11 @@ cat > "$APP/Info.plist" <<PLIST
 <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
 <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
 <key>UILaunchScreen</key><dict/>
+<key>UISupportedInterfaceOrientations</key><array>$ORIENTATIONS</array>
+<key>UISupportedInterfaceOrientations~ipad</key><array>$ORIENTATIONS</array>
+<key>UIRequiresFullScreen</key><true/>
+<key>UIStatusBarHidden</key><true/>
+<key>UIViewControllerBasedStatusBarAppearance</key><false/>
 </dict></plist>
 PLIST
 

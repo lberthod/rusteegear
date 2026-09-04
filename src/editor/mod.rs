@@ -786,6 +786,10 @@ pub struct UiActions {
     pub launch_glb_viewer: bool,
     pub play_audio: Option<String>,
     /// Fenêtre Paramètres : volume musique/ambiance changé (Sprint 104).
+    /// Son coupé/rétabli depuis le bouton 🔇 du HUD joueur (roadmap post-audit
+    /// UX v2 2026-09-04, 5.5) — déjà persisté dans `Settings::muted`, reste à
+    /// l'appliquer à `AppState::set_muted`.
+    pub muted: Option<bool>,
     pub music_volume: Option<f32>,
     /// Fenêtre Paramètres : volume effets sonores changé (Sprint 104).
     pub sfx_volume: Option<f32>,
@@ -1133,6 +1137,34 @@ impl Editor {
         self.panels.shortcuts = !self.panels.shortcuts;
     }
 
+    /// Une fenêtre du mode Player (Paramètres, aide, carte, journal de crash)
+    /// est-elle ouverte ? Le curseur souris capturé pendant la partie (roadmap
+    /// post-audit UX v2 2026-09-04, 5.6) est rendu tant que c'est vrai.
+    pub fn player_overlay_open(&self) -> bool {
+        self.panels.settings || self.panels.help || self.panels.map_open || self.panels.crash_log
+    }
+
+    /// Coupe/rétablit le son (touche `0`, roadmap v2 5.5), persiste le réglage
+    /// et renvoie le nouvel état — l'appelant l'applique à `AppState::set_muted`.
+    pub fn toggle_mute(&mut self) -> bool {
+        self.settings.muted = !self.settings.muted;
+        self.settings.save();
+        self.settings.muted
+    }
+
+    /// Points egui par pixel physique (facteur d'échelle × zoom de l'interface)
+    /// — pour convertir la position d'un doigt winit (pixels physiques) dans le
+    /// repère des zones tactiles (`PlayerInput::touch_zones`, roadmap v2 5.1).
+    pub fn pixels_per_point(&self) -> f32 {
+        self.ctx.pixels_per_point()
+    }
+
+    /// Une fenêtre/zone egui occupe-t-elle ce point (en points) ? Cf.
+    /// `hud::egui_owns_point` — un doigt posé dessus est laissé à egui.
+    pub fn ui_owns_point(&self, p: egui::Pos2) -> bool {
+        hud::egui_owns_point(&self.ctx, p)
+    }
+
     /// Fenêtres flottantes à mémoriser entre deux lancements (roadmap 5.4).
     const PERSISTED_WINDOWS: [&'static str; 8] = [
         "console",
@@ -1264,6 +1296,9 @@ impl Editor {
         touch_ui: bool,
         // Tab maintenue : classement déplié (roadmap v2 1.6).
         roster_held: bool,
+        // Marges sûres système en pixels physiques (`AppState::safe_insets_px`,
+        // roadmap post-audit UX v2 2026-09-04, 5.4), `None` si inconnues.
+        safe_insets_px: Option<[f32; 4]>,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx
@@ -1344,10 +1379,20 @@ impl Editor {
         let output = self.ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
             let hud_scale = settings.hud_scale;
-            let area = play_area_rect(ctx.content_rect(), device_preview, device_portrait);
+            // `screen` : toute la zone de jeu (fond de la carte, voile de pause,
+            // vignette) ; `area` : la même moins les marges sûres, pour **tout**
+            // le HUD (roadmap post-audit UX v2 2026-09-04, 5.4 — seul le stick
+            // se rentrait, la barre de vie et la pastille passaient sous
+            // l'encoche). Insets système (pixels physiques → points) en
+            // plancher, marge de repli de la scène (`safe_area`) par-dessus.
+            let screen = play_area_rect(ctx.content_rect(), device_preview, device_portrait);
+            let ppp = ctx.pixels_per_point().max(0.1);
+            let system_pt = safe_insets_px.map(|px| px.map(|v| v / ppp));
+            let insets = crate::app::touch::safe_insets(screen, system_pt, mobile.safe_area);
+            let area = crate::app::touch::inset_rect(screen, insets);
             if device_preview {
-                device_bezel(ctx, area);
-                touch_feedback(ctx, area);
+                device_bezel(ctx, screen);
+                touch_feedback(ctx, screen);
             }
             // Écran d'accueil (roadmap 2.1 ; v2 1.4) : seul par-dessus la 3D —
             // pas de HUD, de pastille ni de contrôles tactiles derrière (le jeu
@@ -1359,6 +1404,8 @@ impl Editor {
                 input_state.touch_turn = 0.0;
                 input_state.touch_look = (0.0, 0.0);
                 input_state.buttons.clear();
+                input_state.touch_stick = None;
+                input_state.touch_zones = None;
                 if let Some(choice) = windows::player_welcome_window(
                     ctx,
                     area,
@@ -1413,7 +1460,7 @@ impl Editor {
                 return;
             }
             if damage_flash > 0.0 {
-                damage_vignette(ctx, area, damage_flash);
+                damage_vignette(ctx, screen, damage_flash);
             }
             if ally_down_flash > 0.0 {
                 ally_down_banner(ctx, area, ally_down_flash, locale, hud_scale, ally_marker);
@@ -1520,7 +1567,7 @@ impl Editor {
                 // ou Aide ouverts depuis le menu : les boutons se retirent, le
                 // voile reste (roadmap v2 1.3).
                 if *settings_open || *help_open {
-                    pause_veil(ctx, area);
+                    pause_veil(ctx, screen);
                 } else {
                     let choice =
                         pause_menu(ctx, area, locale, hud_scale, net_connected, restart_confirm);
@@ -1567,7 +1614,9 @@ impl Editor {
             // (roadmap v2 1.1 — un desktop à la souris n'a rien à en faire) et
             // hors pause (roadmap v2 1.5).
             if touch_ui && mobile.any() && !paused {
-                mobile_overlay(ctx, area, mobile, input_state);
+                // Doigts suivis un par un par `lib.rs` (`tracked`, roadmap v2
+                // 5.1) : l'overlay dessine l'état, il ne l'écrase pas.
+                mobile_overlay(ctx, area, mobile, input_state, hud_scale, touch_ui, 1.0);
                 // Vaincu : le bouton de saut passe à l'allié suivant (roadmap
                 // v2 1.9), sur front montant comme la touche clavier.
                 let jump_held = input_state.buttons.contains(&jump_button);
@@ -1581,22 +1630,30 @@ impl Editor {
                 input_state.touch_turn = 0.0;
                 input_state.touch_look = (0.0, 0.0);
                 input_state.buttons.clear();
+                input_state.touch_stick = None;
+                input_state.touch_zones = None;
                 *jump_touch_was_held = false;
             }
-            // ⏸ / Carte / ? (roadmap 2.5 et 5.5) — sans clavier, ni Échap, ni M,
-            // ni F1 ; utiles à la souris aussi, donc pour toute scène (roadmap v2 1.1).
-            let (pause_clicked, map_clicked, help_clicked) = mobile_top_buttons(ctx, area, paused);
-            if pause_clicked {
+            // ⏸ / 🔇 / Carte / ? (roadmap 2.5, 5.5 ; v2 5.3/5.5) — sans clavier,
+            // ni Échap, ni M, ni F1 ; utiles à la souris aussi, donc pour toute
+            // scène (roadmap v2 1.1). Au-dessus de la carte quand elle est ouverte.
+            let top = mobile_top_buttons(ctx, area, paused, settings.muted, map_open, locale);
+            if top.pause {
                 actions.toggle_pause = true;
             }
-            if map_clicked {
+            if top.map {
                 *map_open_ref = !*map_open_ref;
             }
-            if help_clicked {
+            if top.help {
                 *help_open = !*help_open;
                 if *help_open {
                     *settings_open = false;
                 }
+            }
+            if top.mute {
+                settings.muted = !settings.muted;
+                settings.save();
+                actions.muted = Some(settings.muted);
             }
             // Pastille réseau permanente + bannière d'événement (roadmap 2.2).
             let net_label = match (net_kind, net_rtt_ms) {
@@ -1605,7 +1662,7 @@ impl Editor {
                 (1, _) => crate::app::locale::net_connecting(locale).to_string(),
                 _ => crate::app::locale::net_offline(locale).to_string(),
             };
-            net_status_pill(ctx, area, net_kind, &net_label, hud_scale);
+            net_status_pill(ctx, area, net_kind, &net_label, hud_scale, top.rect.left());
             if let Some((text, alpha)) = &net_banner {
                 net_event_banner(ctx, area, text, *alpha, hud_scale);
             }
@@ -1637,7 +1694,11 @@ impl Editor {
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
             // (jamais les deux à la fois, cf. doc de `player_map_overlay`).
             if map_open {
-                player_map_overlay(ctx, area, minimap, locale, touch_ui, map_zoom, map_pan);
+                // Fond sur tout l'écran ; le bouton ✖ (roadmap v2 5.3) et les
+                // boutons du haut (au-dessus, `Order::Tooltip`) la ferment.
+                if player_map_overlay(ctx, screen, minimap, locale, touch_ui, map_zoom, map_pan) {
+                    *map_open_ref = false;
+                }
             } else {
                 player_corner_minimap(ctx, area, minimap, hud_scale);
             }
@@ -2536,6 +2597,7 @@ fn build_ui(
         wave,
         hud_image_cache,
         actions,
+        settings.mouse_sensitivity,
     );
 
     // Résumé lisible de l'autosave (« il y a 2 h · 994 objets ») plutôt qu'un
@@ -3793,7 +3855,7 @@ fn play_overlays(
     // `map_zoom`/`map_pan`), donc la touche `M` (cf. `Renderer::toggle_player_map`,
     // maintenant armée aussi hors mode `--player`) les bascule ici aussi.
     if panels.map_open {
-        player_map_overlay(
+        if player_map_overlay(
             root.ctx(),
             play_rect,
             minimap,
@@ -3801,7 +3863,9 @@ fn play_overlays(
             false,
             &mut panels.map_zoom,
             &mut panels.map_pan,
-        );
+        ) {
+            panels.map_open = false;
+        }
     } else {
         player_corner_minimap(root.ctx(), play_rect, minimap, hud_scale);
     }
@@ -3878,6 +3942,10 @@ fn end_of_round_and_hud_widgets(
     wave: u32,
     hud_image_cache: &mut HudImageCache,
     actions: &mut UiActions,
+    // Sensibilité souris des Paramètres (roadmap post-audit UX v2 2026-09-04,
+    // 5.6) : l'orbite au pointeur de l'aperçu mobile la suit comme la caméra
+    // de `picking`.
+    mouse_sensitivity: f32,
 ) {
     // Fin de partie : bouton « Rejouer » (preview éditeur, comme sur APK).
     // `round_summary_won` prime sur `won` (local, pensé pour un joueur solo)
@@ -3891,10 +3959,24 @@ fn end_of_round_and_hud_widgets(
         actions.restart = true;
     }
     if *playing && scene.mobile.any() {
-        mobile_overlay(root.ctx(), play_rect, &scene.mobile, input_state);
+        // Aperçu éditeur : la souris simule un doigt via egui (`tracked =
+        // false`), marge de repli si la scène la demande (roadmap v2 5.4).
+        let insets = crate::app::touch::safe_insets(play_rect, None, scene.mobile.safe_area);
+        let rect = crate::app::touch::inset_rect(play_rect, insets);
+        mobile_overlay(
+            root.ctx(),
+            rect,
+            &scene.mobile,
+            input_state,
+            hud_scale,
+            false,
+            mouse_sensitivity,
+        );
     } else {
         input_state.joy = (0.0, 0.0);
         input_state.buttons.clear();
+        input_state.touch_stick = None;
+        input_state.touch_zones = None;
     }
     // Widgets HUD déclaratifs (`Scene::hud_widgets`) : visibles en Play comme en
     // Édition (via 👁 Aperçu HUD) — même logique que `hud_preview_overlays`

@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 /// Le joystick et chaque bouton nommé sont lisibles depuis Lua via `input`.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct MobileControls {
-    /// Affiche un joystick virtuel (coin bas-gauche).
+    /// Affiche le stick virtuel flottant (moitié gauche) — même comportement
+    /// que `dual_stick`, cf. sa doc.
     pub joystick: bool,
     /// Affiche un pavé « tank » W/A/S/D (coin bas-gauche) à la place du
     /// joystick : mêmes contrôles que le clavier desktop — W/S avance/recule le
@@ -18,15 +19,28 @@ pub struct MobileControls {
     /// même coin de l'écran.
     #[serde(default)]
     pub dpad: bool,
-    /// Joystick virtuel bridé à l'axe avance/recul (coin bas-gauche) : contrairement
-    /// à `joystick` (axe libre X/Y), dévier le pouce latéralement n'a aucun effet —
-    /// seul l'axe vertical compte, écrit dans `PlayerInput::touch_thrust`. À la
-    /// place de `joystick`. Prioritaire sur `joystick` mais pas sur `dpad` (cf.
-    /// `mobile_overlay`), pour ne jamais superposer plusieurs schémas de contrôle
-    /// dans le même coin de l'écran. **Pas de second stick pour tourner** : une
-    /// première version ajoutait un stick droit (axe horizontal → rotation
-    /// caméra/personnage) mais il a été retiré sur retour explicite — tourner
-    /// reste au clavier (flèches) tant qu'aucun remplacement tactile n'est défini.
+    /// Schéma « stick + caméra au doigt » (roadmap post-audit UX v2
+    /// 2026-09-04, 5.7 — cette doc décrivait encore un stick bridé à un axe) :
+    ///
+    /// - **stick gauche flottant** : il apparaît là où le pouce se pose dans la
+    ///   moitié gauche de l'écran (sous la barre de vie), deux axes **relatifs
+    ///   à la caméra** écrits dans `PlayerInput::joy` — le même canal que
+    ///   WASD/flèches, le personnage tourne tout seul vers la direction
+    ///   demandée ; zone morte de 12 %, rayon proportionnel à l'écran (44 à
+    ///   90 pt, cf. `app::touch::stick_radius`), le doigt garde le contrôle en
+    ///   sortant du cercle et le stick disparaît au relâchement (roadmap v2 5.2) ;
+    /// - **orbite au doigt** : glisser dans la moitié droite tourne la caméra
+    ///   (`PlayerInput::touch_look`), en même temps que le stick — chaque doigt
+    ///   est suivi séparément (`lib.rs`, roadmap v2 5.1) ;
+    /// - **grille d'action** bas-droite (`buttons`) : boutons nommés tenables
+    ///   pendant que le stick est actif.
+    ///
+    /// À la place de `joystick` (même schéma aujourd'hui — `joystick` est
+    /// l'ancien nom, gardé pour les scènes existantes) ; prioritaire sur
+    /// `joystick` mais pas sur `dpad` (cf. `mobile_overlay`), pour ne jamais
+    /// superposer plusieurs schémas dans le même coin de l'écran. Il n'y a pas
+    /// de second stick dessiné : la moitié droite entière fait office de
+    /// « stick caméra », plus large qu'un cercle sous le pouce.
     #[serde(default)]
     pub dual_stick: bool,
     /// Boutons tactiles nommés (coin bas-droite).
@@ -37,7 +51,12 @@ pub struct MobileControls {
     /// Affiche la barre de vie du HUD (pilotée par `set_health` côté script).
     #[serde(default)]
     pub health_bar: bool,
-    /// Screen Safe Area : rentre les contrôles/HUD dans une marge sûre (encoche, bords arrondis).
+    /// Screen Safe Area : rentre les contrôles/HUD dans une marge sûre (encoche,
+    /// bords arrondis). Les insets système (iOS `safeAreaInsets`, rectangle de
+    /// contenu Android, `env(safe-area-inset-*)` web) s'appliquent toujours à
+    /// tout le HUD ; ce drapeau ajoute la marge de repli de 6 % (28 pt max)
+    /// sur les côtés sans inset connu — cf. `app::touch::safe_insets`
+    /// (roadmap post-audit UX v2 2026-09-04, 5.4).
     #[serde(default)]
     pub safe_area: bool,
 }

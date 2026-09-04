@@ -373,6 +373,7 @@ impl Renderer {
                     spectating.as_deref(),
                     touch_ui,
                     roster_held,
+                    app.safe_insets_px,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -1264,6 +1265,9 @@ fn apply_editor_actions(
     }
     if let Some(clip) = actions.play_audio {
         app.play_audio(&clip);
+    }
+    if let Some(m) = actions.muted {
+        app.set_muted(m);
     }
     if let Some(v) = actions.music_volume {
         app.set_music_volume(v);
