@@ -174,9 +174,43 @@ impl AppState {
         self.restart_game();
     }
 
-    /// Sauvegarde rapide vers l'emplacement par défaut (`~/motor3derust_scene.json`).
+    /// Cible de « 💾 Enregistrer » / Cmd+S : la scène de démarrage du projet
+    /// ouvert, sinon l'emplacement historique `~/motor3derust_scene.json`
+    /// (roadmap post-audit UX 2026-09-04, 1.1 — avant, Enregistrer ignorait le
+    /// projet et écrivait toujours dans le fichier personnel : quelqu'un qui
+    /// ouvrait `examples/first_game`, modifiait et enregistrait ne retrouvait
+    /// rien dans son projet).
+    pub fn save_target(&self) -> String {
+        match &self.current_project {
+            Some(project) => project.main_scene_path.to_string_lossy().into_owned(),
+            None => scene_path(),
+        }
+    }
+
+    /// Sauvegarde rapide vers `save_target()`.
     pub fn save(&mut self) {
-        self.save_to(&scene_path());
+        let path = self.save_target();
+        self.save_to(&path);
+    }
+
+    /// Titre de la fenêtre de l'éditeur (roadmap post-audit UX 2026-09-04, 1.4) :
+    /// « Projet — scène.json • RusteeGear », le point signalant des
+    /// modifications non sauvegardées (convention macOS). Mode player : le nom
+    /// du produit seul.
+    pub fn window_title(&self) -> String {
+        if self.player {
+            return "RusteeGear".to_string();
+        }
+        let target = self.save_target();
+        let file = std::path::Path::new(&target)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| target.clone());
+        let dirty = if self.scene_dirty { " •" } else { "" };
+        match &self.current_project {
+            Some(project) => format!("{} — {file}{dirty} · RusteeGear", project.name),
+            None => format!("{file}{dirty} · RusteeGear"),
+        }
     }
 
     /// Sauvegarde la scène en JSON vers un chemin donné (« Enregistrer sous »).

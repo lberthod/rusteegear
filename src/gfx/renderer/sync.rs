@@ -70,10 +70,17 @@ impl Renderer {
 
     /// Résout le `GpuMesh` d'un type de mesh (None si un modèle importé n'est pas encore chargé).
     pub(super) fn resolve_mesh(&self, mesh: MeshKind) -> Option<&GpuMesh> {
-        match mesh {
+        let found = match mesh {
             MeshKind::Imported(i) => self.imported_gpu.get(i as usize),
             k => self.meshes.get(&k),
-        }
+        };
+        // Un mesh sans géométrie (asset introuvable au rechargement, cf.
+        // `Scene::reload_imported` et `examples/broken_scene`) a des tampons GPU
+        // vides : `Buffer::slice(..)` sur un tampon de taille 0 fait paniquer
+        // wgpu (« buffer slices can not be empty ») — l'éditeur plantait en
+        // ouvrant la scène-exemple des pannes (roadmap post-audit UX
+        // 2026-09-04, lot 1.B). Un tel objet est simplement ignoré au dessin.
+        found.filter(|m| m.num_indices > 0)
     }
 
     /// Construit les `GpuMesh` des modèles importés pas encore chargés sur GPU.

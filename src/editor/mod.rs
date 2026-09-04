@@ -6,6 +6,7 @@ mod hierarchy;
 mod hud;
 mod menus;
 mod readiness;
+mod toasts;
 mod windows;
 
 use egui::ViewportId;
@@ -217,6 +218,10 @@ pub struct Editor {
     /// et le bouton « Copier l'adresse ». Cohérent avec `local_server` (posé
     /// ensemble, effacé ensemble).
     local_server_addr: Option<String>,
+    /// Notifications non bloquantes (roadmap post-audit UX 2026-09-04, 1.2).
+    toasts: toasts::Toasts,
+    /// Changement de scène en attente de confirmation (cf. `SceneSwitch`).
+    pub(crate) pending_switch: Option<SceneSwitch>,
 }
 
 impl Drop for Editor {
@@ -298,6 +303,9 @@ struct Panels {
     hud_hidden: bool,
     /// Fenêtre « 🧩 Widgets HUD » (édition de `Scene::hud_widgets`).
     hud_widgets_editor: bool,
+    /// Résumé (âge, nombre d'objets) de l'autosave proposé en restauration,
+    /// calculé une fois par chemin (roadmap post-audit UX 2026-09-04, 1.8).
+    autosave_summary: Option<(std::path::PathBuf, String)>,
     /// Fenêtre « 🩹 Journal de crash » (Sprint 113) — ouverte automatiquement au
     /// lancement si `crash_log::read()` a trouvé une trace, sinon accessible depuis
     /// le menu Aide. Écran **volontaire** : rien n'est envoyé nulle part depuis ici,
@@ -378,6 +386,16 @@ pub struct StatusInfo<'a> {
     /// (`MAX_SKINNED_INSTANCES`) — cf. `Renderer::skinned_dropped_count`.
     /// Doit rester à 0 ; toute valeur > 0 est mise en évidence dans le Profiler.
     pub skinned_dropped: u32,
+    /// Nom du projet ouvert (`AppState::current_project`), `None` en mode
+    /// « scène seule » — affiché dans la barre d'état (roadmap post-audit UX
+    /// 2026-09-04, 1.4 : jusque-là l'UI ne recevait qu'un booléen `has_project`).
+    pub project_name: Option<&'a str>,
+    /// Fichier visé par « Enregistrer » (`AppState::save_target`).
+    pub save_target: &'a str,
+    /// Scène modifiée depuis la dernière sauvegarde (`AppState::scene_dirty`).
+    pub scene_dirty: bool,
+    /// Erreurs de script Lua par index d'objet (`AppState::script_errors`).
+    pub script_errors: &'a std::collections::HashMap<usize, String>,
 }
 
 /// Demande de création de projet posée par l'assistant « Nouveau projet »
@@ -388,6 +406,101 @@ pub struct NewProjectRequest {
     pub name: String,
     pub location: std::path::PathBuf,
     pub template: crate::project::ProjectTemplate,
+}
+
+/// Démo embarquée à charger (menu Fichier › Démos) — cf. `SceneSwitch::Demo`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DemoKind {
+    Mobile,
+    Gameplay,
+    Controller,
+    Tower,
+    TempleRun,
+    Components,
+    AiDuel,
+    Mmorpg,
+    Roguelike,
+    Brawl,
+    Boss,
+    Escorte,
+    Survie,
+}
+
+/// Changement de scène demandé par l'UI (roadmap post-audit UX 2026-09-04,
+/// 1.5). Toutes ces actions remplacent la scène courante : elles passent par
+/// un point unique (`gfx::renderer::frame::perform_scene_switch`) qui, si la
+/// scène est modifiée et non sauvegardée, les met en attente derrière la
+/// modale Enregistrer / Continuer sans enregistrer / Annuler — avant, seuls
+/// Quitter et Fermer le projet posaient la question ; Ouvrir, Nouveau projet
+/// et les Démos écrasaient le travail en cours sans un mot.
+#[derive(Clone, Debug)]
+pub enum SceneSwitch {
+    /// Chemin du manifeste ou du dossier racine d'un projet.
+    OpenProject(String),
+    CreateProject(NewProjectRequest),
+    /// Scène JSON seule.
+    LoadPath(String),
+    /// Scène à l'emplacement par défaut (mobile/web, sans sélecteur).
+    LoadDefault,
+    NewScene,
+    Demo(DemoKind),
+}
+
+impl SceneSwitch {
+    /// Verbe affiché dans la modale de confirmation (« Enregistrer puis … »).
+    pub fn label(&self) -> &'static str {
+        match self {
+            SceneSwitch::OpenProject(_) => "ouvrir le projet",
+            SceneSwitch::CreateProject(_) => "créer le projet",
+            SceneSwitch::LoadPath(_) | SceneSwitch::LoadDefault => "ouvrir la scène",
+            SceneSwitch::NewScene => "vider la scène",
+            SceneSwitch::Demo(_) => "charger la démo",
+        }
+    }
+}
+
+impl UiActions {
+    /// Prélève le changement de scène demandé cette frame, s'il y en a un
+    /// (un seul par frame : les entrées de menu ferment le menu) — cf.
+    /// `SceneSwitch`. Les drapeaux correspondants sont consommés.
+    pub fn take_scene_switch(&mut self) -> Option<SceneSwitch> {
+        if let Some(p) = self.open_project_path.take() {
+            return Some(SceneSwitch::OpenProject(p));
+        }
+        if let Some(req) = self.create_project.take() {
+            return Some(SceneSwitch::CreateProject(req));
+        }
+        if let Some(p) = self.load_path.take() {
+            return Some(SceneSwitch::LoadPath(p));
+        }
+        if std::mem::take(&mut self.load) {
+            return Some(SceneSwitch::LoadDefault);
+        }
+        if std::mem::take(&mut self.new_scene) {
+            return Some(SceneSwitch::NewScene);
+        }
+        let demos = [
+            (&mut self.load_demo, DemoKind::Mobile),
+            (&mut self.load_gameplay, DemoKind::Gameplay),
+            (&mut self.load_controller, DemoKind::Controller),
+            (&mut self.load_tower, DemoKind::Tower),
+            (&mut self.load_temple_run, DemoKind::TempleRun),
+            (&mut self.load_components_demo, DemoKind::Components),
+            (&mut self.load_ai_duel, DemoKind::AiDuel),
+            (&mut self.load_mmorpg, DemoKind::Mmorpg),
+            (&mut self.load_roguelike, DemoKind::Roguelike),
+            (&mut self.load_brawl, DemoKind::Brawl),
+            (&mut self.load_boss, DemoKind::Boss),
+            (&mut self.load_escorte, DemoKind::Escorte),
+            (&mut self.load_survie, DemoKind::Survie),
+        ];
+        for (flag, kind) in demos {
+            if std::mem::take(flag) {
+                return Some(SceneSwitch::Demo(kind));
+            }
+        }
+        None
+    }
 }
 
 /// Actions demandées par l'UI durant une frame, à traiter par l'appelant.
@@ -422,6 +535,11 @@ pub struct UiActions {
     /// `AppState::pending_autosave_recovery`).
     pub restore_autosave: bool,
     pub dismiss_autosave_recovery: bool,
+    /// Réponses à la modale « modifications non sauvegardées » d'un
+    /// changement de scène (cf. `SceneSwitch`, `Editor::pending_switch`).
+    pub switch_save: bool,
+    pub switch_discard: bool,
+    pub switch_cancel: bool,
     pub import: Option<String>,
     pub add: Option<MeshKind>,
     pub delete: Option<usize>,
@@ -673,6 +791,8 @@ impl Editor {
             mp_last_presence_heartbeat: None,
             local_server: None,
             local_server_addr: None,
+            toasts: toasts::Toasts::default(),
+            pending_switch: None,
         }
     }
 
@@ -1114,9 +1234,21 @@ impl Editor {
         confirm_close_project: bool,
         // Autosave à proposer en restauration (Sprint 6, `AppState::pending_autosave_recovery`).
         pending_autosave_recovery: Option<&std::path::Path>,
+        // Raccourci de fichier reçu au clavier (`AppState::pending_shortcut`).
+        shortcut: Option<crate::app::EditorShortcut>,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         let mut actions = UiActions::default();
+        // Cmd+Maj+S / Cmd+O / Cmd+N (roadmap post-audit UX 2026-09-04, 1.1) :
+        // même code que les entrées du menu Fichier correspondantes.
+        match shortcut {
+            Some(crate::app::EditorShortcut::SaveAs) => menus::dialog_save_as(&mut actions),
+            Some(crate::app::EditorShortcut::Open) => menus::dialog_open(&mut actions),
+            Some(crate::app::EditorShortcut::NewProject) => {
+                self.panels.new_project_wizard = true;
+            }
+            None => {}
+        }
 
         // Sprint 7 : lu avant les emprunts `&mut self.<champ>` ci-dessous (des
         // méthodes `&self` sur des champs disjoints n'évitent pas un conflit
@@ -1148,6 +1280,9 @@ impl Editor {
         let hud_image_cache = &mut self.hud_image_cache;
         let hud_widget_new_id = &mut self.hud_widget_new_id;
         let crash_log_text = &mut self.crash_log_text;
+        self.toasts.pump(panels.console);
+        let toasts = &mut self.toasts;
+        let pending_switch_label = self.pending_switch.as_ref().map(|s| s.label());
         let output = self.ctx.run_ui(raw_input, |ui| {
             build_ui(
                 ui,
@@ -1229,6 +1364,8 @@ impl Editor {
                 local_server_running,
                 local_server_pid,
                 local_server_addr.clone(),
+                toasts,
+                pending_switch_label,
             );
         });
 
@@ -1445,6 +1582,9 @@ fn build_ui(
     local_server_running: bool,
     local_server_pid: Option<u32>,
     local_server_addr: Option<String>,
+    toasts: &mut toasts::Toasts,
+    // Changement de scène en attente derrière la modale (`SceneSwitch::label`).
+    pending_switch_label: Option<&'static str>,
 ) {
     // Fenêtre « Paramètres » (clé API DeepSeek…).
     settings_window(root.ctx(), panels, settings, actions);
@@ -1531,6 +1671,44 @@ fn build_ui(
             });
             ui.separator();
             ui.label(format!("GPU : {}", status.backend));
+            ui.separator();
+            // Projet / fichier / état « modifié » (roadmap post-audit UX
+            // 2026-09-04, 1.4) : ce que « Enregistrer » va écrire, et si c'est
+            // nécessaire — avant, rien de tout cela n'était visible.
+            let file = std::path::Path::new(status.save_target)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| status.save_target.to_string());
+            let dirty = if status.scene_dirty { " •" } else { "" };
+            let label = match status.project_name {
+                Some(name) => format!("📁 {name} · {file}{dirty}"),
+                None => format!("📄 {file}{dirty} (sans projet)"),
+            };
+            ui.label(label).on_hover_text(if status.scene_dirty {
+                format!(
+                    "Modifications non sauvegardées — Cmd+S enregistre dans\n{}",
+                    status.save_target
+                )
+            } else {
+                format!("Enregistré — Cmd+S écrit dans\n{}", status.save_target)
+            });
+            // Erreurs non vues depuis la dernière ouverture de la Console
+            // (roadmap post-audit UX 2026-09-04, 1.2).
+            if toasts.unseen_errors > 0 {
+                ui.separator();
+                let n = toasts.unseen_errors;
+                let txt = egui::RichText::new(format!("⛔ {n}"))
+                    .color(egui::Color32::from_rgb(240, 115, 106));
+                if ui
+                    .button(txt)
+                    .on_hover_text(format!(
+                        "{n} erreur(s) depuis la dernière ouverture de la Console — cliquer pour l'ouvrir"
+                    ))
+                    .clicked()
+                {
+                    panels.console = true;
+                }
+            }
         });
     });
 
@@ -1605,6 +1783,7 @@ fn build_ui(
                     hier_filter,
                     hier_new_group,
                     hier_rename,
+                    status.script_errors,
                     actions,
                 );
             });
@@ -1612,7 +1791,7 @@ fn build_ui(
 
     if show_panels {
         inspector_panel(
-            root, scene, selection, status, panels, settings, ai_prompt, actions,
+            root, scene, selection, status, panels, settings, ai_prompt, *playing, actions,
         );
     }
 
@@ -1686,13 +1865,30 @@ fn build_ui(
         actions,
     );
 
+    // Résumé lisible de l'autosave (« il y a 2 h · 994 objets ») plutôt qu'un
+    // chemin brut — calculé une fois, le fichier peut peser plusieurs Mo.
+    let autosave_summary = pending_autosave_recovery.map(|path| {
+        if panels.autosave_summary.as_ref().map(|(p, _)| p.as_path()) != Some(path) {
+            panels.autosave_summary = Some((path.to_path_buf(), describe_autosave(path)));
+        }
+        panels
+            .autosave_summary
+            .as_ref()
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default()
+    });
     confirmation_modals(
         root,
         confirm_quit,
         confirm_close_project,
         pending_autosave_recovery,
+        autosave_summary.as_deref(),
+        pending_switch_label,
         actions,
     );
+
+    // Toasts par-dessus tout, au-dessus de la barre d'état (~26 pt).
+    toasts.show(root.ctx(), 26.0);
 
     // Les actions (add/delete/duplicate/undo/redo) sont appliquées par AppState
     // après cette frame, afin de passer par l'historique.
@@ -1872,12 +2068,28 @@ fn inspector_panel(
     panels: &mut Panels,
     settings: &mut crate::app::settings::Settings,
     ai_prompt: &mut String,
+    playing: bool,
     actions: &mut UiActions,
 ) {
-    egui::Panel::right("inspector")
-            .default_size(240.0)
+    // Pendant Play, l'inspecteur reste éditable mais tout est écrasé au Stop
+    // (retour au `play_snapshot`) : fond teinté + mention, comme Unity
+    // (roadmap post-audit UX 2026-09-04, 1.6).
+    let mut panel = egui::Panel::right("inspector").default_size(240.0);
+    if playing {
+        panel = panel.frame(
+            egui::Frame::side_top_panel(root.style())
+                .fill(egui::Color32::from_rgb(52, 40, 30)),
+        );
+    }
+    panel
             .show_inside(root, |ui| {
                 ui.heading("Inspecteur");
+                if playing {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(232, 118, 59),
+                        "▶ Play : les modifications faites ici ne sont pas conservées après Stop.",
+                    );
+                }
                 ui.separator();
                 // Le contenu (scripts, matériau, audio, composants…) dépasse vite la
                 // hauteur de la fenêtre : tout sauf le titre défile verticalement.
@@ -2428,6 +2640,15 @@ fn inspector_panel(
                                     .desired_rows(4)
                                     .hint_text("ex : obj.ry = obj.ry + dt * 90"),
                             );
+                            // Dernière erreur Lua de cet objet (roadmap post-audit
+                            // UX 2026-09-04, 1.3) — avant, seule la Console la
+                            // montrait, une ligne par frame.
+                            if let Some(err) = status.script_errors.get(&i) {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(240, 115, 106),
+                                    format!("⛔ {err}"),
+                                );
+                            }
                             // --- Génération par IA (DeepSeek) ---
                             ui.separator();
                             ui.label("✨ Générer par IA");
@@ -2900,8 +3121,39 @@ fn confirmation_modals(
     confirm_quit: bool,
     confirm_close_project: bool,
     pending_autosave_recovery: Option<&std::path::Path>,
+    autosave_summary: Option<&str>,
+    pending_switch_label: Option<&'static str>,
     actions: &mut UiActions,
 ) {
+    // Changement de scène (Ouvrir, Nouveau projet, Démos, scène vide) demandé
+    // alors que la scène est modifiée (roadmap post-audit UX 2026-09-04, 1.5) —
+    // même triptyque que Quitter / Fermer le projet.
+    if let Some(label) = pending_switch_label {
+        let resp = egui::Modal::new(egui::Id::new("confirm-switch")).show(root.ctx(), |ui| {
+            ui.set_max_width(380.0);
+            ui.heading("Modifications non sauvegardées");
+            ui.label(format!(
+                "La scène a été modifiée depuis la dernière sauvegarde. \
+                 Que faire avant de {label} ?"
+            ));
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("💾  Enregistrer puis continuer").clicked() {
+                    actions.switch_save = true;
+                }
+                if ui.button("🚪  Continuer sans enregistrer").clicked() {
+                    actions.switch_discard = true;
+                }
+                if ui.button("Annuler").clicked() {
+                    actions.switch_cancel = true;
+                }
+            });
+        });
+        if resp.should_close() {
+            actions.switch_cancel = true;
+        }
+    }
+
     // Modale de fermeture avec modifications non sauvegardées (Phase C,
     // `sprint.19matin.md`) : affichée quand la fermeture (croix de la fenêtre ou
     // Fichier › Quitter) a été demandée alors que la scène est modifiée. Modale
@@ -2980,6 +3232,9 @@ fn confirmation_modals(
                  Veux-tu la restaurer ?",
             );
             ui.add_space(4.0);
+            if let Some(summary) = autosave_summary {
+                ui.label(summary);
+            }
             ui.small(format!("{}", path.display()));
             ui.separator();
             ui.horizontal(|ui| {
@@ -2994,6 +3249,50 @@ fn confirmation_modals(
         if resp.should_close() {
             actions.dismiss_autosave_recovery = true;
         }
+    }
+}
+
+/// « il y a 3 min », « il y a 2 h 13 min », « il y a 5 jours » — pour la
+/// modale d'autosave (roadmap post-audit UX 2026-09-04, 1.8).
+fn human_age(secs: u64) -> String {
+    const MIN: u64 = 60;
+    const HOUR: u64 = 3600;
+    const DAY: u64 = 86_400;
+    if secs < MIN {
+        "à l'instant".to_string()
+    } else if secs < HOUR {
+        format!("il y a {} min", secs / MIN)
+    } else if secs < DAY {
+        let h = secs / HOUR;
+        let m = (secs % HOUR) / MIN;
+        if m == 0 {
+            format!("il y a {h} h")
+        } else {
+            format!("il y a {h} h {m:02} min")
+        }
+    } else {
+        let d = secs / DAY;
+        format!("il y a {d} jour{}", if d > 1 { "s" } else { "" })
+    }
+}
+
+/// Résumé d'un fichier d'autosave : âge (date de modification) et nombre
+/// d'objets (le fichier est une scène JSON). Tolérant : un fichier illisible
+/// donne juste son âge, ou rien.
+fn describe_autosave(path: &std::path::Path) -> String {
+    let age = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| crate::time_compat::SystemTime::now().duration_since(t).ok())
+        .map(|d| human_age(d.as_secs()));
+    let objects = crate::scene::Scene::load(&path.to_string_lossy())
+        .ok()
+        .map(|s| s.objects.len());
+    match (age, objects) {
+        (Some(age), Some(n)) => format!("Sauvegarde automatique {age} · {n} objets"),
+        (Some(age), None) => format!("Sauvegarde automatique {age}"),
+        (None, Some(n)) => format!("Sauvegarde automatique · {n} objets"),
+        (None, None) => String::new(),
     }
 }
 
@@ -3068,6 +3367,16 @@ fn transform_editor(ui: &mut egui::Ui, t: &mut Transform) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn human_age_reads_like_french_relative_time() {
+        assert_eq!(super::human_age(5), "à l'instant");
+        assert_eq!(super::human_age(3 * 60 + 7), "il y a 3 min");
+        assert_eq!(super::human_age(2 * 3600 + 13 * 60), "il y a 2 h 13 min");
+        assert_eq!(super::human_age(3 * 3600), "il y a 3 h");
+        assert_eq!(super::human_age(86_400), "il y a 1 jour");
+        assert_eq!(super::human_age(5 * 86_400 + 100), "il y a 5 jours");
+    }
     use super::*;
     use hud::roster_display_order;
 

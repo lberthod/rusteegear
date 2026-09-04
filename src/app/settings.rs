@@ -62,6 +62,15 @@ pub struct Settings {
     /// Fichier → Projets récents et l'assistant « Nouveau projet ».
     #[serde(default)]
     pub recent_projects: Vec<RecentProject>,
+    /// Rouvrir au démarrage le dernier projet ouvert (roadmap post-audit UX
+    /// 2026-09-04, 1.7) plutôt que la scène de démonstration embarquée. Sans
+    /// projet récent (premier lancement), la démo s'affiche quand même.
+    #[serde(default = "default_true")]
+    pub reopen_last_project: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Une entrée de la liste MRU (`Settings::recent_projects`).
@@ -153,6 +162,7 @@ impl Default for Settings {
             locale: crate::app::locale::Locale::default(),
             muted_players: Vec::new(),
             recent_projects: Vec::new(),
+            reopen_last_project: true,
         }
     }
 }

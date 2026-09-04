@@ -44,6 +44,9 @@ struct App {
     pending_renderer: std::rc::Rc<std::cell::RefCell<Option<Renderer>>>,
     state: AppState,
     modifiers: winit::event::Modifiers,
+    /// Dernier titre posé sur la fenêtre (cf. `AppState::window_title`) — on ne
+    /// rappelle `set_title` que s'il change (appel système par frame sinon).
+    last_title: String,
 
     // --- état tactile ---
     touches: HashMap<u64, (f64, f64)>,
@@ -499,6 +502,17 @@ impl ApplicationHandler for App {
                 {
                     self.last_render = Some(std::time::Instant::now());
                 }
+                // Titre « Projet — scène • » (roadmap post-audit UX 2026-09-04, 1.4).
+                #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+                {
+                    let title = self.state.window_title();
+                    if title != self.last_title {
+                        if let Some(w) = renderer.window.as_ref() {
+                            w.set_title(&title);
+                        }
+                        self.last_title = title;
+                    }
+                }
                 renderer.render(&mut self.state);
                 // Fermeture demandée par le menu Fichier → Quitter.
                 if self.state.should_quit {
@@ -602,6 +616,21 @@ impl ApplicationHandler for App {
                         KeyCode::KeyV if cmd => self.state.paste(),
                         KeyCode::KeyX if cmd => self.state.cut_selected(),
                         KeyCode::KeyA if cmd => self.state.select_all(),
+                        // Raccourcis de fichier (roadmap post-audit UX 2026-09-04,
+                        // 1.1) : absents jusque-là, Enregistrer/Ouvrir/Nouveau
+                        // passaient obligatoirement par le menu. Hors mode player
+                        // (rien à enregistrer, pas de projet).
+                        KeyCode::KeyS if cmd && st.shift_key() && !self.state.player => {
+                            self.state.pending_shortcut = Some(crate::app::EditorShortcut::SaveAs)
+                        }
+                        KeyCode::KeyS if cmd && !self.state.player => self.state.save(),
+                        KeyCode::KeyO if cmd && !self.state.player => {
+                            self.state.pending_shortcut = Some(crate::app::EditorShortcut::Open)
+                        }
+                        KeyCode::KeyN if cmd && !self.state.player => {
+                            self.state.pending_shortcut =
+                                Some(crate::app::EditorShortcut::NewProject)
+                        }
                         KeyCode::Backspace | KeyCode::Delete => self.state.delete_selected(),
                         // Sélection directe de l'arme à distance (cf.
                         // `app::fireball::RANGED_WEAPONS`) — le pendant tactile
@@ -841,11 +870,36 @@ fn make_app(player: bool) -> App {
             );
         }
     } else {
-        // L'éditeur s'ouvre directement sur la scène de base du MMORPG
-        // (`assets/player_scene.json`, embarquée — la même que jouent le site web
-        // et les builds Player), pas sur la petite démo par défaut. `clear_history`
-        // évite qu'un Ctrl+Z juste après l'ouverture ramène la scène vide interne.
-        app.state.load_embedded_player_scene();
+        // Dernier projet ouvert d'abord (roadmap post-audit UX 2026-09-04,
+        // 1.7 — réglage `reopen_last_project`, projets récents de
+        // `Settings`) : reprendre son travail sans repasser par le menu.
+        let mut reopened = false;
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        {
+            let settings = crate::app::settings::Settings::load();
+            if settings.reopen_last_project
+                && let Some(recent) = settings.existing_recent_projects().first()
+            {
+                let path = recent.path.clone();
+                match app.state.open_project(std::path::Path::new(&path)) {
+                    Ok(count) => {
+                        log::info!("Projet « {} » rouvert ({count} objets) — {path}", recent.name);
+                        reopened = true;
+                    }
+                    Err(e) => log::warn!(
+                        "Dernier projet non rouvert ({path}) : {e} — scène de démonstration à la place"
+                    ),
+                }
+            }
+        }
+        if !reopened {
+            // Sinon, la scène de base du MMORPG (`assets/player_scene.json`,
+            // embarquée — la même que jouent le site web et les builds Player),
+            // pas la petite démo par défaut.
+            app.state.load_embedded_player_scene();
+        }
+        // `clear_history` évite qu'un Ctrl+Z juste après l'ouverture ramène la
+        // scène vide interne.
         app.state.clear_history();
     }
     app

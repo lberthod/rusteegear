@@ -935,6 +935,23 @@ fn settings_essentials(
 
     ui.add_space(12.0);
     ui.separator();
+    ui.heading("📁 Démarrage");
+    if ui
+        .checkbox(
+            &mut settings.reopen_last_project,
+            "Rouvrir le dernier projet au démarrage",
+        )
+        .on_hover_text(
+            "Décoché : l'éditeur s'ouvre sur la scène de démonstration (le hameau), \
+             comme avant. Sans projet récent, la démo s'affiche dans tous les cas.",
+        )
+        .changed()
+    {
+        settings.save();
+    }
+
+    ui.add_space(12.0);
+    ui.separator();
     ui.heading("♿ Accessibilité");
     ui.label("Taille du HUD");
     if ui

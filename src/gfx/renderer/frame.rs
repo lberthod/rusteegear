@@ -326,6 +326,8 @@ impl Renderer {
             }
         } else {
             let (gpu_pass_timings_ms, gpu_draw_calls) = self.gpu_profiler_info();
+            let save_target = app.save_target();
+            let shortcut = app.pending_shortcut.take();
             let status = crate::editor::StatusInfo {
                 fps: app.fps(),
                 backend: &self.backend,
@@ -336,6 +338,10 @@ impl Renderer {
                 gpu_pass_timings_ms,
                 gpu_draw_calls,
                 skinned_dropped: self.skinned_dropped_count(),
+                project_name: app.current_project.as_ref().map(|p| p.name.as_str()),
+                save_target: &save_target,
+                scene_dirty: app.scene_dirty,
+                script_errors: &app.script_errors,
             };
             let net_status = app.net_conn.net_status.clone();
             let net_connected = app.is_connected();
@@ -409,6 +415,7 @@ impl Renderer {
                 app.current_project.is_some(),
                 app.confirm_close_project,
                 app.pending_autosave_recovery.as_deref(),
+                shortcut,
             );
             apply_editor_actions(app, editor, actions, ui_fingerprint_before, &mut restart);
             Some(full_output)
@@ -806,12 +813,42 @@ impl Renderer {
 fn apply_editor_actions(
     app: &mut AppState,
     editor: &mut Editor,
-    actions: UiActions,
+    mut actions: UiActions,
     ui_fingerprint_before: String,
     restart: &mut bool,
 ) {
     if app.ui_scene_fingerprint() != ui_fingerprint_before {
         app.scene_dirty = true;
+    }
+    // Changements de scène (Ouvrir, Ouvrir un projet, Nouveau projet, Démos,
+    // scène vide) : un seul chemin, gardé par la modale « modifications non
+    // sauvegardées » (roadmap post-audit UX 2026-09-04, 1.5).
+    if actions.switch_cancel {
+        editor.pending_switch = None;
+    }
+    if actions.switch_discard
+        && let Some(switch) = editor.pending_switch.take()
+    {
+        perform_scene_switch(app, editor, switch);
+    }
+    if actions.switch_save {
+        app.save();
+        // `save` ne baisse `scene_dirty` que sur succès : en cas d'échec on
+        // garde la scène courante (et la modale disparaît, l'erreur est en toast).
+        if !app.scene_dirty {
+            if let Some(switch) = editor.pending_switch.take() {
+                perform_scene_switch(app, editor, switch);
+            }
+        } else {
+            editor.pending_switch = None;
+        }
+    }
+    if let Some(switch) = actions.take_scene_switch() {
+        if app.scene_dirty && !app.player {
+            editor.pending_switch = Some(switch);
+        } else {
+            perform_scene_switch(app, editor, switch);
+        }
     }
     if let Some(kind) = actions.use_item {
         app.use_item(kind);
@@ -827,42 +864,6 @@ fn apply_editor_actions(
     }
     if let Some(path) = actions.save_path {
         app.save_to(&path);
-    }
-    if actions.load {
-        app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
-    }
-    if let Some(path) = actions.load_path {
-        app.load_from(&path);
-    }
-    if let Some(picked_path) = actions.open_project_path {
-        // Accepte soit le manifeste (sélecteur générique « Ouvrir… »,
-        // Sprint 3), soit directement le dossier racine du projet
-        // (« Ouvrir un projet… », projets récents — Sprint 4).
-        let picked = std::path::Path::new(&picked_path);
-        let dir =
-            if picked.file_name().and_then(|n| n.to_str()) == Some(crate::project::MANIFEST_FILE) {
-                picked.parent().unwrap_or(picked)
-            } else {
-                picked
-            };
-        match app.open_project(dir) {
-            Ok(_) => {
-                if let Some(project) = &app.current_project {
-                    editor.note_recent_project(&project.name, &project.root);
-                }
-            }
-            Err(e) => log::error!("Ouverture du projet échouée : {e}"),
-        }
-    }
-    if let Some(req) = actions.create_project {
-        match app.create_project(&req.location, &req.name, req.template) {
-            Ok(_) => {
-                if let Some(project) = &app.current_project {
-                    editor.note_recent_project(&project.name, &project.root);
-                }
-            }
-            Err(e) => log::error!("Création du projet échouée : {e}"),
-        }
     }
     if actions.close_project {
         app.request_close_project();
@@ -935,48 +936,6 @@ fn apply_editor_actions(
     }
     if actions.duplicate {
         app.duplicate_selected();
-    }
-    if actions.new_scene {
-        app.new_scene();
-    }
-    if actions.load_demo {
-        app.load_mobile_demo();
-    }
-    if actions.load_gameplay {
-        app.load_gameplay_demo();
-    }
-    if actions.load_controller {
-        app.load_controller_demo();
-    }
-    if actions.load_tower {
-        app.load_tower_demo();
-    }
-    if actions.load_temple_run {
-        app.load_temple_run_demo();
-    }
-    if actions.load_components_demo {
-        app.load_components_demo();
-    }
-    if actions.load_ai_duel {
-        app.load_zombies_demo();
-    }
-    if actions.load_mmorpg {
-        app.load_mmorpg_demo();
-    }
-    if actions.load_roguelike {
-        app.load_roguelike_demo();
-    }
-    if actions.load_brawl {
-        app.load_brawl_demo();
-    }
-    if actions.load_boss {
-        app.load_boss_demo();
-    }
-    if actions.load_escorte {
-        app.load_escorte_demo();
-    }
-    if actions.load_survie {
-        app.load_survie_demo();
     }
     if actions.restart {
         *restart = true;
@@ -1228,5 +1187,71 @@ fn apply_editor_actions(
     }
     if let Some(view) = actions.set_debug_view {
         app.debug_view = view;
+    }
+}
+
+/// Exécute un changement de scène (cf. `crate::editor::SceneSwitch`) — appelé
+/// soit directement (scène non modifiée), soit après la réponse à la modale
+/// « modifications non sauvegardées » (roadmap post-audit UX 2026-09-04, 1.5).
+fn perform_scene_switch(
+    app: &mut AppState,
+    editor: &mut Editor,
+    switch: crate::editor::SceneSwitch,
+) {
+    use crate::editor::{DemoKind, SceneSwitch};
+    match switch {
+        SceneSwitch::LoadDefault => {
+            app.load(); // asynchrone : la scène est remplacée plus tard (cf. take_imported_dirty)
+        }
+        SceneSwitch::LoadPath(path) => app.load_from(&path),
+        SceneSwitch::OpenProject(picked_path) => {
+            // Accepte soit le manifeste (sélecteur générique « Ouvrir… »,
+            // Sprint 3), soit directement le dossier racine du projet
+            // (« Ouvrir un projet… », projets récents — Sprint 4).
+            let picked = std::path::Path::new(&picked_path);
+            let dir = if picked.file_name().and_then(|n| n.to_str())
+                == Some(crate::project::MANIFEST_FILE)
+            {
+                picked.parent().unwrap_or(picked)
+            } else {
+                picked
+            };
+            match app.open_project(dir) {
+                Ok(count) => {
+                    if let Some(project) = &app.current_project {
+                        editor.note_recent_project(&project.name, &project.root);
+                        log::info!("Projet « {} » ouvert ({count} objets)", project.name);
+                    }
+                }
+                Err(e) => log::error!("Ouverture du projet échouée : {e}"),
+            }
+        }
+        SceneSwitch::CreateProject(req) => {
+            match app.create_project(&req.location, &req.name, req.template) {
+                Ok(root) => {
+                    if let Some(project) = &app.current_project {
+                        editor.note_recent_project(&project.name, &project.root);
+                    }
+                    log::info!("Projet créé dans {}", root.display());
+                }
+                Err(e) => log::error!("Création du projet échouée : {e}"),
+            }
+        }
+        SceneSwitch::NewScene => app.new_scene(),
+        SceneSwitch::Demo(kind) => match kind {
+            DemoKind::Mobile => app.load_mobile_demo(),
+            DemoKind::Gameplay => app.load_gameplay_demo(),
+            DemoKind::Controller => app.load_controller_demo(),
+            DemoKind::Tower => app.load_tower_demo(),
+            DemoKind::TempleRun => app.load_temple_run_demo(),
+            DemoKind::Components => app.load_components_demo(),
+            DemoKind::AiDuel => app.load_zombies_demo(),
+            DemoKind::Mmorpg => app.load_mmorpg_demo(),
+            DemoKind::Roguelike => app.load_roguelike_demo(),
+            DemoKind::Brawl => app.load_brawl_demo(),
+            DemoKind::Boss => app.load_boss_demo(),
+            DemoKind::Escorte => app.load_escorte_demo(),
+            DemoKind::Survie => app.load_survie_demo(),
+        },
     }
 }

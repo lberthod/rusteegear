@@ -22,9 +22,11 @@ pub(super) fn menu_fichier(
     recents: Vec<&RecentProject>,
 ) {
     ui.menu_button("Fichier", |ui| {
+        // (les sélecteurs « Enregistrer sous… » / « Ouvrir… » sont dans
+        // `dialog_save_as` / `dialog_open`, partagés avec les raccourcis clavier)
         if ui
             .button("✨  Nouveau projet")
-            .on_hover_text("Ouvre un choix guidé de template (scène vide, démo, niveau de combat)")
+            .on_hover_text("Cmd+N — choix guidé de template (scène vide, démo, niveau de combat)")
             .clicked()
         {
             actions.open_new_project_wizard = true;
@@ -205,42 +207,24 @@ pub(super) fn menu_fichier(
             ui.close();
         }
         ui.separator();
-        if ui.button("💾  Enregistrer").clicked() {
+        if ui
+            .button("💾  Enregistrer")
+            .on_hover_text("Cmd+S — dans la scène du projet ouvert, sinon ~/motor3derust_scene.json")
+            .clicked()
+        {
             actions.save = true;
             ui.close();
         }
-        if ui.button("💾  Enregistrer sous…").clicked() {
-            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-            if let Some(p) = rfd::FileDialog::new()
-                .add_filter("Scène JSON", &["json"])
-                .set_file_name("scene.json")
-                .save_file()
-            {
-                actions.save_path = Some(p.to_string_lossy().into_owned());
-            }
+        if ui
+            .button("💾  Enregistrer sous…")
+            .on_hover_text("Cmd+Maj+S")
+            .clicked()
+        {
+            dialog_save_as(actions);
             ui.close();
         }
-        if ui.button("📂  Ouvrir…").clicked() {
-            // Sprint 3 : une scène seule (comportement historique) et un projet
-            // (son manifeste `project.rusteegear.json`) partagent ce même
-            // sélecteur — `load_path`/`open_project_path` sont distingués au
-            // moment de traiter l'action (cf. `gfx::renderer`), selon le nom du
-            // fichier choisi.
-            #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-            if let Some(p) = rfd::FileDialog::new()
-                .add_filter("Projet ou scène RusteeGear", &["json"])
-                .pick_file()
-            {
-                if crate::project::is_manifest_path(&p) {
-                    actions.open_project_path = Some(p.to_string_lossy().into_owned());
-                } else {
-                    actions.load_path = Some(p.to_string_lossy().into_owned());
-                }
-            }
-            #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
-            {
-                actions.load = true;
-            }
+        if ui.button("📂  Ouvrir…").on_hover_text("Cmd+O").clicked() {
+            dialog_open(actions);
             ui.close();
         }
         if ui
@@ -757,4 +741,45 @@ pub(super) fn menu_aide(ui: &mut egui::Ui, panels: &mut Panels) {
             ui.close();
         }
     });
+}
+
+/// Sélecteur « Enregistrer sous… » — partagé entre le menu Fichier et Cmd+Maj+S
+/// (roadmap post-audit UX 2026-09-04, 1.1). Pose `actions.save_path` si un
+/// fichier est choisi ; sans effet sur mobile/web (pas de sélecteur natif).
+pub(super) fn dialog_save_as(actions: &mut UiActions) {
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    if let Some(p) = rfd::FileDialog::new()
+        .add_filter("Scène JSON", &["json"])
+        .set_file_name("scene.json")
+        .save_file()
+    {
+        actions.save_path = Some(p.to_string_lossy().into_owned());
+    }
+    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+    {
+        let _ = actions;
+    }
+}
+
+/// Sélecteur « Ouvrir… » — partagé entre le menu Fichier et Cmd+O. Sprint 3 :
+/// une scène seule (comportement historique) et un projet (son manifeste
+/// `project.rusteegear.json`) partagent ce même sélecteur — `load_path` /
+/// `open_project_path` sont distingués ici selon le nom du fichier choisi, et
+/// traités par `gfx::renderer`.
+pub(super) fn dialog_open(actions: &mut UiActions) {
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    if let Some(p) = rfd::FileDialog::new()
+        .add_filter("Projet ou scène RusteeGear", &["json"])
+        .pick_file()
+    {
+        if crate::project::is_manifest_path(&p) {
+            actions.open_project_path = Some(p.to_string_lossy().into_owned());
+        } else {
+            actions.load_path = Some(p.to_string_lossy().into_owned());
+        }
+    }
+    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+    {
+        actions.load = true;
+    }
 }

@@ -72,10 +72,15 @@ impl Scene {
             MeshKind::Imported(i) => match self.imported.get(i as usize) {
                 Some(m) => (m.aabb_min, m.aabb_max),
                 None => {
-                    log::warn!(
-                        "local_aabb : index de mesh importé hors bornes ({i} >= {}), \
-                         probable désync scène chargée/synchronisée — AABB nulle en repli",
-                        self.imported.len()
+                    // Chemin appelé à chaque frame (culling, zones) : une ligne
+                    // par index suffit, cf. `log_buffer::warn_once`.
+                    crate::log_buffer::warn_once(
+                        &format!("local_aabb:{i}"),
+                        &format!(
+                            "local_aabb : index de mesh importé hors bornes ({i} >= {}), \
+                             probable désync scène chargée/synchronisée — AABB nulle en repli",
+                            self.imported.len()
+                        ),
                     );
                     (Vec3::ZERO, Vec3::ZERO)
                 }

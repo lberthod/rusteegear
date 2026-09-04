@@ -51,6 +51,7 @@ pub(super) fn hierarchy_panel(
     filter: &mut String,
     new_group: &mut String,
     rename: &mut Option<(usize, String)>,
+    script_errors: &std::collections::HashMap<usize, String>,
     actions: &mut UiActions,
 ) {
     ui.horizontal(|ui| {
@@ -134,8 +135,13 @@ pub(super) fn hierarchy_panel(
                                         continue;
                                     }
                                     let is_sel = selected.contains(&i);
+                                    // Badge d'erreur de script (roadmap post-audit UX
+                                    // 2026-09-04, 1.3) : l'objet fautif se repère sans
+                                    // ouvrir la Console.
+                                    let script_error = script_errors.get(&i);
                                     let label = format!(
-                                        "{} {}{}",
+                                        "{}{} {}{}",
+                                        if script_error.is_some() { "⛔ " } else { "" },
                                         mesh_category(obj.mesh).1,
                                         obj.name,
                                         object_badges(obj)
@@ -149,9 +155,12 @@ pub(super) fn hierarchy_panel(
                                     // Tooltip aux réponses vides et le clic de sélection se
                                     // perdait, sauf tap tenant dans une seule frame (d'où la
                                     // sélection aléatoire : « ça fait juste du drag and drop »).
-                                    let resp = ui
+                                    let mut resp = ui
                                         .selectable_label(is_sel, label)
                                         .interact(egui::Sense::drag());
+                                    if let Some(err) = script_error {
+                                        resp = resp.on_hover_text(err);
+                                    }
                                     // Un glisser avéré emporte l'index comme payload…
                                     resp.dnd_set_drag_payload(i);
                                     // …déposé sur une autre ligne : réordonner avant elle.
@@ -394,6 +403,7 @@ mod tests {
                             &mut filter,
                             &mut new_group,
                             &mut rename,
+                            &std::collections::HashMap::new(),
                             actions,
                         );
                     });

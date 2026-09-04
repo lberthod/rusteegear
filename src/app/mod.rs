@@ -724,6 +724,18 @@ pub struct NetPanelsState {
     online_players_rx: std::sync::mpsc::Receiver<Result<Vec<String>, String>>,
 }
 
+/// Raccourcis de fichier relayés du clavier (`lib.rs`) vers l'éditeur — cf.
+/// `AppState::pending_shortcut`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorShortcut {
+    /// Cmd+Maj+S : « Enregistrer sous… » (sélecteur de fichier).
+    SaveAs,
+    /// Cmd+O : « Ouvrir… » (scène ou manifeste de projet).
+    Open,
+    /// Cmd+N : assistant « Nouveau projet ».
+    NewProject,
+}
+
 pub struct AppState {
     pub scene: Scene,
     /// Projet ouvert (Sprint 3, manifeste `project.rusteegear.json`), posé par
@@ -743,6 +755,18 @@ pub struct AppState {
     /// `AppState::pending_autosave_recovery`). `None` : rien à proposer, ou
     /// modale déjà traitée (Restaurer/Ignorer, cf. `gfx::renderer`).
     pub pending_autosave_recovery: Option<std::path::PathBuf>,
+    /// Raccourci clavier de fichier (Cmd+Maj+S / Cmd+O / Cmd+N, roadmap
+    /// post-audit UX 2026-09-04, 1.1) posé par `lib.rs` et consommé par
+    /// l'éditeur à la frame suivante : ces trois actions ouvrent un sélecteur
+    /// ou une fenêtre egui, donc vivent côté `Editor`, pas ici. Cmd+S n'en a
+    /// pas besoin (`save()` est appelé directement).
+    pub pending_shortcut: Option<EditorShortcut>,
+    /// Erreurs de script Lua du dernier tick, par index d'objet (roadmap
+    /// post-audit UX 2026-09-04, 1.3) : recalculées à chaque tick par
+    /// `run_object_scripts`, affichées en badge dans la hiérarchie et sous le
+    /// champ Script de l'inspecteur. Le journal ne reçoit une ligne que quand le
+    /// message d'un objet change (avant : une ligne par frame, ~60/s).
+    pub script_errors: HashMap<usize, String>,
     /// Sélection « primaire » (gizmo, inspecteur, surbrillance forte).
     pub selection: Option<usize>,
     /// Ensemble sélectionné (inclut la primaire) pour les opérations groupées.
@@ -1334,6 +1358,8 @@ impl AppState {
             confirm_close_project: false,
             last_autosave: None,
             pending_autosave_recovery: None,
+            pending_shortcut: None,
+            script_errors: HashMap::new(),
         }
     }
 

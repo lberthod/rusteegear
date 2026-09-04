@@ -1542,6 +1542,9 @@ impl AppState {
         // Marqueurs d'animation franchis plus haut, livrés ce même tick.
         events_in.extend(anim_notify_events);
         let mut events_out: Vec<String> = Vec::new();
+        // Erreurs du tick précédent : sert à ne journaliser qu'un changement de
+        // message (cf. `AppState::script_errors`).
+        let prev_script_errors = std::mem::take(&mut self.script_errors);
         // Régénération passive de la vie (hors contact) : appliquée avant les scripts pour
         // que les appels `damage()` de cette frame s'appliquent après, sans s'annuler.
         const HEALTH_REGEN_PER_S: f32 = 0.25;
@@ -1643,7 +1646,11 @@ impl AppState {
                             f
                         }
                         Err(e) => {
-                            log::error!("Compilation du script '{}' : {e}", obj.name);
+                            let msg = format!("Compilation du script '{}' : {e}", obj.name);
+                            if prev_script_errors.get(&idx) != Some(&msg) {
+                                log::error!("{msg}");
+                            }
+                            self.script_errors.insert(idx, msg);
                             continue;
                         }
                     },
@@ -1680,7 +1687,11 @@ impl AppState {
                     self.physics.as_ref(),
                     &mut reverb_requests,
                 ) {
-                    log::error!("Script '{}' : {e}", obj.name);
+                    let msg = format!("Script '{}' : {e}", obj.name);
+                    if prev_script_errors.get(&idx) != Some(&msg) {
+                        log::error!("{msg}");
+                    }
+                    self.script_errors.insert(idx, msg);
                 }
                 if destroy_requested {
                     obj.visible = false;
@@ -1711,7 +1722,11 @@ impl AppState {
                             f
                         }
                         Err(e) => {
-                            log::error!("Compilation du script '{}' : {e}", obj.name);
+                            let msg = format!("Compilation du script '{}' : {e}", obj.name);
+                            if prev_script_errors.get(&idx) != Some(&msg) {
+                                log::error!("{msg}");
+                            }
+                            self.script_errors.insert(idx, msg);
                             continue;
                         }
                     },
@@ -1748,7 +1763,11 @@ impl AppState {
                     self.physics.as_ref(),
                     &mut reverb_requests,
                 ) {
-                    log::error!("Script '{}' : {e}", obj.name);
+                    let msg = format!("Script '{}' : {e}", obj.name);
+                    if prev_script_errors.get(&idx) != Some(&msg) {
+                        log::error!("{msg}");
+                    }
+                    self.script_errors.insert(idx, msg);
                 }
                 // `obj:destroy()` : suppression douce, cf. sa doc dans
                 // `run_script` — jamais un retrait de `scene.objects`.
