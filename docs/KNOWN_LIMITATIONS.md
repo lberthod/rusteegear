@@ -32,10 +32,12 @@ préversion — les libellés du panneau Export le rappellent.
   revanche, les assets d'un projet **ne sont pas isolés** : ils vivent toujours
   dans le dossier utilisateur global `~/.motor3derust/assets/`, partagé entre
   tous les projets — pas encore de dossier `assets/` par projet ni d'index
-  d'assets. Pas de gestionnaire de projets (créer/récents/dupliquer, prévu
-  Sprint 4) ni de commande « Convertir en projet » pour migrer une scène seule
-  et ses assets vers un vrai projet autonome. Voir `docs/SprintAudit12h24.md`
-  (Sprint 3, section « cible long terme »).
+  d'assets. Le gestionnaire de projets (Nouveau projet, récents, dupliquer,
+  réouverture du dernier projet au démarrage) existe depuis le Sprint 4 et la
+  roadmap UX du 04/09/2026 ; il manque encore une commande « Convertir en
+  projet » pour migrer une scène seule et ses assets vers un vrai projet
+  autonome. Voir `docs/SprintAudit12h24.md` (Sprint 3, section « cible long
+  terme »).
 - ~~**Fermeture sans alerte.**~~ **Corrigé (19/07/2026)** : fermer la fenêtre
   (ou Fichier › Quitter) avec des modifications non sauvegardées affiche
   désormais une confirmation Enregistrer / Quitter sans enregistrer / Annuler.
@@ -53,7 +55,15 @@ préversion — les libellés du panneau Export le rappellent.
   d'objets, groupes, manipulations au gizmo (y compris lumières), prefabs,
   outils d'assets. **Non annulables** : l'édition de champs dans l'Inspecteur
   (couleur, script, nom, physique…) et l'import glTF (l'objet créé reste
-  supprimable, et cette suppression est annulable).
+  supprimable, et cette suppression est annulable). Attention : un Cmd+Z
+  après une saisie dans l'Inspecteur revient à l'état d'avant cette saisie
+  sans avertissement (roadmap UX 04/09/2026, 5.1).
+- **Retours à l'écran (04/09/2026, roadmap UX vague 1).** Sauvegarde,
+  import, projet, erreurs de script : toasts en bas à droite + compteur ⛔
+  dans la barre d'état ; badge ⛔ sur l'objet dont le script est en erreur.
+  Le titre de fenêtre affiche projet, scène et le point « modifié ».
+  Restent muets : les opérations d'assets en tâche de fond (texture
+  illisible) hors toast, et l'export mobile hors du panneau Build.
 - **Sélection désactivée pendant Play** (décision produit) : repasser en
   Pause ou Stop pour sélectionner.
 - **Génération IA (scène et scripts) : Experimental.** Nécessite une clé API
@@ -79,16 +89,35 @@ préversion — les libellés du panneau Export le rappellent.
 
 ## Qualité / tests
 
-- Un test connu comme instable (`roguelike_demo_clears_rooms…`) est marqué
-  `#[ignore]` — préexistant, suivi à part ; le lancer à la main :
-  `cargo test roguelike_demo_clears -- --ignored`.
+- `creature_1_never_bites_without_contact` (`src/app/simulation_tests.rs`)
+  échoue localement sur Apple Silicon (M5 Pro, 04/09/2026) et passe en CI
+  Linux — dépendance plateforme non élucidée, à traiter avec les goldens
+  ci-dessous. `synth_variation_does_not_repeat…` est un tirage aléatoire :
+  rarement rouge, relancer.
 - Les goldens de rendu dépendent du GPU réel : un écart entre deux machines
   peut venir du matériel.
 - Scènes au-delà de ~500 objets animés : hors cible de cette préversion.
 
+## Mode Player (desktop, web, mobile)
+
+- **Écran d'accueil (04/09/2026, roadmap UX 2.1)** : pseudo mémorisé,
+  classe, salon, puis « Jouer en ligne » (serveur public par défaut) ou
+  « Jouer seul ». `RUSTEEGEAR_OFFLINE=1` (desktop) saute l'écran et joue
+  hors-ligne. Une pastille ● En ligne / Connexion… / Hors ligne reste
+  affichée en haut à droite ; les changements d'état (perte, reconnexion)
+  passent en bannière 3,5 s. Pas de ping ni de perte de paquets affichés.
+- **Pause** (Échap ou ⏸ tactile) : Reprendre, Rejouer, Paramètres, Se
+  déconnecter, Quitter (natif). En ligne, la pause est locale — la manche
+  continue sans vous, le menu le rappelle.
+- **Tactile** : stick gauche à deux axes, orbite au glissé sur la moitié
+  droite, boutons ⏸ et Carte en haut à droite. Pas encore : maintien de
+  l'écran allumé sur Android/iOS (fait sur le web), retour haptique,
+  orientation verrouillée.
+- **Mort sans réapparition** (décision assumée) : spectateur figé jusqu'à la
+  fin de manche, sans minuteur.
+
 ## Réseau
 
-- Le mode Player se connecte **automatiquement** au serveur public par défaut
-  (c'est la démo partagée) ; `RUSTEEGEAR_OFFLINE=1` pour jouer hors-ligne
-  (desktop). Un échec de connexion est affiché et les créatures reprennent
-  leur simulation locale après 2,5 s sans nouvelles du serveur.
+- Un échec de connexion est affiché (pastille, bannière, fenêtre 🌐) et les
+  créatures reprennent leur simulation locale après 2,5 s sans nouvelles du
+  serveur. Reconnexion automatique avec repli progressif.

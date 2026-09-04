@@ -58,6 +58,22 @@ else
     fail "rustc introuvable" "rustup update (ou installer rustup, cf. ci-dessus)"
 fi
 
+# Toolchain épinglée par rust-toolchain.toml (roadmap post-audit UX 2026-09-04,
+# 4.2) : rustup la télécharge tout seul au premier `cargo`, mais autant le dire
+# avant plutôt que de découvrir 200 Mo de téléchargement après « Environnement
+# prêt ».
+if command -v rustup >/dev/null 2>&1 && [ -f rust-toolchain.toml ]; then
+    PINNED=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+    if [ -n "${PINNED:-}" ]; then
+        if rustup toolchain list 2>/dev/null | grep -q "^${PINNED}"; then
+            pass "toolchain épinglée $PINNED installée (rust-toolchain.toml)"
+        else
+            fail "toolchain épinglée $PINNED absente (rust-toolchain.toml)" \
+                "rustup toolchain install $PINNED --component clippy,rustfmt --target wasm32-unknown-unknown (sinon le premier cargo la télécharge, ~200 Mo)"
+        fi
+    fi
+fi
+
 # Cible native installée (rustup géré) — sur une installation rustup standard
 # la cible hôte est toujours là ; on vérifie quand même, un toolchain minimal
 # « rustup toolchain install --profile minimal » sans composant peut surprendre.

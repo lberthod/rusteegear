@@ -609,8 +609,8 @@ orbite, 2 doigts = zoom). iOS/Android ne sont pas signés pour une distribution 
 ## 🚀 Démarrage rapide
 
 ```bash
-cargo run                       # éditeur desktop
-cargo run -- --player           # mode player (scène plein écran)
+cargo run --profile dev-fast                # éditeur desktop (profil jouable, cf. QUICKSTART.md)
+cargo run --profile dev-fast -- --player    # mode player (scène plein écran, écran d'accueil)
 ```
 
 ### Builds par plateforme
@@ -631,15 +631,19 @@ cargo run -- --player           # mode player (scène plein écran)
 
 ### Commandes dans l'éditeur
 
+Référence complète (clavier, souris, jeu, tactile, manette) :
+**[docs/CONTROLS.md](docs/CONTROLS.md)** — la même table alimente
+**Aide › ⌨ Raccourcis clavier** dans l'éditeur. L'essentiel :
+
 | Action | Commande |
 |---|---|
-| Tourner la caméra | clic gauche + glisser (sur la vue 3D) |
-| Zoomer | molette |
+| Tourner la caméra | clic gauche + glisser (sur la vue 3D) ; `T` pour l'orbite libre |
+| Zoomer / déplacer la vue | molette / clic milieu (ou `Maj`) + glisser |
 | Sélectionner un objet | clic sur l'objet, ou dans la hiérarchie |
-| Ajouter un objet | boutons Cube / Sphère / Plan |
-| Éditer / supprimer | panneau Inspecteur (droite) |
-| Lancer / arrêter l'animation | ▶ Play / ⏹ Stop |
-| Sauver / charger | 💾 Save / 📂 Load (`~/motor3derust_scene.json`) |
+| Ajouter un objet | menu **Ajouter** (🧊 Cube, ⚪ Sphère, ▭ Plan…) ou **Ajouter ▸ 🃏 cartes** |
+| Éditer / supprimer | panneau Inspecteur (droite) ; `Suppr` |
+| Tester / arrêter | ▶ Play / ⏹ Stop (la scène revient à l'état d'avant Play) |
+| Enregistrer / ouvrir | `Cmd+S` (scène du projet ouvert) · `Cmd+Maj+S` · `Cmd+O` · `Cmd+N` |
 
 ---
 

@@ -1,7 +1,14 @@
-# Démarrage rapide — 5 minutes (hors compilation)
+# Démarrage rapide — ~30 minutes la première fois
 
 Objectif : voir une scène jouable dans l'éditeur, sans aucune décision à
 prendre. Chaque commande est à copier telle quelle.
+
+Budget réaliste (roadmap post-audit UX 2026-09-04) : **5 minutes de
+manipulation**, plus ce que les outils font tout seuls — installation de
+rustup et Git LFS, clone (~240 Mo), téléchargement de la toolchain épinglée
+1.98.0 (~200 Mo) et **première compilation (~5 minutes sur Apple M4, plus sur
+une machine plus ancienne)**. Les lancements suivants prennent quelques
+secondes.
 
 ## 1. Prérequis
 
@@ -75,50 +82,14 @@ et l'éditeur s'ouvre sur la scène de démonstration (le hameau du jeu).
 - **Comprendre le moteur (1 page)** : [docs/MENTAL_MODEL.md](docs/MENTAL_MODEL.md)
 - Le contenu du projet exemple : [examples/first_game/README.md](examples/first_game/README.md)
 
-## Piloter l'application de l'extérieur (agent, script, audit)
+## Aller plus loin
 
-L'application peut être télécommandée par TCP local (opt-in, jamais actif par
-défaut — l'éval Lua est de l'exécution de code arbitraire) :
-
-```bash
-cargo run --profile dev-fast -- --pilot     # éditeur + pont sur 127.0.0.1:4517
-```
-
-Puis, dans un autre terminal, avec le client `pilot` :
-
-```bash
-cargo run --profile dev-fast --bin pilot -- state           # playing ? combien d'objets ?
-cargo run --profile dev-fast --bin pilot -- console play    # démarre le mode Play
-cargo run --profile dev-fast --bin pilot -- lua "return 1+1"
-cargo run --profile dev-fast --bin pilot -- scene           # nom/position/visibilité des objets
-cargo run --profile dev-fast --bin pilot -- input 0.0 1.0 jump   # avancer + sauter
-cargo run --profile dev-fast --bin pilot -- screenshot /tmp/s.png 800 600
-cargo run --profile dev-fast --bin pilot -- logs
-cargo run --profile dev-fast --bin pilot -- console stop
-```
-
-Verbes console : `timescale`, `pause`, `play`, `stop`, `step`, `tp`, `select`,
-`spawn`, `health`, `net_stats`. Protocole, architecture et limites :
-[docs/PILOT.md](docs/PILOT.md). `--pilot=PORT` ou `RUSTEEGEAR_PILOT=PORT`
-changent le port.
-
-## Avant de pousser
-
-La CI compile aussi le code gaté par la feature `net_tests` (`cargo clippy
---all-targets --all-features`) sans l'exécuter — un oubli de ce côté est
-invisible localement avec un simple `cargo check`. Pour l'attraper avant de
-pousser (roadmap post-audit 2026-09-03, 1.3) :
-
-```bash
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-En hook automatique :
-
-```bash
-printf '#!/bin/sh\nexec cargo clippy --all-targets --all-features -- -D warnings\n' > .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
-```
+- **Tous les contrôles** (clavier, souris, jeu, tactile, manette) :
+  [docs/CONTROLS.md](docs/CONTROLS.md) — aussi dans **Aide › ⌨ Raccourcis clavier**.
+- **Piloter l'application depuis un script ou un agent** (`--pilot`) :
+  [docs/PILOT.md](docs/PILOT.md).
+- **Contribuer** (clippy, tests, ce que vérifie la CI avant de pousser) :
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Dépannage express
 
@@ -127,4 +98,5 @@ chmod +x .git/hooks/pre-push
 | `error: package … requires rustc 1.x` | `rustup update` |
 | compilation très longue | normal la 1re fois (cf. §3) |
 | logs verbeux souhaités | `RUST_LOG=debug cargo run --profile dev-fast` |
-| jouer sans réseau (mode player) | `RUSTEEGEAR_OFFLINE=1 cargo run --profile dev-fast -- --player` |
+| mode joueur (écran d'accueil : pseudo, en ligne / seul) | `cargo run --profile dev-fast -- --player` |
+| jouer sans réseau, sans écran d'accueil | `RUSTEEGEAR_OFFLINE=1 cargo run --profile dev-fast -- --player` |
