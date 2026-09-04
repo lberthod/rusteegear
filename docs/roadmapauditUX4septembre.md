@@ -48,9 +48,9 @@ format que `roadmapaudit29aout.md` et `roadmapaudit3septembre.md`.
 
 ## Vague 3 — Playtest (M, 3 jours + testeurs)
 
-- [ ] 3.1 Construire le `.dmg` ; Démos ▸ Premier jeu embarqué dans le binaire (plus de `CARGO_MANIFEST_DIR`, `src/editor/menus.rs:48`) ; export qui détecte l'absence du dépôt (O-06)
+- [x] 3.1 Démos ▸ Premier jeu embarqué dans le binaire (`project::first_game_dir`) ; export qui détecte l'absence du dépôt (O-06) — `4b2f126` ; le `.dmg` reste à construire sur la machine de test
 - [ ] 3.2 3 à 5 testeurs sur `docs/TEST_SCENARIO.md`, dont un non-développeur, sans aide (O-04)
-- [ ] 3.3 Résultats dans `docs/playtests/2026-09-XX.md` ; reprioriser vagues 4-5
+- [ ] 3.3 Résultats dans `docs/playtests/2026-09-XX.md` (protocole et format : `docs/playtests/README.md`) ; reprioriser la vague 5
 
 ## Vague 4 — Une seule vérité documentaire (S, 2 jours) — fait `0c19f8c`
 
