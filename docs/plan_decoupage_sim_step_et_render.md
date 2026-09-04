@@ -275,6 +275,13 @@ Cet ordre place le sous-lot E (ciblage IA) en tout dernier, une fois la méthode
 extractions plus sûres — cohérent avec la prudence qui a fait reporter ce chantier lors de la
 session du 3 septembre plutôt que de le tenter sans plan.
 
+**Décision utilisateur (2026-09-03, en cours d'exécution)** : après les 5 premiers lots (tous
+mécaniques, faible risque), demandé explicitement si le pilotage joueur (D) et le ciblage IA (E)
+devaient s'arrêter pour un playtest manuel avant de committer, comme ce document le recommande.
+Réponse : continuer avec la seule vérification automatisée (tests + goldens), sans playtest
+manuel — garantie plus faible que la recommandation initiale de ce plan pour ces deux lots
+spécifiquement, accepté en connaissance de cause. Signalé dans les messages de commit de D et E.
+
 ## Suivi
 
 | Lot | Description | Statut |
@@ -283,8 +290,9 @@ session du 3 septembre plutôt que de le tenter sans plan.
 | 2. `render` B-A/B-B | `build_gizmo_geometry`, `build_debug_geometry` | ✅ `62b9ded`, [run 33795980310](https://github.com/lberthod/rusteegear/actions/runs/33795980310) 7/7 vert. `render` 1125 → ~950 lignes |
 | 2. `render` B-C | `apply_editor_actions` (dispatch des ~90 actions) | ✅ `5504f68` — `render` 1125 → ~530 lignes cumulé |
 | 3. `sim_step` B | `run_object_scripts` | ✅ `7736ffc`, [run 33798670774](https://github.com/lberthod/rusteegear/actions/runs/33798670774) 7/7 vert. `sim_step` ~800 → ~570 lignes cumulé |
-| 4. `render` D | Construction UI (player + éditeur) | ⏳ |
-| 5. `sim_step` C, F | `apply_script_outcomes`, queue de fonction | ⏳ |
-| 6. `render` E, F | Passe d'ombre, passe principale | ⏳ |
+| 4. `render` D | Construction UI (player + éditeur) | ✅ `f5f5a34`, [run 33800510694](https://github.com/lberthod/rusteegear/actions/runs/33800510694) 7/7 vert. `render` 1125 → ~370 lignes cumulé |
+| 5. `sim_step` C | `apply_script_outcomes` | ✅ `ffac132`, [run 33801527708](https://github.com/lberthod/rusteegear/actions/runs/33801527708) 7/7 vert. `sim_step` ~800 → ~525 lignes cumulé. F (queue) reporté après D/E, non actionnable avant |
+| 6. `render` E | Passe d'ombre (`render_shadow_pass`) | ✅ `5afc090`, [run 33802660171](https://github.com/lberthod/rusteegear/actions/runs/33802660171) 7/7 vert, goldens inchangés au pixel près. `render` 1125 → ~310 lignes cumulé |
+| 6. `render` F | Passe principale | ⏳ |
 | 7. `sim_step` D | Pilotage physique du joueur | ⏳ |
 | 8. `sim_step` E1-E3 | Ciblage et poursuite IA | ⏳ |
