@@ -51,7 +51,8 @@ impl AppState {
     /// met à jour `last_autosave`.
     pub(crate) fn maybe_autosave_at(&mut self, autosave_dir: &Path) {
         let now = crate::time_compat::Instant::now();
-        match write_autosave(&self.scene, autosave_dir) {
+        let source = self.manual_save_reference_path();
+        match write_autosave(&self.scene, autosave_dir, &source) {
             Ok(path) => {
                 // Visible dans la barre d'état (« 💾 auto il y a 2 min »,
                 // roadmap post-audit UX v2 2026-09-04, 6.2) — pas de toast :
@@ -121,22 +122,42 @@ impl AppState {
     /// d'un fichier de secours, pas de l'emplacement réel de l'utilisateur —
     /// tant qu'elle n'est pas explicitement sauvegardée là, elle doit rester
     /// signalée comme non enregistrée.
+    ///
+    /// Les autosaves sont globales (un seul dossier pour tous les projets,
+    /// cf. module) : si celle-ci n'a pas été écrite pour le projet/fichier
+    /// actuellement ouvert (`manual_save_reference_path`), on ne continue pas
+    /// à cibler ce projet — `current_project`/`scene_file` sont détachés,
+    /// pour que la sauvegarde suivante passe par « Enregistrer sous » (roadmap
+    /// 3.2) au lieu d'écrire silencieusement la scène restaurée par-dessus un
+    /// projet qui n'est pas le sien (audit externe du 5 septembre 2026,
+    /// risque A : une autosave de A restaurée puis enregistrée pouvait
+    /// écraser B).
     pub fn restore_autosave(&mut self, autosave_path: &Path) -> Result<(), String> {
         let path_str = autosave_path
             .to_str()
             .ok_or("chemin d'autosave non UTF-8")?;
         let mut scene = Scene::load(path_str).map_err(|e| format!("{path_str} : {e}"))?;
         scene.reload_imported();
+        let current_target = self.manual_save_reference_path();
         self.scene = scene;
         self.clear_selection();
         self.scene_dirty = true;
+        if !autosave_matches_target(autosave_path, &current_target) {
+            self.current_project = None;
+            self.scene_file = None;
+        }
         Ok(())
     }
 }
 
-/// Écrit une autosave de `scene` dans `<autosave_dir>/<horodatage>.json` puis
-/// supprime les plus anciennes au-delà de `AppState::AUTOSAVE_KEEP`.
-fn write_autosave(scene: &Scene, autosave_dir: &Path) -> std::io::Result<PathBuf> {
+/// Écrit une autosave de `scene` dans `<autosave_dir>/<horodatage>.json`,
+/// accompagnée d'un sidecar `<horodatage>.json.src` qui enregistre `source`
+/// (la cible de sauvegarde manuelle au moment de l'écriture — projet ou
+/// fichier lié) pour permettre de reconnaître à quel projet cette autosave
+/// appartient (`autosave_matches_target`, audit externe du 5 septembre 2026,
+/// risque A). Supprime ensuite les plus anciennes au-delà de
+/// `AppState::AUTOSAVE_KEEP`.
+fn write_autosave(scene: &Scene, autosave_dir: &Path, source: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(autosave_dir)?;
     let ts = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -149,8 +170,35 @@ fn write_autosave(scene: &Scene, autosave_dir: &Path) -> std::io::Result<PathBuf
     scene.save(path.to_str().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "chemin non UTF-8")
     })?)?;
+    // Best-effort : un sidecar manquant dégrade juste vers « rattachement
+    // inconnu » à la restauration (cf. `autosave_matches_target`), il ne doit
+    // pas faire échouer l'autosave elle-même.
+    let _ = std::fs::write(
+        source_sidecar_path(&path),
+        source.to_string_lossy().as_bytes(),
+    );
     rotate_autosaves(autosave_dir, AppState::AUTOSAVE_KEEP)?;
     Ok(path)
+}
+
+/// Chemin du sidecar de provenance d'une autosave (cf. `write_autosave`).
+fn source_sidecar_path(autosave_path: &Path) -> PathBuf {
+    let mut name = autosave_path.as_os_str().to_owned();
+    name.push(".src");
+    PathBuf::from(name)
+}
+
+/// `true` si `autosave_path` a été écrite pour `current_target` (comparaison
+/// directe des chemins, comme `manual_save_reference_path` — pas de
+/// canonicalisation : la cible peut ne pas encore exister sur disque). En
+/// l'absence de sidecar (autosave écrite avant ce correctif), le rattachement
+/// est considéré inconnu plutôt que supposé correct : mieux vaut demander
+/// « Enregistrer sous » à tort que risquer d'écrire dans le mauvais projet.
+fn autosave_matches_target(autosave_path: &Path, current_target: &Path) -> bool {
+    match std::fs::read_to_string(source_sidecar_path(autosave_path)) {
+        Ok(recorded) => Path::new(&recorded) == current_target,
+        Err(_) => false,
+    }
 }
 
 /// Ne garde que les `keep` autosaves les plus récentes (triées par nom, donc
@@ -165,6 +213,7 @@ fn rotate_autosaves(dir: &Path, keep: usize) -> std::io::Result<()> {
     if entries.len() > keep {
         for old in &entries[..entries.len() - keep] {
             let _ = std::fs::remove_file(old);
+            let _ = std::fs::remove_file(source_sidecar_path(old));
         }
     }
     Ok(())
@@ -221,10 +270,16 @@ mod tests {
         let dir = temp_autosave_dir("ecriture-simple");
         let mut scene = Scene::default();
         scene.light.color = [0.5, 0.5, 0.5];
-        let path = write_autosave(&scene, &dir).expect("écriture de l'autosave");
+        let source = PathBuf::from("/tmp/projet-a/scene.json");
+        let path = write_autosave(&scene, &dir, &source).expect("écriture de l'autosave");
         assert!(path.exists());
         let reloaded = Scene::load(path.to_str().unwrap()).expect("relecture");
         assert_eq!(reloaded.light.color, [0.5, 0.5, 0.5]);
+        assert!(autosave_matches_target(&path, &source));
+        assert!(!autosave_matches_target(
+            &path,
+            Path::new("/tmp/projet-b/scene.json")
+        ));
     }
 
     #[test]
@@ -294,8 +349,9 @@ mod tests {
         app.scene_dirty = true;
 
         app.maybe_autosave_at(&dir);
+        // 1 autosave + son sidecar de provenance (`.json.src`, cf. `write_autosave`).
         let count_after_first = std::fs::read_dir(&dir).unwrap().count();
-        assert_eq!(count_after_first, 1);
+        assert_eq!(count_after_first, 2);
 
         // Un second appel immédiat (intervalle non écoulé) ne doit rien
         // ajouter — vérifié via la politique complète `maybe_autosave`, pas
@@ -441,6 +497,72 @@ mod tests {
         assert!(
             app.scene_dirty,
             "une scène restaurée depuis un autosave doit être signalée non enregistrée"
+        );
+    }
+
+    /// Audit externe du 5 septembre 2026, risque A / roadmap 2.4 : une
+    /// autosave écrite pour le projet A, restaurée pendant que le projet B
+    /// est ouvert, ne doit pas laisser B ciblé — sinon la sauvegarde suivante
+    /// écrirait la scène de A par-dessus B.
+    #[test]
+    fn restoring_an_autosave_from_another_project_detaches_the_open_project() {
+        let dir = temp_autosave_dir("croisement-a-b");
+        let project_a = crate::project::ProjectRoot {
+            name: "Projet A".to_string(),
+            root: PathBuf::from("/tmp/projet-a"),
+            main_scene_path: PathBuf::from("/tmp/projet-a/scene.json"),
+        };
+        let mut app_a = AppState::new();
+        app_a.current_project = Some(project_a);
+        app_a.scene.light.color = [0.9, 0.1, 0.1];
+        app_a.scene_dirty = true;
+        app_a.maybe_autosave_at(&dir);
+        let autosave_of_a = latest_autosave(&dir).expect("autosave de A écrite");
+
+        let project_b = crate::project::ProjectRoot {
+            name: "Projet B".to_string(),
+            root: PathBuf::from("/tmp/projet-b"),
+            main_scene_path: PathBuf::from("/tmp/projet-b/scene.json"),
+        };
+        let mut app_b = AppState::new();
+        app_b.current_project = Some(project_b);
+
+        app_b
+            .restore_autosave(&autosave_of_a)
+            .expect("restauration de l'autosave de A");
+
+        // Le contenu restauré est bien celui de A...
+        assert_eq!(app_b.scene.light.color, [0.9, 0.1, 0.1]);
+        // ...mais B n'est plus la cible : une sauvegarde suivante ne peut
+        // plus écrire silencieusement dans B (`save_target()` retombe sur
+        // « Enregistrer sous », roadmap 3.2), et ne peut pas non plus
+        // continuer à viser un `scene_file` de B.
+        assert!(app_b.current_project.is_none());
+        assert!(app_b.scene_file.is_none());
+    }
+
+    /// Contre-épreuve : restaurer sa propre autosave (source == cible
+    /// courante) ne détache pas le projet.
+    #[test]
+    fn restoring_an_autosave_from_the_same_project_keeps_it_bound() {
+        let dir = temp_autosave_dir("meme-projet");
+        let project = crate::project::ProjectRoot {
+            name: "Projet".to_string(),
+            root: PathBuf::from("/tmp/projet"),
+            main_scene_path: PathBuf::from("/tmp/projet/scene.json"),
+        };
+        let mut app = AppState::new();
+        app.current_project = Some(project.clone());
+        app.scene_dirty = true;
+        app.maybe_autosave_at(&dir);
+        let autosave = latest_autosave(&dir).expect("autosave écrite");
+
+        app.restore_autosave(&autosave)
+            .expect("restauration de sa propre autosave");
+
+        assert_eq!(
+            app.current_project.as_ref().map(|p| &p.name),
+            Some(&project.name)
         );
     }
 }

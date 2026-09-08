@@ -58,11 +58,35 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             --install "platforms;android-33" --sdk_root="$ANDROID_HOME"
+      - name: Restaurer le keystore de signature
+        # `packaging/release.keystore` n'est jamais committé (Sprint post-audit
+        # 2026-09-03 2.3) et ce job tourne sur un runner neuf à chaque release :
+        # sans cette étape, build_apk.sh en génère un NOUVEAU à chaque fois, donc
+        # une identité de signature différente à chaque release — Android refuse
+        # alors toute mise à jour par-dessus l'APK d'une release précédente
+        # (audit externe du 5 septembre 2026, point D). Le secret contient le
+        # fichier keystore lui-même, encodé en base64 : `base64 -i
+        # packaging/release.keystore | gh secret set RUSTEEGEAR_KEYSTORE_B64
+        # --repo <owner>/<repo>` après l'avoir généré une première fois en local
+        # (`./packaging/build_apk.sh` avec RUSTEEGEAR_KEYSTORE_PASS positionné).
+        # Secret absent (première release) : build_apk.sh en génère un et cette
+        # étape ne fait rien — penser à sauvegarder ce premier keystore.
+        if: ${{ secrets.RUSTEEGEAR_KEYSTORE_B64 != '' }}
+        run: |
+          echo "${{ secrets.RUSTEEGEAR_KEYSTORE_B64 }}" | base64 -d > packaging/release.keystore
       - name: Build .apk
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
           # Le tag v* fixe le versionName de l'APK (override d'identité, Sprint 36).
           APP_VERSION: ${{ github.ref_name }}
+          # Requis par packaging/build_apk.sh (pas de défaut, Sprint post-audit
+          # 2026-09-03 2.3) : sans ce secret, le job échoue ici avec « variable
+          # requise » plutôt que de signer avec un mot de passe par défaut.
+          # À définir une fois : `gh secret set RUSTEEGEAR_KEYSTORE_PASS
+          # --repo <owner>/<repo>` (audit externe du 5 septembre 2026, point D
+          # — ce secret manquait, le job Android de Release était donc
+          # cassé dans cette configuration malgré un job CI de compilation vert).
+          RUSTEEGEAR_KEYSTORE_PASS: ${{ secrets.RUSTEEGEAR_KEYSTORE_PASS }}
         run: |
           export APP_VERSION="${APP_VERSION#v}"   # v1.2.0 -> 1.2.0
           ./packaging/build_apk.sh

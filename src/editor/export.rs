@@ -172,9 +172,7 @@ impl ExportPanel {
         };
         self.cancelled = true;
         self.queue.clear();
-        if let Some(c) = lock_child(child).as_mut() {
-            kill_process_tree(c);
-        }
+        kill_process_tree(child);
         let label = self.running.map(Target::label).unwrap_or("export");
         self.log.push("⏹ Annulation demandée…".to_string());
         log::info!("Export « {label} » annulé.");
@@ -1164,20 +1162,55 @@ fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(data.to_vec())
 }
 
-/// Tue un processus de packaging et tout son groupe (cf. `ExportPanel::cancel`).
-/// Le script tourne dans son propre groupe (`process_group(0)` dans `run`) :
-/// `kill -TERM -- -<pid>` atteint bash **et** ses enfants. Puis `kill()` sur
-/// le bash lui-même, au cas où il ignorerait SIGTERM.
-fn kill_process_tree(child: &mut Child) {
+/// Délai de grâce laissé au script de packaging après SIGTERM avant
+/// l'escalade vers SIGKILL (cf. `kill_process_tree`) : les scripts comme
+/// `build_apk.sh` modifient temporairement `Cargo.toml` (identité Android,
+/// mot de passe du keystore) et le restaurent via un `trap EXIT` — un SIGKILL
+/// immédiat contournait ce trap et pouvait laisser ces substitutions, y
+/// compris un secret, dans le fichier de travail (audit externe du 5
+/// septembre 2026, risque E).
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Termine un processus de packaging et tout son groupe (cf.
+/// `ExportPanel::cancel`). Le script tourne dans son propre groupe
+/// (`process_group(0)` dans `run`) : `kill -TERM -- -<pid>` atteint bash
+/// **et** ses enfants, en leur laissant `KILL_GRACE` pour se terminer
+/// proprement (trap EXIT compris) avant qu'un thread de fond n'escalade vers
+/// SIGKILL si le groupe tourne toujours.
+fn kill_process_tree(shared: &SharedChild) {
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
-            .args(["-TERM", "--", &format!("-{}", child.id())])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        if let Some(child) = lock_child(shared).as_ref() {
+            let _ = Command::new("kill")
+                .args(["-TERM", "--", &format!("-{}", child.id())])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        let shared = Arc::clone(shared);
+        std::thread::spawn(move || {
+            std::thread::sleep(KILL_GRACE);
+            if let Some(c) = lock_child(&shared).as_mut() {
+                if matches!(c.try_wait(), Ok(None)) {
+                    let _ = Command::new("kill")
+                        .args(["-KILL", "--", &format!("-{}", c.id())])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    let _ = c.kill();
+                }
+            }
+        });
     }
-    let _ = child.kill();
+    #[cfg(not(unix))]
+    {
+        // Pas de groupe de processus portable hors Unix, ni de trap EXIT dans
+        // les scripts `.sh` visés par cette annulation (export mobile/Linux) :
+        // SIGKILL immédiat du seul bash, comme avant ce correctif.
+        if let Some(c) = lock_child(shared).as_mut() {
+            let _ = c.kill();
+        }
+    }
 }
 
 /// Lance le script de packaging en thread de fond ; renvoie le canal de log et
