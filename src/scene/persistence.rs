@@ -157,10 +157,31 @@ impl Scene {
         std::fs::rename(&tmp, path)
     }
 
+    /// Charge et migre une scène. Une scène dont `version` dépasse
+    /// [`Scene::CURRENT_VERSION`] est refusée plutôt que migrée en silence :
+    /// `migrate()` ne connaît que les paliers jusqu'à `CURRENT_VERSION`, donc
+    /// une version future traverserait ses `if` sans rien faire puis serait
+    /// re-timbrée `CURRENT_VERSION` — un moteur plus ancien pourrait alors la
+    /// réenregistrer en perdant silencieusement les champs qu'il ne connaît
+    /// pas (`serde` ignore déjà les champs inconnus à la désérialisation).
+    /// Même garde que `ProjectManifest::load` (audit externe du 5 septembre
+    /// 2026, point H).
     pub fn load(path: &str) -> std::io::Result<Scene> {
         let json = std::fs::read_to_string(path)?;
         let mut scene: Scene = serde_json::from_str(&json)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        if scene.version > Self::CURRENT_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{path} déclare le format de scène {}, mais cette version de \
+                     RusteeGear ne comprend que jusqu'au format {} — mets à jour \
+                     l'éditeur avant d'ouvrir ce fichier.",
+                    scene.version,
+                    Self::CURRENT_VERSION
+                ),
+            ));
+        }
         scene.migrate();
         Ok(scene)
     }
@@ -316,5 +337,35 @@ mod tests {
             .save(path.to_str().unwrap())
             .expect("première sauvegarde");
         assert!(!backup_path(&path).exists());
+    }
+
+    /// Audit externe du 5 septembre 2026, point H : une scène déclarant un
+    /// format futur ne doit pas être migrée en silence (et re-timbrée
+    /// `CURRENT_VERSION`, ce qui masquerait la perte des champs inconnus).
+    #[test]
+    fn loading_a_scene_from_a_future_version_is_rejected() {
+        let path = temp_scene_path("version-future-refusee");
+        let mut scene = Scene::default();
+        scene.version = Scene::CURRENT_VERSION + 1;
+        scene.save(path.to_str().unwrap()).expect("écriture");
+
+        let err = match Scene::load(path.to_str().unwrap()) {
+            Err(e) => e,
+            Ok(_) => panic!("une scène de format futur doit être refusée"),
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("format de scène"),
+            "message peu clair : {err}"
+        );
+    }
+
+    #[test]
+    fn loading_a_scene_at_the_current_version_still_succeeds() {
+        let path = temp_scene_path("version-courante-acceptee");
+        Scene::default()
+            .save(path.to_str().unwrap())
+            .expect("écriture");
+        Scene::load(path.to_str().unwrap()).expect("une scène à jour doit se charger");
     }
 }

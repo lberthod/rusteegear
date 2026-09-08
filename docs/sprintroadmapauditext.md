@@ -65,8 +65,8 @@ reproduit sur données utilisateur — à confirmer par un test avant de cocher.
 
 ## Vague 7 — Compatibilité fichiers et secrets (S, à glisser dans une vague existante)
 
-- [ ] 7.1 `Scene::load` : refuser les versions futures au lieu de les migrer silencieusement vers la version courante, comme le fait déjà le manifeste de projet (H, `src/scene/persistence.rs:160,188`)
-- [ ] 7.2 Déplacer la clé privée DeepSeek hors des réglages sérialisés en clair, vers le trousseau système ; exclure explicitement les secrets des diagnostics et des exports (H, `src/app/settings.rs:13,433`) — ne pas confondre avec la clé publique de configuration Firebase, qui reste en config
+- [x] 7.1 `Scene::load` refuse désormais toute scène dont `version > Scene::CURRENT_VERSION` (même garde que `ProjectManifest::load`), au lieu de migrer en silence puis re-timbrer `CURRENT_VERSION` — perdait silencieusement les champs inconnus d'un format futur en cas de réenregistrement. Tests : `loading_a_scene_from_a_future_version_is_rejected`, `loading_a_scene_at_the_current_version_still_succeeds` ([src/scene/persistence.rs](../src/scene/persistence.rs)) (H)
+- [ ] 7.2 Déplacer la clé privée DeepSeek hors des réglages sérialisés en clair, vers le trousseau système — **non fait** : nécessite une nouvelle dépendance (`keyring` ou équivalent) avec un comportement différent par plateforme (macOS/Windows/Linux ont un trousseau, iOS/Android/wasm généralement pas), donc un repli explicite à concevoir plutôt qu'un simple remplacement de type ; un changement bâclé ici risquerait de casser la persistance des réglages sur une plateforme non testée. À traiter comme sa propre vague. Vérifié dans cette session : `Settings` ne dérive pas `Debug` et aucun chemin de diagnostics/export n'imprime `deepseek_api_key` en clair actuellement — pas de fuite immédiate au-delà du fichier `settings.json` lui-même (H, `src/app/settings.rs:13`) — ne pas confondre avec `firebase_api_key`, publique par conception (cf. commentaire `settings.rs:20-23`)
 
 ## Hors périmètre de ce sprint
 
