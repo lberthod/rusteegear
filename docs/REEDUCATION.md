@@ -14,9 +14,12 @@ MediaPipe Pose + canvas 2D, ~430 lignes) sur RusteeGear.
 
 ![Séance en cours : avatar, cible, halo et point suivi](img/reeducation_preview.png)
 
-> Avertissement repris tel quel de Mouvéo : **prototype de coaching, sans
-> diagnostic ni mesure clinique**. Le patient suit les consignes de son
-> professionnel de santé et s'arrête en cas de douleur, vertige ou inconfort.
+> **Démonstration technologique de vision par ordinateur, pas un outil
+> médical** : aucune valeur médicale, thérapeutique ni scientifique, aucune
+> validation clinique, aucun avis médical — comme Mouvéo l'annonçait déjà
+> (« prototype de coaching, sans diagnostic ni mesure clinique »). L'utilisateur
+> consulte un professionnel de santé et s'arrête en cas de douleur, vertige ou
+> inconfort. Origine : [antoinequarroz/mouveo-reeducation](https://github.com/antoinequarroz/mouveo-reeducation).
 
 ## Ce que fait le jeu
 

@@ -467,7 +467,7 @@ else
   hud_text("celebration", "")
   if cel > 0 then save.set("rd_cel", 0) end
 end
-hud_text("mention", "Créé par Antoine Quarroz et Loïc Berthod · prototype de coaching, sans diagnostic ni mesure clinique — suivez les consignes de votre professionnel de santé.")
+hud_text("mention", "Créé par Antoine Quarroz et Loïc Berthod · démo technologique de vision par ordinateur, sans valeur médicale ni scientifique — consultez un professionnel de santé.")
 "#;
 
 /// Script directeur complet : les constantes de ce module (projection, durées)
