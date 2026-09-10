@@ -521,6 +521,7 @@ impl Physics {
             controlled,
             kinematic,
             scripted,
+            scripted_delta: std::collections::HashMap::new(),
             collider_owner,
             sensors,
             query_cache: std::cell::RefCell::new(None),

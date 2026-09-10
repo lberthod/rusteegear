@@ -314,6 +314,7 @@ impl App {
         let p = egui::pos2(touch.location.x as f32 / ppp, touch.location.y as f32 / ppp);
         let egui_owns = renderer.ui_owns_point(p);
         let gameplay = self.state.playing && !self.state.paused && !self.state.welcome_pending;
+        let platformer_pad = self.state.scene.mobile.platformer;
         let inp = &mut self.state.input_state;
         match touch.phase {
             TouchPhase::Started => {
@@ -371,6 +372,11 @@ impl App {
         inp.buttons.clear();
         inp.touch_thrust = 0.0;
         inp.touch_turn = 0.0;
+        if platformer_pad {
+            // Schéma plateformer (`MobileControls::platformer`) : pas de stick,
+            // ◀ ▶ écrivent l'axe X de `joy` (recalculé depuis tous les doigts).
+            inp.joy = (0.0, 0.0);
+        }
         for (role, _) in self.touch_roles.values() {
             match role {
                 TouchRole::Button(name) => {
@@ -378,6 +384,8 @@ impl App {
                 }
                 TouchRole::Pad(PadKey::Up) => inp.touch_thrust = 1.0,
                 TouchRole::Pad(PadKey::Down) => inp.touch_thrust = -1.0,
+                TouchRole::Pad(PadKey::Left) if platformer_pad => inp.joy.0 = -1.0,
+                TouchRole::Pad(PadKey::Right) if platformer_pad => inp.joy.0 = 1.0,
                 TouchRole::Pad(PadKey::Left) => inp.touch_turn = -1.0,
                 TouchRole::Pad(PadKey::Right) => inp.touch_turn = 1.0,
                 TouchRole::Stick | TouchRole::Orbit | TouchRole::None => {}
@@ -1485,6 +1493,38 @@ fn make_app(player: bool) -> App {
             match app.state.load_from_blocking(&path) {
                 Ok(count) => log::info!("Scène jouée en mode Player : {path} ({count} objets)"),
                 Err(e) => log::error!("--scene : {e} — scène embarquée à la place"),
+            }
+        }
+        // `--level=N` (desktop) / `window.__rusteegear_start_level` (web) : démarrer
+        // directement à ce niveau du plateformer 2D (sélecteur de mondes).
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        {
+            app.state.start_level = std::env::args().find_map(|a| {
+                a.strip_prefix("--level=")
+                    .and_then(|v| v.parse::<u32>().ok())
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.state.start_level = js_sys::Reflect::get(
+                &js_sys::global(),
+                &wasm_bindgen::JsValue::from_str("__rusteegear_start_level"),
+            )
+            .ok()
+            .and_then(|v| v.as_f64())
+            .map(|v| v.max(0.0) as u32);
+            // `window.__rusteegear_touch = true` (page web sur écran tactile,
+            // détecté par `navigator.maxTouchPoints`) : l'interface tactile est
+            // dessinée dès le départ, sans attendre un premier doigt.
+            if js_sys::Reflect::get(
+                &js_sys::global(),
+                &wasm_bindgen::JsValue::from_str("__rusteegear_touch"),
+            )
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            {
+                app.state.touch_seen = true;
             }
         }
         // Connexion automatique au serveur RusteeGear par défaut (VPS) : sans

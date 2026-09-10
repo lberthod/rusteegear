@@ -59,6 +59,14 @@ pub struct MobileControls {
     /// (roadmap post-audit UX v2 2026-09-04, 5.4).
     #[serde(default)]
     pub safe_area: bool,
+    /// Schéma **plateformer 2D** (RageQuit) : deux gros boutons ◀ ▶ en bas à
+    /// gauche qui écrivent directement l'axe X de `PlayerInput::joy` (pas de
+    /// pivot « tank »), la grille `buttons` en bas à droite (typiquement le
+    /// bouton de saut du contrôleur), **aucune zone d'orbite** : un doigt posé
+    /// ailleurs ne tourne jamais la caméra de côté. Prioritaire sur `dpad`,
+    /// `dual_stick` et `joystick`.
+    #[serde(default)]
+    pub platformer: bool,
 }
 
 impl MobileControls {
@@ -67,6 +75,7 @@ impl MobileControls {
         self.joystick
             || self.dpad
             || self.dual_stick
+            || self.platformer
             || !self.buttons.is_empty()
             || self.touch_zone
             || self.health_bar

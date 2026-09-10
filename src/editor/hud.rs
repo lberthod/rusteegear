@@ -1640,6 +1640,9 @@ pub(super) fn mobile_overlay(
             Some((_, TouchRole::Pad(key))) => match key {
                 PadKey::Up => input.touch_thrust = 1.0,
                 PadKey::Down => input.touch_thrust = -1.0,
+                // Plateformer : ◀ ▶ = axe X du déplacement, pas un pivot.
+                PadKey::Left if cfg.platformer => input.joy = (-1.0, 0.0),
+                PadKey::Right if cfg.platformer => input.joy = (1.0, 0.0),
                 PadKey::Left => input.touch_turn = -1.0,
                 PadKey::Right => input.touch_turn = 1.0,
             },
@@ -1668,10 +1671,17 @@ pub(super) fn mobile_overlay(
         let held = match key {
             PadKey::Up => input.touch_thrust > 0.0,
             PadKey::Down => input.touch_thrust < 0.0,
+            PadKey::Left if cfg.platformer => input.joy.0 < -0.5,
+            PadKey::Right if cfg.platformer => input.joy.0 > 0.5,
             PadKey::Left => input.touch_turn < 0.0,
             PadKey::Right => input.touch_turn > 0.0,
         };
-        touch_button(&painter, *cell, key.label(), held, 10.0);
+        let (label, radius) = if cfg.platformer {
+            (key.label_platformer(), 18.0)
+        } else {
+            (key.label(), 10.0)
+        };
+        touch_button(&painter, *cell, label, held, radius);
     }
 
     // --- Stick flottant (roadmap v2 5.2) : dessiné là où le pouce s'est posé ;
@@ -1864,7 +1874,7 @@ mod tests {
             egui::text::FontDefinitions::default(),
         );
         let font = egui::FontId::proportional(14.0);
-        let used = "🗺💀🎉⭐🏆⏱✨🕯📜🔵🔴💚🎒👜👥🌐⚙❓📝⏸🔇🔊🛡👹🔄🎮⌨✖⚠💾🔍🎯";
+        let used = "🗺💀🎉⭐🏆⏱✨🕯📜🔵🔴💚🎒👜👥🌐⚙❓📝⏸🔇🔊🛡👹🔄🎮⌨✖⚠💾🔍🎯◀▶";
         let missing: String = used
             .chars()
             .filter(|c| !fonts.has_glyph(&font, *c))

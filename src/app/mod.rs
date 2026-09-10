@@ -1133,6 +1133,11 @@ pub struct AppState {
     /// Anticipation caméra lissée du plateformer 2D (unités, signée), cf. le suivi
     /// caméra dans `advance_play`.
     camera_ahead: f32,
+    /// Niveau de départ demandé (`--level=N` en natif, `window.__rusteegear_start_level`
+    /// sur le web) : appliqué à l'entrée en Play (point de contrôle + téléportation),
+    /// puis consommé.
+    pub start_level: Option<u32>,
+    start_level_pending: Option<u32>,
     /// Textes de HUD posés par les scripts (`hud_text(id, texte)`, mode plateformer
     /// 2D) : remplacent le contenu du widget `Text` d'id correspondant. Remis à
     /// zéro à l'entrée en Play seulement (une vanne de mort doit survivre à
@@ -1515,6 +1520,8 @@ impl AppState {
             death_pos: None,
             run_time: 0.0,
             camera_ahead: 0.0,
+            start_level: None,
+            start_level_pending: None,
             hud_texts: std::collections::HashMap::new(),
             pose: pose::PoseFrame::default(),
             hands: pose::HandFrame::default(),
@@ -2007,9 +2014,9 @@ impl AppState {
     /// Niveau courant du plateformer 2D : index du bloc de 40 unités sur X où se
     /// trouve le joueur (même découpage que `build_scene.py` du jeu RageQuit).
     pub fn platformer_level(&self) -> Option<u32> {
-        self.scene.platformer?;
+        let pl = self.scene.platformer?;
         let p = self.player_position().or(self.checkpoint)?;
-        Some(((p.x + 5.0) / 40.0).floor().max(0.0) as u32)
+        Some(((p.x + 5.0) / pl.level_spacing.max(1.0)).floor().max(0.0) as u32)
     }
 
     /// Nouvelle partie après une victoire (« Rejouer ») : morts, chrono, point de

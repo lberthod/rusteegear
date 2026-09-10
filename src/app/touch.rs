@@ -80,6 +80,17 @@ pub enum PadKey {
 }
 
 impl PadKey {
+    /// Libellé du schéma plateformer (`MobileControls::platformer`) : flèches
+    /// gauche/droite (glyphes couverts par les fontes egui, cf. le test
+    /// `player_hud_glyphs_are_covered_by_the_embedded_fonts`).
+    pub fn label_platformer(self) -> &'static str {
+        match self {
+            PadKey::Left => "◀",
+            PadKey::Right => "▶",
+            other => other.label(),
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             PadKey::Up => "W",
@@ -149,6 +160,10 @@ pub const ACTION_SPACING: f32 = 8.0;
 /// Cellule du pavé W/A/S/D (points).
 pub const PAD_BUTTON: f32 = 56.0;
 pub const PAD_GAP: f32 = 6.0;
+/// Boutons du schéma plateformer (`MobileControls::platformer`) : plus gros
+/// qu'une cellule de pavé (on les martèle les yeux sur le jeu), 76 pt ≥ 44 pt.
+pub const PLATFORMER_BUTTON: f32 = 76.0;
+pub const PLATFORMER_GAP: f32 = 12.0;
 /// Colonnes de la grille d'action : pousse en hauteur, jamais en largeur (un
 /// téléphone de largeur courante n'a pas la place pour 4 boutons en ligne à
 /// côté du pavé).
@@ -167,6 +182,37 @@ impl TouchZones {
             touch_zone: cfg.touch_zone,
             ..Default::default()
         };
+        if cfg.platformer {
+            // ◀ ▶ côte à côte en bas à gauche, saut (grille `buttons`) en bas à
+            // droite, ni stick ni orbite.
+            let b = PLATFORMER_BUTTON * hud_scale.clamp(0.75, 1.6);
+            let min = pos2(area.left() + m, area.bottom() - m - b);
+            zones.pad = vec![
+                (PadKey::Left, Rect::from_min_size(min, Vec2::splat(b))),
+                (
+                    PadKey::Right,
+                    Rect::from_min_size(min + vec2(b + PLATFORMER_GAP, 0.0), Vec2::splat(b)),
+                ),
+            ];
+            if !cfg.buttons.is_empty() {
+                let n = cfg.buttons.len() as f32;
+                let width = n * b + (n - 1.0) * PLATFORMER_GAP;
+                let min = pos2(area.right() - m - width, area.bottom() - m - b);
+                zones.buttons = cfg
+                    .buttons
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        let cell = Rect::from_min_size(
+                            min + vec2(i as f32 * (b + PLATFORMER_GAP), 0.0),
+                            Vec2::splat(b),
+                        );
+                        (name.clone(), cell)
+                    })
+                    .collect();
+            }
+            return zones;
+        }
         if cfg.dpad {
             let size = PAD_BUTTON * 3.0 + PAD_GAP * 2.0;
             let min = pos2(area.left() + m, area.bottom() - m - size);

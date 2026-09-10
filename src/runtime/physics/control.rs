@@ -205,7 +205,28 @@ impl Physics {
             ..Default::default()
         };
         let movement = controller.move_shape(dt, &queries, shape, &shape_pos, desired, |_| {});
-        let new_translation = translation + movement.translation;
+        // Plateforme mobile (mode plateformer 2D) : posé sur un corps scripté
+        // (`PhysicsKind::Kinematic`) qui vient de bouger, le joueur est emporté du
+        // même déplacement — appliqué **après** `move_shape`, hors contrôleur :
+        // passé dans `desired`, un déplacement vertical serait annulé par le
+        // `snap_to_ground` (montée) ou lu comme une chute (descente), et la
+        // plateforme finirait par pénétrer ou fuir sous les pieds. Le sol est
+        // identifié par un rayon vers le bas depuis le centre du corps (longueur =
+        // demi-hauteur + marge) ; hors plateformer (jeu 3D historique) rien ne change.
+        let carry = if self.platformer_feel && movement.grounded && !do_jump {
+            let bottom = -shape.compute_local_aabb().mins.y;
+            let ray = Ray::new(translation, Vector::new(0.0, -1.0, 0.0));
+            queries
+                .cast_ray(&ray, bottom + 0.35, true)
+                .and_then(|(h, _)| self.collider_owner.get(&h))
+                .and_then(|i| self.scripted_delta.get(i))
+                .copied()
+                .unwrap_or(Vec3::ZERO)
+        } else {
+            Vec3::ZERO
+        };
+        let new_translation =
+            translation + movement.translation + Vector::new(carry.x, carry.y, carry.z);
 
         // Vitesse horizontale dérivée du mouvement **réel** (post-collision), pas
         // de la cible commandée : un mur doit freiner le joueur visiblement au
@@ -270,6 +291,16 @@ impl Physics {
         /// Vitesse maximale (m/s) que la dépénétration peut ajouter au
         /// déplacement demandé par le script.
         const DEPEN_SPEED: f32 = 0.8;
+        // Plateformer 2D : une plateforme mobile ne bute pas sur le joueur posé
+        // dessus (elle ne pourrait jamais monter) — il est emporté par
+        // `control_kinematic` (cf. `scripted_delta`), pas poussé.
+        let riders: Vec<RigidBodyHandle> = if self.platformer_feel {
+            self.kinematic.iter().map(|k| k.1).collect()
+        } else {
+            Vec::new()
+        };
+        let not_rider =
+            |_: ColliderHandle, c: &Collider| c.parent().is_none_or(|p| !riders.contains(&p));
         for slot in 0..self.scripted.len() {
             let (index, handle) = self.scripted[slot];
             let Some(obj) = scene.objects.get_mut(index) else {
@@ -295,12 +326,19 @@ impl Physics {
 
             let target = obj.transform.position;
             let mut desired = target - cur;
-            desired.y -= SCRIPTED_FALL_SPEED * dt;
+            // Plateformer 2D : les corps scriptés sont des plateformes qui écrivent
+            // leur hauteur — pas de descente forcée (une plateforme dont le script
+            // est mis en veille au loin, cf. `SCRIPT_CULL_DISTANCE`, tomberait
+            // dans le vide).
+            if !self.platformer_feel {
+                desired.y -= SCRIPTED_FALL_SPEED * dt;
+            }
 
             // Même exclusion des capteurs que pour le joueur (ci-dessus).
             let filter = QueryFilter::new()
                 .exclude_rigid_body(handle)
-                .exclude_sensors();
+                .exclude_sensors()
+                .predicate(&not_rider);
             let queries = self.broad.as_query_pipeline(
                 self.narrow.query_dispatcher(),
                 &self.bodies,
@@ -325,6 +363,7 @@ impl Physics {
                 translation.z *= k;
             }
             let resolved = cur + translation;
+            self.scripted_delta.insert(index, resolved - cur);
 
             obj.transform.position = resolved;
             let next_rotation = obj.transform.rotation;

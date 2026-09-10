@@ -37,6 +37,9 @@ pub(super) const PLAYER_CAMERA_HEIGHT_OFFSET: f32 = 1.6;
 /// sans contrôleur est mis en sommeil — plus qu'un niveau entier (40), donc les
 /// pièges du niveau courant et l'entrée du suivant restent actifs.
 pub(super) const SCRIPT_CULL_DISTANCE: f32 = 48.0;
+/// Hauteur d'apparition du joueur au départ direct d'un niveau (même convention
+/// que les portes du jeu : juste au-dessus du sol à y = 0).
+const PLAYER_START_Y: f32 = 0.5;
 
 /// Vitesse (rad/s) de la rotation « tank » manuelle (A/D tenus). Constante dédiée,
 /// distincte de `Controller::turn_speed` : ce dernier (10 rad/s) est un taux de
@@ -955,10 +958,20 @@ impl AppState {
             self.death_pos = None;
             self.run_time = 0.0;
             self.hud_texts.clear();
+            // Départ direct à un niveau (sélecteur de mondes) : point de contrôle posé
+            // sur son apparition, joueur téléporté après la construction de la physique.
+            self.start_level_pending = self.start_level.take();
             // Manche 1 révélée, suivantes masquées, *avant* de construire la physique
             // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
             self.init_waves();
             self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+            if let Some(n) = self.start_level_pending.take()
+                && let Some(pl) = self.scene.platformer
+            {
+                let cp = Vec3::new(n as f32 * pl.level_spacing, PLAYER_START_Y, pl.plane_z);
+                self.checkpoint = Some(cp);
+                self.place_player(cp);
+            }
             // sons en autoplay (gain atténué par la distance à la caméra, panning
             // stéréo caméra→source si spatialisé — Sprint 104) : lus **en flux**
             // (`play_music_streaming_gain`, `StreamingSoundData`) plutôt que
@@ -1624,6 +1637,17 @@ impl AppState {
                 .collect()
         };
         if let Some(phys) = &mut self.physics {
+            // Plateformer 2D : les plateformes mobiles (corps scriptés) sont
+            // résolues AVANT le joueur, pour que `control_kinematic` emporte le
+            // joueur du déplacement de CE pas (cf. `Physics::scripted_delta`) —
+            // sinon un pas de retard, visible comme une pénétration/décollement à
+            // chaque changement de direction. Les requêtes voient de toute façon
+            // les positions d'avant-pas (`set_next_kinematic_translation` ne
+            // s'applique qu'au `step`) : l'ordre n'a pas d'autre effet.
+            let scripted_first = self.scene.platformer.is_some();
+            if scripted_first {
+                phys.resolve_scripted_moves(dt, &mut self.scene);
+            }
             let (player_facing, player_anim, any_jump) = drive_local_and_networked_players(
                 phys,
                 &self.scene,
@@ -1682,7 +1706,9 @@ impl AppState {
             // déplacement que leurs scripts viennent d'écrire (boucle 1. plus
             // haut) est résolu contre le monde (murs, objets fixes, joueur) —
             // la position réellement atteinte est réécrite dans la scène.
-            phys.resolve_scripted_moves(dt, &mut self.scene);
+            if !scripted_first {
+                phys.resolve_scripted_moves(dt, &mut self.scene);
+            }
             let phys_started = crate::time_compat::Instant::now();
             phys.step(dt, &mut self.scene);
             self.perf.sim_physics_ms = phys_started.elapsed().as_secs_f32() * 1000.0;

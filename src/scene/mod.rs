@@ -1538,6 +1538,10 @@ pub struct Platformer2D {
     /// morts, le niveau est un cimetière — ajoutée au snapshot de Play, elle
     /// survit donc aux réapparitions (jamais à l'arrêt du Play).
     pub tombstones: bool,
+    /// Largeur d'un niveau sur X (les niveaux sont posés côte à côte) : sert au
+    /// numéro de niveau courant (`AppState::platformer_level`) et au départ direct
+    /// à un niveau donné (`--level=N`, `window.__rusteegear_start_level`).
+    pub level_spacing: f32,
 }
 
 impl Default for Platformer2D {
@@ -1549,6 +1553,7 @@ impl Default for Platformer2D {
             instant_respawn: true,
             kill_y: -8.0,
             tombstones: true,
+            level_spacing: 40.0,
         }
     }
 }

@@ -160,6 +160,12 @@ pub struct Physics {
     /// déplacement écrit par le script Lua est résolu chaque pas par
     /// `resolve_scripted_moves` (glisse contre murs/objets fixes/joueur).
     scripted: Vec<(usize, RigidBodyHandle)>,
+    /// Déplacement **réellement résolu** au dernier pas de chaque corps scripté
+    /// (index d'objet → delta), cf. `resolve_scripted_moves` — plateformes
+    /// mobiles du mode plateformer 2D : un joueur posé dessus est emporté
+    /// d'autant (`control_kinematic`), sans quoi le contrôleur cinématique le
+    /// laisserait glisser sur place et la plateforme partirait sous ses pieds.
+    scripted_delta: std::collections::HashMap<usize, Vec3>,
     /// Collider → index d'objet, pour **tous** les colliders construits (statiques
     /// inclus, contrairement à `dynamic`/`controlled`/`kinematic` qui ne suivent que
     /// ce qui doit être recopié/piloté chaque frame) — nécessaire pour retrouver
