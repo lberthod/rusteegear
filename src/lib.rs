@@ -878,6 +878,8 @@ impl ApplicationHandler for App {
                 // « tourne » sans que rien ne bouge (sim figée, pause, entrées).
                 #[cfg(target_arch = "wasm32")]
                 signal_web_state(&self.state);
+                #[cfg(target_arch = "wasm32")]
+                signal_web_vars(&self.state);
                 // Fermeture demandée par le menu Fichier → Quitter.
                 if self.state.should_quit {
                     event_loop.exit();
@@ -1276,6 +1278,10 @@ impl ApplicationHandler for App {
         if let Some(flat) = take_pending_hands() {
             self.state.set_hands(&flat);
         }
+        // Idem pour ce que la page hôte a poussé (événements HUD, variables,
+        // visibilité du HUD) — PhysioTech.ch.
+        #[cfg(target_arch = "wasm32")]
+        apply_pending_host_requests(&mut self.state);
         self.poll_gamepad();
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         self.poll_asset_hot_reload();
@@ -1812,6 +1818,78 @@ thread_local! {
     static PENDING_POSE: std::cell::RefCell<Option<Vec<f32>>> = const { std::cell::RefCell::new(None) };
     /// Idem pour les mains (`set_hand_landmarks`).
     static PENDING_HANDS: std::cell::RefCell<Option<Vec<f32>>> = const { std::cell::RefCell::new(None) };
+    /// Événements HUD poussés par la page hôte (`push_hud_event`), dans l'ordre.
+    static PENDING_HUD_EVENTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Variables de script posées par la page hôte (`set_script_var`), dans l'ordre.
+    static PENDING_SCRIPT_VARS: std::cell::RefCell<Vec<(String, f64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Visibilité des widgets HUD demandée par la page (`set_hud_widgets_visible`).
+    static PENDING_HUD_VISIBLE: std::cell::RefCell<Option<bool>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Export appelé par la page hôte pour cliquer un bouton HUD sans widget : même
+/// file que `AppState::push_hud_event` (lu au tick suivant via
+/// `on_event("hud:<action>")`). PhysioTech.ch : `demarrer`, `pause`, `reprendre`,
+/// `arreter`, `rythme`, `amplitude`, `avatar`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn push_hud_event(action: &str) {
+    PENDING_HUD_EVENTS.with(|p| p.borrow_mut().push(action.to_string()));
+}
+
+/// Export appelé par la page hôte pour poser une variable de script (`save.*`,
+/// nombres seulement) — réglages d'un programme thérapeute (`rd_level`,
+/// `rd_amp`, `rd_duration`, `rd_world`…), lus par le script au tick suivant.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_script_var(key: &str, value: f64) {
+    PENDING_SCRIPT_VARS.with(|p| p.borrow_mut().push((key.to_string(), value)));
+}
+
+/// Export appelé par la page hôte qui dessine elle-même le HUD (à partir de
+/// `window.__rusteegear_vars`) : `false` masque les widgets `Scene::hud_widgets`
+/// du moteur, `true` les rétablit — cf. `Scene::hud_widgets_hidden`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_hud_widgets_visible(visible: bool) {
+    PENDING_HUD_VISIBLE.with(|p| *p.borrow_mut() = Some(visible));
+}
+
+/// Applique ce que la page hôte a poussé depuis le dernier tour de boucle
+/// (événements HUD, variables de script, visibilité du HUD) — sur le seul
+/// thread qui détient `AppState`.
+#[cfg(target_arch = "wasm32")]
+fn apply_pending_host_requests(state: &mut app::AppState) {
+    let events = PENDING_HUD_EVENTS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for action in events {
+        state.push_hud_event(&action);
+    }
+    let vars = PENDING_SCRIPT_VARS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for (key, value) in vars {
+        state.set_script_var(&key, value);
+    }
+    if let Some(visible) = PENDING_HUD_VISIBLE.with(|p| p.borrow_mut().take()) {
+        state.scene.hud_widgets_hidden = !visible;
+    }
+}
+
+/// `window.__rusteegear_vars` : objet JS `{ ui_<clé>: nombre, … }` des variables
+/// de script `ui_*` (cf. `AppState::ui_vars`), mis à jour à chaque frame
+/// présentée — la page hôte y lit l'état du jeu (étape, score, chrono…).
+#[cfg(target_arch = "wasm32")]
+fn signal_web_vars(state: &app::AppState) {
+    let obj = js_sys::Object::new();
+    for (k, v) in state.ui_vars() {
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &wasm_bindgen::JsValue::from_str(k),
+            &wasm_bindgen::JsValue::from_f64(v),
+        );
+    }
+    let _ = js_sys::Reflect::set(
+        &js_sys::global(),
+        &wasm_bindgen::JsValue::from_str("__rusteegear_vars"),
+        &obj,
+    );
 }
 
 /// Export appelé par la page à chaque inférence du *Hand Landmarker* : `n × 64`

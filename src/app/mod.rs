@@ -1967,6 +1967,7 @@ impl AppState {
                 .game_camera
                 .map(|g| g.ortho_height)
                 .unwrap_or(0.0),
+            min_width: self.scene.game_camera.map(|g| g.min_width).unwrap_or(0.0),
         });
         log::info!("Caméra de jeu définie sur la vue actuelle");
     }
@@ -2043,6 +2044,28 @@ impl AppState {
     /// `examples/gen_reeduc_preview.rs`).
     pub fn script_var(&self, key: &str) -> Option<f64> {
         self.lua_vars.get(key).copied()
+    }
+
+    /// Écrit une variable de script (`save.get` la lira au prochain tick) — export
+    /// wasm `set_script_var` : la page hôte pousse ses réglages (rythme, amplitude,
+    /// durée, ambiance) au script directeur sans passer par un widget HUD.
+    pub fn set_script_var(&mut self, key: &str, value: f64) {
+        self.lua_vars.insert(key.to_string(), value);
+    }
+
+    /// Variables de script destinées à une page hôte : toutes les clés `ui_*`
+    /// (convention des scripts qui exposent leur état, cf. `docs/REEDUCATION.md`),
+    /// triées pour une sortie stable. Publiées chaque image sur le web
+    /// (`window.__rusteegear_vars`).
+    pub fn ui_vars(&self) -> Vec<(&str, f64)> {
+        let mut out: Vec<(&str, f64)> = self
+            .lua_vars
+            .iter()
+            .filter(|(k, _)| k.starts_with("ui_"))
+            .map(|(k, v)| (k.as_str(), *v))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(b.0));
+        out
     }
 
     /// Temps à afficher au HUD chrono : figé à la victoire, sinon temps de jeu courant.

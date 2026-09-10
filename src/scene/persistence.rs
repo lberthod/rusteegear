@@ -120,6 +120,7 @@ impl Scene {
             hud_widgets: Vec::new(),
             platformer: None,
             arcade_hud: false,
+            hud_widgets_hidden: false,
             version: Scene::CURRENT_VERSION,
         })
     }

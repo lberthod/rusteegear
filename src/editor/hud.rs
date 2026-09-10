@@ -78,6 +78,11 @@ pub(super) fn hud_widgets(
     image_cache: &mut HudImageCache,
 ) -> Vec<String> {
     let mut clicked = Vec::new();
+    // Page hôte qui dessine le HUD elle-même (`Scene::hud_widgets_hidden`) :
+    // rien à rendre, aucun clic possible.
+    if scene.hud_widgets_hidden {
+        return clicked;
+    }
     for widget in &scene.hud_widgets {
         let (fx, fy) = widget.anchor.fraction();
         let anchor_pos = egui::pos2(

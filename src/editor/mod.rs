@@ -17,8 +17,8 @@ use winit::window::Window;
 use file_dialogs::{DialogTarget, FileDialogs};
 use hierarchy::hierarchy_panel;
 use hud::{
-    HudImageCache, HudWidgetValues, RosterEntry, ally_down_banner, collectibles_hud, crosshair,
-    damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
+    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ally_down_banner, collectibles_hud,
+    crosshair, damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
     item_inventory_panel, kills_hud, lose_banner, mobile_overlay, mobile_top_buttons,
     multiplayer_roster_panel, net_event_banner, net_status_pill, palier_banner, pause_menu,
     pause_veil, restart_button, roster_overlay, round_summary_banner, scene_has_ranged_weapon,
@@ -1653,15 +1653,27 @@ impl Editor {
             // ⏸ / 🔇 / Carte / ? (roadmap 2.5, 5.5 ; v2 5.3/5.5) — sans clavier,
             // ni Échap, ni M, ni F1 ; utiles à la souris aussi, donc pour toute
             // scène (roadmap v2 1.1). Au-dessus de la carte quand elle est ouverte.
-            let top = mobile_top_buttons(
-                ctx,
-                area,
-                paused,
-                settings.muted,
-                map_open,
-                locale,
-                scene.platformer.is_some(),
-            );
+            // Page hôte qui dessine le HUD elle-même (`Scene::hud_widgets_hidden`,
+            // PhysioTech.ch) : elle a ses propres boutons Pause / Arrêter.
+            let top = if scene.hud_widgets_hidden {
+                TopButtons {
+                    pause: false,
+                    map: false,
+                    help: false,
+                    mute: false,
+                    rect: egui::Rect::ZERO,
+                }
+            } else {
+                mobile_top_buttons(
+                    ctx,
+                    area,
+                    paused,
+                    settings.muted,
+                    map_open,
+                    locale,
+                    scene.platformer.is_some(),
+                )
+            };
             if top.pause {
                 actions.toggle_pause = true;
             }

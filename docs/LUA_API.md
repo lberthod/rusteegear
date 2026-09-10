@@ -27,7 +27,7 @@ tourne ou colore réellement l'objet.
 
 | Champ | Type | Rôle |
 | --- | --- | --- |
-| `obj.x`, `obj.y`, `obj.z` | nombre (lecture/écriture) | Position dans le monde. |
+| `obj.x`, `obj.y`, `obj.z` | nombre (lecture/écriture) | Position dans le monde. Sur un objet `physics: "Kinematic"`, le déplacement écrit est résolu contre le monde (glisse le long des obstacles) ; en mode plateformer 2D (`Scene::platformer`), un tel objet est une **plateforme porteuse** : le joueur posé dessus est emporté de son déplacement (horizontal ou vertical), elle ne bute pas sur lui et ne subit pas la descente forcée. |
 | `obj.rx`, `obj.ry`, `obj.rz` | nombre (lecture/écriture) | Rotation en **degrés** (`ry` = autour de l'axe vertical). Le round-trip lecture → écriture est stable : un yaw pur reste dans `ry`. |
 | `obj.sx`, `obj.sy`, `obj.sz` | nombre (lecture/écriture) | Échelle. |
 | `obj.r`, `obj.g`, `obj.b` | nombre 0..1 (lecture/écriture) | Couleur de l'objet. |
@@ -66,7 +66,7 @@ Méthode :
 | `hand.left`, `hand.right` | table `{x, y, z}` ou absente | Main vue de ce côté : trois tableaux 1-based de 21 repères (1 poignet ; 2-5 pouce ; 6-9 index ; 10-13 majeur ; 14-17 annulaire ; 18-21 auriculaire, base → bout), mêmes coordonnées image que `pose`, `z` relatif au poignet. Le côté est décidé par la page (poignet du corps le plus proche). |
 | `deaths` | nombre (lecture seule) | Morts de la partie en cours (mode plateformer 2D, réapparition instantanée) — survit aux relances automatiques, remis à 0 à l'entrée en Play. Permet à un piège de changer selon la tentative. |
 | `save.get(clé)` | fonction → nombre ou `nil` | Lit une variable de sauvegarde. |
-| `save.set(clé, valeur)` | fonction | Écrit une variable de sauvegarde (**nombres seulement**). Partagée entre tous les objets, conservée avant erreur, embarquée dans la sauvegarde de partie. |
+| `save.set(clé, valeur)` | fonction | Écrit une variable de sauvegarde (**nombres seulement**). Partagée entre tous les objets, conservée avant erreur, embarquée dans la sauvegarde de partie. Convention : les clés `ui_*` sont publiées à la page hôte web à chaque image (`window.__rusteegear_vars`), et une page peut écrire n'importe quelle clé par l'export `set_script_var` — cf. `docs/REEDUCATION.md`, « Page hôte ». Le moteur écrit lui-même `cam_visible_width` / `cam_visible_height` (cadre visible par la caméra de jeu au niveau de sa cible, unités monde) quand une scène `arcade_hud` a une caméra de jeu. |
 | `debug.line(x1,y1,z1, x2,y2,z2, r,g,b)` | fonction | Trace un segment de débogage (couleur 0..1) visible une frame ; les appels s'accumulent. Remplace la bibliothèque `debug` standard de Lua. |
 
 ## Fonctions globales

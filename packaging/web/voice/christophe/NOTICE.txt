@@ -1,0 +1,10 @@
+Christophe voice pack for Mouvéo
+
+These French guidance clips were generated locally with Chatterbox Multilingual
+V3 by Resemble AI, distributed under the MIT license. No reference voice or
+voice-cloning sample was used.
+
+“Christophe” is an original in-app coach persona. It does not refer to, reproduce,
+or claim to be a proprietary voice from Microsoft, Apple, or another provider.
+
+Chatterbox: https://github.com/resemble-ai/chatterbox

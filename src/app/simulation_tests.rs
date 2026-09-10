@@ -2584,8 +2584,19 @@ fn bubbles_demo_mode_catches_bubbles_with_the_joystick() {
     reeduc_tick(&mut app);
     assert_eq!(
         reeduc_var(&app, "rd_stage"),
-        2.0,
-        "sans caméra : partie immédiate"
+        4.0,
+        "sans caméra : compte à rebours tout de suite"
+    );
+    assert_eq!(reeduc_var(&app, "ui_count"), 3.0);
+    let mut ticks = 0;
+    while reeduc_var(&app, "rd_stage") == 4.0 && ticks < 300 {
+        reeduc_tick(&mut app);
+        ticks += 1;
+    }
+    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
+    assert!(
+        (125..=150).contains(&ticks),
+        "3 × 0,75 s ≈ 135 pas, mesuré {ticks}"
     );
     let mut caught = 0.0;
     let mut saw_bubble = false;
@@ -2660,11 +2671,22 @@ fn bubbles_camera_mode_calibrates_then_catches_and_pauses_when_the_body_is_lost(
         reeduc_tick(&mut app);
         ticks += 1;
     }
-    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        4.0,
+        "calibration finie : compte à rebours"
+    );
     assert!(
         (90..=140).contains(&ticks),
         "1,8 s ≈ 108 pas, mesuré {ticks}"
     );
+    let mut count_ticks = 0;
+    while reeduc_var(&app, "rd_stage") == 4.0 && count_ticks < 300 {
+        app.set_pose(&flat_pose_from_world(&body));
+        reeduc_tick(&mut app);
+        count_ticks += 1;
+    }
+    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
 
     let mut caught = 0.0;
     for _ in 0..900 {
@@ -2730,7 +2752,7 @@ fn bubbles_bombs_cost_points_and_never_count_as_missed() {
     let mut bomb_seen = false;
     for _ in 0..1500 {
         reeduc_tick(&mut app);
-        if (1..=3).any(|i| {
+        if (1..=4).any(|i| {
             reeduc_var(&app, &format!("rd_b{i}_kind")) > 0.5
                 && reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5
         }) {
@@ -2741,7 +2763,7 @@ fn bubbles_bombs_cost_points_and_never_count_as_missed() {
     assert!(bomb_seen, "aucune bombe en 25 s au rythme vif");
     let missed_before = reeduc_var(&app, "rd_missed");
     let bombs_alive = |app: &AppState| {
-        (1..=3)
+        (1..=4)
             .filter(|i| {
                 reeduc_var(app, &format!("rd_b{i}_kind")) > 0.5
                     && reeduc_var(app, &format!("rd_b{i}_alive")) > 0.5
@@ -2751,7 +2773,7 @@ fn bubbles_bombs_cost_points_and_never_count_as_missed() {
     // 2. Toucher la prochaine bombe avec la main : pénalité, série à zéro, compteur.
     let mut hit = false;
     for _ in 0..3000 {
-        let bomb = (1..=3).find(|i| {
+        let bomb = (1..=4).find(|i| {
             reeduc_var(&app, &format!("rd_b{i}_kind")) > 0.5
                 && reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5
         });
@@ -2797,6 +2819,367 @@ fn bubbles_bombs_cost_points_and_never_count_as_missed() {
     );
 }
 
+/// Page hôte (PhysioTech.ch, cf. `docs/REEDUCATION.md`) : elle pilote la séance
+/// par des événements HUD sans widget (`hud:pause`, `hud:reprendre`,
+/// `hud:arreter`) et lit l'état publié en `ui_*` (`AppState::ui_vars`). La pause
+/// fige le chrono, retire les bulles en vol sans pénalité ; la reprise attend
+/// un délai d'apparition avant la première bulle.
+#[test]
+fn bubbles_host_page_pauses_resumes_stops_and_reads_ui_vars() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    let mut n = 0;
+    while reeduc_var(&app, "rd_stage") != 2.0 && n < 300 {
+        reeduc_tick(&mut app);
+        n += 1;
+    }
+    assert_eq!(reeduc_var(&app, "ui_stage"), 2.0);
+    // Une bulle en vol, quelques pas de chrono.
+    let mut n = 0;
+    while alive_bubble(&app).is_none() && n < 300 {
+        reeduc_tick(&mut app);
+        n += 1;
+    }
+    assert!(alive_bubble(&app).is_some());
+    let missed_before = reeduc_var(&app, "rd_missed");
+    app.push_hud_event("pause");
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "ui_paused"), 1.0);
+    assert_eq!(reeduc_var(&app, "ui_status"), 13.0, "consigne « pause »");
+    assert!(alive_bubble(&app).is_none(), "bulles retirées à la pause");
+    assert_eq!(
+        reeduc_var(&app, "rd_missed"),
+        missed_before,
+        "sans pénalité"
+    );
+    let elapsed = reeduc_var(&app, "rd_elapsed");
+    for _ in 0..90 {
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(reeduc_var(&app, "rd_elapsed"), elapsed, "chrono figé");
+    assert!(alive_bubble(&app).is_none(), "rien n'apparaît en pause");
+    assert!(
+        app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("pause"))
+    );
+    app.push_hud_event("reprendre");
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "ui_paused"), 0.0);
+    assert!(
+        alive_bubble(&app).is_none(),
+        "reprise douce : pas de bulle au premier pas"
+    );
+    for _ in 0..30 {
+        reeduc_tick(&mut app);
+    }
+    assert!(reeduc_var(&app, "rd_elapsed") > elapsed, "chrono reparti");
+    // Les `ui_*` reflètent les `rd_*` ; `ui_vars` ne renvoie que ce préfixe, trié.
+    let ui = app.ui_vars();
+    assert!(ui.iter().all(|(k, _)| k.starts_with("ui_")));
+    assert!(ui.windows(2).all(|w| w[0].0 < w[1].0), "trié par clé");
+    let get = |k: &str| ui.iter().find(|(kk, _)| *kk == k).map(|(_, v)| *v);
+    assert_eq!(get("ui_points"), Some(reeduc_var(&app, "rd_points")));
+    assert_eq!(get("ui_combo"), Some(reeduc_var(&app, "rd_combo")));
+    assert_eq!(get("ui_duration"), Some(60.0));
+    assert_eq!(get("ui_cam"), Some(0.0));
+    assert!(get("ui_left").is_some_and(|v| v > 0.0 && v < 60.0));
+    app.push_hud_event("arreter");
+    reeduc_tick(&mut app);
+    assert_eq!(
+        reeduc_var(&app, "ui_stage"),
+        0.0,
+        "« Arrêter » ramène à l'accueil"
+    );
+}
+
+/// Programme thérapeute posé par la page hôte (`set_script_var`) : durée de
+/// manche, rythme et amplitude sont lus par le script directeur au tick suivant,
+/// bornés, et la partie s'arrête après la durée demandée ; `rd_maxcombo` garde
+/// la meilleure série ; l'ambiance teinte le fond.
+#[test]
+fn bubbles_host_page_settings_drive_duration_level_amplitude_and_world() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.set_script_var("rd_duration", 12.0);
+    app.set_script_var("rd_level", 1.0);
+    app.set_script_var("rd_amp", 200.0); // borné à 95
+    app.set_script_var("rd_world", 2.0);
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "ui_duration"), 12.0);
+    assert_eq!(reeduc_var(&app, "ui_level"), 1.0);
+    assert_eq!(reeduc_var(&app, "ui_amp"), 95.0);
+    assert_eq!(reeduc_var(&app, "ui_world"), 2.0);
+    let fond = app.scene.objects.iter().find(|o| o.name == "Fond").unwrap();
+    assert!(
+        fond.color[2] > fond.color[0] + 0.1,
+        "océan : fond bleuté {:?}",
+        fond.color
+    );
+    assert!(
+        app.hud_texts
+            .get("aide")
+            .is_some_and(|s| s.contains("Doux") && s.contains("12 s")),
+        "{:?}",
+        app.hud_texts.get("aide")
+    );
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    let mut n = 0;
+    while reeduc_var(&app, "rd_stage") != 3.0 && n < 3000 {
+        if let Some(b) = alive_bubble(&app) {
+            let hand = object_pos(&app, "Repère wrist_r");
+            app.input_state.joy.0 =
+                (app.input_state.joy.0 + 0.25 * (b.x - hand.x)).clamp(-1.0, 1.0);
+            app.input_state.joy.1 =
+                (app.input_state.joy.1 + 0.25 * (b.y - hand.y)).clamp(-1.0, 1.0);
+        }
+        reeduc_tick(&mut app);
+        n += 1;
+    }
+    assert_eq!(reeduc_var(&app, "rd_stage"), 3.0);
+    // 135 pas de compte à rebours + 12 s = 720 pas, à quelques pas près.
+    assert!((840..=900).contains(&n), "12 s de manche, mesuré {n} pas");
+    assert!(reeduc_var(&app, "rd_caught") >= 1.0);
+    assert!(reeduc_var(&app, "ui_maxcombo") >= 1.0);
+    assert!(reeduc_var(&app, "ui_maxcombo") >= reeduc_var(&app, "ui_combo"));
+}
+
+/// Les éléments naissent **loin des mains** : au moment de l'apparition, chaque
+/// bulle ou bombe est à au moins `HAND_CLEAR` (0,55 m) de la main suivie (mode
+/// démo : la main droite, immobile près de l'épaule).
+#[test]
+fn bubbles_spawn_away_from_the_hands() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.set_script_var("rd_level", 3.0);
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    app.input_state.joy = (0.2, 0.2);
+    let mut seen = std::collections::HashSet::new();
+    let mut spawns = 0;
+    for _ in 0..2400 {
+        reeduc_tick(&mut app);
+        for i in 1..=4 {
+            if reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5 {
+                let born = reeduc_var(&app, &format!("rd_b{i}_born"));
+                if seen.insert((i, born.to_bits())) {
+                    spawns += 1;
+                    let b = Vec3::new(
+                        reeduc_var(&app, &format!("rd_b{i}_x")) as f32,
+                        reeduc_var(&app, &format!("rd_b{i}_y")) as f32,
+                        0.0,
+                    );
+                    let hand = Vec3::new(
+                        reeduc_var(&app, "rd_hand_x") as f32,
+                        reeduc_var(&app, "rd_hand_y") as f32,
+                        0.0,
+                    );
+                    assert!(
+                        b.distance(hand) >= 0.5,
+                        "élément né à {:.2} m de la main",
+                        b.distance(hand)
+                    );
+                }
+            }
+        }
+    }
+    assert!(spawns >= 8, "assez d'apparitions observées : {spawns}");
+}
+
+/// Mode « Étoile filante » (`rd_mode` = 1) : une étoile glisse, la main posée
+/// dessus rapporte 10 points par seconde de contact, la perdre compte une
+/// perte et casse la série ; l'objet « Étoile » est visible et suit `rd_star_*`.
+#[test]
+fn star_mode_scores_contact_seconds_and_counts_losses() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.set_script_var("rd_mode", 1.0);
+    app.set_script_var("rd_level", 1.0);
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "ui_mode"), 1.0);
+    assert!(
+        app.hud_texts
+            .get("titre")
+            .is_some_and(|t| t.contains("Étoile")),
+        "{:?}",
+        app.hud_texts.get("titre")
+    );
+    app.push_hud_event("demarrer");
+    let mut n = 0;
+    while reeduc_var(&app, "rd_stage") != 2.0 && n < 300 {
+        reeduc_tick(&mut app);
+        n += 1;
+    }
+    assert_eq!(reeduc_var(&app, "rd_star_on"), 1.0);
+    assert!(
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Étoile")
+            .unwrap()
+            .visible
+    );
+    assert!(alive_bubble(&app).is_none(), "pas de bulles dans ce mode");
+    // Suivre l'étoile au joystick pendant 6 s.
+    for _ in 0..360 {
+        let star = Vec3::new(
+            reeduc_var(&app, "rd_star_x") as f32,
+            reeduc_var(&app, "rd_star_y") as f32,
+            0.0,
+        );
+        let hand = object_pos(&app, "Repère wrist_r");
+        app.input_state.joy.0 = (app.input_state.joy.0 + 0.3 * (star.x - hand.x)).clamp(-1.0, 1.0);
+        app.input_state.joy.1 = (app.input_state.joy.1 + 0.3 * (star.y - hand.y)).clamp(-1.0, 1.0);
+        reeduc_tick(&mut app);
+    }
+    let caught = reeduc_var(&app, "rd_caught");
+    assert!(caught >= 3.0, "secondes de contact : {caught}");
+    assert!(reeduc_var(&app, "rd_points") >= 30.0);
+    assert_eq!(reeduc_var(&app, "ui_star_hit"), 1.0);
+    assert_eq!(reeduc_var(&app, "rd_missed"), 0.0);
+    // Lâcher l'étoile : une perte, série à zéro.
+    app.input_state.joy = (-1.0, -1.0);
+    for _ in 0..120 {
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_missed"),
+        1.0,
+        "contact perdu compté une fois"
+    );
+    assert_eq!(reeduc_var(&app, "rd_combo"), 0.0);
+    assert_eq!(reeduc_var(&app, "ui_status"), 21.0);
+    assert!(
+        app.hud_texts
+            .get("objectif")
+            .is_some_and(|t| t.contains("Contact")),
+        "{:?}",
+        app.hud_texts.get("objectif")
+    );
+}
+
+/// Rythme des bombes : jamais deux en vol à la fois, et après chaque bombe
+/// (touchée ou expirée) un repos de 3 à 8 s sans bombe ; les éléments naissent
+/// à au moins 0,6 m les uns des autres (pas de bulle posée sur une bombe).
+#[test]
+fn bombs_come_one_at_a_time_with_a_rest_and_elements_keep_their_distance() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.set_script_var("rd_level", 3.0);
+    app.set_script_var("rd_duration", 600.0);
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    app.input_state.joy = (0.0, 0.0);
+    let mut seen = std::collections::HashSet::new();
+    let mut bombs = 0;
+    let mut last_bomb_end: Option<f64> = None;
+    let mut bomb_alive_prev = false;
+    for _ in 0..7200 {
+        reeduc_tick(&mut app);
+        let t = app.time as f64;
+        let alive: Vec<(usize, Vec3, bool)> = (1..=4)
+            .filter(|i| reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5)
+            .map(|i| {
+                (
+                    i,
+                    Vec3::new(
+                        reeduc_var(&app, &format!("rd_b{i}_x")) as f32,
+                        reeduc_var(&app, &format!("rd_b{i}_y")) as f32,
+                        0.0,
+                    ),
+                    (reeduc_var(&app, &format!("rd_b{i}_kind")) - 1.0).abs() < 0.5,
+                )
+            })
+            .collect();
+        let bomb_alive = alive.iter().filter(|(_, _, b)| *b).count();
+        assert!(bomb_alive <= 1, "deux bombes en vol");
+        if bomb_alive_prev && bomb_alive == 0 {
+            last_bomb_end = Some(t);
+        }
+        bomb_alive_prev = bomb_alive > 0;
+        for (i, p, is_bomb) in &alive {
+            let born = reeduc_var(&app, &format!("rd_b{i}_born"));
+            if seen.insert((*i, born.to_bits())) {
+                if *is_bomb {
+                    bombs += 1;
+                    if let Some(end) = last_bomb_end {
+                        assert!(
+                            t - end >= 3.0 - 0.05,
+                            "bombe {:.2} s après la précédente",
+                            t - end
+                        );
+                    }
+                }
+                for (j, q, _) in &alive {
+                    if j != i {
+                        assert!(
+                            p.distance(*q) >= 0.6 - 1e-3,
+                            "éléments à {:.2} m",
+                            p.distance(*q)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(bombs >= 3, "assez de bombes observées en 2 min : {bombs}");
+}
+
+/// Écran en portrait (téléphone) : le moteur publie le cadre réellement visible
+/// (`cam_visible_width/height`) et les bulles restent dedans — jamais hors de
+/// l'image, même si le cadre caméra projeté (4 m) est plus large.
+#[test]
+fn bubbles_stay_inside_the_visible_frame_on_a_portrait_screen() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    app.camera.aspect = 9.0 / 16.0;
+    reeduc_tick(&mut app);
+    let vw = reeduc_var(&app, "cam_visible_width");
+    let vh = reeduc_var(&app, "cam_visible_height");
+    assert!(
+        (2.9..=3.2).contains(&vw),
+        "largeur visible en portrait : {vw}"
+    );
+    assert!(vh > 4.0, "hauteur visible : {vh}");
+    app.set_script_var("rd_level", 3.0);
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    let mut seen = 0;
+    for _ in 0..2400 {
+        reeduc_tick(&mut app);
+        for i in 1..=4 {
+            if reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5 {
+                seen += 1;
+                let x = reeduc_var(&app, &format!("rd_b{i}_x"));
+                let y = reeduc_var(&app, &format!("rd_b{i}_y"));
+                assert!(
+                    x.abs() <= vw / 2.0 - 0.29,
+                    "bulle hors de l'image en x : {x}"
+                );
+                assert!(
+                    (y - 1.55).abs() <= vh / 2.0 - 0.29,
+                    "bulle hors de l'image en y : {y}"
+                );
+            }
+        }
+    }
+    assert!(seen > 100);
+}
+
 /// Les éléments naissent dans la zone que la caméra voit et à portée des
 /// épaules actuelles : un patient décalé vers la gauche de l'image voit ses
 /// bulles décalées avec lui, jamais hors cadre.
@@ -2810,7 +3193,8 @@ fn bubbles_spawn_around_the_live_shoulders_inside_the_visible_frame() {
     app.set_pose(&flat_pose_from_world(&body));
     reeduc_tick(&mut app);
     app.push_hud_event("demarrer");
-    for _ in 0..200 {
+    // Calibration (1,8 s) puis compte à rebours (2,25 s) : ~245 pas.
+    for _ in 0..400 {
         app.set_pose(&flat_pose_from_world(&body));
         reeduc_tick(&mut app);
     }
@@ -2877,7 +3261,8 @@ fn bubbles_blue_needs_a_fist_and_green_an_open_hand() {
     app.set_pose(&flat_pose_from_world(&body));
     reeduc_tick(&mut app);
     app.push_hud_event("demarrer");
-    for _ in 0..200 {
+    // Calibration (1,8 s) puis compte à rebours (2,25 s) : ~245 pas.
+    for _ in 0..400 {
         app.set_pose(&flat_pose_from_world(&body));
         app.set_hands(&right_hand_flat(false));
         reeduc_tick(&mut app);

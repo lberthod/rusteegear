@@ -1502,6 +1502,13 @@ pub struct Scene {
     /// Faux par défaut : aucune scène existante ne change.
     #[serde(default)]
     pub arcade_hud: bool,
+    /// **Runtime seulement, jamais sérialisé** : une page hôte (web,
+    /// `set_hud_widgets_visible(false)` — PhysioTech.ch, cf. `docs/REEDUCATION.md`)
+    /// dessine elle-même le HUD à partir des variables `save.ui_*` publiées par
+    /// les scripts ; les widgets `hud_widgets` ne sont alors plus rendus. Sans page
+    /// hôte (éditeur, desktop, APK) le drapeau reste faux et rien ne change.
+    #[serde(skip)]
+    pub hud_widgets_hidden: bool,
 }
 
 /// Réglages du mode plateformer 2D (`Scene::platformer`) : la scène reste une
@@ -1603,6 +1610,29 @@ pub struct GameCamera {
     /// éloignées du centre. Cf. `OrbitCamera::ortho_height`.
     #[serde(default)]
     pub ortho_height: f32,
+    /// Largeur minimale visible (unités monde) au niveau de la cible : sur un
+    /// écran étroit (téléphone en portrait, zone de scène réduite), la caméra
+    /// recule d'elle-même pour que cette largeur tienne dans l'image — sans ça, un
+    /// champ vertical fixe rogne les côtés. `0` = distance fixe.
+    #[serde(default)]
+    pub min_width: f32,
+}
+
+impl GameCamera {
+    /// Distance effective pour un champ vertical `fovy` (rad) et un rapport
+    /// largeur/hauteur `aspect` : `distance`, augmentée si `min_width` ne tient pas.
+    pub fn distance_for(&self, fovy: f32, aspect: f32) -> f32 {
+        if self.min_width <= 0.0 || self.ortho_height > 0.0 || aspect <= 0.0 {
+            return self.distance;
+        }
+        let half = (fovy * 0.5).tan().max(1e-4);
+        let visible_width = 2.0 * self.distance * half * aspect;
+        if visible_width >= self.min_width {
+            self.distance
+        } else {
+            self.min_width / (2.0 * half * aspect)
+        }
+    }
 }
 
 /// Schéma JSON simplifié produit par l'IA pour générer une scène entière.

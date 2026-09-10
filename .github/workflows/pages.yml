@@ -88,6 +88,10 @@ jobs:
           # Démo « Rééducation » (portage de Mouvéo) : même pkg/, scène choisie
           # par l'URL, caméra + MediaPipe côté page — cf. docs/REEDUCATION.md.
           cp packaging/web/reeduc.html site/
+          # Interface PhysioTech.ch (frontend Mouvéo) : manifeste PWA, service
+          # worker, icône, pack voix du coach — cf. docs/roadmapMouveoFrontend10septembre.md.
+          cp packaging/web/manifest.json packaging/web/sw.js packaging/web/favicon.svg site/
+          cp -r packaging/web/voice site/voice
           cp -r packaging/web/pkg site/pkg
           cargo doc --no-deps --lib
           echo '<meta http-equiv="refresh" content="0; url=motor3derust/index.html">' \

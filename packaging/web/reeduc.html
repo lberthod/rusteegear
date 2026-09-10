@@ -3,98 +3,657 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07111f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PhysioTech" />
+    <meta name="description" content="Séance de mobilité gamifiée guidée par la caméra : attrapez les bulles avec vos mains. Prototype de coaching, sans diagnostic ni mesure clinique." />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <title>PhysioTech.ch — Attrape-bulles</title>
     <!--
-      Page hôte de la démo « Rééducation — mobilité guidée » (portage de Mouvéo,
-      https://github.com/antoinequarroz/mouveo-reeducation, 10 septembre 2026).
-      Même moteur générique que index.html (pkg/), scène choisie par l'URL
-      (`?scene=reeduc`, lue par src/lib.rs). Cette page ajoute ce que le moteur
-      ne fait pas lui-même : la caméra et le suivi du corps (MediaPipe Pose
-      Landmarker, wasm + modèle chargés depuis un CDN à la demande), poussés au
-      moteur par l'export `set_pose_landmarks` (33 repères × x, y, z,
-      visibilité) — cf. src/app/pose.rs et docs/REEDUCATION.md.
-      Sans caméra (refusée, absente, CDN inaccessible), le jeu reste jouable :
-      le point suivi se pilote au stick tactile ou aux flèches (mode démo).
+      Page hôte de PhysioTech.ch (démo « Rééducation » de RusteeGear, jeu
+      Attrape-bulles). Interface reprise du prototype Mouvéo d'Antoine Quarroz
+      (https://github.com/antoinequarroz/mouveo-reeducation, composant
+      `app/mouveo-game.tsx`, 10 septembre 2026) — parcours de séance, coach
+      vocal Christophe, historique, espace thérapeute, PWA — réécrite en HTML,
+      CSS et JS purs (pas d'étape de build) : cf. docs/roadmapMouveoFrontend10septembre.md.
+
+      Le moteur (pkg/, même wasm que index.html, scène `?scene=reeduc`) reste la
+      seule source de vérité du jeu ; cette page :
+        - lui pousse la caméra (MediaPipe Pose + Hand Landmarker, CDN, Web Worker)
+          par `set_pose_landmarks` / `set_hand_landmarks` ;
+        - le pilote par `push_hud_event` (demarrer, pause, reprendre, arreter…)
+          et `set_script_var` (rd_level, rd_amp, rd_duration, rd_world) ;
+        - lit son état chaque image dans `window.__rusteegear_vars` (`ui_*`)
+          et dessine le HUD elle-même (`set_hud_widgets_visible(false)`).
+      Sans caméra (refusée, absente, CDN inaccessible), mode démo : la main du
+      mannequin se pilote au stick tactile ou aux flèches.
     -->
     <style>
-      html, body { margin: 0; height: 100%; background: #07111f; color: #e6e8e3;
-        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
-      #rustee-canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
-      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
-        justify-content: center; gap: 12px; padding: 24px; text-align: center; background: #07111f;
-        transition: opacity .35s ease; }
+      :root {
+        --bg: #07111f; --fg: #f8fafc; --muted: #94a3b8; --faint: #64748b;
+        --lime: #c4ff4a; --lime-2: #d5ff7d; --lime-ink: #dfff9a; --sky: #7dd3fc; --amber: #fcd34d; --emerald: #6ee7b7; --red: #f87171;
+        --card: rgba(255,255,255,.055); --line: rgba(255,255,255,.10); --radius: 1rem;
+        --world-a: rgba(34, 197, 94, .18); --world-b: rgba(56, 189, 248, .10);
+        --font: "Avenir Next", Avenir, Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      body.world-space { --world-a: rgba(139, 92, 246, .22); --world-b: rgba(232, 121, 249, .10); }
+      body.world-ocean { --world-a: rgba(6, 182, 212, .21); --world-b: rgba(45, 212, 191, .11); }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--fg); font: clamp(13px, 0.55vw + 10px, 15px)/1.5 var(--font); -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+      html { height: 100%; }
+      body { min-height: 100dvh; display: flex; flex-direction: column; background: radial-gradient(circle at 12% -8%, var(--world-a), transparent 30rem), radial-gradient(circle at 88% 4%, var(--world-b), transparent 28rem), var(--bg); }
+      /* Au-dessus de 1024 px, tout tient dans la fenêtre : en-tête, scène et
+         barre latérale (qui défile seule), pied de page — aucun zoom à faire. */
+      @media (min-width: 1024px) { body { height: 100dvh; overflow: hidden; } }
+      button { font: inherit; color: inherit; touch-action: manipulation; cursor: pointer; }
+      input[type="range"] { min-height: 28px; width: 100%; accent-color: var(--lime); }
+      input[type="text"] { font: inherit; color: var(--fg); background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: .7rem; padding: .55rem .8rem; width: 100%; }
+      .pressable { transition: scale .15s ease-out, background-color .15s ease-out, box-shadow .15s ease-out, color .15s ease-out, opacity .15s ease-out; }
+      .pressable:active:not(:disabled) { scale: .96; }
+      .pressable:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+      [hidden] { display: none !important; }
+      .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+      /* ---- En-tête ---- */
+      #top { position: relative; z-index: 20; flex: none; display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: 100%; max-width: 96rem; margin: 0 auto; padding: .6rem 1rem; }
+      .brand { display: flex; align-items: center; gap: .75rem; }
+      .brand-mark { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 1.1rem; box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 10px 30px rgba(196,255,74,.16); overflow: hidden; }
+      .brand-mark img, .logo-img { display: block; width: 100%; height: 100%; }
+      .brand p { margin: 0; }
+      .brand .name { font-size: 1.1rem; font-weight: 900; letter-spacing: .04em; }
+      .brand .name span { color: var(--lime); }
+      .brand .sub { display: flex; align-items: center; gap: .4rem; font-size: .75rem; color: var(--muted); }
+      .dot { width: .4rem; height: .4rem; border-radius: 999px; background: var(--emerald); box-shadow: 0 0 8px rgba(110,231,183,.8); }
+      body.offline .dot { background: var(--amber); box-shadow: none; }
+      nav.cluster { display: flex; align-items: center; gap: .25rem; padding: .25rem; border-radius: 1rem; background: rgba(255,255,255,.045); box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+      nav.cluster button { display: inline-flex; align-items: center; gap: .4rem; border: 0; background: transparent; color: #cbd5e1; padding: .5rem .7rem; border-radius: .75rem; font-weight: 700; font-size: .85rem; }
+      nav.cluster button:hover { background: rgba(255,255,255,.1); color: #fff; }
+      nav.cluster button.lime { color: var(--lime); }
+      nav.cluster button:disabled { opacity: .45; cursor: default; }
+      nav.cluster button svg { width: 1.05rem; height: 1.05rem; }
+      #install { border: 1px solid rgba(196,255,74,.3); background: rgba(196,255,74,.1); color: var(--lime); }
+      @media (max-width: 639px) { nav.cluster { background: transparent; box-shadow: none; } nav.cluster button .lbl { display: none; } }
+
+      /* ---- Mise en page ---- */
+      #app { flex: 1 1 auto; min-height: 0; width: 100%; max-width: 96rem; margin: 0 auto; padding: 0 1rem .6rem; display: grid; gap: 1rem; }
+      @media (min-width: 1024px) { #app { grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 340px); grid-template-rows: minmax(0, 1fr); padding: 0 1.5rem .6rem; align-items: stretch; } #top { padding: .6rem 1.5rem; } #side { min-height: 0; overflow-y: auto; padding-right: .25rem; scrollbar-width: thin; } }
+      #stage { container-type: inline-size; position: relative; min-height: min(68dvh, 720px); border-radius: 2rem; overflow: hidden; background: radial-gradient(circle at 82% 8%, var(--world-b), transparent 24rem), radial-gradient(circle at 8% 18%, var(--world-a), transparent 26rem), #0d1b2d; box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 24px 70px rgba(0,0,0,.34); }
+      @media (min-width: 1024px) { #stage { height: 100%; min-height: 0; } }
+      @media (max-width: 639px) { #stage { border-radius: 1.5rem; min-height: 72dvh; } }
+      /* Plein écran de la scène : elle prend toute la fenêtre, coins droits. */
+      #stage:fullscreen { border-radius: 0; height: 100vh; }
+      #stage:fullscreen .screen.scroll .in { padding-top: max(1.25rem, env(safe-area-inset-top)); }
+      #rustee-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+      .screen { position: absolute; inset: 0; z-index: 10; }
+      .scroll { position: absolute; inset: 0; overflow-y: auto; }
+      .dim { background: rgba(7,17,31,.88); }
+      #pip { position: absolute; left: .75rem; bottom: .75rem; width: 200px; height: 150px; z-index: 12; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,.14); background: #0d1b2d; pointer-events: none; }
+      #pip video, #pip canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+      #pip .tag { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: var(--muted); background: rgba(7,17,31,.6); padding: 1px 6px; border-radius: 6px; }
+      @media (max-width: 700px) { #pip { width: 120px; height: 90px; } }
+      #fs { position: absolute; right: .75rem; bottom: .75rem; z-index: 12; display: inline-flex; align-items: center; gap: .35rem; height: 34px; padding: 0 .7rem; border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: rgba(7, 17, 31, .7); color: var(--fg); font-size: .8rem; font-weight: 700; backdrop-filter: blur(6px); }
+      #fs:hover, #fs:focus-visible { background: rgba(196, 255, 74, .8); color: var(--bg); outline: none; }
+
+      /* ---- Composants ---- */
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 1.2rem; padding: .8rem .95rem; }
+      .card h3 { margin: 0; font-size: .95rem; font-weight: 900; }
+      .eyebrow { display: inline-flex; align-items: center; gap: .45rem; border-radius: 999px; padding: .4rem .7rem; color: var(--lime-ink); background: rgba(196,255,74,.09); box-shadow: 0 0 0 1px rgba(196,255,74,.18); font-size: .72rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+      .kicker { font-size: .78rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: var(--sky); }
+      .kicker.lime { color: var(--lime); }
+      h1 { margin: .8rem 0 0; font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 900; line-height: 1.02; letter-spacing: -.04em; max-width: 24rem; }
+      h2 { margin: .5rem 0 0; font-size: 2rem; font-weight: 900; letter-spacing: -.02em; }
+      .lead { margin: .75rem 0 0; color: #cbd5e1; max-width: 32rem; line-height: 1.55; }
+      .choice, .tile, .pain { display: block; width: 100%; text-align: left; border: 0; color: inherit; border-radius: 1.35rem; background: linear-gradient(145deg, rgba(255,255,255,.075), rgba(255,255,255,.035)); box-shadow: 0 0 0 1px rgba(255,255,255,.09), 0 10px 30px rgba(0,0,0,.12); }
+      .choice:hover, .tile:hover { box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 14px 34px rgba(0,0,0,.18); }
+      .choice.is-selected, .tile.is-selected { background: linear-gradient(145deg, rgba(196,255,74,.14), rgba(196,255,74,.055)); box-shadow: 0 0 0 1px rgba(196,255,74,.68), 0 16px 40px rgba(196,255,74,.08); }
+      .choice { padding: .8rem 1rem; margin-top: .6rem; }
+      .choice .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+      .choice .t1 { display: block; font-size: .7rem; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--lime); }
+      .choice .t2 { display: block; font-size: 1.2rem; font-weight: 900; margin-top: .15rem; }
+      .choice .meta { display: flex; align-items: center; gap: .4rem; margin-top: .5rem; font-size: .82rem; color: #cbd5e1; flex-wrap: wrap; }
+      .mark { display: grid; place-items: center; width: 1.9rem; height: 1.9rem; flex: none; border-radius: 999px; color: rgba(255,255,255,.52); background: rgba(255,255,255,.07); font-weight: 900; }
+      .mark.on { color: var(--bg); background: var(--lime); }
+      .chip { display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px; padding: .32rem .62rem .32rem .38rem; background: rgba(0,0,0,.18); color: rgba(255,255,255,.78); font-size: .72rem; font-weight: 700; }
+      .chip > span { display: grid; place-items: center; width: 1.35rem; height: 1.35rem; border-radius: 999px; background: rgba(196,255,74,.16); color: var(--lime-ink); font-size: .65rem; }
+      .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; border-radius: 1.2rem; padding: .3rem; background: rgba(0,0,0,.2); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); margin-top: .45rem; }
+      .seg button { min-height: 2.4rem; border: 0; border-radius: .9rem; background: transparent; color: var(--faint); font-weight: 700; font-size: .9rem; }
+      .seg button:hover { background: rgba(255,255,255,.05); color: #fff; }
+      .seg button.on { background: rgba(255,255,255,.14); color: #fff; box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 8px 20px rgba(0,0,0,.18); }
+      .seg.four { grid-template-columns: repeat(4, 1fr); }
+      .seg.two { grid-template-columns: repeat(2, 1fr); }
+      .pain { padding: .7rem 1rem; margin-top: .6rem; }
+      .pain input { margin-top: .3rem; }
+      .pain.alert { box-shadow: 0 0 0 1px rgba(252,211,77,.38), 0 10px 30px rgba(0,0,0,.12); }
+      .pain .row { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+      .pain .row small { display: block; font-weight: 400; font-size: .78rem; color: var(--muted); }
+      .score-n { font-size: 1.5rem; font-weight: 900; font-variant-numeric: tabular-nums; color: var(--lime); }
+      .score-n.warn { color: var(--amber); }
+      .score-n small { font-size: .68rem; color: rgba(255,255,255,.42); margin-left: .1rem; }
+      .warn-text { margin: .5rem 0 0; font-size: .88rem; color: var(--amber); }
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 0; border-radius: 1rem; padding: 0 1.2rem; height: 3.25rem; font-weight: 900; font-size: 1rem; }
+      .btn.primary { background: var(--lime); color: var(--bg); box-shadow: 0 10px 30px rgba(196,255,74,.16), inset 0 1px 0 rgba(255,255,255,.36); }
+      .btn.primary:hover { background: var(--lime-2); }
+      .btn.ghost { background: rgba(255,255,255,.06); color: #fff; border: 1px solid rgba(255,255,255,.15); }
+      .btn.ghost:hover { background: rgba(255,255,255,.12); }
+      .btn.danger { background: rgba(239,68,68,.85); color: #fff; border: 1px solid rgba(254,202,202,.3); }
+      .btn.danger:hover { background: rgb(239,68,68); }
+      .btn.soft-danger { background: rgba(248,113,113,.1); color: #fecaca; border: 1px solid rgba(252,165,165,.2); }
+      .btn.sm { height: 2.5rem; font-size: .9rem; border-radius: .8rem; }
+      .btn:disabled { opacity: .55; cursor: default; }
+      .btn svg { width: 1.1rem; height: 1.1rem; }
+      .dock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 13; padding: .6rem 1.25rem calc(.6rem + env(safe-area-inset-bottom)); background: rgba(7,17,31,.9); box-shadow: 0 -1px 0 rgba(255,255,255,.09), 0 -16px 40px rgba(7,17,31,.5); backdrop-filter: blur(18px); }
+      .dock .in { display: flex; align-items: center; gap: .5rem; max-width: 42rem; margin: 0 auto; }
+      .dock .who { flex: 1; min-width: 0; display: none; }
+      @media (min-width: 640px) { .dock .who { display: block; } }
+      .dock .who p { margin: 0; }
+      .dock .who .a { font-weight: 900; font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .dock .who .b { font-size: .78rem; color: var(--muted); }
+      .metric { border-radius: .8rem; background: rgba(255,255,255,.05); padding: .7rem .5rem; text-align: center; }
+      .metric b { display: block; font-size: 1.25rem; font-weight: 900; }
+      .metric span { font-size: .75rem; color: var(--muted); }
+      .metric.big b { font-size: 1.9rem; color: var(--lime); }
+      .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+      .grid4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+      @media (min-width: 640px) { .grid4 { grid-template-columns: repeat(4, 1fr); } }
+      .bar { height: .5rem; border-radius: 999px; background: rgba(255,255,255,.1); overflow: hidden; }
+      .bar > i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--lime); transition: width .25s ease-out; }
+      .bar.sky > i { background: linear-gradient(90deg, var(--sky), var(--lime)); }
+      .bar.emerald > i { background: var(--emerald); }
+      .bar.violet > i { background: #c4b5fd; }
+      .note { margin: .6rem 0 0; font-size: .78rem; color: var(--faint); line-height: 1.5; }
+      .back { display: inline-flex; align-items: center; gap: .3rem; border: 0; background: transparent; color: #cbd5e1; font-weight: 700; font-size: .9rem; padding: .4rem .3rem; }
+      .back:hover { color: #fff; }
+      .toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 1px solid var(--line); background: transparent; color: inherit; border-radius: .9rem; padding: .9rem 1rem; margin-top: 1rem; text-align: left; }
+      .toggle.on { border-color: var(--lime); background: rgba(196,255,74,.1); }
+      .toggle .sw { width: 2.75rem; height: 1.5rem; border-radius: 999px; padding: .2rem; background: rgba(255,255,255,.15); flex: none; }
+      .toggle.on .sw { background: var(--lime); }
+      .toggle .sw i { display: block; width: 1.1rem; height: 1.1rem; border-radius: 999px; background: var(--bg); transition: translate .15s; }
+      .toggle.on .sw i { translate: 1.25rem 0; }
+      label.range { display: block; margin-top: 1.1rem; }
+      label.range .row { display: flex; justify-content: space-between; font-size: .88rem; font-weight: 700; color: #cbd5e1; }
+      .list { display: grid; gap: .6rem; margin-top: 1.2rem; }
+      .item { display: grid; gap: .6rem; border: 1px solid var(--line); background: rgba(255,255,255,.05); border-radius: 1rem; padding: .9rem 1rem; }
+      @media (min-width: 640px) { .item { grid-template-columns: 1fr repeat(5, auto); align-items: center; column-gap: 1rem; } }
+      .item .t { font-weight: 800; }
+      .item .d { font-size: .78rem; color: var(--muted); }
+      .sv { min-width: 4.5rem; }
+      .sv b { display: block; font-weight: 900; }
+      .sv span { font-size: .72rem; color: var(--faint); }
+      .empty { border: 1px dashed rgba(255,255,255,.15); border-radius: 1.5rem; padding: 2rem; text-align: center; }
+
+      /* ---- Écrans ---- */
+      .welcome { position: absolute; background: linear-gradient(180deg, rgba(7,17,31,.9), rgba(7,17,31,.82) 60%, rgba(7,17,31,.9)); }
+      .welcome::before, .welcome::after { content: ""; position: absolute; border-radius: 999px; pointer-events: none; filter: blur(1px); }
+      .welcome::before { width: 18rem; height: 18rem; right: -7rem; top: -8rem; background: var(--world-a); }
+      .welcome::after { width: 13rem; height: 13rem; left: -8rem; top: 16rem; background: var(--world-b); }
+      .welcome .in { position: relative; z-index: 1; max-width: 64rem; margin: 0 auto; padding: 1rem 1.1rem 5.4rem; }
+      @media (min-width: 640px) { .welcome .in { padding: 1.1rem 1.5rem 5.4rem; } }
+      .hero { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+      .hero h1 { margin: .35rem 0 0; font-size: clamp(1.5rem, 2.4cqw + .6rem, 2.3rem); max-width: none; }
+      .hero .lead { margin-top: .35rem; font-size: .92rem; max-width: 46rem; }
+      .wgrid { display: grid; gap: .8rem; margin-top: .8rem; }
+      @container (min-width: 700px) { .wgrid { grid-template-columns: 1.05fr .95fr; } }
+      .wcol > .choice:first-child, .wcol > .section-h:first-child { margin-top: 0; }
+      .orb { display: none; place-items: center; width: 4rem; height: 4rem; flex: none; border-radius: 1.75rem; color: var(--lime); background: linear-gradient(145deg, rgba(255,255,255,.11), rgba(255,255,255,.035)); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 20px 50px var(--world-a), inset 0 1px 0 rgba(255,255,255,.1); transform: rotate(4deg); font-size: 2.2rem; }
+      @media (min-width: 640px) { .orb { display: grid; } }
+      .section-h { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; margin-top: .7rem; }
+      .section-h p { margin: 0; }
+      .section-h .a { font-weight: 900; font-size: 1.05rem; }
+      .section-h .b { font-size: .85rem; color: var(--muted); }
+      .section-h .c { font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; color: rgba(255,255,255,.45); text-align: right; }
+      .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: .45rem; }
+      .tile { position: relative; min-height: 5.2rem; padding: .7rem .75rem; }
+      .tile .glyph { display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border-radius: .7rem; font-size: 1rem; }
+      .tile .n { display: block; margin-top: .45rem; font-weight: 900; font-size: .92rem; line-height: 1.15; padding-right: 1.6rem; }
+      .tile .s { display: block; margin-top: .2rem; font-size: .74rem; color: var(--muted); line-height: 1.35; }
+      .tile .mark { position: absolute; right: .6rem; top: .6rem; }
+      .setup { background: radial-gradient(circle at top, #173457 0%, #0b1a2b 52%, #07111f 100%); }
+      .setup .in { max-width: 36rem; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 1.25rem; }
+      .steps { display: grid; gap: .75rem; margin-top: 1.4rem; }
+      .step { display: flex; gap: 1rem; border: 1px solid var(--line); background: rgba(255,255,255,.06); border-radius: 1rem; padding: .9rem 1rem; }
+      .step .ic { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; flex: none; border-radius: .8rem; background: rgba(196,255,74,.15); color: var(--lime); font-size: 1.2rem; }
+      .step p { margin: 0; }
+      .step .t { font-weight: 800; }
+      .step .t em { font-style: normal; color: var(--faint); margin-right: .4rem; }
+      .step .d { font-size: .85rem; color: var(--muted); line-height: 1.45; }
+      .alert { margin-top: 1rem; border-radius: .8rem; padding: .75rem .9rem; background: rgba(239,68,68,.15); border: 1px solid rgba(252,165,165,.2); color: #fecaca; font-size: .9rem; }
+      .center { display: grid; place-items: center; text-align: center; padding: 1.5rem; }
+      .center .ic { font-size: 2.4rem; color: var(--lime); animation: pulse 1.4s ease-in-out infinite; }
+      @keyframes pulse { 50% { opacity: .35; } }
+      .calib { display: grid; align-items: end; padding: 1rem; background: rgba(7,17,31,.2); }
+      .calib .panel { width: 100%; border-radius: 1.5rem; border: 1px solid var(--line); background: rgba(7,17,31,.92); padding: 1.1rem 1.2rem; backdrop-filter: blur(8px); }
+      .calib .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+      .calib .pct { display: grid; place-items: center; width: 3rem; height: 3rem; flex: none; border-radius: 999px; font-weight: 900; font-size: 1rem; background: var(--amber); color: var(--bg); }
+      .calib .pct.ok { background: var(--lime); }
+      .checks { display: grid; gap: .5rem; margin-top: 1rem; }
+      @media (min-width: 640px) { .checks { grid-template-columns: repeat(3, 1fr); } }
+      .check { display: flex; align-items: center; gap: .5rem; border-radius: .8rem; padding: .5rem .75rem; font-size: .85rem; font-weight: 700; background: rgba(255,255,255,.05); color: var(--faint); }
+      .check.done { background: rgba(110,231,183,.1); color: #a7f3d0; }
+      .check i { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border-radius: 999px; border: 1px solid rgba(255,255,255,.2); font-style: normal; font-size: .7rem; }
+      .check.done i { background: var(--emerald); color: var(--bg); border: 0; }
+      .countdown { pointer-events: none; z-index: 30; display: grid; place-items: center; background: rgba(7,17,31,.45); backdrop-filter: blur(2px); }
+      .countdown .n { display: grid; place-items: center; width: 9rem; height: 9rem; border-radius: 999px; border: 4px solid rgba(196,255,74,.6); background: rgba(7,17,31,.9); color: var(--lime); font-size: 4.5rem; font-weight: 900; box-shadow: 0 0 70px rgba(196,255,74,.28); animation: countdown-pop .72s cubic-bezier(.2,.9,.25,1) both; }
+      @keyframes countdown-pop { 0% { opacity: 0; transform: scale(.45); } 35% { opacity: 1; transform: scale(1.08); } 100% { opacity: .25; transform: scale(.92); } }
+      .hud { pointer-events: none; }
+      .hud .topbar { position: absolute; inset: 0 0 auto 0; display: flex; justify-content: space-between; align-items: flex-start; padding: 1rem 1.1rem 5rem; background: linear-gradient(to bottom, rgba(0,0,0,.8), transparent); }
+      .hud .mission { margin: 0 0 .25rem; font-size: .72rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--lime); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .hud .lbl { margin: 0; font-size: .75rem; color: rgba(255,255,255,.7); }
+      .hud .score { margin: 0; font-size: 2.2rem; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1.1; }
+      .hud .combo { display: none; height: fit-content; border-radius: 999px; padding: .25rem .75rem; border: 1px solid rgba(252,211,77,.3); background: rgba(252,211,77,.15); color: #fde68a; font-weight: 900; font-size: .9rem; }
+      .hud .combo.on { display: inline-block; }
+      .hud .clock { border-radius: 1rem; padding: .5rem 1rem; text-align: center; background: rgba(0,0,0,.45); backdrop-filter: blur(6px); }
+      .hud .clock b { display: block; font-size: 1.4rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+      .hud .gain { position: absolute; right: 1.1rem; top: 5.6rem; font-weight: 900; color: var(--lime); font-size: 1.3rem; opacity: 0; }
+      .hud .gain.pop { animation: gain 0.9s ease-out both; }
+      @keyframes gain { 0% { opacity: 0; transform: translateY(6px); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(-26px); } }
+      .hud .status { position: absolute; left: 0; right: 0; bottom: 1rem; display: flex; justify-content: center; padding: 0 .75rem; }
+      .hud .status .in { width: 100%; max-width: 36rem; border-radius: 1rem; padding: .7rem 1rem; text-align: center; background: rgba(7,17,31,.88); color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.3); backdrop-filter: blur(8px); }
+      .hud .status .in.lost { background: var(--amber); color: var(--bg); }
+      .hud .status p { margin: 0; font-size: .92rem; font-weight: 700; }
+      .hud .status .q { display: grid; grid-template-columns: repeat(3, 1fr); gap: .25rem; margin-top: .5rem; padding-top: .5rem; border-top: 1px solid rgba(255,255,255,.1); font-size: .75rem; }
+      .hud .status .q b { color: var(--lime); }
+      .hud .status .q b.warn { color: #fde68a; }
+      .hud .status .q b.ok { color: #a7f3d0; }
+      .hud .status .q span { color: rgba(255,255,255,.55); margin-left: .25rem; }
+      .hud .status .in.lost .q { display: none; }
+      .ctl { position: absolute; right: 1rem; top: 5.8rem; z-index: 40; display: flex; gap: .5rem; }
+      .ctl.top { top: 1rem; }
+      .ctl button { pointer-events: auto; display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px; padding: .5rem 1rem; font-weight: 900; font-size: .85rem; border: 1px solid rgba(255,255,255,.2); background: rgba(7,17,31,.8); color: #fff; backdrop-filter: blur(6px); box-shadow: 0 8px 20px rgba(0,0,0,.3); }
+      .ctl button.stop { border-color: rgba(254,202,202,.3); background: rgba(239,68,68,.85); }
+      .modal { z-index: 30; display: grid; place-items: center; background: rgba(7,17,31,.9); backdrop-filter: blur(8px); padding: 1.5rem; }
+      .modal .in { max-width: 26rem; text-align: center; }
+      .modal .ic { display: grid; place-items: center; width: 4rem; height: 4rem; margin: 0 auto; border-radius: 999px; background: rgba(255,255,255,.1); font-size: 1.8rem; }
+      .modal .acts { display: flex; flex-direction: column; gap: .75rem; margin-top: 1.5rem; }
+      @media (min-width: 640px) { .modal .acts { flex-direction: row; justify-content: center; } }
+      .celebrate { pointer-events: none; z-index: 35; display: grid; place-items: center; overflow: hidden; }
+      .celebrate .pop { border-radius: 1.5rem; border: 1px solid rgba(196,255,74,.4); background: rgba(7,17,31,.9); padding: 1.2rem 1.8rem; text-align: center; box-shadow: 0 0 60px rgba(196,255,74,.28); backdrop-filter: blur(8px); animation: reward-pop 1.3s ease both; }
+      .celebrate .pop .star { font-size: 2rem; color: var(--lime); }
+      .celebrate .pop p { margin: .3rem 0 0; font-size: 1.5rem; font-weight: 900; }
+      .spark { position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border-radius: 999px; background: var(--lime); animation: spark-fly 1.1s ease-out both; transform: rotate(var(--angle)) translateY(-40px); }
+      .spark:nth-of-type(3n) { background: var(--sky); } .spark:nth-of-type(3n + 1) { background: var(--amber); }
+      @keyframes reward-pop { 0% { opacity: 0; transform: scale(.7); } 24% { opacity: 1; transform: scale(1.06); } 75% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(.94); } }
+      @keyframes spark-fly { 0% { opacity: 0; transform: rotate(var(--angle)) translateY(-20px) scale(.5); } 22% { opacity: 1; } 100% { opacity: 0; transform: rotate(var(--angle)) translateY(-170px) scale(1.2); } }
+      .summary { background: #0b1a2b; }
+      .summary .in { max-width: 62rem; margin: 0 auto; padding: 1.1rem 1.25rem 1.5rem; text-align: center; display: grid; gap: 1rem; }
+      @container (min-width: 760px) { .summary .in { grid-template-columns: 1.05fr .95fr; align-items: start; } .summary .sum-right { padding-top: .5rem; } }
+      .summary .declare { margin-top: 0; }
+      .trophy { display: grid; place-items: center; width: 3.2rem; height: 3.2rem; margin: 0 auto .6rem; border-radius: 1.2rem; background: var(--lime); color: var(--bg); font-size: 2rem; overflow: hidden; }
+      .trophy img { width: 100%; height: 100%; display: block; }
+      .stars { display: flex; justify-content: center; gap: .4rem; margin-top: .6rem; font-size: 1.9rem; color: rgba(255,255,255,.15); }
+      .stars span.on { color: var(--amber); }
+      .advice { margin-top: 1rem; border-radius: 1rem; border: 1px solid rgba(125,211,252,.15); background: rgba(125,211,252,.07); padding: .9rem 1rem; text-align: left; }
+      .advice p { margin: 0; }
+      .advice .t { font-size: .88rem; font-weight: 800; color: #bae6fd; }
+      .advice .d { margin-top: .25rem; font-size: .9rem; color: #e2e8f0; line-height: 1.5; }
+      .declare { margin-top: 1rem; border-radius: 1rem; background: rgba(255,255,255,.05); padding: 1.1rem 1.2rem; text-align: left; }
+      .declare label { display: block; font-weight: 800; }
+      .declare label span { font-weight: 400; color: var(--muted); }
+      .declare input { margin-top: .6rem; }
+      .declare .warn { margin: .6rem 0 0; border-radius: .8rem; padding: .7rem .8rem; background: rgba(252,211,77,.1); color: #fde68a; font-size: .88rem; }
+      .acts { display: flex; flex-direction: column; gap: .75rem; margin-top: 1.2rem; }
+      @media (min-width: 640px) { .acts { flex-direction: row; justify-content: center; } }
+      .share { position: absolute; right: 1rem; top: 1rem; z-index: 40; }
+
+      /* ---- Barre latérale ---- */
+      #side { display: flex; flex-direction: column; gap: .7rem; }
+      .kv.weekly { display: block; }
+      .kv.weekly.done { background: rgba(196,255,74,.12); }
+      .kv.weekly .bar { margin-top: .35rem; height: .3rem; }
+      .kv.weekly small { display: block; margin-top: .25rem; font-size: .7rem; color: var(--faint); line-height: 1.3; }
+      .journey { display: flex; align-items: center; gap: .25rem; margin-top: .9rem; }
+      .journey .st { display: grid; place-items: center; width: 2rem; height: 2rem; flex: none; border-radius: 999px; font-size: .75rem; font-weight: 900; background: rgba(255,255,255,.1); color: var(--faint); }
+      .journey .st.done { background: var(--emerald); color: var(--bg); }
+      .journey .st.cur { background: var(--lime); color: var(--bg); box-shadow: 0 0 0 4px rgba(196,255,74,.15); }
+      .journey .st.gold { background: var(--amber); color: var(--bg); }
+      .journey .ln { flex: 1; height: .25rem; border-radius: 999px; background: rgba(255,255,255,.1); }
+      .journey .ln.on { background: var(--lime); }
+      .quality { border-color: rgba(125,211,252,.2); background: linear-gradient(145deg, rgba(56,189,248,.1), rgba(196,255,74,.05)); }
+      .pill { border-radius: 999px; padding: .25rem .75rem; font-size: .75rem; font-weight: 700; background: rgba(255,255,255,.1); color: var(--muted); }
+      .pill.ok { background: rgba(110,231,183,.15); color: #a7f3d0; }
+      .pill.warn { background: rgba(252,211,77,.15); color: #fde68a; }
+      .kv { border-radius: .8rem; background: rgba(0,0,0,.15); padding: .7rem .8rem; }
+      .kv span { display: block; font-size: .75rem; color: var(--faint); }
+      .kv b { display: block; margin-top: .2rem; font-weight: 900; }
+      .kv b.warn { color: #fde68a; } .kv b.ok { color: #a7f3d0; } .kv b.sky { color: #bae6fd; }
+      .side-row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+      .side-row .lbl { font-size: .85rem; color: var(--muted); }
+      .badges { display: grid; grid-template-columns: repeat(4, 1fr); gap: .4rem; margin-top: .6rem; }
+      .badge { display: grid; place-items: center; min-height: 2.3rem; border-radius: .8rem; border: 1px solid rgba(255,255,255,.05); background: rgba(0,0,0,.1); font-size: 1.3rem; filter: grayscale(1); opacity: .3; }
+      .badge.on { border-color: rgba(167,243,208,.2); background: rgba(167,243,208,.1); filter: none; opacity: 1; }
+      .garden { border-color: rgba(110,231,183,.15); background: rgba(110,231,183,.055); }
+      .weekly { border-color: rgba(196,181,253,.15); background: rgba(196,181,253,.055); }
+      .weekly.done { border-color: rgba(196,255,74,.25); background: rgba(196,255,74,.1); }
+      .safety { border-color: rgba(56,189,248,.15); background: rgba(56,189,248,.06); }
+      .safety p { margin: 0; }
+      .plants { display: flex; align-items: flex-end; gap: .2rem; font-size: 1.3rem; color: var(--emerald); }
+
+      /* ---- Vues plein écran ---- */
+      .view { position: fixed; inset: 0; z-index: 50; overflow-y: auto; background: var(--bg); padding: 1rem; }
+      @media (min-width: 640px) { .view { padding: 2rem; } }
+      .view .in { max-width: 64rem; margin: 0 auto; }
+      .view .head { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 1.4rem; gap: 1rem; }
+      .cols { display: grid; gap: 1rem; margin-top: 1.5rem; }
+      @media (min-width: 1024px) { .cols { grid-template-columns: 1.1fr .9fr; } }
+      .panel { border: 1px solid var(--line); background: rgba(255,255,255,.05); border-radius: 1.5rem; padding: 1.4rem; }
+      .panel h2 { font-size: 1.3rem; }
+      .plan { margin-top: 1.2rem; border-radius: 1rem; border: 1px solid rgba(125,211,252,.15); background: rgba(125,211,252,.06); padding: 1rem; }
+      .plan .row { display: flex; justify-content: space-between; align-items: center; }
+      .plan .row p { margin: 0; }
+      .pbars { display: flex; align-items: flex-end; gap: .5rem; height: 7rem; margin-top: 1.2rem; }
+      .pbars > div { flex: 1; display: flex; flex-direction: column; align-items: center; gap: .4rem; height: 100%; justify-content: flex-end; }
+      .pbars i { display: block; width: 100%; border-radius: .5rem .5rem 0 0; background: linear-gradient(to top, #38bdf8, var(--lime)); }
+      .pbars span { font-size: .72rem; color: var(--faint); }
+      .amber-box { border-color: rgba(252,211,77,.15); background: rgba(252,211,77,.06); display: flex; gap: .75rem; }
+      .amber-box p { margin: 0; }
+
+      /* ---- Pied de page, chargement ---- */
+      #foot { flex: none; display: flex; justify-content: center; padding: .15rem .75rem calc(.15rem + env(safe-area-inset-bottom)); font-size: .74rem; color: var(--muted); text-align: center; }
+      #foot a { color: var(--lime); text-decoration: none; }
+      #foot a:hover, #foot a:focus-visible { text-decoration: underline; outline: none; }
+      #boot { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; background: var(--bg); transition: opacity .35s ease; }
       #boot.hidden { opacity: 0; pointer-events: none; }
-      #boot .logo { font-size: 30px; font-weight: 800; letter-spacing: -.01em; }
-      #boot .logo span { color: #c4ff4a; }
+      #boot .logo { display: flex; align-items: center; gap: 14px; font-size: 30px; font-weight: 800; letter-spacing: -.01em; }
+      #boot .logo img { width: 56px; height: 56px; border-radius: 16px; box-shadow: 0 10px 30px rgba(196,255,74,.2); }
+      #boot .logo span { color: var(--lime); }
       #boot .sub { margin: 0; color: #b4bac3; max-width: 60ch; }
       #bar { width: min(420px, 80vw); height: 6px; background: #1c2431; border-radius: 3px; overflow: hidden; }
-      #fill { height: 100%; width: 0; background: #c4ff4a; transition: width .15s linear; }
+      #fill { height: 100%; width: 0; background: var(--lime); transition: width .15s linear; }
       #status { margin: 0; color: #b4bac3; font-variant-numeric: tabular-nums; }
-      #err { display: none; max-width: 60ch; margin-top: 8px; padding: 14px 18px; text-align: left;
-        background: #3e1f1d; border-left: 4px solid #f0736a; border-radius: 4px; }
+      #err { display: none; max-width: 60ch; margin-top: 8px; padding: 14px 18px; text-align: left; background: #3e1f1d; border-left: 4px solid #f0736a; border-radius: 4px; }
       #err h2 { margin: 0 0 6px; font-size: 17px; }
       #err p { margin: 0 0 6px; }
       #err code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; color: #f0b3ad; }
       #boot.failed #bar { display: none; }
       #boot.failed #err { display: block; }
-      /* Caméra : pastille de commande en haut au centre (le HUD du moteur occupe
-         les coins), aperçu miroir à gauche à mi-hauteur. */
-      #cam { position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
-        display: none; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: 999px;
-        background: rgba(7, 17, 31, .78); backdrop-filter: blur(6px); font-size: 13.5px; z-index: 5; }
-      body.running #cam { display: flex; }
-      #cam button { border: 0; border-radius: 999px; padding: 6px 14px; font: inherit; font-weight: 700;
-        background: #c4ff4a; color: #07111f; cursor: pointer; }
-      #cam button:hover, #cam button:focus-visible { background: #d5ff7d; outline: none; }
-      #cam button.on { background: rgba(255,255,255,.12); color: #e6e8e3; }
-      #camstatus { color: #b4bac3; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      #pip { position: fixed; left: max(12px, env(safe-area-inset-left)); top: 42%; width: 200px; height: 150px;
-        border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,.14);
-        background: #0d1b2d; display: none; pointer-events: none; z-index: 4; }
-      #pip.on { display: block; }
-      #pip video, #pip canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-        transform: scaleX(-1); }
-      #pip .tag { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: #b4bac3;
-        background: rgba(7,17,31,.6); padding: 1px 6px; border-radius: 6px; }
-      /* Pied de page : crédits et liens, sous le HUD du moteur (qui garde ses
-         boutons en bas à droite et ses textes en bas à gauche). */
-      #foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: none; justify-content: center;
-        padding: 4px 12px calc(4px + env(safe-area-inset-bottom)); font-size: 12.5px; color: #b4bac3;
-        background: linear-gradient(to top, rgba(7,17,31,.85), rgba(7,17,31,0)); pointer-events: none; }
-      #foot span { pointer-events: auto; }
-      #foot a { color: #c4ff4a; text-decoration: none; }
-      #foot a:hover, #foot a:focus-visible { text-decoration: underline; outline: none; }
-      body.running #foot { display: flex; }
-      #fs { position: fixed; bottom: max(40px, calc(32px + env(safe-area-inset-bottom))); left: max(8px, env(safe-area-inset-left));
-        width: 30px; height: 30px; border: 0; border-radius: 6px;
-        background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
-      #fs:hover, #fs:focus-visible { background: rgba(196, 255, 74, .8); color: #07111f; outline: none; }
-      body.running #fs { display: block; }
-      @media (max-width: 700px) { #pip { width: 132px; height: 100px; top: auto; bottom: 120px; } }
-      @media (prefers-reduced-motion: reduce) { #boot, #fill { transition: none; } }
+      /* ---- Navigateur mobile (téléphone, tablette en portrait) ---- */
+      @media (max-width: 1023px) {
+        #top { padding: .45rem .8rem; }
+        .brand-mark { width: 2.4rem; height: 2.4rem; }
+        .brand .name { font-size: 1rem; }
+        /* Pendant la séance, la scène prend toute la hauteur visible : rien à
+           faire défiler pour voir le score, la consigne et les commandes. */
+        body.in-session #stage { height: calc(100dvh - 3.6rem); min-height: 0; }
+        body.in-session #app { padding-top: 0; }
+        /* Vignette caméra en haut à gauche sous le score (la consigne occupe le bas). */
+        #pip { left: .6rem; top: 5.4rem; bottom: auto; width: 104px; height: 78px; border-radius: 10px; }
+        .hud .topbar { padding: .7rem .8rem 3.4rem; }
+        .hud .score { font-size: 1.9rem; }
+        .hud .clock { padding: .35rem .7rem; }
+        .hud .clock b { font-size: 1.15rem; }
+        .ctl { top: 4.5rem; right: .6rem; gap: .4rem; }
+        .ctl button { padding: .45rem .8rem; font-size: .8rem; }
+        .hud .status { bottom: .6rem; padding: 0 .6rem; }
+        .hud .status .in { padding: .55rem .75rem; border-radius: .9rem; }
+        .hud .status p { font-size: .84rem; }
+        .hud .status .q { font-size: .7rem; }
+        .modal .in { max-width: 22rem; }
+        .modal h2 { font-size: 1.6rem; }
+        .welcome .in { padding-bottom: 5.6rem; }
+        .dock .in { gap: .4rem; }
+        .btn { height: 3rem; font-size: .95rem; }
+        .summary .in { padding: 1rem .9rem 1.4rem; }
+        #foot { font-size: .68rem; }
+      }
+      /* Écran tactile : pas de plein écran par élément sur iOS, le bouton est
+         inutile ; le stick tactile du moteur est déjà à portée de pouce. */
+      @media (pointer: coarse) { #fs { display: none !important; } }
+      @media (prefers-reduced-motion: reduce) { .pressable, .bar > i { transition: none; } .countdown .n, .celebrate .pop, .spark, .hud .gain.pop, .center .ic { animation: none; } #boot, #fill { transition: none; } }
     </style>
   </head>
-  <body>
-    <canvas id="rustee-canvas" tabindex="0" aria-label="Zone de jeu PhysioTech.ch"></canvas>
-    <div id="cam" role="group" aria-label="Caméra">
-      <span id="camstatus">Sans caméra : stick tactile ou flèches</span>
-      <button id="camtoggle" type="button">📷 Activer la caméra</button>
+  <body class="world-garden">
+    <header id="top">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><img src="./favicon.svg" alt="" /></span>
+        <div><p class="name">PHYSIO<span>TECH</span>.CH</p><p class="sub"><span class="dot"></span><span id="online-text">Votre séance est prête</span></p></div>
+      </div>
+      <nav class="cluster" aria-label="Navigation">
+        <button id="install" class="pressable" hidden><span aria-hidden="true">✨</span><span class="lbl">Installer</span></button>
+        <button id="voice-toggle" class="pressable" title="Christophe · voix enregistrée (Chatterbox, open source)" aria-label="Activer ou couper la voix de Christophe"><span id="voice-ic" aria-hidden="true">🔊</span><span class="lbl">Christophe</span></button>
+        <button id="voice-test" class="pressable lime" title="Tester Christophe" aria-label="Tester la voix de Christophe"><span aria-hidden="true">✨</span><span class="lbl">Tester</span></button>
+        <button id="nav-history" class="pressable" aria-label="Voir l’historique"><span aria-hidden="true">📈</span><span class="lbl">Progrès</span></button>
+        <button id="nav-therapist" class="pressable" aria-label="Ouvrir l’espace thérapeute"><span aria-hidden="true">⚙️</span><span class="lbl">Thérapeute</span></button>
+      </nav>
+    </header>
+
+    <main id="app">
+      <section id="stage" aria-label="Zone de jeu">
+        <canvas id="rustee-canvas" tabindex="0" aria-label="Zone de jeu PhysioTech.ch"></canvas>
+        <div id="pip" aria-hidden="true" hidden>
+          <video id="video" muted playsinline autoplay></video>
+          <canvas id="overlay"></canvas>
+          <span class="tag">aperçu miroir</span>
+        </div>
+        <button id="fs" type="button" title="Plein écran (touche F)" hidden>⛶ <span class="lbl">Plein écran</span></button>
+
+        <!-- Accueil -->
+        <div id="s-welcome" class="screen scroll welcome">
+          <div class="in">
+            <div class="hero">
+              <div>
+                <span class="eyebrow">✨ Séance du jour</span>
+                <h1>Votre mouvement devient un jeu.</h1>
+                <p class="lead">Christophe vous guide, à votre rythme : attrapez les bulles avec vos mains, évitez les cubes rouges, gardez le geste doux.</p>
+              </div>
+              <span class="orb" aria-hidden="true" id="orb"><img class="logo-img" src="./favicon.svg" alt="" style="width:2.6rem;height:2.6rem;border-radius:.8rem" /></span>
+            </div>
+            <div class="wgrid">
+            <div class="wcol">
+            <button id="choose-circuit" class="choice pressable" aria-pressed="false">
+              <span class="row"><span><span class="t1">Le meilleur choix pour aujourd’hui</span><span class="t2">Parcours guidé</span></span><span class="mark" id="mark-circuit">→</span></span>
+              <span class="meta" id="circuit-chips"></span>
+              <span class="meta" id="circuit-meta"></span>
+            </button>
+            <button id="choose-single" class="choice pressable" aria-pressed="true">
+              <span class="row"><span><span class="t1">Ou une manche ciblée</span><span class="t2">Attrape-bulles · une manche</span></span><span class="mark on" id="mark-single">✓</span></span>
+              <span class="meta" id="single-meta"></span>
+            </button>
+            <label class="pain" id="pain-before-card">
+              <span class="row"><span>Comment vous sentez-vous ?<small>Douleur ressentie avant la séance</small></span><span class="score-n" id="pain-before-n">0<small>/10</small></span></span>
+              <input id="pain-before" aria-label="Douleur maintenant" type="range" min="0" max="10" value="0" />
+              <p class="warn-text" id="pain-before-warn" hidden>Réduisez l’amplitude et suivez les consignes de votre professionnel.</p>
+            </label>
+            </div>
+            <div class="wcol">
+            <div class="grid2" style="align-items:start">
+              <div><div class="section-h" style="margin-top:0"><div><p class="a">Mode de jeu</p><p class="b" id="game-desc">Touchez les bulles</p></div></div>
+                <div class="seg two" id="games" aria-label="Choisir un mode de jeu"><button data-game="0" class="on">🫧 Bulles</button><button data-game="1">⭐ Étoile</button></div></div>
+              <div><div class="section-h" style="margin-top:0"><div><p class="a">Ambiance</p><p class="b" id="world-desc">Jardin · Mobilité douce</p></div></div>
+                <div class="seg" id="worlds" aria-label="Choisir un univers"><button data-world="0" class="on" title="Jardin">🌿</button><button data-world="1" title="Espace">✨</button><button data-world="2" title="Océan">🌊</button></div></div>
+            </div>
+            <div class="section-h"><div><p class="a">Rythme des bulles</p><p class="b">Le thérapeute peut le fixer dans son espace</p></div></div>
+            <div class="tiles" id="levels">
+              <button class="tile pressable" data-level="1"><span class="glyph" style="color:#7dd3fc;background:#7dd3fc18;box-shadow:0 0 0 1px #7dd3fc28">🫧</span><span class="mark">→</span><span class="n">Doux</span><span class="s">2 bulles, 6 s</span></button>
+              <button class="tile pressable" data-level="2"><span class="glyph" style="color:#c4ff4a;background:#c4ff4a18;box-shadow:0 0 0 1px #c4ff4a28">🎯</span><span class="mark">→</span><span class="n">Moyen</span><span class="s">3 bulles, 4,5 s</span></button>
+              <button class="tile pressable" data-level="3"><span class="glyph" style="color:#fb7185;background:#fb718518;box-shadow:0 0 0 1px #fb718528">⚡</span><span class="mark">→</span><span class="n">Vif</span><span class="s">4 bulles, 3,2 s, plus de bombes</span></button>
+            </div>
+            <p class="alert" id="welcome-error" role="alert" hidden></p>
+            </div>
+            </div>
+          </div>
+          <div class="dock">
+            <div class="in">
+              <div class="who"><p class="a" id="dock-label">Attrape-bulles · une manche</p><p class="b">Prêt quand vous l’êtes</p></div>
+              <button id="start-camera" class="btn primary pressable" style="flex:1">📷 Commencer →</button>
+              <button id="start-demo" class="btn ghost pressable" aria-label="Essayer sans caméra" title="Essayer sans caméra">▶ <span class="lbl">Mode démo</span></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Préparation -->
+        <div id="s-setup" class="screen scroll setup" hidden>
+          <div class="in">
+            <button class="back" data-act="reset">‹ Retour</button>
+            <p class="kicker lime" style="margin-top:1rem">Avant de commencer</p>
+            <h2>Préparez votre espace.</h2>
+            <p class="lead">Ces trois points améliorent nettement le suivi des mouvements.</p>
+            <div class="steps">
+              <div class="step"><span class="ic">📱</span><div><p class="t"><em>1.</em>Téléphone ou écran stable</p><p class="d">Posez l’appareil en mode paysage, à hauteur de poitrine, sans le tenir.</p></div></div>
+              <div class="step"><span class="ic">🧍</span><div><p class="t"><em>2.</em><span id="setup-body">Tête, épaules et mains visibles</span></p><p class="d" id="setup-body-d">Reculez d’environ 1,5 à 2 mètres : les bulles naissent autour de vos épaules.</p></div></div>
+              <div class="step"><span class="ic">🪑</span><div><p class="t"><em>3.</em><span id="setup-seat">Zone dégagée</span></p><p class="d" id="setup-seat-d">Éloignez tapis, table basse et objets fragiles.</p></div></div>
+            </div>
+            <p class="alert" id="setup-error" role="alert" hidden></p>
+            <button id="open-camera" class="btn primary pressable" style="margin-top:1.4rem;width:100%">📷 Ouvrir la caméra et vérifier</button>
+            <p class="note" style="text-align:center">L’analyse reste sur cet appareil. Ce prototype ne réalise aucune mesure clinique.</p>
+          </div>
+        </div>
+
+        <!-- Chargement -->
+        <div id="s-loading" class="screen dim center" hidden>
+          <div><div class="ic" aria-hidden="true">⌛</div><p style="font-weight:700;margin:.6rem 0 0" id="loading-title">Préparation de la caméra…</p><p class="note">La première ouverture peut prendre quelques secondes (modèles ~18 Mo).</p></div>
+        </div>
+
+        <!-- Calibration -->
+        <div id="s-calib" class="screen calib" hidden>
+          <div class="panel">
+            <div class="row"><div><p class="kicker">Vérification automatique</p><p style="margin:.2rem 0 0;font-size:1.25rem;font-weight:900" id="calib-title">Placez-vous au centre du cadre</p></div><span class="pct" id="calib-pct">0%</span></div>
+            <div class="bar" style="margin-top:1rem;height:.7rem"><i id="calib-bar"></i></div>
+            <div class="checks"><div class="check" id="ck-body"><i>✓</i>Corps détecté</div><div class="check" id="ck-stable"><i>✓</i>Position stable</div><div class="check" id="ck-ready"><i>✓</i>Repères prêts</div></div>
+          </div>
+        </div>
+
+        <!-- Compte à rebours -->
+        <div id="s-count" class="screen countdown" hidden aria-live="assertive"><div class="n" id="count-n">3</div></div>
+
+        <!-- HUD de jeu -->
+        <div id="s-hud" class="screen hud" hidden>
+          <div class="topbar">
+            <div style="min-width:0;padding-right:.75rem"><p class="mission" id="hud-mission">Attrape-bulles</p><div style="display:flex;align-items:center;gap:.75rem"><div><p class="lbl">Score</p><p class="score" id="hud-score">0</p></div><span class="combo" id="hud-combo">⚡ ×3</span></div></div>
+            <div class="clock"><p class="lbl" style="margin:0">Temps</p><b id="hud-clock">1:00</b></div>
+          </div>
+          <div class="gain" id="hud-gain">+10</div>
+          <div class="status"><div class="in" id="hud-status-box"><p id="hud-status">Attrapez les bulles avec vos mains !</p><div class="q"><span><b id="q-prec">—</b><span>précision</span></span><span><b id="q-stab" class="ok">Stable</b></span><span><b id="q-tempo">—</b><span>rythme</span></span></div></div></div>
+        </div>
+        <div id="ctl-play" class="ctl" hidden><button class="pressable" data-act="pause" aria-label="Mettre la séance en pause">⏸ Pause</button><button class="pressable stop" data-act="stop" aria-label="Arrêter immédiatement la séance">Arrêter</button></div>
+        <div id="ctl-early" class="ctl top" hidden><button class="pressable stop" data-act="stop" aria-label="Arrêter immédiatement la séance">Arrêter</button></div>
+
+        <!-- Pause -->
+        <div id="s-paused" class="screen modal" hidden>
+          <div class="in"><span class="ic">⏸</span><p class="kicker" style="margin-top:1.2rem">Séance en pause</p><h2>Prenez votre temps.</h2><p class="lead" style="margin-inline:auto">Votre progression est conservée et le chronomètre est arrêté.</p>
+            <div class="acts"><button class="btn primary pressable" data-act="resume">▶ Reprendre</button><button class="btn soft-danger pressable" data-act="stop">Arrêter</button></div></div>
+        </div>
+
+        <!-- Repos entre deux manches -->
+        <div id="s-rest" class="screen modal" hidden>
+          <div class="in"><span class="ic">💧</span><p class="kicker" style="margin-top:1.2rem" id="rest-kicker">Pause récupération · 1/3</p><h2>Respirez tranquillement.</h2><p class="lead" style="margin-inline:auto" id="rest-next">Prochaine manche : rythme moyen, 60 s.</p>
+            <div class="acts"><button class="btn primary pressable" data-act="continue">▶ Continuer le parcours</button><button class="btn ghost pressable" data-act="finish">Terminer ici</button></div></div>
+        </div>
+
+        <!-- Célébration -->
+        <div id="s-cel" class="screen celebrate" hidden aria-live="polite"><div class="pop"><div class="star">★</div><p id="cel-text">Série lancée !</p></div><span class="spark" style="--angle:0deg"></span><span class="spark" style="--angle:30deg"></span><span class="spark" style="--angle:60deg"></span><span class="spark" style="--angle:90deg"></span><span class="spark" style="--angle:120deg"></span><span class="spark" style="--angle:150deg"></span><span class="spark" style="--angle:180deg"></span><span class="spark" style="--angle:210deg"></span><span class="spark" style="--angle:240deg"></span><span class="spark" style="--angle:270deg"></span><span class="spark" style="--angle:300deg"></span><span class="spark" style="--angle:330deg"></span></div>
+
+        <!-- Bilan -->
+        <div id="s-finished" class="screen scroll summary" hidden>
+          <div class="in">
+            <div class="sum-left">
+            <span class="trophy"><img src="./favicon.svg" alt="" /></span>
+            <p class="kicker lime">Séance terminée</p>
+            <h2 style="font-size:2.2rem" id="sum-points">0 points</h2>
+            <div class="stars" id="sum-stars"><span>★</span><span>★</span><span>★</span></div>
+            <div class="grid4" style="margin-top:1.2rem"><div class="metric"><b id="sum-caught">0</b><span id="sum-caught-l">bulles attrapées</span></div><div class="metric"><b id="sum-prec">0 %</b><span id="sum-prec-l">précision</span></div><div class="metric"><b id="sum-combo">0</b><span>meilleure série</span></div><div class="metric"><b id="sum-reg">—</b><span id="sum-reg-l">régularité</span></div></div>
+            <p class="note" id="sum-detail"></p>
+            <div class="advice"><p class="t">Conseil pour la prochaine séance</p><p class="d" id="sum-advice"></p></div>
+            </div>
+            <div class="sum-right">
+            <div class="declare">
+              <label>Douleur après la séance : <b id="pain-after-n">0</b>/10 <span id="pain-before-echo">(avant : 0/10)</span></label>
+              <input id="pain-after" aria-label="Douleur après la séance" type="range" min="0" max="10" value="0" />
+              <p class="warn" id="pain-warn" hidden>La douleur a augmenté. Arrêtez les exercices et parlez-en à votre professionnel de santé avant la prochaine séance.</p>
+              <label style="margin-top:1.1rem">Fatigue : <b id="fatigue-n">2</b>/10</label>
+              <input id="fatigue" aria-label="Fatigue ressentie" type="range" min="0" max="10" value="2" style="accent-color:#7dd3fc" />
+            </div>
+            <p class="note">Les scores sont des repères de jeu approximatifs, pas des mesures cliniques.</p>
+            <div class="acts"><button id="save-session" class="btn primary pressable">✓ Enregistrer le bilan</button><button id="share" class="btn ghost pressable">✨ Partager</button><button class="btn ghost pressable" data-act="reset">↻ Nouvelle séance</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside id="side">
+        <div class="card" id="side-journey" hidden><div class="side-row"><h3 style="letter-spacing:.12em;text-transform:uppercase;color:#cbd5e1">Votre parcours</h3><span class="lbl" id="journey-lbl">Étape 1/1</span></div><div class="journey" id="journey"></div></div>
+        <div class="card quality" id="side-quality" hidden>
+          <div class="side-row" style="align-items:flex-start"><div><h3>🔊 Coach Christophe</h3><p class="note" style="margin-top:.2rem">Repères en direct pour rendre le geste plus doux.</p></div><span class="pill" id="qc-pill">En attente</span></div>
+          <div style="margin-top:1rem"><div class="side-row"><span class="lbl">Précision de la manche</span><b id="qc-prec" style="font-size:1.25rem">—</b></div><div class="bar sky" style="margin-top:.5rem"><i id="qc-bar"></i></div></div>
+          <div class="grid2" style="margin-top:1rem"><div class="kv"><span>Corps dans le cadre</span><b id="qc-stab" class="ok">Stable</b></div><div class="kv"><span>Rythme observé</span><b id="qc-tempo" class="sky">—</b></div><div class="kv"><span>Main gauche</span><b id="qc-hl">—</b></div><div class="kv"><span>Main droite</span><b id="qc-hr">—</b></div></div>
+          <p class="note">Indicateurs ludiques approximatifs, sans valeur de mesure clinique.</p>
+        </div>
+        <div class="card" id="side-session">
+          <div class="side-row"><h3 id="ss-title">Séance sélectionnée</h3><span class="pill" style="background:rgba(196,255,74,.15);color:var(--lime);text-transform:uppercase">haut du corps</span></div>
+          <h2 style="font-size:1.3rem;margin-top:.2rem" id="ss-name">Attrape-bulles</h2>
+          <p class="note" style="margin-top:.15rem;font-size:.8rem;color:var(--muted)" id="ss-hint">Blanc : touchez · Bleu : poing fermé · Vert : main ouverte · Cube rouge : à éviter.</p>
+          <label class="range" style="margin-top:.6rem"><span class="row"><span>Amplitude confortable</span><b id="amp-n">75 %</b></span><input id="amp" type="range" min="55" max="95" step="10" value="75" aria-label="Amplitude confortable" style="margin-top:.2rem" /></label>
+          <p class="note" id="ss-locked" hidden style="margin-top:.2rem">Réglages fixes pendant la séance.</p>
+          <div style="margin-top:.6rem"><div class="side-row" style="font-size:.85rem"><span class="lbl">Manche</span><b id="ss-progress">0 bulles</b></div><div class="bar" style="margin-top:.3rem"><i id="ss-bar"></i></div></div>
+          <div class="grid3" style="margin-top:.6rem"><div class="metric"><b id="ss-points">0</b><span>points</span></div><div class="metric"><b id="ss-combo">×0</b><span>série</span></div><div class="metric"><b id="ss-level">Moyen</b><span>rythme</span></div></div>
+        </div>
+        <div class="card garden" id="side-garden">
+          <div class="side-row"><div><h3 style="color:#d1fae5">Jardin de mobilité</h3><p class="note" style="margin-top:0" id="g-sessions">0 séance accomplie</p></div><div class="plants" id="g-plants"></div></div>
+          <div class="side-row" style="margin-top:.5rem;font-size:.85rem"><span class="lbl" id="g-name">Graine</span><b style="color:#a7f3d0" id="g-points">0 pts</b></div>
+          <div class="bar emerald" style="margin-top:.3rem"><i id="g-bar"></i></div>
+          <div class="grid2" style="margin-top:.6rem">
+            <div class="kv"><span>Régularité douce</span><b style="color:#fde68a" id="g-streak">🔥 0 jour</b><small style="display:block;margin-top:.25rem;font-size:.7rem;color:var(--faint);line-height:1.3">Les jours de repos n’annulent rien.</small></div>
+            <div class="kv weekly" id="side-weekly"><span>Objectif de la semaine <span id="w-ic">🗓️</span></span><b style="color:#ddd6fe" id="w-n">0/3</b><div class="bar violet"><i id="w-bar"></i></div><small id="w-text">3 séances restantes</small></div>
+          </div>
+          <div class="badges" id="g-badges"></div>
+        </div>
+        <div class="card safety"><p style="font-size:.85rem;color:#cbd5e1"><b style="color:#bae6fd">Bougez sans douleur.</b> Arrêtez en cas de douleur, vertige ou inconfort. Prototype de coaching, sans diagnostic ni mesure clinique.</p><button id="side-stop" class="btn soft-danger sm pressable" style="margin-top:.6rem;width:100%" data-act="stop" hidden>⏸ Arrêter la séance</button></div>
+      </aside>
+    </main>
+
+    <!-- Vue Progrès -->
+    <div id="view-history" class="view" hidden>
+      <div class="in">
+        <button class="back" data-act="view-patient">‹ Retour aux séances</button>
+        <div class="head"><div><p class="kicker lime">Progression</p><h1 style="font-size:2.4rem;max-width:none">Historique des séances</h1></div><span style="font-size:2.5rem" aria-hidden="true">📊</span></div>
+        <div class="grid3" style="margin-top:1.4rem"><div class="metric big"><b id="h-count">0</b><span>séances</span></div><div class="metric big"><b id="h-best">0</b><span>record de points</span></div><div class="metric big"><b id="h-prec">0 %</b><span>précision moyenne</span></div></div>
+        <div class="list" id="h-list"></div>
+      </div>
     </div>
-    <div id="pip" aria-hidden="true">
-      <video id="video" muted playsinline autoplay></video>
-      <canvas id="overlay"></canvas>
-      <span class="tag">aperçu miroir</span>
+
+    <!-- Espace thérapeute -->
+    <div id="view-therapist" class="view" hidden>
+      <div class="in">
+        <button class="back" data-act="view-patient">‹ Retour patient</button>
+        <div style="margin-top:1.4rem"><p class="kicker">Espace thérapeute · prototype local</p><h1 style="font-size:2.4rem;max-width:none" id="t-title">Programme</h1><p class="lead" id="t-sub">Les réglages restent sur cet appareil.</p></div>
+        <div class="cols">
+          <section class="panel">
+            <h2>Prescription de séance</h2>
+            <label class="range" style="margin-top:1rem"><span class="row"><span>Prénom du patient</span></span><input id="t-name" type="text" maxlength="40" placeholder="Camille" style="margin-top:.5rem" /></label>
+            <label class="range"><span class="row"><span>Code patient</span></span><input id="t-code" type="text" maxlength="16" placeholder="MQ-4821" style="margin-top:.5rem" /></label>
+            <div class="plan"><div class="row"><div><p style="font-weight:800;color:#e0f2fe">Parcours patient</p><p class="note" style="margin-top:0">1 à 4 manches d’Attrape-bulles, dans l’ordre</p></div><span class="pill" style="background:rgba(125,211,252,.1);color:#bae6fd" id="t-rounds-pill">3 manches</span></div>
+              <div class="seg four" id="t-rounds"><button data-rounds="1">1</button><button data-rounds="2">2</button><button data-rounds="3" class="on">3</button><button data-rounds="4">4</button></div></div>
+            <label class="range"><span class="row"><span>Mode de jeu</span><b id="t-game-n">Attrape-bulles</b></span></label>
+            <div class="seg two" id="t-game"><button data-game="0" class="on">🫧 Attrape-bulles</button><button data-game="1">⭐ Étoile filante</button></div>
+            <label class="range"><span class="row"><span>Rythme</span><b id="t-level-n">Moyen</b></span></label>
+            <div class="seg" id="t-level"><button data-level="1">Doux</button><button data-level="2" class="on">Moyen</button><button data-level="3">Vif</button></div>
+            <label class="range"><span class="row"><span>Amplitude personnalisée</span><b id="t-amp-n">75 %</b></span><input id="t-amp" type="range" min="55" max="95" step="10" value="75" /></label>
+            <label class="range"><span class="row"><span>Durée d’une manche</span><b id="t-dur-n">60 s</b></span></label>
+            <div class="seg four" id="t-dur"><button data-dur="30">30 s</button><button data-dur="45">45 s</button><button data-dur="60" class="on">60 s</button><button data-dur="90">90 s</button></div>
+            <button id="t-seated" class="toggle pressable"><span><span style="display:block;font-weight:800">Mode assis</span><span class="note" style="margin-top:0">Consignes adaptées à une séance sur chaise</span></span><span class="sw"><i></i></span></button>
+            <button id="t-save" class="btn primary pressable" style="margin-top:1.4rem;width:100%">✓ Enregistrer le programme</button>
+          </section>
+          <section style="display:grid;gap:1rem;align-content:start">
+            <div class="panel"><div style="display:flex;align-items:center;gap:.6rem"><span aria-hidden="true">👤</span><h2 style="margin:0">Suivi patient</h2></div>
+              <div class="grid2" style="margin-top:1.2rem"><div class="metric big"><b id="t-sessions">0</b><span>séances réalisées</span></div><div class="metric big"><b id="t-last-prec">—</b><span>dernière précision</span></div><div class="metric big"><b id="t-last-combo">—</b><span>dernière série</span></div><div class="metric big"><b id="t-last-pain">—</b><span>dernière douleur</span></div></div></div>
+            <div class="panel"><div class="side-row"><h2 style="margin:0;font-size:1.1rem">Douleur récente</h2><span class="lbl">7 séances</span></div><div id="t-pain"></div></div>
+            <div class="panel amber-box"><span aria-hidden="true">🛡️</span><div><p style="font-weight:800;color:#fde68a">Données déclaratives</p><p class="note" style="margin-top:.2rem;color:#cbd5e1">Les résultats de caméra sont approximatifs et ne remplacent pas une évaluation clinique.</p></div></div>
+          </section>
+        </div>
+      </div>
     </div>
-    <button id="fs" type="button" title="Plein écran">⛶</button>
+
     <footer id="foot"><span>PhysioTech.ch — créé par
       <a href="https://github.com/antoinequarroz" target="_blank" rel="noopener">Antoine Quarroz</a> et
       <a href="https://github.com/lberthod" target="_blank" rel="noopener">Loïc Berthod</a> ·
       <a href="https://github.com/lberthod/physiotek" target="_blank" rel="noopener">code du jeu</a> ·
       moteur <a href="https://github.com/lberthod/rusteegear" target="_blank" rel="noopener">RusteeGear</a></span></footer>
+
     <div id="boot" role="status" aria-live="polite">
-      <div class="logo">PhysioTech<span>.ch</span></div>
+      <div class="logo"><img src="./favicon.svg" alt="" /><span>PhysioTech<span>.ch</span></span></div>
       <p class="sub">Attrape-bulles : touchez les bulles avec vos mains avant qu'elles n'éclatent — bleu poing fermé,
-        vert main ouverte, noir à éviter.</p>
+        vert main ouverte, cube rouge à éviter.</p>
       <p class="sub"><b>Démonstration technologique de vision par ordinateur</b> — aucune valeur médicale, thérapeutique
         ni scientifique, aucun avis médical. Consultez un professionnel de santé ; arrêtez en cas de douleur ou de vertige.</p>
       <div id="bar"><div id="fill"></div></div>
@@ -105,15 +664,18 @@
         <p><code id="err-detail"></code></p>
       </div>
     </div>
+
     <script type="module">
-      import init, { set_pose_landmarks, set_hand_landmarks } from "./pkg/motor3derust.js";
+      import init, { set_pose_landmarks, set_hand_landmarks, push_hud_event, set_script_var, set_hud_widgets_visible } from "./pkg/motor3derust.js";
 
       const $ = (id) => document.getElementById(id);
       const canvas = $("rustee-canvas");
+      const stage = $("stage");
       const boot = $("boot");
       const statusEl = $("status");
       const fill = $("fill");
       let failed = false;
+      let engineReady = false;
 
       // Le moteur choisit sa scène par l'URL (src/lib.rs, `web_requested_scene`) :
       // on l'impose ici pour que la page marche aussi ouverte sans paramètre.
@@ -123,6 +685,650 @@
         history.replaceState(null, "", url);
       }
 
+      // =====================================================================
+      // 1. Données de séance (reprises de Mouvéo, adaptées à Attrape-bulles)
+      // =====================================================================
+      const LEVELS = { 1: { name: "Doux", short: "doux" }, 2: { name: "Moyen", short: "moyen" }, 3: { name: "Vif", short: "vif" } };
+      // Modes de jeu du moteur (`rd_mode`) : 0 Attrape-bulles (captures), 1 Étoile filante (secondes de contact).
+      const GAMES = { 0: { name: "Attrape-bulles", short: "bulles", unit: "bulles attrapées", unit1: "bulle attrapée", miss: "éclatées", hint: "Touchez les bulles avant qu’elles n’éclatent." }, 1: { name: "Étoile filante", short: "étoile", unit: "s de contact", unit1: "s de contact", miss: "pertes", hint: "Gardez une main sur l’étoile qui se déplace lentement." } };
+      const WORLDS = [{ name: "Jardin", emoji: "🌿", cls: "world-garden", description: "Mobilité douce" }, { name: "Espace", emoji: "✨", cls: "world-space", description: "Précision et calme" }, { name: "Océan", emoji: "🌊", cls: "world-ocean", description: "Ampleur et fluidité" }];
+      // Consignes du script directeur (`ui_status`, cf. src/scene/demos/reeducation.rs).
+      const STATUS = { 0: "Réglez le rythme, puis Commencer", 1: "Reculez : tête, épaules et mains doivent être visibles", 2: "Ne bougez plus, calibration…", 3: "Attrapez les bulles avec vos mains !", 8: "Mode démo — stick ou flèches : amenez la main sur les bulles", 9: "Bulle éclatée… la suivante arrive", 10: "Bombe ! Évitez les cubes rouges", 11: "Bleu : fermez le poing pour l’attraper", 12: "Vert : ouvrez la main pour l’attraper", 13: "Séance en pause — respirez tranquillement", 14: "Préparez-vous…", 20: "Gardez une main sur l’étoile", 21: "Contact perdu — rejoignez l’étoile" };
+      const HAND_STATE = { 0: "—", 1: "Poing", 2: "Ouverte", 3: "Détendue" };
+      const DEFAULT_PROGRAM = { game: 0, level: 2, amp: 75, duration: 60, rounds: 3, seated: false, name: "", code: "" };
+
+      // Textes du coach (Mouvéo) et clips Christophe correspondants.
+      const COACH_READY_TEXT = "Bonjour, je suis Christophe. Je vous accompagne pendant votre séance.";
+      const ARM_START_TEXT = "C’est parti. Gardez l’épaule relâchée et accompagnez la cible sans forcer.";
+      const GOOD_CONTROL_TEXT = "Excellent contrôle. Gardez ce mouvement doux et régulier.";
+      const COACH_CUES = {
+        [COACH_READY_TEXT]: "ready",
+        "Placez-vous au centre du cadre.": "position",
+        "Calibration terminée. Trois.": "calibrated",
+        "Trois.": "three", "Deux.": "two", "Un.": "one",
+        "C’est parti.": "start",
+        "Mission terminée. Prenez une pause avant le jeu suivant.": "mission_complete",
+        "Séance en pause. Respirez tranquillement.": "paused",
+        "Reprenez doucement.": "resume",
+        "Replacez-vous au centre du cadre.": "reposition",
+        [ARM_START_TEXT]: "arm_start",
+        [GOOD_CONTROL_TEXT]: "good_control",
+      };
+      function coachCue(text) {
+        if (COACH_CUES[text]) return COACH_CUES[text];
+        if (/^Série de/.test(text)) return "good";
+        if (/^Manche/.test(text) && /Replacez-vous/.test(text)) return "reposition";
+        if (/^Manche/.test(text)) return "next_game";
+        return null;
+      }
+
+      // =====================================================================
+      // 2. État de la page
+      // =====================================================================
+      const S = {
+        view: "patient",                // patient | history | therapist
+        stage: "welcome",               // welcome | setup | loading | calibrate | countdown | playing | paused | rest | finished
+        engineStage: 0,
+        demo: false,
+        started: false,                 // « demarrer » envoyé pour la manche courante
+        mode: "single",                 // single | circuit
+        world: 0,
+        game: 0,                        // 0 Attrape-bulles, 1 Étoile filante
+        level: 2,
+        amp: 75,
+        program: { ...DEFAULT_PROGRAM },
+        round: 0,
+        rounds: 1,
+        painBefore: 0, pain: 0, fatigue: 2, saved: false,
+        history: [],
+        voice: true,
+        totals: { points: 0, caught: 0, missed: 0, bombs: 0, maxcombo: 0 },
+        hitTimes: [],
+        lastVars: {},
+        online: navigator.onLine,
+        installPrompt: null,
+        cameraError: "",
+      };
+
+      // ---- Persistance (localStorage, comme Mouvéo) ----
+      function loadStorage() {
+        try {
+          const h = JSON.parse(localStorage.getItem("physiotech-history") || "[]");
+          S.history = Array.isArray(h) ? h : [];
+        } catch { S.history = []; }
+        try {
+          const p = JSON.parse(localStorage.getItem("physiotech-program") || "null");
+          if (p && typeof p === "object") S.program = { ...DEFAULT_PROGRAM, ...p };
+          S.program.level = Math.min(3, Math.max(1, Math.round(S.program.level) || 2));
+          if (![55, 65, 75, 85, 95].includes(S.program.amp)) S.program.amp = 75;
+          if (![30, 45, 60, 90].includes(S.program.duration)) S.program.duration = 60;
+          S.program.rounds = Math.min(4, Math.max(1, Math.round(S.program.rounds) || 3));
+          S.program.game = S.program.game === 1 ? 1 : 0;
+        } catch { S.program = { ...DEFAULT_PROGRAM }; }
+        try { S.voice = localStorage.getItem("physiotech-voice") !== "off"; } catch { /* valeur par défaut */ }
+        try { const w = Number(localStorage.getItem("physiotech-world")); if (w >= 0 && w <= 2) S.world = w; } catch { /* valeur par défaut */ }
+        S.level = S.program.level; S.amp = S.program.amp; S.game = S.program.game;
+      }
+      function saveHistory() { try { localStorage.setItem("physiotech-history", JSON.stringify(S.history)); } catch { /* quota ou navigation privée */ } }
+      function saveProgram() { try { localStorage.setItem("physiotech-program", JSON.stringify(S.program)); } catch { /* idem */ } }
+
+      // ---- Scores dérivés (Mouvéo) ----
+      function regularityScore(times) {
+        if (times.length < 3) return times.length ? 75 : 0;
+        const intervals = times.slice(1).map((t, i) => t - times[i]);
+        const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const variance = intervals.reduce((sum, v) => sum + (v - mean) ** 2, 0) / intervals.length;
+        return Math.max(50, Math.min(99, Math.round(100 - (Math.sqrt(variance) / mean) * 70)));
+      }
+      function streakScore(history) {
+        if (!history.length) return 0;
+        const days = new Set(history.map((item) => item.date.slice(0, 10)));
+        const cursor = new Date();
+        const key = () => cursor.toISOString().slice(0, 10);
+        if (!days.has(key())) cursor.setDate(cursor.getDate() - 1);
+        let streak = 0;
+        while (days.has(key())) { streak += 1; cursor.setDate(cursor.getDate() - 1); }
+        return streak;
+      }
+      const precisionOf = (caught, missed) => (caught + missed) ? Math.round(caught / (caught + missed) * 100) : 0;
+      // Étoiles : bulles attrapées (mode 0) ou secondes de contact (mode 1), à l'échelle de la durée jouée.
+      const starsOf = (caught, seconds, game) => { const k = Math.max(1, seconds) / 60; const t = game === 1 ? [40, 25, 10] : [20, 12, 5]; return caught >= t[0] * k ? 3 : caught >= t[1] * k ? 2 : caught >= t[2] * k ? 1 : 0; };
+      // Précision : bulles attrapées / apparues (mode 0), temps de contact / temps joué (mode 1).
+      const precisionFor = (game, caught, missed, seconds) => game === 1 ? Math.min(100, Math.round(caught / Math.max(1, seconds) * 100)) : precisionOf(caught, missed);
+      const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+      const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+
+      // =====================================================================
+      // 3. Coach Christophe (voix) et retour haptique
+      // =====================================================================
+      // Une seule voix pour tout : les enregistrements de Christophe (22 clips
+      // mp3 de Mouvéo, `voice/christophe/`). Jamais de synthèse vocale du
+      // navigateur : chaque phrase est ramenée au clip le plus proche par
+      // `clipFor` ; une phrase sans clip pertinent reste muette plutôt que de
+      // changer de voix.
+      const coachRef = { cue: "", time: 0 };
+      const CLIPS = ["ready", "position", "calibrated", "three", "two", "one", "start", "arm_start", "legs_start", "balance_start", "squat_start", "good", "good_control", "mission_complete", "next_game", "reposition", "paused", "resume", "trunk", "symmetry", "slow_return"];
+      const clipCache = {};
+      for (const c of CLIPS) { const a = new Audio(`./voice/christophe/${c}.mp3`); a.preload = "auto"; clipCache[c] = a; }
+      function clipFor(text) {
+        const cue = coachCue(text);
+        if (cue) return cue;
+        const t = text.toLowerCase();
+        if (/^(trois|deux|un)\b/.test(t)) return t.startsWith("trois") ? "three" : t.startsWith("deux") ? "two" : "one";
+        if (/mode démo/.test(t)) return "three";
+        if (/ouverture de la caméra|je vous vois/.test(t)) return "position";
+        if (/n’a pas pu démarrer|n'a pas pu démarrer/.test(t)) return "reposition";
+        if (/bombe|ralentissez/.test(t)) return "trunk";
+        if (/contact perdu/.test(t)) return "slow_return";
+        if (/bulle éclatée/.test(t)) return null;
+        if (/fermez le poing|ouvrez la main/.test(t)) return "symmetry";
+        if (/secondes de contact|série de|bien joué|très bien|encore une|parfait|restez dessus|très régulier/.test(t)) return "good";
+        if (/excellent contrôle/.test(t)) return "good_control";
+        if (/mission terminée/.test(t)) return "mission_complete";
+        if (/séance terminée/.test(t)) return "good_control";
+        if (/enregistrée|résultat copié/.test(t)) return "good";
+        if (/^manche/.test(t)) return /replacez/.test(t) ? "reposition" : "next_game";
+        if (/replacez-vous/.test(t)) return "reposition";
+        if (/en pause/.test(t)) return "paused";
+        if (/reprenez|retour à la séance/.test(t)) return "resume";
+        if (/séance arrêtée/.test(t)) return "paused";
+        if (/douleur a augmenté|réduisez l’amplitude|réduisez l'amplitude/.test(t)) return "trunk";
+        if (/bonjour|christophe est de retour|espace thérapeute|voici vos progrès|aucune séance|programme enregistré/.test(t)) return "ready";
+        if (/c’est parti|c'est parti/.test(t)) return "start";
+        return null; // réglages (rythme, ambiance, amplitude, douleur…) : pas de clip, silence
+      }
+      // File de lecture : un seul clip à la fois, jamais coupé — sauf par un
+      // événement de **flux** (priorité 3 : compte à rebours, départ, pause,
+      // reprise, arrêt, fin) qui interrompt et vide la file. Les **consignes**
+      // (priorité 2 : bombe, repositionnement, geste) passent en tête de file
+      // et attendent la fin du clip en cours ; les **encouragements**
+      // (priorité 1) ne jouent que si Christophe est silencieux. Un clip déjà
+      // en cours ou déjà prévu n'est pas redemandé, et chaque clip a un délai
+      // minimal de répétition : plus de phrases doublées ni hachées.
+      const PRIO = { three: 3, two: 3, one: 3, calibrated: 3, start: 3, arm_start: 3, paused: 3, resume: 3, mission_complete: 3, next_game: 3, ready: 3, position: 2, reposition: 2, trunk: 2, slow_return: 2, symmetry: 2, good_control: 2, good: 1 };
+      const REPEAT_MS = { 3: 400, 2: 3000, 1: 5000 };
+      const voice = { current: null, queue: [], last: {} };
+      function stopCurrent() {
+        if (!voice.current) return;
+        const a = clipCache[voice.current];
+        if (a) { a.onended = null; a.pause(); a.currentTime = 0; }
+        voice.current = null;
+      }
+      function playNext() {
+        if (voice.current) return;
+        const item = voice.queue.shift();
+        if (!item) return;
+        const a = clipCache[item.clip];
+        if (!a) { playNext(); return; }
+        voice.current = item.clip;
+        a.currentTime = 0;
+        a.onended = () => { voice.current = null; playNext(); };
+        a.play().catch(() => { voice.current = null; playNext(); });
+      }
+      function enqueue(clip, prio) {
+        if (!S.voice || !clip) return;
+        const now = Date.now();
+        if (voice.current === clip || voice.queue.some((q) => q.clip === clip)) return;
+        if (now - (voice.last[clip] || 0) < REPEAT_MS[prio]) return;
+        if (prio >= 3) { voice.last[clip] = now; stopCurrent(); voice.queue = [{ clip, prio }]; playNext(); return; }
+        if (prio === 2) { voice.last[clip] = now; voice.queue = voice.queue.filter((q) => q.prio >= 2).slice(0, 1); voice.queue.unshift({ clip, prio }); playNext(); return; }
+        if (voice.current || voice.queue.length) return; // encouragement : seulement dans un silence
+        voice.last[clip] = now;
+        voice.queue.push({ clip, prio }); playNext();
+      }
+      function speak(text, prioOverride) {
+        const clip = clipFor(text);
+        if (!clip) return;
+        enqueue(clip, prioOverride ?? PRIO[clip] ?? 2);
+      }
+      // Consignes de jeu répétitives (corps perdu, bombe, geste) : même cue au
+      // plus toutes les 4 s, toute phrase toutes les 2 s — Christophe reste présent
+      // sans bégayer. Les actions de l'interface parlent toujours (`say`).
+      function coach(text) { speak(text); }
+      function say(text) { speak(text); }
+      function stopVoice() { stopCurrent(); voice.queue = []; }
+      function vibrate(pattern) { try { navigator.vibrate?.(pattern); } catch { /* non supporté */ } }
+
+      // =====================================================================
+      // 4. Pont avec le moteur
+      // =====================================================================
+      function sendEvent(action) { if (engineReady) push_hud_event(action); }
+      function setVar(key, value) { if (engineReady) set_script_var(key, value); }
+      function pushSettings() {
+        setVar("rd_level", S.level); setVar("rd_amp", S.amp);
+        setVar("rd_duration", S.program.duration); setVar("rd_world", S.world); setVar("rd_mode", S.game);
+      }
+      function focusCanvas() { try { canvas.focus({ preventScroll: true }); } catch { canvas.focus(); } }
+
+      // =====================================================================
+      // 5. Rendu des écrans
+      // =====================================================================
+      const SCREENS = ["s-welcome", "s-setup", "s-loading", "s-calib", "s-count", "s-hud", "s-paused", "s-rest", "s-finished"];
+      const active = () => !["welcome", "setup", "finished"].includes(S.stage);
+      function setStage(stage) {
+        if (S.stage === stage) return;
+        S.stage = stage;
+        renderStage();
+      }
+      function renderStage() {
+        const show = { welcome: "s-welcome", setup: "s-setup", loading: "s-loading", calibrate: "s-calib", countdown: "s-count", playing: "s-hud", paused: "s-hud", rest: "s-rest", finished: "s-finished" }[S.stage];
+        for (const id of SCREENS) $(id).hidden = id !== show;
+        $("s-paused").hidden = S.stage !== "paused";
+        $("ctl-play").hidden = S.stage !== "playing";
+        $("ctl-early").hidden = !["loading", "calibrate", "countdown"].includes(S.stage);
+        $("side-stop").hidden = !active();
+        $("side-journey").hidden = S.stage === "welcome";
+        $("side-quality").hidden = S.stage !== "playing";
+        // Pendant la séance, seul ce qui sert reste visible dans la barre latérale.
+        $("side-garden").hidden = active();
+        $("side-session").hidden = S.stage === "finished";
+        // Mobile : la scène remplit l'écran pendant la séance, et on la remonte en haut.
+        const inSession = active() && S.stage !== "setup" && S.stage !== "loading";
+        if (document.body.classList.contains("in-session") !== inSession) {
+          document.body.classList.toggle("in-session", inSession);
+          if (inSession && window.innerWidth < 1024) setTimeout(() => { stage.scrollIntoView({ block: "start", behavior: "smooth" }); fitCanvas(); }, 50);
+        }
+        $("ss-locked").hidden = !active();
+        $("amp").disabled = active();
+        $("fs").hidden = !engineReady;
+        $("pip").hidden = !stream;
+        const nav = ["nav-history", "nav-therapist"];
+        for (const id of nav) $(id).disabled = active();
+        renderJourney();
+        renderSessionCard();
+        fitCanvas();
+      }
+      function renderWelcome() {
+        const circuit = S.mode === "circuit";
+        $("choose-circuit").classList.toggle("is-selected", circuit); $("choose-circuit").setAttribute("aria-pressed", String(circuit));
+        $("choose-single").classList.toggle("is-selected", !circuit); $("choose-single").setAttribute("aria-pressed", String(!circuit));
+        $("mark-circuit").className = `mark ${circuit ? "on" : ""}`; $("mark-circuit").textContent = circuit ? "✓" : "→";
+        $("mark-single").className = `mark ${circuit ? "" : "on"}`; $("mark-single").textContent = circuit ? "→" : "✓";
+        const p = S.program;
+        $("circuit-chips").innerHTML = Array.from({ length: p.rounds }, (_, i) => `<span class="chip"><span>${i + 1}</span>${GAMES[p.game].name} · ${LEVELS[p.level].short} · ${p.duration} s</span>`).join("");
+        $("circuit-meta").innerHTML = `<span>🏃</span> ${p.rounds} manche${p.rounds > 1 ? "s" : ""} · pauses incluses · environ ${Math.ceil(p.rounds * (p.duration + 30) / 60)} min${p.name ? ` · programme de ${esc(p.name)}` : ""}`;
+        $("single-meta").innerHTML = `<span>🎯</span> ${GAMES[S.game].name} · rythme ${LEVELS[S.level].short} · amplitude ${S.amp} % · ${p.duration} s`;
+        $("choose-single").querySelector(".t2").textContent = `${GAMES[S.game].name} · une manche`;
+        for (const b of $("levels").querySelectorAll("button")) { const on = Number(b.dataset.level) === S.level && !circuit; b.classList.toggle("is-selected", on); b.setAttribute("aria-pressed", String(on)); b.querySelector(".mark").className = `mark ${on ? "on" : ""}`; b.querySelector(".mark").textContent = on ? "✓" : "→"; }
+        for (const b of $("worlds").querySelectorAll("button")) b.classList.toggle("on", Number(b.dataset.world) === S.world);
+        document.body.className = WORLDS[S.world].cls + (S.online ? "" : " offline") + (document.body.classList.contains("in-session") ? " in-session" : "");
+        $("world-desc").textContent = `${WORLDS[S.world].name} · ${WORLDS[S.world].description}`;
+        for (const b of $("games").querySelectorAll("button")) b.classList.toggle("on", Number(b.dataset.game) === S.game);
+        $("game-desc").textContent = S.game === 1 ? "Suivez l’étoile avec la main" : "Touchez les bulles à temps";
+        $("pain-before-n").innerHTML = `${S.painBefore}<small>/10</small>`; $("pain-before-n").classList.toggle("warn", S.painBefore >= 5);
+        $("pain-before-card").classList.toggle("alert", S.painBefore >= 5); $("pain-before-warn").hidden = S.painBefore < 5;
+        $("dock-label").textContent = circuit ? `Parcours de ${p.rounds} manches` : `${GAMES[S.game].name} · une manche`;
+        $("welcome-error").hidden = !S.cameraError; $("welcome-error").textContent = S.cameraError;
+        $("setup-error").hidden = !S.cameraError; $("setup-error").textContent = S.cameraError;
+        $("setup-seat").textContent = p.seated ? "Chaise stable" : "Zone dégagée";
+        $("setup-seat-d").textContent = p.seated ? "Posez les pieds au sol et bloquez les roulettes." : "Éloignez tapis, table basse et objets fragiles.";
+        $("install").hidden = !S.installPrompt;
+        $("online-text").textContent = S.online ? "Votre séance est prête" : "Disponible hors ligne";
+        $("voice-ic").textContent = S.voice ? "🔊" : "🔇"; $("voice-test").disabled = !S.voice;
+      }
+      function renderJourney() {
+        const done = S.stage === "finished";
+        $("journey-lbl").textContent = done ? "Terminé" : S.stage === "setup" || S.stage === "loading" ? "Préparation" : `Étape ${S.round + 1}/${S.rounds}`;
+        let html = `<span class="st ${S.stage !== "setup" ? "done" : "cur"}">📱</span>`;
+        for (let i = 0; i < S.rounds; i++) {
+          const complete = i < S.round || done; const cur = active() && i === S.round && !done;
+          html += `<span class="ln ${complete || cur ? "on" : ""}"></span><span class="st ${complete ? "done" : cur ? "cur" : ""}">${complete ? "✓" : i + 1}</span>`;
+        }
+        html += `<span class="ln ${done ? "on" : ""}"></span><span class="st ${done ? "gold" : ""}">🏆</span>`;
+        $("journey").innerHTML = html;
+      }
+      function renderSessionCard() {
+        const v = S.lastVars;
+        $("ss-title").textContent = S.mode === "circuit" ? `Parcours · manche ${S.round + 1}/${S.rounds}` : "Séance sélectionnée";
+        $("ss-name").textContent = GAMES[S.game].name; $("ss-hint").textContent = S.game === 1 ? GAMES[1].hint : "Blanc : touchez · Bleu : poing fermé · Vert : main ouverte · Cube rouge : à éviter.";
+        $("amp").value = S.amp; $("amp-n").textContent = `${S.amp} %`;
+        $("ss-level").textContent = LEVELS[S.level].name;
+        const caught = v.ui_caught || 0, missed = v.ui_missed || 0;
+        $("ss-progress").textContent = `${caught} ${caught === 1 ? GAMES[S.game].unit1 : GAMES[S.game].unit} · ${Math.round(v.ui_left ?? S.program.duration)} s`;
+        $("ss-bar").style.width = `${Math.min(100, ((v.ui_duration || S.program.duration) - (v.ui_left ?? S.program.duration)) / (v.ui_duration || S.program.duration) * 100)}%`;
+        $("ss-points").textContent = String(Math.round(v.ui_points || 0)); $("ss-combo").textContent = `×${Math.round(v.ui_combo || 0)}`;
+        void missed;
+      }
+      function renderGarden() {
+        const h = S.history;
+        const lifetime = h.reduce((s, i) => s + i.points, 0);
+        const level = Math.min(4, Math.floor(lifetime / 150));
+        const names = ["Graine", "Pousse", "Jeune plante", "En fleurs", "Jardin lumineux"];
+        const streak = streakScore(h);
+        const totalMoves = h.reduce((s, i) => s + i.caught, 0);
+        $("g-sessions").textContent = `${h.length} séance${h.length === 1 ? "" : "s"} accomplie${h.length === 1 ? "" : "s"}`;
+        $("g-plants").innerHTML = Array.from({ length: level + 1 }, (_, i) => i >= 3 ? "🌸" : i >= 1 ? "🌱" : "<span style='display:inline-block;width:.7rem;height:.7rem;border-radius:999px;background:#6ee7b7'></span>").join("");
+        $("g-name").textContent = names[level]; $("g-points").textContent = `${lifetime} pts`;
+        $("g-bar").style.width = `${(lifetime % 150) / 1.5}%`;
+        $("g-streak").textContent = `🔥 ${streak} jour${streak === 1 ? "" : "s"}`;
+        const badges = [{ icon: "🌱", label: "Premier pas", on: h.length >= 1 }, { icon: "💯", label: "100 bulles", on: totalMoves >= 100 }, { icon: "🎯", label: "Précision 85 %", on: h.some((i) => i.precision >= 85) }, { icon: "🔥", label: "Rythme 3 jours", on: streak >= 3 }];
+        $("g-badges").innerHTML = badges.map((b) => `<div class="badge ${b.on ? "on" : ""}" title="${b.label}"><span aria-label="${b.label}">${b.icon}</span></div>`).join("");
+        const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const week = h.filter((i) => new Date(i.date).getTime() >= since).length;
+        const done = week >= 3;
+        $("side-weekly").classList.toggle("done", done);
+        $("w-text").textContent = done ? "Objectif atteint — les jours de repos comptent aussi." : `${Math.max(0, 3 - week)} séance${3 - week === 1 ? "" : "s"} restante${3 - week === 1 ? "" : "s"}`;
+        $("w-ic").textContent = done ? "🏆" : "🗓️"; $("w-bar").style.width = `${Math.min(100, week / 3 * 100)}%`; $("w-n").textContent = `${Math.min(week, 3)}/3`;
+      }
+      function renderHistory() {
+        const h = S.history;
+        const best = Math.max(0, ...h.map((i) => i.points));
+        const avg = h.length ? Math.round(h.reduce((s, i) => s + i.precision, 0) / h.length) : 0;
+        $("h-count").textContent = String(h.length); $("h-best").textContent = String(best); $("h-prec").textContent = `${avg} %`;
+        $("h-list").innerHTML = h.length === 0
+          ? `<div class="empty"><p style="font-weight:800;margin:0">Aucune séance enregistrée</p><p class="note">Terminez une séance pour retrouver ici vos progrès.</p><button class="btn primary sm pressable" data-act="view-patient" style="margin-top:1rem">▶ Choisir une séance</button></div>`
+          : h.map((i) => `<div class="item"><div><p class="t" style="margin:0">${i.rounds > 1 ? `Parcours guidé · ${i.rounds} manches` : ""}${i.rounds > 1 ? " · " : ""}${GAMES[i.game || 0].name}</p><p class="d" style="margin:0">${new Date(i.date).toLocaleDateString("fr-CH", { day: "numeric", month: "long", year: "numeric" })} · rythme ${LEVELS[i.level]?.short ?? "moyen"} · ${i.duration} s</p></div><div class="sv"><b>${i.points}</b><span>points</span></div><div class="sv"><b>${i.caught}</b><span>${i.game === 1 ? "s contact" : "bulles"}</span></div><div class="sv"><b>${i.precision} %</b><span>précision</span></div><div class="sv"><b>${i.pain}/10</b><span>douleur</span></div><div class="sv"><b>${i.fatigue}/10</b><span>fatigue</span></div></div>`).join("");
+      }
+      function renderTherapist() {
+        const p = S.program, h = S.history;
+        $("t-title").textContent = p.name ? `Programme de ${p.name}` : "Programme patient";
+        $("t-sub").textContent = `${p.code ? `Code patient ${p.code} · ` : ""}les réglages restent sur cet appareil.`;
+        $("t-name").value = p.name; $("t-code").value = p.code;
+        $("t-rounds-pill").textContent = `${p.rounds} manche${p.rounds > 1 ? "s" : ""}`;
+        for (const b of $("t-rounds").querySelectorAll("button")) b.classList.toggle("on", Number(b.dataset.rounds) === p.rounds);
+        for (const b of $("t-level").querySelectorAll("button")) b.classList.toggle("on", Number(b.dataset.level) === p.level);
+        for (const b of $("t-game").querySelectorAll("button")) b.classList.toggle("on", Number(b.dataset.game) === p.game);
+        $("t-game-n").textContent = GAMES[p.game].name;
+        $("t-level-n").textContent = LEVELS[p.level].name;
+        $("t-amp").value = p.amp; $("t-amp-n").textContent = `${p.amp} %`;
+        for (const b of $("t-dur").querySelectorAll("button")) b.classList.toggle("on", Number(b.dataset.dur) === p.duration);
+        $("t-dur-n").textContent = `${p.duration} s`;
+        $("t-seated").classList.toggle("on", p.seated);
+        $("t-sessions").textContent = String(h.length);
+        $("t-last-prec").textContent = h[0] ? `${h[0].precision} %` : "—";
+        $("t-last-combo").textContent = h[0] ? `×${h[0].maxcombo}` : "—";
+        $("t-last-pain").textContent = h[0] ? `${h[0].pain}/10` : "—";
+        const recent = h.slice(0, 7).reverse();
+        $("t-pain").innerHTML = recent.length
+          ? `<div class="pbars">${recent.map((i) => `<div><i style="height:${Math.max(8, i.pain * 10)}%"></i><span>${i.pain}</span></div>`).join("")}</div>`
+          : `<p class="note">La tendance apparaîtra après les premières séances.</p>`;
+      }
+      function renderView() {
+        $("view-history").hidden = S.view !== "history";
+        $("view-therapist").hidden = S.view !== "therapist";
+        if (S.view === "history") renderHistory();
+        if (S.view === "therapist") renderTherapist();
+      }
+      function renderAll() { renderWelcome(); renderStage(); renderGarden(); renderView(); }
+
+      // =====================================================================
+      // 6. Boucle de lecture de l'état du moteur (window.__rusteegear_vars)
+      // =====================================================================
+      let lastCaught = 0, lastCel = 0, lastCount = 0, lastStatus = -1, lastBodyOk = true, lastEngineStage = 0, lastCombo = 0;
+      let tempoLabel = "—";
+      function onEngineStage(st, v) {
+        if (st === 1) { setStage("calibrate"); }
+        else if (st === 4) { setStage("countdown"); lastCount = 0; }
+        else if (st === 2) {
+          setStage(v.ui_paused > 0.5 ? "paused" : "playing");
+          if (lastEngineStage === 4 || lastEngineStage === 1) { coachRef.cue = "start"; coachRef.time = Date.now(); speak(ARM_START_TEXT); }
+        } else if (st === 3) { onRoundFinished(v); }
+        else if (st === 0 && S.started && ["calibrate", "countdown", "playing", "paused"].includes(S.stage)) { resetSession(); }
+      }
+      function onRoundFinished(v) {
+        S.totals.points += v.ui_points || 0; S.totals.caught += v.ui_caught || 0; S.totals.missed += v.ui_missed || 0; S.totals.bombs += v.ui_bombs || 0;
+        S.totals.maxcombo = Math.max(S.totals.maxcombo, v.ui_maxcombo || 0);
+        S.started = false;
+        if (S.mode === "circuit" && S.round < S.rounds - 1) {
+          setStage("rest");
+          $("rest-kicker").textContent = `Pause récupération · ${S.round + 1}/${S.rounds}`;
+          $("rest-next").innerHTML = `Prochaine manche : <strong>${GAMES[S.game].name}, rythme ${LEVELS[S.level].short}, ${S.program.duration} s</strong>.`;
+          say("Mission terminée. Prenez une pause avant le jeu suivant.");
+        } else finishSession();
+      }
+      function applyVars(v) {
+        S.lastVars = v;
+        const st = Math.round(v.ui_stage || 0);
+        if (st !== lastEngineStage) { onEngineStage(st, v); lastEngineStage = st; }
+        else if (st === 2) { const want = v.ui_paused > 0.5 ? "paused" : "playing"; if (S.stage !== want && ["playing", "paused"].includes(S.stage)) setStage(want); }
+
+        if (S.stage === "calibrate") {
+          const body = v.ui_body_ok > 0.5 && v.ui_pose_ok > 0.5;
+          const calib = Math.round((v.ui_calib || 0) * 100);
+          $("calib-title").textContent = body ? "Restez immobile un instant" : (S.program.seated ? "Asseyez-vous au centre, épaules et mains visibles" : "Reculez : tête, épaules et mains doivent être visibles");
+          $("calib-pct").textContent = `${calib}%`; $("calib-pct").classList.toggle("ok", body);
+          $("calib-bar").style.width = `${calib}%`;
+          $("ck-body").classList.toggle("done", body); $("ck-stable").classList.toggle("done", calib >= 35); $("ck-ready").classList.toggle("done", calib >= 90);
+          // Caméra prête et corps vu par le moteur : on lance la séance (le
+          // moteur verrouille alors le mode caméra, cf. `hud:demarrer`).
+          if (!S.started && v.ui_pose_ok > 0.5 && st === 0) { S.started = true; sendEvent("demarrer"); say("Je vous vois. Restez immobile un instant, je calibre."); }
+        }
+        if (S.stage === "countdown") {
+          const c = Math.round(v.ui_count || 3);
+          if (c !== lastCount) {
+            lastCount = c; $("count-n").textContent = String(c);
+            const node = $("count-n"); node.style.animation = "none"; void node.offsetWidth; node.style.animation = "";
+            if (c === 3) speak(v.ui_cam > 0.5 ? "Calibration terminée. Trois." : "Trois."); else speak(c === 2 ? "Deux." : "Un.", v.ui_cam > 0.5 ? 2 : 3);
+          }
+        }
+        if (S.stage === "playing" || S.stage === "paused") {
+          $("hud-mission").textContent = `${S.rounds > 1 ? `Manche ${S.round + 1}/${S.rounds} · ` : ""}${GAMES[S.game].name} · ${LEVELS[S.level].short}`;
+          $("hud-score").textContent = String(Math.round(v.ui_points || 0));
+          const combo = Math.round(v.ui_combo || 0);
+          $("hud-combo").classList.toggle("on", combo >= 3); $("hud-combo").textContent = `⚡ ×${combo}`;
+          $("hud-clock").textContent = clock(v.ui_left || 0);
+          const bodyOk = v.ui_body_ok > 0.5 || S.demo;
+          const code = Math.round(v.ui_status ?? 3);
+          if (!bodyOk) { $("hud-status").textContent = "⏸ Repositionnez-vous — séance en pause"; if (lastBodyOk) say("Replacez-vous au centre du cadre."); }
+          else if (code !== lastStatus) {
+            $("hud-status").textContent = STATUS[code] || STATUS[3];
+            // Chaque consigne est dite par Christophe (bombe, bulle éclatée,
+            // geste demandé, reprise du jeu).
+            if (code === 11) coach("Bleu : fermez le poing pour l’attraper.");
+            else if (code === 12) coach("Vert : ouvrez la main pour l’attraper.");
+            else if (code === 9) coach("Bulle éclatée. La suivante arrive.");
+            else if (code === 21) coach("Contact perdu. Rejoignez l’étoile, doucement.");
+            else if (code === 20 && lastStatus === 21) coach("Voilà, restez dessus.");
+          }
+          lastStatus = bodyOk ? code : -1; lastBodyOk = bodyOk;
+          $("hud-status-box").classList.toggle("lost", !bodyOk);
+          const caught = Math.round(v.ui_caught || 0), missed = Math.round(v.ui_missed || 0);
+          if (caught > lastCaught) {
+            const now = Date.now();
+            if (lastCaught > 0 || S.round > 0) { const dtHit = S.hitTimes.length ? now - S.hitTimes[S.hitTimes.length - 1] : 0; tempoLabel = dtHit && dtHit < 1200 ? "rapide" : dtHit && dtHit < 4000 ? "régulier" : "doux"; }
+            S.hitTimes.push(now);
+            vibrate(combo % 5 === 0 ? [45, 40, 45] : 45);
+            const g = $("hud-gain"); g.textContent = `+${Math.round(v.ui_cel_gain || 10)}`; g.classList.remove("pop"); void g.offsetWidth; g.classList.add("pop");
+            // Christophe salue chaque capture : le clip « Série » tous les trois
+            // enchaînements, un mot court entre-temps.
+            if (S.game === 1) { if (combo > 0 && combo % 5 === 0 && combo > lastCombo) speak(`${combo} secondes de contact. Continuez, tout en douceur.`); }
+            else if (combo > 0 && combo % 3 === 0 && combo > lastCombo) speak(`Série de ${combo}. Revenez doucement.`);
+            else if (combo === 1) coach("Bien joué, continuez.");
+            else coach(["Très bien.", "Encore une.", "Parfait, gardez le geste doux."][combo % 3]);
+          }
+          lastCaught = caught;
+          const cel = Math.round(v.ui_cel || 0);
+          if (cel !== lastCel && cel >= 2) {
+            celebrate(cel === 2 ? "Série de 5 !" : cel === 3 ? "Série de 10 !" : "Bombe ! −20");
+            if (cel === 2) say("Série de 5. Très régulier."); else if (cel === 3) say(GOOD_CONTROL_TEXT); else { vibrate(120); say("Bombe touchée. Moins vingt points, évitez les cubes rouges."); }
+          }
+          lastCel = cel; lastCombo = combo;
+          const elapsedS = (v.ui_duration || S.program.duration) - (v.ui_left ?? 0);
+          const prec = (S.game === 1 ? elapsedS > 1 : caught + missed) ? precisionFor(S.game, caught, missed, elapsedS) : null;
+          $("q-prec").textContent = prec === null ? "—" : `${prec} %`;
+          $("q-stab").textContent = bodyOk ? "Stable" : "À ajuster"; $("q-stab").className = bodyOk ? "ok" : "warn";
+          $("q-tempo").textContent = tempoLabel; $("q-tempo").className = tempoLabel === "rapide" ? "warn" : "";
+          $("qc-pill").textContent = caught + missed ? (bodyOk ? "Stable" : "À ajuster") : "En attente"; $("qc-pill").className = `pill ${caught + missed ? (bodyOk ? "ok" : "warn") : ""}`;
+          $("qc-prec").textContent = prec === null ? "—" : `${prec} %`; $("qc-bar").style.width = `${prec ?? 0}%`;
+          $("qc-stab").textContent = bodyOk ? "Stable" : "À ajuster"; $("qc-stab").className = bodyOk ? "ok" : "warn";
+          $("qc-tempo").textContent = tempoLabel; $("qc-tempo").className = tempoLabel === "rapide" ? "warn" : "sky";
+          $("qc-hl").textContent = HAND_STATE[Math.round(v.ui_hand_l || 0)]; $("qc-hr").textContent = HAND_STATE[Math.round(v.ui_hand_r || 0)];
+          renderSessionCard();
+        }
+      }
+      function celebrate(text) {
+        $("cel-text").textContent = text;
+        const node = $("s-cel"); node.hidden = false;
+        for (const el of node.querySelectorAll(".pop, .spark")) { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
+        clearTimeout(celebrate.t); celebrate.t = setTimeout(() => { node.hidden = true; }, 1300);
+      }
+      function pollVars() {
+        const v = window.__rusteegear_vars;
+        if (v && engineReady) applyVars(v);
+        requestAnimationFrame(pollVars);
+      }
+      // Sonde de diagnostic (console, tests automatisés) : état de la page et
+      // injection d'un état moteur simulé — `__physiotech.applyVars({ ui_stage: 2, … })`.
+      window.__physiotech = { state: S, applyVars: (v) => applyVars(v), setStage, finishSession, resetSession, speak, voice, clipFor };
+
+      // =====================================================================
+      // 7. Actions de séance
+      // =====================================================================
+      function prepareSession() {
+        S.started = false; S.round = 0; S.rounds = S.mode === "circuit" ? S.program.rounds : 1;
+        S.totals = { points: 0, caught: 0, missed: 0, bombs: 0, maxcombo: 0 }; S.hitTimes = [];
+        S.pain = S.painBefore; S.fatigue = 2; S.saved = false; S.cameraError = "";
+        lastCaught = 0; lastCel = 0; lastCount = 0; lastStatus = -1; lastBodyOk = true; lastCombo = 0; tempoLabel = "—";
+        coachRef.cue = ""; coachRef.time = 0;
+        if (S.mode === "circuit") { S.level = S.program.level; S.amp = S.program.amp; S.game = S.program.game; }
+        pushSettings();
+      }
+      function openCameraSetup() { prepareSession(); S.demo = false; setStage("setup"); renderWelcome(); say(COACH_READY_TEXT); }
+      async function beginCamera() {
+        setStage("loading"); S.cameraError = ""; renderWelcome();
+        say("Ouverture de la caméra. Un instant.");
+        const ok = await startCamera();
+        if (!ok) { setStage("setup"); renderWelcome(); say("La caméra n’a pas pu démarrer. Vérifiez son autorisation, ou essayez le mode démo."); return; }
+        setStage("calibrate");
+        $("calib-pct").textContent = "0%"; $("calib-bar").style.width = "0%";
+        say("Placez-vous au centre du cadre.");
+      }
+      function startDemo() {
+        prepareSession(); stopCamera(); S.demo = true;
+        S.started = true; sendEvent("demarrer"); focusCanvas();
+        say("Mode démo. Déplacez la main avec les flèches ou le stick. Trois.");
+      }
+      function pauseSession() { sendEvent("pause"); say("Séance en pause. Respirez tranquillement."); }
+      function resumeSession() { sendEvent("reprendre"); focusCanvas(); say("Reprenez doucement."); }
+      function continueCircuit() {
+        S.round += 1; S.started = true; lastCaught = 0; lastCel = 0; lastCount = 0; lastStatus = -1;
+        if (S.demo) { sendEvent("demarrer"); say(`Manche ${S.round + 1} sur ${S.rounds}. Trois.`); }
+        else { sendEvent("demarrer"); setStage("calibrate"); say(`Manche ${S.round + 1} sur ${S.rounds}. Replacez-vous au centre du cadre.`); }
+        renderStage(); focusCanvas();
+      }
+      function finishSession() {
+        stopCamera(); stopVoice(); S.started = false;
+        const t = S.totals, seconds = S.program.duration * (S.round + 1);
+        const prec = precisionFor(S.game, t.caught, t.missed, seconds), stars = starsOf(t.caught, seconds, S.game), reg = regularityScore(S.hitTimes);
+        $("sum-points").textContent = `${t.points} points`;
+        $("sum-stars").querySelectorAll("span").forEach((s, i) => s.classList.toggle("on", stars > i));
+        $("sum-caught").textContent = String(t.caught); $("sum-caught-l").textContent = S.game === 1 ? "s de contact" : "bulles attrapées";
+        $("sum-prec").textContent = `${prec} %`; $("sum-prec-l").textContent = S.game === 1 ? "temps en contact" : "précision";
+        $("sum-combo").textContent = S.game === 1 ? `${t.maxcombo} s` : `×${t.maxcombo}`; $("sum-reg").textContent = S.game === 1 ? String(t.missed) : (reg ? `${reg} %` : "—"); $("sum-reg-l").textContent = S.game === 1 ? "contacts perdus" : "régularité";
+        $("sum-detail").textContent = S.game === 1
+          ? `${GAMES[1].name} · ${t.caught} s de contact sur ${seconds} s · ${t.missed} perte${t.missed === 1 ? "" : "s"} · ${S.round + 1} manche${S.round ? "s" : ""} de ${S.program.duration} s`
+          : `${t.caught} bulle${t.caught > 1 ? "s" : ""} attrapée${t.caught > 1 ? "s" : ""} sur ${t.caught + t.missed} · ${t.bombs} cube${t.bombs === 1 ? "" : "s"} rouge${t.bombs === 1 ? "" : "s"} touché${t.bombs === 1 ? "" : "s"} · ${S.round + 1} manche${S.round ? "s" : ""} de ${S.program.duration} s`;
+        renderSummaryDeclare();
+        setStage("finished");
+        say(`Séance terminée. ${t.points} points, ${t.caught} ${S.game === 1 ? "secondes de contact" : `bulle${t.caught > 1 ? "s" : ""} attrapée${t.caught > 1 ? "s" : ""}`}. ${summaryAdvice()}`);
+        renderJourney();
+      }
+      function summaryAdvice() {
+        const t = S.totals, prec = precisionFor(S.game, t.caught, t.missed, S.program.duration * (S.round + 1)), reg = regularityScore(S.hitTimes);
+        if (S.pain - S.painBefore >= 2) return "Votre douleur a augmenté : privilégiez le repos et signalez-le à votre professionnel.";
+        if (S.game === 1) return prec >= 70 ? "Vous suivez l’étoile avec beaucoup de constance. Gardez ce geste lent et fluide." : t.missed >= 5 ? "Le contact se perd souvent : ralentissez le bras et anticipez le déplacement de l’étoile." : "Cherchez un mouvement continu, sans à-coup, en gardant l’épaule relâchée.";
+        if (t.bombs >= 3) return "Plusieurs cubes rouges touchés : prenez le temps de regarder la forme avant d’aller vers la bulle.";
+        if (prec >= 85) return "Votre précision est excellente. Gardez ce geste doux, sans accélérer.";
+        if (t.maxcombo >= 10) return "Belle série. Pensez à garder les épaules relâchées quand les bulles montent.";
+        if (reg >= 80) return "Votre rythme est régulier. Cherchez maintenant les bulles un peu plus hautes.";
+        return "Chaque bulle compte. Cherchez surtout un geste lent et confortable.";
+      }
+      function renderSummaryDeclare() {
+        $("pain-after").value = S.pain; $("pain-after-n").textContent = String(S.pain); $("pain-before-echo").textContent = `(avant : ${S.painBefore}/10)`;
+        $("pain-warn").hidden = S.pain - S.painBefore < 2;
+        $("fatigue").value = S.fatigue; $("fatigue-n").textContent = String(S.fatigue);
+        $("sum-advice").textContent = summaryAdvice();
+        $("save-session").disabled = S.saved; $("save-session").textContent = S.saved ? "✓ Séance enregistrée" : "✓ Enregistrer le bilan";
+      }
+      function saveSession() {
+        if (S.saved) return;
+        const t = S.totals;
+        const record = { id: Date.now(), date: new Date().toISOString(), game: S.game, points: t.points, caught: t.caught, missed: t.missed, bombs: t.bombs, precision: precisionFor(S.game, t.caught, t.missed, S.program.duration * (S.round + 1)), maxcombo: t.maxcombo, regularity: regularityScore(S.hitTimes), level: S.level, amp: S.amp, duration: S.program.duration, rounds: S.round + 1, painBefore: S.painBefore, pain: S.pain, fatigue: S.fatigue, demo: S.demo };
+        S.history = [record, ...S.history].slice(0, 30); saveHistory(); S.saved = true;
+        renderSummaryDeclare(); renderGarden(); celebrate("Séance enregistrée !"); say("Séance enregistrée. À bientôt pour la prochaine.");
+      }
+      async function shareSummary() {
+        const t = S.totals;
+        const text = `J’ai terminé ma séance PhysioTech.ch (${GAMES[S.game].name}) : ${t.caught} ${S.game === 1 ? "secondes de contact" : "bulles attrapées"} et ${t.points} points.`;
+        try {
+          if (navigator.share) await navigator.share({ title: "Ma séance PhysioTech.ch", text });
+          else { await navigator.clipboard.writeText(text); celebrate("Résultat copié !"); say("Résultat copié."); }
+        } catch { /* Un partage annulé ne modifie pas la séance. */ }
+      }
+      function resetSession() {
+        stopCamera(); stopVoice();
+        if (S.started || ["calibrate", "countdown", "playing", "paused", "rest"].includes(S.stage)) sendEvent("arreter");
+        S.started = false; S.demo = false;
+        S.pain = 0; S.fatigue = 2; S.saved = false; S.cameraError = "";
+        S.lastVars = {};
+        setStage("welcome"); renderWelcome(); renderSessionCard();
+      }
+      function stopSession() { const active = S.stage !== "welcome" && S.stage !== "finished"; resetSession(); if (active) say("Séance arrêtée. Reposez-vous, je reste là."); }
+
+      // =====================================================================
+      // 8. Événements de l'interface
+      // =====================================================================
+      document.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-act]"); if (!b) return;
+        const act = b.dataset.act;
+        if (act === "reset") resetSession();
+        else if (act === "stop") stopSession();
+        else if (act === "pause") pauseSession();
+        else if (act === "resume") resumeSession();
+        else if (act === "continue") continueCircuit();
+        else if (act === "finish") finishSession();
+        else if (act === "view-patient") { S.view = "patient"; renderView(); renderWelcome(); renderStage(); say("Retour à la séance."); }
+      });
+      $("choose-circuit").addEventListener("click", () => { S.mode = "circuit"; S.level = S.program.level; S.amp = S.program.amp; S.game = S.program.game; setVar("rd_mode", S.game); renderWelcome(); renderSessionCard(); say(`Parcours guidé : ${S.program.rounds} manche${S.program.rounds > 1 ? "s" : ""} de ${GAMES[S.game].name}, ${S.program.duration} secondes.`); });
+      $("choose-single").addEventListener("click", () => { S.mode = "single"; renderWelcome(); say(`Une manche de ${GAMES[S.game].name}.`); });
+      $("games").addEventListener("click", (e) => { const b = e.target.closest("button[data-game]"); if (!b) return; S.mode = "single"; S.game = Number(b.dataset.game); setVar("rd_mode", S.game); renderWelcome(); renderSessionCard(); say(`${GAMES[S.game].name}. ${GAMES[S.game].hint}`); });
+      $("worlds").addEventListener("click", (e) => { const b = e.target.closest("button[data-world]"); if (!b) return; S.world = Number(b.dataset.world); try { localStorage.setItem("physiotech-world", String(S.world)); } catch { /* ok */ } setVar("rd_world", S.world); renderWelcome(); say(`Ambiance ${WORLDS[S.world].name}.`); });
+      $("levels").addEventListener("click", (e) => { const b = e.target.closest("button[data-level]"); if (!b) return; S.mode = "single"; S.level = Number(b.dataset.level); setVar("rd_level", S.level); renderWelcome(); renderSessionCard(); say(`Rythme ${LEVELS[S.level].short}.`); });
+      $("pain-before").addEventListener("input", (e) => { S.painBefore = Number(e.target.value); renderWelcome(); });
+      $("pain-before").addEventListener("change", () => say(S.painBefore >= 5 ? `Douleur à ${S.painBefore} sur 10. Réduisez l’amplitude et restez doux.` : `Douleur à ${S.painBefore} sur 10. Très bien.`));
+      $("amp").addEventListener("input", (e) => { S.amp = Number(e.target.value); setVar("rd_amp", S.amp); renderWelcome(); renderSessionCard(); });
+      $("amp").addEventListener("change", () => say(`Amplitude ${S.amp} pour cent.`));
+      $("start-camera").addEventListener("click", openCameraSetup);
+      $("start-demo").addEventListener("click", startDemo);
+      $("open-camera").addEventListener("click", beginCamera);
+      $("pain-after").addEventListener("input", (e) => { S.pain = Number(e.target.value); renderSummaryDeclare(); });
+      $("pain-after").addEventListener("change", () => say(S.pain - S.painBefore >= 2 ? "La douleur a augmenté. Arrêtez les exercices et parlez-en à votre professionnel de santé." : `Douleur après la séance : ${S.pain} sur 10.`));
+      $("fatigue").addEventListener("input", (e) => { S.fatigue = Number(e.target.value); renderSummaryDeclare(); });
+      $("fatigue").addEventListener("change", () => say(`Fatigue : ${S.fatigue} sur 10.`));
+      $("save-session").addEventListener("click", saveSession);
+      $("share").addEventListener("click", shareSummary);
+      $("nav-history").addEventListener("click", () => { S.view = "history"; renderView(); say(S.history.length ? `Voici vos progrès : ${S.history.length} séance${S.history.length > 1 ? "s" : ""} enregistrée${S.history.length > 1 ? "s" : ""}.` : "Aucune séance enregistrée pour l’instant. Terminez une séance pour la retrouver ici."); });
+      $("nav-therapist").addEventListener("click", () => { S.view = "therapist"; S.mode = "single"; renderView(); say("Espace thérapeute : réglez le programme du patient."); });
+      $("voice-toggle").addEventListener("click", () => { S.voice = !S.voice; try { localStorage.setItem("physiotech-voice", S.voice ? "on" : "off"); } catch { /* ok */ } if (!S.voice) stopVoice(); else say("Christophe est de retour."); renderWelcome(); });
+      $("voice-test").addEventListener("click", () => speak(COACH_READY_TEXT));
+      $("install").addEventListener("click", async () => { if (!S.installPrompt) return; await S.installPrompt.prompt(); await S.installPrompt.userChoice; S.installPrompt = null; renderWelcome(); });
+      // Espace thérapeute.
+      $("t-rounds").addEventListener("click", (e) => { const b = e.target.closest("button[data-rounds]"); if (b) { S.program.rounds = Number(b.dataset.rounds); renderTherapist(); } });
+      $("t-level").addEventListener("click", (e) => { const b = e.target.closest("button[data-level]"); if (b) { S.program.level = Number(b.dataset.level); renderTherapist(); } });
+      $("t-game").addEventListener("click", (e) => { const b = e.target.closest("button[data-game]"); if (b) { S.program.game = Number(b.dataset.game); renderTherapist(); } });
+      $("t-dur").addEventListener("click", (e) => { const b = e.target.closest("button[data-dur]"); if (b) { S.program.duration = Number(b.dataset.dur); renderTherapist(); } });
+      $("t-amp").addEventListener("input", (e) => { S.program.amp = Number(e.target.value); renderTherapist(); });
+      $("t-seated").addEventListener("click", () => { S.program.seated = !S.program.seated; renderTherapist(); });
+      $("t-name").addEventListener("input", (e) => { S.program.name = e.target.value.trim(); });
+      $("t-code").addEventListener("input", (e) => { S.program.code = e.target.value.trim(); });
+      $("t-save").addEventListener("click", () => { saveProgram(); S.level = S.program.level; S.amp = S.program.amp; S.game = S.program.game; pushSettings(); S.view = "patient"; renderView(); renderWelcome(); renderSessionCard(); celebrate("Programme mis à jour !"); say(`Programme enregistré : ${S.program.rounds} manche${S.program.rounds > 1 ? "s" : ""} de ${GAMES[S.program.game].name}, rythme ${LEVELS[S.program.level].short}, ${S.program.duration} secondes.`); });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && S.stage === "playing") pauseSession();
+        if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) $("fs").click();
+      });
+      window.addEventListener("online", () => { S.online = true; renderWelcome(); });
+      window.addEventListener("offline", () => { S.online = false; renderWelcome(); });
+      window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); S.installPrompt = e; renderWelcome(); });
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => undefined);
+      // Outil WebMCP facultatif (Mouvéo) : un agent peut lancer la séance démo.
+      try {
+        const mc = document.modelContext;
+        if (mc?.registerTool) void Promise.resolve(mc.registerTool({ name: "start_demo_session", title: "Démarrer la séance démo", description: "Démarre une manche du mode choisi sans caméra (main pilotée aux flèches).", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute() { $("start-demo").click(); return { status: "started", level: S.level, amp: S.amp, duration: S.program.duration }; } })).catch(() => undefined);
+      } catch { /* WebMCP facultatif. */ }
+
+      // =====================================================================
+      // 9. Moteur : chargement, canvas, plein écran
+      // =====================================================================
       function setStatus(text) { statusEl.textContent = text; }
       function fail(title, body, detail) {
         if (failed) return;
@@ -130,7 +1336,6 @@
         boot.style.display = "flex";
         boot.classList.remove("hidden");
         boot.classList.add("failed");
-        document.body.classList.remove("running");
         $("err-title").textContent = title;
         $("err-body").textContent = body;
         $("err-detail").textContent = detail ? String(detail) : "";
@@ -171,9 +1376,13 @@
         return bytes;
       }
 
+      // Le moteur dimensionne le canvas sur la fenêtre au démarrage (winit) ;
+      // une fois prêt, on le recale sur la zone de scène (l'observateur de
+      // redimensionnement de winit suit le style inline).
       function fitCanvas() {
-        canvas.style.width = `${window.innerWidth}px`;
-        canvas.style.height = `${window.innerHeight}px`;
+        if (!engineReady) { canvas.style.width = `${window.innerWidth}px`; canvas.style.height = `${window.innerHeight}px`; return; }
+        const r = stage.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) { canvas.style.width = `${Math.round(r.width)}px`; canvas.style.height = `${Math.round(r.height)}px`; }
       }
       window.addEventListener("resize", fitCanvas);
       window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 100));
@@ -181,62 +1390,49 @@
       canvas.addEventListener("contextmenu", (e) => e.preventDefault());
       canvas.addEventListener("pointerdown", () => canvas.focus());
       $("fs").addEventListener("click", () => {
-        const el = document.documentElement;
         if (document.fullscreenElement) document.exitFullscreen();
-        else if (el.requestFullscreen) el.requestFullscreen();
-        canvas.focus();
+        else if (stage.requestFullscreen) stage.requestFullscreen();
+        focusCanvas();
       });
+      document.addEventListener("fullscreenchange", () => setTimeout(fitCanvas, 50));
 
-      // ---------------------------------------------------------------
-      // Caméra + MediaPipe (Pose Landmarker + Hand Landmarker) → moteur.
+      // =====================================================================
+      // 10. Caméra + MediaPipe (Pose Landmarker + Hand Landmarker) → moteur.
       // Chargés à la demande (≈ 18 Mo : wasm + modèles pose « lite » et mains)
-      // depuis un CDN, jamais au chargement de la page. L'inférence tourne dans
-      // un **Web Worker** : sur le thread principal elle bloquait le rendu du
-      // moteur 10 à 30 ms à chaque image (saccades) ; ici le thread principal
-      // ne fait que capturer une ImageBitmap de la vidéo et recevoir les
-      // repères. Repli sur le thread principal si le worker échoue (pas de
-      // WebGL dans le worker, import CDN refusé…). Cadence visée 30 Hz
-      // (Mouvéo : 15 Hz), relâchée d'elle-même si la machine ne suit pas.
-      // ---------------------------------------------------------------
+      // depuis un CDN. L'inférence tourne dans un **Web Worker** : sur le thread
+      // principal elle bloquait le rendu du moteur 10 à 30 ms à chaque image
+      // (saccades) ; ici le thread principal ne fait que capturer une
+      // ImageBitmap de la vidéo et recevoir les repères. Repli sur le thread
+      // principal si le worker échoue (pas de WebGL dans le worker, import CDN
+      // refusé…). Cadence visée 30 Hz (Mouvéo : 15 Hz), relâchée d'elle-même
+      // si la machine ne suit pas.
+      // =====================================================================
       const MP_VERSION = "0.10.21";
       const MP_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
       const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
       const HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
       const LINKS = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
-      // Liaisons de la main (0-based) et couleur par doigt (comme la visualisation MediaPipe).
       const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
       const FINGER_COLORS = ["#ffebb8", "#c4b5fd", "#fcd34d", "#5ae673", "#5a8cff"];
       const fingerOf = (i) => i === 0 ? -1 : Math.floor((i - 1) / 4);
       const HAND_FLOATS = 1 + 21 * 3;
       const video = $("video");
       const overlay = $("overlay");
-      const camStatus = $("camstatus");
-      const camToggle = $("camtoggle");
       let stream = null;
       let rafId = null;
       let starting = false;
-      // Cadence adaptative : coût moyen (EMA) d'une inférence au-dessus de 26 ms → 15 Hz.
       let inferenceInterval = 33;
       let inferenceCost = 0;
       let lastInference = 0;
-      // Chemin worker.
       let worker = null;
       let workerBusy = false;
-      // Chemin de repli (thread principal).
       let landmarker = null;
       let handLandmarker = null;
       const none = new Float32Array(0);
-      // L'export wasm n'existe qu'après `init()` : avant (onglet masqué pendant
-      // le téléchargement, par exemple), on ignore simplement l'envoi.
-      let engineReady = false;
       function pushPose(arr) { if (engineReady) set_pose_landmarks(arr); }
       function pushHands(arr) { if (engineReady) set_hand_landmarks(arr); }
 
       // --- Fonctions partagées avec le worker (sérialisées par toString) ---
-      // Côté d'une main : le poignet du corps (repères 15/16) le plus proche du
-      // poignet de la main — robuste, contrairement à la latéralité du modèle
-      // qui suppose une image déjà retournée en miroir (la nôtre ne l'est pas :
-      // en repli, on inverse donc son étiquette).
       function handSide(handPts, handedness, posePts) {
         const w = handPts[0];
         if (posePts && posePts[15] && posePts[16]) {
@@ -247,7 +1443,6 @@
         const label = handedness && handedness[0] && handedness[0].categoryName;
         return label === "Left" ? 1 : 0;
       }
-      // Sérialise la pose (33 × x, y, z, visibilité) — null sans corps.
       function packPose(points) {
         if (!points) return null;
         const flat = new Float32Array(33 * 4);
@@ -257,7 +1452,6 @@
         }
         return flat;
       }
-      // Sérialise jusqu'à deux mains (une par côté) : [côté, 21 × (x, y, z)].
       function packHands(result, posePts) {
         if (!result || !result.landmarks || result.landmarks.length === 0) return null;
         const HF = 1 + 21 * 3;
@@ -280,7 +1474,6 @@
         }
         return n ? out.slice(0, n * HF) : null;
       }
-      // Corps du worker : charge les deux modèles puis traite chaque ImageBitmap reçue.
       function workerMain() {
         let pose = null, hands = null;
         self.onmessage = async (e) => {
@@ -327,7 +1520,6 @@
         const h = overlay.height = overlay.clientHeight || 150;
         ctx.clearRect(0, 0, w, h);
         if (!points) return;
-        // L'aperçu est en object-fit: cover — même recadrage que la vidéo.
         const vw = video.videoWidth || w, vh = video.videoHeight || h;
         const scale = Math.max(w / vw, h / vh);
         const cx = (vw * scale - w) / 2, cy = (vh * scale - h) / 2;
@@ -340,7 +1532,6 @@
         ctx.fillStyle = "#c4ff4a";
         for (const i of [15, 16, 25, 26, 27, 28]) { const p = P(points[i]); ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, Math.PI * 2); ctx.fill(); }
       }
-
       function drawHands(handPoints) {
         if (!handPoints) return;
         const ctx = overlay.getContext("2d");
@@ -364,22 +1555,15 @@
           }
         }
       }
-
-      // Résultat d'une inférence (worker ou thread principal) → moteur + vignette.
       function applyResult(poseFlat, handsFlat, points, handPoints, cost) {
         pushPose(poseFlat || none);
         pushHands(handsFlat || none);
-        const nHands = handsFlat ? handsFlat.length / HAND_FLOATS : 0;
-        camStatus.textContent = points
-          ? (nHands ? `Corps et ${nHands === 1 ? "une main" : "deux mains"} suivis` : "Corps suivi — placez-vous entier dans le cadre")
-          : (nHands ? "Main suivie — corps hors cadre" : "Caméra active — aucun corps détecté");
         inferenceCost = inferenceCost * 0.8 + cost * 0.2;
         inferenceInterval = inferenceCost > 26 ? 66 : 33;
         drawOverlay(points);
         drawHands(handPoints);
+        void HAND_FLOATS;
       }
-
-      // Boucle worker : une ImageBitmap par inférence, jamais deux en vol.
       function workerLoop() {
         const now = performance.now();
         if (worker && !workerBusy && video.readyState >= 2 && now - lastInference > inferenceInterval) {
@@ -392,8 +1576,6 @@
         }
         rafId = requestAnimationFrame(workerLoop);
       }
-
-      // Boucle de repli : inférence sur le thread principal.
       function mainThreadLoop() {
         const now = performance.now();
         if (landmarker && video.readyState >= 2 && now - lastInference > inferenceInterval) {
@@ -406,8 +1588,6 @@
         }
         rafId = requestAnimationFrame(mainThreadLoop);
       }
-
-      // Démarre le worker d'inférence ; résout `true` s'il est prêt.
       function startWorker() {
         return new Promise((resolve) => {
           if (typeof Worker === "undefined" || typeof createImageBitmap === "undefined") { resolve(false); return; }
@@ -415,8 +1595,8 @@
           let w;
           try { w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })), { type: "module" }); }
           catch (e) { resolve(false); return; }
-          const fail = (why) => { console.warn("Worker d'inférence indisponible, repli thread principal :", why); w.terminate(); resolve(false); };
-          w.onerror = (e) => fail(e.message || e);
+          const failW = (why) => { console.warn("Worker d'inférence indisponible, repli thread principal :", why); w.terminate(); resolve(false); };
+          w.onerror = (e) => failW(e.message || e);
           w.onmessage = (e) => {
             const m = e.data;
             if (m.type === "ready") {
@@ -429,25 +1609,27 @@
               };
               resolve(true);
             } else if (m.type === "error") {
-              fail(m.message);
+              failW(m.message);
             }
           };
           w.postMessage({ type: "init", base: MP_BASE, poseModel: MODEL_URL, handModel: HAND_MODEL_URL });
         });
       }
-
+      // Ouvre la caméra et le suivi ; résout `true` si tout est prêt, sinon
+      // pose `S.cameraError` (la page revient à l'écran de préparation).
       async function startCamera() {
-        if (starting || stream) return;
+        if (starting) return false;
+        if (stream) return true;
         starting = true;
-        camToggle.disabled = true;
         try {
-          camStatus.textContent = "Ouverture de la caméra…";
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error("Pas d'accès caméra dans ce navigateur."), { name: "NotSupported" });
+          $("loading-title").textContent = "Préparation de la caméra…";
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
           video.srcObject = stream;
           await video.play();
-          $("pip").classList.add("on");
-          camStatus.textContent = "Chargement du suivi du mouvement (~18 Mo)…";
+          $("pip").hidden = false;
+          $("loading-title").textContent = "Chargement du suivi du mouvement…";
           lastInference = 0;
           inferenceCost = 0;
           if (await startWorker()) {
@@ -469,22 +1651,20 @@
             } catch (e) { console.warn("Suivi des doigts indisponible :", e); handLandmarker = null; }
             rafId = requestAnimationFrame(mainThreadLoop);
           }
-          camToggle.textContent = "⏹ Couper la caméra";
-          camToggle.classList.add("on");
-          camStatus.textContent = "Caméra active — reculez, corps entier visible";
+          return true;
         } catch (e) {
           console.warn("Caméra indisponible :", e);
           stopCamera();
-          camStatus.textContent = (e && e.name === "NotAllowedError")
-            ? "Caméra refusée — mode démo (stick ou flèches)"
-            : "Caméra ou suivi indisponible — mode démo (stick ou flèches)";
+          S.cameraError = (e && e.name === "NotAllowedError")
+            ? "La caméra a été refusée. Autorisez-la dans le navigateur puis réessayez, ou essayez le mode démo."
+            : (e && e.name === "NotSupported") ? "Pas d’accès caméra dans ce navigateur : essayez le mode démo."
+            : "La caméra ou le suivi n’a pas pu démarrer. Vérifiez l’autorisation et la connexion, puis réessayez.";
+          return false;
         } finally {
           starting = false;
-          camToggle.disabled = false;
-          canvas.focus();
+          focusCanvas();
         }
       }
-
       function stopCamera() {
         if (rafId) cancelAnimationFrame(rafId);
         rafId = null;
@@ -497,24 +1677,23 @@
         if (handLandmarker) { try { handLandmarker.close(); } catch (_) { /* déjà fermé */ } }
         handLandmarker = null;
         video.srcObject = null;
-        $("pip").classList.remove("on");
+        $("pip").hidden = true;
         drawOverlay(null);
         pushPose(none);
         pushHands(none);
-        camToggle.textContent = "📷 Activer la caméra";
-        camToggle.classList.remove("on");
-        camStatus.textContent = "Sans caméra : stick tactile ou flèches";
       }
-      camToggle.addEventListener("click", () => { if (stream) stopCamera(); else startCamera(); });
       document.addEventListener("visibilitychange", () => {
         // Onglet caché : plus d'inférence → le moteur met la séance en pause
         // de lui-même (pose périmée après 0,75 s, cf. app/pose.rs).
         if (document.visibilityState === "hidden") { pushPose(none); pushHands(none); }
       });
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        camToggle.disabled = true;
-        camStatus.textContent = "Pas d'accès caméra dans ce navigateur — mode démo";
-      }
+
+      // =====================================================================
+      // 11. Démarrage
+      // =====================================================================
+      loadStorage();
+      renderAll();
+      fitCanvas();
 
       async function main() {
         if (!navigator.gpu) {
@@ -527,18 +1706,21 @@
         fill.style.width = "100%";
         setStatus("Compilation et démarrage du moteur…");
         await init({ module_or_path: bytes });
-        engineReady = true;
         if (failed) return;
         setStatus("Initialisation du GPU…");
         const READY_FALLBACK_MS = 6000;
         const start = performance.now();
         function reveal() {
           if (failed) return;
+          engineReady = true;
+          // La page dessine le HUD elle-même ; les widgets du moteur s'effacent.
+          set_hud_widgets_visible(false);
+          pushSettings();
           fitCanvas();
           boot.classList.add("hidden");
-          document.body.classList.add("running");
-          canvas.focus();
-          setTimeout(() => { if (!failed) boot.style.display = "none"; }, 500);
+          renderStage();
+          requestAnimationFrame(pollVars);
+          setTimeout(() => { if (!failed) { boot.style.display = "none"; fitCanvas(); } }, 500);
         }
         function pollReady() {
           if (failed) return;

@@ -1,0 +1,15 @@
+{
+  "name": "PhysioTech.ch — Attrape-bulles",
+  "short_name": "PhysioTech",
+  "description": "Séance de mobilité gamifiée guidée par la caméra : attrapez les bulles avec vos mains.",
+  "lang": "fr",
+  "start_url": "./reeduc.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "orientation": "any",
+  "icons": [
+    { "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

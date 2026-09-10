@@ -1012,7 +1012,7 @@ impl AppState {
             if let Some(gc) = self.scene.game_camera {
                 self.camera.yaw = gc.yaw;
                 self.camera.pitch = gc.pitch;
-                self.camera.distance = gc.distance;
+                self.camera.distance = gc.distance_for(self.camera.fovy, self.camera.aspect);
                 // Vue orthographique de jeu (plateformer 2D) : seulement en Play,
                 // remise à 0 (perspective) par `on_play_stopped`.
                 self.camera.ortho_height = gc.ortho_height.max(0.0);
@@ -1375,8 +1375,19 @@ impl AppState {
         {
             self.camera.yaw = gc.yaw;
             self.camera.pitch = gc.pitch;
-            self.camera.distance = gc.distance;
+            self.camera.distance = gc.distance_for(self.camera.fovy, self.camera.aspect);
             self.camera.collision_distance = None;
+            // Cadre réellement visible au niveau de la cible (unités monde), publié
+            // aux scripts : une scène qui place ses cibles peut les garder dans
+            // l'image quel que soit l'écran (portrait sur téléphone) — cf. la démo
+            // Rééducation (`cam_visible_width` / `cam_visible_height`).
+            let visible_h = 2.0 * self.camera.distance * (self.camera.fovy * 0.5).tan();
+            self.lua_vars
+                .insert("cam_visible_height".into(), f64::from(visible_h));
+            self.lua_vars.insert(
+                "cam_visible_width".into(),
+                f64::from(visible_h * self.camera.aspect),
+            );
             if !self.scene.camera_follow {
                 self.camera.target = Vec3::from_array(gc.target);
             }

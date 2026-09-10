@@ -1024,7 +1024,17 @@ fn reeducation_demo_is_wired_for_its_director_script() {
             .unwrap_or_else(|| panic!("sphère « Repère {name} » manquante"));
         assert!(obj.script.contains(&format!("rd_p_{name}_x")));
     }
-    for name in ["Bulle 1", "Bulle 3", "Halo 1", "Halo 3", "Torse", "Sol"] {
+    for name in [
+        "Bulle 1",
+        "Bulle 3",
+        "Halo 1",
+        "Halo 3",
+        "Bombe 1",
+        "Bombe 3",
+        "Halo bombe 1",
+        "Torse",
+        "Sol",
+    ] {
         assert!(
             scene.objects.iter().any(|o| o.name == name),
             "{name} manquant"
@@ -1069,14 +1079,21 @@ fn reeducation_demo_is_wired_for_its_director_script() {
             _ => None,
         })
         .collect();
-    for a in ["demarrer", "rythme", "amplitude", "avatar"] {
+    for a in ["demarrer", "rythme", "amplitude", "avatar", "mode"] {
         assert!(actions.contains(&a), "bouton « {a} » manquant");
         assert!(
             scene.objects[0].script.contains(&format!("hud:{a}")),
             "le directeur n'écoute pas hud:{a}"
         );
     }
-    assert_eq!(actions.len(), 4, "un seul mode de jeu : quatre boutons");
+    assert_eq!(actions.len(), 5, "cinq boutons (dont le choix du mode)");
+    assert!(
+        scene
+            .objects
+            .iter()
+            .any(|o| o.name == "Étoile" && o.script.contains("rd_star_x")),
+        "l'étoile du mode Étoile filante"
+    );
     for id in [
         "titre",
         "consigne",
@@ -1103,6 +1120,58 @@ fn reeducation_demo_is_wired_for_its_director_script() {
         "point de vue de jeu fixe (face au patient)"
     );
     assert!(scene.mobile.joystick, "mode démo : joystick à l'écran");
+}
+
+/// `Scene::hud_widgets_hidden` (page hôte qui dessine le HUD elle-même) est un
+/// drapeau runtime : jamais écrit dans une scène sauvegardée, faux au chargement.
+#[test]
+fn reeducation_hud_hidden_flag_is_never_serialized() {
+    let mut scene = Scene::reeducation_demo();
+    scene.hud_widgets_hidden = true;
+    let json = serde_json::to_string(&scene).unwrap();
+    assert!(!json.contains("hud_widgets_hidden"));
+    let back: Scene = serde_json::from_str(&json).unwrap();
+    assert!(!back.hud_widgets_hidden);
+    assert_eq!(back.hud_widgets.len(), scene.hud_widgets.len());
+    assert!(
+        scene.objects[0].script.contains("hud:pause")
+            && scene.objects[0].script.contains("hud:reprendre")
+            && scene.objects[0].script.contains("hud:arreter"),
+        "le directeur écoute les événements de la page hôte"
+    );
+    assert!(scene.objects[0].script.contains("ui_stage"));
+    let bombe = scene.objects.iter().find(|o| o.name == "Bombe 1").unwrap();
+    assert!(
+        matches!(bombe.mesh, MeshKind::Cube),
+        "les bombes sont des cubes rouges"
+    );
+    assert!(bombe.script.contains("rd_b1_kind"));
+    assert_eq!(scene.game_camera.unwrap().min_width, 3.0);
+    for name in ["Fond", "Sol"] {
+        let o = scene.objects.iter().find(|o| o.name == name).unwrap();
+        assert!(
+            o.script.contains("rd_world"),
+            "{name} teinté par l'ambiance"
+        );
+    }
+}
+
+/// `GameCamera::min_width` : sur un écran large la distance ne change pas ; en
+/// portrait la caméra recule juste assez pour que la largeur demandée tienne.
+#[test]
+fn game_camera_backs_off_on_narrow_screens_to_keep_its_min_width() {
+    let gc = Scene::reeducation_demo().game_camera.unwrap();
+    let fovy = 45f32.to_radians();
+    assert_eq!(gc.distance_for(fovy, 16.0 / 9.0), gc.distance);
+    let d = gc.distance_for(fovy, 9.0 / 16.0);
+    assert!(d > gc.distance, "portrait : recule ({d} > {})", gc.distance);
+    let visible = 2.0 * d * (fovy * 0.5).tan() * (9.0 / 16.0);
+    assert!((visible - gc.min_width).abs() < 1e-3);
+    let fixed = GameCamera {
+        min_width: 0.0,
+        ..gc
+    };
+    assert_eq!(fixed.distance_for(fovy, 0.5), gc.distance);
 }
 
 /// Projection repère caméra ↔ plan de jeu : miroir sur x (la droite du patient à

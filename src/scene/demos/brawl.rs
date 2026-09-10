@@ -99,6 +99,7 @@ impl Scene {
                 pitch: 0.35,
                 distance: 9.0,
                 ortho_height: 0.0,
+                min_width: 0.0,
             }),
             point_lights: vec![
                 // Lumière chaude du côté du joueur, froide du côté du rival — cadrage
