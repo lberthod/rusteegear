@@ -2707,3 +2707,144 @@ fn bubbles_camera_mode_calibrates_then_catches_and_pauses_when_the_body_is_lost(
             .is_some_and(|s| s.contains("pause"))
     );
 }
+
+/// Bombes : un élément noir à halo rouge que la main ne doit pas toucher —
+/// sinon 20 points de moins et la série repart de zéro ; une bombe qui expire
+/// ne compte pas comme bulle éclatée. Le tirage est déterministe, donc une
+/// bombe finit toujours par apparaître au rythme « vif ».
+#[test]
+fn bubbles_bombs_cost_points_and_never_count_as_missed() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.push_hud_event("rythme"); // moyen → vif (30 % de bombes)
+    reeduc_tick(&mut app);
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "rd_level"), 3.0);
+    // 1. Une bombe apparaît ; on la laisse expirer : rien de compté comme éclaté.
+    let mut bomb_seen = false;
+    for _ in 0..1500 {
+        reeduc_tick(&mut app);
+        if (1..=3).any(|i| {
+            reeduc_var(&app, &format!("rd_b{i}_kind")) > 0.5
+                && reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5
+        }) {
+            bomb_seen = true;
+            break;
+        }
+    }
+    assert!(bomb_seen, "aucune bombe en 25 s au rythme vif");
+    let missed_before = reeduc_var(&app, "rd_missed");
+    let bombs_alive = |app: &AppState| {
+        (1..=3)
+            .filter(|i| {
+                reeduc_var(app, &format!("rd_b{i}_kind")) > 0.5
+                    && reeduc_var(app, &format!("rd_b{i}_alive")) > 0.5
+            })
+            .count()
+    };
+    // 2. Toucher la prochaine bombe avec la main : pénalité, série à zéro, compteur.
+    let mut hit = false;
+    for _ in 0..3000 {
+        let bomb = (1..=3).find(|i| {
+            reeduc_var(&app, &format!("rd_b{i}_kind")) > 0.5
+                && reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5
+        });
+        if let Some(i) = bomb {
+            let b = Vec3::new(
+                reeduc_var(&app, &format!("rd_b{i}_x")) as f32,
+                reeduc_var(&app, &format!("rd_b{i}_y")) as f32,
+                0.0,
+            );
+            let hand = object_pos(&app, "Repère wrist_r");
+            app.input_state.joy.0 =
+                (app.input_state.joy.0 + 0.25 * (b.x - hand.x)).clamp(-1.0, 1.0);
+            app.input_state.joy.1 =
+                (app.input_state.joy.1 + 0.25 * (b.y - hand.y)).clamp(-1.0, 1.0);
+        } else {
+            app.input_state.joy = (0.0, 0.0);
+        }
+        let bombs_before = reeduc_var(&app, "rd_bombs");
+        let points_before = reeduc_var(&app, "rd_points");
+        reeduc_tick(&mut app);
+        if reeduc_var(&app, "rd_bombs") > bombs_before {
+            hit = true;
+            assert_eq!(reeduc_var(&app, "rd_combo"), 0.0, "série remise à zéro");
+            assert!(
+                reeduc_var(&app, "rd_points") <= f64::max(0.0, points_before - 20.0) + 1e-6,
+                "pénalité de 20 points"
+            );
+            assert!(
+                app.hud_texts
+                    .get("celebration")
+                    .is_some_and(|s| s.contains("-20")),
+                "{:?}",
+                app.hud_texts.get("celebration")
+            );
+            break;
+        }
+    }
+    assert!(hit, "la main doit pouvoir toucher une bombe");
+    let _ = (missed_before, bombs_alive(&app));
+    assert!(
+        reeduc_var(&app, "rd_missed")
+            <= reeduc_var(&app, "rd_caught") + reeduc_var(&app, "rd_missed")
+    );
+}
+
+/// Les éléments naissent dans la zone que la caméra voit et à portée des
+/// épaules actuelles : un patient décalé vers la gauche de l'image voit ses
+/// bulles décalées avec lui, jamais hors cadre.
+#[test]
+fn bubbles_spawn_around_the_live_shoulders_inside_the_visible_frame() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    let body = standing_body();
+    app.set_pose(&flat_pose_from_world(&body));
+    reeduc_tick(&mut app);
+    app.push_hud_event("demarrer");
+    for _ in 0..200 {
+        app.set_pose(&flat_pose_from_world(&body));
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
+    // Le patient se décale de 0,8 m vers sa droite (x négatif dans le monde miroir).
+    let shifted: Vec<(&str, (f32, f32))> =
+        body.iter().map(|(n, (x, y))| (*n, (x - 0.8, *y))).collect();
+    let mut positions = Vec::new();
+    for _ in 0..1500 {
+        app.set_pose(&flat_pose_from_world(&shifted));
+        reeduc_tick(&mut app);
+        for i in 1..=3 {
+            if reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5 {
+                let p = (
+                    reeduc_var(&app, &format!("rd_b{i}_x")) as f32,
+                    reeduc_var(&app, &format!("rd_b{i}_y")) as f32,
+                    reeduc_var(&app, &format!("rd_b{i}_born")),
+                );
+                if !positions.contains(&p) {
+                    positions.push(p);
+                }
+            }
+        }
+    }
+    assert!(
+        positions.len() >= 6,
+        "assez d'éléments nés : {}",
+        positions.len()
+    );
+    // Épaules normalisées : hanches recentrées en x = 0 ⇒ le corps décalé reste centré,
+    // les éléments naissent autour de (0, 2.25) à moins d'un bras (≈ 1,04 m × 0,75 × 1,1).
+    for (x, y, _) in &positions {
+        assert!(
+            *x >= -1.75 && *x <= 1.75 && *y >= 0.3 && *y <= 3.0,
+            "hors cadre : ({x}, {y})"
+        );
+        let d = ((x - 0.0).powi(2) + (y - 2.25).powi(2)).sqrt();
+        assert!(d <= 0.9, "trop loin des épaules : ({x}, {y}), d = {d}");
+    }
+}

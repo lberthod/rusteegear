@@ -88,8 +88,9 @@ pub(crate) fn world_to_pose(wx: f32, wy: f32) -> (f32, f32) {
 pub const DIRECTOR_SCRIPT: &str = r#"
 local SMOOTH_POSE, SMOOTH_HAND = 35.0, 40.0   -- lissage (1/s) des repères caméra, déjà interpolés par le moteur
 local VIS_MIN = 0.5                           -- sous cette visibilité, un repère n'est pas dessiné
-local NB = 3                                  -- bulles simultanées au maximum (objets « Bulle 1..3 »)
-local CATCH_R = 0.32                          -- distance main -> bulle pour l'attraper (m)
+local NB = 3                                  -- éléments simultanés au maximum (objets « Bulle 1..3 »)
+local CATCH_R = 0.26                          -- distance main -> élément pour le toucher (m)
+local BOMB_COST = 20                          -- points perdus quand on touche une bombe
 
 local NAMES = {"nose", "shoulder_l", "shoulder_r", "elbow_l", "elbow_r", "wrist_l", "wrist_r",
                "hip_l", "hip_r", "knee_l", "knee_r", "ankle_l", "ankle_r"}
@@ -100,13 +101,16 @@ local VBODY = {
   hip_l = {-0.24, 1.35}, hip_r = {0.24, 1.35}, knee_l = {-0.27, 0.72}, knee_r = {0.27, 0.72},
   ankle_l = {-0.29, 0.10}, ankle_r = {0.29, 0.10},
 }
--- Rythmes : délai entre deux bulles, durée de vie d'une bulle, bulles simultanées.
+-- Rythmes : délai entre deux éléments, durée de vie, éléments simultanés,
+-- probabilité qu'un élément soit une bombe.
 local LEVELS = {
-  {name = "Doux", spawn = 1.8, life = 6.0, max = 1},
-  {name = "Moyen", spawn = 1.2, life = 4.5, max = 2},
-  {name = "Vif", spawn = 0.8, life = 3.2, max = 3},
+  {name = "Doux", spawn = 1.8, life = 6.0, max = 1, bomb = 0.12},
+  {name = "Moyen", spawn = 1.2, life = 4.5, max = 2, bomb = 0.22},
+  {name = "Vif", spawn = 0.8, life = 3.2, max = 3, bomb = 0.30},
 }
-local COLORS = {{0.77, 1.00, 0.29}, {0.49, 0.83, 0.99}, {0.77, 0.71, 0.99}, {0.99, 0.83, 0.30}, {0.98, 0.44, 0.52}, {0.18, 0.83, 0.75}}
+-- Couleurs des bulles (vives et bien distinctes) ; les bombes sont noires à halo rouge.
+local COLORS = {{0.77, 1.00, 0.29}, {0.35, 0.80, 1.00}, {0.80, 0.55, 1.00}, {1.00, 0.85, 0.20},
+                {1.00, 0.40, 0.55}, {0.20, 0.95, 0.75}, {1.00, 0.60, 0.20}, {0.95, 0.95, 0.95}}
 
 local function g(k, d) local v = save.get(k); if v == nil then return d end; return v end
 local function num(x) return tostring(math.floor(x + 0.5)) end
@@ -142,7 +146,7 @@ if on_event("hud:rythme") then level = level % 3 + 1 end
 if on_event("hud:avatar") then avatar = (avatar + 1) % 2 end
 if on_event("hud:demarrer") then
   if stage == 0 or stage == 3 then
-    save.set("rd_points", 0); save.set("rd_combo", 0); save.set("rd_caught", 0); save.set("rd_missed", 0)
+    save.set("rd_points", 0); save.set("rd_combo", 0); save.set("rd_caught", 0); save.set("rd_missed", 0); save.set("rd_bombs", 0)
     save.set("rd_elapsed", 0); save.set("rd_last_spawn", -10); save.set("rd_calib_start", 0); save.set("rd_finish_at", 0)
     for i = 1, NB do save.set("rd_b" .. i .. "_alive", 0); save.set("rd_b" .. i .. "_pop", -10) end
     cam = pose.ok
@@ -185,6 +189,13 @@ if live then
     local p = pts[NAMES[i]]
     p[1] = (p[1] - NCX) * NK
     p[2] = 1.35 + (p[2] - NCY) * NK
+  end
+  -- Hanches hors cadre (patient assis ou trop près) : le torse et le bassin
+  -- restent dessinés, posés sous les épaules ; les jambes, elles, s'effacent.
+  if pts.hip_l[3] < VIS_MIN or pts.hip_r[3] < VIS_MIN then
+    local sx, sy = (pts.shoulder_l[1] + pts.shoulder_r[1]) / 2, (pts.shoulder_l[2] + pts.shoulder_r[2]) / 2
+    pts.hip_l = {sx - 0.24, sy - 0.9, 0.6}
+    pts.hip_r = {sx + 0.24, sy - 0.9, 0.6}
   end
 else
   for i = 1, #NAMES do local n = NAMES[i]; pts[n] = {VBODY[n][1], VBODY[n][2], 1.0} end
@@ -259,35 +270,60 @@ if stage == 2 then
   end
 
   local points, combo = g("rd_points", 0), g("rd_combo", 0)
-  local caught, missed = g("rd_caught", 0), g("rd_missed", 0)
+  local caught, missed, bombs = g("rd_caught", 0), g("rd_missed", 0), g("rd_bombs", 0)
   if body_ok then
     save.set("rd_elapsed", g("rd_elapsed", 0) + dt)
-    -- Naissance d'une bulle dans la zone atteignable (autour des épaules).
+    -- Naissance d'un élément : autour des épaules **actuelles** (elles suivent
+    -- le patient), à une distance qui demande un geste (35 à 100 % du rayon),
+    -- et toujours dans la partie de l'écran que la caméra voit — un élément né
+    -- hors cadre serait impossible à attraper.
     local alive = 0
     for i = 1, NB do if g("rd_b" .. i .. "_alive", 0) > 0.5 then alive = alive + 1 end end
     if alive < lv.max and time - g("rd_last_spawn", -10) >= lv.spawn then
       for i = 1, NB do
         if g("rd_b" .. i .. "_alive", 0) < 0.5 then
-          local bx = clamp(cx + (rnd() * 2 - 1) * R, -1.9, 1.9)
-          local by = clamp(cy + (rnd() * 1.5 - 0.5) * R, 0.35, 3.0)
+          local scx = (pts.shoulder_l[1] + pts.shoulder_r[1]) / 2
+          local scy = (pts.shoulder_l[2] + pts.shoulder_r[2]) / 2
+          local xmin, xmax = (-W / 2 - NCX) * NK + 0.25, (W / 2 - NCX) * NK - 0.25
+          local ymin, ymax = math.max(0.3, 1.35 + (0 - NCY) * NK + 0.25), 1.35 + (H - NCY) * NK - 0.2
+          local ang = rnd() * 2 * math.pi
+          local rr = R * (0.35 + 0.65 * rnd())
+          local bx = clamp(scx + math.cos(ang) * rr, xmin, xmax)
+          local by = clamp(scy + math.sin(ang) * rr, ymin, ymax)
+          local bomb = rnd() < lv.bomb
           local c = COLORS[math.floor(rnd() * #COLORS) + 1]
           save.set("rd_b" .. i .. "_alive", 1); save.set("rd_b" .. i .. "_x", bx); save.set("rd_b" .. i .. "_y", by)
           save.set("rd_b" .. i .. "_born", time); save.set("rd_b" .. i .. "_life", lv.life)
-          save.set("rd_b" .. i .. "_r", c[1]); save.set("rd_b" .. i .. "_g", c[2]); save.set("rd_b" .. i .. "_b", c[3])
+          save.set("rd_b" .. i .. "_kind", bomb and 1 or 0)
+          if bomb then
+            save.set("rd_b" .. i .. "_r", 0.08); save.set("rd_b" .. i .. "_g", 0.08); save.set("rd_b" .. i .. "_b", 0.1)
+            save.set("rd_b" .. i .. "_hr", 1.0); save.set("rd_b" .. i .. "_hg", 0.22); save.set("rd_b" .. i .. "_hb", 0.12)
+          else
+            save.set("rd_b" .. i .. "_r", c[1]); save.set("rd_b" .. i .. "_g", c[2]); save.set("rd_b" .. i .. "_b", c[3])
+            save.set("rd_b" .. i .. "_hr", c[1]); save.set("rd_b" .. i .. "_hg", c[2]); save.set("rd_b" .. i .. "_hb", c[3])
+          end
           save.set("rd_last_spawn", time)
           break
         end
       end
     end
-    -- Capture et expiration.
+    -- Capture (bulle : points ; bombe : pénalité) et expiration.
     for i = 1, NB do
       if g("rd_b" .. i .. "_alive", 0) > 0.5 then
         local bx, by = g("rd_b" .. i .. "_x", 0), g("rd_b" .. i .. "_y", 0)
+        local bomb = g("rd_b" .. i .. "_kind", 0) > 0.5
         local got = false
         for k = 1, #catchers do
           if dist(catchers[k][1], catchers[k][2], bx, by) < CATCH_R then got = true end
         end
-        if got then
+        if got and bomb then
+          bombs = bombs + 1; combo = 0
+          points = math.max(0, points - BOMB_COST)
+          save.set("rd_b" .. i .. "_alive", 0); save.set("rd_b" .. i .. "_pop", time)
+          save.set("rd_cel", 4); save.set("rd_cel_until", time + 1.0)
+          save.set("rd_status", 10)
+          vibrate(120)
+        elseif got then
           caught = caught + 1; combo = combo + 1
           local gain = 10 + math.floor(combo / 3) * 5
           points = points + gain
@@ -298,14 +334,16 @@ if stage == 2 then
           save.set("rd_status", 3)
           vibrate(45)
         elseif time - g("rd_b" .. i .. "_born", time) > lv.life then
-          missed = missed + 1; combo = 0
           save.set("rd_b" .. i .. "_alive", 0)
-          save.set("rd_status", 9)
+          if not bomb then
+            missed = missed + 1; combo = 0
+            save.set("rd_status", 9)
+          end
         end
       end
     end
   end
-  save.set("rd_points", points); save.set("rd_combo", combo); save.set("rd_caught", caught); save.set("rd_missed", missed)
+  save.set("rd_points", points); save.set("rd_combo", combo); save.set("rd_caught", caught); save.set("rd_missed", missed); save.set("rd_bombs", bombs)
   if g("rd_elapsed", 0) >= SESSION_S then
     save.set("rd_games", g("rd_games", 0) + 1)
     if points > g("rd_best", 0) then save.set("rd_best", points) end
@@ -350,12 +388,13 @@ local STATUS = {
   [3] = "Attrapez les bulles avec vos mains !",
   [8] = "Mode démo — joystick ou flèches : amenez la main sur les bulles",
   [9] = "Bulle éclatée… la suivante arrive",
+  [10] = "Bombe ! Évitez les boules noires",
 }
 hud_text("titre", "MOUVÉO · Attrape-bulles")
 local reglages = "Rythme " .. lv.name .. " · amplitude " .. num(amp) .. " % · " .. num(SESSION_S) .. " s"
 if stage == 0 then
   local src = pose.ok and "📷 Caméra détectée : attrapez avec vos deux mains." or "🎮 Sans caméra : mode démo, la main se pilote au joystick ou aux flèches."
-  hud_text("aide", "Des bulles apparaissent autour de vous : touchez-les avant qu'elles n'éclatent.\nChaque bulle vaut 10 points, les séries rapportent plus.\n" .. reglages .. "\n" .. src)
+  hud_text("aide", "Des bulles apparaissent autour de vous : touchez-les avant qu'elles n'éclatent.\nChaque bulle vaut 10 points, les séries rapportent plus — évitez les bombes noires (-" .. num(BOMB_COST) .. ").\n" .. reglages .. "\n" .. src)
   hud_text("consigne", STATUS[0])
   hud_text("score", ""); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", ""); hud_text("bilan", "")
 elseif stage == 1 then
@@ -369,7 +408,7 @@ elseif stage == 2 then
   hud_text("score", num(points) .. " pts")
   hud_text("chrono", "Temps 0:" .. ((sec < 10) and "0" or "") .. num(sec))
   hud_text("serie", (combo >= 3) and ("⚡ série ×" .. num(combo)) or "")
-  hud_text("objectif", "Bulles attrapées " .. num(g("rd_caught", 0)) .. " · éclatées " .. num(g("rd_missed", 0)))
+  hud_text("objectif", "Bulles attrapées " .. num(g("rd_caught", 0)) .. " · éclatées " .. num(g("rd_missed", 0)) .. " · bombes " .. num(g("rd_bombs", 0)))
   hud_text("aide", reglages)
   if not body_ok then hud_text("consigne", "⏸ Repositionnez-vous — partie en pause")
   else hud_text("consigne", STATUS[g("rd_status", 3)] or STATUS[3]) end
@@ -380,7 +419,7 @@ else
   local prec = (total > 0) and num(caught / total * 100) or "0"
   local stars = (caught >= 20) and "★★★" or ((caught >= 12) and "★★☆" or ((caught >= 5) and "★☆☆" or "☆☆☆"))
   hud_text("bilan", "🏆 Partie terminée — " .. num(points) .. " points " .. stars .. "\n"
-    .. num(caught) .. " bulles attrapées sur " .. num(total) .. " · précision " .. prec .. " %\n"
+    .. num(caught) .. " bulles attrapées sur " .. num(total) .. " · précision " .. prec .. " % · " .. num(g("rd_bombs", 0)) .. " bombe" .. ((g("rd_bombs", 0) == 1) and "" or "s") .. "\n"
     .. "Record " .. num(g("rd_best", 0)) .. " pts · " .. num(g("rd_games", 0)) .. " partie" .. ((g("rd_games", 0) == 1) and "" or "s") .. "\n"
     .. "▶ Rejouer")
   hud_text("consigne", "Bougez sans douleur : arrêtez en cas de douleur, vertige ou inconfort inhabituel.")
@@ -389,7 +428,7 @@ else
 end
 local cel = g("rd_cel", 0)
 if cel > 0 and time < g("rd_cel_until", 0) then
-  local CEL = {"+" .. num(g("rd_cel_gain", 10)), "✨ Série de 5 !", "🏆 Série de 10 !"}
+  local CEL = {"+" .. num(g("rd_cel_gain", 10)), "✨ Série de 5 !", "🏆 Série de 10 !", "💥 -" .. num(BOMB_COST)}
   hud_text("celebration", CEL[cel] or "")
 else
   hud_text("celebration", "")
@@ -419,12 +458,13 @@ fn bubble_script(i: usize) -> String {
          if alive then\n\
            obj.visible = true\n\
            obj.x = save.get(\"rd_b{i}_x\") or 0; obj.y = (save.get(\"rd_b{i}_y\") or 0) + math.sin(time * 2.0 + {i}) * 0.04; obj.z = 0.1\n\
-           local s = 0.34 * (1.0 + math.sin(time * 5.0 + {i}) * 0.06)\n\
+           local bomb = (save.get(\"rd_b{i}_kind\") or 0) > 0.5\n\
+           local s = bomb and 0.24 or 0.21 * (1.0 + math.sin(time * 5.0 + {i}) * 0.06)\n\
            obj.sx = s; obj.sy = s; obj.sz = s\n\
            obj.r = save.get(\"rd_b{i}_r\") or 1; obj.g = save.get(\"rd_b{i}_g\") or 1; obj.b = save.get(\"rd_b{i}_b\") or 1\n\
          elseif since >= 0 and since < 0.25 then\n\
            obj.visible = true\n\
-           local s = 0.34 * (1.0 + since * 4.0)\n\
+           local s = 0.22 * (1.0 + since * 5.0)\n\
            obj.sx = s; obj.sy = s; obj.sz = s\n\
          else\n\
            obj.visible = false\n\
@@ -432,8 +472,8 @@ fn bubble_script(i: usize) -> String {
     )
 }
 
-/// Halo d'une bulle : rétrécit à mesure que sa durée de vie s'écoule — c'est
-/// le compte à rebours visible avant qu'elle n'éclate.
+/// Halo d'un élément : pour une bulle, rétrécit à mesure que sa durée de vie
+/// s'écoule (compte à rebours visible) ; pour une bombe, halo rouge qui pulse.
 fn bubble_halo_script(i: usize) -> String {
     format!(
         "local alive = (save.get(\"rd_b{i}_alive\") or 0) > 0.5\n\
@@ -443,9 +483,10 @@ fn bubble_halo_script(i: usize) -> String {
            local life = save.get(\"rd_b{i}_life\") or 4\n\
            local left = 1.0 - (time - (save.get(\"rd_b{i}_born\") or time)) / life\n\
            if left < 0 then left = 0 end\n\
-           local s = 0.42 + 0.5 * left\n\
+           local bomb = (save.get(\"rd_b{i}_kind\") or 0) > 0.5\n\
+           local s = bomb and (0.34 + 0.08 * math.sin(time * 12.0)) or (0.28 + 0.3 * left)\n\
            obj.sx = s; obj.sy = s; obj.sz = s\n\
-           obj.r = save.get(\"rd_b{i}_r\") or 1; obj.g = save.get(\"rd_b{i}_g\") or 1; obj.b = save.get(\"rd_b{i}_b\") or 1\n\
+           obj.r = save.get(\"rd_b{i}_hr\") or 1; obj.g = save.get(\"rd_b{i}_hg\") or 1; obj.b = save.get(\"rd_b{i}_hb\") or 1\n\
          end\n"
     )
 }

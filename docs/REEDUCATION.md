@@ -16,22 +16,27 @@ MediaPipe Pose + canvas 2D, ~430 lignes) sur RusteeGear.
 ## Ce que fait le jeu
 
 Un seul mode : **Attrape-bulles**. Le patient se place face à la caméra (ou
-pilote la main du mannequin au joystick), lance la partie, et des bulles
-lumineuses apparaissent autour de lui, dans la zone que ses bras peuvent
-atteindre (rayon = longueur du bras calibrée × amplitude). Il les touche avec
-l'une ou l'autre main avant qu'elles n'éclatent : le halo de chaque bulle
-rétrécit à mesure que sa durée de vie s'écoule. Une partie dure 60 s de temps
-actif (le chrono se fige quand le corps sort du cadre).
+pilote la main du mannequin au joystick), lance la partie, et de petites bulles
+colorées apparaissent autour de ses épaules **actuelles** (elles suivent le
+patient s'il se déplace), à une distance qui demande un geste (35 à 100 % de
+la longueur du bras calibrée × amplitude) et toujours dans la partie de
+l'écran que la caméra voit. Il les touche avec l'une ou l'autre main avant
+qu'elles n'éclatent : le halo de chaque bulle rétrécit à mesure que sa durée
+de vie s'écoule. Parmi les éléments se glissent des **bombes** (boule noire à
+halo rouge qui pulse) : les toucher coûte 20 points et casse la série ; les
+laisser passer ne coûte rien. Une partie dure 60 s de temps actif (le chrono se
+fige quand le corps sort du cadre).
 
-| Rythme | Nouvelle bulle toutes les | Durée de vie | Bulles simultanées |
-| --- | --- | --- | --- |
-| Doux | 1,8 s | 6 s | 1 |
-| Moyen (défaut) | 1,2 s | 4,5 s | 2 |
-| Vif | 0,8 s | 3,2 s | 3 |
+| Rythme | Nouvel élément toutes les | Durée de vie | Simultanés | Part de bombes |
+| --- | --- | --- | --- | --- |
+| Doux | 1,8 s | 6 s | 1 | 12 % |
+| Moyen (défaut) | 1,2 s | 4,5 s | 2 | 22 % |
+| Vif | 0,8 s | 3,2 s | 3 | 30 % |
 
 **Score** : 10 points par bulle + 5 par palier de 3 dans la série (série
-remise à zéro quand une bulle éclate), célébrations aux séries de 5 et 10 ;
-**bilan** en fin de partie : points, bulles attrapées / éclatées, précision,
+remise à zéro quand une bulle éclate ou qu'une bombe est touchée, score jamais
+négatif), célébrations aux séries de 5 et 10 ;
+**bilan** en fin de partie : points, bulles attrapées / éclatées, bombes touchées, précision,
 1 à 3 étoiles, record et nombre de parties (conservés le temps de la session,
 `save.*`). Les bulles naissent selon un tirage pseudo-aléatoire déterministe
 (Park-Miller, identique sur les deux backends Lua), donc rejouable en test.
@@ -86,6 +91,7 @@ cumulés) et record, conservés le temps de la session (`save.*`).
 | Entrée | **caméra** : MediaPipe Pose Landmarker + Hand Landmarker (wasm + modèles ~18 Mo, chargés d'un CDN au clic « Activer la caméra »), 33 + 2 × 21 repères à ~30 Hz ; les bulles s'attrapent avec la paume (doigts suivis) ou le poignet | **mode démo** : la main droite du mannequin se pilote au stick tactile (souris) ou aux flèches |
 | Calibration | 1,8 s de corps visible sans bouger → ancres (épaules, bras) figées : centre et rayon de la zone des bulles | immédiate, silhouette virtuelle debout |
 | Pause | automatique dès que le corps sort du cadre (ou pose périmée > 0,75 s) : chrono figé, consigne « Repositionnez-vous » | jamais |
+| Hanches hors cadre (assis, trop près) | torse et bassin dessinés sous les épaules, jambes effacées | — |
 | Sans caméra | bascule d'elle-même en mode démo (refus, absence, CDN inaccessible) | — |
 
 Le mode est **verrouillé au départ de la séance** (`pose.ok` à l'appui sur
