@@ -347,8 +347,10 @@ mod tests {
     #[test]
     fn loading_a_scene_from_a_future_version_is_rejected() {
         let path = temp_scene_path("version-future-refusee");
-        let mut scene = Scene::default();
-        scene.version = Scene::CURRENT_VERSION + 1;
+        let scene = Scene {
+            version: Scene::CURRENT_VERSION + 1,
+            ..Scene::default()
+        };
         scene.save(path.to_str().unwrap()).expect("écriture");
 
         let err = match Scene::load(path.to_str().unwrap()) {

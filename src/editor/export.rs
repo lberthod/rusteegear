@@ -1190,15 +1190,15 @@ fn kill_process_tree(shared: &SharedChild) {
         let shared = Arc::clone(shared);
         std::thread::spawn(move || {
             std::thread::sleep(KILL_GRACE);
-            if let Some(c) = lock_child(&shared).as_mut() {
-                if matches!(c.try_wait(), Ok(None)) {
-                    let _ = Command::new("kill")
-                        .args(["-KILL", "--", &format!("-{}", c.id())])
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status();
-                    let _ = c.kill();
-                }
+            if let Some(c) = lock_child(&shared).as_mut()
+                && matches!(c.try_wait(), Ok(None))
+            {
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{}", c.id())])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                let _ = c.kill();
             }
         });
     }
