@@ -1860,8 +1860,11 @@ impl AppState {
             if obj.script.trim().is_empty() {
                 continue;
             }
+            // Tag `attached` : objet qui suit le joueur par script (yeux…) — jamais
+            // mis en sommeil, sinon une téléportation le laisserait derrière.
             if let Some(px) = cull_x
                 && obj.controller.is_none()
+                && obj.tag != "attached"
                 && (obj.transform.position.x - px).abs() > SCRIPT_CULL_DISTANCE
             {
                 continue;
@@ -2155,7 +2158,7 @@ impl AppState {
             self.scene.objects.push(crate::scene::SceneObject {
                 name: "Débris".into(),
                 transform,
-                mesh: crate::scene::MeshKind::Cube,
+                mesh: crate::scene::MeshKind::Sphere,
                 physics: crate::runtime::physics::PhysicsKind::Dynamic,
                 color,
                 emissive: 1.0,
@@ -2204,7 +2207,7 @@ impl AppState {
             let tomb = crate::scene::SceneObject {
                 name: "Tombe".into(),
                 transform,
-                mesh: crate::scene::MeshKind::Cube,
+                mesh: crate::scene::MeshKind::Sphere,
                 physics: crate::runtime::physics::PhysicsKind::None,
                 color: [0.45, 0.45, 0.5],
                 emissive: 1.0,

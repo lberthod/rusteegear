@@ -85,6 +85,7 @@ Méthode :
 | `reverb(mix)` | — | Réverbération du bus SFX (0..1, transition 0,5 s) ; le dernier appel du pas l'emporte. |
 | `vibrate(ms)` | — | Demande un retour haptique — **aujourd'hui seulement journalisé**, sur toutes les cibles. |
 | `checkpoint(x, y, z)` | — | Point de réapparition du joueur après une mort en mode plateformer 2D (sinon : position de départ). Appliqué après la boucle des scripts ; le dernier appel du pas l'emporte. |
+| *(mode plateformer 2D)* | — | Les scripts des objets sans contrôleur à plus de 48 unités du joueur (sur X) ne tournent pas, sauf ceux tagués `attached` (objets qui suivent le joueur par script). |
 | `hud_text(id, texte)` | — | Remplace le contenu du widget HUD `Text` dont l'id est `id` (fenêtre 🧩 Widgets HUD) ; `""` l'efface. Survit aux réapparitions, effacé à l'entrée en Play. Vannes de mort, nom de niveau… |
 | `bone(nom, dx, dy, dz)` | — | Impose la **direction monde** de l'os `nom` (joint du rig glTF de l'objet, ex. `UpperArm.L`) vers son premier enfant — retargeting d'une pose captée (`pose`/`hand`) sur un mesh skinné, par-dessus le clip en cours ; seule l'orientation change, pas la longueur. À rappeler à chaque pas : sans appel, l'os revient à son animation. Sans effet sur un mesh non skinné. |
 | `teleport(x, y, z)` | — | Déplace le joueur local (corps physique et caméra de suivi compris) — typiquement depuis la zone `trigger` d'une porte de sortie, pour enchaîner les niveaux d'une même scène. |
