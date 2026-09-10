@@ -62,6 +62,8 @@ Méthode :
 | `tilt.x`, `tilt.y` | nombre -1..1 | Inclinaison gyroscope/accéléromètre (desktop : simulée aux flèches). |
 | `pose.ok` | booléen | Une pose corporelle fraîche est disponible (page web de rééducation, caméra + MediaPipe — cf. [REEDUCATION.md](REEDUCATION.md)). Faux partout ailleurs, et 0,75 s après la dernière image. |
 | `pose.<repère>` | table `{x, y, z, v}` | 13 repères nommés : `nose`, `shoulder_l/r`, `elbow_l/r`, `wrist_l/r`, `hip_l/r`, `knee_l/r`, `ankle_l/r`. `x`, `y` normalisés 0..1 sur l'image caméra (`y` vers le bas, image non miroir : la main droite est à `x < 0.5`), `z` profondeur relative, `v` visibilité 0..1. Zéros tant qu'aucune image n'a été reçue. |
+| `hand.ok` | booléen | Au moins une main fraîche (page web de rééducation, MediaPipe Hand Landmarker). |
+| `hand.left`, `hand.right` | table `{x, y, z}` ou absente | Main vue de ce côté : trois tableaux 1-based de 21 repères (1 poignet ; 2-5 pouce ; 6-9 index ; 10-13 majeur ; 14-17 annulaire ; 18-21 auriculaire, base → bout), mêmes coordonnées image que `pose`, `z` relatif au poignet. Le côté est décidé par la page (poignet du corps le plus proche). |
 | `deaths` | nombre (lecture seule) | Morts de la partie en cours (mode plateformer 2D, réapparition instantanée) — survit aux relances automatiques, remis à 0 à l'entrée en Play. Permet à un piège de changer selon la tentative. |
 | `save.get(clé)` | fonction → nombre ou `nil` | Lit une variable de sauvegarde. |
 | `save.set(clé, valeur)` | fonction | Écrit une variable de sauvegarde (**nombres seulement**). Partagée entre tous les objets, conservée avant erreur, embarquée dans la sauvegarde de partie. |
@@ -116,7 +118,7 @@ Bon à savoir :
 
 ## Natif ↔ web : ce qui diffère
 
-Les 23 globales ci-dessus existent avec les mêmes noms et arités sur les deux
+Les 24 globales ci-dessus existent avec les mêmes noms et arités sur les deux
 interpréteurs, `raycast` et `overlap_sphere` compris. Les écarts réels :
 
 | Sujet | Natif (`mlua`, Lua 5.4) | Web (`rilua`, Lua 5.1) |
@@ -129,6 +131,7 @@ interpréteurs, `raycast` et `overlap_sphere` compris. Les écarts réels :
 | `overlap_sphere` | Entier | Flottant (`tostring` peut différer) |
 | Persistance de `save.*` | Fichier `user://save_<slot>.json` (`~/.motor3derust/save`) | Le temps de la session seulement (pas de dossier utilisateur dans le navigateur) |
 | `spawn()` | Oui | Le dossier d'assets utilisateur n'existe pas : le prefab est introuvable et l'appel journalise une erreur |
+| `hand.*` | Toujours `ok = false` (`AppState::set_hands` pour les tests) | `set_hand_landmarks`, `reeduc.html` seulement |
 | `pose.*` | Toujours `ok = false` (aucune caméra branchée au moteur natif — un test peut pousser des repères via `AppState::set_pose`) | Renseignée par la page hôte (`set_pose_landmarks`), `reeduc.html` seulement |
 
 Les quatre scripts d'[`examples/scripts/`](../examples/scripts/) sont exécutés

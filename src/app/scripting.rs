@@ -361,6 +361,31 @@ pub(super) fn run_script(
         Ok(())
     })?;
     g.set("pose", pose_tbl)?;
+    // Table `hand` (doigts) : `hand.ok`, puis `hand.left`/`hand.right` = `{x, y, z}`
+    // (tableaux 1-based de 21 repères) ou absent si la main n'est pas vue.
+    let hand_tbl = lua.create_table()?;
+    super::script_ctx::with_hands(|h| -> mlua::Result<()> {
+        hand_tbl.set("ok", h.is_ok())?;
+        for (name, right) in [("left", false), ("right", true)] {
+            if let Some(hand) = h.side(right) {
+                let t = lua.create_table()?;
+                let xs = lua.create_table()?;
+                let ys = lua.create_table()?;
+                let zs = lua.create_table()?;
+                for (i, lm) in hand.landmarks.iter().enumerate() {
+                    xs.set(i + 1, lm[0])?;
+                    ys.set(i + 1, lm[1])?;
+                    zs.set(i + 1, lm[2])?;
+                }
+                t.set("x", xs)?;
+                t.set("y", ys)?;
+                t.set("z", zs)?;
+                hand_tbl.set(name, t)?;
+            }
+        }
+        Ok(())
+    })?;
+    g.set("hand", hand_tbl)?;
     g.set("spawn", spawn)?;
     g.set("add_item", add_item_fn)?;
     g.set("find_tag", find_tag)?;

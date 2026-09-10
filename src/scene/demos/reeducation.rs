@@ -11,6 +11,7 @@
 //! | MediaPipe Pose dans le navigateur              | idem, dans `packaging/web/reeduc.html` -> export wasm    |
 //! |                                                | `set_pose_landmarks` -> table Lua `pose` (`app::pose`)   |
 //! | squelette dessiné sur la vidéo                 | avatar 3D (sphères aux articulations, cylindres en os)  |
+//! | (pas de doigts dans Mouvéo)                    | main suivie (21 repères MediaPipe), 3 exercices de doigts |
 //! | cibles 2D relatives à l'épaule/la hanche       | sphères émissives dans le plan `z = 0`, mêmes motifs    |
 //! | machine à états React (welcome/calibrate/…)    | script Lua « directeur », état dans `save.*`            |
 //! | HUD React (score, série, chrono, consigne)     | widgets HUD déclaratifs + `hud_text`                    |
@@ -85,6 +86,10 @@ pub(crate) fn world_to_pose(wx: f32, wy: f32) -> (f32, f32) {
 /// objets (cible, halo, point suivi, repères, os) le relisent le même tick — la
 /// « Séance » est le premier objet de la scène pour ça.
 pub const DIRECTOR_SCRIPT: &str = r#"
+local SMOOTH_POSE, SMOOTH_HAND = 22.0, 30.0   -- lissage (1/s) des repères caméra
+local HK = 5.0                                -- zoom de la main dessinée (m par unité image)
+local VIS_MIN = 0.5                           -- sous cette visibilité, un repère n'est pas dessiné
+
 local NAMES = {"nose", "shoulder_l", "shoulder_r", "elbow_l", "elbow_r", "wrist_l", "wrist_r",
                "hip_l", "hip_r", "knee_l", "knee_r", "ankle_l", "ankle_r"}
 -- Corps virtuel du mode démo (monde, m) : silhouette debout au centre.
@@ -94,8 +99,11 @@ local VBODY = {
   hip_l = {-0.24, 1.35}, hip_r = {0.24, 1.35}, knee_l = {-0.27, 0.72}, knee_r = {0.27, 0.72},
   ankle_l = {-0.29, 0.10}, ankle_r = {0.29, 0.10},
 }
--- Les 8 exercices de Mouvéo : motifs = décalages (x latéral, y vers le BAS)
--- en fraction de la longueur du membre, depuis l'origine (épaule / hanche).
+-- Les 8 exercices de Mouvéo + 3 exercices de doigts : motifs = décalages (x
+-- latéral, y vers le BAS) en fraction de la longueur du membre, depuis
+-- l'origine (épaule / hanche). Pour les mains (`mode = "hand"`), la caméra
+-- mesure un degré de fermeture/ouverture `m` (0 = neutre, 1 = geste complet)
+-- et l'amplitude fixe le `m` à atteindre ; le motif ne sert qu'au mode démo.
 local EX = {
   {name="Bulles latérales", short="Élévation latérale", mode="arm", hold=0, k=1.6, r=0.77,g=1.00,b=0.29,
    pat={{0.72,-0.52},{0.86,-0.68},{0.68,-0.82}}, tip="Écartez le bras sur le côté, puis revenez doucement.", fam="haut du corps"},
@@ -113,14 +121,29 @@ local EX = {
    pat={{0.0,0.36},{0.0,0.46},{0.0,0.40}}, tip="Descendez les hanches vers la cible puis redressez-vous doucement.", fam="jambes"},
   {name="Île équilibre", short="Équilibre sur une jambe", mode="ankle", hold=2.0, k=1.0, r=0.65,g=0.55,b=0.98,
    pat={{0.25,0.58},{0.32,0.52},{0.22,0.48}}, tip="Levez légèrement le pied et maintenez-le dans l'île lumineuse.", fam="équilibre"},
+  {name="Pince lumineuse", short="Pince pouce-index", mode="hand", gesture="pinch", hold=0, k=1.2, r=1.00,g=0.90,b=0.70,
+   pat={{0.0,-0.8},{0.0,-0.8},{0.0,-0.8}}, tip="Rapprochez le bout de l'index du pouce, puis rouvrez la main.", fam="main"},
+  {name="Éventail", short="Ouverture des doigts", mode="hand", gesture="spread", hold=0, k=1.2, r=0.30,g=0.90,b=0.40,
+   pat={{0.0,-0.8},{0.0,-0.8},{0.0,-0.8}}, tip="Ouvrez grand la main, puis refermez le poing doucement.", fam="main"},
+  {name="Piano", short="Opposition pouce-doigts", mode="hand", gesture="piano", hold=0, k=1.2, r=0.30,g=0.50,b=1.00,
+   pat={{0.0,-0.8},{0.0,-0.8},{0.0,-0.8}}, tip="Touchez le pouce avec chaque doigt, l'un après l'autre.", fam="main"},
 }
 local GARDEN = {"Graine", "Pousse", "Jeune plante", "En fleurs", "Jardin lumineux"}
+local FINGER_TIPS = {9, 13, 17, 21}   -- index, majeur, annulaire, auriculaire (1-based)
 
 local function g(k, d) local v = save.get(k); if v == nil then return d end; return v end
 local function num(x) return tostring(math.floor(x + 0.5)) end
 local function P(lm) return (0.5 - lm.x) * W, (1.0 - lm.y) * H end
 local function dist(ax, ay, bx, by) local dx, dy = ax - bx, ay - by; return math.sqrt(dx * dx + dy * dy) end
 local function clamp(v, lo, hi) if v < lo then return lo end; if v > hi then return hi end; return v end
+-- Lissage exponentiel d'une valeur mémorisée dans `save` (framerate-indépendant).
+local function smooth(key, target, rate)
+  local cur = save.get(key)
+  if cur == nil then cur = target end
+  cur = cur + (target - cur) * (1.0 - math.exp(-rate * dt))
+  save.set(key, cur)
+  return cur
+end
 
 local stage = g("rd_stage", 0)      -- 0 accueil, 1 calibration, 2 séance, 3 bilan
 local ex_i = g("rd_ex", 1)
@@ -150,15 +173,17 @@ if stage == 3 then
   end
 end
 local ex = EX[ex_i]
+local mode = ex.mode
+local hand_ex = (mode == "hand")
 if on_event("hud:demarrer") then
   if stage == 0 or stage == 3 then
-    -- Nouvelle séance : compteurs à zéro, mode caméra si une pose est fraîche.
+    -- Nouvelle séance : compteurs à zéro, mode caméra si une pose (ou une main) est fraîche.
     save.set("rd_hits", 0); save.set("rd_points", 0); save.set("rd_combo", 0); save.set("rd_phase", 0)
     save.set("rd_tidx", 0); save.set("rd_last_hit", -10); save.set("rd_dwell", 0); save.set("rd_elapsed", 0)
     save.set("rd_saved", 0); save.set("rd_finish_at", 0); save.set("rd_calib_start", 0); save.set("rd_regularity", 0)
     pain, fatigue = 0, 2
     for i = 1, 12 do save.set("rd_hit_" .. i, 0) end
-    cam = pose.ok
+    cam = pose.ok or (hand_ex and hand.ok)
     save.set("rd_cam", cam and 1 or 0)
     if cam then
       stage = 1
@@ -172,18 +197,44 @@ if on_event("hud:demarrer") then
   end
 end
 
--- ---- Points du corps (monde) : pose caméra ou corps virtuel ----
+-- ---- Points du corps (monde) : pose caméra lissée ou corps virtuel ----
 local pts = {}
 local live = cam and stage >= 1 and stage <= 2
 if stage == 0 then live = pose.ok end
 if live then
-  for i = 1, #NAMES do local n = NAMES[i]; local lm = pose[n]; local x, y = P(lm); pts[n] = {x, y, lm.v} end
+  for i = 1, #NAMES do
+    local n = NAMES[i]; local lm = pose[n]; local x, y = P(lm)
+    pts[n] = {smooth("rd_s_" .. n .. "_x", x, SMOOTH_POSE), smooth("rd_s_" .. n .. "_y", y, SMOOTH_POSE), lm.v}
+  end
 else
   for i = 1, #NAMES do local n = NAMES[i]; pts[n] = {VBODY[n][1], VBODY[n][2], 1.0} end
 end
-local mode = ex.mode
+
+-- ---- Main (doigts) : 21 repères dessinés en grand, centrés et lissés ----
+local HP = nil           -- points main (monde), 1-based, nil si pas de main
+local hs = 0             -- taille de main (poignet -> base du majeur, m)
+local hand_live = hand_ex and (cam or stage == 0)
+if hand_live then
+  local Hn = (side > 0) and hand.right or hand.left
+  if Hn then
+    local cx, cy = 0, 0
+    for i = 1, 21 do cx = cx + Hn.x[i]; cy = cy + Hn.y[i] end
+    cx, cy = smooth("rd_hc_x", cx / 21, 12.0), smooth("rd_hc_y", cy / 21, 12.0)
+    HP = {}
+    for i = 1, 21 do
+      local wx, wy = (cx - Hn.x[i]) * HK, 1.6 + (cy - Hn.y[i]) * HK
+      HP[i] = {smooth("rd_hs_" .. i .. "_x", wx, SMOOTH_HAND), smooth("rd_hs_" .. i .. "_y", wy, SMOOTH_HAND)}
+    end
+    hs = math.max(0.2, dist(HP[1][1], HP[1][2], HP[10][1], HP[10][2]))
+  end
+end
+
+-- Visibilité « corps prêt » selon l'exercice.
 local body_ok = true
-if live then
+if hand_ex then
+  if cam or stage == 0 then body_ok = HP ~= nil end
+  if not cam and stage >= 1 then body_ok = true end
+elseif live then
   if not pose.ok then body_ok = false
   elseif mode == "arm" then
     body_ok = pts["shoulder" .. sfx][3] > 0.55 and pts["wrist" .. sfx][3] > 0.45 and pts["hip" .. sfx][3] > 0.45
@@ -195,7 +246,7 @@ if live then
   end
 end
 
--- ---- Calibration (mode caméra) : 1,8 s de corps visible, puis ancres figées ----
+-- ---- Calibration (mode caméra) : 1,8 s de corps (ou main) visible, puis ancres figées ----
 local calib = 0
 if stage == 1 then
   if body_ok then
@@ -216,69 +267,103 @@ local target_vis, tx, ty, tr, tg, tb = 0, 0, 0, ex.r, ex.g, ex.b
 local hand_vis, hx, hy = 0, 0, 0
 local dwell_frac = 0
 if stage == 2 then
-  local A = {}
-  for i = 1, #NAMES do local n = NAMES[i]; A[n] = {g("rd_a_" .. n .. "_x", 0), g("rd_a_" .. n .. "_y", 0)} end
-  local origin, neutral, tracked, limb, tname
-  if mode == "arm" then
-    origin, neutral, tname = A["shoulder" .. sfx], A["hip" .. sfx], "wrist" .. sfx
-    limb = dist(origin[1], origin[2], A["elbow" .. sfx][1], A["elbow" .. sfx][2])
-      + dist(A["elbow" .. sfx][1], A["elbow" .. sfx][2], A["wrist" .. sfx][1], A["wrist" .. sfx][2])
-  elseif mode == "hips" then
-    origin = {(A.hip_l[1] + A.hip_r[1]) / 2, (A.hip_l[2] + A.hip_r[2]) / 2}
-    neutral, tname = origin, "hips"
-    limb = math.max(0.5, dist(origin[1], origin[2], (A.shoulder_l[1] + A.shoulder_r[1]) / 2, (A.shoulder_l[2] + A.shoulder_r[2]) / 2))
-  else
-    origin, tname = A["hip" .. sfx], mode .. sfx
-    neutral = A[tname]
-    limb = dist(origin[1], origin[2], A["knee" .. sfx][1], A["knee" .. sfx][2])
-      + dist(A["knee" .. sfx][1], A["knee" .. sfx][2], A["ankle" .. sfx][1], A["ankle" .. sfx][2])
-  end
-  if cam then
-    if mode == "hips" then tracked = {(pts.hip_l[1] + pts.hip_r[1]) / 2, (pts.hip_l[2] + pts.hip_r[2]) / 2}
-    else tracked = {pts[tname][1], pts[tname][2]} end
-  else
-    -- Mode démo : le point suivi part de la position neutre et se pilote au
-    -- joystick (ou flèches via tilt), lissé pour un geste « doux ».
-    local jx = clamp(input.jx + tilt.x, -1, 1)
-    local jy = clamp(input.jy + tilt.y, -1, 1)
-    local want_x, want_y = neutral[1] + jx * limb * ex.k, neutral[2] + jy * limb * ex.k
-    local cx, cy = g("rd_hand_x", want_x), g("rd_hand_y", want_y)
-    local a = 1.0 - math.exp(-8.0 * dt)
-    cx, cy = cx + (want_x - cx) * a, cy + (want_y - cy) * a
-    save.set("rd_hand_x", cx); save.set("rd_hand_y", cy)
-    tracked = {cx, cy}
-    -- Le reste du membre suit, pour que l'avatar reste lisible : coude à
-    -- mi-chemin épaule -> main, cheville sous le genou levé, genou à mi-chemin
-    -- hanche -> cheville, tout le tronc pour les hanches.
-    if mode == "hips" then
-      local ox, oy = cx - origin[1], cy - origin[2]
-      local names = {"hip_l", "hip_r", "shoulder_l", "shoulder_r", "elbow_l", "elbow_r", "wrist_l", "wrist_r", "nose"}
-      for i = 1, #names do local n = names[i]; pts[n] = {A[n][1] + ox, A[n][2] + oy, 1} end
-      pts.knee_l = {A.knee_l[1], A.knee_l[2] + oy * 0.5, 1}; pts.knee_r = {A.knee_r[1], A.knee_r[2] + oy * 0.5, 1}
-    else
-      pts[tname] = {cx, cy, 1}
-      if mode == "arm" then
-        local s = A["shoulder" .. sfx]
-        pts["elbow" .. sfx] = {(s[1] + cx) / 2 + side * 0.08, (s[2] + cy) / 2 - 0.12, 1}
-      elseif mode == "knee" then
-        pts["ankle" .. sfx] = {cx + side * 0.05, cy - 0.6, 1}
-      else
-        local h = A["hip" .. sfx]
-        pts["knee" .. sfx] = {(h[1] + cx) / 2 + side * 0.06, (h[2] + cy) / 2 + 0.05, 1}
-      end
-    end
-  end
-
   local phase = g("rd_phase", 0)
   local tidx = g("rd_tidx", 0)
-  local off = ex.pat[(tidx % 3) + 1]
   local strength = amp / 100
-  local apply_side = (mode == "hips") and 0 or side
-  local reach = {origin[1] + apply_side * limb * off[1] * strength, origin[2] - limb * off[2] * strength}
-  local target = (phase == 0) and reach or neutral
+  local reached, returned = false, false
+  local tracked, target
+
+  if hand_ex and cam then
+    -- Geste de main mesuré sur la main dessinée : degré `m` (0 neutre, 1 complet).
+    if HP then
+      local m
+      local thumb = HP[5]
+      if ex.gesture == "spread" then
+        local wrist, mcp, tip = HP[1], HP[10], HP[13]
+        local dx, dy = mcp[1] - wrist[1], mcp[2] - wrist[2]
+        local dl = math.max(0.001, math.sqrt(dx * dx + dy * dy))
+        m = clamp((dist(wrist[1], wrist[2], tip[1], tip[2]) / hs - 1.3) / 1.0, 0, 1)
+        target = {wrist[1] + dx / dl * 2.3 * hs, wrist[2] + dy / dl * 2.3 * hs}
+        tracked = tip
+      else
+        local tip_i = 9
+        if ex.gesture == "piano" then tip_i = FINGER_TIPS[(tidx % 4) + 1] end
+        local tip = HP[tip_i]
+        m = 1.0 - clamp((dist(thumb[1], thumb[2], tip[1], tip[2]) / hs - 0.15) / 0.9, 0, 1)
+        target = thumb
+        tracked = tip
+      end
+      reached = m >= strength
+      returned = m <= 0.25
+      dwell_frac = 0
+    end
+  else
+    -- Géométrie corps (Mouvéo) : origine / neutre / membre calibrés.
+    local A = {}
+    for i = 1, #NAMES do local n = NAMES[i]; A[n] = {g("rd_a_" .. n .. "_x", 0), g("rd_a_" .. n .. "_y", 0)} end
+    local origin, neutral, limb, tname
+    if hand_ex then
+      -- Mode démo des exercices de doigts : jauge verticale à droite de l'avatar.
+      origin, neutral, limb, tname = {1.5, 1.1}, {1.5, 1.1}, 0.8, nil
+    elseif mode == "arm" then
+      origin, neutral, tname = A["shoulder" .. sfx], A["hip" .. sfx], "wrist" .. sfx
+      limb = dist(origin[1], origin[2], A["elbow" .. sfx][1], A["elbow" .. sfx][2])
+        + dist(A["elbow" .. sfx][1], A["elbow" .. sfx][2], A["wrist" .. sfx][1], A["wrist" .. sfx][2])
+    elseif mode == "hips" then
+      origin = {(A.hip_l[1] + A.hip_r[1]) / 2, (A.hip_l[2] + A.hip_r[2]) / 2}
+      neutral, tname = origin, "hips"
+      limb = math.max(0.5, dist(origin[1], origin[2], (A.shoulder_l[1] + A.shoulder_r[1]) / 2, (A.shoulder_l[2] + A.shoulder_r[2]) / 2))
+    else
+      origin, tname = A["hip" .. sfx], mode .. sfx
+      neutral = A[tname]
+      limb = dist(origin[1], origin[2], A["knee" .. sfx][1], A["knee" .. sfx][2])
+        + dist(A["knee" .. sfx][1], A["knee" .. sfx][2], A["ankle" .. sfx][1], A["ankle" .. sfx][2])
+    end
+    if cam then
+      if mode == "hips" then tracked = {(pts.hip_l[1] + pts.hip_r[1]) / 2, (pts.hip_l[2] + pts.hip_r[2]) / 2}
+      else tracked = {pts[tname][1], pts[tname][2]} end
+    else
+      -- Mode démo : le point suivi part de la position neutre et se pilote au
+      -- joystick (ou flèches via tilt), lissé pour un geste « doux ».
+      local jx = clamp(input.jx + tilt.x, -1, 1)
+      local jy = clamp(input.jy + tilt.y, -1, 1)
+      local want_x, want_y = neutral[1] + jx * limb * ex.k, neutral[2] + jy * limb * ex.k
+      local cx = smooth("rd_hand_x", want_x, 8.0)
+      local cy = smooth("rd_hand_y", want_y, 8.0)
+      tracked = {cx, cy}
+      -- Le reste du membre suit, pour que l'avatar reste lisible : coude à
+      -- mi-chemin épaule -> main, cheville sous le genou levé, genou à mi-chemin
+      -- hanche -> cheville, tout le tronc pour les hanches.
+      if mode == "hips" then
+        local ox, oy = cx - origin[1], cy - origin[2]
+        local names = {"hip_l", "hip_r", "shoulder_l", "shoulder_r", "elbow_l", "elbow_r", "wrist_l", "wrist_r", "nose"}
+        for i = 1, #names do local n = names[i]; pts[n] = {A[n][1] + ox, A[n][2] + oy, 1} end
+        pts.knee_l = {A.knee_l[1], A.knee_l[2] + oy * 0.5, 1}; pts.knee_r = {A.knee_r[1], A.knee_r[2] + oy * 0.5, 1}
+      elseif tname then
+        pts[tname] = {cx, cy, 1}
+        if mode == "arm" then
+          local s = A["shoulder" .. sfx]
+          pts["elbow" .. sfx] = {(s[1] + cx) / 2 + side * 0.08, (s[2] + cy) / 2 - 0.12, 1}
+        elseif mode == "knee" then
+          pts["ankle" .. sfx] = {cx + side * 0.05, cy - 0.6, 1}
+        else
+          local h = A["hip" .. sfx]
+          pts["knee" .. sfx] = {(h[1] + cx) / 2 + side * 0.06, (h[2] + cy) / 2 + 0.05, 1}
+        end
+      end
+    end
+    local off = ex.pat[(tidx % 3) + 1]
+    local apply_side = (mode == "hips" or hand_ex) and 0 or side
+    local reach = {origin[1] + apply_side * limb * off[1] * strength, origin[2] - limb * off[2] * strength}
+    target = (phase == 0) and reach or neutral
+    local thr = math.max(0.2, limb * 0.16)
+    local near = dist(tracked[1], tracked[2], target[1], target[2]) < thr
+    reached, returned = near, near
+  end
+
   if phase == 1 then tr, tg, tb = 0.49, 0.83, 0.99 end
-  target_vis, tx, ty = 1, target[1], target[2]
-  hand_vis, hx, hy = (body_ok and 1 or 0), tracked[1], tracked[2]
+  if target then target_vis, tx, ty = 1, target[1], target[2] end
+  if tracked then hand_vis, hx, hy = (body_ok and 1 or 0), tracked[1], tracked[2] end
 
   local hits, combo, points = g("rd_hits", 0), g("rd_combo", 0), g("rd_points", 0)
   local function record_hit()
@@ -289,7 +374,8 @@ if stage == 2 then
     if hits <= 12 then save.set("rd_hit_" .. hits, time) end
     points = points + 10 + math.floor(combo / 3) * 5
     save.set("rd_phase", 1)
-    if mode == "arm" then save.set("rd_status", 4) elseif mode == "knee" then save.set("rd_status", 5)
+    if hand_ex then save.set("rd_status", 12)
+    elseif mode == "arm" then save.set("rd_status", 4) elseif mode == "knee" then save.set("rd_status", 5)
     elseif mode == "ankle" then save.set("rd_status", 6) else save.set("rd_status", 7) end
     local m1, m2 = math.ceil(goal * 0.4), math.ceil(goal * 0.7)
     if combo == m1 then save.set("rd_cel", 1); save.set("rd_cel_until", time + 1.3)
@@ -299,10 +385,10 @@ if stage == 2 then
     if hits >= goal then save.set("rd_finish_at", time + 0.5) end
   end
 
-  if body_ok then
+  if body_ok and tracked then
     save.set("rd_elapsed", g("rd_elapsed", 0) + dt)
-    local d = dist(tracked[1], tracked[2], target[1], target[2])
-    if d < math.max(0.2, limb * 0.16) then
+    local trigger = (phase == 0) and reached or (phase == 1 and returned)
+    if trigger then
       if phase == 1 then
         save.set("rd_phase", 0); save.set("rd_tidx", tidx + 1); save.set("rd_dwell", 0); save.set("rd_status", 9)
       elseif ex.hold > 0 then
@@ -340,18 +426,30 @@ if stage == 2 then
   end
 end
 
--- ---- Sorties partagées avec les autres objets (cible, halo, point, repères) ----
+-- ---- Sorties partagées avec les autres objets (cible, halo, point, repères, os, doigts) ----
 save.set("rd_stage", stage); save.set("rd_ex", ex_i); save.set("rd_side", side); save.set("rd_amp", amp); save.set("rd_goal", goal)
 save.set("rd_pain", pain); save.set("rd_fatigue", fatigue)
 save.set("rd_target_vis", target_vis); save.set("rd_target_x", tx); save.set("rd_target_y", ty)
 save.set("rd_target_r", tr); save.set("rd_target_g", tg); save.set("rd_target_b", tb)
 save.set("rd_hand_vis", hand_vis); save.set("rd_hand_px", hx); save.set("rd_hand_py", hy)
 save.set("rd_dwell_frac", dwell_frac)
-local show_body = (stage ~= 3) and (not live or pose.ok)
+save.set("rd_target_scale", HP and math.max(0.5, hs * 1.2) or 1.0)
+local show_hand = HP ~= nil and stage ~= 3
+local show_body = (stage ~= 3) and (not live or pose.ok) and not show_hand
 for i = 1, #NAMES do
   local n = NAMES[i]
-  save.set("rd_p_" .. n .. "_vis", show_body and 1 or 0)
+  -- Un repère mal vu (hors cadre, extrapolé par le modèle) n'est pas dessiné :
+  -- sans ça, un os file vers un point fantasque hors de l'écran.
+  local vis = show_body and pts[n][3] >= VIS_MIN
+  save.set("rd_p_" .. n .. "_vis", vis and 1 or 0)
   save.set("rd_p_" .. n .. "_x", pts[n][1]); save.set("rd_p_" .. n .. "_y", pts[n][2])
+end
+for i = 1, 21 do
+  if show_hand then
+    save.set("rd_h_" .. i .. "_vis", 1); save.set("rd_h_" .. i .. "_x", HP[i][1]); save.set("rd_h_" .. i .. "_y", HP[i][2])
+  else
+    save.set("rd_h_" .. i .. "_vis", 0)
+  end
 end
 
 -- ---- HUD ----
@@ -367,18 +465,27 @@ local STATUS = {
   [8] = "Mode démo — joystick ou flèches : amenez le point blanc sur la cible",
   [9] = "Nouvelle cible — mouvement lent et confortable",
   [10] = "Maintenez la position…",
+  [11] = "Montrez votre main entière à la caméra",
+  [12] = "Bien — rouvrez la main doucement",
 }
 local cote = (side > 0) and "droit" or "gauche"
+local cote_m = (side > 0) and "droite" or "gauche"
 hud_text("titre", "MOUVÉO · " .. ex.name)
-local reglages = "Côté " .. cote .. " · amplitude " .. num(amp) .. " % · objectif " .. num(goal) .. " répétitions"
+local reglages = (hand_ex and ("Main " .. cote_m) or ("Côté " .. cote)) .. " · amplitude " .. num(amp) .. " % · objectif " .. num(goal) .. " répétitions"
 if stage == 0 then
-  local src = pose.ok and "📷 Caméra détectée : la séance suivra vos mouvements." or "🎮 Sans caméra : mode démo, le point blanc se pilote au joystick ou aux flèches."
+  local src
+  if hand_ex then
+    src = HP and "📷 Main détectée : la séance suivra vos doigts." or (hand.ok and ("📷 Montrez votre main " .. cote_m .. " à la caméra.") or "🎮 Sans caméra : mode démo, la jauge se pilote au joystick ou aux flèches.")
+  else
+    src = pose.ok and "📷 Caméra détectée : la séance suivra vos mouvements." or "🎮 Sans caméra : mode démo, le point blanc se pilote au joystick ou aux flèches."
+  end
   hud_text("aide", ex.short .. " (" .. ex.fam .. ")\n" .. ex.tip .. "\n" .. reglages .. "\n" .. src)
   hud_text("consigne", STATUS[0])
   hud_text("score", ""); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", ""); hud_text("bilan", "")
 elseif stage == 1 then
   hud_text("aide", reglages)
-  if body_ok then hud_text("consigne", STATUS[2] .. " " .. num(calib * 100) .. " %") else hud_text("consigne", STATUS[1]) end
+  if body_ok then hud_text("consigne", STATUS[2] .. " " .. num(calib * 100) .. " %")
+  else hud_text("consigne", hand_ex and STATUS[11] or STATUS[1]) end
   hud_text("score", ""); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", ""); hud_text("bilan", "")
 elseif stage == 2 then
   local hits, combo, points = g("rd_hits", 0), g("rd_combo", 0), g("rd_points", 0)
@@ -391,10 +498,13 @@ elseif stage == 2 then
   for i = 1, goal do bar = bar .. ((i <= hits) and "★" or "☆") end
   hud_text("objectif", "Objectif " .. num(math.min(hits, goal)) .. "/" .. num(goal) .. "  " .. bar)
   hud_text("aide", reglages)
-  if not body_ok then hud_text("consigne", "⏸ Repositionnez-vous — séance en pause")
+  if not body_ok then hud_text("consigne", hand_ex and ("⏸ " .. STATUS[11] .. " — séance en pause") or "⏸ Repositionnez-vous — séance en pause")
   else
     local s = g("rd_status", 3)
     if s == 10 then hud_text("consigne", STATUS[10] .. " " .. num(dwell_frac * 100) .. " %")
+    elseif hand_ex and s == 3 and ex.gesture == "piano" then
+      local fingers = {"l'index", "le majeur", "l'annulaire", "l'auriculaire"}
+      hud_text("consigne", "Touchez le pouce avec " .. fingers[(g("rd_tidx", 0) % 4) + 1])
     else hud_text("consigne", STATUS[s] or STATUS[3]) end
   end
   hud_text("bilan", "")
@@ -447,7 +557,7 @@ local vis = (save.get("rd_target_vis") or 0) > 0.5
 obj.visible = vis
 if vis then
   obj.x = save.get("rd_target_x") or 0; obj.y = save.get("rd_target_y") or 0; obj.z = 0
-  local s = 0.30 * (1.0 + math.sin(time * 5.5) * 0.08)
+  local s = 0.30 * (save.get("rd_target_scale") or 1) * (1.0 + math.sin(time * 5.5) * 0.08)
   obj.sx = s; obj.sy = s; obj.sz = s
   obj.r = save.get("rd_target_r") or 1; obj.g = save.get("rd_target_g") or 1; obj.b = save.get("rd_target_b") or 1
 end
@@ -461,7 +571,7 @@ local vis = (save.get("rd_target_vis") or 0) > 0.5
 obj.visible = vis
 if vis then
   obj.x = save.get("rd_target_x") or 0; obj.y = save.get("rd_target_y") or 0; obj.z = 0
-  local s = 0.5 * (1.0 + math.sin(time * 5.5) * 0.08) + 0.4 * (save.get("rd_dwell_frac") or 0)
+  local s = (0.5 * (1.0 + math.sin(time * 5.5) * 0.08) + 0.4 * (save.get("rd_dwell_frac") or 0)) * (save.get("rd_target_scale") or 1)
   obj.sx = s; obj.sy = s; obj.sz = s
   obj.r = save.get("rd_target_r") or 1; obj.g = save.get("rd_target_g") or 1; obj.b = save.get("rd_target_b") or 1
 end
@@ -494,20 +604,22 @@ const BONES: [(&str, &str); 12] = [
     ("knee_r", "ankle_r"),
 ];
 
-/// Script d'un os : cylindre (axe Y, hauteur 1) posé au milieu des deux repères,
-/// étiré à leur distance et tourné autour de Z pour les relier — angle calculé
-/// par `acos` + signe plutôt qu'`atan2`, absent en Lua 5.1 sous ce nom.
-fn bone_script(a: &str, b: &str) -> String {
+/// Script d'un segment (os du corps ou phalange) : cylindre (axe Y, hauteur 1)
+/// posé au milieu des deux repères `ka`/`kb` (préfixes de clés `save`, ex.
+/// `rd_p_hip_r` ou `rd_h_9`), étiré à leur distance et tourné autour de Z pour
+/// les relier — angle calculé par `acos` + signe plutôt qu'`atan2`, absent en
+/// Lua 5.1 sous ce nom.
+fn segment_script(ka: &str, kb: &str, thickness: f32, z: f32) -> String {
     format!(
-        "local vis = (save.get(\"rd_p_{a}_vis\") or 0) > 0.5 and (save.get(\"rd_p_{b}_vis\") or 0) > 0.5\n\
+        "local vis = (save.get(\"{ka}_vis\") or 0) > 0.5 and (save.get(\"{kb}_vis\") or 0) > 0.5\n\
          obj.visible = vis\n\
          if vis then\n\
-           local ax, ay = save.get(\"rd_p_{a}_x\") or 0, save.get(\"rd_p_{a}_y\") or 0\n\
-           local bx, by = save.get(\"rd_p_{b}_x\") or 0, save.get(\"rd_p_{b}_y\") or 0\n\
+           local ax, ay = save.get(\"{ka}_x\") or 0, save.get(\"{ka}_y\") or 0\n\
+           local bx, by = save.get(\"{kb}_x\") or 0, save.get(\"{kb}_y\") or 0\n\
            local dx, dy = bx - ax, by - ay\n\
            local len = math.sqrt(dx * dx + dy * dy)\n\
-           obj.x = (ax + bx) / 2; obj.y = (ay + by) / 2; obj.z = 0\n\
-           obj.sx = 0.07; obj.sz = 0.07; obj.sy = math.max(0.01, len)\n\
+           obj.x = (ax + bx) / 2; obj.y = (ay + by) / 2; obj.z = {z:?}\n\
+           obj.sx = {thickness:?}; obj.sz = {thickness:?}; obj.sy = math.max(0.01, len)\n\
            if len > 0.0001 then\n\
              local c = dy / len\n\
              if c > 1 then c = 1 elseif c < -1 then c = -1 end\n\
@@ -516,6 +628,53 @@ fn bone_script(a: &str, b: &str) -> String {
              obj.rx = 0; obj.ry = 0; obj.rz = ang\n\
            end\n\
          end\n"
+    )
+}
+
+/// Repères de la main (MediaPipe Hand Landmarker, 1-based) : couleur par doigt
+/// comme dans la visualisation MediaPipe (pouce crème, index violet, majeur
+/// jaune, annulaire vert, auriculaire bleu, paume gris-bleu).
+fn finger_color(i: usize) -> [f32; 3] {
+    match i {
+        2..=5 => [1.0, 0.92, 0.72],
+        6..=9 => [0.77, 0.71, 0.99],
+        10..=13 => [0.99, 0.83, 0.30],
+        14..=17 => [0.35, 0.9, 0.45],
+        18..=21 => [0.35, 0.55, 1.0],
+        _ => [0.85, 0.9, 1.0],
+    }
+}
+
+/// Les 21 liaisons de la main (paires 1-based) : chaînes des cinq doigts + paume.
+const HAND_BONES: [(usize, usize); 21] = [
+    (1, 2),
+    (2, 3),
+    (3, 4),
+    (4, 5),
+    (1, 6),
+    (6, 7),
+    (7, 8),
+    (8, 9),
+    (6, 10),
+    (10, 11),
+    (11, 12),
+    (12, 13),
+    (10, 14),
+    (14, 15),
+    (15, 16),
+    (16, 17),
+    (14, 18),
+    (18, 19),
+    (19, 20),
+    (20, 21),
+    (1, 18),
+];
+
+fn hand_joint_script(i: usize) -> String {
+    format!(
+        "local vis = (save.get(\"rd_h_{i}_vis\") or 0) > 0.5\n\
+         obj.visible = vis\n\
+         if vis then obj.x = save.get(\"rd_h_{i}_x\") or 0; obj.y = save.get(\"rd_h_{i}_y\") or 0; obj.z = 0.02 end\n"
     )
 }
 
@@ -557,7 +716,7 @@ fn button_widget(id: &str, label: &str, action: &str, offset_y: f32) -> HudWidge
 impl Scene {
     /// Démo « Rééducation — mobilité guidée » (cf. la doc du module).
     pub fn reeducation_demo() -> Self {
-        let mut objects = Vec::with_capacity(32);
+        let mut objects = Vec::with_capacity(80);
 
         // Directeur en tête de liste : les autres objets relisent son état le
         // même tick (les scripts s'exécutent dans l'ordre de `objects`).
@@ -597,7 +756,7 @@ impl Scene {
             os.transform = os.transform.with_scale(Vec3::new(0.07, 0.5, 0.07));
             os.color = [0.85, 0.9, 1.0];
             os.emissive = 0.25;
-            os.script = bone_script(a, b);
+            os.script = segment_script(&format!("rd_p_{a}"), &format!("rd_p_{b}"), 0.07, 0.0);
             os.visible = false;
             objects.push(os);
         }
@@ -611,6 +770,32 @@ impl Scene {
             j.script = joint_script(name);
             j.visible = false;
             objects.push(j);
+        }
+
+        // Main dessinée en grand (exercices de doigts) : 21 repères + 21 phalanges,
+        // couleur par doigt, cachés tant qu'aucune main n'est suivie.
+        for (a, b) in HAND_BONES {
+            let mut ph = demo_obj(&format!("Phalange {a}-{b}"), MeshKind::Cylinder, Vec3::ZERO);
+            ph.transform = ph.transform.with_scale(Vec3::new(0.05, 0.3, 0.05));
+            ph.color = if matches!((a, b), (1, 6) | (6, 10) | (10, 14) | (14, 18) | (1, 18)) {
+                finger_color(1)
+            } else {
+                finger_color(b)
+            };
+            ph.emissive = 0.3;
+            ph.script = segment_script(&format!("rd_h_{a}"), &format!("rd_h_{b}"), 0.05, 0.01);
+            ph.visible = false;
+            objects.push(ph);
+        }
+        for i in 1..=21 {
+            let mut d = demo_obj(&format!("Doigt {i}"), MeshKind::Sphere, Vec3::ZERO);
+            let r = if i == 1 { 0.09 } else { 0.06 };
+            d.transform = d.transform.with_scale(Vec3::splat(r));
+            d.color = finger_color(i);
+            d.emissive = 0.5;
+            d.script = hand_joint_script(i);
+            d.visible = false;
+            objects.push(d);
         }
 
         let mut main = demo_obj("Point suivi", MeshKind::Sphere, Vec3::new(0.8, 1.3, 0.05));

@@ -2496,3 +2496,191 @@ fn reeducation_camera_mode_calibrates_then_counts_reps_and_pauses_when_the_body_
         app.hud_texts.get("consigne")
     );
 }
+
+/// Main droite synthétique « à plat » (cf. `pose::HandFrame::apply_flat`) :
+/// poignet en (0.3, 0.6), base du majeur 0.1 plus haut (taille de main 0.1),
+/// pouce à gauche ; `pinched` colle le bout de l'index au pouce, sinon l'index
+/// est tendu loin du pouce.
+fn right_hand_flat(pinched: bool) -> Vec<f32> {
+    use crate::app::pose::{FLOATS_PER_HAND, HAND_LANDMARK_COUNT};
+    let mut v = vec![0.0f32; FLOATS_PER_HAND];
+    v[0] = 1.0;
+    let mut set = |i: usize, x: f32, y: f32| {
+        v[1 + i * 3] = x;
+        v[2 + i * 3] = y;
+    };
+    // Paume : poignet, bases des doigts en éventail au-dessus.
+    set(0, 0.30, 0.60);
+    set(1, 0.26, 0.58);
+    set(2, 0.23, 0.55);
+    set(3, 0.215, 0.53);
+    set(4, 0.22, 0.52); // bout du pouce
+    for (f, x) in [(5usize, 0.27), (9, 0.30), (13, 0.33), (17, 0.36)] {
+        set(f, x, 0.50);
+        set(f + 1, x, 0.46);
+        set(f + 2, x, 0.42);
+        set(f + 3, x, 0.38);
+    }
+    if pinched {
+        set(8, 0.225, 0.52);
+    }
+    assert_eq!(HAND_LANDMARK_COUNT, 21);
+    v
+}
+
+fn select_exercise(app: &mut AppState, target_index: usize) {
+    for _ in 1..target_index {
+        app.push_hud_event("ex_next");
+        reeduc_tick(app);
+    }
+    assert_eq!(reeduc_var(app, "rd_ex"), target_index as f64);
+}
+
+/// Exercice de doigts « Pince lumineuse » en **mode caméra** : la main droite
+/// (21 repères) suffit à démarrer, la calibration se fait sur la main, la main
+/// est dessinée en grand à la place du corps, et chaque pince fermée puis
+/// rouverte compte une répétition.
+#[test]
+fn reeducation_pinch_exercise_counts_hand_gestures_from_hand_landmarks() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    select_exercise(&mut app, 9);
+    assert!(
+        app.hud_texts
+            .get("titre")
+            .is_some_and(|t| t.contains("Pince")),
+        "{:?}",
+        app.hud_texts.get("titre")
+    );
+    app.set_hands(&right_hand_flat(false));
+    reeduc_tick(&mut app);
+    assert!(
+        app.hud_texts
+            .get("aide")
+            .is_some_and(|s| s.contains("Main détectée")),
+        "{:?}",
+        app.hud_texts.get("aide")
+    );
+    let doigt = |app: &AppState| {
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Doigt 9")
+            .unwrap()
+            .visible
+    };
+    let nez = |app: &AppState| {
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Repère nose")
+            .unwrap()
+            .visible
+    };
+    assert!(doigt(&app), "la main est dessinée dès l'accueil");
+    assert!(!nez(&app), "le corps s'efface derrière la main");
+
+    app.push_hud_event("demarrer");
+    app.set_hands(&right_hand_flat(false));
+    reeduc_tick(&mut app);
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        1.0,
+        "main présente : calibration"
+    );
+    let mut n = 0;
+    while reeduc_var(&app, "rd_stage") == 1.0 && n < 400 {
+        app.set_hands(&right_hand_flat(false));
+        reeduc_tick(&mut app);
+        n += 1;
+    }
+    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
+
+    let mut hits = 0.0;
+    for cycle in 0..6 {
+        for _ in 0..45 {
+            app.set_hands(&right_hand_flat(cycle % 2 == 0));
+            reeduc_tick(&mut app);
+        }
+        hits = reeduc_var(&app, "rd_hits");
+    }
+    assert!(hits >= 3.0, "pinces comptées : {hits}");
+    assert!(
+        app.hud_texts
+            .get("objectif")
+            .is_some_and(|s| s.contains('★')),
+        "{:?}",
+        app.hud_texts.get("objectif")
+    );
+
+    // Main perdue : pause, consigne dédiée.
+    for _ in 0..(crate::app::pose::STALE_AFTER_TICKS + 5) {
+        reeduc_tick(&mut app);
+    }
+    assert!(
+        app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("main") && s.contains("pause")),
+        "{:?}",
+        app.hud_texts.get("consigne")
+    );
+    assert!(!doigt(&app), "main perdue : plus dessinée");
+}
+
+/// Exercice de doigts sans caméra : jauge verticale pilotée au joystick, même
+/// machine à états que les autres exercices.
+#[test]
+fn reeducation_hand_exercise_has_a_joystick_demo_mode() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    select_exercise(&mut app, 10); // Éventail
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
+    assert_eq!(reeduc_var(&app, "rd_cam"), 0.0);
+    let mut hits = 0.0;
+    for _ in 0..900 {
+        let target = object_pos(&app, "Cible");
+        let hand = object_pos(&app, "Point suivi");
+        app.input_state.joy.1 =
+            (app.input_state.joy.1 + 0.2 * (target.y - hand.y)).clamp(-1.0, 1.0);
+        reeduc_tick(&mut app);
+        hits = reeduc_var(&app, "rd_hits");
+        if hits >= 2.0 {
+            break;
+        }
+    }
+    assert!(hits >= 2.0, "répétitions en mode démo main : {hits}");
+}
+
+/// Repère du corps mal vu (visibilité < 0,5) : ni sa sphère ni ses os ne sont
+/// dessinés — c'est ce qui faisait filer un cylindre hors de l'écran quand le
+/// patient était trop près de la caméra.
+#[test]
+fn reeducation_hides_low_visibility_landmarks_and_their_bones() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    let mut flat = flat_pose_from_world(&standing_body());
+    flat[27 * 4 + 3] = 0.2; // cheville gauche extrapolée
+    app.set_pose(&flat);
+    reeduc_tick(&mut app);
+    reeduc_tick(&mut app);
+    let vis = |name: &str| {
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .visible
+    };
+    assert!(vis("Repère knee_l"));
+    assert!(!vis("Repère ankle_l"));
+    assert!(!vis("Os knee_l-ankle_l"));
+    assert!(vis("Os hip_l-knee_l"));
+}

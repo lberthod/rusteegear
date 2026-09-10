@@ -117,9 +117,22 @@ struct KinematicState {
     hvel: Vec3,
     vspeed: f32,
     grounded: bool,
+    /// Pas écoulés depuis le dernier contact au sol — « coyote time » du mode
+    /// plateformer 2D (`Physics::platformer_feel`) : sauter juste après avoir
+    /// quitté un rebord marche encore pendant `COYOTE_TICKS` pas.
+    air_ticks: u32,
 }
 
+/// Coyote time (pas de 1/60 s) et vitesse verticale résiduelle quand le saut est
+/// relâché en pleine montée (« saut à hauteur variable ») — mode plateformer 2D
+/// seulement (`Physics::platformer_feel`), le contrôleur 3D historique est inchangé.
+const COYOTE_TICKS: u32 = 6;
+const JUMP_CUT_SPEED: f32 = 4.0;
+
 pub struct Physics {
+    /// Scène en mode plateformer 2D (`Scene::platformer`) : saut à hauteur
+    /// variable + coyote time dans `control_kinematic`.
+    platformer_feel: bool,
     bodies: RigidBodySet,
     colliders: ColliderSet,
     gravity: Vector,

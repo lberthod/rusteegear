@@ -383,6 +383,7 @@ impl Physics {
                         // (`cur.y.abs() < 1.0`, vraie tant qu'aucune chute n'a
                         // commencé).
                         grounded: true,
+                        air_ticks: 0,
                     },
                 ));
             } else if controllable {
@@ -504,6 +505,7 @@ impl Physics {
         };
 
         Physics {
+            platformer_feel: scene.platformer.is_some(),
             bodies,
             colliders,
             gravity: Vector::new(0.0, -9.81, 0.0),

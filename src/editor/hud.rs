@@ -1283,6 +1283,7 @@ pub(super) fn mobile_top_buttons(
     muted: bool,
     above_map: bool,
     locale: crate::app::locale::Locale,
+    minimal: bool,
 ) -> TopButtons {
     let mut out = TopButtons {
         pause: false,
@@ -1295,8 +1296,12 @@ pub(super) fn mobile_top_buttons(
     let map_w = 64.0;
     let spacing = 8.0;
     // Largeur totale connue d'avance : le groupe est aligné à droite.
+    // `minimal` (jeu solo arcade, cf. `Scene::platformer`) : pause et son
+    // seulement — pas de carte ni d'aide MMORPG.
     let width = if paused {
         TOUCH_TARGET
+    } else if minimal {
+        TOUCH_TARGET * 2.0 + spacing
     } else {
         TOUCH_TARGET * 3.0 + map_w + spacing * 3.0
     };
@@ -1329,6 +1334,9 @@ pub(super) fn mobile_top_buttons(
                     .clicked()
                 {
                     out.mute = true;
+                }
+                if minimal {
+                    return;
                 }
                 // « Carte » en toutes lettres : 🗺 est couvert par les fontes
                 // d'egui, mais le mot reste plus clair qu'un pictogramme.

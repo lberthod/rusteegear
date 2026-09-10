@@ -1036,6 +1036,22 @@ fn reeducation_demo_is_wired_for_its_director_script() {
         .filter(|o| o.name.starts_with("Os "))
         .collect();
     assert_eq!(bones.len(), 12, "les 12 segments du squelette de Mouvéo");
+    assert_eq!(
+        scene
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Doigt "))
+            .count(),
+        21
+    );
+    assert_eq!(
+        scene
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Phalange "))
+            .count(),
+        21
+    );
     assert!(
         bones
             .iter()

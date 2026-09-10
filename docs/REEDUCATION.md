@@ -32,11 +32,29 @@ quand le corps sort du cadre) ou s'arrête à l'objectif (4 à 12 répétitions)
 | Feux de pas | cheville | hanche | — | jambes |
 | Ascenseur | milieu des hanches | hanches | — | jambes |
 | Île équilibre | cheville | hanche | 2 s | équilibre |
+| Pince lumineuse *(ajout)* | bout de l'index → pouce | main suivie (21 repères) | — | main |
+| Éventail *(ajout)* | bout du majeur (ouverture) | main suivie | — | main |
+| Piano *(ajout)* | index, majeur, annulaire, auriculaire → pouce, tour à tour | main suivie | — | main |
 
 Les trois cibles de chaque exercice sont des décalages en fraction de la
 **longueur du membre calibrée** (épaule→coude→poignet, hanche→genou→cheville),
 modulés par l'**amplitude confortable** (55 à 95 %) — exactement les motifs de
 Mouvéo, donc la difficulté suit la morphologie du patient, pas des pixels.
+
+Les trois exercices de **doigts** n'existent pas dans Mouvéo : la page fait
+tourner en plus le *Hand Landmarker* (21 repères par main), la main du côté
+choisi est dessinée en grand (couleur par doigt), et un degré de geste `m`
+(0 = neutre, 1 = geste complet : pince fermée, main grande ouverte, doigt sur
+le pouce) remplace la distance à la cible — l'amplitude fixe le `m` à atteindre,
+le retour se valide sous 25 %. Sans caméra, une jauge verticale se pilote au
+joystick.
+
+**Qualité du suivi** : inférence à 30 Hz (15 Hz dans Mouvéo) avec repli
+automatique à 15 Hz si la machine ne suit pas ; repères lissés côté moteur
+(constante ~45 ms) puis interpolés à chaque frame ; un repère de visibilité
+< 0,5 (hors cadre, extrapolé) n'est pas dessiné, et ses os non plus — c'est ce
+qui faisait filer des cylindres hors de l'écran quand le patient était trop
+près de la caméra.
 
 **Score** : 10 points par cible + 5 par palier de 3 dans la série ; paliers
 fêtés à 40 %, 70 % et 100 % de l'objectif ; **régularité** en fin de séance =
@@ -49,7 +67,7 @@ cumulés) et record, conservés le temps de la session (`save.*`).
 
 | | Web `reeduc.html` (Chrome/Edge/Safari récents) | Éditeur, desktop `--player`, APK |
 | --- | --- | --- |
-| Entrée | **caméra** : MediaPipe Pose Landmarker (wasm + modèle « lite » ~10 Mo, chargés d'un CDN au clic « Activer la caméra »), 33 repères à ~15 Hz | **mode démo** : le point suivi part de la position neutre et se pilote au stick tactile (souris) ou aux flèches |
+| Entrée | **caméra** : MediaPipe Pose Landmarker + Hand Landmarker (wasm + modèles ~18 Mo, chargés d'un CDN au clic « Activer la caméra »), 33 + 2 × 21 repères à ~30 Hz | **mode démo** : le point suivi part de la position neutre et se pilote au stick tactile (souris) ou aux flèches |
 | Calibration | 1,8 s de corps visible sans bouger → ancres (épaules, coudes, poignets, hanches, genoux, chevilles) figées | immédiate, silhouette virtuelle debout |
 | Pause | automatique dès que le corps sort du cadre (ou pose périmée > 0,75 s) : chrono figé, consigne « Repositionnez-vous » | jamais |
 | Sans caméra | bascule d'elle-même en mode démo (refus, absence, CDN inaccessible) | — |
@@ -95,7 +113,7 @@ anti-rebond 0,65 s entre deux cibles, comme dans l'original.
 
 ## Fichiers
 
-- [src/app/pose.rs](../src/app/pose.rs) — `PoseFrame` (33 repères, fraîcheur), `AppState::set_pose`.
+- [src/app/pose.rs](../src/app/pose.rs) — `PoseFrame` (33 repères, fraîcheur), `HandFrame` (2 × 21 repères), `AppState::set_pose`/`set_hands`.
 - [src/lib.rs](../src/lib.rs) — export wasm `set_pose_landmarks`, `?scene=reeduc` / `--demo=reeduc`.
 - [src/app/scripting.rs](../src/app/scripting.rs), [scripting_web.rs](../src/app/scripting_web.rs) — table `pose` (cf. [LUA_API.md](LUA_API.md)).
 - [src/scene/demos/reeducation.rs](../src/scene/demos/reeducation.rs) — scène, scripts, widgets.

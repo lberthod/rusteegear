@@ -114,9 +114,15 @@ impl Physics {
         let (_, handle, state) = self.kinematic[slot];
 
         let grounded = state.grounded;
-        let do_jump = jump && grounded;
+        // Coyote time : encore possible pendant quelques pas après un rebord, tant
+        // qu'aucun saut n'a déjà commencé (vitesse verticale non positive).
+        let coyote = self.platformer_feel && state.air_ticks <= COYOTE_TICKS && state.vspeed <= 0.0;
+        let do_jump = jump && (grounded || coyote);
         let vspeed = if do_jump {
             jump_speed
+        } else if self.platformer_feel && !jump && state.vspeed > JUMP_CUT_SPEED {
+            // Saut relâché en pleine montée : on coupe l'élan (petit saut).
+            JUMP_CUT_SPEED
         } else if grounded {
             // Pas de solveur de contact pour maintenir un corps kinématique au
             // repos sur le sol : on remet explicitement à zéro plutôt que de
@@ -217,6 +223,11 @@ impl Physics {
             hvel: new_hvel,
             vspeed,
             grounded: movement.grounded,
+            air_ticks: if movement.grounded {
+                0
+            } else {
+                state.air_ticks.saturating_add(1)
+            },
         };
 
         if let Some(body) = self.bodies.get_mut(handle) {

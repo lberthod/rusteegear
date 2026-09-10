@@ -1114,6 +1114,12 @@ pub struct AppState {
     /// Point de réapparition courant (fonction Lua `checkpoint(x, y, z)`) : `None` =
     /// position de départ du snapshot de Play. Survit à `restart_game` comme `deaths`.
     checkpoint: Option<Vec3>,
+    /// Séquence de mort en cours (mode plateformer 2D) : secondes restantes avant
+    /// la réapparition — le joueur est masqué, ses débris volent, puis
+    /// `rage_respawn`. `None` hors séquence.
+    pending_respawn: Option<f32>,
+    /// Position de la dernière mort (tombe posée à la réapparition).
+    death_pos: Option<Vec3>,
     /// Textes de HUD posés par les scripts (`hud_text(id, texte)`, mode plateformer
     /// 2D) : remplacent le contenu du widget `Text` d'id correspondant. Remis à
     /// zéro à l'entrée en Play seulement (une vanne de mort doit survivre à
@@ -1123,6 +1129,8 @@ pub struct AppState {
     /// alimentée par `set_pose` (export wasm `set_pose_landmarks`, tests),
     /// vieillie d'un pas à chaque `sim_step`, exposée aux scripts en `pose`.
     pub pose: pose::PoseFrame,
+    /// Dernières mains reçues (doigts, `set_hands`), exposées aux scripts en `hand`.
+    pub hands: pose::HandFrame,
     /// File d'événements de gameplay : noms émis pendant le tick courant
     /// (par un script via `emit("nom")`, ou par le moteur — ex. `score:N` à chaque
     /// point marqué), **délivrés aux scripts au tick fixe suivant** via
@@ -1490,8 +1498,11 @@ impl AppState {
             score: 0,
             deaths: 0,
             checkpoint: None,
+            pending_respawn: None,
+            death_pos: None,
             hud_texts: std::collections::HashMap::new(),
             pose: pose::PoseFrame::default(),
+            hands: pose::HandFrame::default(),
             game_events: Vec::new(),
             trigger_prev: std::collections::HashSet::new(),
             furtive_awake: std::collections::HashSet::new(),
@@ -1977,6 +1988,12 @@ impl AppState {
         self.pose.apply_flat(flat);
     }
 
+    /// Reçoit les mains « à plat » (`n × 64` flottants, cf. `pose::HandFrame::
+    /// apply_flat`) — export wasm `set_hand_landmarks`, ou un test.
+    pub fn set_hands(&mut self, flat: &[f32]) {
+        self.hands.apply_flat(flat);
+    }
+
     /// Valeur d'une variable de script (`save.get`/`save.set`), `None` si jamais
     /// écrite — lecture seule, pour les exemples et outils hors crate (ex.
     /// `examples/gen_reeduc_preview.rs`).
@@ -2013,6 +2030,13 @@ impl AppState {
             .iter()
             .position(|o| o.visible && o.controller.as_ref().is_some_and(|c| c.input || c.gyro))
             .or_else(|| {
+                // Séquence de mort du plateformer 2D (`pending_respawn`) : le
+                // joueur pilotable est masqué le temps des débris — surtout pas de
+                // repli sur un objet scripté quelconque (un piège serait « le
+                // joueur » : zones mortelles, ramassage et portes réagiraient).
+                if self.pending_respawn.is_some() {
+                    return None;
+                }
                 // Exclut les monstres (`ai_chaser`) et cibles de combat
                 // (`combat.attackable`) : ils portent aussi un script (leur
                 // logique de dégâts/couleur), donc sans cette exclusion, un

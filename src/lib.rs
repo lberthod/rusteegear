@@ -1272,6 +1272,10 @@ impl ApplicationHandler for App {
         if let Some(flat) = take_pending_pose() {
             self.state.set_pose(&flat);
         }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(flat) = take_pending_hands() {
+            self.state.set_hands(&flat);
+        }
         self.poll_gamepad();
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         self.poll_asset_hot_reload();
@@ -1803,6 +1807,22 @@ thread_local! {
     /// appliquée à `AppState` — consommée par `about_to_wait`. Une seule valeur :
     /// deux inférences entre deux tours de boucle, seule la dernière compte.
     static PENDING_POSE: std::cell::RefCell<Option<Vec<f32>>> = const { std::cell::RefCell::new(None) };
+    /// Idem pour les mains (`set_hand_landmarks`).
+    static PENDING_HANDS: std::cell::RefCell<Option<Vec<f32>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Export appelé par la page à chaque inférence du *Hand Landmarker* : `n × 64`
+/// flottants (`côté`, puis 21 × `x, y, z` par main), tableau vide sans main —
+/// cf. `app::pose::HandFrame::apply_flat`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_hand_landmarks(data: &[f32]) {
+    PENDING_HANDS.with(|p| *p.borrow_mut() = Some(data.to_vec()));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn take_pending_hands() -> Option<Vec<f32>> {
+    PENDING_HANDS.with(|p| p.borrow_mut().take())
 }
 
 /// Export appelé par `packaging/web/reeduc.html` à chaque inférence MediaPipe :

@@ -619,6 +619,31 @@ pub(super) fn run_script_web(
         Ok(())
     }));
     lua_try!(lua.set_global("pose", pose_tbl));
+    // Table `hand` (doigts) — même forme que côté mlua, cf. `scripting.rs`.
+    let hand_tbl = lua.create_table();
+    lua_try!(crate::app::script_ctx::with_hands(|h| -> LuaResult<()> {
+        set_bool(lua, &hand_tbl, "ok", h.is_ok())?;
+        for (name, right) in [("left", false), ("right", true)] {
+            if let Some(hand) = h.side(right) {
+                let t = lua.create_table();
+                let xs = lua.create_table();
+                let ys = lua.create_table();
+                let zs = lua.create_table();
+                for (i, lm) in hand.landmarks.iter().enumerate() {
+                    let k = (i + 1) as f64;
+                    lua.table_raw_set(&xs, Val::Num(k), Val::Num(lm[0] as f64))?;
+                    lua.table_raw_set(&ys, Val::Num(k), Val::Num(lm[1] as f64))?;
+                    lua.table_raw_set(&zs, Val::Num(k), Val::Num(lm[2] as f64))?;
+                }
+                set_table(lua, &t, "x", xs)?;
+                set_table(lua, &t, "y", ys)?;
+                set_table(lua, &t, "z", zs)?;
+                set_table(lua, &hand_tbl, name, t)?;
+            }
+        }
+        Ok(())
+    }));
+    lua_try!(lua.set_global("hand", hand_tbl));
     lua_try!(lua.register_function("spawn", host_spawn));
     lua_try!(lua.register_function("add_item", host_add_item));
     lua_try!(lua.register_function("find_tag", host_find_tag));
@@ -1668,6 +1693,34 @@ mod tests {
         }
 
         #[test]
+        fn hand_table_matches_between_backends() {
+            let mut flat = vec![0.0f32; crate::app::pose::FLOATS_PER_HAND];
+            flat[0] = 1.0; // main droite
+            flat[1 + 8 * 3] = 0.25; // index (bout) x
+            flat[2 + 8 * 3] = 0.5; // y
+            let mut frame = crate::app::pose::HandFrame::default();
+            frame.apply_flat(&flat);
+            crate::app::script_ctx::set_hands(&frame);
+            let src = "if hand.ok and hand.right and not hand.left then obj.x = hand.right.x[9] * 10; obj.y = hand.right.y[9] * 10; obj.z = #hand.right.x end";
+            let mut t_native = Transform::from_pos(Vec3::ZERO);
+            let mut t_web = Transform::from_pos(Vec3::ZERO);
+            let mut col = [1.0; 3];
+            run_native(src, &mut t_native, &mut col);
+            run_web(src, &mut t_web, &mut col);
+            assert!(
+                (t_native.position - Vec3::new(2.5, 5.0, 21.0)).length() < 1e-4,
+                "{:?}",
+                t_native.position
+            );
+            assert!(
+                (t_native.position - t_web.position).length() < 1e-5,
+                "web {:?}",
+                t_web.position
+            );
+            crate::app::script_ctx::set_hands(&crate::app::pose::HandFrame::default());
+        }
+
+        #[test]
         fn pose_table_matches_between_backends() {
             // `pose.ok` et les repères nommés (démo Rééducation) : même lecture des
             // deux côtés, y compris la visibilité.
@@ -1702,6 +1755,10 @@ mod tests {
         fn reeducation_scripts_run_on_the_web_backend() {
             let scene = crate::scene::Scene::reeducation_demo();
             let mut lua = Lua::new().unwrap();
+            // Comme `AppState::new` : GC incrémental coupé (write barrier absent
+            // de l'API bas niveau, cf. `maybe_collect_garbage`), collectes
+            // complètes périodiques seulement.
+            lua.gc_stop();
             let mut funcs: Vec<(String, Function)> = scene
                 .objects
                 .iter()
@@ -1714,8 +1771,8 @@ mod tests {
                 })
                 .collect();
             assert!(
-                funcs.len() >= 29,
-                "directeur + cible + halo + point + 13 repères + 12 os"
+                funcs.len() >= 71,
+                "directeur + cible + halo + point + 13 repères + 12 os + 21 doigts + 21 phalanges"
             );
             // Ancrage GC comme le fait `AppState` (cf. `anchor_compiled_function`).
             for (i, (_, f)) in funcs.iter_mut().enumerate() {

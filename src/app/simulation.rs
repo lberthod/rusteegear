@@ -432,7 +432,10 @@ fn drive_local_and_networked_players(
         // (joueur local), ou demandé par l'`Input` réseau de ce joueur.
         let jump = (!ctrl.jump_button.is_empty()
             && input_state.buttons.contains(&ctrl.jump_button))
-            || (space && ctrl.input);
+            || (space && ctrl.input)
+            // Plateformer 2D : Haut / W sautent aussi (l'axe vertical n'a pas
+            // d'autre usage une fois le déplacement verrouillé sur X).
+            || (lock_z && ctrl.input && net_input.is_none() && raw_my > 0.5);
         let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
         any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
         if ctrl.input {
@@ -874,6 +877,8 @@ impl AppState {
         self.lost = false;
         // L'orbite éditeur est toujours en perspective (cf. `OrbitCamera::ortho_height`).
         self.camera.ortho_height = 0.0;
+        self.pending_respawn = None;
+        self.death_pos = None;
         self.clear_selection();
         self.audio.stop_all();
         if let Some(ctx) = self.edit_context.take() {
@@ -942,6 +947,8 @@ impl AppState {
             // plateformer 2D repartent de zéro (ils survivent à `restart_game`).
             self.deaths = 0;
             self.checkpoint = None;
+            self.pending_respawn = None;
+            self.death_pos = None;
             self.hud_texts.clear();
             // Manche 1 révélée, suivantes masquées, *avant* de construire la physique
             // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
@@ -1253,10 +1260,20 @@ impl AppState {
             // exactement comme une à 60 Hz), là où la forme linéaire sur-amortissait à
             // bas FPS et créait de micro-à-coups de caméra sous gigue de frame.
             let t = 1.0 - (-dt * 6.0).exp();
+            // Plateformer 2D : la caméra regarde un peu devant le joueur (dans le
+            // sens de sa course) — on voit venir le trou, pas le mur derrière soi.
+            let ahead = if self.scene.platformer.is_some_and(|pl| pl.lock_z) {
+                self.player_index()
+                    .and_then(|i| self.physics.as_ref().and_then(|ph| ph.velocity(i)))
+                    .map(|v| (v.x * 0.4).clamp(-3.0, 3.0))
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
             self.camera.target = self
                 .camera
                 .target
-                .lerp(p + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0), t);
+                .lerp(p + Vec3::new(ahead, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0), t);
             // Caméra qui pivote derrière l'orientation du joueur, **seulement** pour
             // un personnage équipé d'une arme à distance (`fire_button`, cf. le
             // réticule central de `editor::crosshair`) : sans ce suivi, le réticule
@@ -1640,7 +1657,7 @@ impl AppState {
         }
 
         // Plateformer 2D : mort instantanée + réapparition, à pas fixe (cf. sa doc).
-        self.check_instant_death();
+        self.check_instant_death(dt);
 
         // Instantané de fin de pas pour l'interpolation de rendu (cf. `advance_play`) :
         // l'ancien « courant » devient le « précédent », puis on capture les poses
@@ -1754,6 +1771,8 @@ impl AppState {
         // (`pose.ok` retombe à faux sans nouvelle image, cf. `pose::STALE_AFTER_TICKS`).
         self.pose.tick();
         super::script_ctx::set_pose(&self.pose);
+        self.hands.tick();
+        super::script_ctx::set_hands(&self.hands);
         // Calculé une fois : `self.scene.objects` est emprunté mutable par
         // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
         // n'y serait pas appelable.
@@ -1992,15 +2011,29 @@ impl AppState {
     /// cimetière et chaque objet coûte un draw instancié de plus).
     const MAX_TOMBSTONES: usize = 200;
 
+    /// Durée de la séquence de mort (débris, flash, secousse) avant réapparition.
+    const DEATH_PAUSE_S: f32 = 0.45;
+
     /// Mode plateformer 2D à réapparition instantanée : zone mortelle, chute sous
-    /// `kill_y` ou vie à 0 ⇒ `rage_death`. Vérifié à chaque **pas fixe** (fin de
-    /// `sim_step`) et non par frame comme `lost` : déterministe, et donc identique
-    /// en temps réel et en pas simulés (`advance_steps`, pont de pilotage).
-    fn check_instant_death(&mut self) {
+    /// `kill_y` ou vie à 0 ⇒ `rage_death_start`, puis `rage_respawn` après
+    /// `DEATH_PAUSE_S`. Vérifié à chaque **pas fixe** (fin de `sim_step`) et non
+    /// par frame comme `lost` : déterministe, identique en temps réel et en pas
+    /// simulés (`advance_steps`, pont de pilotage).
+    fn check_instant_death(&mut self, dt: f32) {
         let Some(pl) = self.scene.platformer else {
             return;
         };
         if !pl.instant_respawn || self.lost {
+            return;
+        }
+        if let Some(remaining) = self.pending_respawn {
+            let remaining = remaining - dt;
+            if remaining <= 0.0 {
+                self.pending_respawn = None;
+                self.rage_respawn();
+            } else {
+                self.pending_respawn = Some(remaining);
+            }
             return;
         }
         let Some(p) = self.player_position() else {
@@ -2009,17 +2042,64 @@ impl AppState {
         let dead =
             self.scene.deadly_at(p) || p.y < pl.kill_y || self.hud_health.is_some_and(|h| h <= 0.0);
         if dead {
-            self.rage_death();
+            self.rage_death_start(p);
         }
     }
 
-    /// Mort en mode plateformer 2D (`Platformer2D::instant_respawn`) : compte,
-    /// secoue, relance la scène **tout de suite** (`restart_game`, qui restaure
-    /// tous les pièges) puis replace le joueur au dernier `checkpoint()` — sans
-    /// bannière ni bouton, la boucle « encore une fois » ne doit jamais attendre.
-    pub(crate) fn rage_death(&mut self) {
+    /// Début de la séquence de mort : compte, flash, secousse, joueur masqué et
+    /// six débris dynamiques projetés depuis sa position — la scène continue de
+    /// tourner (les débris volent, les pièges restent en place) pendant
+    /// `DEATH_PAUSE_S`, puis `rage_respawn`. Sans cette pause, la mort était
+    /// invisible : le joueur réapparaissait dans le même pas que sa chute.
+    fn rage_death_start(&mut self, p: Vec3) {
         self.deaths = self.deaths.saturating_add(1);
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+        self.fx.damage_flash = 1.0;
+        self.fx.camera_shake = 1.0;
+        self.death_pos = Some(p);
+        let color = self
+            .player_index()
+            .map(|i| self.scene.objects[i].color)
+            .unwrap_or([0.0, 0.0, 0.0]);
+        if let Some(i) = self.player_index() {
+            self.scene.objects[i].visible = false;
+        }
+        // Débris : ajoutés en fin de tableau (indices existants intacts), effacés
+        // par la restauration du snapshot à la réapparition.
+        const DEBRIS: usize = 6;
+        let first = self.scene.objects.len();
+        for k in 0..DEBRIS {
+            let angle = (k as f32 + 0.5) * std::f32::consts::TAU / DEBRIS as f32;
+            let mut transform = crate::scene::Transform::from_pos(
+                p + Vec3::new(angle.cos(), angle.sin(), 0.0) * 0.2,
+            );
+            transform.scale = Vec3::splat(0.18);
+            self.scene.objects.push(crate::scene::SceneObject {
+                name: "Débris".into(),
+                transform,
+                mesh: crate::scene::MeshKind::Cube,
+                physics: crate::runtime::physics::PhysicsKind::Dynamic,
+                color,
+                emissive: 1.0,
+                ..Default::default()
+            });
+        }
+        self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        if let Some(phys) = self.physics.as_mut() {
+            for k in 0..DEBRIS {
+                let angle = (k as f32 + 0.5) * std::f32::consts::TAU / DEBRIS as f32;
+                let v = Vec3::new(angle.cos() * 4.5, 3.5 + angle.sin().abs() * 4.5, 0.0);
+                phys.set_velocity(first + k, v);
+            }
+        }
+        self.pending_respawn = Some(Self::DEATH_PAUSE_S);
+    }
+
+    /// Fin de la séquence de mort : relance la scène **tout de suite**
+    /// (`restart_game`, qui restaure tous les pièges et efface les débris), pose
+    /// la tombe, puis replace le joueur au dernier `checkpoint()` — sans bannière
+    /// ni bouton, la boucle « encore une fois » ne doit jamais attendre.
+    fn rage_respawn(&mut self) {
         // `restart_game` lève la pause (pensé pour le bouton du menu pause) : une
         // mort en pas-à-pas (éditeur en pause, `step`) ne doit pas relancer le
         // temps réel — on restaure l'état de pause tel quel.
@@ -2030,7 +2110,7 @@ impl AppState {
             .scene
             .platformer
             .filter(|pl| pl.tombstones)
-            .and_then(|_| self.player_position())
+            .and_then(|_| self.death_pos.take())
             .filter(|_| {
                 self.play_snapshot
                     .iter()
@@ -2059,9 +2139,9 @@ impl AppState {
         if let Some(cp) = self.checkpoint {
             self.place_player(cp);
         }
-        // Posés **après** `restart_game`, qui les remet à zéro.
-        self.fx.damage_flash = 1.0;
-        self.fx.camera_shake = 1.0;
+        // Posés **après** `restart_game`, qui les remet à zéro : la réapparition
+        // garde un reste de secousse.
+        self.fx.camera_shake = 0.4;
     }
 
     /// Téléporte le joueur local (transform + corps physique + caméra de suivi).

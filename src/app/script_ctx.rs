@@ -13,7 +13,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use super::pose::PoseFrame;
+use super::pose::{HandFrame, PoseFrame};
 
 thread_local! {
     static DEATHS: Cell<u32> = const { Cell::new(0) };
@@ -21,6 +21,8 @@ thread_local! {
     /// fois par tick avant la boucle des scripts, lue par les deux backends pour
     /// construire la table globale `pose`.
     static POSE: RefCell<PoseFrame> = RefCell::new(PoseFrame::default());
+    /// Dernières mains (doigts, cf. `app::pose::HandFrame`), même cycle que `POSE`.
+    static HANDS: RefCell<HandFrame> = RefCell::new(HandFrame::default());
     static VISIBLE_IN: Cell<bool> = const { Cell::new(true) };
     static VISIBLE_OUT: Cell<Option<bool>> = const { Cell::new(None) };
 }
@@ -44,6 +46,15 @@ pub(crate) fn set_pose(p: &PoseFrame) {
 /// Lit la pose du tick sans la copier (fermeture appelée sous l'emprunt).
 pub(crate) fn with_pose<R>(f: impl FnOnce(&PoseFrame) -> R) -> R {
     POSE.with(|c| f(&c.borrow()))
+}
+
+/// Mains du tick (table Lua `hand`), cf. `set_pose`.
+pub(crate) fn set_hands(h: &HandFrame) {
+    HANDS.with(|c| *c.borrow_mut() = h.clone());
+}
+
+pub(crate) fn with_hands<R>(f: impl FnOnce(&HandFrame) -> R) -> R {
+    HANDS.with(|c| f(&c.borrow()))
 }
 
 /// Visibilité de l'objet dont le script va s'exécuter (valeur initiale de

@@ -1652,7 +1652,15 @@ impl Editor {
             // ⏸ / 🔇 / Carte / ? (roadmap 2.5, 5.5 ; v2 5.3/5.5) — sans clavier,
             // ni Échap, ni M, ni F1 ; utiles à la souris aussi, donc pour toute
             // scène (roadmap v2 1.1). Au-dessus de la carte quand elle est ouverte.
-            let top = mobile_top_buttons(ctx, area, paused, settings.muted, map_open, locale);
+            let top = mobile_top_buttons(
+                ctx,
+                area,
+                paused,
+                settings.muted,
+                map_open,
+                locale,
+                scene.platformer.is_some(),
+            );
             if top.pause {
                 actions.toggle_pause = true;
             }

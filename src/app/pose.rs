@@ -190,3 +190,138 @@ mod tests {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Mains (doigts) — MediaPipe *Hand Landmarker*, 21 repères par main
+// ---------------------------------------------------------------------------
+
+/// Repères d'une main (MediaPipe Hand Landmarker) : 0 poignet ; 1-4 pouce
+/// (CMC, MCP, IP, bout) ; 5-8 index (MCP, PIP, DIP, bout) ; 9-12 majeur ;
+/// 13-16 annulaire ; 17-20 auriculaire. Exposés à Lua en tableaux `x`/`y`/`z`
+/// 1-based (`hand.right.x[9]` = bout de l'index).
+pub const HAND_LANDMARK_COUNT: usize = 21;
+
+/// Flottants par repère de main (`x, y, z` — pas de visibilité : le modèle
+/// n'en fournit pas) — cf. `HandFrame::apply_flat`.
+pub const FLOATS_PER_HAND_LANDMARK: usize = 3;
+
+/// Flottants par main dans la représentation à plat : un marqueur de côté
+/// (`0` gauche, `1` droite) puis les 21 repères.
+pub const FLOATS_PER_HAND: usize = 1 + HAND_LANDMARK_COUNT * FLOATS_PER_HAND_LANDMARK;
+
+/// Une main détectée : 21 repères `[x, y, z]` (mêmes conventions image que
+/// `Landmark`, `z` relatif au poignet).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hand {
+    pub landmarks: [[f32; 3]; HAND_LANDMARK_COUNT],
+}
+
+/// Dernières mains reçues (au plus une par côté) + âge en pas de simulation.
+/// Le côté est décidé par la page (repère de poignet du corps le plus proche,
+/// repli sur la latéralité du modèle) — cf. `packaging/web/reeduc.html`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandFrame {
+    pub left: Option<Hand>,
+    pub right: Option<Hand>,
+    /// Pas de simulation écoulés depuis la dernière image (cf. `STALE_AFTER_TICKS`).
+    pub age: u32,
+}
+
+impl Default for HandFrame {
+    fn default() -> Self {
+        Self {
+            left: None,
+            right: None,
+            age: u32::MAX,
+        }
+    }
+}
+
+impl HandFrame {
+    /// Décode `n × 64` flottants (`[côté, 21 × (x, y, z)]` par main, `n` ∈ 0..2).
+    /// Une tranche vide signifie « aucune main » : les deux côtés passent à
+    /// `None` (contrairement à `PoseFrame`, on ne fige pas la dernière main :
+    /// une main qui sort du cadre doit disparaître, pas rester plantée).
+    pub fn apply_flat(&mut self, flat: &[f32]) {
+        self.left = None;
+        self.right = None;
+        self.age = 0;
+        let (hands, _rest) = flat.as_chunks::<FLOATS_PER_HAND>();
+        for chunk in hands {
+            let mut hand = Hand {
+                landmarks: [[0.0; 3]; HAND_LANDMARK_COUNT],
+            };
+            let (pts, _) = chunk[1..].as_chunks::<FLOATS_PER_HAND_LANDMARK>();
+            for (dst, src) in hand.landmarks.iter_mut().zip(pts) {
+                *dst = *src;
+            }
+            if chunk[0] >= 0.5 {
+                self.right = Some(hand);
+            } else {
+                self.left = Some(hand);
+            }
+        }
+    }
+
+    pub fn tick(&mut self) {
+        self.age = self.age.saturating_add(1);
+    }
+
+    /// Au moins une main fraîche.
+    pub fn is_ok(&self) -> bool {
+        self.age < STALE_AFTER_TICKS && (self.left.is_some() || self.right.is_some())
+    }
+
+    /// Main d'un côté, seulement si l'image est fraîche.
+    pub fn side(&self, right: bool) -> Option<&Hand> {
+        if self.age >= STALE_AFTER_TICKS {
+            return None;
+        }
+        if right {
+            self.right.as_ref()
+        } else {
+            self.left.as_ref()
+        }
+    }
+}
+
+#[cfg(test)]
+mod hand_tests {
+    use super::*;
+
+    fn hand_flat(side: f32, tip_x: f32) -> Vec<f32> {
+        let mut v = vec![0.0; FLOATS_PER_HAND];
+        v[0] = side;
+        v[1 + 8 * 3] = tip_x; // bout de l'index (repère 8)
+        v
+    }
+
+    #[test]
+    fn hands_decode_by_side_and_expose_their_landmarks() {
+        let mut h = HandFrame::default();
+        assert!(!h.is_ok());
+        let mut flat = hand_flat(1.0, 0.3);
+        flat.extend(hand_flat(0.0, 0.7));
+        h.apply_flat(&flat);
+        assert!(h.is_ok());
+        assert_eq!(h.side(true).unwrap().landmarks[8][0], 0.3);
+        assert_eq!(h.side(false).unwrap().landmarks[8][0], 0.7);
+        h.apply_flat(&hand_flat(1.0, 0.4));
+        assert!(h.side(false).is_none(), "main gauche disparue = None");
+        assert_eq!(h.side(true).unwrap().landmarks[8][0], 0.4);
+        h.apply_flat(&[]);
+        assert!(!h.is_ok());
+        assert!(h.left.is_none() && h.right.is_none());
+    }
+
+    #[test]
+    fn hands_go_stale_like_the_pose() {
+        let mut h = HandFrame::default();
+        h.apply_flat(&hand_flat(1.0, 0.1));
+        for _ in 0..STALE_AFTER_TICKS {
+            h.tick();
+        }
+        assert!(!h.is_ok());
+        assert!(h.side(true).is_none());
+    }
+}
