@@ -21,6 +21,11 @@ pub struct OrbitCamera {
     /// (vue de côté 2D, cf. `Scene::platformer`), remise à 0 au Stop — l'orbite
     /// éditeur reste toujours en perspective.
     pub ortho_height: f32,
+    /// Calage de la cible sur la grille des gros pixels (unités monde par pixel de
+    /// la cible basse résolution, `0` = désactivé) : posé par le renderer quand la
+    /// pixelisation est active — sans ça, un mouvement de caméra sous-pixel fait
+    /// scintiller tous les bords du décor. N'affecte que les matrices de rendu.
+    pub snap: f32,
 }
 
 impl OrbitCamera {
@@ -34,6 +39,17 @@ impl OrbitCamera {
             fovy: 45f32.to_radians(),
             collision_distance: None,
             ortho_height: 0.0,
+            snap: 0.0,
+        }
+    }
+
+    /// Cible effective des matrices de vue : `target`, calée sur la grille des
+    /// gros pixels si `snap > 0`.
+    fn render_target(&self) -> Vec3 {
+        if self.snap > 0.0 {
+            (self.target / self.snap).round() * self.snap
+        } else {
+            self.target
         }
     }
 
@@ -69,11 +85,9 @@ impl OrbitCamera {
     /// inchangée, seul le rendu de la frame courante tressaute (Sprint 1,
     /// `sprint10audit.md` — retour d'encaissement de coup).
     pub fn view_proj_shaken(&self, shake_offset: Vec3) -> Mat4 {
-        let view = look_at_mat4(
-            self.eye() + shake_offset,
-            self.target + shake_offset,
-            Vec3::Y,
-        );
+        let target = self.render_target();
+        let eye = self.eye() - self.target + target;
+        let view = look_at_mat4(eye + shake_offset, target + shake_offset, Vec3::Y);
         self.proj() * view
     }
 
@@ -119,7 +133,9 @@ impl OrbitCamera {
     }
 
     pub fn view_proj(&self) -> Mat4 {
-        let view = look_at_mat4(self.eye(), self.target, Vec3::Y);
+        let target = self.render_target();
+        let eye = self.eye() - self.target + target;
+        let view = look_at_mat4(eye, target, Vec3::Y);
         self.proj() * view
     }
 }

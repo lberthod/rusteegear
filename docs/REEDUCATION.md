@@ -41,6 +41,27 @@ Les trois cibles de chaque exercice sont des décalages en fraction de la
 modulés par l'**amplitude confortable** (55 à 95 %) — exactement les motifs de
 Mouvéo, donc la difficulté suit la morphologie du patient, pas des pixels.
 
+**Avatar** : deux personnages skinnés embarqués dans le binaire (schéma
+`embedded://`, donc aussi sur le web) sont **retargetés** sur les repères
+captés — le script de l'objet appelle `bone(nom, dx, dy, dz)` pour chaque
+segment (tronc, tête, bras, avant-bras, cuisses, jambes, mains, phalanges) et
+le moteur tourne l'os vers cette direction par rotation minimale autour de son
+axe +Y local, en gardant les longueurs du rig
+([src/scene/import.rs](../src/scene/import.rs),
+`compute_joint_matrices_into_with`). L'échelle suit la distance
+hanches→épaules captée, l'animation `Idle` continue sur les os non pilotés.
+
+| Avatar | Rig | Doigts | Proportions |
+| --- | --- | --- | --- |
+| **Héros** (défaut) | `fairy_hero`, 23 os | en bâtons colorés posés sur ses mains | humaines : pieds au sol, bras à la bonne longueur |
+| **Ninja** | `monster_ninja_b` (Quaternius), 43 os | pouce/index/majeur/auriculaire **animés** | cartoon (bras longs, jambes courtes) |
+| **Bâtons** | sphères + cylindres | oui | exactes (ce sont les repères) |
+
+Le bouton « Avatar » cycle héros → ninja → bâtons. Piège rencontré : les deux
+rigs ne nomment pas leurs côtés pareil (`Shoulder.L` du héros est à −X, du
+point de vue du spectateur ; celui du ninja à +X, du point de vue du
+personnage) — `AvatarRig::mirror` règle quel côté du patient pilote `.L`.
+
 Les **mains** n'existent pas dans Mouvéo : la page fait tourner en plus le
 *Hand Landmarker* (21 repères par main, deux mains), et les deux mains suivies
 viennent se poser sur les poignets du squelette, à l'échelle du corps, couleur
@@ -116,6 +137,7 @@ anti-rebond 0,65 s entre deux cibles, comme dans l'original.
 ## Fichiers
 
 - [src/app/pose.rs](../src/app/pose.rs) — `PoseFrame` (33 repères, fraîcheur), `HandFrame` (2 × 21 repères), `AppState::set_pose`/`set_hands`.
+- [src/scene/import.rs](../src/scene/import.rs) — directions d'os imposées (`compute_joint_matrices_into_with`), `SceneObject::bone_dirs`, fonction Lua `bone()` ; [src/assets.rs](../src/assets.rs) — modèles `embedded://`.
 - [src/lib.rs](../src/lib.rs) — export wasm `set_pose_landmarks`, `?scene=reeduc` / `--demo=reeduc`.
 - [src/app/scripting.rs](../src/app/scripting.rs), [scripting_web.rs](../src/app/scripting_web.rs) — table `pose` (cf. [LUA_API.md](LUA_API.md)).
 - [src/scene/demos/reeducation.rs](../src/scene/demos/reeducation.rs) — scène, scripts, widgets.

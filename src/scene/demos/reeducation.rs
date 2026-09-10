@@ -10,7 +10,7 @@
 //! | ---------------------------------------------- | ------------------------------------------------------- |
 //! | MediaPipe Pose dans le navigateur              | idem, dans `packaging/web/reeduc.html` -> export wasm    |
 //! |                                                | `set_pose_landmarks` -> table Lua `pose` (`app::pose`)   |
-//! | squelette dessiné sur la vidéo                 | avatar 3D (sphères aux articulations, cylindres en os)  |
+//! | squelette dessiné sur la vidéo                 | personnage skinné (rig 43 os, doigts) piloté par `bone()`, ou bâtons |
 //! | (pas de doigts dans Mouvéo)                    | deux mains sur le squelette (21 repères MediaPipe chacune), 3 exercices de doigts avec la main en grand |
 //! | cibles 2D relatives à l'épaule/la hanche       | sphères émissives dans le plan `z = 0`, mêmes motifs    |
 //! | machine à états React (welcome/calibrate/…)    | script Lua « directeur », état dans `save.*`            |
@@ -160,6 +160,10 @@ if on_event("hud:ex_next") then ex_i = ex_i + 1; if ex_i > #EX then ex_i = 1 end
 if on_event("hud:cote") then side = -side; sfx = (side > 0) and "_r" or "_l" end
 if on_event("hud:amplitude") then amp = amp + 10; if amp > 95 then amp = 55 end end
 if on_event("hud:objectif") then goal = goal + 2; if goal > 12 then goal = 4 end end
+-- Avatar : 0 squelette de bâtons, 1 héros (proportions humaines, doigts en
+-- bâtons sur ses mains), 2 ninja (rig cartoon avec doigts animés).
+local avatar = g("rd_avatar", 1)
+if on_event("hud:avatar") then avatar = (avatar + 1) % 3 end
 if stage == 3 then
   if on_event("hud:douleur") then pain = (pain + 1) % 11 end
   if on_event("hud:fatigue") then fatigue = (fatigue + 1) % 11 end
@@ -446,7 +450,7 @@ end
 
 -- ---- Sorties partagées avec les autres objets (cible, halo, point, repères, os, doigts) ----
 save.set("rd_stage", stage); save.set("rd_ex", ex_i); save.set("rd_side", side); save.set("rd_amp", amp); save.set("rd_goal", goal)
-save.set("rd_pain", pain); save.set("rd_fatigue", fatigue)
+save.set("rd_pain", pain); save.set("rd_fatigue", fatigue); save.set("rd_avatar", avatar)
 save.set("rd_target_vis", target_vis); save.set("rd_target_x", tx); save.set("rd_target_y", ty)
 save.set("rd_target_r", tr); save.set("rd_target_g", tg); save.set("rd_target_b", tb)
 save.set("rd_hand_vis", hand_vis); save.set("rd_hand_px", hx); save.set("rd_hand_py", hy)
@@ -454,33 +458,38 @@ save.set("rd_dwell_frac", dwell_frac)
 save.set("rd_target_scale", HP and math.max(0.5, hs * 1.2) or 1.0)
 local show_hand = HP ~= nil and stage ~= 3
 local show_body = (stage ~= 3) and (not live or pose.ok) and not show_hand
+-- Le personnage skinné (objet « Avatar ») lit `rd_p_*_ok` (repère fiable) et
+-- `rd_body_shown` ; les bâtons lisent `rd_p_*_vis`, à zéro en mode personnage.
+save.set("rd_body_shown", show_body and 1 or 0)
 for i = 1, #NAMES do
   local n = NAMES[i]
   -- Un repère mal vu (hors cadre, extrapolé par le modèle) n'est pas dessiné :
   -- sans ça, un os file vers un point fantasque hors de l'écran.
-  local vis = show_body and pts[n][3] >= VIS_MIN
-  save.set("rd_p_" .. n .. "_vis", vis and 1 or 0)
+  local ok = show_body and pts[n][3] >= VIS_MIN
+  save.set("rd_p_" .. n .. "_ok", ok and 1 or 0)
+  save.set("rd_p_" .. n .. "_vis", (ok and avatar == 0) and 1 or 0)
   save.set("rd_p_" .. n .. "_x", pts[n][1]); save.set("rd_p_" .. n .. "_y", pts[n][2])
 end
 -- Deux jeux d'objets de main (gauche/droite) : en exercice de doigts, celui du
 -- côté travaillé porte la main agrandie (échelle 1), l'autre est caché ; sinon
 -- chacun suit sa main sur le squelette, à l'échelle du corps (0,45).
-local function write_hand(prefix, pts_h, scale)
+local function write_hand(prefix, pts_h, scale, sticks)
   save.set(prefix .. "scale", scale)
+  save.set(prefix .. "ok", pts_h and 1 or 0)
   for i = 1, 21 do
     if pts_h then
-      save.set(prefix .. i .. "_vis", 1); save.set(prefix .. i .. "_x", pts_h[i][1]); save.set(prefix .. i .. "_y", pts_h[i][2])
+      save.set(prefix .. i .. "_vis", sticks and 1 or 0); save.set(prefix .. i .. "_x", pts_h[i][1]); save.set(prefix .. i .. "_y", pts_h[i][2])
     else
       save.set(prefix .. i .. "_vis", 0)
     end
   end
 end
 if show_hand then
-  write_hand((side > 0) and "rd_hr_" or "rd_hl_", HP, 1.0)
-  write_hand((side > 0) and "rd_hl_" or "rd_hr_", nil, 1.0)
+  write_hand((side > 0) and "rd_hr_" or "rd_hl_", HP, 1.0, true)
+  write_hand((side > 0) and "rd_hl_" or "rd_hr_", nil, 1.0, true)
 else
-  write_hand("rd_hl_", show_body and HPL or nil, 0.45)
-  write_hand("rd_hr_", show_body and HPR or nil, 0.45)
+  write_hand("rd_hl_", show_body and HPL or nil, 0.45, avatar ~= 2)
+  write_hand("rd_hr_", show_body and HPR or nil, 0.45, avatar ~= 2)
 end
 
 -- ---- HUD ----
@@ -579,6 +588,213 @@ pub fn director_script() -> String {
          local SESSION_S, CALIB_S = {SESSION_SECONDS:?}, {CALIBRATION_SECONDS:?}\n\
          {DIRECTOR_SCRIPT}"
     )
+}
+
+/// Rig d'un avatar skinné : noms des os et mesures de repos utilisés par
+/// `avatar_script`. Les rigs Blender/glTF posent chaque os le long de +Y local,
+/// c'est cet axe que `bone()` réoriente (cf. `import::compute_joint_matrices_into_with`).
+struct AvatarRig {
+    /// Valeur de `rd_avatar` qui affiche cet avatar (1 héros, 2 ninja).
+    mode: u32,
+    /// Rotation Y (°) pour faire face à la caméra (+Z monde).
+    face_yaw: f32,
+    /// Hauteur des hanches dans le rig (unités modèle, pose de repos).
+    hips_y: f32,
+    /// Distance hanches → épaules dans le rig (unités modèle).
+    torso: f32,
+    /// Chaîne du tronc (tous orientés hanches → épaules), puis le cou/tête.
+    spine: &'static [&'static str],
+    neck: &'static str,
+    /// Bras, avant-bras, cuisse, jambe : `(côté .L du rig, côté .R)` — le
+    /// personnage fait face au patient, son `.L` suit le côté **droit** capté
+    /// (miroir), sauf si `mirror` est faux.
+    upper_arm: (&'static str, &'static str),
+    lower_arm: (&'static str, &'static str),
+    upper_leg: (&'static str, &'static str),
+    lower_leg: (&'static str, &'static str),
+    /// Os de la main (poignet → milieu de la paume), `""` si le rig n'en a pas.
+    hand: (&'static str, &'static str),
+    /// Le rig a des chaînes de doigts nommées `Thumb1`, `Index1`… + suffixe.
+    fingers: bool,
+    mirror: bool,
+}
+
+const HERO_RIG: AvatarRig = AvatarRig {
+    mode: 1,
+    face_yaw: 0.0,
+    hips_y: 0.95,
+    torso: 0.57,
+    spine: &["Hips", "Spine", "Chest"],
+    neck: "Head",
+    upper_arm: ("UpperArm.L", "UpperArm.R"),
+    lower_arm: ("Forearm.L", "Forearm.R"),
+    upper_leg: ("Thigh.L", "Thigh.R"),
+    lower_leg: ("Shin.L", "Shin.R"),
+    hand: ("Hand.L", "Hand.R"),
+    fingers: false,
+    // Ce rig nomme ses côtés du point de vue du spectateur : `Shoulder.L` est à
+    // −X, donc à gauche de l'écran, côté gauche du patient dans le miroir.
+    mirror: false,
+};
+
+const NINJA_RIG: AvatarRig = AvatarRig {
+    mode: 2,
+    face_yaw: 0.0,
+    hips_y: 0.785,
+    torso: 0.868,
+    spine: &["Hips", "Abdomen", "Torso"],
+    neck: "Neck",
+    upper_arm: ("UpperArm.L", "UpperArm.R"),
+    lower_arm: ("LowerArm.L", "LowerArm.R"),
+    upper_leg: ("UpperLeg.L", "UpperLeg.R"),
+    lower_leg: ("LowerLeg.L", "LowerLeg.R"),
+    hand: ("", ""),
+    fingers: true,
+    // `Shoulder.L` à +X (à droite de l'écran) : suit le côté droit du patient.
+    mirror: true,
+};
+
+/// Script d'un avatar skinné : retargeting des repères captés par **directions
+/// d'os** (`bone()`), pas par positions — les longueurs du rig restent les
+/// siennes, seule l'orientation de chaque segment suit le patient. Échelle =
+/// distance hanches→épaules captée / celle du rig ; origine posée pour que les
+/// hanches du rig tombent sur les hanches captées. Un repère non fiable laisse
+/// l'os sur sa pose d'animation (`Idle`). Doigts (ninja) : chaînes
+/// pouce/index/majeur/auriculaire ← repères de la main (pas d'annulaire dans ce rig).
+fn avatar_script(rig: &AvatarRig, idle_clip: &str) -> String {
+    let (side_l, side_r) = if rig.mirror { ("r", "l") } else { ("l", "r") };
+    let (hand_l, hand_r) = if rig.mirror {
+        ("rd_hr_", "rd_hl_")
+    } else {
+        ("rd_hl_", "rd_hr_")
+    };
+    let spine: Vec<String> = rig
+        .spine
+        .iter()
+        .map(|n| format!("bone(\"{n}\", dx, dy, 0)"))
+        .collect();
+    let spine = spine.join("; ");
+    let hand_seg = if rig.hand.0.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  hand_dir(\"{hl}\", \"{hand_l}\"); hand_dir(\"{hr}\", \"{hand_r}\")\n",
+            hl = rig.hand.0,
+            hr = rig.hand.1
+        )
+    };
+    let fingers = if rig.fingers {
+        format!("  fingers(\"{hand_l}\", \".L\"); fingers(\"{hand_r}\", \".R\")\n")
+    } else {
+        String::new()
+    };
+    format!(
+        r#"
+local show = math.floor((save.get("rd_avatar") or 1) + 0.5) == {mode} and (save.get("rd_body_shown") or 0) > 0.5
+obj.visible = show
+obj.anim = "{idle_clip}"
+if show then
+  local function pt(n) return save.get("rd_p_" .. n .. "_x") or 0, save.get("rd_p_" .. n .. "_y") or 0, (save.get("rd_p_" .. n .. "_ok") or 0) > 0.5 end
+  local function dir(ax, ay, bx, by)
+    local dx, dy = bx - ax, by - ay
+    local l = math.sqrt(dx * dx + dy * dy)
+    if l < 1e-4 then return nil end
+    return dx / l, dy / l
+  end
+  local function seg(name, a, b)
+    local ax, ay, av = pt(a); local bx, by, bv = pt(b)
+    if av and bv then local dx, dy = dir(ax, ay, bx, by); if dx then bone(name, dx, dy, 0) end end
+  end
+  local hlx, hly, hlv = pt("hip_l"); local hrx, hry, hrv = pt("hip_r")
+  local slx, sly, slv = pt("shoulder_l"); local srx, sry, srv = pt("shoulder_r")
+  local hx, hy = (hlx + hrx) / 2, (hly + hry) / 2
+  local sx, sy = (slx + srx) / 2, (sly + sry) / 2
+  local torso = math.sqrt((sx - hx) * (sx - hx) + (sy - hy) * (sy - hy))
+  local want = torso / {torso}
+  if want < 0.4 then want = 0.4 elseif want > 2.2 then want = 2.2 end
+  local scale = save.get("rd_av{mode}_scale") or want
+  scale = scale + (want - scale) * (1.0 - math.exp(-6.0 * dt))
+  save.set("rd_av{mode}_scale", scale)
+  obj.sx = scale; obj.sy = scale; obj.sz = scale
+  obj.x = hx; obj.y = hy - {hips_y} * scale; obj.z = 0
+  obj.rx = 0; obj.ry = {face_yaw}; obj.rz = 0
+  if hlv and hrv and slv and srv then
+    local dx, dy = dir(hx, hy, sx, sy)
+    if dx then {spine} end
+    local nx, ny, nv = pt("nose")
+    if nv then local dx2, dy2 = dir(sx, sy, nx, ny); if dx2 then bone("{neck}", dx2, dy2, 0) end end
+  end
+  seg("{ua_l}", "shoulder_{sl}", "elbow_{sl}"); seg("{la_l}", "elbow_{sl}", "wrist_{sl}")
+  seg("{ua_r}", "shoulder_{sr}", "elbow_{sr}"); seg("{la_r}", "elbow_{sr}", "wrist_{sr}")
+  seg("{ul_l}", "hip_{sl}", "knee_{sl}"); seg("{ll_l}", "knee_{sl}", "ankle_{sl}")
+  seg("{ul_r}", "hip_{sr}", "knee_{sr}"); seg("{ll_r}", "knee_{sr}", "ankle_{sr}")
+  local function hp(prefix, i) return save.get(prefix .. i .. "_x") or 0, save.get(prefix .. i .. "_y") or 0 end
+  local function hand_dir(name, prefix)
+    if (save.get(prefix .. "ok") or 0) < 0.5 then return end
+    local ax, ay = hp(prefix, 1); local bx, by = hp(prefix, 10)
+    local dx, dy = dir(ax, ay, bx, by)
+    if dx then bone(name, dx, dy, 0) end
+  end
+  local function fingers(prefix, suffix)
+    if (save.get(prefix .. "ok") or 0) < 0.5 then return end
+    local function fb(name, i, j)
+      local ax, ay = hp(prefix, i); local bx, by = hp(prefix, j)
+      local dx, dy = dir(ax, ay, bx, by)
+      if dx then bone(name .. suffix, dx, dy, 0) end
+    end
+    fb("Thumb1", 2, 3); fb("Thumb2", 3, 5)
+    fb("Index1", 6, 7); fb("Index2", 7, 8); fb("Index3", 8, 9)
+    fb("Middle1", 10, 11); fb("Middle2", 11, 12); fb("Middle3", 12, 13)
+    fb("Pinky1", 18, 19); fb("Pinky2", 19, 20); fb("Pinky3", 20, 21)
+  end
+{hand_seg}{fingers}end
+"#,
+        mode = rig.mode,
+        idle_clip = idle_clip,
+        torso = rig.torso,
+        hips_y = rig.hips_y,
+        face_yaw = rig.face_yaw,
+        spine = spine,
+        neck = rig.neck,
+        ua_l = rig.upper_arm.0,
+        ua_r = rig.upper_arm.1,
+        la_l = rig.lower_arm.0,
+        la_r = rig.lower_arm.1,
+        ul_l = rig.upper_leg.0,
+        ul_r = rig.upper_leg.1,
+        ll_l = rig.lower_leg.0,
+        ll_r = rig.lower_leg.1,
+        sl = side_l,
+        sr = side_r,
+        hand_seg = hand_seg,
+        fingers = fingers,
+    )
+}
+
+/// Modèle embarqué dans le binaire (`assets::EMBEDDED_MODELS`, schéma
+/// `embedded://`) : disponible sur toutes les cibles, web compris.
+fn import_embedded_model(imported: &mut Vec<ImportedMesh>, file: &str) -> MeshKind {
+    let path = format!("{}{file}", crate::assets::EMBEDDED_SCHEME);
+    match crate::scene::import::load_gltf(&path) {
+        Ok((data, aabb_min, aabb_max)) => {
+            let mut mesh = ImportedMesh {
+                name: file.into(),
+                path,
+                data,
+                aabb_min,
+                aabb_max,
+                ..Default::default()
+            };
+            mesh.load_skinning();
+            let index = imported.len() as u32;
+            imported.push(mesh);
+            MeshKind::Imported(index)
+        }
+        Err(e) => {
+            log::error!("import_embedded_model({file}) : {e}");
+            MeshKind::Capsule
+        }
+    }
 }
 
 /// Script de la cible lumineuse (« Cible ») : suit `rd_target_*`, pulse, prend
@@ -753,6 +969,7 @@ impl Scene {
     /// Démo « Rééducation — mobilité guidée » (cf. la doc du module).
     pub fn reeducation_demo() -> Self {
         let mut objects = Vec::with_capacity(120);
+        let mut imported: Vec<ImportedMesh> = Vec::new();
 
         // Directeur en tête de liste : les autres objets relisent son état le
         // même tick (les scripts s'exécutent dans l'ordre de `objects`).
@@ -848,6 +1065,28 @@ impl Scene {
             }
         }
 
+        // Avatars skinnés, pilotés par directions d'os (cf. `avatar_script`) :
+        // héros aux proportions humaines (défaut), ninja cartoon avec doigts animés.
+        for (name, file, rig, idle) in [
+            ("Avatar héros", "fairy_hero.glb", &HERO_RIG, "Idle"),
+            (
+                "Avatar ninja",
+                "monster_ninja_b.glb",
+                &NINJA_RIG,
+                "CharacterArmature|Idle",
+            ),
+        ] {
+            let mesh = import_embedded_model(&mut imported, file);
+            let mut avatar = demo_obj(name, mesh, Vec3::ZERO);
+            avatar.animation = Some(AnimationState {
+                clip: idle.into(),
+                ..Default::default()
+            });
+            avatar.script = avatar_script(rig, idle);
+            avatar.visible = false;
+            objects.push(avatar);
+        }
+
         let mut main = demo_obj("Point suivi", MeshKind::Sphere, Vec3::new(0.8, 1.3, 0.05));
         main.transform = main.transform.with_scale(Vec3::splat(0.12));
         main.color = [1.0, 1.0, 1.0];
@@ -884,10 +1123,17 @@ impl Scene {
                 "enregistrer",
                 -336.0,
             ),
+            button_widget(
+                "b_avatar",
+                "Avatar : héros / ninja / bâtons",
+                "avatar",
+                -376.0,
+            ),
         ];
 
         Scene {
             objects,
+            imported,
             camera_follow: false,
             game_camera: Some(GameCamera {
                 target: [0.0, 1.5, 0.0],

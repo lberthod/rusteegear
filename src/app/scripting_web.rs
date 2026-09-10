@@ -109,7 +109,42 @@ thread_local! {
 /// Nombre d'appels à `run_script_web` entre deux collectes complètes du GC `rilua`
 /// (un appel par objet scripté par tick — quelques secondes de marge avec une poignée
 /// d'objets scriptés à 60 Hz). Cf. `maybe_collect_garbage`.
-const GC_PERIOD: u32 = 240;
+const GC_PERIOD: u32 = 600;
+
+/// Fonctions hôtes globales (`emit`, `spawn`, `raycast`…) : des pointeurs de
+/// fonction sans état, enregistrés **une fois** par instance `Lua` — pas à chaque
+/// appel de `run_script_web`. Avant, chaque objet scripté ré-allouait ces ~15
+/// fonctions à chaque pas (≈ 10 000 objets Lua par seconde avec dix pièges
+/// actifs), nourrissant le GC dont les collectes complètes saccadaient le jeu
+/// web. Marqueur `__rustee_hosts` dans les globales : robuste à une nouvelle
+/// instance `Lua` (tests), sans état Rust à côté.
+fn ensure_host_functions(lua: &mut Lua) -> LuaResult<()> {
+    if matches!(lua.get_global_val("__rustee_hosts"), Val::Bool(true)) {
+        return Ok(());
+    }
+    type Host = fn(&mut LuaState) -> LuaResult<u32>;
+    const HOSTS: &[(&str, Host)] = &[
+        ("vibrate", host_vibrate),
+        ("reverb", host_reverb),
+        ("set_health", host_set_health),
+        ("damage", host_damage),
+        ("emit", host_emit),
+        ("on_event", host_on_event),
+        ("checkpoint", host_checkpoint),
+        ("teleport", host_teleport),
+        ("hud_text", host_hud_text),
+        ("bone", host_bone),
+        ("spawn", host_spawn),
+        ("add_item", host_add_item),
+        ("find_tag", host_find_tag),
+        ("raycast", host_raycast),
+        ("overlap_sphere", host_overlap_sphere),
+    ];
+    for &(name, f) in HOSTS {
+        lua.register_function(name, f)?;
+    }
+    lua.set_global("__rustee_hosts", true)
+}
 
 /// Déclenche une collecte complète (`Lua::gc_collect`) tous les `GC_PERIOD` appels.
 /// Le GC incrémental de `rilua` est désactivé une fois pour toutes à la création de
@@ -127,6 +162,7 @@ fn maybe_collect_garbage(lua: &mut Lua) {
     });
     if n >= GC_PERIOD {
         GC_TICKS.with(|c| c.set(0));
+        let gc_started = crate::time_compat::Instant::now();
         if let Err(e) = lua.gc_collect() {
             log::warn!("Collecte GC Lua (web) : {e}");
         }
@@ -135,6 +171,10 @@ fn maybe_collect_garbage(lua: &mut Lua) {
         // bug de write barrier ci-dessus) dès la prochaine allocation — on redésactive
         // immédiatement, comme à la création de `Lua` (`AppState::new`).
         lua.gc_stop();
+        let ms = gc_started.elapsed().as_secs_f32() * 1000.0;
+        if ms > 2.0 {
+            log::warn!("Collecte GC Lua (web) : {ms:.1} ms");
+        }
     }
 }
 
@@ -274,6 +314,15 @@ fn host_hud_text(state: &mut LuaState) -> LuaResult<u32> {
     let text = arg_str(state, 1)?;
     let event = crate::app::script_ctx::hud_event(&id, &text);
     ACCUM.with(|a| a.borrow_mut().events_out.push(event));
+    Ok(0)
+}
+
+fn host_bone(state: &mut LuaState) -> LuaResult<u32> {
+    let name = arg_str(state, 0)?;
+    let x = arg_f32(state, 1)?;
+    let y = arg_f32(state, 2)?;
+    let z = arg_f32(state, 3)?;
+    crate::app::script_ctx::push_bone(name, Vec3::new(x, y, z));
     Ok(0)
 }
 
@@ -593,15 +642,7 @@ pub(super) fn run_script_web(
     lua_try!(lua.set_global("tilt", tilt));
     lua_try!(lua.set_global("debug", debug_api));
     lua_try!(lua.set_global("save", save_api));
-    lua_try!(lua.register_function("vibrate", host_vibrate));
-    lua_try!(lua.register_function("reverb", host_reverb));
-    lua_try!(lua.register_function("set_health", host_set_health));
-    lua_try!(lua.register_function("damage", host_damage));
-    lua_try!(lua.register_function("emit", host_emit));
-    lua_try!(lua.register_function("on_event", host_on_event));
-    lua_try!(lua.register_function("checkpoint", host_checkpoint));
-    lua_try!(lua.register_function("teleport", host_teleport));
-    lua_try!(lua.register_function("hud_text", host_hud_text));
+    lua_try!(ensure_host_functions(lua));
     lua_try!(lua.set_global("deaths", f64::from(crate::app::script_ctx::deaths())));
     // Table `pose` (démo Rééducation) — même forme que côté mlua, cf. `scripting.rs`.
     let pose_tbl = lua.create_table();
@@ -644,11 +685,6 @@ pub(super) fn run_script_web(
         Ok(())
     }));
     lua_try!(lua.set_global("hand", hand_tbl));
-    lua_try!(lua.register_function("spawn", host_spawn));
-    lua_try!(lua.register_function("add_item", host_add_item));
-    lua_try!(lua.register_function("find_tag", host_find_tag));
-    lua_try!(lua.register_function("raycast", host_raycast));
-    lua_try!(lua.register_function("overlap_sphere", host_overlap_sphere));
 
     let call_result = lua.call_function(func, &[]).map(|_| ());
 
@@ -1690,6 +1726,22 @@ mod tests {
                 &mut Vec::new(),
                 &[],
             )
+        }
+
+        #[test]
+        fn bone_pushes_the_same_direction_on_both_backends() {
+            let src = "bone('UpperArm.L', 0.6, 0.8, 0)\nbone('Index1.R', -1, 0, 0)";
+            let mut t = Transform::from_pos(Vec3::ZERO);
+            let mut col = [1.0; 3];
+            crate::app::script_ctx::take_bones();
+            run_native(src, &mut t, &mut col);
+            let native = crate::app::script_ctx::take_bones();
+            run_web(src, &mut t, &mut col);
+            let web = crate::app::script_ctx::take_bones();
+            assert_eq!(native.len(), 2);
+            assert_eq!(native, web);
+            assert_eq!(native[0].0, "UpperArm.L");
+            assert!((native[0].1 - Vec3::new(0.6, 0.8, 0.0)).length() < 1e-6);
         }
 
         #[test]

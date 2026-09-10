@@ -103,24 +103,38 @@ impl Renderer {
                 .filter(|a| !a.clip.is_empty())
                 .and_then(|a| find_clip(&a.clip));
             let time = anim.map(|a| a.time).unwrap_or(0.0);
+            // Directions d'os imposées par le script (monde → espace modèle, la
+            // rotation de l'objet annulée ; l'échelle, uniforme, ne change pas une direction).
+            let bone_dirs: Vec<Option<glam::Vec3>> = if obj.bone_dirs.is_empty() {
+                Vec::new()
+            } else {
+                let inv = obj.transform.rotation.inverse();
+                skeleton
+                    .joints
+                    .iter()
+                    .map(|j| obj.bone_dirs.get(&j.name).map(|d| inv * *d))
+                    .collect()
+            };
             // Fondu enchaîné : `blend < 1.0` tant qu'une transition est en
             // cours (cf. `AppState::sim_step`) — mélange avec le clip quitté au niveau
             // des poses locales, pas des matrices monde (`compute_joint_matrices_blended`).
             match anim.filter(|a| a.blend < 1.0 && !a.prev_clip.is_empty()) {
-                Some(a) => crate::scene::import::compute_joint_matrices_blended_into(
+                Some(a) => crate::scene::import::compute_joint_matrices_blended_into_with(
                     skeleton,
                     find_clip(&a.prev_clip),
                     a.prev_time,
                     clip,
                     time,
                     a.blend,
+                    &bone_dirs,
                     &mut scratch,
                     &mut matrices,
                 ),
-                None => crate::scene::import::compute_joint_matrices_into(
+                None => crate::scene::import::compute_joint_matrices_into_with(
                     skeleton,
                     clip,
                     time,
+                    &bone_dirs,
                     &mut scratch,
                     &mut matrices,
                 ),

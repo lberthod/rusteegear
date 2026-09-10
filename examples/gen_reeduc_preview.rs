@@ -36,6 +36,17 @@ fn main() {
     app.load_reeducation_demo();
     app.playing = true;
     tick(&mut app);
+    // `REEDUC_AVATAR=0|1|2` (bâtons / héros / ninja) : le bouton « Avatar »
+    // cycle héros → ninja → bâtons, on le presse autant de fois que nécessaire.
+    let presses = match std::env::var("REEDUC_AVATAR").as_deref() {
+        Ok("2") => 1,
+        Ok("0") => 2,
+        _ => 0,
+    };
+    for _ in 0..presses {
+        app.push_hud_event("avatar");
+        tick(&mut app);
+    }
     app.push_hud_event("demarrer");
     tick(&mut app);
     // Deux répétitions jouées, puis le point suivi s'arrête à mi-chemin de la
@@ -61,8 +72,12 @@ fn main() {
     }
     println!("répétitions jouées avant capture : {hits}");
     let pixels = renderer.render_scene_headless(&mut app, WIDTH, HEIGHT);
-    let out =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/img/reeducation_preview.png");
+    let out = std::env::var("REEDUC_PREVIEW_OUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("docs/img/reeducation_preview.png")
+        });
     image::save_buffer(&out, &pixels, WIDTH, HEIGHT, image::ColorType::Rgba8)
         .expect("écriture de reeducation_preview.png");
     println!("Preview écrite : {}", out.display());

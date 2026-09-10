@@ -2854,6 +2854,7 @@ fn binding_combo(ui: &mut egui::Ui, binding: &mut HudBinding) {
                 HudBinding::Kills,
                 HudBinding::Wave,
                 HudBinding::Deaths,
+                HudBinding::RunTime,
             ] {
                 ui.selectable_value(binding, b, format!("{b:?}"));
             }

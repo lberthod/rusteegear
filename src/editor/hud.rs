@@ -15,6 +15,8 @@ pub(super) struct HudWidgetValues<'a> {
     pub wave: u32,
     /// Morts de la partie (mode plateformer 2D, `AppState::deaths`).
     pub deaths: u32,
+    /// Chrono de la partie (s), mode plateformer 2D.
+    pub run_time: f32,
     /// Contenus de widgets `Text` posés par les scripts (`hud_text`), par id.
     pub hud_texts: &'a std::collections::HashMap<String, String>,
 }
@@ -27,7 +29,19 @@ fn hud_binding_value(binding: HudBinding, v: &HudWidgetValues) -> f32 {
         HudBinding::Kills => v.kills as f32,
         HudBinding::Wave => v.wave as f32,
         HudBinding::Deaths => v.deaths as f32,
+        HudBinding::RunTime => v.run_time,
     }
+}
+
+/// `1:23.4` — chrono du plateformer 2D.
+fn fmt_run_time(s: f32) -> String {
+    let total_ds = (s.max(0.0) * 10.0).floor() as u64;
+    format!(
+        "{}:{:02}.{}",
+        total_ds / 600,
+        (total_ds / 10) % 60,
+        total_ds % 10
+    )
 }
 
 /// Cache de textures pour les widgets `Image` : une texture GPU par chemin
@@ -89,6 +103,9 @@ pub(super) fn hud_widgets(
                     let content = values.hud_texts.get(&widget.id).unwrap_or(content);
                     let text = match binding {
                         HudBinding::None => content.clone(),
+                        HudBinding::RunTime => {
+                            format!("{content} {}", fmt_run_time(values.run_time))
+                        }
                         b => format!("{content} {}", hud_binding_value(*b, values) as i64),
                     };
                     // `size[1]` > 0 = taille de police (points) : un compteur de

@@ -894,6 +894,12 @@ pub struct SceneObject {
     /// usage réel ; sans effet sur un mesh statique (aucun joint à animer).
     #[serde(default)]
     pub animation: Option<AnimationState>,
+    /// Directions d'os imposées (monde) par le script de l'objet via `bone(nom,
+    /// dx, dy, dz)` — retargeting d'une pose captée sur un mesh skinné (avatar de
+    /// la démo Rééducation). Réécrites à chaque pas après le script (vides si le
+    /// script n'appelle pas `bone`), jamais sérialisées.
+    #[serde(skip)]
+    pub bone_dirs: std::collections::HashMap<String, Vec3>,
     /// Lien vers un prefab : `None` pour un objet indépendant (la grande
     /// majorité). `Some` fait de cet objet une **instance** — resynchronisée depuis le
     /// template par `Scene::sync_prefab_instances`, champ par champ, sauf ceux listés
@@ -1382,6 +1388,7 @@ impl Default for SceneObject {
             weapon_pickup: None,
             item_pickup: None,
             tap_action: TapAction::None,
+            bone_dirs: std::collections::HashMap::new(),
             visible: true,
             deadly: false,
             respawn_delay: 0.0,

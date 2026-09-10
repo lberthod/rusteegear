@@ -86,6 +86,7 @@ Méthode :
 | `vibrate(ms)` | — | Demande un retour haptique — **aujourd'hui seulement journalisé**, sur toutes les cibles. |
 | `checkpoint(x, y, z)` | — | Point de réapparition du joueur après une mort en mode plateformer 2D (sinon : position de départ). Appliqué après la boucle des scripts ; le dernier appel du pas l'emporte. |
 | `hud_text(id, texte)` | — | Remplace le contenu du widget HUD `Text` dont l'id est `id` (fenêtre 🧩 Widgets HUD) ; `""` l'efface. Survit aux réapparitions, effacé à l'entrée en Play. Vannes de mort, nom de niveau… |
+| `bone(nom, dx, dy, dz)` | — | Impose la **direction monde** de l'os `nom` (joint du rig glTF de l'objet, ex. `UpperArm.L`) vers son premier enfant — retargeting d'une pose captée (`pose`/`hand`) sur un mesh skinné, par-dessus le clip en cours ; seule l'orientation change, pas la longueur. À rappeler à chaque pas : sans appel, l'os revient à son animation. Sans effet sur un mesh non skinné. |
 | `teleport(x, y, z)` | — | Déplace le joueur local (corps physique et caméra de suivi compris) — typiquement depuis la zone `trigger` d'une porte de sortie, pour enchaîner les niveaux d'une même scène. |
 
 ## Événements émis par le moteur
@@ -118,7 +119,7 @@ Bon à savoir :
 
 ## Natif ↔ web : ce qui diffère
 
-Les 24 globales ci-dessus existent avec les mêmes noms et arités sur les deux
+Les 25 globales ci-dessus existent avec les mêmes noms et arités sur les deux
 interpréteurs, `raycast` et `overlap_sphere` compris. Les écarts réels :
 
 | Sujet | Natif (`mlua`, Lua 5.4) | Web (`rilua`, Lua 5.1) |

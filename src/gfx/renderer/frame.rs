@@ -115,6 +115,11 @@ impl Renderer {
             if app.has_won() && app.is_leveled_demo {
                 app.next_level();
             } else {
+                // Plateformer 2D : « Rejouer » après une victoire = nouvelle partie
+                // (morts, chrono, tombes à zéro), pas une simple relance.
+                if app.has_won() && app.scene.platformer.is_some() {
+                    app.new_run();
+                }
                 app.restart_game();
             }
         }
@@ -181,6 +186,13 @@ impl Renderer {
             (0.0, 0.0, sw, sh)
         };
         app.camera.aspect = dw / dh.max(1.0);
+        // Pixelisation + vue orthographique : la caméra se cale sur la grille des
+        // gros pixels (cf. `OrbitCamera::snap`).
+        app.camera.snap = if self.pixel_scale > 1 && app.camera.ortho_height > 0.0 {
+            app.camera.ortho_height / (dh / self.pixel_scale as f32).max(1.0)
+        } else {
+            0.0
+        };
         self.write_uniforms(app);
         // Skinning GPU : joint_buf entièrement rempli AVANT la passe (comme
         // les lignes de debug ci-dessous) — `queue.write_buffer` n'est pas ordonné avec
@@ -308,6 +320,7 @@ impl Renderer {
         let won = app.has_won();
         let wave = app.wave;
         let deaths = app.deaths();
+        let run_time = app.run_time();
         let hud_texts_owned = app.hud_texts.clone();
         let hud_texts = &hud_texts_owned;
         let mut restart = false;
@@ -358,6 +371,7 @@ impl Renderer {
                     won,
                     wave,
                     deaths,
+                    run_time,
                     hud_texts,
                     &mut restart,
                     app.paused,
@@ -500,6 +514,7 @@ impl Renderer {
                 won,
                 wave,
                 deaths,
+                run_time,
                 hud_texts,
                 status,
                 &net_status,

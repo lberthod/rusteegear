@@ -341,6 +341,13 @@ pub(super) fn run_script(
     g.set("checkpoint", checkpoint)?;
     g.set("teleport", teleport)?;
     g.set("hud_text", hud_text)?;
+    // `bone(nom, dx, dy, dz)` : impose la direction (monde) de l'os `nom` du mesh
+    // skinné de cet objet — cf. `SceneObject::bone_dirs`.
+    let bone = lua.create_function(|_, (name, x, y, z): (String, f32, f32, f32)| {
+        super::script_ctx::push_bone(name, Vec3::new(x, y, z));
+        Ok(())
+    })?;
+    g.set("bone", bone)?;
     // Global `deaths` (lecture seule) : morts de la partie en cours — permet à un
     // piège de varier selon les tentatives (`if deaths % 2 == 1 then … end`).
     g.set("deaths", super::script_ctx::deaths())?;

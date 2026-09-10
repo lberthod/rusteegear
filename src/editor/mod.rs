@@ -1268,6 +1268,7 @@ impl Editor {
         won: bool,
         wave: u32,
         deaths: u32,
+        run_time: f32,
         hud_texts: &std::collections::HashMap<String, String>,
         restart: &mut bool,
         paused: bool,
@@ -1733,6 +1734,7 @@ impl Editor {
                 kills,
                 wave,
                 deaths,
+                run_time,
                 hud_texts,
             };
             actions.hud_clicks = hud_widgets(ctx, area, scene, &values, hud_image_cache);
@@ -1777,6 +1779,7 @@ impl Editor {
         won: bool,
         wave: u32,
         deaths: u32,
+        run_time: f32,
         hud_texts: &std::collections::HashMap<String, String>,
         status: StatusInfo,
         net_status: &str,
@@ -1924,6 +1927,7 @@ impl Editor {
                 won,
                 wave,
                 deaths,
+                run_time,
                 hud_texts,
                 &status,
                 export,
@@ -2154,6 +2158,7 @@ fn build_ui(
     won: bool,
     wave: u32,
     deaths: u32,
+    run_time: f32,
     hud_texts: &std::collections::HashMap<String, String>,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
@@ -2629,6 +2634,7 @@ fn build_ui(
         kills,
         wave,
         deaths,
+        run_time,
         hud_texts,
         hud_image_cache,
         actions,
@@ -4039,6 +4045,7 @@ fn end_of_round_and_hud_widgets(
     kills: u32,
     wave: u32,
     deaths: u32,
+    run_time: f32,
     hud_texts: &std::collections::HashMap<String, String>,
     hud_image_cache: &mut HudImageCache,
     actions: &mut UiActions,
@@ -4088,6 +4095,7 @@ fn end_of_round_and_hud_widgets(
             kills,
             wave,
             deaths,
+            run_time,
             hud_texts,
         };
         actions.hud_clicks = hud_widgets(root.ctx(), play_rect, scene, &values, hud_image_cache);

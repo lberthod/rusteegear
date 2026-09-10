@@ -33,6 +33,10 @@ pub(super) const DEFAULT_CHASE_DISTANCE: f32 = 7.0;
 /// à `transform.position.y = 0.0` : viser la tête demande donc un décalage bien
 /// plus grand qu'avec l'ancienne capsule centrée.
 pub(super) const PLAYER_CAMERA_HEIGHT_OFFSET: f32 = 1.6;
+/// Plateformer 2D : distance (unités, sur X) au-delà de laquelle un objet scripté
+/// sans contrôleur est mis en sommeil — plus qu'un niveau entier (40), donc les
+/// pièges du niveau courant et l'entrée du suivant restent actifs.
+pub(super) const SCRIPT_CULL_DISTANCE: f32 = 48.0;
 
 /// Vitesse (rad/s) de la rotation « tank » manuelle (A/D tenus). Constante dédiée,
 /// distincte de `Controller::turn_speed` : ce dernier (10 rad/s) est un taux de
@@ -949,6 +953,7 @@ impl AppState {
             self.checkpoint = None;
             self.pending_respawn = None;
             self.death_pos = None;
+            self.run_time = 0.0;
             self.hud_texts.clear();
             // Manche 1 révélée, suivantes masquées, *avant* de construire la physique
             // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
@@ -1260,20 +1265,32 @@ impl AppState {
             // exactement comme une à 60 Hz), là où la forme linéaire sur-amortissait à
             // bas FPS et créait de micro-à-coups de caméra sous gigue de frame.
             let t = 1.0 - (-dt * 6.0).exp();
-            // Plateformer 2D : la caméra regarde un peu devant le joueur (dans le
-            // sens de sa course) — on voit venir le trou, pas le mur derrière soi.
-            let ahead = if self.scene.platformer.is_some_and(|pl| pl.lock_z) {
-                self.player_index()
+            if self.scene.platformer.is_some_and(|pl| pl.lock_z) {
+                // Plateformer 2D : suivi quasi rigide en X (un retard visible donne
+                // l'impression que le jeu « lague » quand on court), doux en Y (les
+                // sauts ne secouent pas l'écran), et une anticipation dans le sens de
+                // la course lissée à part (`camera_ahead`) — sinon chaque départ ou
+                // arrêt fait sauter la cible de 3 unités.
+                let vx = self
+                    .player_index()
                     .and_then(|i| self.physics.as_ref().and_then(|ph| ph.velocity(i)))
-                    .map(|v| (v.x * 0.4).clamp(-3.0, 3.0))
-                    .unwrap_or(0.0)
+                    .map(|v| v.x)
+                    .unwrap_or(0.0);
+                let wanted = (vx * 0.45).clamp(-3.0, 3.0);
+                let ta = 1.0 - (-dt * 2.5).exp();
+                self.camera_ahead += (wanted - self.camera_ahead) * ta;
+                let goal = p + Vec3::new(self.camera_ahead, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0);
+                let tx = 1.0 - (-dt * 18.0).exp();
+                let ty = 1.0 - (-dt * 5.0).exp();
+                self.camera.target.x += (goal.x - self.camera.target.x) * tx;
+                self.camera.target.y += (goal.y - self.camera.target.y) * ty;
+                self.camera.target.z = goal.z;
             } else {
-                0.0
-            };
-            self.camera.target = self
-                .camera
-                .target
-                .lerp(p + Vec3::new(ahead, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0), t);
+                self.camera.target = self
+                    .camera
+                    .target
+                    .lerp(p + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0), t);
+            }
             // Caméra qui pivote derrière l'orientation du joueur, **seulement** pour
             // un personnage équipé d'une arme à distance (`fire_button`, cf. le
             // réticule central de `editor::crosshair`) : sans ce suivi, le réticule
@@ -1437,6 +1454,31 @@ impl AppState {
     /// Un pas de simulation à **dt fixe** : scripts Lua, actions au tap, pilotage des
     /// objets pilotables et pas de physique. Appelé 0..N fois par frame (cf. `advance_play`).
     pub(super) fn sim_step(&mut self, dt: f32) {
+        let step_started = crate::time_compat::Instant::now();
+        self.sim_step_inner(dt);
+        // Diagnostic des saccades (plateformer 2D, surtout sur le web) : un pas
+        // fixe qui dépasse la moitié d'une frame à 60 Hz est journalisé avec sa
+        // répartition scripts / physique — au plus une ligne par seconde.
+        let ms = step_started.elapsed().as_secs_f32() * 1000.0;
+        if ms > 8.0 && self.scene.platformer.is_some() {
+            let now = crate::time_compat::Instant::now();
+            if self
+                .perf
+                .last_slow_step_log
+                .is_none_or(|t| now.duration_since(t).as_secs_f32() > 1.0)
+            {
+                self.perf.last_slow_step_log = Some(now);
+                log::warn!(
+                    "Pas de simulation lent : {ms:.1} ms (scripts {:.1} ms, physique {:.1} ms, {} objets)",
+                    self.perf.sim_scripts_ms,
+                    self.perf.sim_physics_ms,
+                    self.scene.objects.len()
+                );
+            }
+        }
+    }
+
+    fn sim_step_inner(&mut self, dt: f32) {
         // 1. scripts
         self.time += dt;
         let time = self.time;
@@ -1471,7 +1513,9 @@ impl AppState {
             }
             None => std::collections::HashSet::new(),
         };
+        let scripts_started = crate::time_compat::Instant::now();
         let outcome = self.run_object_scripts(dt, time, &triggered, anim_notify_events);
+        self.perf.sim_scripts_ms = scripts_started.elapsed().as_secs_f32() * 1000.0;
         self.apply_script_outcomes(outcome);
 
         // Attaques à distance des créatures (cf. `creature_attack.rs`) : gèle
@@ -1611,7 +1655,9 @@ impl AppState {
             // haut) est résolu contre le monde (murs, objets fixes, joueur) —
             // la position réellement atteinte est réécrite dans la scène.
             phys.resolve_scripted_moves(dt, &mut self.scene);
+            let phys_started = crate::time_compat::Instant::now();
             phys.step(dt, &mut self.scene);
+            self.perf.sim_physics_ms = phys_started.elapsed().as_secs_f32() * 1000.0;
             // Plateformer 2D : le joueur est ramené sur le plan de jeu après le pas
             // (une bousculade ou une pente latérale pourrait sinon le faire dériver
             // en profondeur, invisible de côté mais fatal aux sauts calibrés).
@@ -1656,7 +1702,11 @@ impl AppState {
             }
         }
 
-        // Plateformer 2D : mort instantanée + réapparition, à pas fixe (cf. sa doc).
+        // Plateformer 2D : chrono de partie (ne repart pas à zéro à chaque mort)
+        // et mort instantanée + réapparition, à pas fixe (cf. sa doc).
+        if self.scene.platformer.is_some() && self.win_time.is_none() {
+            self.run_time += dt;
+        }
         self.check_instant_death(dt);
 
         // Instantané de fin de pas pour l'interpolation de rendu (cf. `advance_play`) :
@@ -1778,6 +1828,16 @@ impl AppState {
         // n'y serait pas appelable.
         let online_client = self.is_online_client();
         let net_check_now = Instant::now();
+        // Plateformer 2D : les scripts des pièges loin du joueur ne tournent pas
+        // (rien à y voir ni à y déclencher) — sur le web, l'interpréteur Lua pur
+        // Rust coûtait ~12 ms par frame avec les 35 pièges du jeu, d'où des
+        // saccades ; avec la coupure, moins de 10 objets scriptés par pas.
+        let cull_x = self
+            .scene
+            .platformer
+            .filter(|pl| pl.lock_z)
+            .and_then(|_| self.player_position().or(self.checkpoint))
+            .map(|p| p.x);
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             let just_tapped = self.touch.tapped_obj == Some(idx);
             let touch_started = self.touch.touch_started_obj == Some(idx);
@@ -1798,6 +1858,12 @@ impl AppState {
             // Game feel : les collectibles encore visibles tournent sur eux-mêmes.
             crate::scene::animate_collectible(obj, time);
             if obj.script.trim().is_empty() {
+                continue;
+            }
+            if let Some(px) = cull_x
+                && obj.controller.is_none()
+                && (obj.transform.position.x - px).abs() > SCRIPT_CULL_DISTANCE
+            {
                 continue;
             }
             // Créature synchronisée par le serveur (`Combat::attackable`, cf.
@@ -1899,6 +1965,9 @@ impl AppState {
                     obj.visible = v;
                     solid_changes.push((idx, v));
                 }
+                // Directions d'os poussées par `bone()` : remplacent le jeu précédent
+                // (vides si le script n'en a pas poussé ce pas — jamais d'override fantôme).
+                obj.bone_dirs = super::script_ctx::take_bones().into_iter().collect();
                 if destroy_requested {
                     obj.visible = false;
                     solid_changes.push((idx, false));
@@ -1986,6 +2055,9 @@ impl AppState {
                     obj.visible = v;
                     solid_changes.push((idx, v));
                 }
+                // Directions d'os poussées par `bone()` : remplacent le jeu précédent
+                // (vides si le script n'en a pas poussé ce pas — jamais d'override fantôme).
+                obj.bone_dirs = super::script_ctx::take_bones().into_iter().collect();
                 // `obj:destroy()` : suppression douce, cf. sa doc dans
                 // `run_script` — jamais un retrait de `scene.objects`.
                 if destroy_requested {

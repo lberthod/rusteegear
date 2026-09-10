@@ -31,6 +31,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Modèles LFS (mêmes étapes que ci.yml) : `assets::EMBEDDED_MODELS` compile
+      # l'avatar de la démo Rééducation dans le .wasm via include_bytes! — sans
+      # `git lfs pull`, ce serait un pointeur texte, et le test
+      # `embedded_model_is_a_real_glb_not_an_lfs_pointer` échouerait en CI.
+      - name: Liste des objets LFS (clé de cache)
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Cache LFS
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Récupérer les modèles (assets/models/)
+        run: git lfs pull
+
       # Même toolchain épinglée que ci.yml : `rust-toolchain.toml` prime sur le canal
       # demandé ici, donc installer `stable` + wasm32 ne suffisait pas (roadmap
       # post-audit UX 2026-09-04, 0.1 — Pages rouge du 3 au 4 septembre).

@@ -519,6 +519,11 @@ pub struct PerfState {
     /// pas forcément la même frame que `perf_window_worst_dt`, c'est un
     /// indicateur de *quel côté* (sim vs rendu/présentation) chercher un à-coup.
     perf_window_worst_sim: f32,
+    /// Durée des scripts et de la physique du dernier pas fixe (ms), et dernier
+    /// journal « pas lent » — diagnostic des saccades (cf. `sim_step`).
+    sim_scripts_ms: f32,
+    sim_physics_ms: f32,
+    last_slow_step_log: Option<Instant>,
 }
 
 pub struct DragState {
@@ -1120,6 +1125,14 @@ pub struct AppState {
     pending_respawn: Option<f32>,
     /// Position de la dernière mort (tombe posée à la réapparition).
     death_pos: Option<Vec3>,
+    /// Chrono de la partie (s) en mode plateformer 2D : cumule les pas fixes depuis
+    /// l'entrée en Play — contrairement à `time`, ne repart PAS de zéro à chaque
+    /// mort (`restart_game`). Remis à zéro par `new_run`. Exposé au HUD web et au
+    /// classement (`window.__rusteegear_state`).
+    run_time: f32,
+    /// Anticipation caméra lissée du plateformer 2D (unités, signée), cf. le suivi
+    /// caméra dans `advance_play`.
+    camera_ahead: f32,
     /// Textes de HUD posés par les scripts (`hud_text(id, texte)`, mode plateformer
     /// 2D) : remplacent le contenu du widget `Text` d'id correspondant. Remis à
     /// zéro à l'entrée en Play seulement (une vanne de mort doit survivre à
@@ -1500,6 +1513,8 @@ impl AppState {
             checkpoint: None,
             pending_respawn: None,
             death_pos: None,
+            run_time: 0.0,
+            camera_ahead: 0.0,
             hud_texts: std::collections::HashMap::new(),
             pose: pose::PoseFrame::default(),
             hands: pose::HandFrame::default(),
@@ -1635,6 +1650,9 @@ impl AppState {
                 perf_window_start: Instant::now(),
                 perf_window_worst_dt: 0.0,
                 perf_window_worst_sim: 0.0,
+                sim_scripts_ms: 0.0,
+                sim_physics_ms: 0.0,
+                last_slow_step_log: None,
             },
             gizmo_mode: GizmoMode::Translate,
             active_axis: None,
@@ -1978,6 +1996,32 @@ impl AppState {
     /// Morts de la partie en cours (mode plateformer 2D, cf. `deaths`).
     pub fn deaths(&self) -> u32 {
         self.deaths
+    }
+
+    /// Chrono de la partie en cours (s), cf. `run_time`.
+    pub fn run_time(&self) -> f32 {
+        self.run_time
+    }
+
+    /// Niveau courant du plateformer 2D : index du bloc de 40 unités sur X où se
+    /// trouve le joueur (même découpage que `build_scene.py` du jeu RageQuit).
+    pub fn platformer_level(&self) -> Option<u32> {
+        self.scene.platformer?;
+        let p = self.player_position().or(self.checkpoint)?;
+        Some(((p.x + 5.0) / 40.0).floor().max(0.0) as u32)
+    }
+
+    /// Nouvelle partie après une victoire (« Rejouer ») : morts, chrono, point de
+    /// contrôle, textes HUD et tombes repartent de zéro — sans quitter le Play.
+    pub fn new_run(&mut self) {
+        self.deaths = 0;
+        self.run_time = 0.0;
+        self.checkpoint = None;
+        self.pending_respawn = None;
+        self.death_pos = None;
+        self.hud_texts.clear();
+        self.play_snapshot.retain(|o| o.name != "Tombe");
+        self.scene.objects.retain(|o| o.name != "Tombe");
     }
 
     /// Reçoit une pose corporelle « à plat » (`33 × 4` flottants, ordre

@@ -18,6 +18,36 @@ pub const SCHEME: &str = "bundle://";
 /// Préfixe d'un asset de projet (dossier `~/.motor3derust/assets/`, édition desktop).
 pub const ASSET_SCHEME: &str = "asset://";
 
+/// Préfixe d'un modèle **compilé dans le binaire** (`include_bytes!`), pour les
+/// démos qui doivent tourner sur toutes les cibles — web compris, où ni le
+/// dossier `assets/models/` ni `assets/bundle/` (vide hors export) n'existent.
+/// Réservé à une poignée de fichiers légers (cf. `EMBEDDED_MODELS`) : chaque
+/// octet finit dans le `.wasm` téléchargé.
+pub const EMBEDDED_SCHEME: &str = "embedded://";
+
+/// Modèles embarqués, résolus par `read_bytes("embedded://<nom>")`. Fichiers
+/// LFS : les workflows CI/Pages font `git lfs pull` avant de compiler.
+const EMBEDDED_MODELS: &[(&str, &[u8])] = &[
+    // Avatars de la démo Rééducation : héros aux proportions humaines (23 os,
+    // pas de doigts) et ninja cartoon (43 os, pouce/index/majeur/auriculaire).
+    (
+        "fairy_hero.glb",
+        include_bytes!("../assets/models/fairy_hero.glb"),
+    ),
+    (
+        "monster_ninja_b.glb",
+        include_bytes!("../assets/models/monster_ninja_b.glb"),
+    ),
+];
+
+/// Octets d'un modèle embarqué (`EMBEDDED_MODELS`), `None` si le nom est inconnu.
+pub fn embedded_bytes(name: &str) -> Option<Vec<u8>> {
+    EMBEDDED_MODELS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, b)| b.to_vec())
+}
+
 /// Préfixe d'une référence **stable** vers un asset de projet : un uuid
 /// plutôt qu'un nom de fichier, résolu via le manifeste (`register_asset`/
 /// `resolve_asset_id`) — survit à un renommage du fichier sous-jacent (`rename_asset`),
@@ -39,7 +69,10 @@ const MANIFEST_FILE: &str = "manifest.json";
 /// collecte d'assets) partagent cette même logique plutôt que de la dupliquer chacun
 /// de leur côté.
 pub fn is_known_scheme(path: &str) -> bool {
-    path.starts_with(SCHEME) || path.starts_with(ASSET_SCHEME) || path.starts_with(ASSET_ID_SCHEME)
+    path.starts_with(SCHEME)
+        || path.starts_with(ASSET_SCHEME)
+        || path.starts_with(ASSET_ID_SCHEME)
+        || path.starts_with(EMBEDDED_SCHEME)
 }
 
 /// Manifeste `uuid → nom de fichier courant`, persisté dans
@@ -441,6 +474,9 @@ pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
     if let Some(key) = path.strip_prefix(SCHEME) {
         return bundle_bytes(key);
     }
+    if let Some(key) = path.strip_prefix(EMBEDDED_SCHEME) {
+        return embedded_bytes(key);
+    }
     if let Some(key) = path.strip_prefix(ASSET_SCHEME) {
         if let Some(dir) = assets_dir()
             && let Some(target) = safe_join(&dir, key)
@@ -791,7 +827,21 @@ mod tests {
         assert!(is_known_scheme("bundle://x"));
         assert!(is_known_scheme("asset://x"));
         assert!(is_known_scheme("asset-id://x"));
+        assert!(is_known_scheme("embedded://x"));
         assert!(!is_known_scheme("/disque/x.glb"));
+    }
+
+    #[test]
+    fn embedded_model_is_a_real_glb_not_an_lfs_pointer() {
+        // Sans `git lfs pull`, le fichier inclus serait un pointeur texte : le
+        // modèle embarqué doit commencer par la signature binaire glTF.
+        let bytes = read_bytes("embedded://monster_ninja_b.glb").expect("modèle embarqué");
+        assert_eq!(
+            &bytes[..4],
+            b"glTF",
+            "assets/models/monster_ninja_b.glb n'est pas un GLB (LFS non tiré ?)"
+        );
+        assert!(read_bytes("embedded://inconnu.glb").is_none());
     }
 
     #[test]

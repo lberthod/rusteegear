@@ -190,6 +190,12 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
+    /// Premier enfant du joint `i` dans l'ordre de `joints` (les rigs Blender
+    /// listent les enfants après leur parent), `None` pour une feuille.
+    pub fn first_child(&self, i: usize) -> Option<usize> {
+        self.joints.iter().position(|j| j.parent == Some(i))
+    }
+
     /// Indice du joint racine (celui sans parent), s'il existe. `None` seulement pour un
     /// squelette vide — un squelette valide a toujours exactement une racine.
     pub fn root(&self) -> Option<usize> {
@@ -614,6 +620,7 @@ pub struct SkinningScratch {
 fn resolve_world_matrices_into(
     skeleton: &Skeleton,
     local_of: impl Fn(usize, &Joint) -> Mat4,
+    bone_dirs: &[Option<Vec3>],
     scratch: &mut SkinningScratch,
     out: &mut Vec<Mat4>,
 ) {
@@ -641,7 +648,25 @@ fn resolve_world_matrices_into(
                 .parent
                 .and_then(|p| world[p])
                 .unwrap_or(Mat4::IDENTITY);
-            world[i] = Some(parent_world * local);
+            let mut w = parent_world * local;
+            // Direction d'os imposée (retargeting depuis des repères, cf.
+            // `SceneObject::bone_dirs`) : rotation minimale amenant l'axe du joint
+            // sur la direction voulue, en espace modèle. Le reste de la hiérarchie
+            // se compose sur la matrice corrigée.
+            if let Some(Some(target)) = bone_dirs.get(i) {
+                // Axe de l'os = +Y local du joint (convention des rigs exportés de
+                // Blender : chaque enfant est posé en (0, longueur, 0)) — plus sûr que
+                // « le premier enfant », qui peut être un accessoire (cape, arme).
+                let child_t = Vec3::Y;
+                let (s, r, t) = w.to_scale_rotation_translation();
+                let d0 = (r * child_t).normalize_or_zero();
+                let d1 = target.normalize_or_zero();
+                if d0 != Vec3::ZERO && d1 != Vec3::ZERO {
+                    let q = Quat::from_rotation_arc(d0, d1);
+                    w = Mat4::from_scale_rotation_translation(s, q * r, t);
+                }
+            }
+            world[i] = Some(w);
             progressed = true;
             false // résolu : sorti de `remaining`
         });
@@ -684,12 +709,29 @@ pub fn compute_joint_matrices_into(
     scratch: &mut SkinningScratch,
     out: &mut Vec<Mat4>,
 ) {
+    compute_joint_matrices_into_with(skeleton, clip, time, &[], scratch, out);
+}
+
+/// Comme `compute_joint_matrices_into`, avec des **directions d'os imposées** :
+/// `bone_dirs[i]` (espace modèle, `None` = pas d'override) force l'axe du joint
+/// `i` vers son premier enfant à suivre cette direction — retargeting d'une pose
+/// captée (repères MediaPipe) sur un rig, cf. `SceneObject::bone_dirs`. Un
+/// tableau plus court que le squelette vaut `None` pour les joints manquants.
+pub fn compute_joint_matrices_into_with(
+    skeleton: &Skeleton,
+    clip: Option<&Clip>,
+    time: f32,
+    bone_dirs: &[Option<Vec3>],
+    scratch: &mut SkinningScratch,
+    out: &mut Vec<Mat4>,
+) {
     resolve_world_matrices_into(
         skeleton,
         |i, joint| {
             let (t, r, s) = local_pose(joint, i, clip, time);
             Mat4::from_scale_rotation_translation(s, r, t)
         },
+        bone_dirs,
         scratch,
         out,
     );
@@ -742,6 +784,33 @@ pub fn compute_joint_matrices_blended_into(
     scratch: &mut SkinningScratch,
     out: &mut Vec<Mat4>,
 ) {
+    compute_joint_matrices_blended_into_with(
+        skeleton,
+        clip_a,
+        time_a,
+        clip_b,
+        time_b,
+        blend,
+        &[],
+        scratch,
+        out,
+    );
+}
+
+/// `compute_joint_matrices_blended_into` + directions d'os imposées (cf.
+/// `compute_joint_matrices_into_with`).
+#[allow(clippy::too_many_arguments)]
+pub fn compute_joint_matrices_blended_into_with(
+    skeleton: &Skeleton,
+    clip_a: Option<&Clip>,
+    time_a: f32,
+    clip_b: Option<&Clip>,
+    time_b: f32,
+    blend: f32,
+    bone_dirs: &[Option<Vec3>],
+    scratch: &mut SkinningScratch,
+    out: &mut Vec<Mat4>,
+) {
     let blend = blend.clamp(0.0, 1.0);
     resolve_world_matrices_into(
         skeleton,
@@ -754,6 +823,7 @@ pub fn compute_joint_matrices_blended_into(
                 ta.lerp(tb, blend),
             )
         },
+        bone_dirs,
         scratch,
         out,
     );
@@ -1279,6 +1349,109 @@ pub(crate) mod tests {
         // (0,0.5,0) composée par-dessus le monde du joint 0 ; son canal de scale
         // (step) est tenu à (1,1,1) à t=0.5, donc sans effet sur la position.
         assert_eq!(matrices[1].col(3).truncate(), Vec3::new(5.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn bone_direction_override_rotates_the_joint_toward_the_target() {
+        // Fixture : Root en (0,1,0), Child en (0,0.5,0) local ⇒ l'os Root→Child pointe
+        // vers +Y. Imposer +X à Root doit amener Child en (0.5, 1, 0) — et rien
+        // ne change quand aucune direction n'est donnée.
+        let path = write_temp_glb(&skinned_triangle_glb(), "bone_dir_override");
+        let (skeleton, _) = load_gltf_skeleton(path.to_str().unwrap()).unwrap().unwrap();
+        let _ = std::fs::remove_file(&path);
+        let mut out = Vec::new();
+        compute_joint_matrices_into_with(
+            &skeleton,
+            None,
+            0.0,
+            &[Some(Vec3::X), None],
+            &mut SkinningScratch::default(),
+            &mut out,
+        );
+        assert!(
+            (out[1].col(3).truncate() - Vec3::new(0.5, 1.0, 0.0)).length() < 1e-5,
+            "{:?}",
+            out[1].col(3)
+        );
+        assert!((out[0].col(3).truncate() - Vec3::new(0.0, 1.0, 0.0)).length() < 1e-5);
+        let plain = compute_joint_matrices(&skeleton, None, 0.0);
+        let mut same = Vec::new();
+        compute_joint_matrices_into_with(
+            &skeleton,
+            None,
+            0.0,
+            &[None, None],
+            &mut SkinningScratch::default(),
+            &mut same,
+        );
+        assert_eq!(plain, same);
+        // Direction nulle : ignorée (pas de NaN).
+        compute_joint_matrices_into_with(
+            &skeleton,
+            None,
+            0.0,
+            &[Some(Vec3::ZERO)],
+            &mut SkinningScratch::default(),
+            &mut same,
+        );
+        assert_eq!(plain, same);
+    }
+
+    /// Sur les vrais rigs embarqués (héros 23 os, ninja 43 os) : imposer +X à
+    /// l'os du bras doit amener l'avant-bras à +X de l'épaule — quel que soit
+    /// le clip joué (la direction remplace la rotation animée).
+    #[test]
+    fn bone_direction_override_works_on_the_embedded_avatar_rigs() {
+        for (file, upper, lower, clip_name) in [
+            (
+                "embedded://fairy_hero.glb",
+                "UpperArm.L",
+                "Forearm.L",
+                "Idle",
+            ),
+            (
+                "embedded://monster_ninja_b.glb",
+                "UpperArm.L",
+                "LowerArm.L",
+                "CharacterArmature|Idle",
+            ),
+        ] {
+            let (skeleton, _) = load_gltf_skeleton(file).unwrap().unwrap();
+            let clips = load_gltf_clips(file).unwrap();
+            let clip = clips.iter().find(|c| c.name == clip_name);
+            let iu = skeleton
+                .joints
+                .iter()
+                .position(|j| j.name == upper)
+                .unwrap();
+            let il = skeleton
+                .joints
+                .iter()
+                .position(|j| j.name == lower)
+                .unwrap();
+            let mut dirs = vec![None; skeleton.joints.len()];
+            dirs[iu] = Some(Vec3::X);
+            let mut out = Vec::new();
+            compute_joint_matrices_into_with(
+                &skeleton,
+                clip,
+                0.3,
+                &dirs,
+                &mut SkinningScratch::default(),
+                &mut out,
+            );
+            // `out` = monde × inverse_bind : on veut la pose monde ⇒ on annule l'inverse_bind.
+            let world = |i: usize| {
+                (out[i] * skeleton.joints[i].inverse_bind.inverse())
+                    .col(3)
+                    .truncate()
+            };
+            let d = (world(il) - world(iu)).normalize();
+            assert!(
+                d.dot(Vec3::X) > 0.99,
+                "{file} : {upper}→{lower} = {d:?} au lieu de +X"
+            );
+        }
     }
 
     #[test]

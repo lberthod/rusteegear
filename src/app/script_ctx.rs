@@ -23,6 +23,9 @@ thread_local! {
     static POSE: RefCell<PoseFrame> = RefCell::new(PoseFrame::default());
     /// Dernières mains (doigts, cf. `app::pose::HandFrame`), même cycle que `POSE`.
     static HANDS: RefCell<HandFrame> = RefCell::new(HandFrame::default());
+    /// Directions d'os poussées par `bone(nom, dx, dy, dz)` pendant le script
+    /// courant, reprises dans `SceneObject::bone_dirs` juste après.
+    static BONES: RefCell<Vec<(String, glam::Vec3)>> = const { RefCell::new(Vec::new()) };
     static VISIBLE_IN: Cell<bool> = const { Cell::new(true) };
     static VISIBLE_OUT: Cell<Option<bool>> = const { Cell::new(None) };
 }
@@ -55,6 +58,16 @@ pub(crate) fn set_hands(h: &HandFrame) {
 
 pub(crate) fn with_hands<R>(f: impl FnOnce(&HandFrame) -> R) -> R {
     HANDS.with(|c| f(&c.borrow()))
+}
+
+/// `bone(nom, dx, dy, dz)` côté script (les deux backends).
+pub(crate) fn push_bone(name: String, dir: glam::Vec3) {
+    BONES.with(|b| b.borrow_mut().push((name, dir)));
+}
+
+/// Consomme les directions poussées par le script qui vient de s'exécuter.
+pub(crate) fn take_bones() -> Vec<(String, glam::Vec3)> {
+    BONES.with(|b| std::mem::take(&mut *b.borrow_mut()))
 }
 
 /// Visibilité de l'objet dont le script va s'exécuter (valeur initiale de
