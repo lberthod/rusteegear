@@ -41,9 +41,11 @@ Les trois cibles de chaque exercice sont des décalages en fraction de la
 modulés par l'**amplitude confortable** (55 à 95 %) — exactement les motifs de
 Mouvéo, donc la difficulté suit la morphologie du patient, pas des pixels.
 
-Les trois exercices de **doigts** n'existent pas dans Mouvéo : la page fait
-tourner en plus le *Hand Landmarker* (21 repères par main), la main du côté
-choisi est dessinée en grand (couleur par doigt), et un degré de geste `m`
+Les **mains** n'existent pas dans Mouvéo : la page fait tourner en plus le
+*Hand Landmarker* (21 repères par main, deux mains), et les deux mains suivies
+viennent se poser sur les poignets du squelette, à l'échelle du corps, couleur
+par doigt. Pendant les trois exercices de **doigts**, la main du côté choisi
+est dessinée en grand à la place du corps, et un degré de geste `m`
 (0 = neutre, 1 = geste complet : pince fermée, main grande ouverte, doigt sur
 le pouce) remplace la distance à la cible — l'amplitude fixe le `m` à atteindre,
 le retour se valide sous 25 %. Sans caméra, une jauge verticale se pilote au

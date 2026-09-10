@@ -1042,7 +1042,7 @@ fn reeducation_demo_is_wired_for_its_director_script() {
             .iter()
             .filter(|o| o.name.starts_with("Doigt "))
             .count(),
-        21
+        42
     );
     assert_eq!(
         scene
@@ -1050,7 +1050,7 @@ fn reeducation_demo_is_wired_for_its_director_script() {
             .iter()
             .filter(|o| o.name.starts_with("Phalange "))
             .count(),
-        21
+        42
     );
     assert!(
         bones

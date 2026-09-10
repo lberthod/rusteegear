@@ -11,7 +11,7 @@
 //! | MediaPipe Pose dans le navigateur              | idem, dans `packaging/web/reeduc.html` -> export wasm    |
 //! |                                                | `set_pose_landmarks` -> table Lua `pose` (`app::pose`)   |
 //! | squelette dessiné sur la vidéo                 | avatar 3D (sphères aux articulations, cylindres en os)  |
-//! | (pas de doigts dans Mouvéo)                    | main suivie (21 repères MediaPipe), 3 exercices de doigts |
+//! | (pas de doigts dans Mouvéo)                    | deux mains sur le squelette (21 repères MediaPipe chacune), 3 exercices de doigts avec la main en grand |
 //! | cibles 2D relatives à l'épaule/la hanche       | sphères émissives dans le plan `z = 0`, mêmes motifs    |
 //! | machine à états React (welcome/calibrate/…)    | script Lua « directeur », état dans `save.*`            |
 //! | HUD React (score, série, chrono, consigne)     | widgets HUD déclaratifs + `hud_text`                    |
@@ -210,23 +210,41 @@ else
   for i = 1, #NAMES do local n = NAMES[i]; pts[n] = {VBODY[n][1], VBODY[n][2], 1.0} end
 end
 
--- ---- Main (doigts) : 21 repères dessinés en grand, centrés et lissés ----
-local HP = nil           -- points main (monde), 1-based, nil si pas de main
-local hs = 0             -- taille de main (poignet -> base du majeur, m)
-local hand_live = hand_ex and (cam or stage == 0)
-if hand_live then
-  local Hn = (side > 0) and hand.right or hand.left
-  if Hn then
+-- ---- Mains (doigts) : 21 repères par côté, lissés ----
+-- Exercice de doigts : la main travaillée est dessinée en grand, centrée ;
+-- sinon les deux mains sont projetées comme le corps (même image, même
+-- échelle) et viennent se poser sur les poignets du squelette.
+local function hand_points(Hn, key, zoom)
+  local out = {}
+  if zoom then
     local cx, cy = 0, 0
     for i = 1, 21 do cx = cx + Hn.x[i]; cy = cy + Hn.y[i] end
     cx, cy = smooth("rd_hc_x", cx / 21, 12.0), smooth("rd_hc_y", cy / 21, 12.0)
-    HP = {}
     for i = 1, 21 do
       local wx, wy = (cx - Hn.x[i]) * HK, 1.6 + (cy - Hn.y[i]) * HK
-      HP[i] = {smooth("rd_hs_" .. i .. "_x", wx, SMOOTH_HAND), smooth("rd_hs_" .. i .. "_y", wy, SMOOTH_HAND)}
+      out[i] = {smooth(key .. i .. "_x", wx, SMOOTH_HAND), smooth(key .. i .. "_y", wy, SMOOTH_HAND)}
     end
+  else
+    for i = 1, 21 do
+      local wx, wy = (0.5 - Hn.x[i]) * W, (1.0 - Hn.y[i]) * H
+      out[i] = {smooth(key .. i .. "_x", wx, SMOOTH_HAND), smooth(key .. i .. "_y", wy, SMOOTH_HAND)}
+    end
+  end
+  return out
+end
+local HP = nil           -- main travaillée, en grand (exercice de doigts), nil sinon
+local hs = 0             -- sa taille (poignet -> base du majeur, m)
+local HPL, HPR = nil, nil -- mains à l'échelle du corps, sur le squelette
+local hands_live = cam or stage == 0
+if hands_live and hand_ex then
+  local Hn = (side > 0) and hand.right or hand.left
+  if Hn then
+    HP = hand_points(Hn, "rd_hz_", true)
     hs = math.max(0.2, dist(HP[1][1], HP[1][2], HP[10][1], HP[10][2]))
   end
+elseif hands_live then
+  if hand.left then HPL = hand_points(hand.left, "rd_hl_", false) end
+  if hand.right then HPR = hand_points(hand.right, "rd_hr_", false) end
 end
 
 -- Visibilité « corps prêt » selon l'exercice.
@@ -444,12 +462,25 @@ for i = 1, #NAMES do
   save.set("rd_p_" .. n .. "_vis", vis and 1 or 0)
   save.set("rd_p_" .. n .. "_x", pts[n][1]); save.set("rd_p_" .. n .. "_y", pts[n][2])
 end
-for i = 1, 21 do
-  if show_hand then
-    save.set("rd_h_" .. i .. "_vis", 1); save.set("rd_h_" .. i .. "_x", HP[i][1]); save.set("rd_h_" .. i .. "_y", HP[i][2])
-  else
-    save.set("rd_h_" .. i .. "_vis", 0)
+-- Deux jeux d'objets de main (gauche/droite) : en exercice de doigts, celui du
+-- côté travaillé porte la main agrandie (échelle 1), l'autre est caché ; sinon
+-- chacun suit sa main sur le squelette, à l'échelle du corps (0,45).
+local function write_hand(prefix, pts_h, scale)
+  save.set(prefix .. "scale", scale)
+  for i = 1, 21 do
+    if pts_h then
+      save.set(prefix .. i .. "_vis", 1); save.set(prefix .. i .. "_x", pts_h[i][1]); save.set(prefix .. i .. "_y", pts_h[i][2])
+    else
+      save.set(prefix .. i .. "_vis", 0)
+    end
   end
+end
+if show_hand then
+  write_hand((side > 0) and "rd_hr_" or "rd_hl_", HP, 1.0)
+  write_hand((side > 0) and "rd_hl_" or "rd_hr_", nil, 1.0)
+else
+  write_hand("rd_hl_", show_body and HPL or nil, 0.45)
+  write_hand("rd_hr_", show_body and HPR or nil, 0.45)
 end
 
 -- ---- HUD ----
@@ -609,7 +640,8 @@ const BONES: [(&str, &str); 12] = [
 /// `rd_p_hip_r` ou `rd_h_9`), étiré à leur distance et tourné autour de Z pour
 /// les relier — angle calculé par `acos` + signe plutôt qu'`atan2`, absent en
 /// Lua 5.1 sous ce nom.
-fn segment_script(ka: &str, kb: &str, thickness: f32, z: f32) -> String {
+fn segment_script(ka: &str, kb: &str, thickness: f32, z: f32, scale_key: Option<&str>) -> String {
+    let f = scale_key.map_or("1".to_string(), |k| format!("(save.get(\"{k}\") or 1)"));
     format!(
         "local vis = (save.get(\"{ka}_vis\") or 0) > 0.5 and (save.get(\"{kb}_vis\") or 0) > 0.5\n\
          obj.visible = vis\n\
@@ -619,7 +651,7 @@ fn segment_script(ka: &str, kb: &str, thickness: f32, z: f32) -> String {
            local dx, dy = bx - ax, by - ay\n\
            local len = math.sqrt(dx * dx + dy * dy)\n\
            obj.x = (ax + bx) / 2; obj.y = (ay + by) / 2; obj.z = {z:?}\n\
-           obj.sx = {thickness:?}; obj.sz = {thickness:?}; obj.sy = math.max(0.01, len)\n\
+           obj.sx = {thickness:?} * {f}; obj.sz = {thickness:?} * {f}; obj.sy = math.max(0.01, len)\n\
            if len > 0.0001 then\n\
              local c = dy / len\n\
              if c > 1 then c = 1 elseif c < -1 then c = -1 end\n\
@@ -670,11 +702,15 @@ const HAND_BONES: [(usize, usize); 21] = [
     (1, 18),
 ];
 
-fn hand_joint_script(i: usize) -> String {
+fn hand_joint_script(prefix: &str, i: usize, radius: f32) -> String {
     format!(
-        "local vis = (save.get(\"rd_h_{i}_vis\") or 0) > 0.5\n\
+        "local vis = (save.get(\"{prefix}{i}_vis\") or 0) > 0.5\n\
          obj.visible = vis\n\
-         if vis then obj.x = save.get(\"rd_h_{i}_x\") or 0; obj.y = save.get(\"rd_h_{i}_y\") or 0; obj.z = 0.02 end\n"
+         if vis then\n\
+           local f = {radius:?} * (save.get(\"{prefix}scale\") or 1)\n\
+           obj.sx = f; obj.sy = f; obj.sz = f\n\
+           obj.x = save.get(\"{prefix}{i}_x\") or 0; obj.y = save.get(\"{prefix}{i}_y\") or 0; obj.z = 0.02\n\
+         end\n"
     )
 }
 
@@ -716,7 +752,7 @@ fn button_widget(id: &str, label: &str, action: &str, offset_y: f32) -> HudWidge
 impl Scene {
     /// Démo « Rééducation — mobilité guidée » (cf. la doc du module).
     pub fn reeducation_demo() -> Self {
-        let mut objects = Vec::with_capacity(80);
+        let mut objects = Vec::with_capacity(120);
 
         // Directeur en tête de liste : les autres objets relisent son état le
         // même tick (les scripts s'exécutent dans l'ordre de `objects`).
@@ -756,7 +792,7 @@ impl Scene {
             os.transform = os.transform.with_scale(Vec3::new(0.07, 0.5, 0.07));
             os.color = [0.85, 0.9, 1.0];
             os.emissive = 0.25;
-            os.script = segment_script(&format!("rd_p_{a}"), &format!("rd_p_{b}"), 0.07, 0.0);
+            os.script = segment_script(&format!("rd_p_{a}"), &format!("rd_p_{b}"), 0.07, 0.0, None);
             os.visible = false;
             objects.push(os);
         }
@@ -772,30 +808,44 @@ impl Scene {
             objects.push(j);
         }
 
-        // Main dessinée en grand (exercices de doigts) : 21 repères + 21 phalanges,
-        // couleur par doigt, cachés tant qu'aucune main n'est suivie.
-        for (a, b) in HAND_BONES {
-            let mut ph = demo_obj(&format!("Phalange {a}-{b}"), MeshKind::Cylinder, Vec3::ZERO);
-            ph.transform = ph.transform.with_scale(Vec3::new(0.05, 0.3, 0.05));
-            ph.color = if matches!((a, b), (1, 6) | (6, 10) | (10, 14) | (14, 18) | (1, 18)) {
-                finger_color(1)
-            } else {
-                finger_color(b)
-            };
-            ph.emissive = 0.3;
-            ph.script = segment_script(&format!("rd_h_{a}"), &format!("rd_h_{b}"), 0.05, 0.01);
-            ph.visible = false;
-            objects.push(ph);
-        }
-        for i in 1..=21 {
-            let mut d = demo_obj(&format!("Doigt {i}"), MeshKind::Sphere, Vec3::ZERO);
-            let r = if i == 1 { 0.09 } else { 0.06 };
-            d.transform = d.transform.with_scale(Vec3::splat(r));
-            d.color = finger_color(i);
-            d.emissive = 0.5;
-            d.script = hand_joint_script(i);
-            d.visible = false;
-            objects.push(d);
+        // Deux mains (21 repères + 21 phalanges chacune, couleur par doigt) :
+        // posées sur les poignets du squelette à l'échelle du corps, ou la main
+        // travaillée en grand pendant un exercice de doigts (`rd_h<l|r>_scale`).
+        for (s, label) in [("l", "gauche"), ("r", "droite")] {
+            let prefix = format!("rd_h{s}_");
+            for (a, b) in HAND_BONES {
+                let mut ph = demo_obj(
+                    &format!("Phalange {label} {a}-{b}"),
+                    MeshKind::Cylinder,
+                    Vec3::ZERO,
+                );
+                ph.transform = ph.transform.with_scale(Vec3::new(0.05, 0.3, 0.05));
+                ph.color = if matches!((a, b), (1, 6) | (6, 10) | (10, 14) | (14, 18) | (1, 18)) {
+                    finger_color(1)
+                } else {
+                    finger_color(b)
+                };
+                ph.emissive = 0.3;
+                ph.script = segment_script(
+                    &format!("{prefix}{a}"),
+                    &format!("{prefix}{b}"),
+                    0.05,
+                    0.01,
+                    Some(&format!("{prefix}scale")),
+                );
+                ph.visible = false;
+                objects.push(ph);
+            }
+            for i in 1..=21 {
+                let mut d = demo_obj(&format!("Doigt {label} {i}"), MeshKind::Sphere, Vec3::ZERO);
+                let r = if i == 1 { 0.09 } else { 0.06 };
+                d.transform = d.transform.with_scale(Vec3::splat(r));
+                d.color = finger_color(i);
+                d.emissive = 0.5;
+                d.script = hand_joint_script(&prefix, i, r);
+                d.visible = false;
+                objects.push(d);
+            }
         }
 
         let mut main = demo_obj("Point suivi", MeshKind::Sphere, Vec3::new(0.8, 1.3, 0.05));

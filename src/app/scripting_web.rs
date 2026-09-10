@@ -1771,8 +1771,8 @@ mod tests {
                 })
                 .collect();
             assert!(
-                funcs.len() >= 71,
-                "directeur + cible + halo + point + 13 repères + 12 os + 21 doigts + 21 phalanges"
+                funcs.len() >= 113,
+                "directeur + cible + halo + point + 13 repères + 12 os + 2 × (21 doigts + 21 phalanges)"
             );
             // Ancrage GC comme le fait `AppState` (cf. `anchor_compiled_function`).
             for (i, (_, f)) in funcs.iter_mut().enumerate() {

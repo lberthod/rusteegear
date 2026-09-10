@@ -2567,7 +2567,7 @@ fn reeducation_pinch_exercise_counts_hand_gestures_from_hand_landmarks() {
         app.scene
             .objects
             .iter()
-            .find(|o| o.name == "Doigt 9")
+            .find(|o| o.name == "Doigt droite 9")
             .unwrap()
             .visible
     };
@@ -2683,4 +2683,63 @@ fn reeducation_hides_low_visibility_landmarks_and_their_bones() {
     assert!(!vis("Repère ankle_l"));
     assert!(!vis("Os knee_l-ankle_l"));
     assert!(vis("Os hip_l-knee_l"));
+}
+
+/// Hors exercice de doigts, les deux mains suivies viennent se poser sur les
+/// poignets du squelette, à l'échelle du corps (même projection que la pose).
+#[test]
+fn reeducation_draws_both_hands_on_the_skeleton_at_body_scale() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    let body = standing_body();
+    // Main droite dont le poignet (repère 1) coïncide avec le poignet droit du corps.
+    let (wx, wy) = crate::scene::demos::reeducation::world_to_pose(0.80, 1.30);
+    let mut right = right_hand_flat(false);
+    let (ox, oy) = (wx - right[1], wy - right[2]);
+    for i in 0..21 {
+        right[1 + i * 3] += ox;
+        right[2 + i * 3] += oy;
+    }
+    let mut left = right.clone();
+    left[0] = 0.0;
+    let (lx, ly) = crate::scene::demos::reeducation::world_to_pose(-0.80, 1.30);
+    for i in 0..21 {
+        left[1 + i * 3] += lx - wx;
+        left[2 + i * 3] += ly - wy;
+    }
+    let mut both = right.clone();
+    both.extend(left);
+    for _ in 0..30 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&both);
+        reeduc_tick(&mut app);
+    }
+    let obj = |name: &str| {
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    assert!(obj("Repère nose").visible, "le corps reste dessiné");
+    for (name, wrist) in [
+        ("Doigt droite 1", Vec3::new(0.80, 1.30, 0.02)),
+        ("Doigt gauche 1", Vec3::new(-0.80, 1.30, 0.02)),
+    ] {
+        let o = obj(name);
+        assert!(o.visible, "{name} visible");
+        assert!(
+            (o.transform.position - wrist).length() < 0.08,
+            "{name} sur le poignet : {:?}",
+            o.transform.position
+        );
+        assert!(
+            o.transform.scale.x < 0.05,
+            "échelle du corps, pas la main agrandie"
+        );
+    }
+    assert!(obj("Phalange droite 4-5").visible);
+    assert!(obj("Phalange gauche 1-2").visible);
 }
