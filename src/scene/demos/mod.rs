@@ -249,6 +249,8 @@ mod escorte;
 
 mod misc;
 
+pub mod reeducation;
+
 mod mmorpg;
 
 mod hameau_gdd;

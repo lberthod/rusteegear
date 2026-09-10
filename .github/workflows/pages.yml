@@ -69,6 +69,9 @@ jobs:
           # exactement ce qui a rendu la démo noire du 3 au 4 septembre.
           node -e "const fs=require('fs');const b=fs.readFileSync('packaging/web/pkg/motor3derust_bg.wasm');if(!WebAssembly.validate(b)){console.error('✗ .wasm refusé par V8 (proposition non supportée) — cf. packaging/build_web.sh');process.exit(1)}console.log('✓ .wasm valide,',(b.length/1048576).toFixed(1),'Mo')"
           cp packaging/web/index.html site/
+          # Démo « Rééducation » (portage de Mouvéo) : même pkg/, scène choisie
+          # par l'URL, caméra + MediaPipe côté page — cf. docs/REEDUCATION.md.
+          cp packaging/web/reeduc.html site/
           cp -r packaging/web/pkg site/pkg
           cargo doc --no-deps --lib
           echo '<meta http-equiv="refresh" content="0; url=motor3derust/index.html">' \

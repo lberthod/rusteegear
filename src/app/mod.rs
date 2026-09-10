@@ -26,6 +26,8 @@ pub mod scripting;
 mod creature_attack;
 // Contexte de tick partagé par les deux backends Lua (mode plateformer 2D).
 pub(crate) mod script_ctx;
+// Pose corporelle (MediaPipe) poussée par la page web, exposée à Lua (`pose`).
+pub mod pose;
 #[cfg(any(target_arch = "wasm32", test))]
 mod scripting_web;
 mod selection;
@@ -1117,6 +1119,10 @@ pub struct AppState {
     /// zéro à l'entrée en Play seulement (une vanne de mort doit survivre à
     /// `restart_game`).
     pub hud_texts: std::collections::HashMap<String, String>,
+    /// Dernière pose corporelle reçue (démo Rééducation, cf. `app::pose`) :
+    /// alimentée par `set_pose` (export wasm `set_pose_landmarks`, tests),
+    /// vieillie d'un pas à chaque `sim_step`, exposée aux scripts en `pose`.
+    pub pose: pose::PoseFrame,
     /// File d'événements de gameplay : noms émis pendant le tick courant
     /// (par un script via `emit("nom")`, ou par le moteur — ex. `score:N` à chaque
     /// point marqué), **délivrés aux scripts au tick fixe suivant** via
@@ -1485,6 +1491,7 @@ impl AppState {
             deaths: 0,
             checkpoint: None,
             hud_texts: std::collections::HashMap::new(),
+            pose: pose::PoseFrame::default(),
             game_events: Vec::new(),
             trigger_prev: std::collections::HashSet::new(),
             furtive_awake: std::collections::HashSet::new(),
@@ -1926,7 +1933,11 @@ impl AppState {
             pitch: self.camera.pitch,
             distance: self.camera.distance,
             // Conserve un éventuel réglage orthographique posé dans l'inspecteur.
-            ortho_height: self.scene.game_camera.map(|g| g.ortho_height).unwrap_or(0.0),
+            ortho_height: self
+                .scene
+                .game_camera
+                .map(|g| g.ortho_height)
+                .unwrap_or(0.0),
         });
         log::info!("Caméra de jeu définie sur la vue actuelle");
     }
@@ -1956,6 +1967,21 @@ impl AppState {
     /// Morts de la partie en cours (mode plateformer 2D, cf. `deaths`).
     pub fn deaths(&self) -> u32 {
         self.deaths
+    }
+
+    /// Reçoit une pose corporelle « à plat » (`33 × 4` flottants, ordre
+    /// MediaPipe ; tranche vide = personne non détectée) — cf. `pose::PoseFrame::
+    /// apply_flat`. Appelé par l'export wasm `set_pose_landmarks` (`lib.rs`) à
+    /// chaque inférence de la page web, ou directement par un test.
+    pub fn set_pose(&mut self, flat: &[f32]) {
+        self.pose.apply_flat(flat);
+    }
+
+    /// Valeur d'une variable de script (`save.get`/`save.set`), `None` si jamais
+    /// écrite — lecture seule, pour les exemples et outils hors crate (ex.
+    /// `examples/gen_reeduc_preview.rs`).
+    pub fn script_var(&self, key: &str) -> Option<f64> {
+        self.lua_vars.get(key).copied()
     }
 
     /// Temps à afficher au HUD chrono : figé à la victoire, sinon temps de jeu courant.

@@ -191,6 +191,18 @@ pub(super) fn menu_fichier(
                     ui.close();
                 }
                 if ui
+                    .button("🎯  Rééducation (mobilité guidée, caméra ou joystick)")
+                    .on_hover_text(
+                        "Portage de Mouvéo : atteindre des cibles lumineuses avec le poignet, le genou, la cheville ou les hanches, \
+                         puis revenir en position neutre — 8 exercices, série, régularité, bilan. Suivi caméra (MediaPipe) sur la \
+                         page web reeduc.html ; ici, le point suivi se pilote au joystick ou aux flèches (mode démo)",
+                    )
+                    .clicked()
+                {
+                    actions.load_reeducation = true;
+                    ui.close();
+                }
+                if ui
                     .button("🛒  Escorte (RoundObjective::Escorte)")
                     .on_hover_text(
                         "Convoi lent à mener d'un bout à l'autre d'un couloir, ciblé en priorité par les créatures (RoundObjective::Escorte)",

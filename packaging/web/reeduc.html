@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>RusteeGear — Rééducation, mobilité guidée</title>
+    <!--
+      Page hôte de la démo « Rééducation — mobilité guidée » (portage de Mouvéo,
+      https://github.com/antoinequarroz/mouveo-reeducation, 10 septembre 2026).
+      Même moteur générique que index.html (pkg/), scène choisie par l'URL
+      (`?scene=reeduc`, lue par src/lib.rs). Cette page ajoute ce que le moteur
+      ne fait pas lui-même : la caméra et le suivi du corps (MediaPipe Pose
+      Landmarker, wasm + modèle chargés depuis un CDN à la demande), poussés au
+      moteur par l'export `set_pose_landmarks` (33 repères × x, y, z,
+      visibilité) — cf. src/app/pose.rs et docs/REEDUCATION.md.
+      Sans caméra (refusée, absente, CDN inaccessible), le jeu reste jouable :
+      le point suivi se pilote au stick tactile ou aux flèches (mode démo).
+    -->
+    <style>
+      html, body { margin: 0; height: 100%; background: #07111f; color: #e6e8e3;
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+      #rustee-canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 12px; padding: 24px; text-align: center; background: #07111f;
+        transition: opacity .35s ease; }
+      #boot.hidden { opacity: 0; pointer-events: none; }
+      #boot .logo { font-size: 30px; font-weight: 800; letter-spacing: -.01em; }
+      #boot .logo span { color: #c4ff4a; }
+      #boot .sub { margin: 0; color: #b4bac3; max-width: 60ch; }
+      #bar { width: min(420px, 80vw); height: 6px; background: #1c2431; border-radius: 3px; overflow: hidden; }
+      #fill { height: 100%; width: 0; background: #c4ff4a; transition: width .15s linear; }
+      #status { margin: 0; color: #b4bac3; font-variant-numeric: tabular-nums; }
+      #err { display: none; max-width: 60ch; margin-top: 8px; padding: 14px 18px; text-align: left;
+        background: #3e1f1d; border-left: 4px solid #f0736a; border-radius: 4px; }
+      #err h2 { margin: 0 0 6px; font-size: 17px; }
+      #err p { margin: 0 0 6px; }
+      #err code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; color: #f0b3ad; }
+      #boot.failed #bar { display: none; }
+      #boot.failed #err { display: block; }
+      /* Caméra : pastille de commande en haut au centre (le HUD du moteur occupe
+         les coins), aperçu miroir à gauche à mi-hauteur. */
+      #cam { position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+        display: none; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: 999px;
+        background: rgba(7, 17, 31, .78); backdrop-filter: blur(6px); font-size: 13.5px; z-index: 5; }
+      body.running #cam { display: flex; }
+      #cam button { border: 0; border-radius: 999px; padding: 6px 14px; font: inherit; font-weight: 700;
+        background: #c4ff4a; color: #07111f; cursor: pointer; }
+      #cam button:hover, #cam button:focus-visible { background: #d5ff7d; outline: none; }
+      #cam button.on { background: rgba(255,255,255,.12); color: #e6e8e3; }
+      #camstatus { color: #b4bac3; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #pip { position: fixed; left: max(12px, env(safe-area-inset-left)); top: 42%; width: 200px; height: 150px;
+        border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,.14);
+        background: #0d1b2d; display: none; pointer-events: none; z-index: 4; }
+      #pip.on { display: block; }
+      #pip video, #pip canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+        transform: scaleX(-1); }
+      #pip .tag { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: #b4bac3;
+        background: rgba(7,17,31,.6); padding: 1px 6px; border-radius: 6px; }
+      #fs { position: fixed; bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left));
+        width: 30px; height: 30px; border: 0; border-radius: 6px;
+        background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
+      #fs:hover, #fs:focus-visible { background: rgba(196, 255, 74, .8); color: #07111f; outline: none; }
+      body.running #fs { display: block; }
+      @media (max-width: 700px) { #pip { width: 132px; height: 100px; top: auto; bottom: 120px; } }
+      @media (prefers-reduced-motion: reduce) { #boot, #fill { transition: none; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="rustee-canvas" tabindex="0" aria-label="Zone de jeu — rééducation"></canvas>
+    <div id="cam" role="group" aria-label="Caméra">
+      <span id="camstatus">Sans caméra : stick tactile ou flèches</span>
+      <button id="camtoggle" type="button">📷 Activer la caméra</button>
+    </div>
+    <div id="pip" aria-hidden="true">
+      <video id="video" muted playsinline autoplay></video>
+      <canvas id="overlay"></canvas>
+      <span class="tag">aperçu miroir</span>
+    </div>
+    <button id="fs" type="button" title="Plein écran">⛶</button>
+    <div id="boot" role="status" aria-live="polite">
+      <div class="logo">🩺 Mouvéo <span>× RusteeGear</span></div>
+      <p class="sub">Mobilité guidée : atteignez les cibles lumineuses avec le poignet, le genou, la cheville ou les hanches,
+        puis revenez en position neutre. Prototype de coaching, sans diagnostic ni mesure clinique.</p>
+      <div id="bar"><div id="fill"></div></div>
+      <p id="status">Vérification du navigateur…</p>
+      <div id="err">
+        <h2 id="err-title"></h2>
+        <p id="err-body"></p>
+        <p><code id="err-detail"></code></p>
+      </div>
+    </div>
+    <script type="module">
+      import init, { set_pose_landmarks } from "./pkg/motor3derust.js";
+
+      const $ = (id) => document.getElementById(id);
+      const canvas = $("rustee-canvas");
+      const boot = $("boot");
+      const statusEl = $("status");
+      const fill = $("fill");
+      let failed = false;
+
+      // Le moteur choisit sa scène par l'URL (src/lib.rs, `web_requested_scene`) :
+      // on l'impose ici pour que la page marche aussi ouverte sans paramètre.
+      if (new URLSearchParams(location.search).get("scene") !== "reeduc") {
+        const url = new URL(location.href);
+        url.searchParams.set("scene", "reeduc");
+        history.replaceState(null, "", url);
+      }
+
+      function setStatus(text) { statusEl.textContent = text; }
+      function fail(title, body, detail) {
+        if (failed) return;
+        failed = true;
+        boot.style.display = "flex";
+        boot.classList.remove("hidden");
+        boot.classList.add("failed");
+        document.body.classList.remove("running");
+        $("err-title").textContent = title;
+        $("err-body").textContent = body;
+        $("err-detail").textContent = detail ? String(detail) : "";
+        setStatus("");
+      }
+      const origError = console.error.bind(console);
+      console.error = (...args) => {
+        origError(...args);
+        const text = args.map(String).join(" ");
+        if (/renderer impossible|adaptateur|Création de la fenêtre impossible/i.test(text)) {
+          fail("Le rendu 3D n'a pas pu démarrer",
+            "Le navigateur a bien WebGPU, mais aucune carte graphique compatible n'a répondu (vérifier chrome://gpu).", text);
+        }
+      };
+
+      async function fetchWithProgress(url) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status} sur ${url}`);
+        const compressed = !!res.headers.get("content-encoding");
+        const total = compressed ? 0 : Number(res.headers.get("content-length")) || 0;
+        const reader = res.body.getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          got += value.length;
+          const mb = (got / 1048576).toFixed(1);
+          fill.style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%`
+                                   : `${Math.min(95, (got / 24_000_000) * 100).toFixed(1)}%`;
+          setStatus(total ? `Téléchargement du moteur… ${mb} / ${(total / 1048576).toFixed(1)} Mo`
+                          : `Téléchargement du moteur… ${mb} Mo`);
+        }
+        const bytes = new Uint8Array(got);
+        let offset = 0;
+        for (const c of chunks) { bytes.set(c, offset); offset += c.length; }
+        return bytes;
+      }
+
+      function fitCanvas() {
+        canvas.style.width = `${window.innerWidth}px`;
+        canvas.style.height = `${window.innerHeight}px`;
+      }
+      window.addEventListener("resize", fitCanvas);
+      window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 100));
+      if (window.visualViewport) window.visualViewport.addEventListener("resize", fitCanvas);
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+      $("fs").addEventListener("click", () => {
+        const el = document.documentElement;
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (el.requestFullscreen) el.requestFullscreen();
+        canvas.focus();
+      });
+
+      // ---------------------------------------------------------------
+      // Caméra + MediaPipe Pose Landmarker → set_pose_landmarks (33 × 4).
+      // Chargés à la demande (≈ 10 Mo : wasm + modèle « lite ») depuis un CDN,
+      // jamais au chargement de la page ; l'inférence tourne à ~15 Hz
+      // (66 ms), comme dans Mouvéo, et le tracé du squelette suit chaque frame.
+      // ---------------------------------------------------------------
+      const MP_VERSION = "0.10.21";
+      const MP_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+      const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+      const LINKS = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
+      const video = $("video");
+      const overlay = $("overlay");
+      const camStatus = $("camstatus");
+      const camToggle = $("camtoggle");
+      let stream = null;
+      let landmarker = null;
+      let rafId = null;
+      let lastInference = 0;
+      let starting = false;
+      const flat = new Float32Array(33 * 4);
+      const none = new Float32Array(0);
+      // L'export wasm n'existe qu'après `init()` : avant (onglet masqué pendant
+      // le téléchargement, par exemple), on ignore simplement l'envoi.
+      let engineReady = false;
+      function pushPose(arr) { if (engineReady) set_pose_landmarks(arr); }
+
+      function drawOverlay(points) {
+        const ctx = overlay.getContext("2d");
+        const w = overlay.width = overlay.clientWidth || 200;
+        const h = overlay.height = overlay.clientHeight || 150;
+        ctx.clearRect(0, 0, w, h);
+        if (!points) return;
+        // L'aperçu est en object-fit: cover — même recadrage que la vidéo.
+        const vw = video.videoWidth || w, vh = video.videoHeight || h;
+        const scale = Math.max(w / vw, h / vh);
+        const cx = (vw * scale - w) / 2, cy = (vh * scale - h) / 2;
+        const P = (p) => [p.x * vw * scale - cx, p.y * vh * scale - cy];
+        ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 3; ctx.lineCap = "round";
+        for (const [a, b] of LINKS) {
+          const pa = P(points[a]), pb = P(points[b]);
+          ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+        }
+        ctx.fillStyle = "#c4ff4a";
+        for (const i of [15, 16, 25, 26, 27, 28]) { const p = P(points[i]); ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, Math.PI * 2); ctx.fill(); }
+      }
+
+      function loop() {
+        const now = performance.now();
+        if (landmarker && video.readyState >= 2 && now - lastInference > 66) {
+          lastInference = now;
+          let points = null;
+          try { points = landmarker.detectForVideo(video, now).landmarks[0] || null; }
+          catch (e) { /* la dernière pose reste affichée */ }
+          if (points) {
+            for (let i = 0; i < 33; i++) {
+              const p = points[i];
+              flat[i * 4] = p.x; flat[i * 4 + 1] = p.y; flat[i * 4 + 2] = p.z; flat[i * 4 + 3] = p.visibility ?? 1;
+            }
+            pushPose(flat);
+            camStatus.textContent = "Corps suivi — placez-vous entier dans le cadre";
+          } else {
+            pushPose(none);
+            camStatus.textContent = "Caméra active — aucun corps détecté";
+          }
+          drawOverlay(points);
+        }
+        rafId = requestAnimationFrame(loop);
+      }
+
+      async function startCamera() {
+        if (starting || stream) return;
+        starting = true;
+        camToggle.disabled = true;
+        try {
+          camStatus.textContent = "Ouverture de la caméra…";
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+          video.srcObject = stream;
+          await video.play();
+          $("pip").classList.add("on");
+          camStatus.textContent = "Chargement du suivi du mouvement (~10 Mo)…";
+          const { FilesetResolver, PoseLandmarker } = await import(`${MP_BASE}/vision_bundle.mjs`);
+          const vision = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
+          const options = (delegate) => ({
+            baseOptions: { modelAssetPath: MODEL_URL, delegate },
+            runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: .55, minTrackingConfidence: .55 });
+          try { landmarker = await PoseLandmarker.createFromOptions(vision, options("GPU")); }
+          catch (e) { console.warn("Pose Landmarker GPU refusé, repli CPU :", e); landmarker = await PoseLandmarker.createFromOptions(vision, options("CPU")); }
+          camToggle.textContent = "⏹ Couper la caméra";
+          camToggle.classList.add("on");
+          camStatus.textContent = "Caméra active — reculez, corps entier visible";
+          lastInference = 0;
+          rafId = requestAnimationFrame(loop);
+        } catch (e) {
+          console.warn("Caméra indisponible :", e);
+          stopCamera();
+          camStatus.textContent = (e && e.name === "NotAllowedError")
+            ? "Caméra refusée — mode démo (stick ou flèches)"
+            : "Caméra ou suivi indisponible — mode démo (stick ou flèches)";
+        } finally {
+          starting = false;
+          camToggle.disabled = false;
+          canvas.focus();
+        }
+      }
+
+      function stopCamera() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = null;
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+        if (landmarker) { try { landmarker.close(); } catch (_) { /* déjà fermé */ } }
+        landmarker = null;
+        video.srcObject = null;
+        $("pip").classList.remove("on");
+        drawOverlay(null);
+        pushPose(none);
+        camToggle.textContent = "📷 Activer la caméra";
+        camToggle.classList.remove("on");
+        camStatus.textContent = "Sans caméra : stick tactile ou flèches";
+      }
+
+      camToggle.addEventListener("click", () => { if (stream) stopCamera(); else startCamera(); });
+      document.addEventListener("visibilitychange", () => {
+        // Onglet caché : plus d'inférence → le moteur met la séance en pause
+        // de lui-même (pose périmée après 0,75 s, cf. app/pose.rs).
+        if (document.visibilityState === "hidden") pushPose(none);
+      });
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        camToggle.disabled = true;
+        camStatus.textContent = "Pas d'accès caméra dans ce navigateur — mode démo";
+      }
+
+      async function main() {
+        if (!navigator.gpu) {
+          fail("WebGPU n'est pas disponible dans ce navigateur",
+            "Le jeu a besoin de WebGPU : Chrome ou Edge 113+, Safari 18+, Firefox 141+. Vérifier aussi que l'accélération matérielle est activée.");
+          return;
+        }
+        setStatus("Téléchargement du moteur…");
+        const bytes = await fetchWithProgress(new URL("./pkg/motor3derust_bg.wasm", import.meta.url));
+        fill.style.width = "100%";
+        setStatus("Compilation et démarrage du moteur…");
+        await init({ module_or_path: bytes });
+        engineReady = true;
+        if (failed) return;
+        setStatus("Initialisation du GPU…");
+        const READY_FALLBACK_MS = 6000;
+        const start = performance.now();
+        function reveal() {
+          if (failed) return;
+          fitCanvas();
+          boot.classList.add("hidden");
+          document.body.classList.add("running");
+          canvas.focus();
+          setTimeout(() => { if (!failed) boot.style.display = "none"; }, 500);
+        }
+        function pollReady() {
+          if (failed) return;
+          if (window.__rusteegear_ready || performance.now() - start > READY_FALLBACK_MS) reveal();
+          else setTimeout(pollReady, 50);
+        }
+        pollReady();
+      }
+
+      main().catch((e) => {
+        const msg = (e && (e.message || String(e))) || "";
+        if (/CompileError|LinkError|Invalid import|instantiate/i.test(msg)) {
+          fail("Ce navigateur ne peut pas charger le jeu", "Le module WebAssembly a été refusé. Mettre le navigateur à jour (Chrome ou Edge récent) suffit en général.", msg);
+        } else {
+          fail("Le jeu n'a pas pu se charger", "Le téléchargement ou le démarrage a échoué. Recharger la page ; si le problème persiste, vérifier la connexion.", msg);
+        }
+      });
+    </script>
+  </body>
+</html>

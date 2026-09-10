@@ -249,6 +249,24 @@ impl AppState {
         self.clear_selection();
     }
 
+    /// Charge la démo « Rééducation — mobilité guidée » (cf. `Scene::reeducation_demo`,
+    /// portage de Mouvéo, 10 septembre 2026) : cibles à atteindre au poignet/genou/
+    /// cheville/hanches, suivi caméra (page web) ou joystick (mode démo).
+    pub fn load_reeducation_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::reeducation_demo();
+        self.scene_file = None;
+        self.objective = crate::app::multiplayer::RoundObjective::default();
+        self.async_load.imported_dirty = true;
+        self.hud_health = None;
+        self.fx.damage_flash = 0.0;
+        self.fx.camera_shake = 0.0;
+        self.fx.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
     /// Charge la démo « Escorte » (cf. `Scene::escorte_demo`, Sprint 7 de
     /// `sprint10audit.md`) : un convoi lent traverse un couloir pendant qu'une
     /// créature le prend pour cible en priorité — `objective` posé sur `Escorte`

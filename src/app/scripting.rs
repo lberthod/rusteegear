@@ -344,6 +344,23 @@ pub(super) fn run_script(
     // Global `deaths` (lecture seule) : morts de la partie en cours — permet à un
     // piège de varier selon les tentatives (`if deaths % 2 == 1 then … end`).
     g.set("deaths", super::script_ctx::deaths())?;
+    // Table `pose` (démo Rééducation, cf. `app::pose`) : `pose.ok` + un repère
+    // nommé par entrée de `pose::NAMED` (`{x, y, z, v}`, coordonnées MediaPipe).
+    let pose_tbl = lua.create_table()?;
+    super::script_ctx::with_pose(|p| -> mlua::Result<()> {
+        pose_tbl.set("ok", p.is_ok())?;
+        for (name, idx) in super::pose::NAMED {
+            let lm = p.landmarks[idx];
+            let t = lua.create_table()?;
+            t.set("x", lm.x)?;
+            t.set("y", lm.y)?;
+            t.set("z", lm.z)?;
+            t.set("v", lm.visibility)?;
+            pose_tbl.set(name, t)?;
+        }
+        Ok(())
+    })?;
+    g.set("pose", pose_tbl)?;
     g.set("spawn", spawn)?;
     g.set("add_item", add_item_fn)?;
     g.set("find_tag", find_tag)?;
@@ -1605,5 +1622,94 @@ mod tests {
                 q.dot(rebuilt)
             );
         }
+    }
+
+    /// Démo Rééducation : la table `pose` expose `ok` et les 13 repères nommés
+    /// (`app::pose::NAMED`) posés via `script_ctx::set_pose` avant l'appel.
+    #[test]
+    fn script_reads_pose_landmarks_via_the_pose_table() {
+        let lua = Lua::new();
+        let src = "obj.x = pose.wrist_r.x; obj.y = pose.wrist_r.y; obj.z = pose.nose.v\n\
+                   if pose.ok then obj.r = 1 else obj.r = 0 end";
+        let func = lua.load(src).into_function().unwrap();
+        let mut flat = vec![0.0f32; crate::app::pose::LANDMARK_COUNT * 4];
+        flat[16 * 4] = 0.25;
+        flat[16 * 4 + 1] = 0.6;
+        flat[3] = 0.9;
+        let mut frame = crate::app::pose::PoseFrame::default();
+        frame.apply_flat(&flat);
+        super::super::script_ctx::set_pose(&frame);
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [0.0, 0.0, 0.0];
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+            &[],
+        )
+        .unwrap();
+        assert!((t.position.x - 0.25).abs() < 1e-5);
+        assert!((t.position.y - 0.6).abs() < 1e-5);
+        assert!((t.position.z - 0.9).abs() < 1e-5);
+        assert_eq!(col[0], 1.0, "pose.ok doit être vrai juste après une image");
+
+        // Pose perdue (aucune image reçue) : `pose.ok` faux, repères à zéro.
+        super::super::script_ctx::set_pose(&crate::app::pose::PoseFrame::default());
+        let mut t2 = Transform::from_pos(Vec3::ONE);
+        run_script(
+            &lua,
+            &func,
+            &mut t2,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut false,
+            &mut std::collections::HashMap::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(col[0], 0.0);
+        assert_eq!(t2.position.x, 0.0);
     }
 }

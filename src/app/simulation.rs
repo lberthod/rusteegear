@@ -1750,6 +1750,10 @@ impl AppState {
         let mut solid_changes: Vec<(usize, bool)> = Vec::new();
         // Global Lua `deaths` (mode plateformer 2D), lu par les deux backends.
         super::script_ctx::set_deaths(self.deaths);
+        // Table Lua `pose` (démo Rééducation) : vieillit d'un pas par tick fixe
+        // (`pose.ok` retombe à faux sans nouvelle image, cf. `pose::STALE_AFTER_TICKS`).
+        self.pose.tick();
+        super::script_ctx::set_pose(&self.pose);
         // Calculé une fois : `self.scene.objects` est emprunté mutable par
         // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
         // n'y serait pas appelable.
@@ -2002,9 +2006,8 @@ impl AppState {
         let Some(p) = self.player_position() else {
             return;
         };
-        let dead = self.scene.deadly_at(p)
-            || p.y < pl.kill_y
-            || self.hud_health.is_some_and(|h| h <= 0.0);
+        let dead =
+            self.scene.deadly_at(p) || p.y < pl.kill_y || self.hud_health.is_some_and(|h| h <= 0.0);
         if dead {
             self.rage_death();
         }
@@ -2029,7 +2032,10 @@ impl AppState {
             .filter(|pl| pl.tombstones)
             .and_then(|_| self.player_position())
             .filter(|_| {
-                self.play_snapshot.iter().filter(|o| o.name == "Tombe").count()
+                self.play_snapshot
+                    .iter()
+                    .filter(|o| o.name == "Tombe")
+                    .count()
                     < Self::MAX_TOMBSTONES
             });
         self.restart_game();

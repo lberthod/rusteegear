@@ -1548,6 +1548,7 @@ fn perform_scene_switch(
             DemoKind::Boss => app.load_boss_demo(),
             DemoKind::Escorte => app.load_escorte_demo(),
             DemoKind::Survie => app.load_survie_demo(),
+            DemoKind::Reeducation => app.load_reeducation_demo(),
         },
     }
 }

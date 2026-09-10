@@ -119,6 +119,7 @@ impl Scene {
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
             platformer: None,
+            arcade_hud: false,
             version: Scene::CURRENT_VERSION,
         })
     }

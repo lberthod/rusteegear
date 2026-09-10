@@ -298,7 +298,9 @@ les remplacent directement.
 
 **Démos** — `Fichier → 🎬 Démos`, regroupées en 4 sous-menus : **⭐ Commencer**
 (Premier jeu, tutoriel reproductible dans `examples/first_game/` ; Démo
-MMORPG), **🎮 Jeux jouables** (Zombies, Donjon, Tour, Course infinie, Duel),
+MMORPG), **🎮 Jeux jouables** (Zombies, Donjon, Tour, Course infinie, Duel,
+**Rééducation** — mobilité guidée façon Mouvéo, suivi du corps par la caméra sur
+le web ou joystick ailleurs, cf. [docs/REEDUCATION.md](docs/REEDUCATION.md)),
 **🌐 Modes multijoueur** (Vagues, Survie, Boss, Escorte) et **🧰 Exemples
 techniques** (Contrôleur, Mobile, Gameplay/API, Composants).
 

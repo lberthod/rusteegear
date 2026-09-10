@@ -11,10 +11,16 @@
 //! Les scripts s'exécutent séquentiellement sur le thread de simulation : aucune
 //! ré-entrance possible.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+use super::pose::PoseFrame;
 
 thread_local! {
     static DEATHS: Cell<u32> = const { Cell::new(0) };
+    /// Dernière pose corporelle (démo Rééducation, cf. `app::pose`) : copiée une
+    /// fois par tick avant la boucle des scripts, lue par les deux backends pour
+    /// construire la table globale `pose`.
+    static POSE: RefCell<PoseFrame> = RefCell::new(PoseFrame::default());
     static VISIBLE_IN: Cell<bool> = const { Cell::new(true) };
     static VISIBLE_OUT: Cell<Option<bool>> = const { Cell::new(None) };
 }
@@ -27,6 +33,17 @@ pub(crate) fn set_deaths(n: u32) {
 
 pub(crate) fn deaths() -> u32 {
     DEATHS.with(|d| d.get())
+}
+
+/// Pose corporelle du tick (table Lua `pose`). Posée une fois par tick avant la
+/// boucle des scripts, comme `set_deaths`.
+pub(crate) fn set_pose(p: &PoseFrame) {
+    POSE.with(|c| *c.borrow_mut() = p.clone());
+}
+
+/// Lit la pose du tick sans la copier (fermeture appelée sous l'emprunt).
+pub(crate) fn with_pose<R>(f: impl FnOnce(&PoseFrame) -> R) -> R {
+    POSE.with(|c| f(&c.borrow()))
 }
 
 /// Visibilité de l'objet dont le script va s'exécuter (valeur initiale de
@@ -102,7 +119,10 @@ mod tests {
     #[test]
     fn hud_event_round_trips_and_keeps_colons_in_text() {
         let e = hud_event("taunt", "Le sol : il était là.");
-        assert_eq!(parse_hud_event(&e), Some(("taunt", "Le sol : il était là.")));
+        assert_eq!(
+            parse_hud_event(&e),
+            Some(("taunt", "Le sol : il était là."))
+        );
         assert_eq!(parse_hud_event("sys:teleport:1,2,3"), None);
         assert_eq!(parse_hud_event("hud:x:y"), None);
     }

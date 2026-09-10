@@ -464,6 +464,9 @@ impl App {
             && !s.is_lost()
             && !s.has_won()
             && !s.touch_ui_active()
+            // HUD arcade (`Scene::arcade_hud`, démo Rééducation) : pas de caméra à
+            // la souris, le curseur reste visible pour cliquer les boutons du HUD.
+            && !s.scene.arcade_hud
             && self.window_focused
             && !renderer.player_overlay_open();
         if want == self.cursor_grabbed {
@@ -870,6 +873,11 @@ impl ApplicationHandler for App {
                     self.web_ready_signaled = true;
                     signal_web_ready();
                 }
+                // État de jeu lisible depuis la console du navigateur
+                // (`window.__rusteegear_state`) : diagnostic d'une page qui
+                // « tourne » sans que rien ne bouge (sim figée, pause, entrées).
+                #[cfg(target_arch = "wasm32")]
+                signal_web_state(&self.state);
                 // Fermeture demandée par le menu Fichier → Quitter.
                 if self.state.should_quit {
                     event_loop.exit();
@@ -1258,6 +1266,12 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_arch = "wasm32")]
         self.adopt_pending_renderer();
+        // Pose corporelle poussée par la page web (`set_pose_landmarks`) depuis
+        // le dernier tour : appliquée ici, sur le seul thread qui détient `AppState`.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(flat) = take_pending_pose() {
+            self.state.set_pose(&flat);
+        }
         self.poll_gamepad();
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         self.poll_asset_hot_reload();
@@ -1455,7 +1469,8 @@ fn make_app(player: bool) -> App {
         // mode Player, sans passer par l'éditeur ni par un export — le geste « lancer
         // mon jeu » pendant le développement (ex. le plateformer 2D `ragequit`).
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-        if let Some(path) = std::env::args().find_map(|a| a.strip_prefix("--scene=").map(str::to_string))
+        if let Some(path) =
+            std::env::args().find_map(|a| a.strip_prefix("--scene=").map(str::to_string))
         {
             match app.state.load_from_blocking(&path) {
                 Ok(count) => log::info!("Scène jouée en mode Player : {path} ({count} objets)"),
@@ -1474,7 +1489,36 @@ fn make_app(player: bool) -> App {
         let offline = offline_requested(std::env::var("RUSTEEGEAR_OFFLINE").ok().as_deref());
         #[cfg(target_arch = "wasm32")]
         let offline = false;
-        if offline {
+        // Démo jouée directement en mode Player : `--demo=reeduc` (desktop) ou
+        // `?scene=reeduc` (web, cf. `packaging/web/reeduc.html`) — la page web de
+        // rééducation charge le moteur générique et choisit sa scène par l'URL.
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        let requested_demo =
+            std::env::args().find_map(|a| a.strip_prefix("--demo=").map(str::to_string));
+        #[cfg(target_arch = "wasm32")]
+        let requested_demo = web_requested_scene();
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        let requested_demo: Option<String> = None;
+        let demo_loaded = match requested_demo.as_deref() {
+            Some("reeduc") | Some("reeducation") => {
+                app.state.load_reeducation_demo();
+                log::info!("Démo Rééducation jouée en mode Player.");
+                true
+            }
+            Some(other) => {
+                log::warn!("Démo inconnue « {other} » — scène embarquée à la place.");
+                false
+            }
+            None => false,
+        };
+        // Jeu solo (mode plateformer 2D, `Scene::platformer`, ou démo demandée) :
+        // pas de serveur, pas d'écran d'accueil « en ligne / seul » — la partie
+        // démarre directement, sur toutes les cibles, web compris (où il n'y a pas
+        // de variable d'environnement).
+        let solo = app.state.scene.platformer.is_some() || demo_loaded;
+        if solo {
+            log::info!("Jeu solo (plateformer 2D ou démo) : écran d'accueil et serveur ignorés.");
+        } else if offline {
             log::info!("Mode hors-ligne (RUSTEEGEAR_OFFLINE) : pas de connexion au serveur.");
         } else {
             // Écran d'accueil (roadmap post-audit UX 2026-09-04, 2.1) : la
@@ -1732,6 +1776,71 @@ fn signal_web_ready() {
     );
 }
 
+/// `window.__rusteegear_state` : chrono, morts, pause, position du joueur —
+/// une chaîne clé=valeur, mise à jour à chaque frame présentée (diagnostic web).
+#[cfg(target_arch = "wasm32")]
+fn signal_web_state(state: &app::AppState) {
+    let pos = state.player_position().unwrap_or_default();
+    let text = format!(
+        "time={:.2};deaths={};paused={};playing={};x={:.2};y={:.2}",
+        state.hud_timer().unwrap_or(0.0),
+        state.deaths(),
+        state.paused,
+        state.playing,
+        pos.x,
+        pos.y
+    );
+    let _ = js_sys::Reflect::set(
+        &js_sys::global(),
+        &wasm_bindgen::JsValue::from_str("__rusteegear_state"),
+        &wasm_bindgen::JsValue::from_str(&text),
+    );
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// Dernière pose reçue de la page (`set_pose_landmarks`) et pas encore
+    /// appliquée à `AppState` — consommée par `about_to_wait`. Une seule valeur :
+    /// deux inférences entre deux tours de boucle, seule la dernière compte.
+    static PENDING_POSE: std::cell::RefCell<Option<Vec<f32>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Export appelé par `packaging/web/reeduc.html` à chaque inférence MediaPipe :
+/// `33 × 4` flottants (`x, y, z, visibility` par repère, ordre du modèle) ou un
+/// tableau vide quand personne n'est détecté — cf. `app::pose::PoseFrame::apply_flat`.
+/// Seulement mis en attente ici : `App` (et donc `AppState`) vit dans les callbacks
+/// winit, inaccessible depuis un export libre.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_pose_landmarks(data: &[f32]) {
+    PENDING_POSE.with(|p| *p.borrow_mut() = Some(data.to_vec()));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn take_pending_pose() -> Option<Vec<f32>> {
+    PENDING_POSE.with(|p| p.borrow_mut().take())
+}
+
+/// Valeur du paramètre `scene` de l'URL de la page hôte (`?scene=reeduc`),
+/// `None` sans paramètre ou hors navigateur.
+#[cfg(target_arch = "wasm32")]
+fn web_requested_scene() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    scene_param(&search)
+}
+
+/// Extrait `scene=<valeur>` d'une chaîne de requête (`?a=1&scene=reeduc`) —
+/// fonction pure, testée sans navigateur.
+#[allow(dead_code)]
+fn scene_param(search: &str) -> Option<String> {
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("scene="))
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 /// Point d'entrée Android (appelé par android-activity via la NativeActivity).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -1791,6 +1900,21 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `?scene=reeduc` (page web de rééducation) : lecture tolérante de la chaîne
+    /// de requête, `None` sans paramètre ou vide.
+    #[test]
+    fn scene_param_reads_the_scene_query_parameter() {
+        assert_eq!(scene_param("?scene=reeduc").as_deref(), Some("reeduc"));
+        assert_eq!(
+            scene_param("?a=1&scene=reeduc&b=2").as_deref(),
+            Some("reeduc")
+        );
+        assert_eq!(scene_param("scene=x").as_deref(), Some("x"));
+        assert_eq!(scene_param("?scene="), None);
+        assert_eq!(scene_param("?other=reeduc"), None);
+        assert_eq!(scene_param(""), None);
+    }
 
     /// Roadmap post-audit UX v2 2026-09-04, 1.7 : le pseudo invité a quatre
     /// chiffres (zéro-paddé) et deux horodatages voisins donnent des chiffres

@@ -526,6 +526,8 @@ pub enum DemoKind {
     Boss,
     Escorte,
     Survie,
+    /// Rééducation — mobilité guidée (portage de Mouvéo).
+    Reeducation,
 }
 
 /// Changement de scène demandé par l'UI (roadmap post-audit UX 2026-09-04,
@@ -595,6 +597,7 @@ impl UiActions {
             (&mut self.load_boss, DemoKind::Boss),
             (&mut self.load_escorte, DemoKind::Escorte),
             (&mut self.load_survie, DemoKind::Survie),
+            (&mut self.load_reeducation, DemoKind::Reeducation),
         ];
         for (flag, kind) in demos {
             if std::mem::take(flag) {
@@ -700,6 +703,9 @@ pub struct UiActions {
     /// « Démo Survie » (mode `RoundObjective::Survie`) : vagues qui recommencent en
     /// boucle une fois la dernière vidée, survivre le plus longtemps possible.
     pub load_survie: bool,
+    /// « Démo Rééducation » : cibles à atteindre avec le corps (caméra sur le
+    /// web, joystick/flèches ailleurs), portage de Mouvéo.
+    pub load_reeducation: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// Inventaire d'armes (cf. `weapon_inventory_panel`) : arme choisie par le
@@ -1470,70 +1476,77 @@ impl Editor {
             if palier_flash > 0.0 {
                 palier_banner(ctx, area, palier_flash, palier_level, locale, hud_scale);
             }
-            if let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
+            // Jeu solo « arcade » (mode plateformer 2D, `Scene::platformer`, ou
+            // `Scene::arcade_hud` — démo Rééducation) : aucun HUD MMORPG (vie, arme,
+            // frags, équipe, inventaire, mini-carte, réseau) — seuls les widgets
+            // déclaratifs de la scène (`hud_widgets`) s'affichent.
+            let arcade = scene.platformer.is_some() || scene.arcade_hud;
+            if !arcade && let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h, hud_scale, settings.colorblind);
             }
             // Décalages persistés dans la scène (Scene::hud_layout) : pas de
             // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
             let mut layout = scene.hud_layout;
-            wave_hud(ctx, area, scene, wave, locale, hud_scale);
-            weapon_hud(
-                ctx,
-                area,
-                weapon_label,
-                &mut layout.weapon_hud,
-                false,
-                locale,
-                hud_scale,
-            );
-            // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
-            // affiché en Play, contrairement au score de `collectibles_hud` juste en
-            // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
-            // multijoueur n'en a pas — cf. docs/audits/editor.md pour l'absence de
-            // score en ligne que ce HUD dédié corrige).
-            kills_hud(
-                ctx,
-                area,
-                kills,
-                assists,
-                &mut layout.kills,
-                false,
-                locale,
-                hud_scale,
-            );
-            multiplayer_roster_panel(
-                ctx,
-                area,
-                roster,
-                &mut layout.roster,
-                false,
-                locale,
-                settings.colorblind,
-            );
-            if scene_has_ranged_weapon(scene) {
-                crosshair(ctx, area, &mut layout.crosshair, false, hud_scale);
-                weapon_inventory_panel(
+            if !arcade {
+                wave_hud(ctx, area, scene, wave, locale, hud_scale);
+                weapon_hud(
                     ctx,
                     area,
-                    weapon_inventory,
-                    selected_weapon,
-                    &mut layout.weapon_inventory,
+                    weapon_label,
+                    &mut layout.weapon_hud,
+                    false,
+                    locale,
+                    hud_scale,
+                );
+                // Frags (GAMEDESIGN_EN_LIGNE.md, brique de progression MMORPG) : toujours
+                // affiché en Play, contrairement au score de `collectibles_hud` juste en
+                // dessous, qui ne s'affiche que si la scène a des collectibles (la carte
+                // multijoueur n'en a pas — cf. docs/audits/editor.md pour l'absence de
+                // score en ligne que ce HUD dédié corrige).
+                kills_hud(
+                    ctx,
+                    area,
+                    kills,
+                    assists,
+                    &mut layout.kills,
+                    false,
+                    locale,
+                    hud_scale,
+                );
+                multiplayer_roster_panel(
+                    ctx,
+                    area,
+                    roster,
+                    &mut layout.roster,
+                    false,
+                    locale,
+                    settings.colorblind,
+                );
+                if scene_has_ranged_weapon(scene) {
+                    crosshair(ctx, area, &mut layout.crosshair, false, hud_scale);
+                    weapon_inventory_panel(
+                        ctx,
+                        area,
+                        weapon_inventory,
+                        selected_weapon,
+                        &mut layout.weapon_inventory,
+                        false,
+                        &mut actions,
+                        locale,
+                    );
+                }
+                item_inventory_panel(
+                    ctx,
+                    area,
+                    item_inventory,
+                    &mut layout.item_inventory,
                     false,
                     &mut actions,
                     locale,
                 );
             }
-            item_inventory_panel(
-                ctx,
-                area,
-                item_inventory,
-                &mut layout.item_inventory,
-                false,
-                &mut actions,
-                locale,
-            );
-            if let Some((c, t)) = scene.collectibles() {
+            if !arcade && let Some((c, t)) = scene.collectibles() {
                 collectibles_hud(ctx, area, c, t, game_time, score, locale, hud_scale);
             }
             // Écran de fin de manche détaillé (Phase H, Sprint 1) : prioritaire
@@ -1664,7 +1677,9 @@ impl Editor {
                 (1, _) => crate::app::locale::net_connecting(locale).to_string(),
                 _ => crate::app::locale::net_offline(locale).to_string(),
             };
-            net_status_pill(ctx, area, net_kind, &net_label, hud_scale, top.rect.left());
+            if !arcade {
+                net_status_pill(ctx, area, net_kind, &net_label, hud_scale, top.rect.left());
+            }
             if let Some((text, alpha)) = &net_banner {
                 net_event_banner(ctx, area, text, *alpha, hud_scale);
             }
@@ -1701,7 +1716,7 @@ impl Editor {
                 if player_map_overlay(ctx, screen, minimap, locale, touch_ui, map_zoom, map_pan) {
                     *map_open_ref = false;
                 }
-            } else {
+            } else if !arcade {
                 player_corner_minimap(ctx, area, minimap, hud_scale);
             }
             let values = HudWidgetValues {

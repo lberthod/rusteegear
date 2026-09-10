@@ -161,7 +161,7 @@ impl AppState {
     /// `Button` (`Scene::hud_widgets`, cf. Sprint 109) — même file que `emit()` côté
     /// Lua (`AppState::game_events`), lu au tick suivant via `on_event("hud:<action>")`.
     /// Le préfixe évite toute collision avec un nom d'événement choisi par un script.
-    pub(crate) fn push_hud_event(&mut self, action: &str) {
+    pub fn push_hud_event(&mut self, action: &str) {
         self.game_events.push(format!("hud:{action}"));
     }
 

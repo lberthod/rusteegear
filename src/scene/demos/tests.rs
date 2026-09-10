@@ -992,3 +992,128 @@ fn mmorpg_creatures_carry_a_chase_casting_without_touching_hp() {
         "budget de PV par vague = contrat GDD §5.5, intouchable par le casting"
     );
 }
+
+/// Démo Rééducation (portage de Mouvéo) : la « Séance » (directeur) est le
+/// premier objet — les autres relisent son état `save.*` le même tick —, les
+/// 13 repères nommés ont chacun leur sphère, les widgets HUD ont des ids uniques
+/// et couvrent les 9 actions de boutons que le directeur écoute.
+#[test]
+fn reeducation_demo_is_wired_for_its_director_script() {
+    let scene = Scene::reeducation_demo();
+    assert_eq!(scene.objects[0].name, "Séance");
+    assert!(scene.objects[0].script.contains("hud:demarrer"));
+    for name in [
+        "nose",
+        "shoulder_l",
+        "shoulder_r",
+        "elbow_l",
+        "elbow_r",
+        "wrist_l",
+        "wrist_r",
+        "hip_l",
+        "hip_r",
+        "knee_l",
+        "knee_r",
+        "ankle_l",
+        "ankle_r",
+    ] {
+        let obj = scene
+            .objects
+            .iter()
+            .find(|o| o.name == format!("Repère {name}"))
+            .unwrap_or_else(|| panic!("sphère « Repère {name} » manquante"));
+        assert!(obj.script.contains(&format!("rd_p_{name}_x")));
+    }
+    for name in ["Cible", "Halo", "Point suivi", "Sol"] {
+        assert!(
+            scene.objects.iter().any(|o| o.name == name),
+            "{name} manquant"
+        );
+    }
+    let bones: Vec<&SceneObject> = scene
+        .objects
+        .iter()
+        .filter(|o| o.name.starts_with("Os "))
+        .collect();
+    assert_eq!(bones.len(), 12, "les 12 segments du squelette de Mouvéo");
+    assert!(
+        bones
+            .iter()
+            .all(|o| o.mesh == MeshKind::Cylinder && o.script.contains("obj.rz"))
+    );
+    let mut ids = std::collections::HashSet::new();
+    for w in &scene.hud_widgets {
+        assert!(ids.insert(w.id.clone()), "id de widget dupliqué : {}", w.id);
+    }
+    let actions: Vec<&str> = scene
+        .hud_widgets
+        .iter()
+        .filter_map(|w| match &w.kind {
+            HudWidgetKind::Button { action, .. } => Some(action.as_str()),
+            _ => None,
+        })
+        .collect();
+    for a in [
+        "demarrer",
+        "ex_prev",
+        "ex_next",
+        "cote",
+        "amplitude",
+        "objectif",
+        "douleur",
+        "fatigue",
+        "enregistrer",
+    ] {
+        assert!(actions.contains(&a), "bouton « {a} » manquant");
+        assert!(
+            scene.objects[0].script.contains(&format!("hud:{a}")),
+            "le directeur n'écoute pas hud:{a}"
+        );
+    }
+    for id in [
+        "titre",
+        "consigne",
+        "score",
+        "chrono",
+        "serie",
+        "objectif",
+        "bilan",
+        "celebration",
+        "jardin",
+    ] {
+        assert!(
+            scene.hud_widgets.iter().any(|w| w.id == id),
+            "widget texte « {id} » manquant"
+        );
+        assert!(
+            scene.objects[0]
+                .script
+                .contains(&format!("hud_text(\"{id}\""))
+        );
+    }
+    assert!(
+        scene.game_camera.is_some(),
+        "point de vue de jeu fixe (face au patient)"
+    );
+    assert!(scene.mobile.joystick, "mode démo : joystick à l'écran");
+}
+
+/// Projection repère caméra ↔ plan de jeu : miroir sur x (la droite du patient à
+/// droite de l'écran), y vers le haut, et aller-retour exact.
+#[test]
+fn reeducation_pose_projection_mirrors_x_and_round_trips() {
+    use super::reeducation::{pose_to_world, world_to_pose};
+    let (x, y) = pose_to_world(0.25, 0.5);
+    assert!(
+        x > 0.0,
+        "poignet droit (x image < 0.5) → à droite dans le monde"
+    );
+    assert!((y - 1.6).abs() < 1e-5);
+    let (px, py) = world_to_pose(x, y);
+    assert!((px - 0.25).abs() < 1e-6 && (py - 0.5).abs() < 1e-6);
+    let (x0, y0) = pose_to_world(0.5, 1.0);
+    assert!(
+        x0.abs() < 1e-6 && y0.abs() < 1e-6,
+        "centre bas de l'image = pied de l'avatar"
+    );
+}

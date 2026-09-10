@@ -16,7 +16,7 @@ pub const CONSOLE_HELP: &str = "Commandes de la console :\n\
   spawn <prefab> <x> <y> <z> instancier un prefab\n\
   health                     état de la barre de vie\n\
   weapon <i>                 choisir l'arme i\n\
-  demo <nom> [--force]       charger une démo (mmorpg, gameplay, controleur, tower, temple, zombies, mobile, roguelike, brawl, boss, escorte, survie, components, hameau)\n\
+  demo <nom> [--force]       charger une démo (mmorpg, gameplay, controleur, tower, temple, zombies, mobile, roguelike, brawl, boss, escorte, survie, reeduc, components, hameau)\n\
   restart                    recommencer la manche\n\
   undo · redo                annuler / rétablir\n\
   music <0..1> · sfx <0..1>  volumes\n\
@@ -37,6 +37,8 @@ const DEMO_NAMES: &[&str] = &[
     "boss",
     "escorte",
     "survie",
+    "reeduc",
+    "reeducation",
     "components",
     "hameau",
     "player",
@@ -332,6 +334,10 @@ impl AppState {
                     self.load_survie_demo();
                     "démo survie chargée".into()
                 }
+                Some("reeduc") | Some("reeducation") => {
+                    self.load_reeducation_demo();
+                    "démo rééducation chargée".into()
+                }
                 Some("components") => {
                     self.load_components_demo();
                     "démo composants chargée".into()
@@ -342,7 +348,7 @@ impl AppState {
                 }
                 other => format!(
                     "usage : demo <nom> — mmorpg, gameplay, controleur, tower, temple, zombies, \
-                     mobile, roguelike, brawl, boss, escorte, survie, components, hameau{}",
+                     mobile, roguelike, brawl, boss, escorte, survie, reeduc, components, hameau{}",
                     other
                         .map(|o| format!(" (reçu : « {o} »)"))
                         .unwrap_or_default()

@@ -603,6 +603,22 @@ pub(super) fn run_script_web(
     lua_try!(lua.register_function("teleport", host_teleport));
     lua_try!(lua.register_function("hud_text", host_hud_text));
     lua_try!(lua.set_global("deaths", f64::from(crate::app::script_ctx::deaths())));
+    // Table `pose` (démo Rééducation) — même forme que côté mlua, cf. `scripting.rs`.
+    let pose_tbl = lua.create_table();
+    lua_try!(crate::app::script_ctx::with_pose(|p| -> LuaResult<()> {
+        set_bool(lua, &pose_tbl, "ok", p.is_ok())?;
+        for (name, idx) in crate::app::pose::NAMED {
+            let lm = p.landmarks[idx];
+            let t = lua.create_table();
+            set_num(lua, &t, "x", lm.x as f64)?;
+            set_num(lua, &t, "y", lm.y as f64)?;
+            set_num(lua, &t, "z", lm.z as f64)?;
+            set_num(lua, &t, "v", lm.visibility as f64)?;
+            set_table(lua, &pose_tbl, name, t)?;
+        }
+        Ok(())
+    }));
+    lua_try!(lua.set_global("pose", pose_tbl));
     lua_try!(lua.register_function("spawn", host_spawn));
     lua_try!(lua.register_function("add_item", host_add_item));
     lua_try!(lua.register_function("find_tag", host_find_tag));
@@ -1604,6 +1620,163 @@ mod tests {
             run_web(src, &mut t_web, &mut col);
             assert!((t_native.position.x - t_web.position.x).abs() < 1e-5);
             assert!((t_native.rotation.dot(t_web.rotation)).abs() > 1.0 - 1e-5);
+        }
+
+        /// Exécute un script sur un backend avec entrées de jeu, événements reçus et
+        /// variables `save.*` partagées — assez pour faire tourner la démo
+        /// Rééducation tick après tick (cf. `reeducation_scripts_run_on_the_web_backend`).
+        #[allow(clippy::too_many_arguments)]
+        fn run_web_game(
+            lua: &mut Lua,
+            func: &Function,
+            t: &mut Transform,
+            time: f32,
+            input: &PlayerInput,
+            events_in: &[String],
+            events_out: &mut Vec<String>,
+            vars: &mut HashMap<String, f64>,
+        ) -> Result<(), String> {
+            run_script_web(
+                lua,
+                func,
+                t,
+                &mut [1.0; 3],
+                &mut None,
+                1.0 / 60.0,
+                time,
+                input,
+                false,
+                false,
+                false,
+                false,
+                false,
+                events_in,
+                events_out,
+                &[],
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut false,
+                vars,
+                &mut Vec::new(),
+                &mut None,
+                &mut Vec::new(),
+                false,
+                None,
+                &mut Vec::new(),
+                &[],
+            )
+        }
+
+        #[test]
+        fn pose_table_matches_between_backends() {
+            // `pose.ok` et les repères nommés (démo Rééducation) : même lecture des
+            // deux côtés, y compris la visibilité.
+            let mut flat = vec![0.0f32; crate::app::pose::LANDMARK_COUNT * 4];
+            flat[24 * 4] = 0.4; // hip_r.x
+            flat[24 * 4 + 1] = 0.7; // hip_r.y
+            flat[24 * 4 + 3] = 0.8; // hip_r.v
+            let mut frame = crate::app::pose::PoseFrame::default();
+            frame.apply_flat(&flat);
+            crate::app::script_ctx::set_pose(&frame);
+            let src = "obj.x = pose.hip_r.x * 10\nobj.y = pose.hip_r.y * 10\nobj.z = pose.hip_r.v * 10\n\
+                       if pose.ok then obj.rz = 90 end";
+            let mut t_native = Transform::from_pos(Vec3::ZERO);
+            let mut t_web = Transform::from_pos(Vec3::ZERO);
+            let mut col = [1.0; 3];
+            run_native(src, &mut t_native, &mut col);
+            run_web(src, &mut t_web, &mut col);
+            assert!(
+                (t_native.position - Vec3::new(4.0, 7.0, 8.0)).length() < 1e-4,
+                "{:?}",
+                t_native.position
+            );
+            assert!((t_native.position - t_web.position).length() < 1e-5);
+            assert!(t_native.rotation.dot(t_web.rotation).abs() > 1.0 - 1e-5);
+        }
+
+        /// Les scripts de la démo Rééducation (directeur + cible + halo + point
+        /// suivi + repères) doivent tourner sur le backend web — Lua 5.1, donc pas
+        /// de `//`, `goto`, `string.format`… — et y jouer une séance complète en
+        /// mode démo : joystick pointé sur la cible → répétitions comptées, bilan.
+        #[test]
+        fn reeducation_scripts_run_on_the_web_backend() {
+            let scene = crate::scene::Scene::reeducation_demo();
+            let mut lua = Lua::new().unwrap();
+            let mut funcs: Vec<(String, Function)> = scene
+                .objects
+                .iter()
+                .filter(|o| !o.script.trim().is_empty())
+                .map(|o| {
+                    let f = lua.load(&o.script).unwrap_or_else(|e| {
+                        panic!("script de « {} » refusé par rilua : {e}", o.name)
+                    });
+                    (o.name.clone(), f)
+                })
+                .collect();
+            assert!(
+                funcs.len() >= 29,
+                "directeur + cible + halo + point + 13 repères + 12 os"
+            );
+            // Ancrage GC comme le fait `AppState` (cf. `anchor_compiled_function`).
+            for (i, (_, f)) in funcs.iter_mut().enumerate() {
+                anchor_compiled_function(&mut lua, i as u64, *f).unwrap();
+            }
+            crate::app::script_ctx::set_pose(&crate::app::pose::PoseFrame::default());
+            let mut vars: HashMap<String, f64> = HashMap::new();
+            let mut transforms: Vec<Transform> =
+                scene.objects.iter().map(|o| o.transform).collect();
+            let mut events_in: Vec<String> = vec!["hud:demarrer".into()];
+            let mut input = PlayerInput::default();
+            let mut best_hits = 0.0;
+            let mut finished = false;
+            for tick in 0..2400u32 {
+                let time = tick as f32 / 60.0;
+                let mut events_out = Vec::new();
+                let mut fi = 0;
+                for (idx, obj) in scene.objects.iter().enumerate() {
+                    if obj.script.trim().is_empty() {
+                        continue;
+                    }
+                    let (name, f) = &funcs[fi];
+                    fi += 1;
+                    run_web_game(
+                        &mut lua,
+                        f,
+                        &mut transforms[idx],
+                        time,
+                        &input,
+                        &events_in,
+                        &mut events_out,
+                        &mut vars,
+                    )
+                    .unwrap_or_else(|e| panic!("tick {tick}, script de « {name} » : {e}"));
+                }
+                events_in = events_out
+                    .into_iter()
+                    .filter(|e| !e.starts_with(crate::app::script_ctx::SYS_EVENT_PREFIX))
+                    .collect();
+                // Pilotage : le joystick est intégré vers la cible (commande
+                // intégrale : la position du point suivi est fonction du stick).
+                let tx = vars.get("rd_target_x").copied().unwrap_or(0.0) as f32;
+                let ty = vars.get("rd_target_y").copied().unwrap_or(0.0) as f32;
+                let hx = vars.get("rd_hand_px").copied().unwrap_or(0.0) as f32;
+                let hy = vars.get("rd_hand_py").copied().unwrap_or(0.0) as f32;
+                input.joy.0 = (input.joy.0 + 0.2 * (tx - hx)).clamp(-1.0, 1.0);
+                input.joy.1 = (input.joy.1 + 0.2 * (ty - hy)).clamp(-1.0, 1.0);
+                let hits = vars.get("rd_hits").copied().unwrap_or(0.0);
+                best_hits = f64::max(best_hits, hits);
+                if vars.get("rd_stage").copied().unwrap_or(0.0) == 3.0 {
+                    finished = true;
+                    break;
+                }
+            }
+            assert!(
+                finished,
+                "la séance doit se terminer une fois l'objectif atteint (répétitions max : {best_hits})"
+            );
+            assert_eq!(best_hits, 8.0, "objectif par défaut : 8 répétitions");
+            assert!(vars["rd_points"] >= 80.0, "points : {}", vars["rd_points"]);
+            assert!(vars["rd_regularity"] >= 50.0);
         }
     }
 }

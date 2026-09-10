@@ -65,8 +65,7 @@ impl Renderer {
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
         // Cibles HDR, locales à cet appel — cf. `hdr_view`/`msaa_color_view` de
         // `render()` : `msaa_color_view` n'est `Some` qu'en MSAA (renderer fenêtré).
-        let (hdr_view, msaa_color_view) =
-            create_hdr_view(&self.device, iw, ih, self.msaa_samples);
+        let (hdr_view, msaa_color_view) = create_hdr_view(&self.device, iw, ih, self.msaa_samples);
         // Chaîne de bloom, locale à cet appel — cf. `bloom_mip_views` de
         // `render()`.
         let bloom_mip_views = create_bloom_mip_views(&self.device, iw, ih);

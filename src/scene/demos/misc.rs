@@ -53,6 +53,7 @@ end"
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
             platformer: None,
+            arcade_hud: false,
             version: Scene::CURRENT_VERSION,
         }
     }
@@ -106,6 +107,7 @@ end"
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
             platformer: None,
+            arcade_hud: false,
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
@@ -191,6 +193,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
             platformer: None,
+            arcade_hud: false,
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {

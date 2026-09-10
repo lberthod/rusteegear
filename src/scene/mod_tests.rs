@@ -2038,6 +2038,7 @@ fn sync_embedded_scene_hameau_from_the_demo() {
         hud_layout: embedded.hud_layout,
         hud_widgets: embedded.hud_widgets,
         platformer: embedded.platformer,
+        arcade_hud: false,
     };
 
     std::fs::write(

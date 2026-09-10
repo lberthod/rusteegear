@@ -2227,3 +2227,272 @@ fn a_pressure_plate_script_fires_when_a_crate_lands_on_it_without_any_player() {
         "le script de la plaque doit avoir réagi à la caisse (rotation {rot:?})"
     );
 }
+
+/// Pose « à plat » (33 repères, ordre MediaPipe) d'un corps debout dont les 13
+/// repères nommés sont placés en coordonnées **monde** (cf.
+/// `scene::demos::reeducation::world_to_pose`), tous parfaitement visibles.
+fn flat_pose_from_world(body: &[(&str, (f32, f32))]) -> Vec<f32> {
+    use crate::app::pose::{FLOATS_PER_LANDMARK, LANDMARK_COUNT, NAMED};
+    let mut flat = vec![0.0f32; LANDMARK_COUNT * FLOATS_PER_LANDMARK];
+    let (chunks, _rest) = flat.as_chunks_mut::<FLOATS_PER_LANDMARK>();
+    for lm in chunks {
+        lm[0] = 0.5;
+        lm[1] = 0.5;
+        lm[3] = 1.0;
+    }
+    for (name, (wx, wy)) in body {
+        let idx = NAMED
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, i)| *i)
+            .unwrap();
+        let (px, py) = crate::scene::demos::reeducation::world_to_pose(*wx, *wy);
+        flat[idx * 4] = px;
+        flat[idx * 4 + 1] = py;
+        flat[idx * 4 + 3] = 1.0;
+    }
+    flat
+}
+
+fn standing_body() -> Vec<(&'static str, (f32, f32))> {
+    vec![
+        ("nose", (0.0, 2.55)),
+        ("shoulder_l", (-0.42, 2.25)),
+        ("shoulder_r", (0.42, 2.25)),
+        ("elbow_l", (-0.72, 1.78)),
+        ("elbow_r", (0.72, 1.78)),
+        ("wrist_l", (-0.80, 1.30)),
+        ("wrist_r", (0.80, 1.30)),
+        ("hip_l", (-0.24, 1.35)),
+        ("hip_r", (0.24, 1.35)),
+        ("knee_l", (-0.27, 0.72)),
+        ("knee_r", (0.27, 0.72)),
+        ("ankle_l", (-0.29, 0.10)),
+        ("ankle_r", (0.29, 0.10)),
+    ]
+}
+
+fn reeduc_tick(app: &mut AppState) {
+    app.perf.last_frame = Instant::now() - std::time::Duration::from_secs_f32(1.0 / 60.0);
+    app.advance_play();
+}
+
+fn reeduc_var(app: &AppState, key: &str) -> f64 {
+    app.lua_vars.get(key).copied().unwrap_or(0.0)
+}
+
+fn object_pos(app: &AppState, name: &str) -> Vec3 {
+    app.scene
+        .objects
+        .iter()
+        .find(|o| o.name == name)
+        .unwrap_or_else(|| panic!("objet « {name} » absent"))
+        .transform
+        .position
+}
+
+/// Démo Rééducation, **mode démo** (aucune pose reçue, `pose.ok` faux) : la
+/// séance démarre sans calibration, le point suivi se pilote au joystick, chaque
+/// cible atteinte puis chaque retour à la hanche compte une répétition, le HUD
+/// suit (`hud_text`), et l'objectif atteint termine la séance sur un bilan.
+#[test]
+fn reeducation_demo_mode_is_playable_with_the_joystick_until_the_goal() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app); // Édition → Play (snapshot, physique, HUD vidé)
+    assert!(
+        app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("Commencer")),
+        "accueil attendu : {:?}",
+        app.hud_texts.get("consigne")
+    );
+    let cible = app
+        .scene
+        .objects
+        .iter()
+        .find(|o| o.name == "Cible")
+        .unwrap();
+    assert!(!cible.visible, "pas de cible avant le départ");
+
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        2.0,
+        "sans caméra : séance immédiate (mode démo)"
+    );
+    assert_eq!(reeduc_var(&app, "rd_cam"), 0.0);
+    assert!(
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Cible")
+            .unwrap()
+            .visible
+    );
+
+    let mut best_hits = 0.0;
+    let mut saw_return_phase = false;
+    let mut finished = false;
+    for _ in 0..2400 {
+        let target = object_pos(&app, "Cible");
+        let hand = object_pos(&app, "Point suivi");
+        // Commande intégrale sur le stick (la position du point suivi est
+        // fonction du stick, pas de sa dérivée).
+        app.input_state.joy.0 =
+            (app.input_state.joy.0 + 0.2 * (target.x - hand.x)).clamp(-1.0, 1.0);
+        app.input_state.joy.1 =
+            (app.input_state.joy.1 + 0.2 * (target.y - hand.y)).clamp(-1.0, 1.0);
+        reeduc_tick(&mut app);
+        if reeduc_var(&app, "rd_phase") == 1.0 {
+            saw_return_phase = true;
+        }
+        best_hits = f64::max(best_hits, reeduc_var(&app, "rd_hits"));
+        if reeduc_var(&app, "rd_stage") == 3.0 {
+            finished = true;
+            break;
+        }
+    }
+    assert!(
+        saw_return_phase,
+        "après une cible atteinte, phase « retour »"
+    );
+    assert!(
+        finished,
+        "objectif de 8 répétitions jamais atteint ({best_hits})"
+    );
+    assert_eq!(best_hits, 8.0);
+    let bilan = app.hud_texts.get("bilan").cloned().unwrap_or_default();
+    assert!(bilan.contains("Séance terminée"), "{bilan}");
+    assert!(bilan.contains("8 répétitions"), "{bilan}");
+    assert!(reeduc_var(&app, "rd_points") >= 80.0);
+
+    // Bilan : douleur/fatigue, enregistrement → jardin de mobilité mis à jour.
+    app.push_hud_event("douleur");
+    reeduc_tick(&mut app);
+    app.push_hud_event("enregistrer");
+    reeduc_tick(&mut app);
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "rd_sessions"), 1.0);
+    assert_eq!(reeduc_var(&app, "rd_pain"), 1.0);
+    let jardin = app.hud_texts.get("jardin").cloned().unwrap_or_default();
+    assert!(jardin.contains("1 séance"), "{jardin}");
+    // Deuxième enregistrement ignoré.
+    app.push_hud_event("enregistrer");
+    reeduc_tick(&mut app);
+    reeduc_tick(&mut app);
+    assert_eq!(reeduc_var(&app, "rd_sessions"), 1.0);
+}
+
+/// Démo Rééducation, **mode caméra** : des poses (`AppState::set_pose`) arrivent à
+/// chaque pas → calibration de 1,8 s de corps visible, puis le poignet droit amené
+/// sur la cible compte une répétition ; sans nouvelle pose pendant plus de
+/// `pose::STALE_AFTER_TICKS`, la séance se met en pause (chrono figé, consigne).
+#[test]
+fn reeducation_camera_mode_calibrates_then_counts_reps_and_pauses_when_the_body_is_lost() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    let body = standing_body();
+    app.set_pose(&flat_pose_from_world(&body));
+    reeduc_tick(&mut app);
+    assert!(
+        app.hud_texts
+            .get("aide")
+            .is_some_and(|s| s.contains("Caméra détectée")),
+        "{:?}",
+        app.hud_texts.get("aide")
+    );
+
+    app.push_hud_event("demarrer");
+    app.set_pose(&flat_pose_from_world(&body));
+    reeduc_tick(&mut app);
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        1.0,
+        "caméra présente : calibration d'abord"
+    );
+    assert_eq!(reeduc_var(&app, "rd_cam"), 1.0);
+    let mut ticks_to_play = 0;
+    while reeduc_var(&app, "rd_stage") == 1.0 && ticks_to_play < 400 {
+        app.set_pose(&flat_pose_from_world(&body));
+        reeduc_tick(&mut app);
+        ticks_to_play += 1;
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        2.0,
+        "calibration jamais terminée"
+    );
+    assert!(
+        (90..=140).contains(&ticks_to_play),
+        "1,8 s de corps visible ≈ 108 pas, mesuré {ticks_to_play}"
+    );
+    // Ancres figées sur la pose calibrée (épaule droite en monde).
+    assert!((reeduc_var(&app, "rd_a_shoulder_r_x") - 0.42).abs() < 1e-3);
+
+    // Le poignet droit va sur la cible (monde → repère) : une répétition, puis
+    // retour à la hanche, etc. — deux répétitions suffisent ici.
+    let mut hits = 0.0;
+    for _ in 0..600 {
+        let target = object_pos(&app, "Cible");
+        let mut b = body.clone();
+        b.iter_mut().find(|(n, _)| *n == "wrist_r").unwrap().1 = (target.x, target.y);
+        app.set_pose(&flat_pose_from_world(&b));
+        reeduc_tick(&mut app);
+        hits = reeduc_var(&app, "rd_hits");
+        if hits >= 2.0 {
+            break;
+        }
+    }
+    assert!(hits >= 2.0, "répétitions comptées en mode caméra : {hits}");
+    assert!(
+        app.hud_texts
+            .get("score")
+            .is_some_and(|s| s.contains("pts")),
+        "{:?}",
+        app.hud_texts.get("score")
+    );
+
+    // Corps perdu : plus aucune pose → pause après le délai de fraîcheur.
+    let elapsed_before = reeduc_var(&app, "rd_elapsed");
+    for _ in 0..(crate::app::pose::STALE_AFTER_TICKS + 5) {
+        reeduc_tick(&mut app);
+    }
+    assert!(
+        app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("pause")),
+        "{:?}",
+        app.hud_texts.get("consigne")
+    );
+    let elapsed_paused = reeduc_var(&app, "rd_elapsed");
+    for _ in 0..30 {
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_elapsed"),
+        elapsed_paused,
+        "le chrono actif ne doit pas avancer pendant la pause"
+    );
+    assert!(elapsed_paused > elapsed_before);
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        2.0,
+        "la pause n'est pas une fin de séance"
+    );
+
+    // Retour dans le cadre : la séance reprend.
+    app.set_pose(&flat_pose_from_world(&body));
+    reeduc_tick(&mut app);
+    assert!(
+        !app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("pause")),
+        "{:?}",
+        app.hud_texts.get("consigne")
+    );
+}

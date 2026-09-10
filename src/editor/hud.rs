@@ -101,7 +101,9 @@ pub(super) fn hud_widgets(
                     } else {
                         egui::RichText::new(text).color(egui::Color32::WHITE)
                     };
-                    ui.label(rich);
+                    // Jamais de retour à la ligne : une `Area` ancrée au centre n'a
+                    // pas de largeur, egui replierait sinon le texte lettre par lettre.
+                    ui.add(egui::Label::new(rich).wrap_mode(egui::TextWrapMode::Extend));
                 }
                 HudWidgetKind::Image { path } => {
                     if let Some(tex) = hud_image(ctx, image_cache, path) {
@@ -1856,6 +1858,43 @@ mod tests {
                 assert!(bad.is_empty(), "{s:?} : glyphes absents {bad:?}");
             }
         }
+    }
+
+    /// Démo Rééducation (portage de Mouvéo) : tout ce que ses widgets HUD et son
+    /// script directeur affichent (`hud_text`, libellés de boutons, menu Démos)
+    /// doit être couvert par les fontes embarquées — un emoji absent rendrait un
+    /// carré dans le HUD du patient.
+    #[test]
+    fn reeducation_hud_glyphs_are_covered_by_the_embedded_fonts() {
+        let mut fonts = egui::text::Fonts::new(
+            egui::epaint::text::TextOptions::default(),
+            egui::text::FontDefinitions::default(),
+        );
+        let font = egui::FontId::proportional(14.0);
+        let scene = crate::scene::Scene::reeducation_demo();
+        let mut texts: Vec<String> = vec![scene.objects[0].script.clone()];
+        for w in &scene.hud_widgets {
+            match &w.kind {
+                crate::scene::HudWidgetKind::Text { content, .. } => texts.push(content.clone()),
+                crate::scene::HudWidgetKind::Button { label, .. } => texts.push(label.clone()),
+                _ => {}
+            }
+        }
+        texts.push("🎯  Rééducation (mobilité guidée, caméra ou joystick)".into());
+        let mut missing = std::collections::BTreeSet::new();
+        for s in &texts {
+            for c in s
+                .chars()
+                .filter(|c| !c.is_ascii() && !fonts.has_glyph(&font, *c))
+            {
+                missing.insert(c);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "glyphes absents des fontes egui : {}",
+            missing.iter().collect::<String>()
+        );
     }
 
     #[test]
