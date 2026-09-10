@@ -48,13 +48,15 @@ fn main() {
     // capture au moment où une bulle est en vol.
     let bubble = |app: &AppState| -> Option<glam::Vec3> {
         (1..=3).find_map(|i| {
-            (app.script_var(&format!("rd_b{i}_alive")).unwrap_or(0.0) > 0.5).then(|| {
-                glam::Vec3::new(
-                    app.script_var(&format!("rd_b{i}_x")).unwrap_or(0.0) as f32,
-                    app.script_var(&format!("rd_b{i}_y")).unwrap_or(0.0) as f32,
-                    0.0,
-                )
-            })
+            (app.script_var(&format!("rd_b{i}_alive")).unwrap_or(0.0) > 0.5
+                && app.script_var(&format!("rd_b{i}_kind")).unwrap_or(0.0) < 0.5)
+                .then(|| {
+                    glam::Vec3::new(
+                        app.script_var(&format!("rd_b{i}_x")).unwrap_or(0.0) as f32,
+                        app.script_var(&format!("rd_b{i}_y")).unwrap_or(0.0) as f32,
+                        0.0,
+                    )
+                })
         })
     };
     let mut caught = 0.0;

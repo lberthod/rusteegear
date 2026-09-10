@@ -20,11 +20,25 @@ pilote la main du mannequin au joystick), lance la partie, et de petites bulles
 colorées apparaissent autour de ses épaules **actuelles** (elles suivent le
 patient s'il se déplace), à une distance qui demande un geste (35 à 100 % de
 la longueur du bras calibrée × amplitude) et toujours dans la partie de
-l'écran que la caméra voit. Il les touche avec l'une ou l'autre main avant
-qu'elles n'éclatent : le halo de chaque bulle rétrécit à mesure que sa durée
-de vie s'écoule. Parmi les éléments se glissent des **bombes** (boule noire à
-halo rouge qui pulse) : les toucher coûte 20 points et casse la série ; les
-laisser passer ne coûte rien. Une partie dure 60 s de temps actif (le chrono se
+l'écran que la caméra voit. Plus d'une fois sur deux, l'élément naît dans le demi-cercle du haut, jusqu'à
+1,35 × le rayon au-dessus des épaules (borné au haut de l'image) : il faut
+lever les bras. Le patient le touche avec l'une ou l'autre main avant qu'il
+n'éclate (le halo rétrécit à mesure que la durée de vie s'écoule), avec le
+**geste que sa couleur impose** :
+
+| Couleur | Geste | Mesure |
+| --- | --- | --- |
+| Blanc | toucher | — |
+| Bleu | toucher **poing fermé** | ouverture < 1,45 (bouts de doigts / taille de main) |
+| Vert | toucher **main ouverte** | ouverture > 1,85 |
+| Noir (halo rouge qui pulse) | **ne pas toucher** : bombe | −20 points, série cassée ; expire sans pénalité |
+
+L'ouverture est mesurée sur les 21 repères de la main (distance moyenne des
+cinq bouts de doigts au poignet, rapportée à la distance poignet → base du
+majeur). Un mauvais geste laisse l'élément en place et affiche la consigne
+(« Bleu : fermez le poing… ») ; sans doigts suivis (mode démo, main trop
+petite à l'image), bleu et vert s'attrapent comme un blanc. Répartition hors
+bombes : 50 % blanc, 25 % bleu, 25 % vert. Une partie dure 60 s de temps actif (le chrono se
 fige quand le corps sort du cadre).
 
 | Rythme | Nouvel élément toutes les | Durée de vie | Simultanés | Part de bombes |

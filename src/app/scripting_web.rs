@@ -1868,7 +1868,10 @@ mod tests {
                     .filter(|e| !e.starts_with(crate::app::script_ctx::SYS_EVENT_PREFIX))
                     .collect();
                 // Pilotage vers la première bulle vivante (commande intégrale).
-                let bubble = (1..=3).find(|i| get(&vars, &format!("rd_b{i}_alive")) > 0.5);
+                let bubble = (1..=3).find(|i| {
+                    get(&vars, &format!("rd_b{i}_alive")) > 0.5
+                        && get(&vars, &format!("rd_b{i}_kind")) < 0.5
+                });
                 if let Some(i) = bubble {
                     let (bx, by) = (
                         get(&vars, &format!("rd_b{i}_x")) as f32,

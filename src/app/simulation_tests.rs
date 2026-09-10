@@ -2541,14 +2541,17 @@ fn reeducation_mannequin_is_built_on_the_landmarks_and_toggles_to_sticks() {
 
 /// Première bulle vivante (monde), lue dans les variables du directeur.
 fn alive_bubble(app: &AppState) -> Option<Vec3> {
+    // Bombes (sorte 1) exclues : on ne va pas les chercher.
     (1..=3).find_map(|i| {
-        (reeduc_var(app, &format!("rd_b{i}_alive")) > 0.5).then(|| {
-            Vec3::new(
-                reeduc_var(app, &format!("rd_b{i}_x")) as f32,
-                reeduc_var(app, &format!("rd_b{i}_y")) as f32,
-                0.0,
-            )
-        })
+        (reeduc_var(app, &format!("rd_b{i}_alive")) > 0.5
+            && reeduc_var(app, &format!("rd_b{i}_kind")) < 0.5)
+            .then(|| {
+                Vec3::new(
+                    reeduc_var(app, &format!("rd_b{i}_x")) as f32,
+                    reeduc_var(app, &format!("rd_b{i}_y")) as f32,
+                    0.0,
+                )
+            })
     })
 }
 
@@ -2845,6 +2848,171 @@ fn bubbles_spawn_around_the_live_shoulders_inside_the_visible_frame() {
             "hors cadre : ({x}, {y})"
         );
         let d = ((x - 0.0).powi(2) + (y - 2.25).powi(2)).sqrt();
-        assert!(d <= 0.9, "trop loin des épaules : ({x}, {y}), d = {d}");
+        // Rayon 0,86 m (bras 1,04 × 75 % × 1,1), étiré ×1,35 vers le haut, borné au haut du cadre (y = 3,0).
+        assert!(d <= 1.2, "trop loin des épaules : ({x}, {y}), d = {d}");
     }
+}
+
+/// Main droite synthétique **poing fermé** : bouts de doigts ramenés près de la
+/// paume (ouverture ≈ 0,9 taille de main, sous le seuil « poing »).
+fn right_fist_flat() -> Vec<f32> {
+    let mut v = right_hand_flat(false);
+    for f in [4usize, 8, 12, 16, 20] {
+        v[2 + f * 3] = 0.52; // y des bouts de doigts au niveau de la paume
+    }
+    v
+}
+
+/// Code couleur : un élément bleu ne s'attrape que poing fermé, un vert que
+/// main ouverte (mesuré sur les doigts suivis) ; le mauvais geste laisse
+/// l'élément en place avec la consigne, le bon l'attrape. Sans doigts suivis
+/// (poignet seul), les deux s'attrapent comme un blanc.
+#[test]
+fn bubbles_blue_needs_a_fist_and_green_an_open_hand() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    let body = standing_body();
+    app.set_pose(&flat_pose_from_world(&body));
+    reeduc_tick(&mut app);
+    app.push_hud_event("demarrer");
+    for _ in 0..200 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&right_hand_flat(false));
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(reeduc_var(&app, "rd_stage"), 2.0);
+    // Paume de la main droite synthétique en monde : milieu poignet (0,3 ; 0,6) → base du majeur (0,3 ; 0,5).
+    let (px, py) = ((0.8 + 0.8) / 2.0, (1.28 + 1.6) / 2.0);
+    let plant = |app: &mut AppState, kind: f64| {
+        let t = app.lua_vars.get("rd_elapsed").copied().unwrap_or(0.0);
+        let _ = t;
+        for (k, v) in [
+            ("rd_b1_alive", 1.0),
+            ("rd_b1_kind", kind),
+            ("rd_b1_x", px),
+            ("rd_b1_y", py),
+            ("rd_b1_life", 60.0),
+        ] {
+            app.lua_vars.insert(k.into(), v);
+        }
+        // `born` = maintenant : le temps de jeu est `rd_elapsed` + accueil ; on
+        // le pose loin dans le futur pour qu'il n'expire jamais.
+        app.lua_vars.insert("rd_b1_born".into(), 1.0e6);
+    };
+    // 1. Bleu + main ouverte : refusé, consigne « fermez le poing ».
+    plant(&mut app, 2.0);
+    let caught0 = reeduc_var(&app, "rd_caught");
+    for _ in 0..20 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&right_hand_flat(false));
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_caught"),
+        caught0,
+        "bleu main ouverte : pas attrapé"
+    );
+    assert!(reeduc_var(&app, "rd_b1_alive") > 0.5);
+    assert!(
+        app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("poing")),
+        "{:?}",
+        app.hud_texts.get("consigne")
+    );
+    // 2. Bleu + poing : attrapé.
+    for _ in 0..20 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&right_fist_flat());
+        reeduc_tick(&mut app);
+        if reeduc_var(&app, "rd_caught") > caught0 {
+            break;
+        }
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_caught"),
+        caught0 + 1.0,
+        "bleu poing fermé : attrapé"
+    );
+    // 3. Vert + poing : refusé ; vert + main ouverte : attrapé.
+    plant(&mut app, 3.0);
+    for _ in 0..20 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&right_fist_flat());
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_caught"),
+        caught0 + 1.0,
+        "vert poing : pas attrapé"
+    );
+    assert!(
+        app.hud_texts
+            .get("consigne")
+            .is_some_and(|s| s.contains("ouvrez")),
+        "{:?}",
+        app.hud_texts.get("consigne")
+    );
+    for _ in 0..20 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&right_hand_flat(false));
+        reeduc_tick(&mut app);
+        if reeduc_var(&app, "rd_caught") > caught0 + 1.0 {
+            break;
+        }
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_caught"),
+        caught0 + 2.0,
+        "vert main ouverte : attrapé"
+    );
+    // 4. Sans doigts suivis : le poignet attrape un bleu comme un blanc.
+    plant(&mut app, 2.0);
+    app.lua_vars.insert("rd_b1_x".into(), 0.8);
+    app.lua_vars.insert("rd_b1_y".into(), 1.30);
+    for _ in 0..30 {
+        app.set_pose(&flat_pose_from_world(&body));
+        app.set_hands(&[]);
+        reeduc_tick(&mut app);
+        if reeduc_var(&app, "rd_caught") > caught0 + 2.0 {
+            break;
+        }
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_caught"),
+        caught0 + 3.0,
+        "poignet seul : geste inconnu, bleu accepté"
+    );
+}
+
+/// Une part des éléments naît au-dessus des épaules, jusqu'à ~1,35 × le rayon :
+/// il faut lever les bras.
+#[test]
+fn bubbles_also_spawn_high_above_the_shoulders() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.push_hud_event("demarrer");
+    reeduc_tick(&mut app);
+    let mut highest: f32 = 0.0;
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..2400 {
+        reeduc_tick(&mut app);
+        for i in 1..=3 {
+            if reeduc_var(&app, &format!("rd_b{i}_alive")) > 0.5 {
+                let born = reeduc_var(&app, &format!("rd_b{i}_born")).to_bits();
+                if seen.insert((i, born)) {
+                    highest = highest.max(reeduc_var(&app, &format!("rd_b{i}_y")) as f32);
+                }
+            }
+        }
+    }
+    assert!(seen.len() >= 10, "éléments nés : {}", seen.len());
+    assert!(
+        highest >= 2.95, // épaules à 2,25 m, haut du cadre visible à 3,0 m : bras tendu à la verticale
+        "au moins un élément nettement au-dessus des épaules : {highest}"
+    );
 }

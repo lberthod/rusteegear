@@ -108,9 +108,14 @@ local LEVELS = {
   {name = "Moyen", spawn = 1.2, life = 4.5, max = 2, bomb = 0.22},
   {name = "Vif", spawn = 0.8, life = 3.2, max = 3, bomb = 0.30},
 }
--- Couleurs des bulles (vives et bien distinctes) ; les bombes sont noires à halo rouge.
-local COLORS = {{0.77, 1.00, 0.29}, {0.35, 0.80, 1.00}, {0.80, 0.55, 1.00}, {1.00, 0.85, 0.20},
-                {1.00, 0.40, 0.55}, {0.20, 0.95, 0.75}, {1.00, 0.60, 0.20}, {0.95, 0.95, 0.95}}
+-- Sortes d'éléments et geste demandé : 0 blanc = toucher, 1 bombe (noir, halo
+-- rouge) = ne pas toucher, 2 bleu = toucher **poing fermé**, 3 vert = toucher
+-- **main ouverte**. L'ouverture est mesurée sur les doigts suivis (distance
+-- moyenne des bouts de doigts au poignet, en tailles de main) ; sans doigts
+-- suivis (mode démo, main trop petite à l'image), bleu et vert valent blanc.
+local KIND_COLOR = {[0] = {0.95, 0.95, 0.95}, [1] = {0.08, 0.08, 0.10}, [2] = {0.25, 0.50, 1.00}, [3] = {0.25, 0.92, 0.40}}
+local KIND_HALO = {[0] = {0.95, 0.95, 0.95}, [1] = {1.00, 0.22, 0.12}, [2] = {0.25, 0.50, 1.00}, [3] = {0.25, 0.92, 0.40}}
+local FIST_MAX, OPEN_MIN = 1.45, 1.85   -- ouverture (bouts de doigts / taille de main) : poing en dessous, main ouverte au-dessus
 
 local function g(k, d) local v = save.get(k); if v == nil then return d end; return v end
 local function num(x) return tostring(math.floor(x + 0.5)) end
@@ -250,13 +255,24 @@ if stage == 2 then
   limb = math.max(0.5, limb)
   local R = limb * (amp / 100) * 1.1   -- rayon de la zone où naissent les bulles
 
-  -- Points de capture : les deux mains (paume si les doigts sont suivis, sinon poignet).
+  -- Points de capture : les deux mains — paume + état (1 poing, 2 ouverte,
+  -- 3 entre les deux) si les doigts sont suivis, sinon poignet + état 0 (inconnu).
   local catchers = {}
+  local function hand_catcher(HP)
+    local hs = math.max(0.05, dist(HP[1][1], HP[1][2], HP[10][1], HP[10][2]))
+    local open = 0
+    local tips = {5, 9, 13, 17, 21}
+    for k = 1, #tips do open = open + dist(HP[1][1], HP[1][2], HP[tips[k]][1], HP[tips[k]][2]) / hs end
+    open = open / #tips
+    local state = 3
+    if open < FIST_MAX then state = 1 elseif open > OPEN_MIN then state = 2 end
+    return {(HP[1][1] + HP[10][1]) / 2, (HP[1][2] + HP[10][2]) / 2, state}
+  end
   if cam then
-    if HPL then catchers[#catchers + 1] = {(HPL[1][1] + HPL[10][1]) / 2, (HPL[1][2] + HPL[10][2]) / 2}
-    elseif pts.wrist_l[3] > 0.45 then catchers[#catchers + 1] = {pts.wrist_l[1], pts.wrist_l[2]} end
-    if HPR then catchers[#catchers + 1] = {(HPR[1][1] + HPR[10][1]) / 2, (HPR[1][2] + HPR[10][2]) / 2}
-    elseif pts.wrist_r[3] > 0.45 then catchers[#catchers + 1] = {pts.wrist_r[1], pts.wrist_r[2]} end
+    if HPL then catchers[#catchers + 1] = hand_catcher(HPL)
+    elseif pts.wrist_l[3] > 0.45 then catchers[#catchers + 1] = {pts.wrist_l[1], pts.wrist_l[2], 0} end
+    if HPR then catchers[#catchers + 1] = hand_catcher(HPR)
+    elseif pts.wrist_r[3] > 0.45 then catchers[#catchers + 1] = {pts.wrist_r[1], pts.wrist_r[2], 0} end
   else
     -- Mode démo : la main droite se pilote au joystick (ou flèches via tilt)
     -- autour des épaules, lissée ; le coude suit pour garder l'avatar lisible.
@@ -266,7 +282,7 @@ if stage == 2 then
     local hy = smooth("rd_hand_y", cy + jy * R * 1.15, 8.0)
     pts.wrist_r = {hx, hy, 1}
     pts.elbow_r = {(A.shoulder_r[1] + hx) / 2 + 0.08, (A.shoulder_r[2] + hy) / 2 - 0.12, 1}
-    catchers[1] = {hx, hy}
+    catchers[1] = {hx, hy, 0}
   end
 
   local points, combo = g("rd_points", 0), g("rd_combo", 0)
@@ -286,22 +302,27 @@ if stage == 2 then
           local scy = (pts.shoulder_l[2] + pts.shoulder_r[2]) / 2
           local xmin, xmax = (-W / 2 - NCX) * NK + 0.25, (W / 2 - NCX) * NK - 0.25
           local ymin, ymax = math.max(0.3, 1.35 + (0 - NCY) * NK + 0.25), 1.35 + (H - NCY) * NK - 0.2
-          local ang = rnd() * 2 * math.pi
+          -- Plus d'une fois sur deux dans le demi-cercle du haut, et jusqu'à
+          -- 1,35 × le rayon au-dessus des épaules : il faut lever les bras.
+          local ang
+          if rnd() < 0.55 then ang = math.pi * (0.15 + 0.7 * rnd()) else ang = rnd() * 2 * math.pi end
           local rr = R * (0.35 + 0.65 * rnd())
+          local dy = math.sin(ang) * rr
+          if dy > 0 then dy = dy * 1.35 end
           local bx = clamp(scx + math.cos(ang) * rr, xmin, xmax)
-          local by = clamp(scy + math.sin(ang) * rr, ymin, ymax)
-          local bomb = rnd() < lv.bomb
-          local c = COLORS[math.floor(rnd() * #COLORS) + 1]
+          local by = clamp(scy + dy, ymin, ymax)
+          local kind = 0
+          if rnd() < lv.bomb then kind = 1
+          else
+            local u = rnd()
+            if u < 0.25 then kind = 2 elseif u < 0.5 then kind = 3 end
+          end
+          local c, hc = KIND_COLOR[kind], KIND_HALO[kind]
           save.set("rd_b" .. i .. "_alive", 1); save.set("rd_b" .. i .. "_x", bx); save.set("rd_b" .. i .. "_y", by)
           save.set("rd_b" .. i .. "_born", time); save.set("rd_b" .. i .. "_life", lv.life)
-          save.set("rd_b" .. i .. "_kind", bomb and 1 or 0)
-          if bomb then
-            save.set("rd_b" .. i .. "_r", 0.08); save.set("rd_b" .. i .. "_g", 0.08); save.set("rd_b" .. i .. "_b", 0.1)
-            save.set("rd_b" .. i .. "_hr", 1.0); save.set("rd_b" .. i .. "_hg", 0.22); save.set("rd_b" .. i .. "_hb", 0.12)
-          else
-            save.set("rd_b" .. i .. "_r", c[1]); save.set("rd_b" .. i .. "_g", c[2]); save.set("rd_b" .. i .. "_b", c[3])
-            save.set("rd_b" .. i .. "_hr", c[1]); save.set("rd_b" .. i .. "_hg", c[2]); save.set("rd_b" .. i .. "_hb", c[3])
-          end
+          save.set("rd_b" .. i .. "_kind", kind)
+          save.set("rd_b" .. i .. "_r", c[1]); save.set("rd_b" .. i .. "_g", c[2]); save.set("rd_b" .. i .. "_b", c[3])
+          save.set("rd_b" .. i .. "_hr", hc[1]); save.set("rd_b" .. i .. "_hg", hc[2]); save.set("rd_b" .. i .. "_hb", hc[3])
           save.set("rd_last_spawn", time)
           break
         end
@@ -311,11 +332,21 @@ if stage == 2 then
     for i = 1, NB do
       if g("rd_b" .. i .. "_alive", 0) > 0.5 then
         local bx, by = g("rd_b" .. i .. "_x", 0), g("rd_b" .. i .. "_y", 0)
-        local bomb = g("rd_b" .. i .. "_kind", 0) > 0.5
-        local got = false
+        local kind = math.floor(g("rd_b" .. i .. "_kind", 0) + 0.5)
+        local bomb = kind == 1
+        -- Touché ? Et avec le bon geste : bleu exige le poing (état 1), vert la
+        -- main ouverte (état 2) ; un état inconnu (0) passe ; un mauvais geste
+        -- laisse l'élément en place et affiche la consigne.
+        local got, wrong = false, 0
         for k = 1, #catchers do
-          if dist(catchers[k][1], catchers[k][2], bx, by) < CATCH_R then got = true end
+          if dist(catchers[k][1], catchers[k][2], bx, by) < CATCH_R then
+            local st = catchers[k][3]
+            if kind == 2 and st ~= 0 and st ~= 1 then wrong = 11
+            elseif kind == 3 and st ~= 0 and st ~= 2 then wrong = 12
+            else got = true end
+          end
         end
+        if wrong > 0 and not got then save.set("rd_status", wrong) end
         if got and bomb then
           bombs = bombs + 1; combo = 0
           points = math.max(0, points - BOMB_COST)
@@ -389,12 +420,14 @@ local STATUS = {
   [8] = "Mode démo — joystick ou flèches : amenez la main sur les bulles",
   [9] = "Bulle éclatée… la suivante arrive",
   [10] = "Bombe ! Évitez les boules noires",
+  [11] = "Bleu : fermez le poing pour l'attraper",
+  [12] = "Vert : ouvrez la main pour l'attraper",
 }
 hud_text("titre", "MOUVÉO · Attrape-bulles")
 local reglages = "Rythme " .. lv.name .. " · amplitude " .. num(amp) .. " % · " .. num(SESSION_S) .. " s"
 if stage == 0 then
   local src = pose.ok and "📷 Caméra détectée : attrapez avec vos deux mains." or "🎮 Sans caméra : mode démo, la main se pilote au joystick ou aux flèches."
-  hud_text("aide", "Des bulles apparaissent autour de vous : touchez-les avant qu'elles n'éclatent.\nChaque bulle vaut 10 points, les séries rapportent plus — évitez les bombes noires (-" .. num(BOMB_COST) .. ").\n" .. reglages .. "\n" .. src)
+  hud_text("aide", "Des bulles apparaissent autour de vous, parfois haut : touchez-les avant qu'elles n'éclatent.\nBlanc : touchez · Bleu : poing fermé · Vert : main ouverte · Noir : bombe, ne touchez pas (-" .. num(BOMB_COST) .. ").\nChaque bulle vaut 10 points, les séries rapportent plus.\n" .. reglages .. "\n" .. src)
   hud_text("consigne", STATUS[0])
   hud_text("score", ""); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", ""); hud_text("bilan", "")
 elseif stage == 1 then
