@@ -423,7 +423,7 @@ local STATUS = {
   [11] = "Bleu : fermez le poing pour l'attraper",
   [12] = "Vert : ouvrez la main pour l'attraper",
 }
-hud_text("titre", "MOUVÉO · Attrape-bulles")
+hud_text("titre", "PhysioTech.ch · Attrape-bulles")
 local reglages = "Rythme " .. lv.name .. " · amplitude " .. num(amp) .. " % · " .. num(SESSION_S) .. " s"
 if stage == 0 then
   local src = pose.ok and "📷 Caméra détectée : attrapez avec vos deux mains." or "🎮 Sans caméra : mode démo, la main se pilote au joystick ou aux flèches."

@@ -1,5 +1,6 @@
-# Rééducation — mobilité guidée (portage de Mouvéo)
+# PhysioTech.ch — Attrape-bulles (démo Rééducation, inspirée de Mouvéo)
 
+Le jeu s'appelle **PhysioTech.ch** (titre du HUD et de la page web).
 Démo jouable `Fichier ▸ 🎬 Démos ▸ 🎮 Jeux jouables ▸ 🎯 Rééducation`, console
 `demo reeduc`, desktop `motor3derust --player --demo=reeduc`, web
 [`reeduc.html`](../packaging/web/reeduc.html) (`?scene=reeduc`). Portage, le
