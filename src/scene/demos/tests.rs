@@ -1055,7 +1055,7 @@ fn reeducation_demo_is_wired_for_its_director_script() {
     assert!(
         bones
             .iter()
-            .all(|o| o.mesh == MeshKind::Cylinder && o.script.contains("obj.rz"))
+            .all(|o| o.mesh == MeshKind::Capsule && o.script.contains("obj.rz"))
     );
     let mut ids = std::collections::HashSet::new();
     for w in &scene.hud_widgets {

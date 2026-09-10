@@ -10,7 +10,7 @@
 //! | ---------------------------------------------- | ------------------------------------------------------- |
 //! | MediaPipe Pose dans le navigateur              | idem, dans `packaging/web/reeduc.html` -> export wasm    |
 //! |                                                | `set_pose_landmarks` -> table Lua `pose` (`app::pose`)   |
-//! | squelette dessiné sur la vidéo                 | personnage skinné (rig 43 os, doigts) piloté par `bone()`, ou bâtons |
+//! | squelette dessiné sur la vidéo                 | mannequin neutre 3D construit sur les repères (ou bâtons) |
 //! | (pas de doigts dans Mouvéo)                    | deux mains sur le squelette (21 repères MediaPipe chacune), 3 exercices de doigts avec la main en grand |
 //! | cibles 2D relatives à l'épaule/la hanche       | sphères émissives dans le plan `z = 0`, mêmes motifs    |
 //! | machine à états React (welcome/calibrate/…)    | script Lua « directeur », état dans `save.*`            |
@@ -160,10 +160,10 @@ if on_event("hud:ex_next") then ex_i = ex_i + 1; if ex_i > #EX then ex_i = 1 end
 if on_event("hud:cote") then side = -side; sfx = (side > 0) and "_r" or "_l" end
 if on_event("hud:amplitude") then amp = amp + 10; if amp > 95 then amp = 55 end end
 if on_event("hud:objectif") then goal = goal + 2; if goal > 12 then goal = 4 end end
--- Avatar : 0 squelette de bâtons, 1 héros (proportions humaines, doigts en
--- bâtons sur ses mains), 2 ninja (rig cartoon avec doigts animés).
-local avatar = g("rd_avatar", 1)
-if on_event("hud:avatar") then avatar = (avatar + 1) % 3 end
+-- Avatar : 0 mannequin neutre (tête, torse, bassin, membres épais, mains),
+-- 1 squelette de bâtons — les deux construits sur les repères eux-mêmes.
+local avatar = g("rd_avatar", 0)
+if on_event("hud:avatar") then avatar = (avatar + 1) % 2 end
 if stage == 3 then
   if on_event("hud:douleur") then pain = (pain + 1) % 11 end
   if on_event("hud:fatigue") then fatigue = (fatigue + 1) % 11 end
@@ -205,10 +205,28 @@ end
 local pts = {}
 local live = cam and stage >= 1 and stage <= 2
 if stage == 0 then live = pose.ok end
+-- Normalisation du corps capté : quelle que soit la distance à la caméra, le
+-- patient est dessiné à taille constante (torse hanches->épaules = 0,9 m) et
+-- centré, hanches à 1,35 m — sans ça, une personne proche de l'objectif
+-- remplit le cadre et l'avatar déborde de l'écran. Identité en mode démo.
+local NK, NCX, NCY = 1.0, 0.0, 1.35
 if live then
   for i = 1, #NAMES do
     local n = NAMES[i]; local lm = pose[n]; local x, y = P(lm)
     pts[n] = {smooth("rd_s_" .. n .. "_x", x, SMOOTH_POSE), smooth("rd_s_" .. n .. "_y", y, SMOOTH_POSE), lm.v}
+  end
+  local hx0, hy0 = (pts.hip_l[1] + pts.hip_r[1]) / 2, (pts.hip_l[2] + pts.hip_r[2]) / 2
+  local sx0, sy0 = (pts.shoulder_l[1] + pts.shoulder_r[1]) / 2, (pts.shoulder_l[2] + pts.shoulder_r[2]) / 2
+  local torso = dist(hx0, hy0, sx0, sy0)
+  local want_k = 1.0
+  if torso > 0.05 then want_k = clamp(0.9 / torso, 0.35, 3.0) end
+  NK = smooth("rd_norm_k", want_k, 4.0)
+  NCX = smooth("rd_norm_cx", hx0, 6.0)
+  NCY = smooth("rd_norm_cy", hy0, 6.0)
+  for i = 1, #NAMES do
+    local p = pts[NAMES[i]]
+    p[1] = (p[1] - NCX) * NK
+    p[2] = 1.35 + (p[2] - NCY) * NK
   end
 else
   for i = 1, #NAMES do local n = NAMES[i]; pts[n] = {VBODY[n][1], VBODY[n][2], 1.0} end
@@ -230,7 +248,10 @@ local function hand_points(Hn, key, zoom)
     end
   else
     for i = 1, 21 do
+      -- Même projection et même normalisation que le corps : la main se pose
+      -- sur le poignet du squelette.
       local wx, wy = (0.5 - Hn.x[i]) * W, (1.0 - Hn.y[i]) * H
+      wx, wy = (wx - NCX) * NK, 1.35 + (wy - NCY) * NK
       out[i] = {smooth(key .. i .. "_x", wx, SMOOTH_HAND), smooth(key .. i .. "_y", wy, SMOOTH_HAND)}
     end
   end
@@ -458,16 +479,17 @@ save.set("rd_dwell_frac", dwell_frac)
 save.set("rd_target_scale", HP and math.max(0.5, hs * 1.2) or 1.0)
 local show_hand = HP ~= nil and stage ~= 3
 local show_body = (stage ~= 3) and (not live or pose.ok) and not show_hand
--- Le personnage skinné (objet « Avatar ») lit `rd_p_*_ok` (repère fiable) et
--- `rd_body_shown` ; les bâtons lisent `rd_p_*_vis`, à zéro en mode personnage.
+-- Les pièces du mannequin (torse, bassin, tête, cou, pieds) lisent
+-- `rd_p_*_ok`/`rd_mannequin` ; repères et os lisent `rd_p_*_vis`.
 save.set("rd_body_shown", show_body and 1 or 0)
+save.set("rd_mannequin", (avatar == 0) and 1 or 0)
 for i = 1, #NAMES do
   local n = NAMES[i]
   -- Un repère mal vu (hors cadre, extrapolé par le modèle) n'est pas dessiné :
   -- sans ça, un os file vers un point fantasque hors de l'écran.
   local ok = show_body and pts[n][3] >= VIS_MIN
   save.set("rd_p_" .. n .. "_ok", ok and 1 or 0)
-  save.set("rd_p_" .. n .. "_vis", (ok and avatar == 0) and 1 or 0)
+  save.set("rd_p_" .. n .. "_vis", ok and 1 or 0)
   save.set("rd_p_" .. n .. "_x", pts[n][1]); save.set("rd_p_" .. n .. "_y", pts[n][2])
 end
 -- Deux jeux d'objets de main (gauche/droite) : en exercice de doigts, celui du
@@ -488,8 +510,8 @@ if show_hand then
   write_hand((side > 0) and "rd_hr_" or "rd_hl_", HP, 1.0, true)
   write_hand((side > 0) and "rd_hl_" or "rd_hr_", nil, 1.0, true)
 else
-  write_hand("rd_hl_", show_body and HPL or nil, 0.45, avatar ~= 2)
-  write_hand("rd_hr_", show_body and HPR or nil, 0.45, avatar ~= 2)
+  write_hand("rd_hl_", show_body and HPL or nil, 0.45, true)
+  write_hand("rd_hr_", show_body and HPR or nil, 0.45, true)
 end
 
 -- ---- HUD ----
@@ -590,213 +612,6 @@ pub fn director_script() -> String {
     )
 }
 
-/// Rig d'un avatar skinné : noms des os et mesures de repos utilisés par
-/// `avatar_script`. Les rigs Blender/glTF posent chaque os le long de +Y local,
-/// c'est cet axe que `bone()` réoriente (cf. `import::compute_joint_matrices_into_with`).
-struct AvatarRig {
-    /// Valeur de `rd_avatar` qui affiche cet avatar (1 héros, 2 ninja).
-    mode: u32,
-    /// Rotation Y (°) pour faire face à la caméra (+Z monde).
-    face_yaw: f32,
-    /// Hauteur des hanches dans le rig (unités modèle, pose de repos).
-    hips_y: f32,
-    /// Distance hanches → épaules dans le rig (unités modèle).
-    torso: f32,
-    /// Chaîne du tronc (tous orientés hanches → épaules), puis le cou/tête.
-    spine: &'static [&'static str],
-    neck: &'static str,
-    /// Bras, avant-bras, cuisse, jambe : `(côté .L du rig, côté .R)` — le
-    /// personnage fait face au patient, son `.L` suit le côté **droit** capté
-    /// (miroir), sauf si `mirror` est faux.
-    upper_arm: (&'static str, &'static str),
-    lower_arm: (&'static str, &'static str),
-    upper_leg: (&'static str, &'static str),
-    lower_leg: (&'static str, &'static str),
-    /// Os de la main (poignet → milieu de la paume), `""` si le rig n'en a pas.
-    hand: (&'static str, &'static str),
-    /// Le rig a des chaînes de doigts nommées `Thumb1`, `Index1`… + suffixe.
-    fingers: bool,
-    mirror: bool,
-}
-
-const HERO_RIG: AvatarRig = AvatarRig {
-    mode: 1,
-    face_yaw: 0.0,
-    hips_y: 0.95,
-    torso: 0.57,
-    spine: &["Hips", "Spine", "Chest"],
-    neck: "Head",
-    upper_arm: ("UpperArm.L", "UpperArm.R"),
-    lower_arm: ("Forearm.L", "Forearm.R"),
-    upper_leg: ("Thigh.L", "Thigh.R"),
-    lower_leg: ("Shin.L", "Shin.R"),
-    hand: ("Hand.L", "Hand.R"),
-    fingers: false,
-    // Ce rig nomme ses côtés du point de vue du spectateur : `Shoulder.L` est à
-    // −X, donc à gauche de l'écran, côté gauche du patient dans le miroir.
-    mirror: false,
-};
-
-const NINJA_RIG: AvatarRig = AvatarRig {
-    mode: 2,
-    face_yaw: 0.0,
-    hips_y: 0.785,
-    torso: 0.868,
-    spine: &["Hips", "Abdomen", "Torso"],
-    neck: "Neck",
-    upper_arm: ("UpperArm.L", "UpperArm.R"),
-    lower_arm: ("LowerArm.L", "LowerArm.R"),
-    upper_leg: ("UpperLeg.L", "UpperLeg.R"),
-    lower_leg: ("LowerLeg.L", "LowerLeg.R"),
-    hand: ("", ""),
-    fingers: true,
-    // `Shoulder.L` à +X (à droite de l'écran) : suit le côté droit du patient.
-    mirror: true,
-};
-
-/// Script d'un avatar skinné : retargeting des repères captés par **directions
-/// d'os** (`bone()`), pas par positions — les longueurs du rig restent les
-/// siennes, seule l'orientation de chaque segment suit le patient. Échelle =
-/// distance hanches→épaules captée / celle du rig ; origine posée pour que les
-/// hanches du rig tombent sur les hanches captées. Un repère non fiable laisse
-/// l'os sur sa pose d'animation (`Idle`). Doigts (ninja) : chaînes
-/// pouce/index/majeur/auriculaire ← repères de la main (pas d'annulaire dans ce rig).
-fn avatar_script(rig: &AvatarRig, idle_clip: &str) -> String {
-    let (side_l, side_r) = if rig.mirror { ("r", "l") } else { ("l", "r") };
-    let (hand_l, hand_r) = if rig.mirror {
-        ("rd_hr_", "rd_hl_")
-    } else {
-        ("rd_hl_", "rd_hr_")
-    };
-    let spine: Vec<String> = rig
-        .spine
-        .iter()
-        .map(|n| format!("bone(\"{n}\", dx, dy, 0)"))
-        .collect();
-    let spine = spine.join("; ");
-    let hand_seg = if rig.hand.0.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "  hand_dir(\"{hl}\", \"{hand_l}\"); hand_dir(\"{hr}\", \"{hand_r}\")\n",
-            hl = rig.hand.0,
-            hr = rig.hand.1
-        )
-    };
-    let fingers = if rig.fingers {
-        format!("  fingers(\"{hand_l}\", \".L\"); fingers(\"{hand_r}\", \".R\")\n")
-    } else {
-        String::new()
-    };
-    format!(
-        r#"
-local show = math.floor((save.get("rd_avatar") or 1) + 0.5) == {mode} and (save.get("rd_body_shown") or 0) > 0.5
-obj.visible = show
-obj.anim = "{idle_clip}"
-if show then
-  local function pt(n) return save.get("rd_p_" .. n .. "_x") or 0, save.get("rd_p_" .. n .. "_y") or 0, (save.get("rd_p_" .. n .. "_ok") or 0) > 0.5 end
-  local function dir(ax, ay, bx, by)
-    local dx, dy = bx - ax, by - ay
-    local l = math.sqrt(dx * dx + dy * dy)
-    if l < 1e-4 then return nil end
-    return dx / l, dy / l
-  end
-  local function seg(name, a, b)
-    local ax, ay, av = pt(a); local bx, by, bv = pt(b)
-    if av and bv then local dx, dy = dir(ax, ay, bx, by); if dx then bone(name, dx, dy, 0) end end
-  end
-  local hlx, hly, hlv = pt("hip_l"); local hrx, hry, hrv = pt("hip_r")
-  local slx, sly, slv = pt("shoulder_l"); local srx, sry, srv = pt("shoulder_r")
-  local hx, hy = (hlx + hrx) / 2, (hly + hry) / 2
-  local sx, sy = (slx + srx) / 2, (sly + sry) / 2
-  local torso = math.sqrt((sx - hx) * (sx - hx) + (sy - hy) * (sy - hy))
-  local want = torso / {torso}
-  if want < 0.4 then want = 0.4 elseif want > 2.2 then want = 2.2 end
-  local scale = save.get("rd_av{mode}_scale") or want
-  scale = scale + (want - scale) * (1.0 - math.exp(-6.0 * dt))
-  save.set("rd_av{mode}_scale", scale)
-  obj.sx = scale; obj.sy = scale; obj.sz = scale
-  obj.x = hx; obj.y = hy - {hips_y} * scale; obj.z = 0
-  obj.rx = 0; obj.ry = {face_yaw}; obj.rz = 0
-  if hlv and hrv and slv and srv then
-    local dx, dy = dir(hx, hy, sx, sy)
-    if dx then {spine} end
-    local nx, ny, nv = pt("nose")
-    if nv then local dx2, dy2 = dir(sx, sy, nx, ny); if dx2 then bone("{neck}", dx2, dy2, 0) end end
-  end
-  seg("{ua_l}", "shoulder_{sl}", "elbow_{sl}"); seg("{la_l}", "elbow_{sl}", "wrist_{sl}")
-  seg("{ua_r}", "shoulder_{sr}", "elbow_{sr}"); seg("{la_r}", "elbow_{sr}", "wrist_{sr}")
-  seg("{ul_l}", "hip_{sl}", "knee_{sl}"); seg("{ll_l}", "knee_{sl}", "ankle_{sl}")
-  seg("{ul_r}", "hip_{sr}", "knee_{sr}"); seg("{ll_r}", "knee_{sr}", "ankle_{sr}")
-  local function hp(prefix, i) return save.get(prefix .. i .. "_x") or 0, save.get(prefix .. i .. "_y") or 0 end
-  local function hand_dir(name, prefix)
-    if (save.get(prefix .. "ok") or 0) < 0.5 then return end
-    local ax, ay = hp(prefix, 1); local bx, by = hp(prefix, 10)
-    local dx, dy = dir(ax, ay, bx, by)
-    if dx then bone(name, dx, dy, 0) end
-  end
-  local function fingers(prefix, suffix)
-    if (save.get(prefix .. "ok") or 0) < 0.5 then return end
-    local function fb(name, i, j)
-      local ax, ay = hp(prefix, i); local bx, by = hp(prefix, j)
-      local dx, dy = dir(ax, ay, bx, by)
-      if dx then bone(name .. suffix, dx, dy, 0) end
-    end
-    fb("Thumb1", 2, 3); fb("Thumb2", 3, 5)
-    fb("Index1", 6, 7); fb("Index2", 7, 8); fb("Index3", 8, 9)
-    fb("Middle1", 10, 11); fb("Middle2", 11, 12); fb("Middle3", 12, 13)
-    fb("Pinky1", 18, 19); fb("Pinky2", 19, 20); fb("Pinky3", 20, 21)
-  end
-{hand_seg}{fingers}end
-"#,
-        mode = rig.mode,
-        idle_clip = idle_clip,
-        torso = rig.torso,
-        hips_y = rig.hips_y,
-        face_yaw = rig.face_yaw,
-        spine = spine,
-        neck = rig.neck,
-        ua_l = rig.upper_arm.0,
-        ua_r = rig.upper_arm.1,
-        la_l = rig.lower_arm.0,
-        la_r = rig.lower_arm.1,
-        ul_l = rig.upper_leg.0,
-        ul_r = rig.upper_leg.1,
-        ll_l = rig.lower_leg.0,
-        ll_r = rig.lower_leg.1,
-        sl = side_l,
-        sr = side_r,
-        hand_seg = hand_seg,
-        fingers = fingers,
-    )
-}
-
-/// Modèle embarqué dans le binaire (`assets::EMBEDDED_MODELS`, schéma
-/// `embedded://`) : disponible sur toutes les cibles, web compris.
-fn import_embedded_model(imported: &mut Vec<ImportedMesh>, file: &str) -> MeshKind {
-    let path = format!("{}{file}", crate::assets::EMBEDDED_SCHEME);
-    match crate::scene::import::load_gltf(&path) {
-        Ok((data, aabb_min, aabb_max)) => {
-            let mut mesh = ImportedMesh {
-                name: file.into(),
-                path,
-                data,
-                aabb_min,
-                aabb_max,
-                ..Default::default()
-            };
-            mesh.load_skinning();
-            let index = imported.len() as u32;
-            imported.push(mesh);
-            MeshKind::Imported(index)
-        }
-        Err(e) => {
-            log::error!("import_embedded_model({file}) : {e}");
-            MeshKind::Capsule
-        }
-    }
-}
-
 /// Script de la cible lumineuse (« Cible ») : suit `rd_target_*`, pulse, prend
 /// la couleur de l'exercice (ou le bleu « retour »).
 const TARGET_SCRIPT: &str = r#"
@@ -851,23 +666,33 @@ const BONES: [(&str, &str); 12] = [
     ("knee_r", "ankle_r"),
 ];
 
-/// Script d'un segment (os du corps ou phalange) : cylindre (axe Y, hauteur 1)
-/// posé au milieu des deux repères `ka`/`kb` (préfixes de clés `save`, ex.
-/// `rd_p_hip_r` ou `rd_h_9`), étiré à leur distance et tourné autour de Z pour
-/// les relier — angle calculé par `acos` + signe plutôt qu'`atan2`, absent en
-/// Lua 5.1 sous ce nom.
-fn segment_script(ka: &str, kb: &str, thickness: f32, z: f32, scale_key: Option<&str>) -> String {
+/// Script d'un segment (os du corps ou phalange) : mesh à axe Y et hauteur 1
+/// (cylindre ou capsule) posé au milieu des deux repères `ka`/`kb` (préfixes de
+/// clés `save`, ex. `rd_p_hip_r` ou `rd_h_9`), étiré à leur distance et tourné
+/// autour de Z pour les relier — angle calculé par `acos` + signe plutôt
+/// qu'`atan2`, absent en Lua 5.1 sous ce nom. Deux largeurs (échelle x/z) :
+/// `width_m` en mode mannequin, `width_s` en mode bâtons (`rd_mannequin`) ;
+/// `scale_key` multiplie encore la largeur (mains agrandies).
+fn segment_script(
+    ka: &str,
+    kb: &str,
+    width_m: f32,
+    width_s: f32,
+    z: f32,
+    scale_key: Option<&str>,
+) -> String {
     let f = scale_key.map_or("1".to_string(), |k| format!("(save.get(\"{k}\") or 1)"));
     format!(
         "local vis = (save.get(\"{ka}_vis\") or 0) > 0.5 and (save.get(\"{kb}_vis\") or 0) > 0.5\n\
          obj.visible = vis\n\
          if vis then\n\
+           local w = (((save.get(\"rd_mannequin\") or 1) > 0.5) and {width_m:?} or {width_s:?}) * {f}\n\
            local ax, ay = save.get(\"{ka}_x\") or 0, save.get(\"{ka}_y\") or 0\n\
            local bx, by = save.get(\"{kb}_x\") or 0, save.get(\"{kb}_y\") or 0\n\
            local dx, dy = bx - ax, by - ay\n\
            local len = math.sqrt(dx * dx + dy * dy)\n\
            obj.x = (ax + bx) / 2; obj.y = (ay + by) / 2; obj.z = {z:?}\n\
-           obj.sx = {thickness:?} * {f}; obj.sz = {thickness:?} * {f}; obj.sy = math.max(0.01, len)\n\
+           obj.sx = w; obj.sz = w; obj.sy = math.max(0.01, len)\n\
            if len > 0.0001 then\n\
              local c = dy / len\n\
              if c > 1 then c = 1 elseif c < -1 then c = -1 end\n\
@@ -878,6 +703,47 @@ fn segment_script(ka: &str, kb: &str, thickness: f32, z: f32, scale_key: Option<
          end\n"
     )
 }
+
+/// Script d'une pièce ellipsoïdale du mannequin (sphère étirée) posée entre
+/// deux repères `ka` → `kb` et orientée le long : `along` = allongement ajouté
+/// à la distance (diamètre le long de l'axe), `wide`/`deep` = diamètres
+/// transversaux. Visible seulement en mode mannequin et repères fiables.
+fn ellipsoid_script(ka: &str, kb: &str, along: f32, wide: f32, deep: f32, z: f32) -> String {
+    format!(
+        "local vis = (save.get(\"rd_mannequin\") or 0) > 0.5 and (save.get(\"{ka}_ok\") or 0) > 0.5 and (save.get(\"{kb}_ok\") or 0) > 0.5\n\
+         obj.visible = vis\n\
+         if vis then\n\
+           local ax, ay = save.get(\"{ka}_x\") or 0, save.get(\"{ka}_y\") or 0\n\
+           local bx, by = save.get(\"{kb}_x\") or 0, save.get(\"{kb}_y\") or 0\n\
+           local dx, dy = bx - ax, by - ay\n\
+           local len = math.sqrt(dx * dx + dy * dy)\n\
+           obj.x = (ax + bx) / 2; obj.y = (ay + by) / 2; obj.z = {z:?}\n\
+           obj.sx = {wide:?}; obj.sz = {deep:?}; obj.sy = len + {along:?}\n\
+           if len > 0.0001 then\n\
+             local c = dy / len\n\
+             if c > 1 then c = 1 elseif c < -1 then c = -1 end\n\
+             local ang = math.deg(math.acos(c))\n\
+             if dx > 0 then ang = -ang end\n\
+             obj.rx = 0; obj.ry = 0; obj.rz = ang\n\
+           end\n\
+         end\n"
+    )
+}
+
+/// Points milieu virtuels du mannequin (milieu des hanches, des épaules, base
+/// du cou) : posés par ce script sur l'objet « Repère milieu » (invisible) et
+/// publiés en `rd_m_<nom>_*` pour les pièces du torse et du cou.
+const MIDPOINTS_SCRIPT: &str = r#"
+obj.visible = false
+local function pt(n) return save.get("rd_p_" .. n .. "_x") or 0, save.get("rd_p_" .. n .. "_y") or 0, (save.get("rd_p_" .. n .. "_ok") or 0) > 0.5 end
+local hlx, hly, hlv = pt("hip_l"); local hrx, hry, hrv = pt("hip_r")
+local slx, sly, slv = pt("shoulder_l"); local srx, sry, srv = pt("shoulder_r")
+local nx, ny, nv = pt("nose")
+save.set("rd_m_hips_x", (hlx + hrx) / 2); save.set("rd_m_hips_y", (hly + hry) / 2); save.set("rd_m_hips_ok", (hlv and hrv) and 1 or 0)
+local sx, sy = (slx + srx) / 2, (sly + sry) / 2
+save.set("rd_m_shoulders_x", sx); save.set("rd_m_shoulders_y", sy); save.set("rd_m_shoulders_ok", (slv and srv) and 1 or 0)
+save.set("rd_m_chin_x", sx + (nx - sx) * 0.55); save.set("rd_m_chin_y", sy + (ny - sy) * 0.55); save.set("rd_m_chin_ok", (nv and slv and srv) and 1 or 0)
+"#;
 
 /// Repères de la main (MediaPipe Hand Landmarker, 1-based) : couleur par doigt
 /// comme dans la visualisation MediaPipe (pouce crème, index violet, majeur
@@ -918,6 +784,23 @@ const HAND_BONES: [(usize, usize); 21] = [
     (1, 18),
 ];
 
+/// Script d'une sphère d'articulation du corps (« Repère <nom> ») : diamètre
+/// `size_m` en mode mannequin (couleur chair), `size_s` en bâtons (bleu pâle) ;
+/// `dy` décale verticalement (tête posée au-dessus du nez).
+fn body_joint_script(name: &str, size_m: f32, size_s: f32, dy: f32) -> String {
+    format!(
+        "local vis = (save.get(\"rd_p_{name}_vis\") or 0) > 0.5\n\
+         obj.visible = vis\n\
+         if vis then\n\
+           local m = (save.get(\"rd_mannequin\") or 1) > 0.5\n\
+           local f = m and {size_m:?} or {size_s:?}\n\
+           obj.sx = f; obj.sy = f; obj.sz = f\n\
+           if m then obj.r = 0.92; obj.g = 0.84; obj.b = 0.74 else obj.r = 0.85; obj.g = 0.9; obj.b = 1.0 end\n\
+           obj.x = save.get(\"rd_p_{name}_x\") or 0; obj.y = (save.get(\"rd_p_{name}_y\") or 0) + (m and {dy:?} or 0); obj.z = 0\n\
+         end\n"
+    )
+}
+
 fn hand_joint_script(prefix: &str, i: usize, radius: f32) -> String {
     format!(
         "local vis = (save.get(\"{prefix}{i}_vis\") or 0) > 0.5\n\
@@ -927,15 +810,6 @@ fn hand_joint_script(prefix: &str, i: usize, radius: f32) -> String {
            obj.sx = f; obj.sy = f; obj.sz = f\n\
            obj.x = save.get(\"{prefix}{i}_x\") or 0; obj.y = save.get(\"{prefix}{i}_y\") or 0; obj.z = 0.02\n\
          end\n"
-    )
-}
-
-/// Script d'une sphère d'articulation (« Repère <nom> »).
-fn joint_script(name: &str) -> String {
-    format!(
-        "local vis = (save.get(\"rd_p_{name}_vis\") or 0) > 0.5\n\
-         obj.visible = vis\n\
-         if vis then obj.x = save.get(\"rd_p_{name}_x\") or 0; obj.y = save.get(\"rd_p_{name}_y\") or 0; obj.z = 0 end\n"
     )
 }
 
@@ -969,7 +843,6 @@ impl Scene {
     /// Démo « Rééducation — mobilité guidée » (cf. la doc du module).
     pub fn reeducation_demo() -> Self {
         let mut objects = Vec::with_capacity(120);
-        let mut imported: Vec<ImportedMesh> = Vec::new();
 
         // Directeur en tête de liste : les autres objets relisent son état le
         // même tick (les scripts s'exécutent dans l'ordre de `objects`).
@@ -1004,25 +877,107 @@ impl Scene {
         cible.visible = false;
         objects.push(cible);
 
+        // Os du corps : capsules épaisses (mannequin) ou fines (bâtons). Largeur
+        // = 4 × rayon voulu (la capsule unité a un rayon de 0,25).
         for (a, b) in BONES {
-            let mut os = demo_obj(&format!("Os {a}-{b}"), MeshKind::Cylinder, Vec3::ZERO);
-            os.transform = os.transform.with_scale(Vec3::new(0.07, 0.5, 0.07));
-            os.color = [0.85, 0.9, 1.0];
-            os.emissive = 0.25;
-            os.script = segment_script(&format!("rd_p_{a}"), &format!("rd_p_{b}"), 0.07, 0.0, None);
+            let (wm, ws) = match (a, b) {
+                ("shoulder_l", "elbow_l") | ("shoulder_r", "elbow_r") => (0.32, 0.06),
+                ("elbow_l", "wrist_l") | ("elbow_r", "wrist_r") => (0.26, 0.06),
+                ("hip_l", "knee_l") | ("hip_r", "knee_r") => (0.42, 0.06),
+                ("knee_l", "ankle_l") | ("knee_r", "ankle_r") => (0.32, 0.06),
+                // Lignes des épaules, des hanches et des flancs : cachées dans le
+                // torse et le bassin du mannequin.
+                _ => (0.12, 0.06),
+            };
+            let mut os = demo_obj(&format!("Os {a}-{b}"), MeshKind::Capsule, Vec3::ZERO);
+            os.transform = os.transform.with_scale(Vec3::new(0.06, 0.5, 0.06));
+            os.color = [0.88, 0.82, 0.76];
+            os.roughness = 0.75;
+            os.emissive = 0.05;
+            os.script = segment_script(
+                &format!("rd_p_{a}"),
+                &format!("rd_p_{b}"),
+                wm,
+                ws,
+                0.0,
+                None,
+            );
             os.visible = false;
             objects.push(os);
         }
 
         for name in JOINTS {
+            let (sm, ss, dy) = match name {
+                "nose" => (0.30, 0.2, 0.04),
+                "shoulder_l" | "shoulder_r" => (0.26, 0.07, 0.0),
+                "elbow_l" | "elbow_r" => (0.16, 0.07, 0.0),
+                "wrist_l" | "wrist_r" => (0.13, 0.07, 0.0),
+                "hip_l" | "hip_r" => (0.20, 0.07, 0.0),
+                "knee_l" | "knee_r" => (0.20, 0.07, 0.0),
+                _ => (0.14, 0.07, 0.0),
+            };
             let mut j = demo_obj(&format!("Repère {name}"), MeshKind::Sphere, Vec3::ZERO);
-            let r = if name == "nose" { 0.2 } else { 0.07 };
-            j.transform = j.transform.with_scale(Vec3::splat(r));
-            j.color = [0.85, 0.9, 1.0];
-            j.emissive = 0.35;
-            j.script = joint_script(name);
+            j.transform = j.transform.with_scale(Vec3::splat(ss));
+            j.color = [0.88, 0.82, 0.76];
+            j.roughness = 0.9;
+            j.emissive = 0.05;
+            j.script = body_joint_script(name, sm, ss, dy);
             j.visible = false;
             objects.push(j);
+        }
+
+        // Pièces du mannequin : points milieu, torse, bassin, cou, pieds.
+        let mut milieu = demo_obj("Repère milieu", MeshKind::Sphere, Vec3::new(0.0, -6.0, 0.0));
+        milieu.transform = milieu.transform.with_scale(Vec3::splat(0.01));
+        milieu.script = MIDPOINTS_SCRIPT.into();
+        milieu.visible = false;
+        objects.push(milieu);
+        for (name, ka, kb, along, wide, deep, z) in [
+            (
+                "Torse",
+                "rd_m_hips",
+                "rd_m_shoulders",
+                0.30,
+                0.62,
+                0.32,
+                -0.04,
+            ),
+            (
+                "Bassin",
+                "rd_p_hip_l",
+                "rd_p_hip_r",
+                0.24,
+                0.34,
+                0.30,
+                -0.03,
+            ),
+            ("Cou", "rd_m_shoulders", "rd_m_chin", 0.02, 0.13, 0.13, 0.0),
+            (
+                "Pied gauche",
+                "rd_p_ankle_l",
+                "rd_p_ankle_l",
+                0.12,
+                0.13,
+                0.30,
+                0.08,
+            ),
+            (
+                "Pied droit",
+                "rd_p_ankle_r",
+                "rd_p_ankle_r",
+                0.12,
+                0.13,
+                0.30,
+                0.08,
+            ),
+        ] {
+            let mut piece = demo_obj(name, MeshKind::Sphere, Vec3::ZERO);
+            piece.color = [0.88, 0.82, 0.76];
+            piece.roughness = 0.75;
+            piece.emissive = 0.05;
+            piece.script = ellipsoid_script(ka, kb, along, wide, deep, z);
+            piece.visible = false;
+            objects.push(piece);
         }
 
         // Deux mains (21 repères + 21 phalanges chacune, couleur par doigt) :
@@ -1047,6 +1002,7 @@ impl Scene {
                     &format!("{prefix}{a}"),
                     &format!("{prefix}{b}"),
                     0.05,
+                    0.05,
                     0.01,
                     Some(&format!("{prefix}scale")),
                 );
@@ -1063,28 +1019,6 @@ impl Scene {
                 d.visible = false;
                 objects.push(d);
             }
-        }
-
-        // Avatars skinnés, pilotés par directions d'os (cf. `avatar_script`) :
-        // héros aux proportions humaines (défaut), ninja cartoon avec doigts animés.
-        for (name, file, rig, idle) in [
-            ("Avatar héros", "fairy_hero.glb", &HERO_RIG, "Idle"),
-            (
-                "Avatar ninja",
-                "monster_ninja_b.glb",
-                &NINJA_RIG,
-                "CharacterArmature|Idle",
-            ),
-        ] {
-            let mesh = import_embedded_model(&mut imported, file);
-            let mut avatar = demo_obj(name, mesh, Vec3::ZERO);
-            avatar.animation = Some(AnimationState {
-                clip: idle.into(),
-                ..Default::default()
-            });
-            avatar.script = avatar_script(rig, idle);
-            avatar.visible = false;
-            objects.push(avatar);
         }
 
         let mut main = demo_obj("Point suivi", MeshKind::Sphere, Vec3::new(0.8, 1.3, 0.05));
@@ -1123,23 +1057,19 @@ impl Scene {
                 "enregistrer",
                 -336.0,
             ),
-            button_widget(
-                "b_avatar",
-                "Avatar : héros / ninja / bâtons",
-                "avatar",
-                -376.0,
-            ),
+            button_widget("b_avatar", "Avatar : mannequin / bâtons", "avatar", -376.0),
         ];
 
         Scene {
             objects,
-            imported,
             camera_follow: false,
             game_camera: Some(GameCamera {
-                target: [0.0, 1.5, 0.0],
+                // Un peu de recul : le corps normalisé (≈ 2,6 m avec les bras
+                // levés) tient dans l'image avec de la marge pour le HUD.
+                target: [0.0, 1.55, 0.0],
                 yaw: 0.0,
                 pitch: 0.03,
-                distance: 5.2,
+                distance: 6.4,
                 ortho_height: 0.0,
             }),
             light: Light {

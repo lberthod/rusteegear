@@ -41,26 +41,14 @@ Les trois cibles de chaque exercice sont des décalages en fraction de la
 modulés par l'**amplitude confortable** (55 à 95 %) — exactement les motifs de
 Mouvéo, donc la difficulté suit la morphologie du patient, pas des pixels.
 
-**Avatar** : deux personnages skinnés embarqués dans le binaire (schéma
-`embedded://`, donc aussi sur le web) sont **retargetés** sur les repères
-captés — le script de l'objet appelle `bone(nom, dx, dy, dz)` pour chaque
-segment (tronc, tête, bras, avant-bras, cuisses, jambes, mains, phalanges) et
-le moteur tourne l'os vers cette direction par rotation minimale autour de son
-axe +Y local, en gardant les longueurs du rig
-([src/scene/import.rs](../src/scene/import.rs),
-`compute_joint_matrices_into_with`). L'échelle suit la distance
-hanches→épaules captée, l'animation `Idle` continue sur les os non pilotés.
-
-| Avatar | Rig | Doigts | Proportions |
-| --- | --- | --- | --- |
-| **Héros** (défaut) | `fairy_hero`, 23 os | en bâtons colorés posés sur ses mains | humaines : pieds au sol, bras à la bonne longueur |
-| **Ninja** | `monster_ninja_b` (Quaternius), 43 os | pouce/index/majeur/auriculaire **animés** | cartoon (bras longs, jambes courtes) |
-| **Bâtons** | sphères + cylindres | oui | exactes (ce sont les repères) |
-
-Le bouton « Avatar » cycle héros → ninja → bâtons. Piège rencontré : les deux
-rigs ne nomment pas leurs côtés pareil (`Shoulder.L` du héros est à −X, du
-point de vue du spectateur ; celui du ninja à +X, du point de vue du
-personnage) — `AvatarRig::mirror` règle quel côté du patient pilote `.L`.
+**Avatar** : un **mannequin neutre** construit directement sur les repères
+captés — tête, cou, torse et bassin (ellipsoïdes), membres en capsules,
+articulations, pieds, mains et doigts — donc aux proportions exactes du
+patient, sans accessoire ni personnage : c'est ce qu'on attend d'une
+application de mouvement. Le bouton « Avatar » bascule sur le squelette de
+bâtons (mêmes objets, affinés). Le moteur sait aussi retargeter une pose sur un
+mesh skinné (`bone()`, cf. [LUA_API.md](LUA_API.md)) — les personnages
+riggés essayés (héros à bouclier, ninja) ont été écartés pour cette démo.
 
 Les **mains** n'existent pas dans Mouvéo : la page fait tourner en plus le
 *Hand Landmarker* (21 repères par main, deux mains), et les deux mains suivies
@@ -71,6 +59,11 @@ est dessinée en grand à la place du corps, et un degré de geste `m`
 le pouce) remplace la distance à la cible — l'amplitude fixe le `m` à atteindre,
 le retour se valide sous 25 %. Sans caméra, une jauge verticale se pilote au
 joystick.
+
+**Cadrage** : le corps capté est normalisé avant tout dessin — torse
+hanches→épaules ramené à 0,9 m, hanches centrées à 1,35 m — donc le patient
+garde la même taille à l'écran qu'il soit à 1 m ou 3 m de la caméra (les cibles,
+relatives au corps, suivent) ; la caméra de jeu est reculée en conséquence.
 
 **Qualité du suivi** : inférence à 30 Hz (15 Hz dans Mouvéo) avec repli
 automatique à 15 Hz si la machine ne suit pas ; repères lissés côté moteur
@@ -121,7 +114,7 @@ reeduc.html ── caméra ──▶ MediaPipe ──▶ set_pose_landmarks(33 �
 
 | Mouvéo | RusteeGear | Pourquoi |
 | --- | --- | --- |
-| squelette 2D dessiné sur la vidéo miroir | avatar 3D : sphères aux articulations, cylindres pour les 12 os (orientés par script), dans le plan `z = 0`, caméra de jeu fixe face au patient ; la vidéo reste en vignette miroir (HTML) | le moteur rend de la 3D, pas un flux vidéo ; la vignette garde le retour visuel « je me vois » |
+| squelette 2D dessiné sur la vidéo miroir | mannequin 3D neutre construit sur les repères (ellipsoïdes + capsules, orientés par script), dans le plan `z = 0`, caméra de jeu fixe face au patient ; la vidéo reste en vignette miroir (HTML) | le moteur rend de la 3D, pas un flux vidéo ; la vignette garde le retour visuel « je me vois » |
 | état React (`useRef`/`useState`), un composant de 430 lignes | machine à états dans un script Lua « directeur », état numérique dans `save.*` (préfixe `rd_`), les autres objets le relisent le même tick | pas de callbacks dans l'API script (un chunk par objet et par pas), et `save` est le seul état partagé |
 | HUD React + Tailwind (score, série, chrono, consigne, bilan, sliders) | widgets HUD déclaratifs (`hud_text` pour les textes, `Button` → `hud:<action>`), pain/fatigue par boutons +1 | pas de sliders parmi les widgets ; les boutons restent visibles à tous les stades (ils n'agissent qu'au bon stade) |
 | voix de synthèse (`speechSynthesis`), vibration | `vibrate()` (journalisé), pas de voix | pas d'API voix dans le moteur — à brancher côté page si besoin |

@@ -2666,10 +2666,8 @@ fn reeducation_hides_low_visibility_landmarks_and_their_bones() {
     app.load_reeducation_demo();
     app.playing = true;
     reeduc_tick(&mut app);
-    for _ in 0..2 {
-        app.push_hud_event("avatar"); // héros → ninja → bâtons
-        reeduc_tick(&mut app);
-    }
+    app.push_hud_event("avatar"); // mannequin → bâtons
+    reeduc_tick(&mut app);
     let mut flat = flat_pose_from_world(&standing_body());
     flat[27 * 4 + 3] = 0.2; // cheville gauche extrapolée
     app.set_pose(&flat);
@@ -2697,10 +2695,8 @@ fn reeducation_draws_both_hands_on_the_skeleton_at_body_scale() {
     app.load_reeducation_demo();
     app.playing = true;
     reeduc_tick(&mut app);
-    for _ in 0..2 {
-        app.push_hud_event("avatar"); // héros → ninja → bâtons
-        reeduc_tick(&mut app);
-    }
+    app.push_hud_event("avatar"); // mannequin → bâtons
+    reeduc_tick(&mut app);
     let body = standing_body();
     // Main droite dont le poignet (repère 1) coïncide avec le poignet droit du corps.
     let (wx, wy) = crate::scene::demos::reeducation::world_to_pose(0.80, 1.30);
@@ -2779,204 +2775,101 @@ fn bone_directions_pushed_by_a_script_land_on_the_object_each_tick() {
     );
 }
 
-/// Les avatars de la démo Rééducation : héros (proportions humaines, 23 os) par
-/// défaut, ninja (43 os, doigts) ensuite, bâtons enfin — chacun retargeté par
-/// directions d'os depuis les repères (corps en mode démo, doigts du ninja dès
-/// qu'une main est suivie).
+/// Normalisation du corps capté : une personne deux fois plus proche de la
+/// caméra (repères deux fois plus grands, décalés) est dessinée à la même
+/// taille et au même endroit qu'à distance normale — torse 0,9 m, hanches
+/// centrées à 1,35 m.
 #[test]
-fn reeducation_avatars_are_retargeted_from_landmarks_and_fingers() {
+fn reeducation_normalizes_the_captured_body_size_and_position() {
     let mut app = AppState::new();
     app.load_reeducation_demo();
-    let idx_of = |app: &AppState, name: &str| {
-        app.scene
-            .objects
-            .iter()
-            .position(|o| o.name == name)
-            .unwrap()
-    };
-    let hero = idx_of(&app, "Avatar héros");
-    let ninja = idx_of(&app, "Avatar ninja");
-    for (i, joints, finger) in [(hero, 23, "Hand.L"), (ninja, 43, "Index1.L")] {
-        let crate::scene::MeshKind::Imported(mi) = app.scene.objects[i].mesh else {
-            panic!("modèle embarqué attendu (LFS tiré ?)");
-        };
-        let skeleton = app.scene.imported[mi as usize]
-            .skeleton
-            .as_ref()
-            .expect("rig");
-        assert_eq!(skeleton.joints.len(), joints);
-        assert!(skeleton.joints.iter().any(|j| j.name == finger));
-    }
     app.playing = true;
     reeduc_tick(&mut app);
-    reeduc_tick(&mut app);
-    let h = &app.scene.objects[hero];
-    assert!(
-        h.visible,
-        "héros visible par défaut (corps virtuel du mode démo)"
-    );
-    assert!(!app.scene.objects[ninja].visible);
-    for name in [
-        "Hips",
-        "Chest",
-        "Head",
-        "UpperArm.L",
-        "Forearm.R",
-        "Thigh.L",
-        "Shin.R",
-    ] {
-        assert!(
-            h.bone_dirs.contains_key(name),
-            "{name} manquant dans {:?}",
-            h.bone_dirs.keys()
-        );
+    // Corps « proche » : tout est ×2 autour des hanches, et décalé de 0,6 m à gauche.
+    let near: Vec<(&str, (f32, f32))> = standing_body()
+        .into_iter()
+        .map(|(n, (x, y))| (n, (x * 2.0 - 0.6, 1.35 + (y - 1.35) * 2.0)))
+        .collect();
+    for _ in 0..240 {
+        app.set_pose(&flat_pose_from_world(&near));
+        reeduc_tick(&mut app);
     }
+    let pos = |name: &str| object_pos(&app, name);
+    let hips = (pos("Repère hip_l") + pos("Repère hip_r")) / 2.0;
+    let shoulders = (pos("Repère shoulder_l") + pos("Repère shoulder_r")) / 2.0;
     assert!(
-        (h.transform.scale.x - 1.58).abs() < 0.4,
-        "échelle ≈ torse capté / torse du rig : {}",
-        h.transform.scale.x
+        (hips.x).abs() < 0.05 && (hips.y - 1.35).abs() < 0.05,
+        "hanches centrées : {hips:?}"
     );
     assert!(
-        !app.scene
-            .objects
-            .iter()
-            .find(|o| o.name == "Repère nose")
-            .unwrap()
-            .visible,
-        "bâtons cachés"
+        ((shoulders - hips).length() - 0.9).abs() < 0.06,
+        "torse ramené à 0,9 m : {:?}",
+        shoulders - hips
     );
     assert!(
-        app.scene
-            .objects
-            .iter()
-            .find(|o| o.name == "Repère nose")
-            .map(|o| !o.visible)
-            .unwrap()
-    );
-
-    // Ninja + main droite suivie ⇒ doigts .L (miroir) pilotés, bâtons de main cachés.
-    app.push_hud_event("avatar");
-    reeduc_tick(&mut app);
-    app.set_pose(&flat_pose_from_world(&standing_body()));
-    app.set_hands(&right_hand_flat(false));
-    reeduc_tick(&mut app);
-    app.set_hands(&right_hand_flat(false));
-    reeduc_tick(&mut app);
-    let n = &app.scene.objects[ninja];
-    assert!(n.visible && !app.scene.objects[hero].visible);
-    for name in [
-        "Hips",
-        "Neck",
-        "UpperArm.L",
-        "LowerLeg.R",
-        "Thumb1.L",
-        "Index1.L",
-        "Index3.L",
-        "Middle2.L",
-        "Pinky3.L",
-    ] {
-        assert!(n.bone_dirs.contains_key(name), "{name} manquant");
-    }
-    assert!(!n.bone_dirs.contains_key("Index1.R"));
-    assert!(
-        !app.scene
-            .objects
-            .iter()
-            .find(|o| o.name == "Doigt droite 9")
-            .unwrap()
-            .visible,
-        "doigts animés sur le rig, pas en bâtons"
-    );
-
-    // Bâtons.
-    app.push_hud_event("avatar");
-    reeduc_tick(&mut app);
-    app.set_hands(&right_hand_flat(false));
-    reeduc_tick(&mut app);
-    assert!(!app.scene.objects[ninja].visible && !app.scene.objects[hero].visible);
-    assert!(
-        app.scene
-            .objects
-            .iter()
-            .find(|o| o.name == "Repère nose")
-            .unwrap()
-            .visible
-    );
-    assert!(
-        app.scene
-            .objects
-            .iter()
-            .find(|o| o.name == "Doigt droite 9")
-            .unwrap()
-            .visible
+        (pos("Repère wrist_r").x - 0.80).abs() < 0.08,
+        "poignet droit à sa place normalisée"
     );
 }
 
-/// Le héros lève bien le bras : même calcul que le renderer
-/// (`prepare_skinned_draws`) à partir des `bone_dirs` posées par son script en
-/// mode démo : le bras droit du patient (côté `.R` de ce rig, nommé du point
-/// de vue du spectateur) part vers la droite et la main monte quand le point
-/// suivi est en haut à droite.
+/// Mannequin neutre (défaut) : torse, bassin, cou, tête et pieds visibles et
+/// posés sur les repères ; membres épais. En mode bâtons ces pièces
+/// disparaissent et les os s'affinent. Aucun accessoire, aucun rig : le corps
+/// est construit sur les repères eux-mêmes.
 #[test]
-fn reeducation_hero_arm_follows_the_raised_hand() {
+fn reeducation_mannequin_is_built_on_the_landmarks_and_toggles_to_sticks() {
     let mut app = AppState::new();
     app.load_reeducation_demo();
     app.playing = true;
     reeduc_tick(&mut app);
-    app.push_hud_event("demarrer");
     reeduc_tick(&mut app);
-    app.input_state.joy = (0.6, 0.6);
-    for _ in 0..90 {
-        reeduc_tick(&mut app);
+    let obj = |app: &AppState, name: &str| {
+        app.scene
+            .objects
+            .iter()
+            .find(|o| o.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+    for name in ["Torse", "Bassin", "Cou", "Pied gauche", "Pied droit"] {
+        assert!(obj(&app, name).visible, "{name} visible en mode mannequin");
     }
-    let hero = app
-        .scene
-        .objects
-        .iter()
-        .find(|o| o.name == "Avatar héros")
-        .unwrap();
-    let crate::scene::MeshKind::Imported(mi) = hero.mesh else {
-        panic!()
-    };
-    let imported = &app.scene.imported[mi as usize];
-    let skeleton = imported.skeleton.as_ref().unwrap();
-    let anim = hero.animation.as_ref().unwrap();
-    let clip = imported.clips.iter().find(|c| c.name == anim.clip);
-    let inv = hero.transform.rotation.inverse();
-    let dirs: Vec<Option<Vec3>> = skeleton
-        .joints
-        .iter()
-        .map(|j| hero.bone_dirs.get(&j.name).map(|d| inv * *d))
-        .collect();
-    let mut out = Vec::new();
-    crate::scene::import::compute_joint_matrices_into_with(
-        skeleton,
-        clip,
-        anim.time,
-        &dirs,
-        &mut crate::scene::import::SkinningScratch::default(),
-        &mut out,
-    );
-    let idx = |n: &str| skeleton.joints.iter().position(|j| j.name == n).unwrap();
-    let world = |i: usize| {
-        (out[i] * skeleton.joints[i].inverse_bind.inverse())
-            .col(3)
-            .truncate()
-    };
-    let ua = world(idx("UpperArm.R"));
-    let fa = world(idx("Forearm.R"));
-    let hand = world(idx("Hand.R"));
-    eprintln!(
-        "dirs UpperArm.R={:?} Forearm.R={:?} anim={} t={}",
-        hero.bone_dirs.get("UpperArm.R"),
-        hero.bone_dirs.get("Forearm.R"),
-        anim.clip,
-        anim.time
-    );
-    eprintln!("UpperArm.R={ua:?} Forearm.R={fa:?} Hand.R={hand:?}");
+    let torse = obj(&app, "Torse");
     assert!(
-        fa.x > ua.x + 0.05,
-        "avant-bras à droite de l'épaule : {ua:?} → {fa:?}"
+        (torse.transform.position - Vec3::new(0.0, 1.8, -0.04)).length() < 0.08,
+        "torse entre hanches et épaules : {:?}",
+        torse.transform.position
     );
-    assert!(hand.y > fa.y, "main au-dessus du coude");
+    assert!(
+        (torse.transform.scale.y - 1.2).abs() < 0.1,
+        "torse allongé le long du tronc : {:?}",
+        torse.transform.scale
+    );
+    let tete = obj(&app, "Repère nose");
+    assert!(
+        (tete.transform.scale.x - 0.30).abs() < 1e-3,
+        "tête = grosse sphère"
+    );
+    let bras = obj(&app, "Os shoulder_r-elbow_r");
+    assert!(
+        (bras.transform.scale.x - 0.32).abs() < 1e-3
+            && bras.mesh == crate::scene::MeshKind::Capsule
+    );
+    assert!(
+        app.scene
+            .objects
+            .iter()
+            .all(|o| !o.name.starts_with("Avatar")),
+        "plus d'avatar riggé (bouclier, arme)"
+    );
+
+    app.push_hud_event("avatar");
+    reeduc_tick(&mut app);
+    reeduc_tick(&mut app);
+    for name in ["Torse", "Bassin", "Cou", "Pied gauche"] {
+        assert!(!obj(&app, name).visible, "{name} caché en mode bâtons");
+    }
+    assert!((obj(&app, "Os shoulder_r-elbow_r").transform.scale.x - 0.06).abs() < 1e-3);
+    assert!((obj(&app, "Repère nose").transform.scale.x - 0.2).abs() < 1e-3);
+    assert!(obj(&app, "Repère knee_l").visible);
 }
