@@ -1491,15 +1491,24 @@ pub struct Scene {
     /// tant que ce composant n'est pas posé. Cf. `Platformer2D`.
     #[serde(default)]
     pub platformer: Option<Platformer2D>,
-    /// HUD « arcade » en mode Player : masque tout le HUD MMORPG (barre de vie,
+    /// Jeu « arcade » en mode Player : masque tout le HUD MMORPG (barre de vie,
     /// arme, frags, équipe, inventaire, mini-carte, pastille réseau) pour ne
-    /// laisser que les widgets déclaratifs de la scène (`hud_widgets`) — un jeu
-    /// solo qui n'a ni arme ni équipe n'a rien à faire de « Frags 0 » ou « Arme :
-    /// Boule de feu ». Implicite en mode plateformer 2D (`platformer`), explicite
-    /// ici pour les autres scènes solo (démo Rééducation). Faux par défaut :
-    /// aucune scène existante ne change.
+    /// laisser que les widgets déclaratifs de la scène (`hud_widgets`), ne
+    /// capture pas la souris, et **fige la caméra de jeu** (`game_camera`
+    /// réimposée à chaque frame : ni orbite, ni zoom) — un jeu solo qui n'a ni
+    /// arme ni équipe n'a rien à faire de « Frags 0 » ou d'une caméra qui tourne.
+    /// Le HUD est aussi minimal en mode plateformer 2D (`platformer`) ; ce
+    /// drapeau est explicite pour les autres scènes solo (démo Rééducation).
+    /// Faux par défaut : aucune scène existante ne change.
     #[serde(default)]
     pub arcade_hud: bool,
+    /// **Runtime seulement, jamais sérialisé** : une page hôte (web,
+    /// `set_hud_widgets_visible(false)` — PhysioTech.ch, cf. `docs/REEDUCATION.md`)
+    /// dessine elle-même le HUD à partir des variables `save.ui_*` publiées par
+    /// les scripts ; les widgets `hud_widgets` ne sont alors plus rendus. Sans page
+    /// hôte (éditeur, desktop, APK) le drapeau reste faux et rien ne change.
+    #[serde(skip)]
+    pub hud_widgets_hidden: bool,
 }
 
 /// Réglages du mode plateformer 2D (`Scene::platformer`) : la scène reste une

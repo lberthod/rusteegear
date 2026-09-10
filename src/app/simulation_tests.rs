@@ -3016,3 +3016,32 @@ fn bubbles_also_spawn_high_above_the_shoulders() {
         "au moins un élément nettement au-dessus des épaules : {highest}"
     );
 }
+
+/// Scène à HUD arcade (démo Rééducation) : la caméra de jeu est fixe — ni le
+/// doigt/la souris (`touch_look`), ni la manette, ni un zoom ne la font
+/// tourner ou avancer ; elle est réimposée à chaque frame.
+#[test]
+fn arcade_scene_camera_cannot_be_rotated_or_zoomed() {
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    let gc = app.scene.game_camera.unwrap();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    for _ in 0..30 {
+        app.input_state.touch_look = (80.0, -40.0);
+        app.input_state.gamepad_yaw = 1.0;
+        app.input_state.gamepad_pitch = 1.0;
+        app.camera.distance += 2.0; // molette / pinch
+        app.camera.yaw += 0.5; // orbite tactile de lib.rs
+        reeduc_tick(&mut app);
+        assert!(
+            (app.camera.yaw - gc.yaw).abs() < 1e-6,
+            "yaw {} ≠ {}",
+            app.camera.yaw,
+            gc.yaw
+        );
+        assert!((app.camera.pitch - gc.pitch).abs() < 1e-6);
+        assert!((app.camera.distance - gc.distance).abs() < 1e-6);
+        assert!((app.camera.target - Vec3::from_array(gc.target)).length() < 1e-6);
+    }
+}

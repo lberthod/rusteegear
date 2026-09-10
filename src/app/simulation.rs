@@ -1364,6 +1364,23 @@ impl AppState {
             // joueur passe près d'un obstacle (cf. `update_camera_collision`).
             self.update_camera_collision();
         }
+        // Caméra fixe (`Scene::arcade_hud`, démo Rééducation) : aucun geste —
+        // manette, doigt, souris, molette — ne tourne ni ne rapproche la scène.
+        // La caméra de jeu est réimposée à chaque frame (hors du bloc « suivi du
+        // joueur » ci-dessus : ces scènes n'ont pas de personnage joueur), plutôt
+        // que chaque source d'orbite filtrée une à une.
+        if self.playing
+            && self.scene.arcade_hud
+            && let Some(gc) = self.scene.game_camera
+        {
+            self.camera.yaw = gc.yaw;
+            self.camera.pitch = gc.pitch;
+            self.camera.distance = gc.distance;
+            self.camera.collision_distance = None;
+            if !self.scene.camera_follow {
+                self.camera.target = Vec3::from_array(gc.target);
+            }
+        }
         // Décroissance du flash de dégâts (~0,4 s), au niveau frame comme la caméra.
         if self.fx.damage_flash > 0.0 {
             self.fx.damage_flash = (self.fx.damage_flash - dt * 2.5).max(0.0);

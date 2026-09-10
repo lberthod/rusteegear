@@ -56,7 +56,16 @@
         transform: scaleX(-1); }
       #pip .tag { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: #b4bac3;
         background: rgba(7,17,31,.6); padding: 1px 6px; border-radius: 6px; }
-      #fs { position: fixed; bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left));
+      /* Pied de page : crédits et liens, sous le HUD du moteur (qui garde ses
+         boutons en bas à droite et ses textes en bas à gauche). */
+      #foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: none; justify-content: center;
+        padding: 4px 12px calc(4px + env(safe-area-inset-bottom)); font-size: 12.5px; color: #b4bac3;
+        background: linear-gradient(to top, rgba(7,17,31,.85), rgba(7,17,31,0)); pointer-events: none; }
+      #foot span { pointer-events: auto; }
+      #foot a { color: #c4ff4a; text-decoration: none; }
+      #foot a:hover, #foot a:focus-visible { text-decoration: underline; outline: none; }
+      body.running #foot { display: flex; }
+      #fs { position: fixed; bottom: max(40px, calc(32px + env(safe-area-inset-bottom))); left: max(8px, env(safe-area-inset-left));
         width: 30px; height: 30px; border: 0; border-radius: 6px;
         background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
       #fs:hover, #fs:focus-visible { background: rgba(196, 255, 74, .8); color: #07111f; outline: none; }
@@ -77,6 +86,11 @@
       <span class="tag">aperçu miroir</span>
     </div>
     <button id="fs" type="button" title="Plein écran">⛶</button>
+    <footer id="foot"><span>PhysioTech.ch — créé par
+      <a href="https://github.com/antoinequarroz" target="_blank" rel="noopener">Antoine Quarroz</a> et
+      <a href="https://github.com/lberthod" target="_blank" rel="noopener">Loïc Berthod</a> ·
+      <a href="https://github.com/lberthod/physiotek" target="_blank" rel="noopener">code du jeu</a> ·
+      moteur <a href="https://github.com/lberthod/rusteegear" target="_blank" rel="noopener">RusteeGear</a></span></footer>
     <div id="boot" role="status" aria-live="polite">
       <div class="logo">PhysioTech<span>.ch</span></div>
       <p class="sub">Attrape-bulles : touchez les bulles avec vos mains avant qu'elles n'éclatent — bleu poing fermé,

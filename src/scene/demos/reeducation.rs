@@ -460,14 +460,27 @@ else
   hud_text("aide", reglages)
 end
 local cel = g("rd_cel", 0)
+local cel_shown = 0
 if cel > 0 and time < g("rd_cel_until", 0) then
   local CEL = {"+" .. num(g("rd_cel_gain", 10)), "✨ Série de 5 !", "🏆 Série de 10 !", "💥 -" .. num(BOMB_COST)}
   hud_text("celebration", CEL[cel] or "")
+  cel_shown = cel
 else
   hud_text("celebration", "")
   if cel > 0 then save.set("rd_cel", 0) end
 end
-hud_text("mention", "Prototype de coaching, sans diagnostic ni mesure clinique — suivez les consignes de votre professionnel de santé.")
+hud_text("mention", "Créé par Antoine Quarroz et Loïc Berthod · prototype de coaching, sans diagnostic ni mesure clinique — suivez les consignes de votre professionnel de santé.")
+
+-- ---- État publié à la page hôte (`ui_*` -> window.__rusteegear_vars) ----
+-- Étapes : 0 accueil, 1 calibration, 4 compte à rebours, 2 partie, 3 bilan.
+save.set("ui_stage", stage); save.set("ui_cam", cam and 1 or 0); save.set("ui_pose_ok", pose.ok and 1 or 0)
+save.set("ui_body_ok", body_ok and 1 or 0); save.set("ui_calib", calib); save.set("ui_count", count)
+save.set("ui_points", g("rd_points", 0)); save.set("ui_combo", g("rd_combo", 0)); save.set("ui_maxcombo", g("rd_maxcombo", 0))
+save.set("ui_caught", g("rd_caught", 0)); save.set("ui_missed", g("rd_missed", 0)); save.set("ui_bombs", g("rd_bombs", 0))
+save.set("ui_left", math.max(0, duration - g("rd_elapsed", 0))); save.set("ui_duration", duration)
+save.set("ui_status", status_code); save.set("ui_cel", cel_shown); save.set("ui_cel_gain", g("rd_cel_gain", 0))
+save.set("ui_level", level); save.set("ui_amp", amp); save.set("ui_avatar", avatar); save.set("ui_world", world)
+save.set("ui_best", g("rd_best", 0)); save.set("ui_games", g("rd_games", 0)); save.set("ui_paused", paused and 1 or 0)
 "#;
 
 /// Script directeur complet : les constantes de ce module (projection, durées)

@@ -1,6 +1,10 @@
 # PhysioTech.ch — Attrape-bulles (démo Rééducation, inspirée de Mouvéo)
 
-Le jeu s'appelle **PhysioTech.ch** (titre du HUD et de la page web).
+Le jeu s'appelle **PhysioTech.ch** (titre du HUD et de la page web), créé par
+[Antoine Quarroz](https://github.com/antoinequarroz) (Mouvéo, l'original) et
+[Loïc Berthod](https://github.com/lberthod) (portage sur RusteeGear). Site
+déployable : dépôt [lberthod/physiotek](https://github.com/lberthod/physiotek)
+(page + wasm construits depuis ce dépôt).
 Démo jouable `Fichier ▸ 🎬 Démos ▸ 🎮 Jeux jouables ▸ 🎯 Rééducation`, console
 `demo reeduc`, desktop `motor3derust --player --demo=reeduc`, web
 [`reeduc.html`](../packaging/web/reeduc.html) (`?scene=reeduc`). Portage, le
