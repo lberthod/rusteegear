@@ -36,41 +36,44 @@ fn main() {
     app.load_reeducation_demo();
     app.playing = true;
     tick(&mut app);
-    // `REEDUC_AVATAR=0|1|2` (bâtons / héros / ninja) : le bouton « Avatar »
-    // cycle héros → ninja → bâtons, on le presse autant de fois que nécessaire.
-    let presses = match std::env::var("REEDUC_AVATAR").as_deref() {
-        Ok("2") => 1,
-        Ok("0") => 2,
-        _ => 0,
-    };
+    // `REEDUC_AVATAR=1` : squelette de bâtons au lieu du mannequin.
+    let presses = usize::from(std::env::var("REEDUC_AVATAR").as_deref() == Ok("1"));
     for _ in 0..presses {
         app.push_hud_event("avatar");
         tick(&mut app);
     }
     app.push_hud_event("demarrer");
     tick(&mut app);
-    // Deux répétitions jouées, puis le point suivi s'arrête à mi-chemin de la
-    // 3ᵉ cible : cible, halo, avatar et point suivi tous visibles.
-    let mut hits = 0.0;
+    // Quelques bulles attrapées au joystick (main droite du mannequin), puis la
+    // capture au moment où une bulle est en vol.
+    let bubble = |app: &AppState| -> Option<glam::Vec3> {
+        (1..=3).find_map(|i| {
+            (app.script_var(&format!("rd_b{i}_alive")).unwrap_or(0.0) > 0.5).then(|| {
+                glam::Vec3::new(
+                    app.script_var(&format!("rd_b{i}_x")).unwrap_or(0.0) as f32,
+                    app.script_var(&format!("rd_b{i}_y")).unwrap_or(0.0) as f32,
+                    0.0,
+                )
+            })
+        })
+    };
+    let mut caught = 0.0;
     let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(12) {
-        let target = pos(&app, "Cible");
-        let hand = pos(&app, "Point suivi");
-        app.input_state.joy.0 =
-            (app.input_state.joy.0 + 0.2 * (target.x - hand.x)).clamp(-1.0, 1.0);
-        app.input_state.joy.1 =
-            (app.input_state.joy.1 + 0.2 * (target.y - hand.y)).clamp(-1.0, 1.0);
+    while start.elapsed() < std::time::Duration::from_secs(14) {
+        if let Some(b) = bubble(&app) {
+            let hand = pos(&app, "Repère wrist_r");
+            app.input_state.joy.0 =
+                (app.input_state.joy.0 + 0.25 * (b.x - hand.x)).clamp(-1.0, 1.0);
+            app.input_state.joy.1 =
+                (app.input_state.joy.1 + 0.25 * (b.y - hand.y)).clamp(-1.0, 1.0);
+        }
         tick(&mut app);
-        hits = app.script_var("rd_hits").unwrap_or(0.0);
-        if hits >= 2.0 && app.script_var("rd_phase").unwrap_or(0.0) == 0.0 {
+        caught = app.script_var("rd_caught").unwrap_or(0.0);
+        if caught >= 2.0 && bubble(&app).is_some() {
             break;
         }
     }
-    app.input_state.joy = (0.6, 0.55);
-    for _ in 0..20 {
-        tick(&mut app);
-    }
-    println!("répétitions jouées avant capture : {hits}");
+    println!("bulles attrapées avant capture : {caught}");
     let pixels = renderer.render_scene_headless(&mut app, WIDTH, HEIGHT);
     let out = std::env::var("REEDUC_PREVIEW_OUT")
         .map(std::path::PathBuf::from)

@@ -15,31 +15,31 @@ MediaPipe Pose + canvas 2D, ~430 lignes) sur RusteeGear.
 
 ## Ce que fait le jeu
 
-Le patient se place face à la caméra (ou pilote un point au joystick), choisit
-une **mission** parmi huit exercices, puis atteint des **cibles lumineuses**
-avec son poignet, son genou, sa cheville ou ses hanches, et **revient en
-position neutre** (hanche, pied au sol, centre) — chaque aller-retour compte
-une répétition. Une séance dure au plus 60 s de temps actif (le chrono se fige
-quand le corps sort du cadre) ou s'arrête à l'objectif (4 à 12 répétitions).
+Un seul mode : **Attrape-bulles**. Le patient se place face à la caméra (ou
+pilote la main du mannequin au joystick), lance la partie, et des bulles
+lumineuses apparaissent autour de lui, dans la zone que ses bras peuvent
+atteindre (rayon = longueur du bras calibrée × amplitude). Il les touche avec
+l'une ou l'autre main avant qu'elles n'éclatent : le halo de chaque bulle
+rétrécit à mesure que sa durée de vie s'écoule. Une partie dure 60 s de temps
+actif (le chrono se fige quand le corps sort du cadre).
 
-| Exercice | Repère suivi | Origine des cibles | Maintien | Famille |
-| --- | --- | --- | --- | --- |
-| Bulles latérales | poignet | épaule | — | haut du corps |
-| Lumières devant | poignet | épaule | — | haut du corps |
-| Chemin lumineux | poignet | épaule | — | haut du corps |
-| Étoile stable | poignet | épaule | 1 s | équilibre |
-| Fusée genou | genou | hanche | — | jambes |
-| Feux de pas | cheville | hanche | — | jambes |
-| Ascenseur | milieu des hanches | hanches | — | jambes |
-| Île équilibre | cheville | hanche | 2 s | équilibre |
-| Pince lumineuse *(ajout)* | bout de l'index → pouce | main suivie (21 repères) | — | main |
-| Éventail *(ajout)* | bout du majeur (ouverture) | main suivie | — | main |
-| Piano *(ajout)* | index, majeur, annulaire, auriculaire → pouce, tour à tour | main suivie | — | main |
+| Rythme | Nouvelle bulle toutes les | Durée de vie | Bulles simultanées |
+| --- | --- | --- | --- |
+| Doux | 1,8 s | 6 s | 1 |
+| Moyen (défaut) | 1,2 s | 4,5 s | 2 |
+| Vif | 0,8 s | 3,2 s | 3 |
 
-Les trois cibles de chaque exercice sont des décalages en fraction de la
-**longueur du membre calibrée** (épaule→coude→poignet, hanche→genou→cheville),
-modulés par l'**amplitude confortable** (55 à 95 %) — exactement les motifs de
-Mouvéo, donc la difficulté suit la morphologie du patient, pas des pixels.
+**Score** : 10 points par bulle + 5 par palier de 3 dans la série (série
+remise à zéro quand une bulle éclate), célébrations aux séries de 5 et 10 ;
+**bilan** en fin de partie : points, bulles attrapées / éclatées, précision,
+1 à 3 étoiles, record et nombre de parties (conservés le temps de la session,
+`save.*`). Les bulles naissent selon un tirage pseudo-aléatoire déterministe
+(Park-Miller, identique sur les deux backends Lua), donc rejouable en test.
+
+Les huit exercices structurés de Mouvéo (élévations, genou, pas, squat…) et
+les trois exercices de doigts ont existé dans une version précédente de cette
+démo (historique git jusqu'à `e5946fa`) ; ils ont été retirés à la demande pour
+ne garder qu'un jeu de capture.
 
 **Avatar** : un **mannequin neutre** construit directement sur les repères
 captés — tête, cou, torse et bassin (ellipsoïdes), membres en capsules,
@@ -52,13 +52,8 @@ riggés essayés (héros à bouclier, ninja) ont été écartés pour cette dém
 
 Les **mains** n'existent pas dans Mouvéo : la page fait tourner en plus le
 *Hand Landmarker* (21 repères par main, deux mains), et les deux mains suivies
-viennent se poser sur les poignets du squelette, à l'échelle du corps, couleur
-par doigt. Pendant les trois exercices de **doigts**, la main du côté choisi
-est dessinée en grand à la place du corps, et un degré de geste `m`
-(0 = neutre, 1 = geste complet : pince fermée, main grande ouverte, doigt sur
-le pouce) remplace la distance à la cible — l'amplitude fixe le `m` à atteindre,
-le retour se valide sous 25 %. Sans caméra, une jauge verticale se pilote au
-joystick.
+viennent se poser sur les poignets du mannequin, couleur par doigt ; quand
+elles sont suivies, c'est le centre de la paume qui attrape les bulles.
 
 **Cadrage** : le corps capté est normalisé avant tout dessin — torse
 hanches→épaules ramené à 0,9 m, hanches centrées à 1,35 m — donc le patient
@@ -88,8 +83,8 @@ cumulés) et record, conservés le temps de la session (`save.*`).
 
 | | Web `reeduc.html` (Chrome/Edge/Safari récents) | Éditeur, desktop `--player`, APK |
 | --- | --- | --- |
-| Entrée | **caméra** : MediaPipe Pose Landmarker + Hand Landmarker (wasm + modèles ~18 Mo, chargés d'un CDN au clic « Activer la caméra »), 33 + 2 × 21 repères à ~30 Hz | **mode démo** : le point suivi part de la position neutre et se pilote au stick tactile (souris) ou aux flèches |
-| Calibration | 1,8 s de corps visible sans bouger → ancres (épaules, coudes, poignets, hanches, genoux, chevilles) figées | immédiate, silhouette virtuelle debout |
+| Entrée | **caméra** : MediaPipe Pose Landmarker + Hand Landmarker (wasm + modèles ~18 Mo, chargés d'un CDN au clic « Activer la caméra »), 33 + 2 × 21 repères à ~30 Hz ; les bulles s'attrapent avec la paume (doigts suivis) ou le poignet | **mode démo** : la main droite du mannequin se pilote au stick tactile (souris) ou aux flèches |
+| Calibration | 1,8 s de corps visible sans bouger → ancres (épaules, bras) figées : centre et rayon de la zone des bulles | immédiate, silhouette virtuelle debout |
 | Pause | automatique dès que le corps sort du cadre (ou pose périmée > 0,75 s) : chrono figé, consigne « Repositionnez-vous » | jamais |
 | Sans caméra | bascule d'elle-même en mode démo (refus, absence, CDN inaccessible) | — |
 
@@ -120,8 +115,8 @@ reeduc.html ── caméra ──▶ MediaPipe ──▶ set_pose_landmarks(33 �
 | Mouvéo | RusteeGear | Pourquoi |
 | --- | --- | --- |
 | squelette 2D dessiné sur la vidéo miroir | mannequin 3D neutre construit sur les repères (ellipsoïdes + capsules, orientés par script), dans le plan `z = 0`, caméra de jeu fixe face au patient ; la vidéo reste en vignette miroir (HTML) | le moteur rend de la 3D, pas un flux vidéo ; la vignette garde le retour visuel « je me vois » |
-| état React (`useRef`/`useState`), un composant de 430 lignes | machine à états dans un script Lua « directeur », état numérique dans `save.*` (préfixe `rd_`), les autres objets le relisent le même tick | pas de callbacks dans l'API script (un chunk par objet et par pas), et `save` est le seul état partagé |
-| HUD React + Tailwind (score, série, chrono, consigne, bilan, sliders) | widgets HUD déclaratifs (`hud_text` pour les textes, `Button` → `hud:<action>`), pain/fatigue par boutons +1 | pas de sliders parmi les widgets ; les boutons restent visibles à tous les stades (ils n'agissent qu'au bon stade) |
+| état React (`useRef`/`useState`), un composant de 430 lignes | machine à états (accueil, calibration, partie, bilan) dans un script Lua « directeur », état numérique dans `save.*` (préfixe `rd_`), les autres objets le relisent le même tick | pas de callbacks dans l'API script (un chunk par objet et par pas), et `save` est le seul état partagé |
+| HUD React + Tailwind (score, série, chrono, consigne, bilan, sliders) | widgets HUD déclaratifs (`hud_text` pour les textes, `Button` → `hud:<action>` : Commencer, Rythme, Amplitude, Avatar) | pas de sliders parmi les widgets ; les boutons restent visibles à tous les stades |
 | voix de synthèse (`speechSynthesis`), vibration | `vibrate()` (journalisé), pas de voix | pas d'API voix dans le moteur — à brancher côté page si besoin |
 | `localStorage` (historique 30 séances, programme thérapeute) | `save.*` le temps de la session ; pas d'espace thérapeute séparé (les réglages sont les boutons) | la persistance web du moteur ne couvre pas encore `save.*` (cf. LUA_API.md) |
 | démo tactile : un clic = cible atteinte | mode démo : point piloté au stick/flèches, le membre suit (coude, genou) | jouable et **testable** sans caméra, sur toutes les cibles |

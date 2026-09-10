@@ -1,4 +1,4 @@
-//! Démo « Rééducation — mobilité guidée » (portage du prototype web *Mouvéo*,
+//! Démo « Rééducation — attrape-bulles » (inspirée du prototype web *Mouvéo*,
 //! <https://github.com/antoinequarroz/mouveo-reeducation>, 10 septembre 2026) :
 //! un jeu de rééducation motrice où le patient atteint des cibles lumineuses
 //! avec son poignet, son genou, sa cheville ou ses hanches, revient en position
@@ -87,8 +87,9 @@ pub(crate) fn world_to_pose(wx: f32, wy: f32) -> (f32, f32) {
 /// « Séance » est le premier objet de la scène pour ça.
 pub const DIRECTOR_SCRIPT: &str = r#"
 local SMOOTH_POSE, SMOOTH_HAND = 35.0, 40.0   -- lissage (1/s) des repères caméra, déjà interpolés par le moteur
-local HK = 5.0                                -- zoom de la main dessinée (m par unité image)
 local VIS_MIN = 0.5                           -- sous cette visibilité, un repère n'est pas dessiné
+local NB = 3                                  -- bulles simultanées au maximum (objets « Bulle 1..3 »)
+local CATCH_R = 0.32                          -- distance main -> bulle pour l'attraper (m)
 
 local NAMES = {"nose", "shoulder_l", "shoulder_r", "elbow_l", "elbow_r", "wrist_l", "wrist_r",
                "hip_l", "hip_r", "knee_l", "knee_r", "ankle_l", "ankle_r"}
@@ -99,37 +100,13 @@ local VBODY = {
   hip_l = {-0.24, 1.35}, hip_r = {0.24, 1.35}, knee_l = {-0.27, 0.72}, knee_r = {0.27, 0.72},
   ankle_l = {-0.29, 0.10}, ankle_r = {0.29, 0.10},
 }
--- Les 8 exercices de Mouvéo + 3 exercices de doigts : motifs = décalages (x
--- latéral, y vers le BAS) en fraction de la longueur du membre, depuis
--- l'origine (épaule / hanche). Pour les mains (`mode = "hand"`), la caméra
--- mesure un degré de fermeture/ouverture `m` (0 = neutre, 1 = geste complet)
--- et l'amplitude fixe le `m` à atteindre ; le motif ne sert qu'au mode démo.
-local EX = {
-  {name="Bulles latérales", short="Élévation latérale", mode="arm", hold=0, k=1.6, r=0.77,g=1.00,b=0.29,
-   pat={{0.72,-0.52},{0.86,-0.68},{0.68,-0.82}}, tip="Écartez le bras sur le côté, puis revenez doucement.", fam="haut du corps"},
-  {name="Lumières devant", short="Élévation frontale", mode="arm", hold=0, k=1.6, r=0.49,g=0.83,b=0.99,
-   pat={{0.28,-0.62},{0.35,-0.82},{0.20,-0.95}}, tip="Levez le bras devant vous sans hausser l'épaule.", fam="haut du corps"},
-  {name="Chemin lumineux", short="Trajectoire contrôlée", mode="arm", hold=0, k=1.6, r=0.77,g=0.71,b=0.99,
-   pat={{0.42,-0.35},{0.68,-0.62},{0.82,-0.82}}, tip="Suivez les cibles successives avec un mouvement fluide.", fam="haut du corps"},
-  {name="Étoile stable", short="Maintien du bras", mode="arm", hold=1.0, k=1.6, r=0.99,g=0.83,b=0.30,
-   pat={{0.72,-0.65},{0.72,-0.65},{0.72,-0.65}}, tip="Atteignez la cible et maintenez la position une seconde.", fam="équilibre"},
-  {name="Fusée genou", short="Lever de genou", mode="knee", hold=0, k=1.0, r=0.98,g=0.44,b=0.52,
-   pat={{0.04,0.16},{0.12,0.12},{0.02,0.08}}, tip="Montez le genou vers la cible puis reposez le pied calmement.", fam="jambes"},
-  {name="Feux de pas", short="Pas latéraux", mode="ankle", hold=0, k=1.0, r=0.18,g=0.83,b=0.75,
-   pat={{0.38,0.50},{0.52,0.50},{0.65,0.50}}, tip="Touchez la lumière avec le pied puis revenez au centre.", fam="jambes"},
-  {name="Ascenseur", short="Flexion guidée", mode="hips", hold=0, k=0.6, r=0.98,g=0.57,b=0.24,
-   pat={{0.0,0.36},{0.0,0.46},{0.0,0.40}}, tip="Descendez les hanches vers la cible puis redressez-vous doucement.", fam="jambes"},
-  {name="Île équilibre", short="Équilibre sur une jambe", mode="ankle", hold=2.0, k=1.0, r=0.65,g=0.55,b=0.98,
-   pat={{0.25,0.58},{0.32,0.52},{0.22,0.48}}, tip="Levez légèrement le pied et maintenez-le dans l'île lumineuse.", fam="équilibre"},
-  {name="Pince lumineuse", short="Pince pouce-index", mode="hand", gesture="pinch", hold=0, k=1.2, r=1.00,g=0.90,b=0.70,
-   pat={{0.0,-0.8},{0.0,-0.8},{0.0,-0.8}}, tip="Rapprochez le bout de l'index du pouce, puis rouvrez la main.", fam="main"},
-  {name="Éventail", short="Ouverture des doigts", mode="hand", gesture="spread", hold=0, k=1.2, r=0.30,g=0.90,b=0.40,
-   pat={{0.0,-0.8},{0.0,-0.8},{0.0,-0.8}}, tip="Ouvrez grand la main, puis refermez le poing doucement.", fam="main"},
-  {name="Piano", short="Opposition pouce-doigts", mode="hand", gesture="piano", hold=0, k=1.2, r=0.30,g=0.50,b=1.00,
-   pat={{0.0,-0.8},{0.0,-0.8},{0.0,-0.8}}, tip="Touchez le pouce avec chaque doigt, l'un après l'autre.", fam="main"},
+-- Rythmes : délai entre deux bulles, durée de vie d'une bulle, bulles simultanées.
+local LEVELS = {
+  {name = "Doux", spawn = 1.8, life = 6.0, max = 1},
+  {name = "Moyen", spawn = 1.2, life = 4.5, max = 2},
+  {name = "Vif", spawn = 0.8, life = 3.2, max = 3},
 }
-local GARDEN = {"Graine", "Pousse", "Jeune plante", "En fleurs", "Jardin lumineux"}
-local FINGER_TIPS = {9, 13, 17, 21}   -- index, majeur, annulaire, auriculaire (1-based)
+local COLORS = {{0.77, 1.00, 0.29}, {0.49, 0.83, 0.99}, {0.77, 0.71, 0.99}, {0.99, 0.83, 0.30}, {0.98, 0.44, 0.52}, {0.18, 0.83, 0.75}}
 
 local function g(k, d) local v = save.get(k); if v == nil then return d end; return v end
 local function num(x) return tostring(math.floor(x + 0.5)) end
@@ -144,62 +121,44 @@ local function smooth(key, target, rate)
   save.set(key, cur)
   return cur
 end
+-- Tirage pseudo-aléatoire déterministe (Park-Miller, exact en double sur les
+-- deux backends) : mêmes bulles pour une même graine, testable.
+local function rnd()
+  local s = g("rd_seed", 12345)
+  s = (s * 16807) % 2147483647
+  save.set("rd_seed", s)
+  return s / 2147483647
+end
 
-local stage = g("rd_stage", 0)      -- 0 accueil, 1 calibration, 2 séance, 3 bilan
-local ex_i = g("rd_ex", 1)
-local side = g("rd_side", 1)        -- 1 droit, -1 gauche
+local stage = g("rd_stage", 0)      -- 0 accueil, 1 calibration, 2 partie, 3 bilan
 local amp = g("rd_amp", 75)
-local goal = g("rd_goal", 8)
-local cam = g("rd_cam", 0) > 0.5    -- mode caméra, verrouillé au départ de la séance
-local pain, fatigue = g("rd_pain", 0), g("rd_fatigue", 2)
-local sfx = (side > 0) and "_r" or "_l"
+local level = g("rd_level", 2)
+local avatar = g("rd_avatar", 0)    -- 0 mannequin, 1 bâtons
+local cam = g("rd_cam", 0) > 0.5    -- mode caméra, verrouillé au départ de la partie
 
 -- ---- Boutons du HUD (widgets Button -> hud:<action>) ----
-if on_event("hud:ex_prev") then ex_i = ex_i - 1; if ex_i < 1 then ex_i = #EX end end
-if on_event("hud:ex_next") then ex_i = ex_i + 1; if ex_i > #EX then ex_i = 1 end end
-if on_event("hud:cote") then side = -side; sfx = (side > 0) and "_r" or "_l" end
 if on_event("hud:amplitude") then amp = amp + 10; if amp > 95 then amp = 55 end end
-if on_event("hud:objectif") then goal = goal + 2; if goal > 12 then goal = 4 end end
--- Avatar : 0 mannequin neutre (tête, torse, bassin, membres épais, mains),
--- 1 squelette de bâtons — les deux construits sur les repères eux-mêmes.
-local avatar = g("rd_avatar", 0)
+if on_event("hud:rythme") then level = level % 3 + 1 end
 if on_event("hud:avatar") then avatar = (avatar + 1) % 2 end
-if stage == 3 then
-  if on_event("hud:douleur") then pain = (pain + 1) % 11 end
-  if on_event("hud:fatigue") then fatigue = (fatigue + 1) % 11 end
-  if on_event("hud:enregistrer") and g("rd_saved", 0) < 0.5 then
-    save.set("rd_saved", 1)
-    save.set("rd_sessions", g("rd_sessions", 0) + 1)
-    save.set("rd_lifetime", g("rd_lifetime", 0) + g("rd_points", 0))
-    if g("rd_points", 0) > g("rd_best", 0) then save.set("rd_best", g("rd_points", 0)) end
-    save.set("rd_last_reg", g("rd_regularity", 0)); save.set("rd_last_pain", pain); save.set("rd_last_fatigue", fatigue)
-    save.set("rd_cel", 4); save.set("rd_cel_until", time + 1.3)
-  end
-end
-local ex = EX[ex_i]
-local mode = ex.mode
-local hand_ex = (mode == "hand")
 if on_event("hud:demarrer") then
   if stage == 0 or stage == 3 then
-    -- Nouvelle séance : compteurs à zéro, mode caméra si une pose (ou une main) est fraîche.
-    save.set("rd_hits", 0); save.set("rd_points", 0); save.set("rd_combo", 0); save.set("rd_phase", 0)
-    save.set("rd_tidx", 0); save.set("rd_last_hit", -10); save.set("rd_dwell", 0); save.set("rd_elapsed", 0)
-    save.set("rd_saved", 0); save.set("rd_finish_at", 0); save.set("rd_calib_start", 0); save.set("rd_regularity", 0)
-    pain, fatigue = 0, 2
-    for i = 1, 12 do save.set("rd_hit_" .. i, 0) end
-    cam = pose.ok or (hand_ex and hand.ok)
+    save.set("rd_points", 0); save.set("rd_combo", 0); save.set("rd_caught", 0); save.set("rd_missed", 0)
+    save.set("rd_elapsed", 0); save.set("rd_last_spawn", -10); save.set("rd_calib_start", 0); save.set("rd_finish_at", 0)
+    for i = 1, NB do save.set("rd_b" .. i .. "_alive", 0); save.set("rd_b" .. i .. "_pop", -10) end
+    cam = pose.ok
     save.set("rd_cam", cam and 1 or 0)
     if cam then
       stage = 1
     else
       for i = 1, #NAMES do local n = NAMES[i]; save.set("rd_a_" .. n .. "_x", VBODY[n][1]); save.set("rd_a_" .. n .. "_y", VBODY[n][2]) end
-      save.set("rd_hand_x", VBODY["wrist" .. sfx][1]); save.set("rd_hand_y", VBODY["wrist" .. sfx][2])
+      save.set("rd_hand_x", VBODY.wrist_r[1]); save.set("rd_hand_y", VBODY.wrist_r[2])
       stage = 2; save.set("rd_status", 8)
     end
   else
-    stage = 0 -- « Arrêter la séance »
+    stage = 0 -- « Arrêter »
   end
 end
+local lv = LEVELS[level]
 
 -- ---- Points du corps (monde) : pose caméra lissée ou corps virtuel ----
 local pts = {}
@@ -207,8 +166,7 @@ local live = cam and stage >= 1 and stage <= 2
 if stage == 0 then live = pose.ok end
 -- Normalisation du corps capté : quelle que soit la distance à la caméra, le
 -- patient est dessiné à taille constante (torse hanches->épaules = 0,9 m) et
--- centré, hanches à 1,35 m — sans ça, une personne proche de l'objectif
--- remplit le cadre et l'avatar déborde de l'écran. Identité en mode démo.
+-- centré, hanches à 1,35 m. Identité en mode démo.
 local NK, NCX, NCY = 1.0, 0.0, 1.35
 if live then
   for i = 1, #NAMES do
@@ -232,64 +190,30 @@ else
   for i = 1, #NAMES do local n = NAMES[i]; pts[n] = {VBODY[n][1], VBODY[n][2], 1.0} end
 end
 
--- ---- Mains (doigts) : 21 repères par côté, lissés ----
--- Exercice de doigts : la main travaillée est dessinée en grand, centrée ;
--- sinon les deux mains sont projetées comme le corps (même image, même
--- échelle) et viennent se poser sur les poignets du squelette.
-local function hand_points(Hn, key, zoom)
+-- ---- Mains (doigts) : 21 repères par côté, même projection que le corps ----
+local function hand_points(Hn, key)
   local out = {}
-  if zoom then
-    local cx, cy = 0, 0
-    for i = 1, 21 do cx = cx + Hn.x[i]; cy = cy + Hn.y[i] end
-    cx, cy = smooth("rd_hc_x", cx / 21, 12.0), smooth("rd_hc_y", cy / 21, 12.0)
-    for i = 1, 21 do
-      local wx, wy = (cx - Hn.x[i]) * HK, 1.6 + (cy - Hn.y[i]) * HK
-      out[i] = {smooth(key .. i .. "_x", wx, SMOOTH_HAND), smooth(key .. i .. "_y", wy, SMOOTH_HAND)}
-    end
-  else
-    for i = 1, 21 do
-      -- Même projection et même normalisation que le corps : la main se pose
-      -- sur le poignet du squelette.
-      local wx, wy = (0.5 - Hn.x[i]) * W, (1.0 - Hn.y[i]) * H
-      wx, wy = (wx - NCX) * NK, 1.35 + (wy - NCY) * NK
-      out[i] = {smooth(key .. i .. "_x", wx, SMOOTH_HAND), smooth(key .. i .. "_y", wy, SMOOTH_HAND)}
-    end
+  for i = 1, 21 do
+    local wx, wy = (0.5 - Hn.x[i]) * W, (1.0 - Hn.y[i]) * H
+    wx, wy = (wx - NCX) * NK, 1.35 + (wy - NCY) * NK
+    out[i] = {smooth(key .. i .. "_x", wx, SMOOTH_HAND), smooth(key .. i .. "_y", wy, SMOOTH_HAND)}
   end
   return out
 end
-local HP = nil           -- main travaillée, en grand (exercice de doigts), nil sinon
-local hs = 0             -- sa taille (poignet -> base du majeur, m)
-local HPL, HPR = nil, nil -- mains à l'échelle du corps, sur le squelette
-local hands_live = cam or stage == 0
-if hands_live and hand_ex then
-  local Hn = (side > 0) and hand.right or hand.left
-  if Hn then
-    HP = hand_points(Hn, "rd_hz_", true)
-    hs = math.max(0.2, dist(HP[1][1], HP[1][2], HP[10][1], HP[10][2]))
-  end
-elseif hands_live then
-  if hand.left then HPL = hand_points(hand.left, "rd_hl_", false) end
-  if hand.right then HPR = hand_points(hand.right, "rd_hr_", false) end
+local HPL, HPR = nil, nil
+if cam or stage == 0 then
+  if hand.left then HPL = hand_points(hand.left, "rd_hl_") end
+  if hand.right then HPR = hand_points(hand.right, "rd_hr_") end
 end
 
--- Visibilité « corps prêt » selon l'exercice.
+-- Corps prêt : épaules visibles et au moins une main.
 local body_ok = true
-if hand_ex then
-  if cam or stage == 0 then body_ok = HP ~= nil end
-  if not cam and stage >= 1 then body_ok = true end
-elseif live then
-  if not pose.ok then body_ok = false
-  elseif mode == "arm" then
-    body_ok = pts["shoulder" .. sfx][3] > 0.55 and pts["wrist" .. sfx][3] > 0.45 and pts["hip" .. sfx][3] > 0.45
-  elseif mode == "hips" then
-    body_ok = pts.shoulder_l[3] > 0.48 and pts.shoulder_r[3] > 0.48 and pts.hip_l[3] > 0.48 and pts.hip_r[3] > 0.48
-      and pts.knee_l[3] > 0.48 and pts.knee_r[3] > 0.48
-  else
-    body_ok = pts["hip" .. sfx][3] > 0.55 and pts["knee" .. sfx][3] > 0.5 and pts["ankle" .. sfx][3] > 0.45
-  end
+if live then
+  body_ok = pose.ok and pts.shoulder_l[3] > VIS_MIN and pts.shoulder_r[3] > VIS_MIN
+    and (pts.wrist_l[3] > 0.45 or pts.wrist_r[3] > 0.45)
 end
 
--- ---- Calibration (mode caméra) : 1,8 s de corps (ou main) visible, puis ancres figées ----
+-- ---- Calibration (mode caméra) : 1,8 s de corps visible, puis ancres figées ----
 local calib = 0
 if stage == 1 then
   if body_ok then
@@ -305,182 +229,94 @@ if stage == 1 then
   end
 end
 
--- ---- Séance ----
-local target_vis, tx, ty, tr, tg, tb = 0, 0, 0, ex.r, ex.g, ex.b
-local hand_vis, hx, hy = 0, 0, 0
-local dwell_frac = 0
+-- ---- Partie ----
 if stage == 2 then
-  local phase = g("rd_phase", 0)
-  local tidx = g("rd_tidx", 0)
-  local strength = amp / 100
-  local reached, returned = false, false
-  local tracked, target
+  local A = {}
+  for i = 1, #NAMES do local n = NAMES[i]; A[n] = {g("rd_a_" .. n .. "_x", 0), g("rd_a_" .. n .. "_y", 0)} end
+  local cx, cy = (A.shoulder_l[1] + A.shoulder_r[1]) / 2, (A.shoulder_l[2] + A.shoulder_r[2]) / 2
+  local limb = dist(A.shoulder_r[1], A.shoulder_r[2], A.elbow_r[1], A.elbow_r[2])
+    + dist(A.elbow_r[1], A.elbow_r[2], A.wrist_r[1], A.wrist_r[2])
+  limb = math.max(0.5, limb)
+  local R = limb * (amp / 100) * 1.1   -- rayon de la zone où naissent les bulles
 
-  if hand_ex and cam then
-    -- Geste de main mesuré sur la main dessinée : degré `m` (0 neutre, 1 complet).
-    if HP then
-      local m
-      local thumb = HP[5]
-      if ex.gesture == "spread" then
-        local wrist, mcp, tip = HP[1], HP[10], HP[13]
-        local dx, dy = mcp[1] - wrist[1], mcp[2] - wrist[2]
-        local dl = math.max(0.001, math.sqrt(dx * dx + dy * dy))
-        m = clamp((dist(wrist[1], wrist[2], tip[1], tip[2]) / hs - 1.3) / 1.0, 0, 1)
-        target = {wrist[1] + dx / dl * 2.3 * hs, wrist[2] + dy / dl * 2.3 * hs}
-        tracked = tip
-      else
-        local tip_i = 9
-        if ex.gesture == "piano" then tip_i = FINGER_TIPS[(tidx % 4) + 1] end
-        local tip = HP[tip_i]
-        m = 1.0 - clamp((dist(thumb[1], thumb[2], tip[1], tip[2]) / hs - 0.15) / 0.9, 0, 1)
-        target = thumb
-        tracked = tip
-      end
-      reached = m >= strength
-      returned = m <= 0.25
-      dwell_frac = 0
-    end
+  -- Points de capture : les deux mains (paume si les doigts sont suivis, sinon poignet).
+  local catchers = {}
+  if cam then
+    if HPL then catchers[#catchers + 1] = {(HPL[1][1] + HPL[10][1]) / 2, (HPL[1][2] + HPL[10][2]) / 2}
+    elseif pts.wrist_l[3] > 0.45 then catchers[#catchers + 1] = {pts.wrist_l[1], pts.wrist_l[2]} end
+    if HPR then catchers[#catchers + 1] = {(HPR[1][1] + HPR[10][1]) / 2, (HPR[1][2] + HPR[10][2]) / 2}
+    elseif pts.wrist_r[3] > 0.45 then catchers[#catchers + 1] = {pts.wrist_r[1], pts.wrist_r[2]} end
   else
-    -- Géométrie corps (Mouvéo) : origine / neutre / membre calibrés.
-    local A = {}
-    for i = 1, #NAMES do local n = NAMES[i]; A[n] = {g("rd_a_" .. n .. "_x", 0), g("rd_a_" .. n .. "_y", 0)} end
-    local origin, neutral, limb, tname
-    if hand_ex then
-      -- Mode démo des exercices de doigts : jauge verticale à droite de l'avatar.
-      origin, neutral, limb, tname = {1.5, 1.1}, {1.5, 1.1}, 0.8, nil
-    elseif mode == "arm" then
-      origin, neutral, tname = A["shoulder" .. sfx], A["hip" .. sfx], "wrist" .. sfx
-      limb = dist(origin[1], origin[2], A["elbow" .. sfx][1], A["elbow" .. sfx][2])
-        + dist(A["elbow" .. sfx][1], A["elbow" .. sfx][2], A["wrist" .. sfx][1], A["wrist" .. sfx][2])
-    elseif mode == "hips" then
-      origin = {(A.hip_l[1] + A.hip_r[1]) / 2, (A.hip_l[2] + A.hip_r[2]) / 2}
-      neutral, tname = origin, "hips"
-      limb = math.max(0.5, dist(origin[1], origin[2], (A.shoulder_l[1] + A.shoulder_r[1]) / 2, (A.shoulder_l[2] + A.shoulder_r[2]) / 2))
-    else
-      origin, tname = A["hip" .. sfx], mode .. sfx
-      neutral = A[tname]
-      limb = dist(origin[1], origin[2], A["knee" .. sfx][1], A["knee" .. sfx][2])
-        + dist(A["knee" .. sfx][1], A["knee" .. sfx][2], A["ankle" .. sfx][1], A["ankle" .. sfx][2])
-    end
-    if cam then
-      if mode == "hips" then tracked = {(pts.hip_l[1] + pts.hip_r[1]) / 2, (pts.hip_l[2] + pts.hip_r[2]) / 2}
-      else tracked = {pts[tname][1], pts[tname][2]} end
-    else
-      -- Mode démo : le point suivi part de la position neutre et se pilote au
-      -- joystick (ou flèches via tilt), lissé pour un geste « doux ».
-      local jx = clamp(input.jx + tilt.x, -1, 1)
-      local jy = clamp(input.jy + tilt.y, -1, 1)
-      local want_x, want_y = neutral[1] + jx * limb * ex.k, neutral[2] + jy * limb * ex.k
-      local cx = smooth("rd_hand_x", want_x, 8.0)
-      local cy = smooth("rd_hand_y", want_y, 8.0)
-      tracked = {cx, cy}
-      -- Le reste du membre suit, pour que l'avatar reste lisible : coude à
-      -- mi-chemin épaule -> main, cheville sous le genou levé, genou à mi-chemin
-      -- hanche -> cheville, tout le tronc pour les hanches.
-      if mode == "hips" then
-        local ox, oy = cx - origin[1], cy - origin[2]
-        local names = {"hip_l", "hip_r", "shoulder_l", "shoulder_r", "elbow_l", "elbow_r", "wrist_l", "wrist_r", "nose"}
-        for i = 1, #names do local n = names[i]; pts[n] = {A[n][1] + ox, A[n][2] + oy, 1} end
-        pts.knee_l = {A.knee_l[1], A.knee_l[2] + oy * 0.5, 1}; pts.knee_r = {A.knee_r[1], A.knee_r[2] + oy * 0.5, 1}
-      elseif tname then
-        pts[tname] = {cx, cy, 1}
-        if mode == "arm" then
-          local s = A["shoulder" .. sfx]
-          pts["elbow" .. sfx] = {(s[1] + cx) / 2 + side * 0.08, (s[2] + cy) / 2 - 0.12, 1}
-        elseif mode == "knee" then
-          pts["ankle" .. sfx] = {cx + side * 0.05, cy - 0.6, 1}
-        else
-          local h = A["hip" .. sfx]
-          pts["knee" .. sfx] = {(h[1] + cx) / 2 + side * 0.06, (h[2] + cy) / 2 + 0.05, 1}
+    -- Mode démo : la main droite se pilote au joystick (ou flèches via tilt)
+    -- autour des épaules, lissée ; le coude suit pour garder l'avatar lisible.
+    local jx = clamp(input.jx + tilt.x, -1, 1)
+    local jy = clamp(input.jy + tilt.y, -1, 1)
+    local hx = smooth("rd_hand_x", cx + jx * R * 1.15, 8.0)
+    local hy = smooth("rd_hand_y", cy + jy * R * 1.15, 8.0)
+    pts.wrist_r = {hx, hy, 1}
+    pts.elbow_r = {(A.shoulder_r[1] + hx) / 2 + 0.08, (A.shoulder_r[2] + hy) / 2 - 0.12, 1}
+    catchers[1] = {hx, hy}
+  end
+
+  local points, combo = g("rd_points", 0), g("rd_combo", 0)
+  local caught, missed = g("rd_caught", 0), g("rd_missed", 0)
+  if body_ok then
+    save.set("rd_elapsed", g("rd_elapsed", 0) + dt)
+    -- Naissance d'une bulle dans la zone atteignable (autour des épaules).
+    local alive = 0
+    for i = 1, NB do if g("rd_b" .. i .. "_alive", 0) > 0.5 then alive = alive + 1 end end
+    if alive < lv.max and time - g("rd_last_spawn", -10) >= lv.spawn then
+      for i = 1, NB do
+        if g("rd_b" .. i .. "_alive", 0) < 0.5 then
+          local bx = clamp(cx + (rnd() * 2 - 1) * R, -1.9, 1.9)
+          local by = clamp(cy + (rnd() * 1.5 - 0.5) * R, 0.35, 3.0)
+          local c = COLORS[math.floor(rnd() * #COLORS) + 1]
+          save.set("rd_b" .. i .. "_alive", 1); save.set("rd_b" .. i .. "_x", bx); save.set("rd_b" .. i .. "_y", by)
+          save.set("rd_b" .. i .. "_born", time); save.set("rd_b" .. i .. "_life", lv.life)
+          save.set("rd_b" .. i .. "_r", c[1]); save.set("rd_b" .. i .. "_g", c[2]); save.set("rd_b" .. i .. "_b", c[3])
+          save.set("rd_last_spawn", time)
+          break
         end
       end
     end
-    local off = ex.pat[(tidx % 3) + 1]
-    local apply_side = (mode == "hips" or hand_ex) and 0 or side
-    local reach = {origin[1] + apply_side * limb * off[1] * strength, origin[2] - limb * off[2] * strength}
-    target = (phase == 0) and reach or neutral
-    local thr = math.max(0.2, limb * 0.16)
-    local near = dist(tracked[1], tracked[2], target[1], target[2]) < thr
-    reached, returned = near, near
-  end
-
-  if phase == 1 then tr, tg, tb = 0.49, 0.83, 0.99 end
-  if target then target_vis, tx, ty = 1, target[1], target[2] end
-  if tracked then hand_vis, hx, hy = (body_ok and 1 or 0), tracked[1], tracked[2] end
-
-  local hits, combo, points = g("rd_hits", 0), g("rd_combo", 0), g("rd_points", 0)
-  local function record_hit()
-    local last = g("rd_last_hit", -10)
-    if time - last < 0.65 then return end
-    save.set("rd_last_hit", time)
-    hits = hits + 1; combo = combo + 1
-    if hits <= 12 then save.set("rd_hit_" .. hits, time) end
-    points = points + 10 + math.floor(combo / 3) * 5
-    save.set("rd_phase", 1)
-    if hand_ex then save.set("rd_status", 12)
-    elseif mode == "arm" then save.set("rd_status", 4) elseif mode == "knee" then save.set("rd_status", 5)
-    elseif mode == "ankle" then save.set("rd_status", 6) else save.set("rd_status", 7) end
-    local m1, m2 = math.ceil(goal * 0.4), math.ceil(goal * 0.7)
-    if combo == m1 then save.set("rd_cel", 1); save.set("rd_cel_until", time + 1.3)
-    elseif combo == m2 then save.set("rd_cel", 2); save.set("rd_cel_until", time + 1.3)
-    elseif combo == goal then save.set("rd_cel", 3); save.set("rd_cel_until", time + 1.3) end
-    vibrate(45)
-    if hits >= goal then save.set("rd_finish_at", time + 0.5) end
-  end
-
-  if body_ok and tracked then
-    save.set("rd_elapsed", g("rd_elapsed", 0) + dt)
-    local trigger = (phase == 0) and reached or (phase == 1 and returned)
-    if trigger then
-      if phase == 1 then
-        save.set("rd_phase", 0); save.set("rd_tidx", tidx + 1); save.set("rd_dwell", 0); save.set("rd_status", 9)
-      elseif ex.hold > 0 then
-        local ds = g("rd_dwell", 0)
-        if ds <= 0 then ds = time; save.set("rd_dwell", ds) end
-        dwell_frac = clamp((time - ds) / ex.hold, 0, 1)
-        save.set("rd_status", 10)
-        if dwell_frac >= 1 then save.set("rd_dwell", 0); dwell_frac = 0; record_hit() end
-      else
-        record_hit()
+    -- Capture et expiration.
+    for i = 1, NB do
+      if g("rd_b" .. i .. "_alive", 0) > 0.5 then
+        local bx, by = g("rd_b" .. i .. "_x", 0), g("rd_b" .. i .. "_y", 0)
+        local got = false
+        for k = 1, #catchers do
+          if dist(catchers[k][1], catchers[k][2], bx, by) < CATCH_R then got = true end
+        end
+        if got then
+          caught = caught + 1; combo = combo + 1
+          local gain = 10 + math.floor(combo / 3) * 5
+          points = points + gain
+          save.set("rd_b" .. i .. "_alive", 0); save.set("rd_b" .. i .. "_pop", time)
+          save.set("rd_cel_gain", gain); save.set("rd_cel", 1); save.set("rd_cel_until", time + 0.8)
+          if combo == 5 then save.set("rd_cel", 2); save.set("rd_cel_until", time + 1.3)
+          elseif combo == 10 then save.set("rd_cel", 3); save.set("rd_cel_until", time + 1.3) end
+          save.set("rd_status", 3)
+          vibrate(45)
+        elseif time - g("rd_b" .. i .. "_born", time) > lv.life then
+          missed = missed + 1; combo = 0
+          save.set("rd_b" .. i .. "_alive", 0)
+          save.set("rd_status", 9)
+        end
       end
-    elseif phase == 0 then
-      save.set("rd_dwell", 0)
-      if g("rd_status", 3) == 10 then save.set("rd_status", 3) end
     end
   end
-  save.set("rd_hits", hits); save.set("rd_combo", combo); save.set("rd_points", points)
-
-  local finish_at = g("rd_finish_at", 0)
-  if (finish_at > 0 and time >= finish_at) or g("rd_elapsed", 0) >= SESSION_S then
-    -- Régularité : écart-type relatif des intervalles entre cibles (Mouvéo).
-    local reg = 0
-    if hits >= 3 then
-      local n = math.min(hits, 12) - 1
-      local mean = 0
-      for i = 1, n do mean = mean + (g("rd_hit_" .. (i + 1), 0) - g("rd_hit_" .. i, 0)) end
-      mean = mean / n
-      local var = 0
-      for i = 1, n do local it = g("rd_hit_" .. (i + 1), 0) - g("rd_hit_" .. i, 0); var = var + (it - mean) * (it - mean) end
-      var = var / n
-      reg = clamp(math.floor(100 - (math.sqrt(var) / math.max(mean, 0.001)) * 70 + 0.5), 50, 99)
-    elseif hits > 0 then reg = 75 end
-    save.set("rd_regularity", reg)
+  save.set("rd_points", points); save.set("rd_combo", combo); save.set("rd_caught", caught); save.set("rd_missed", missed)
+  if g("rd_elapsed", 0) >= SESSION_S then
+    save.set("rd_games", g("rd_games", 0) + 1)
+    if points > g("rd_best", 0) then save.set("rd_best", points) end
+    for i = 1, NB do save.set("rd_b" .. i .. "_alive", 0) end
     stage = 3
   end
 end
 
--- ---- Sorties partagées avec les autres objets (cible, halo, point, repères, os, doigts) ----
-save.set("rd_stage", stage); save.set("rd_ex", ex_i); save.set("rd_side", side); save.set("rd_amp", amp); save.set("rd_goal", goal)
-save.set("rd_pain", pain); save.set("rd_fatigue", fatigue); save.set("rd_avatar", avatar)
-save.set("rd_target_vis", target_vis); save.set("rd_target_x", tx); save.set("rd_target_y", ty)
-save.set("rd_target_r", tr); save.set("rd_target_g", tg); save.set("rd_target_b", tb)
-save.set("rd_hand_vis", hand_vis); save.set("rd_hand_px", hx); save.set("rd_hand_py", hy)
-save.set("rd_dwell_frac", dwell_frac)
-save.set("rd_target_scale", HP and math.max(0.5, hs * 1.2) or 1.0)
-local show_hand = HP ~= nil and stage ~= 3
-local show_body = (stage ~= 3) and (not live or pose.ok) and not show_hand
--- Les pièces du mannequin (torse, bassin, tête, cou, pieds) lisent
--- `rd_p_*_ok`/`rd_mannequin` ; repères et os lisent `rd_p_*_vis`.
+-- ---- Sorties partagées avec les autres objets (repères, os, doigts, bulles) ----
+save.set("rd_stage", stage); save.set("rd_amp", amp); save.set("rd_level", level); save.set("rd_avatar", avatar)
+local show_body = (stage ~= 3) and (not live or pose.ok)
 save.set("rd_body_shown", show_body and 1 or 0)
 save.set("rd_mannequin", (avatar == 0) and 1 or 0)
 for i = 1, #NAMES do
@@ -492,106 +328,68 @@ for i = 1, #NAMES do
   save.set("rd_p_" .. n .. "_vis", ok and 1 or 0)
   save.set("rd_p_" .. n .. "_x", pts[n][1]); save.set("rd_p_" .. n .. "_y", pts[n][2])
 end
--- Deux jeux d'objets de main (gauche/droite) : en exercice de doigts, celui du
--- côté travaillé porte la main agrandie (échelle 1), l'autre est caché ; sinon
--- chacun suit sa main sur le squelette, à l'échelle du corps (0,45).
-local function write_hand(prefix, pts_h, scale, sticks)
-  save.set(prefix .. "scale", scale)
+local function write_hand(prefix, pts_h)
+  save.set(prefix .. "scale", 0.45)
   save.set(prefix .. "ok", pts_h and 1 or 0)
   for i = 1, 21 do
     if pts_h then
-      save.set(prefix .. i .. "_vis", sticks and 1 or 0); save.set(prefix .. i .. "_x", pts_h[i][1]); save.set(prefix .. i .. "_y", pts_h[i][2])
+      save.set(prefix .. i .. "_vis", 1); save.set(prefix .. i .. "_x", pts_h[i][1]); save.set(prefix .. i .. "_y", pts_h[i][2])
     else
       save.set(prefix .. i .. "_vis", 0)
     end
   end
 end
-if show_hand then
-  write_hand((side > 0) and "rd_hr_" or "rd_hl_", HP, 1.0, true)
-  write_hand((side > 0) and "rd_hl_" or "rd_hr_", nil, 1.0, true)
-else
-  write_hand("rd_hl_", show_body and HPL or nil, 0.45, true)
-  write_hand("rd_hr_", show_body and HPR or nil, 0.45, true)
-end
+write_hand("rd_hl_", show_body and HPL or nil)
+write_hand("rd_hr_", show_body and HPR or nil)
 
 -- ---- HUD ----
 local STATUS = {
-  [0] = "Choisissez votre mission, puis ▶ Commencer",
-  [1] = "Reculez : tête, bras et hanches doivent être visibles",
+  [0] = "Réglez le rythme, puis ▶ Commencer",
+  [1] = "Reculez : tête, épaules et mains doivent être visibles",
   [2] = "Ne bougez plus, calibration…",
-  [3] = "Atteignez la cible sans forcer",
-  [4] = "Cible atteinte — revenez près de la hanche",
-  [5] = "Genou levé — reposez le pied doucement",
-  [6] = "Cible atteinte — revenez au centre",
-  [7] = "Descente validée — redressez-vous doucement",
-  [8] = "Mode démo — joystick ou flèches : amenez le point blanc sur la cible",
-  [9] = "Nouvelle cible — mouvement lent et confortable",
-  [10] = "Maintenez la position…",
-  [11] = "Montrez votre main entière à la caméra",
-  [12] = "Bien — rouvrez la main doucement",
+  [3] = "Attrapez les bulles avec vos mains !",
+  [8] = "Mode démo — joystick ou flèches : amenez la main sur les bulles",
+  [9] = "Bulle éclatée… la suivante arrive",
 }
-local cote = (side > 0) and "droit" or "gauche"
-local cote_m = (side > 0) and "droite" or "gauche"
-hud_text("titre", "MOUVÉO · " .. ex.name)
-local reglages = (hand_ex and ("Main " .. cote_m) or ("Côté " .. cote)) .. " · amplitude " .. num(amp) .. " % · objectif " .. num(goal) .. " répétitions"
+hud_text("titre", "MOUVÉO · Attrape-bulles")
+local reglages = "Rythme " .. lv.name .. " · amplitude " .. num(amp) .. " % · " .. num(SESSION_S) .. " s"
 if stage == 0 then
-  local src
-  if hand_ex then
-    src = HP and "📷 Main détectée : la séance suivra vos doigts." or (hand.ok and ("📷 Montrez votre main " .. cote_m .. " à la caméra.") or "🎮 Sans caméra : mode démo, la jauge se pilote au joystick ou aux flèches.")
-  else
-    src = pose.ok and "📷 Caméra détectée : la séance suivra vos mouvements." or "🎮 Sans caméra : mode démo, le point blanc se pilote au joystick ou aux flèches."
-  end
-  hud_text("aide", ex.short .. " (" .. ex.fam .. ")\n" .. ex.tip .. "\n" .. reglages .. "\n" .. src)
+  local src = pose.ok and "📷 Caméra détectée : attrapez avec vos deux mains." or "🎮 Sans caméra : mode démo, la main se pilote au joystick ou aux flèches."
+  hud_text("aide", "Des bulles apparaissent autour de vous : touchez-les avant qu'elles n'éclatent.\nChaque bulle vaut 10 points, les séries rapportent plus.\n" .. reglages .. "\n" .. src)
   hud_text("consigne", STATUS[0])
   hud_text("score", ""); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", ""); hud_text("bilan", "")
 elseif stage == 1 then
   hud_text("aide", reglages)
-  if body_ok then hud_text("consigne", STATUS[2] .. " " .. num(calib * 100) .. " %")
-  else hud_text("consigne", hand_ex and STATUS[11] or STATUS[1]) end
+  if body_ok then hud_text("consigne", STATUS[2] .. " " .. num(calib * 100) .. " %") else hud_text("consigne", STATUS[1]) end
   hud_text("score", ""); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", ""); hud_text("bilan", "")
 elseif stage == 2 then
-  local hits, combo, points = g("rd_hits", 0), g("rd_combo", 0), g("rd_points", 0)
+  local points, combo = g("rd_points", 0), g("rd_combo", 0)
   local left = math.max(0, SESSION_S - g("rd_elapsed", 0))
   local sec = math.floor(left)
   hud_text("score", num(points) .. " pts")
-  hud_text("chrono", "Temps actif 0:" .. ((sec < 10) and "0" or "") .. num(sec))
+  hud_text("chrono", "Temps 0:" .. ((sec < 10) and "0" or "") .. num(sec))
   hud_text("serie", (combo >= 3) and ("⚡ série ×" .. num(combo)) or "")
-  local bar = ""
-  for i = 1, goal do bar = bar .. ((i <= hits) and "★" or "☆") end
-  hud_text("objectif", "Objectif " .. num(math.min(hits, goal)) .. "/" .. num(goal) .. "  " .. bar)
+  hud_text("objectif", "Bulles attrapées " .. num(g("rd_caught", 0)) .. " · éclatées " .. num(g("rd_missed", 0)))
   hud_text("aide", reglages)
-  if not body_ok then hud_text("consigne", hand_ex and ("⏸ " .. STATUS[11] .. " — séance en pause") or "⏸ Repositionnez-vous — séance en pause")
-  else
-    local s = g("rd_status", 3)
-    if s == 10 then hud_text("consigne", STATUS[10] .. " " .. num(dwell_frac * 100) .. " %")
-    elseif hand_ex and s == 3 and ex.gesture == "piano" then
-      local fingers = {"l'index", "le majeur", "l'annulaire", "l'auriculaire"}
-      hud_text("consigne", "Touchez le pouce avec " .. fingers[(g("rd_tidx", 0) % 4) + 1])
-    else hud_text("consigne", STATUS[s] or STATUS[3]) end
-  end
+  if not body_ok then hud_text("consigne", "⏸ Repositionnez-vous — partie en pause")
+  else hud_text("consigne", STATUS[g("rd_status", 3)] or STATUS[3]) end
   hud_text("bilan", "")
 else
-  local hits, points, reg = g("rd_hits", 0), g("rd_points", 0), g("rd_regularity", 0)
-  local stars = 0
-  if hits >= goal then stars = 3 elseif hits >= goal * 0.65 then stars = 2 elseif hits >= goal * 0.35 then stars = 1 end
-  local star_s = ""
-  for i = 1, 3 do star_s = star_s .. ((i <= stars) and "★" or "☆") end
-  local ppm = (hits > 0) and num(points / hits) or "0"
-  hud_text("bilan", "🏆 Séance terminée — " .. num(points) .. " points " .. star_s .. "\n"
-    .. num(hits) .. " répétitions · régularité " .. num(reg) .. " % · " .. ppm .. " pts / mouvement\n"
-    .. "Douleur ressentie " .. num(pain) .. "/10 · Fatigue " .. num(fatigue) .. "/10\n"
-    .. ((g("rd_saved", 0) > 0.5) and "✔ Séance enregistrée" or "💾 Enregistrer le bilan, ou ▶ Nouvelle séance"))
+  local points, caught, missed = g("rd_points", 0), g("rd_caught", 0), g("rd_missed", 0)
+  local total = caught + missed
+  local prec = (total > 0) and num(caught / total * 100) or "0"
+  local stars = (caught >= 20) and "★★★" or ((caught >= 12) and "★★☆" or ((caught >= 5) and "★☆☆" or "☆☆☆"))
+  hud_text("bilan", "🏆 Partie terminée — " .. num(points) .. " points " .. stars .. "\n"
+    .. num(caught) .. " bulles attrapées sur " .. num(total) .. " · précision " .. prec .. " %\n"
+    .. "Record " .. num(g("rd_best", 0)) .. " pts · " .. num(g("rd_games", 0)) .. " partie" .. ((g("rd_games", 0) == 1) and "" or "s") .. "\n"
+    .. "▶ Rejouer")
   hud_text("consigne", "Bougez sans douleur : arrêtez en cas de douleur, vertige ou inconfort inhabituel.")
   hud_text("score", num(points) .. " pts"); hud_text("chrono", ""); hud_text("serie", ""); hud_text("objectif", "")
   hud_text("aide", reglages)
 end
-local sessions, lifetime = g("rd_sessions", 0), g("rd_lifetime", 0)
-local level = math.min(4, math.floor(lifetime / 150))
-hud_text("jardin", "🌱 Jardin de mobilité : " .. GARDEN[level + 1] .. " · " .. num(sessions) .. " séance" .. ((sessions == 1) and "" or "s")
-  .. " · " .. num(lifetime) .. " pts" .. ((g("rd_best", 0) > 0) and (" · record " .. num(g("rd_best", 0))) or ""))
 local cel = g("rd_cel", 0)
 if cel > 0 and time < g("rd_cel_until", 0) then
-  local CEL = {"✨ Série lancée !", "✨ Très régulier !", "🏆 Mission accomplie !", "✔ Séance enregistrée !"}
+  local CEL = {"+" .. num(g("rd_cel_gain", 10)), "✨ Série de 5 !", "🏆 Série de 10 !"}
   hud_text("celebration", CEL[cel] or "")
 else
   hud_text("celebration", "")
@@ -612,45 +410,48 @@ pub fn director_script() -> String {
     )
 }
 
-/// Script de la cible lumineuse (« Cible ») : suit `rd_target_*`, pulse, prend
-/// la couleur de l'exercice (ou le bleu « retour »).
-const TARGET_SCRIPT: &str = r#"
-local vis = (save.get("rd_target_vis") or 0) > 0.5
-obj.visible = vis
-if vis then
-  obj.x = save.get("rd_target_x") or 0; obj.y = save.get("rd_target_y") or 0; obj.z = 0
-  local s = 0.30 * (save.get("rd_target_scale") or 1) * (1.0 + math.sin(time * 5.5) * 0.08)
-  obj.sx = s; obj.sy = s; obj.sz = s
-  obj.r = save.get("rd_target_r") or 1; obj.g = save.get("rd_target_g") or 1; obj.b = save.get("rd_target_b") or 1
-end
-"#;
+/// Script d'une bulle (« Bulle <i> ») : suit `rd_b<i>_*`, flotte doucement,
+/// puis gonfle un court instant quand elle est attrapée (`rd_b<i>_pop`).
+fn bubble_script(i: usize) -> String {
+    format!(
+        "local alive = (save.get(\"rd_b{i}_alive\") or 0) > 0.5\n\
+         local since = time - (save.get(\"rd_b{i}_pop\") or -10)\n\
+         if alive then\n\
+           obj.visible = true\n\
+           obj.x = save.get(\"rd_b{i}_x\") or 0; obj.y = (save.get(\"rd_b{i}_y\") or 0) + math.sin(time * 2.0 + {i}) * 0.04; obj.z = 0.1\n\
+           local s = 0.34 * (1.0 + math.sin(time * 5.0 + {i}) * 0.06)\n\
+           obj.sx = s; obj.sy = s; obj.sz = s\n\
+           obj.r = save.get(\"rd_b{i}_r\") or 1; obj.g = save.get(\"rd_b{i}_g\") or 1; obj.b = save.get(\"rd_b{i}_b\") or 1\n\
+         elseif since >= 0 and since < 0.25 then\n\
+           obj.visible = true\n\
+           local s = 0.34 * (1.0 + since * 4.0)\n\
+           obj.sx = s; obj.sy = s; obj.sz = s\n\
+         else\n\
+           obj.visible = false\n\
+         end\n"
+    )
+}
 
-/// Halo translucide autour de la cible : grossit avec le maintien (`rd_dwell_frac`,
-/// exercices « Étoile stable » / « Île équilibre »), équivalent de l'anneau de
-/// progression de Mouvéo.
-const HALO_SCRIPT: &str = r#"
-local vis = (save.get("rd_target_vis") or 0) > 0.5
-obj.visible = vis
-if vis then
-  obj.x = save.get("rd_target_x") or 0; obj.y = save.get("rd_target_y") or 0; obj.z = 0
-  local s = (0.5 * (1.0 + math.sin(time * 5.5) * 0.08) + 0.4 * (save.get("rd_dwell_frac") or 0)) * (save.get("rd_target_scale") or 1)
-  obj.sx = s; obj.sy = s; obj.sz = s
-  obj.r = save.get("rd_target_r") or 1; obj.g = save.get("rd_target_g") or 1; obj.b = save.get("rd_target_b") or 1
-end
-"#;
-
-/// Point suivi (poignet / genou / cheville / hanches) : sphère blanche.
-const HAND_SCRIPT: &str = r#"
-local vis = (save.get("rd_hand_vis") or 0) > 0.5
-obj.visible = vis
-if vis then obj.x = save.get("rd_hand_px") or 0; obj.y = save.get("rd_hand_py") or 0; obj.z = 0.05 end
-"#;
+/// Halo d'une bulle : rétrécit à mesure que sa durée de vie s'écoule — c'est
+/// le compte à rebours visible avant qu'elle n'éclate.
+fn bubble_halo_script(i: usize) -> String {
+    format!(
+        "local alive = (save.get(\"rd_b{i}_alive\") or 0) > 0.5\n\
+         obj.visible = alive\n\
+         if alive then\n\
+           obj.x = save.get(\"rd_b{i}_x\") or 0; obj.y = (save.get(\"rd_b{i}_y\") or 0) + math.sin(time * 2.0 + {i}) * 0.04; obj.z = 0.1\n\
+           local life = save.get(\"rd_b{i}_life\") or 4\n\
+           local left = 1.0 - (time - (save.get(\"rd_b{i}_born\") or time)) / life\n\
+           if left < 0 then left = 0 end\n\
+           local s = 0.42 + 0.5 * left\n\
+           obj.sx = s; obj.sy = s; obj.sz = s\n\
+           obj.r = save.get(\"rd_b{i}_r\") or 1; obj.g = save.get(\"rd_b{i}_g\") or 1; obj.b = save.get(\"rd_b{i}_b\") or 1\n\
+         end\n"
+    )
+}
 
 /// Os de l'avatar (« Os <a>-<b> ») : les 12 segments du squelette de Mouvéo,
-/// chacun un cylindre entre deux repères. Des objets plutôt que des
-/// `debug.line` : les segments de debug ne vivent qu'un pas de simulation et
-/// clignotent dès que l'affichage tourne plus vite que la simulation, alors
-/// qu'un objet est interpolé entre deux pas comme tout le reste.
+/// chacun une capsule entre deux repères.
 const BONES: [(&str, &str); 12] = [
     ("shoulder_l", "shoulder_r"),
     ("shoulder_l", "elbow_l"),
@@ -864,18 +665,27 @@ impl Scene {
         fond.roughness = 0.95;
         objects.push(fond);
 
-        let mut halo = demo_obj("Halo", MeshKind::Sphere, Vec3::new(0.0, 1.8, 0.0));
-        halo.script = HALO_SCRIPT.into();
-        halo.opacity = 0.22;
-        halo.emissive = 0.6;
-        halo.visible = false;
-        objects.push(halo);
-
-        let mut cible = demo_obj("Cible", MeshKind::Sphere, Vec3::new(0.0, 1.8, 0.0));
-        cible.script = TARGET_SCRIPT.into();
-        cible.emissive = 1.4;
-        cible.visible = false;
-        objects.push(cible);
+        for i in 1..=3 {
+            let mut halo = demo_obj(
+                &format!("Halo {i}"),
+                MeshKind::Sphere,
+                Vec3::new(0.0, 1.8, 0.1),
+            );
+            halo.script = bubble_halo_script(i);
+            halo.opacity = 0.22;
+            halo.emissive = 0.6;
+            halo.visible = false;
+            objects.push(halo);
+            let mut bulle = demo_obj(
+                &format!("Bulle {i}"),
+                MeshKind::Sphere,
+                Vec3::new(0.0, 1.8, 0.1),
+            );
+            bulle.script = bubble_script(i);
+            bulle.emissive = 1.4;
+            bulle.visible = false;
+            objects.push(bulle);
+        }
 
         // Os du corps : capsules épaisses (mannequin) ou fines (bâtons). Largeur
         // = 4 × rayon voulu (la capsule unité a un rayon de 0,25).
@@ -1021,14 +831,6 @@ impl Scene {
             }
         }
 
-        let mut main = demo_obj("Point suivi", MeshKind::Sphere, Vec3::new(0.8, 1.3, 0.05));
-        main.transform = main.transform.with_scale(Vec3::splat(0.12));
-        main.color = [1.0, 1.0, 1.0];
-        main.emissive = 1.0;
-        main.script = HAND_SCRIPT.into();
-        main.visible = false;
-        objects.push(main);
-
         let hud_widgets = vec![
             text_widget("titre", HudAnchor::TopLeft, [16.0, 12.0], 24.0),
             text_widget("objectif", HudAnchor::TopLeft, [16.0, 48.0], 16.0),
@@ -1040,24 +842,12 @@ impl Scene {
             text_widget("serie", HudAnchor::TopRight, [-16.0, 132.0], 16.0),
             text_widget("celebration", HudAnchor::Center, [0.0, -150.0], 32.0),
             text_widget("bilan", HudAnchor::Center, [0.0, 40.0], 18.0),
-            text_widget("consigne", HudAnchor::BottomLeft, [16.0, -64.0], 18.0),
-            text_widget("jardin", HudAnchor::BottomLeft, [16.0, -38.0], 0.0),
+            text_widget("consigne", HudAnchor::BottomLeft, [16.0, -40.0], 18.0),
             text_widget("mention", HudAnchor::BottomLeft, [16.0, -14.0], 0.0),
             button_widget("b_demarrer", "▶ Commencer / Arrêter", "demarrer", -16.0),
-            button_widget("b_ex_prev", "◀ Exercice précédent", "ex_prev", -56.0),
-            button_widget("b_ex_next", "Exercice suivant ▶", "ex_next", -96.0),
-            button_widget("b_cote", "Côté gauche / droit", "cote", -136.0),
-            button_widget("b_amplitude", "Amplitude 55-95 %", "amplitude", -176.0),
-            button_widget("b_objectif", "Objectif 4-12 rép.", "objectif", -216.0),
-            button_widget("b_douleur", "Douleur +1 (bilan)", "douleur", -256.0),
-            button_widget("b_fatigue", "Fatigue +1 (bilan)", "fatigue", -296.0),
-            button_widget(
-                "b_enregistrer",
-                "💾 Enregistrer le bilan",
-                "enregistrer",
-                -336.0,
-            ),
-            button_widget("b_avatar", "Avatar : mannequin / bâtons", "avatar", -376.0),
+            button_widget("b_rythme", "Rythme doux / moyen / vif", "rythme", -56.0),
+            button_widget("b_amplitude", "Amplitude 55-95 %", "amplitude", -96.0),
+            button_widget("b_avatar", "Avatar : mannequin / bâtons", "avatar", -136.0),
         ];
 
         Scene {

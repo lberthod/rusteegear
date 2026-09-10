@@ -1802,10 +1802,10 @@ mod tests {
             assert!(t_native.rotation.dot(t_web.rotation).abs() > 1.0 - 1e-5);
         }
 
-        /// Les scripts de la démo Rééducation (directeur + cible + halo + point
-        /// suivi + repères) doivent tourner sur le backend web — Lua 5.1, donc pas
-        /// de `//`, `goto`, `string.format`… — et y jouer une séance complète en
-        /// mode démo : joystick pointé sur la cible → répétitions comptées, bilan.
+        /// Les scripts de la démo Rééducation (directeur, bulles, mannequin, mains)
+        /// doivent tourner sur le backend web — Lua 5.1, donc pas de `//`, `goto`,
+        /// `string.format`… — et y jouer une partie en mode démo : joystick sur
+        /// les bulles → bulles attrapées, points.
         #[test]
         fn reeducation_scripts_run_on_the_web_backend() {
             let scene = crate::scene::Scene::reeducation_demo();
@@ -1826,21 +1826,21 @@ mod tests {
                 })
                 .collect();
             assert!(
-                funcs.len() >= 113,
-                "directeur + cible + halo + point + 13 repères + 12 os + 2 × (21 doigts + 21 phalanges)"
+                funcs.len() >= 100,
+                "directeur + 3 bulles + halos + mannequin + 2 mains"
             );
-            // Ancrage GC comme le fait `AppState` (cf. `anchor_compiled_function`).
             for (i, (_, f)) in funcs.iter_mut().enumerate() {
                 anchor_compiled_function(&mut lua, i as u64, *f).unwrap();
             }
             crate::app::script_ctx::set_pose(&crate::app::pose::PoseFrame::default());
+            crate::app::script_ctx::set_pose_wanted(true);
             let mut vars: HashMap<String, f64> = HashMap::new();
             let mut transforms: Vec<Transform> =
                 scene.objects.iter().map(|o| o.transform).collect();
             let mut events_in: Vec<String> = vec!["hud:demarrer".into()];
             let mut input = PlayerInput::default();
-            let mut best_hits = 0.0;
-            let mut finished = false;
+            let get = |vars: &HashMap<String, f64>, k: &str| vars.get(k).copied().unwrap_or(0.0);
+            let mut caught = 0.0;
             for tick in 0..2400u32 {
                 let time = tick as f32 / 60.0;
                 let mut events_out = Vec::new();
@@ -1867,28 +1867,27 @@ mod tests {
                     .into_iter()
                     .filter(|e| !e.starts_with(crate::app::script_ctx::SYS_EVENT_PREFIX))
                     .collect();
-                // Pilotage : le joystick est intégré vers la cible (commande
-                // intégrale : la position du point suivi est fonction du stick).
-                let tx = vars.get("rd_target_x").copied().unwrap_or(0.0) as f32;
-                let ty = vars.get("rd_target_y").copied().unwrap_or(0.0) as f32;
-                let hx = vars.get("rd_hand_px").copied().unwrap_or(0.0) as f32;
-                let hy = vars.get("rd_hand_py").copied().unwrap_or(0.0) as f32;
-                input.joy.0 = (input.joy.0 + 0.2 * (tx - hx)).clamp(-1.0, 1.0);
-                input.joy.1 = (input.joy.1 + 0.2 * (ty - hy)).clamp(-1.0, 1.0);
-                let hits = vars.get("rd_hits").copied().unwrap_or(0.0);
-                best_hits = f64::max(best_hits, hits);
-                if vars.get("rd_stage").copied().unwrap_or(0.0) == 3.0 {
-                    finished = true;
+                // Pilotage vers la première bulle vivante (commande intégrale).
+                let bubble = (1..=3).find(|i| get(&vars, &format!("rd_b{i}_alive")) > 0.5);
+                if let Some(i) = bubble {
+                    let (bx, by) = (
+                        get(&vars, &format!("rd_b{i}_x")) as f32,
+                        get(&vars, &format!("rd_b{i}_y")) as f32,
+                    );
+                    let (hx, hy) = (
+                        get(&vars, "rd_p_wrist_r_x") as f32,
+                        get(&vars, "rd_p_wrist_r_y") as f32,
+                    );
+                    input.joy.0 = (input.joy.0 + 0.25 * (bx - hx)).clamp(-1.0, 1.0);
+                    input.joy.1 = (input.joy.1 + 0.25 * (by - hy)).clamp(-1.0, 1.0);
+                }
+                caught = get(&vars, "rd_caught");
+                if caught >= 4.0 {
                     break;
                 }
             }
-            assert!(
-                finished,
-                "la séance doit se terminer une fois l'objectif atteint (répétitions max : {best_hits})"
-            );
-            assert_eq!(best_hits, 8.0, "objectif par défaut : 8 répétitions");
-            assert!(vars["rd_points"] >= 80.0, "points : {}", vars["rd_points"]);
-            assert!(vars["rd_regularity"] >= 50.0);
+            assert!(caught >= 4.0, "bulles attrapées sur rilua : {caught}");
+            assert!(get(&vars, "rd_points") >= 40.0);
         }
     }
 }

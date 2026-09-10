@@ -1024,7 +1024,7 @@ fn reeducation_demo_is_wired_for_its_director_script() {
             .unwrap_or_else(|| panic!("sphère « Repère {name} » manquante"));
         assert!(obj.script.contains(&format!("rd_p_{name}_x")));
     }
-    for name in ["Cible", "Halo", "Point suivi", "Sol"] {
+    for name in ["Bulle 1", "Bulle 3", "Halo 1", "Halo 3", "Torse", "Sol"] {
         assert!(
             scene.objects.iter().any(|o| o.name == name),
             "{name} manquant"
@@ -1069,23 +1069,14 @@ fn reeducation_demo_is_wired_for_its_director_script() {
             _ => None,
         })
         .collect();
-    for a in [
-        "demarrer",
-        "ex_prev",
-        "ex_next",
-        "cote",
-        "amplitude",
-        "objectif",
-        "douleur",
-        "fatigue",
-        "enregistrer",
-    ] {
+    for a in ["demarrer", "rythme", "amplitude", "avatar"] {
         assert!(actions.contains(&a), "bouton « {a} » manquant");
         assert!(
             scene.objects[0].script.contains(&format!("hud:{a}")),
             "le directeur n'écoute pas hud:{a}"
         );
     }
+    assert_eq!(actions.len(), 4, "un seul mode de jeu : quatre boutons");
     for id in [
         "titre",
         "consigne",
@@ -1095,7 +1086,7 @@ fn reeducation_demo_is_wired_for_its_director_script() {
         "objectif",
         "bilan",
         "celebration",
-        "jardin",
+        "mention",
     ] {
         assert!(
             scene.hud_widgets.iter().any(|w| w.id == id),
