@@ -378,6 +378,7 @@ pub(super) struct PipelineBundle {
     pub(super) tonemap_pipeline: wgpu::RenderPipeline,
     pub(super) tonemap_layout: wgpu::BindGroupLayout,
     pub(super) tonemap_sampler: wgpu::Sampler,
+    pub(super) tonemap_sampler_nearest: wgpu::Sampler,
     pub(super) hdr_view: wgpu::TextureView,
     pub(super) msaa_color_view: Option<wgpu::TextureView>,
     pub(super) bloom_threshold_pipeline: wgpu::RenderPipeline,
@@ -939,6 +940,15 @@ pub(super) fn build(
         min_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
+    // Variante sans filtrage (mode plateformer 2D, `Renderer::set_pixel_scale`) :
+    // la cible HDR basse résolution est agrandie pixel par pixel — c'est ce qui
+    // donne le rendu « pixel art » sans dessiner un seul sprite.
+    let tonemap_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("tonemap_sampler_nearest"),
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
     let tonemap_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("tonemap_pipeline_layout"),
         bind_group_layouts: &[Some(&tonemap_layout)],
@@ -1410,6 +1420,7 @@ pub(super) fn build(
         tonemap_pipeline,
         tonemap_layout,
         tonemap_sampler,
+        tonemap_sampler_nearest,
         hdr_view,
         msaa_color_view,
         bloom_threshold_pipeline,

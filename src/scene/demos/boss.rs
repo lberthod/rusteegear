@@ -103,6 +103,7 @@ impl Scene {
                 yaw: 0.0,
                 pitch: 0.45,
                 distance: 11.0,
+                ortho_height: 0.0,
             }),
             point_lights: vec![PointLight {
                 position: [0.0, 6.0, -2.0],

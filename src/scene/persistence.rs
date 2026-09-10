@@ -118,6 +118,7 @@ impl Scene {
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
+            platformer: None,
             version: Scene::CURRENT_VERSION,
         })
     }

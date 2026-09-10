@@ -41,6 +41,8 @@ pub enum HudBinding {
     Score,
     Kills,
     Wave,
+    /// Morts de la partie (mode plateformer 2D, `AppState::deaths`).
+    Deaths,
 }
 
 /// Contenu d'un `HudWidget`. Les 4 natures couvertes par le Sprint 109 —

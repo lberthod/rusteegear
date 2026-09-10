@@ -162,6 +162,7 @@ impl Renderer {
             tonemap_pipeline,
             tonemap_layout,
             tonemap_sampler,
+            tonemap_sampler_nearest,
             hdr_view,
             msaa_color_view,
             bloom_threshold_pipeline,
@@ -218,6 +219,8 @@ impl Renderer {
             tonemap_pipeline,
             tonemap_layout,
             tonemap_sampler,
+            tonemap_sampler_nearest,
+            pixel_scale: 1,
             hdr_view,
             msaa_color_view,
             msaa_samples,
@@ -297,15 +300,45 @@ impl Renderer {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         surface.configure(&self.device, &self.config);
-        self.depth_view = create_depth_view(&self.device, &self.config, self.msaa_samples);
-        (self.hdr_view, self.msaa_color_view) = create_hdr_view(
-            &self.device,
-            new_size.width,
-            new_size.height,
-            self.msaa_samples,
-        );
-        self.bloom_mip_views =
-            create_bloom_mip_views(&self.device, new_size.width, new_size.height);
+        self.recreate_internal_targets();
+    }
+
+    /// Taille des cibles intermédiaires (HDR, profondeur, bloom) : celle de la
+    /// surface divisée par `pixel_scale` (jamais moins de 1×1).
+    pub(super) fn internal_size(&self) -> (u32, u32) {
+        let k = self.pixel_scale.max(1);
+        (
+            (self.config.width / k).max(1),
+            (self.config.height / k).max(1),
+        )
+    }
+
+    /// Recrée `hdr_view`/`msaa_color_view`/`depth_view`/`bloom_mip_views` à
+    /// `internal_size()` — après un redimensionnement de fenêtre ou un changement
+    /// de `pixel_scale`. La surface elle-même n'est pas touchée.
+    fn recreate_internal_targets(&mut self) {
+        let (w, h) = self.internal_size();
+        let mut cfg = self.config.clone();
+        cfg.width = w;
+        cfg.height = h;
+        self.depth_view = create_depth_view(&self.device, &cfg, self.msaa_samples);
+        (self.hdr_view, self.msaa_color_view) =
+            create_hdr_view(&self.device, w, h, self.msaa_samples);
+        self.bloom_mip_views = create_bloom_mip_views(&self.device, w, h);
+    }
+
+    /// Facteur de pixelisation (mode plateformer 2D, `Platformer2D::pixel_scale`) :
+    /// `1` = rendu normal ; `k` = la scène est dessinée à `1/k` de la résolution puis
+    /// agrandie sans filtrage par le tone mapping (`tonemap_sampler_nearest`). L'UI
+    /// egui (HUD, menus) reste dessinée à la résolution de la surface. No-op si la
+    /// valeur ne change pas — appelé chaque frame par `render()`.
+    pub fn set_pixel_scale(&mut self, scale: u32) {
+        let scale = scale.clamp(1, 16);
+        if scale == self.pixel_scale || self.surface.is_none() {
+            return;
+        }
+        self.pixel_scale = scale;
+        self.recreate_internal_targets();
     }
 
     /// Recrée `debug_vbuf` en le doublant tant qu'il ne peut pas contenir `n` sommets,

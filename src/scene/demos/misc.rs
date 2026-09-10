@@ -52,6 +52,7 @@ end"
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
+            platformer: None,
             version: Scene::CURRENT_VERSION,
         }
     }
@@ -104,6 +105,7 @@ end"
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
+            platformer: None,
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {
@@ -188,6 +190,7 @@ if input.btn.Saut then obj.y = 1.4 else obj.y = 0.5 end";
             sky: Sky::default(),
             hud_layout: HudLayout::default(),
             hud_widgets: Vec::new(),
+            platformer: None,
             version: Scene::CURRENT_VERSION,
             objects: vec![
                 SceneObject {

@@ -65,7 +65,13 @@ fn frustum_slice_corners(
     let tan_half = (cam.fovy * 0.5).tan();
     let mut out = [glam::Vec3::ZERO; 8];
     for (k, d) in [d0, d1].into_iter().enumerate() {
-        let hh = d * tan_half;
+        // Orthographique (`OrbitCamera::ortho_height`) : demi-hauteur constante
+        // quelle que soit la distance — la tranche est un pavé, pas un tronc.
+        let hh = if cam.ortho_height > 0.0 {
+            cam.ortho_height * 0.5
+        } else {
+            d * tan_half
+        };
         let hw = hh * cam.aspect;
         let c = eye + forward * d;
         out[k * 4] = c + right * hw + up * hh;

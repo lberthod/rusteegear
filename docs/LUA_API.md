@@ -32,6 +32,7 @@ tourne ou colore réellement l'objet.
 | `obj.sx`, `obj.sy`, `obj.sz` | nombre (lecture/écriture) | Échelle. |
 | `obj.r`, `obj.g`, `obj.b` | nombre 0..1 (lecture/écriture) | Couleur de l'objet. |
 | `obj.anim` | chaîne (lecture/écriture) | Clip d'animation en cours ; `obj.anim = "run"` démarre un fondu vers ce clip. Sans effet sur un objet non animé. |
+| `obj.visible` | booléen (lecture/écriture) | Affiché **et** solide. `obj.visible = false` fait disparaître l'objet et coupe ses collisions sans reconstruire la physique (un saut en cours continue) ; `true` le fait revenir — réversible, contrairement à `obj:destroy()`. Pensé pour les pièges du mode plateformer 2D (`Scene::platformer`). |
 
 Drapeaux **lecture seule**, posés par le moteur et remis à zéro à chaque pas :
 
@@ -59,6 +60,7 @@ Méthode :
 | `input.jx`, `input.jy` | nombre -1..1 | Axes du joystick virtuel (tactile) ou de son équivalent clavier. |
 | `input.btn.<nom>` | `true` ou absent | Bouton tactile pressé (`if input.btn.B1 then … end`) ; un bouton non pressé est `nil`. |
 | `tilt.x`, `tilt.y` | nombre -1..1 | Inclinaison gyroscope/accéléromètre (desktop : simulée aux flèches). |
+| `deaths` | nombre (lecture seule) | Morts de la partie en cours (mode plateformer 2D, réapparition instantanée) — survit aux relances automatiques, remis à 0 à l'entrée en Play. Permet à un piège de changer selon la tentative. |
 | `save.get(clé)` | fonction → nombre ou `nil` | Lit une variable de sauvegarde. |
 | `save.set(clé, valeur)` | fonction | Écrit une variable de sauvegarde (**nombres seulement**). Partagée entre tous les objets, conservée avant erreur, embarquée dans la sauvegarde de partie. |
 | `debug.line(x1,y1,z1, x2,y2,z2, r,g,b)` | fonction | Trace un segment de débogage (couleur 0..1) visible une frame ; les appels s'accumulent. Remplace la bibliothèque `debug` standard de Lua. |
@@ -78,6 +80,9 @@ Méthode :
 | `damage(v)` | — | Retire `v` à la vie (cumulatif dans la frame, borné 0..1) — `damage(999)` pour une zone mortelle. |
 | `reverb(mix)` | — | Réverbération du bus SFX (0..1, transition 0,5 s) ; le dernier appel du pas l'emporte. |
 | `vibrate(ms)` | — | Demande un retour haptique — **aujourd'hui seulement journalisé**, sur toutes les cibles. |
+| `checkpoint(x, y, z)` | — | Point de réapparition du joueur après une mort en mode plateformer 2D (sinon : position de départ). Appliqué après la boucle des scripts ; le dernier appel du pas l'emporte. |
+| `hud_text(id, texte)` | — | Remplace le contenu du widget HUD `Text` dont l'id est `id` (fenêtre 🧩 Widgets HUD) ; `""` l'efface. Survit aux réapparitions, effacé à l'entrée en Play. Vannes de mort, nom de niveau… |
+| `teleport(x, y, z)` | — | Déplace le joueur local (corps physique et caméra de suivi compris) — typiquement depuis la zone `trigger` d'une porte de sortie, pour enchaîner les niveaux d'une même scène. |
 
 ## Événements émis par le moteur
 
@@ -109,7 +114,7 @@ Bon à savoir :
 
 ## Natif ↔ web : ce qui diffère
 
-Les 18 globales ci-dessus existent avec les mêmes noms et arités sur les deux
+Les 22 globales ci-dessus existent avec les mêmes noms et arités sur les deux
 interpréteurs, `raycast` et `overlap_sphere` compris. Les écarts réels :
 
 | Sujet | Natif (`mlua`, Lua 5.4) | Web (`rilua`, Lua 5.1) |

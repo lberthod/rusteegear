@@ -153,6 +153,14 @@ impl Renderer {
         self.sync_objects(&app.scene);
         self.sync_imported(&app.scene);
         self.sync_textures(&app.scene);
+        // Pixelisation du mode plateformer 2D : en Play (et en player) seulement —
+        // l'édition reste nette. No-op tant que la valeur ne change pas.
+        let pixel_scale = if app.playing || app.player {
+            app.scene.platformer.map(|p| p.pixel_scale).unwrap_or(1)
+        } else {
+            1
+        };
+        self.set_pixel_scale(pixel_scale);
 
         // Aperçu mobile : restreint la vue 3D à un écran de téléphone (letterbox).
         // L'aspect caméra doit suivre ce rectangle (sinon l'image serait étirée).
@@ -299,6 +307,9 @@ impl Renderer {
         let lost = app.is_lost();
         let won = app.has_won();
         let wave = app.wave;
+        let deaths = app.deaths();
+        let hud_texts_owned = app.hud_texts.clone();
+        let hud_texts = &hud_texts_owned;
         let mut restart = false;
         let mut resume = false;
         let mut player_net_actions = None;
@@ -346,6 +357,8 @@ impl Renderer {
                     lost,
                     won,
                     wave,
+                    deaths,
+                    hud_texts,
                     &mut restart,
                     app.paused,
                     &mut resume,
@@ -486,6 +499,8 @@ impl Renderer {
                 lost,
                 won,
                 wave,
+                deaths,
+                hud_texts,
                 status,
                 &net_status,
                 net_connected,
@@ -726,6 +741,19 @@ impl Renderer {
         debug_count: u32,
     ) -> u32 {
         let mut scene_draw_calls = 0;
+        // Viewport exprimé dans la cible HDR, plus petite que la surface quand la
+        // pixelisation est active (cf. `set_pixel_scale`) ; borné à la cible pour
+        // qu'un arrondi ne fasse jamais déborder le scissor (erreur de validation wgpu).
+        let (dx, dy, dw, dh) = {
+            let k = self.pixel_scale.max(1) as f32;
+            let (tw, th) = self.internal_size();
+            let (tw, th) = (tw as f32, th as f32);
+            let x = (dx / k).clamp(0.0, tw);
+            let y = (dy / k).clamp(0.0, th);
+            let w = (dw / k).clamp(1.0, (tw - x).max(1.0));
+            let h = (dh / k).clamp(1.0, (th - y).max(1.0));
+            (x, y, w, h)
+        };
         // Si le MSAA est actif (`msaa_color_view`), la passe dessine dans la cible
         // multi-échantillonnée et se résout vers `hdr_view` (`resolve_target`) —
         // sinon comportement inchangé.

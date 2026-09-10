@@ -1261,6 +1261,8 @@ impl Editor {
         lost: bool,
         won: bool,
         wave: u32,
+        deaths: u32,
+        hud_texts: &std::collections::HashMap<String, String>,
         restart: &mut bool,
         paused: bool,
         resume: &mut bool,
@@ -1707,6 +1709,8 @@ impl Editor {
                 score,
                 kills,
                 wave,
+                deaths,
+                hud_texts,
             };
             actions.hud_clicks = hud_widgets(ctx, area, scene, &values, hud_image_cache);
         });
@@ -1749,6 +1753,8 @@ impl Editor {
         lost: bool,
         won: bool,
         wave: u32,
+        deaths: u32,
+        hud_texts: &std::collections::HashMap<String, String>,
         status: StatusInfo,
         net_status: &str,
         net_connected: bool,
@@ -1894,6 +1900,8 @@ impl Editor {
                 lost,
                 won,
                 wave,
+                deaths,
+                hud_texts,
                 &status,
                 export,
                 hier_filter,
@@ -2122,6 +2130,8 @@ fn build_ui(
     lost: bool,
     won: bool,
     wave: u32,
+    deaths: u32,
+    hud_texts: &std::collections::HashMap<String, String>,
     status: &StatusInfo,
     export: &mut export::ExportPanel,
     hier_filter: &mut String,
@@ -2595,6 +2605,8 @@ fn build_ui(
         score,
         kills,
         wave,
+        deaths,
+        hud_texts,
         hud_image_cache,
         actions,
         settings.mouse_sensitivity,
@@ -2881,6 +2893,45 @@ fn inspector_panel(
                          spéculaire fort) ; coupé automatiquement en qualité Basse.",
                     );
                 });
+                if let Some(pl) = scene.platformer.as_mut() {
+                    ui.collapsing("🕹 Plateformer 2D", |ui| {
+                        ui.checkbox(&mut pl.lock_z, "Déplacement sur X seulement (verrou Z)");
+                        ui.add(
+                            egui::DragValue::new(&mut pl.plane_z)
+                                .speed(0.1)
+                                .prefix("plan de jeu z = "),
+                        );
+                        ui.checkbox(
+                            &mut pl.instant_respawn,
+                            "Mort instantanée + réapparition au point de contrôle",
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut pl.kill_y)
+                                .speed(0.1)
+                                .prefix("mort sous y = "),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut pl.pixel_scale, 1..=8)
+                                .text("pixelisation (Play)"),
+                        );
+                        ui.checkbox(&mut pl.tombstones, "Tombe à chaque mort");
+                        if let Some(gc) = scene.game_camera.as_mut() {
+                            ui.add(
+                                egui::Slider::new(&mut gc.ortho_height, 0.0..=40.0)
+                                    .text("hauteur orthographique (0 = perspective)"),
+                            );
+                        } else {
+                            ui.weak(
+                                "Définir une caméra de jeu (📷) pour régler la vue \
+                                 orthographique de côté.",
+                            );
+                        }
+                        ui.weak(
+                            "Scripts : obj.visible (lecture/écriture), deaths, \
+                             checkpoint(x,y,z), teleport(x,y,z) — cf. docs/LUA_API.md.",
+                        );
+                    });
+                }
                 if !scene.point_lights.is_empty() {
                     ui.collapsing(
                         format!("💡 Lumières ponctuelles ({})", scene.point_lights.len()),
@@ -3771,6 +3822,20 @@ fn toolbar(
                 scene.camera_follow = !scene.camera_follow;
             }
             if ui
+                .selectable_label(scene.platformer.is_some(), "🕹 2D")
+                .on_hover_text(
+                    "Mode plateformer 2D : déplacement sur X + saut, mort instantanée \
+                     et réapparition au point de contrôle, rendu pixelisé en Play. \
+                     Réglages dans l'inspecteur de scène (section « Plateformer 2D »).",
+                )
+                .clicked()
+            {
+                scene.platformer = match scene.platformer {
+                    Some(_) => None,
+                    None => Some(crate::scene::Platformer2D::default()),
+                };
+            }
+            if ui
                 .selectable_label(status.grid, "▦ Grille")
                 .on_hover_text("Grille de référence au sol (édition)")
                 .clicked()
@@ -3950,6 +4015,8 @@ fn end_of_round_and_hud_widgets(
     score: u32,
     kills: u32,
     wave: u32,
+    deaths: u32,
+    hud_texts: &std::collections::HashMap<String, String>,
     hud_image_cache: &mut HudImageCache,
     actions: &mut UiActions,
     // Sensibilité souris des Paramètres (roadmap post-audit UX v2 2026-09-04,
@@ -3997,6 +4064,8 @@ fn end_of_round_and_hud_widgets(
             score,
             kills,
             wave,
+            deaths,
+            hud_texts,
         };
         actions.hud_clicks = hud_widgets(root.ctx(), play_rect, scene, &values, hud_image_cache);
     }

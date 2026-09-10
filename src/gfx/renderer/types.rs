@@ -263,6 +263,13 @@ pub struct Renderer {
     pub(super) tonemap_pipeline: wgpu::RenderPipeline,
     pub(super) tonemap_layout: wgpu::BindGroupLayout,
     pub(super) tonemap_sampler: wgpu::Sampler,
+    /// Sampler `Nearest` du tone mapping, utilisé quand `pixel_scale > 1`.
+    pub(super) tonemap_sampler_nearest: wgpu::Sampler,
+    /// Facteur de pixelisation courant (`set_pixel_scale`, mode plateformer 2D) :
+    /// `hdr_view`/`depth_view`/`bloom_mip_views` font `size / pixel_scale`, et la
+    /// passe principale dessine dans ce viewport réduit ; le tone mapping remonte le
+    /// tout à la taille de la surface avec `tonemap_sampler_nearest`. `1` = inactif.
+    pub(super) pixel_scale: u32,
     /// Cible HDR de la passe principale en mode fenêtré — redimensionnée
     /// dans `resize()`, comme `depth_view`. Les chemins headless/test créent la leur en
     /// local (taille demandée par l'appelant, indépendante de la fenêtre).

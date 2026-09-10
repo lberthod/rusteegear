@@ -252,6 +252,10 @@ struct ScriptRunOutcome {
     /// Vie du joueur local après régénération passive et `damage()`/`heal()`
     /// éventuels des scripts, `None` si `hud_health` était déjà `None`.
     health: Option<f32>,
+    /// Objets dont un script a changé `obj.visible` ce tick (index, visible) :
+    /// leurs colliders sont (dés)activés après la boucle (`Physics::
+    /// set_object_solid`) — la boucle emprunte `scene.objects`, pas `physics`.
+    solid_changes: Vec<(usize, bool)>,
 }
 
 /// Avance la lecture des clips d'animation squelettale : indépendant des
@@ -337,6 +341,8 @@ fn drive_local_and_networked_players(
         joy.1 + inp.key_move.1 + inp.gamepad_move.1,
     );
     let (mx, my) = camera_relative_move(raw_mx, raw_my, camera_yaw);
+    // Plateformer 2D (`Scene::platformer`) : déplacement sur X seulement, cf. plus bas.
+    let lock_z = scene.platformer.is_some_and(|p| p.lock_z);
     let (tilt, space) = (inp.tilt, inp.jump);
     let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
     let mut any_jump = false;
@@ -388,7 +394,17 @@ fn drive_local_and_networked_players(
         };
         let mut vx = 0.0;
         let mut vz = 0.0;
-        if ctrl.input {
+        if ctrl.input && lock_z {
+            // Plateformer 2D : gauche/droite **écran** = axe X monde, sans passer
+            // par `camera_relative_move` (la caméra de côté regarde le long de Z,
+            // la rotation relative enverrait le joueur dans la profondeur). Le
+            // joueur réseau garde son entrée brute pour la même raison.
+            let raw = match net_input {
+                Some(n) => n.move_x.clamp(-1.0, 1.0),
+                None => raw_mx,
+            };
+            vx += raw * ctrl.move_speed;
+        } else if ctrl.input {
             vx += mx * ctrl.move_speed;
             if ctrl.auto_run_speed > 0.0 {
                 // Course automatique (endless runner) : avance en continu en +Z ;
@@ -407,7 +423,7 @@ fn drive_local_and_networked_players(
         // reste du déplacement. `-sin(yaw)`/`-cos(yaw)`
         // = même formule que l'inverse de `camera_relative_move` (yaw=0 ⇒ avant
         // = -Z, cf. `Physics::face_direction`).
-        if ctrl.input && net_input.is_none() && key_thrust != 0.0 {
+        if ctrl.input && net_input.is_none() && key_thrust != 0.0 && !lock_z {
             let yaw = obj.transform.rotation.to_euler(EulerRot::YXZ).0;
             vx += key_thrust * ctrl.move_speed * -yaw.sin();
             vz += key_thrust * ctrl.move_speed * -yaw.cos();
@@ -833,7 +849,7 @@ impl AppState {
     /// 3.4). Le drapeau reprend sa valeur d'avant Play, sauf si les réglages
     /// de scène hors objets (lumière, HUD… édités en pause) ont changé entre
     /// temps : ceux-là ne sont pas restaurés, ils restent à enregistrer.
-    fn on_play_stopped(&mut self) {
+    pub(super) fn on_play_stopped(&mut self) {
         self.scene.objects = self.play_snapshot.clone();
         // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
         self.clear_network_players();
@@ -856,6 +872,8 @@ impl AppState {
         self.wave = 0;
         self.win_time = None;
         self.lost = false;
+        // L'orbite éditeur est toujours en perspective (cf. `OrbitCamera::ortho_height`).
+        self.camera.ortho_height = 0.0;
         self.clear_selection();
         self.audio.stop_all();
         if let Some(ctx) = self.edit_context.take() {
@@ -920,6 +938,11 @@ impl AppState {
                 settings_fingerprint: self.scene_settings_fingerprint(),
             });
             self.play_snapshot = self.scene.objects.clone();
+            // Nouvelle partie : compteur de morts et point de contrôle du mode
+            // plateformer 2D repartent de zéro (ils survivent à `restart_game`).
+            self.deaths = 0;
+            self.checkpoint = None;
+            self.hud_texts.clear();
             // Manche 1 révélée, suivantes masquées, *avant* de construire la physique
             // (cf. `init_waves` : les monstres masqués n'ont pas de corps rigide).
             self.init_waves();
@@ -978,6 +1001,9 @@ impl AppState {
                 self.camera.yaw = gc.yaw;
                 self.camera.pitch = gc.pitch;
                 self.camera.distance = gc.distance;
+                // Vue orthographique de jeu (plateformer 2D) : seulement en Play,
+                // remise à 0 (perspective) par `on_play_stopped`.
+                self.camera.ortho_height = gc.ortho_height.max(0.0);
                 if !self.scene.camera_follow {
                     self.camera.target = Vec3::from_array(gc.target);
                 }
@@ -1166,10 +1192,16 @@ impl AppState {
             // Réapparition des pièces bonus et ennemis dont le délai est écoulé.
             let now = self.time;
             self.process_respawns(now);
-            // Défaite : le joueur a touché une zone mortelle (mort instantanée, ex. lave).
+            // Mode plateformer 2D à réapparition instantanée : la mort est vérifiée
+            // à chaque pas fixe dans `sim_step` (`check_instant_death`), jamais ici.
+            let instant_respawn = self.scene.platformer.is_some_and(|p| p.instant_respawn);
+            // Défaite : le joueur a touché une zone mortelle (mort instantanée, ex. lave),
+            // ou — plateformer 2D — est tombé sous `kill_y` (le vide).
             if !self.lost
+                && !instant_respawn
                 && let Some(p) = self.player_position()
-                && self.scene.deadly_at(p)
+                && (self.scene.deadly_at(p)
+                    || self.scene.platformer.is_some_and(|pl| p.y < pl.kill_y))
             {
                 self.lost = true;
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
@@ -1179,6 +1211,7 @@ impl AppState {
             // Contrairement aux zones mortelles, les ennemis punissent par usure (dégâts
             // progressifs + régénération hors contact), plus indulgent qu'une mort au tap.
             if !self.lost
+                && !instant_respawn
                 && let Some(h) = self.hud_health
                 && h <= 0.0
             {
@@ -1562,6 +1595,25 @@ impl AppState {
             // la position réellement atteinte est réécrite dans la scène.
             phys.resolve_scripted_moves(dt, &mut self.scene);
             phys.step(dt, &mut self.scene);
+            // Plateformer 2D : le joueur est ramené sur le plan de jeu après le pas
+            // (une bousculade ou une pente latérale pourrait sinon le faire dériver
+            // en profondeur, invisible de côté mais fatal aux sauts calibrés).
+            if let Some(pl) = self.scene.platformer
+                && pl.lock_z
+            {
+                let player = self
+                    .scene
+                    .objects
+                    .iter()
+                    .position(|o| o.visible && o.controller.as_ref().is_some_and(|c| c.input));
+                if let Some(idx) = player
+                    && let Some(o) = self.scene.objects.get_mut(idx)
+                    && (o.transform.position.z - pl.plane_z).abs() > 1e-4
+                {
+                    o.transform.position.z = pl.plane_z;
+                    phys.set_position(idx, o.transform.position);
+                }
+            }
             // Les créatures en pleine visée suivent la position réellement
             // atteinte (bousculades comprises), cf. `refresh_frozen_anchors`.
             self.refresh_frozen_anchors();
@@ -1586,6 +1638,9 @@ impl AppState {
                 crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
             }
         }
+
+        // Plateformer 2D : mort instantanée + réapparition, à pas fixe (cf. sa doc).
+        self.check_instant_death();
 
         // Instantané de fin de pas pour l'interpolation de rendu (cf. `advance_play`) :
         // l'ancien « courant » devient le « précédent », puis on capture les poses
@@ -1690,6 +1745,11 @@ impl AppState {
         // exige `&mut self` en entier, incompatible avec l'emprunt de
         // `self.scene.objects` actif tout le temps de la boucle ci-dessous (`obj`).
         let mut item_add_requests: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
+        // `obj.visible` réécrit par un script : accumulé comme `spawn_requests`
+        // (les colliders sont basculés après la boucle, cf. `ScriptRunOutcome`).
+        let mut solid_changes: Vec<(usize, bool)> = Vec::new();
+        // Global Lua `deaths` (mode plateformer 2D), lu par les deux backends.
+        super::script_ctx::set_deaths(self.deaths);
         // Calculé une fois : `self.scene.objects` est emprunté mutable par
         // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
         // n'y serait pas appelable.
@@ -1774,6 +1834,7 @@ impl AppState {
                 let mut destroy_requested = false;
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
+                super::script_ctx::set_object_visible(obj.visible);
                 if let Err(e) = scripting_web::run_script_web(
                     &mut self.scripting.lua_web,
                     &func,
@@ -1809,8 +1870,15 @@ impl AppState {
                     }
                     self.script_errors.insert(idx, msg);
                 }
+                if let Some(v) = super::script_ctx::take_visible()
+                    && v != obj.visible
+                {
+                    obj.visible = v;
+                    solid_changes.push((idx, v));
+                }
                 if destroy_requested {
                     obj.visible = false;
+                    solid_changes.push((idx, false));
                 }
                 spawn_requests.extend(spawns_this_obj);
                 item_add_requests.extend(item_adds_this_obj);
@@ -1851,6 +1919,7 @@ impl AppState {
                 let mut destroy_requested = false;
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
+                super::script_ctx::set_object_visible(obj.visible);
                 if let Err(e) = scripting::run_script(
                     &self.scripting.lua,
                     &func,
@@ -1886,10 +1955,19 @@ impl AppState {
                     }
                     self.script_errors.insert(idx, msg);
                 }
+                // `obj.visible` réécrit par le script (mode plateformer 2D : sol qui
+                // disparaît, bloc qui apparaît) — réversible, contrairement à `destroy`.
+                if let Some(v) = super::script_ctx::take_visible()
+                    && v != obj.visible
+                {
+                    obj.visible = v;
+                    solid_changes.push((idx, v));
+                }
                 // `obj:destroy()` : suppression douce, cf. sa doc dans
                 // `run_script` — jamais un retrait de `scene.objects`.
                 if destroy_requested {
                     obj.visible = false;
+                    solid_changes.push((idx, false));
                 }
                 spawn_requests.extend(spawns_this_obj);
                 item_add_requests.extend(item_adds_this_obj);
@@ -1902,6 +1980,102 @@ impl AppState {
             vibrations,
             reverb_requests,
             health,
+            solid_changes,
+        }
+    }
+
+    /// Plafond de tombes laissées par `rage_death` (au-delà, le niveau est déjà un
+    /// cimetière et chaque objet coûte un draw instancié de plus).
+    const MAX_TOMBSTONES: usize = 200;
+
+    /// Mode plateformer 2D à réapparition instantanée : zone mortelle, chute sous
+    /// `kill_y` ou vie à 0 ⇒ `rage_death`. Vérifié à chaque **pas fixe** (fin de
+    /// `sim_step`) et non par frame comme `lost` : déterministe, et donc identique
+    /// en temps réel et en pas simulés (`advance_steps`, pont de pilotage).
+    fn check_instant_death(&mut self) {
+        let Some(pl) = self.scene.platformer else {
+            return;
+        };
+        if !pl.instant_respawn || self.lost {
+            return;
+        }
+        let Some(p) = self.player_position() else {
+            return;
+        };
+        let dead = self.scene.deadly_at(p)
+            || p.y < pl.kill_y
+            || self.hud_health.is_some_and(|h| h <= 0.0);
+        if dead {
+            self.rage_death();
+        }
+    }
+
+    /// Mort en mode plateformer 2D (`Platformer2D::instant_respawn`) : compte,
+    /// secoue, relance la scène **tout de suite** (`restart_game`, qui restaure
+    /// tous les pièges) puis replace le joueur au dernier `checkpoint()` — sans
+    /// bannière ni bouton, la boucle « encore une fois » ne doit jamais attendre.
+    pub(crate) fn rage_death(&mut self) {
+        self.deaths = self.deaths.saturating_add(1);
+        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+        // `restart_game` lève la pause (pensé pour le bouton du menu pause) : une
+        // mort en pas-à-pas (éditeur en pause, `step`) ne doit pas relancer le
+        // temps réel — on restaure l'état de pause tel quel.
+        let paused = self.paused;
+        // Tombe à l'endroit de la mort (`Platformer2D::tombstones`) : une chute
+        // dans le vide la laisse juste sous le niveau du sol, au-dessus du trou.
+        let tomb = self
+            .scene
+            .platformer
+            .filter(|pl| pl.tombstones)
+            .and_then(|_| self.player_position())
+            .filter(|_| {
+                self.play_snapshot.iter().filter(|o| o.name == "Tombe").count()
+                    < Self::MAX_TOMBSTONES
+            });
+        self.restart_game();
+        if let Some(p) = tomb {
+            let pos = Vec3::new(p.x, p.y.max(-0.8), p.z);
+            let mut transform = crate::scene::Transform::from_pos(pos);
+            transform.scale = Vec3::new(0.35, 0.45, 0.35);
+            let tomb = crate::scene::SceneObject {
+                name: "Tombe".into(),
+                transform,
+                mesh: crate::scene::MeshKind::Cube,
+                physics: crate::runtime::physics::PhysicsKind::None,
+                color: [0.45, 0.45, 0.5],
+                emissive: 1.0,
+                ..Default::default()
+            };
+            self.play_snapshot.push(tomb.clone());
+            self.scene.objects.push(tomb);
+        }
+        self.paused = paused;
+        if let Some(cp) = self.checkpoint {
+            self.place_player(cp);
+        }
+        // Posés **après** `restart_game`, qui les remet à zéro.
+        self.fx.damage_flash = 1.0;
+        self.fx.camera_shake = 1.0;
+    }
+
+    /// Téléporte le joueur local (transform + corps physique + caméra de suivi).
+    /// Sert au `checkpoint` de `rage_death` et à la fonction Lua `teleport(x, y, z)`.
+    fn place_player(&mut self, pos: Vec3) {
+        let Some(idx) = self.player_index() else {
+            return;
+        };
+        if let Some(o) = self.scene.objects.get_mut(idx) {
+            o.transform.position = pos;
+        }
+        if let Some(phys) = self.physics.as_mut() {
+            phys.set_position(idx, pos);
+        }
+        // Poses d'interpolation périmées : sans ça, le rendu glisserait le joueur
+        // de l'ancienne position à la nouvelle pendant une frame.
+        self.sim_poses.sim_prev_poses.clear();
+        self.sim_poses.sim_curr_poses.clear();
+        if self.scene.camera_follow {
+            self.camera.target = pos + Vec3::new(0.0, PLAYER_CAMERA_HEIGHT_OFFSET, 0.0);
         }
     }
 
@@ -1912,9 +2086,41 @@ impl AppState {
         for (kind, n) in outcome.item_add_requests {
             self.add_item(kind, n);
         }
+        // `obj.visible` écrit par un script : bascule des colliders sans
+        // reconstruire le monde (cf. `Physics::set_object_solid`).
+        if let Some(phys) = self.physics.as_mut() {
+            for (idx, solid) in outcome.solid_changes {
+                phys.set_object_solid(idx, solid);
+            }
+        }
+        // Événements système (`checkpoint()`/`teleport()` Lua, cf. `script_ctx`) :
+        // interceptés ici, jamais livrés aux scripts.
+        let mut events_out = outcome.events_out;
+        events_out.retain(|e| match super::script_ctx::parse_hud_event(e) {
+            Some((id, text)) => {
+                self.hud_texts.insert(id.to_string(), text.to_string());
+                false
+            }
+            None => true,
+        });
+        events_out.retain(|e| match super::script_ctx::parse_sys_event(e) {
+            Some(("checkpoint", p)) => {
+                self.checkpoint = Some(Vec3::from_array(p));
+                false
+            }
+            Some(("teleport", p)) => {
+                self.place_player(Vec3::from_array(p));
+                false
+            }
+            Some(_) => {
+                log::warn!("Événement système inconnu ignoré : {e}");
+                false
+            }
+            None => true,
+        });
         // Les événements émis pendant ce tick seront délivrés au suivant (cf. la doc de
         // `game_events` — le décalage rend l'ordre des scripts dans la boucle indifférent).
-        self.game_events = outcome.events_out;
+        self.game_events = events_out;
         // `spawn()` : appliqué maintenant que `scene.objects` n'est plus
         // emprunté — ajout en fin de tableau (jamais d'insertion/retrait ailleurs),
         // les indices existants (réseau, undo, IA) restent donc valides. Physique

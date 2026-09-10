@@ -24,6 +24,8 @@ pub mod scripting;
 // sur `rilua` (pur Rust, compile aussi nativement — `cfg(test)` en plus de wasm32
 // permet les tests différentiels contre `mlua`, cf. `scripting_web::tests`).
 mod creature_attack;
+// Contexte de tick partagé par les deux backends Lua (mode plateformer 2D).
+pub(crate) mod script_ctx;
 #[cfg(any(target_arch = "wasm32", test))]
 mod scripting_web;
 mod selection;
@@ -1103,6 +1105,18 @@ pub struct AppState {
     lost: bool,
     /// Score : nombre total de pièces ramassées dans la partie (bonus respawn inclus).
     score: u32,
+    /// Mode plateformer 2D (`Scene::platformer`, réapparition instantanée) : morts
+    /// de la partie en cours — survit à `restart_game` (c'est tout l'intérêt du
+    /// compteur), remis à zéro à l'entrée en Play. Liaison HUD `Deaths`, global Lua `deaths`.
+    deaths: u32,
+    /// Point de réapparition courant (fonction Lua `checkpoint(x, y, z)`) : `None` =
+    /// position de départ du snapshot de Play. Survit à `restart_game` comme `deaths`.
+    checkpoint: Option<Vec3>,
+    /// Textes de HUD posés par les scripts (`hud_text(id, texte)`, mode plateformer
+    /// 2D) : remplacent le contenu du widget `Text` d'id correspondant. Remis à
+    /// zéro à l'entrée en Play seulement (une vanne de mort doit survivre à
+    /// `restart_game`).
+    pub hud_texts: std::collections::HashMap<String, String>,
     /// File d'événements de gameplay : noms émis pendant le tick courant
     /// (par un script via `emit("nom")`, ou par le moteur — ex. `score:N` à chaque
     /// point marqué), **délivrés aux scripts au tick fixe suivant** via
@@ -1468,6 +1482,9 @@ impl AppState {
             win_time: None,
             lost: false,
             score: 0,
+            deaths: 0,
+            checkpoint: None,
+            hud_texts: std::collections::HashMap::new(),
             game_events: Vec::new(),
             trigger_prev: std::collections::HashSet::new(),
             furtive_awake: std::collections::HashSet::new(),
@@ -1908,6 +1925,8 @@ impl AppState {
             yaw: self.camera.yaw,
             pitch: self.camera.pitch,
             distance: self.camera.distance,
+            // Conserve un éventuel réglage orthographique posé dans l'inspecteur.
+            ortho_height: self.scene.game_camera.map(|g| g.ortho_height).unwrap_or(0.0),
         });
         log::info!("Caméra de jeu définie sur la vue actuelle");
     }
@@ -1932,6 +1951,11 @@ impl AppState {
     /// La partie est-elle perdue (joueur entré dans une zone mortelle) ?
     pub fn is_lost(&self) -> bool {
         self.lost
+    }
+
+    /// Morts de la partie en cours (mode plateformer 2D, cf. `deaths`).
+    pub fn deaths(&self) -> u32 {
+        self.deaths
     }
 
     /// Temps à afficher au HUD chrono : figé à la victoire, sinon temps de jeu courant.

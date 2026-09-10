@@ -89,6 +89,30 @@ impl Physics {
         }
     }
 
+    /// Active/désactive **tous** les colliders de l'objet `index` sans reconstruire
+    /// le monde (mode plateformer 2D : un sol qui disparaît sous les pieds via
+    /// `obj.visible = false`, un bloc qui apparaît en plein saut). Une reconstruction
+    /// complète (`Physics::build`) remettrait à zéro l'état du joueur kinématique
+    /// (`KinematicState::vspeed`) — le saut en cours mourrait net à chaque piège.
+    /// Renvoie `true` si au moins un collider a été touché.
+    pub fn set_object_solid(&mut self, index: usize, solid: bool) -> bool {
+        self.invalidate_query_cache();
+        let handles: Vec<ColliderHandle> = self
+            .collider_owner
+            .iter()
+            .filter(|&(_, &owner)| owner == index)
+            .map(|(&h, _)| h)
+            .collect();
+        let mut touched = false;
+        for h in handles {
+            if let Some(c) = self.colliders.get_mut(h) {
+                c.set_enabled(solid);
+                touched = true;
+            }
+        }
+        touched
+    }
+
     /// Impose la vitesse linéaire d'un corps dynamique : utile pour un projectile qui
     /// doit partir à une vitesse connue dès sa création, plutôt que de l'accélérer
     /// progressivement comme le ferait `control` pour un joueur piloté.

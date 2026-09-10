@@ -179,6 +179,16 @@ fn set_bool(lua: &mut Lua, table: &Table, name: &str, v: bool) -> LuaResult<()> 
     lua.table_raw_set(table, key, Val::Bool(v))
 }
 
+/// `Some(bool)` si le champ est un booléen, `None` sinon (`nil`, autre type) —
+/// même tolérance que `obj.get::<bool>` côté mlua pour `obj.visible`.
+fn get_bool_opt(lua: &mut Lua, table: &Table, name: &str) -> LuaResult<Option<bool>> {
+    let key = lua.create_string(name.as_bytes());
+    Ok(match lua.table_raw_get(table, key)? {
+        Val::Bool(b) => Some(b),
+        _ => None,
+    })
+}
+
 fn get_num(lua: &mut Lua, table: &Table, name: &str) -> LuaResult<f64> {
     let key = lua.create_string(name.as_bytes());
     match lua.table_raw_get(table, key)? {
@@ -246,6 +256,33 @@ fn host_vibrate(state: &mut LuaState) -> LuaResult<u32> {
     let ms = arg_f32(state, 0)?;
     ACCUM.with(|a| a.borrow_mut().vib.push(ms));
     Ok(0)
+}
+
+/// `checkpoint(x, y, z)` / `teleport(x, y, z)` — même encodage en événement
+/// système que `scripting::run_script` (cf. `script_ctx::sys_event`).
+fn host_sys_event(state: &mut LuaState, kind: &str) -> LuaResult<u32> {
+    let x = arg_f32(state, 0)?;
+    let y = arg_f32(state, 1)?;
+    let z = arg_f32(state, 2)?;
+    let event = crate::app::script_ctx::sys_event(kind, x, y, z);
+    ACCUM.with(|a| a.borrow_mut().events_out.push(event));
+    Ok(0)
+}
+
+fn host_hud_text(state: &mut LuaState) -> LuaResult<u32> {
+    let id = arg_str(state, 0)?;
+    let text = arg_str(state, 1)?;
+    let event = crate::app::script_ctx::hud_event(&id, &text);
+    ACCUM.with(|a| a.borrow_mut().events_out.push(event));
+    Ok(0)
+}
+
+fn host_checkpoint(state: &mut LuaState) -> LuaResult<u32> {
+    host_sys_event(state, "checkpoint")
+}
+
+fn host_teleport(state: &mut LuaState) -> LuaResult<u32> {
+    host_sys_event(state, "teleport")
 }
 
 fn host_reverb(state: &mut LuaState) -> LuaResult<u32> {
@@ -499,6 +536,13 @@ pub(super) fn run_script_web(
     lua_try!(set_bool(lua, &obj, "touch_ended", touch_ended));
     lua_try!(set_bool(lua, &obj, "triggered", triggered));
     lua_try!(set_bool(lua, &obj, "exited", exited));
+    // `obj.visible` (lecture/écriture) — cf. `scripting::run_script` et `script_ctx`.
+    lua_try!(set_bool(
+        lua,
+        &obj,
+        "visible",
+        crate::app::script_ctx::object_visible()
+    ));
     // Capteurs rapier — même contrat que `scripting::run_script` (cf. sa doc).
     lua_try!(set_bool(lua, &obj, "overlapped", !overlapping.is_empty()));
     lua_try!(set_num(
@@ -555,6 +599,10 @@ pub(super) fn run_script_web(
     lua_try!(lua.register_function("damage", host_damage));
     lua_try!(lua.register_function("emit", host_emit));
     lua_try!(lua.register_function("on_event", host_on_event));
+    lua_try!(lua.register_function("checkpoint", host_checkpoint));
+    lua_try!(lua.register_function("teleport", host_teleport));
+    lua_try!(lua.register_function("hud_text", host_hud_text));
+    lua_try!(lua.set_global("deaths", f64::from(crate::app::script_ctx::deaths())));
     lua_try!(lua.register_function("spawn", host_spawn));
     lua_try!(lua.register_function("add_item", host_add_item));
     lua_try!(lua.register_function("find_tag", host_find_tag));
@@ -588,6 +636,9 @@ pub(super) fn run_script_web(
         }
         debug_out.extend(a.debug_lines.iter().copied());
     });
+    if let Some(v) = lua_try!(get_bool_opt(lua, &obj, "visible")) {
+        crate::app::script_ctx::report_visible(v);
+    }
 
     t.position = Vec3::new(
         lua_try!(get_num(lua, &obj, "x")) as f32,

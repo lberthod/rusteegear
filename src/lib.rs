@@ -1451,6 +1451,17 @@ fn make_app(player: bool) -> App {
         app.state.playing = true;
         // En mode Player on joue le jeu exporté (scène embarquée), pas la démo de l'éditeur.
         app.state.use_embedded_scene();
+        // `--scene=<fichier.json>` (desktop) : jouer une scène de projet directement en
+        // mode Player, sans passer par l'éditeur ni par un export — le geste « lancer
+        // mon jeu » pendant le développement (ex. le plateformer 2D `ragequit`).
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        if let Some(path) = std::env::args().find_map(|a| a.strip_prefix("--scene=").map(str::to_string))
+        {
+            match app.state.load_from_blocking(&path) {
+                Ok(count) => log::info!("Scène jouée en mode Player : {path} ({count} objets)"),
+                Err(e) => log::error!("--scene : {e} — scène embarquée à la place"),
+            }
+        }
         // Connexion automatique au serveur RusteeGear par défaut (VPS) : sans
         // ça, chaque test APK ↔ desktop demande de ressaisir l'adresse et un
         // pseudo à la main des deux côtés avant de pouvoir se voir bouger.

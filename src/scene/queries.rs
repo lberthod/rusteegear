@@ -124,6 +124,10 @@ impl Scene {
 
     /// Le point `p` (position du joueur) touche-t-il une zone mortelle ?
     pub fn deadly_at(&self, p: Vec3) -> bool {
+        // Volontairement sans filtre `visible` : les zones mortelles invisibles
+        // (le vide sous une arène, cf. `brawl_demo`) doivent tuer. Un piège qui
+        // « n'existe pas encore » se place hors de portée et se déplace en surgissant
+        // (cf. le plateformer 2D : pic enterré sous le sol tant qu'il est caché).
         self.objects
             .iter()
             .filter(|o| o.deadly)

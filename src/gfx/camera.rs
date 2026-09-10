@@ -16,6 +16,11 @@ pub struct OrbitCamera {
     /// mute jamais `distance` elle-même : le zoom désiré (molette, réglages) reste
     /// intact dès que l'obstacle disparaît, sans qu'il faille le mémoriser à part.
     pub collision_distance: Option<f32>,
+    /// Projection orthographique : hauteur visible en unités monde, `0` =
+    /// perspective (`fovy`). Posée en Play depuis `GameCamera::ortho_height`
+    /// (vue de côté 2D, cf. `Scene::platformer`), remise à 0 au Stop — l'orbite
+    /// éditeur reste toujours en perspective.
+    pub ortho_height: f32,
 }
 
 impl OrbitCamera {
@@ -28,6 +33,24 @@ impl OrbitCamera {
             aspect,
             fovy: 45f32.to_radians(),
             collision_distance: None,
+            ortho_height: 0.0,
+        }
+    }
+
+    /// Plans near/far communs aux deux projections (et aux cascades d'ombre,
+    /// cf. `passes::compute_cascades`).
+    pub const NEAR: f32 = 0.1;
+    pub const FAR: f32 = 100.0;
+
+    /// Matrice de projection courante : orthographique si `ortho_height > 0`,
+    /// perspective sinon. Même convention NDC wgpu (z dans \[0,1\]) dans les deux cas.
+    pub fn proj(&self) -> Mat4 {
+        if self.ortho_height > 0.0 {
+            let hh = self.ortho_height * 0.5;
+            let hw = hh * self.aspect;
+            directx::orthographic(-hw, hw, -hh, hh, Self::NEAR, Self::FAR)
+        } else {
+            directx::perspective(self.fovy, self.aspect, Self::NEAR, Self::FAR)
         }
     }
 
@@ -51,8 +74,7 @@ impl OrbitCamera {
             self.target + shake_offset,
             Vec3::Y,
         );
-        let proj = directx::perspective(self.fovy, self.aspect, 0.1, 100.0);
-        proj * view
+        self.proj() * view
     }
 
     /// Pan « outil Main » : glisse `target` dans le plan écran de la caméra.
@@ -98,8 +120,7 @@ impl OrbitCamera {
 
     pub fn view_proj(&self) -> Mat4 {
         let view = look_at_mat4(self.eye(), self.target, Vec3::Y);
-        let proj = directx::perspective(self.fovy, self.aspect, 0.1, 100.0);
-        proj * view
+        self.proj() * view
     }
 }
 

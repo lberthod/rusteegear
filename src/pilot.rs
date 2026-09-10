@@ -678,6 +678,8 @@ fn player_dump(app: &AppState) -> serde_json::Value {
         // dans `state`.
         "health": app.displayed_health(),
         "score": app.score(),
+        "deaths": app.deaths(),
+        "hud_texts": app.hud_texts,
         "wave": app.wave,
         "won": app.has_won(),
         "lost": app.is_lost(),

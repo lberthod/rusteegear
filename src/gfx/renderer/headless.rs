@@ -35,6 +35,12 @@ impl Renderer {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        // Pixelisation (mode plateformer 2D, cf. `set_pixel_scale`) : les cibles
+        // intermédiaires sont réduites du même facteur que dans `render()`, pour
+        // qu'une capture (`screenshot_png`, pont de pilotage) montre le même rendu
+        // que la fenêtre. `1` (goldens, renderer headless pur) = inchangé.
+        let k = self.pixel_scale.max(1);
+        let (iw, ih) = ((width / k).max(1), (height / k).max(1));
 
         // Depth dédiée à la taille demandée (peut différer de `self.depth_view`, qui suit
         // la taille de la fenêtre en mode interactif). Même sample count que les
@@ -45,8 +51,8 @@ impl Renderer {
         let depth = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("headless_depth"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: iw,
+                height: ih,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -60,10 +66,10 @@ impl Renderer {
         // Cibles HDR, locales à cet appel — cf. `hdr_view`/`msaa_color_view` de
         // `render()` : `msaa_color_view` n'est `Some` qu'en MSAA (renderer fenêtré).
         let (hdr_view, msaa_color_view) =
-            create_hdr_view(&self.device, width, height, self.msaa_samples);
+            create_hdr_view(&self.device, iw, ih, self.msaa_samples);
         // Chaîne de bloom, locale à cet appel — cf. `bloom_mip_views` de
         // `render()`.
-        let bloom_mip_views = create_bloom_mip_views(&self.device, width, height);
+        let bloom_mip_views = create_bloom_mip_views(&self.device, iw, ih);
 
         // Debug drawing : même logique que `render()` (préparer + vider avant
         // les passes, dessiner après les meshes texturés dans la passe principale).
@@ -145,7 +151,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+            pass.set_viewport(0.0, 0.0, iw as f32, ih as f32, 0.0, 1.0);
 
             // Ciel : même geste que dans `render()`.
             pass.set_pipeline(&self.sky_pipeline);

@@ -101,6 +101,16 @@ impl AppState {
             "stop" => {
                 self.playing = false;
                 self.paused = false;
+                // Sortie de Play appliquée **tout de suite** plutôt qu'au prochain
+                // `advance_play` (frame) : piloté de l'extérieur (pont `pilot`), un
+                // `stop` suivi d'un `scene load` puis d'un `play` sans frame entre
+                // les trois (fenêtre en App Nap) ne voyait jamais la transition —
+                // `was_playing` restait vrai, l'ancien monde physique survivait et
+                // le Play suivant repartait sans snapshot ni remise à zéro.
+                if self.was_playing {
+                    self.on_play_stopped();
+                    self.was_playing = false;
+                }
                 "arrêté".into()
             }
             // `step [n]` : n pas fixes de 1/60 s exécutés immédiatement
@@ -141,6 +151,15 @@ impl AppState {
                     self.push_undo();
                 }
                 self.scene.objects[target].transform.position = pos;
+                // En Play, le corps physique doit suivre : sans ça, le pas suivant
+                // réécrit l'ancienne position depuis rapier et la téléportation
+                // n'a jamais lieu (constaté en pilotant le plateformer 2D).
+                if let Some(phys) = self.physics.as_mut() {
+                    phys.set_position(target, pos);
+                }
+                // Poses d'interpolation périmées, comme `place_player`.
+                self.sim_poses.sim_prev_poses.clear();
+                self.sim_poses.sim_curr_poses.clear();
                 format!(
                     "« {} » téléporté à ({:.2}, {:.2}, {:.2})",
                     self.scene.objects[target].name, pos.x, pos.y, pos.z

@@ -1479,6 +1479,53 @@ pub struct Scene {
     /// niveaux existants n'ont pas migré.
     #[serde(default)]
     pub hud_widgets: Vec<HudWidget>,
+    /// Mode « plateformer 2D » (jeu de plateforme vu de côté, façon *rage game*) :
+    /// `None` pour toutes les scènes 3D existantes — aucun comportement ne change
+    /// tant que ce composant n'est pas posé. Cf. `Platformer2D`.
+    #[serde(default)]
+    pub platformer: Option<Platformer2D>,
+}
+
+/// Réglages du mode plateformer 2D (`Scene::platformer`) : la scène reste une
+/// scène 3D ordinaire (cubes, physique rapier, scripts Lua), mais le joueur est
+/// contraint au plan `z = plane_z`, la mort est instantanée et suivie d'une
+/// réapparition immédiate au dernier point de contrôle (pas de bannière « Rejouer »),
+/// et le rendu est pixelisé (`pixel_scale`, cf. `Renderer::set_pixel_scale`) pour
+/// un look pixel art sans dessiner un seul sprite. Les valeurs par défaut sont
+/// celles d'un jeu jouable tel quel ; tout est réglable dans l'inspecteur de scène.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+pub struct Platformer2D {
+    /// Déplacement restreint à l'axe X (gauche/droite) + saut ; le joueur est
+    /// ramené sur `plane_z` après chaque pas de physique.
+    pub lock_z: bool,
+    /// Plan de jeu (coordonnée Z du joueur).
+    pub plane_z: f32,
+    /// Facteur de pixelisation du rendu en Play : `1` = rendu normal, `4` = la
+    /// scène est dessinée à 1/4 de la résolution puis agrandie sans filtrage.
+    pub pixel_scale: u32,
+    /// Mort instantanée + réapparition immédiate au point de contrôle, en
+    /// comptant les morts (`AppState::deaths`, liaison HUD `Deaths`).
+    pub instant_respawn: bool,
+    /// Sous cette hauteur, le joueur est considéré tombé dans le vide (mort).
+    pub kill_y: f32,
+    /// Laisse une petite tombe à chaque mort (façon Super Meat Boy) : après 40
+    /// morts, le niveau est un cimetière — ajoutée au snapshot de Play, elle
+    /// survit donc aux réapparitions (jamais à l'arrêt du Play).
+    pub tombstones: bool,
+}
+
+impl Default for Platformer2D {
+    fn default() -> Self {
+        Self {
+            lock_z: true,
+            plane_z: 0.0,
+            pixel_scale: 4,
+            instant_respawn: true,
+            kill_y: -8.0,
+            tombstones: true,
+        }
+    }
 }
 
 /// Fond de scène : dégradé de ciel dessiné derrière toute la géométrie,
@@ -1532,6 +1579,12 @@ pub struct GameCamera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
+    /// Projection orthographique en Play : hauteur visible (unités monde) —
+    /// `0` = perspective classique. Utile pour une vue de côté 2D
+    /// (`Scene::platformer`), où la perspective déformerait les plateformes
+    /// éloignées du centre. Cf. `OrbitCamera::ortho_height`.
+    #[serde(default)]
+    pub ortho_height: f32,
 }
 
 /// Schéma JSON simplifié produit par l'IA pour générer une scène entière.

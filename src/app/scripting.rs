@@ -98,6 +98,10 @@ pub(super) fn run_script(
     // clip). N'existe que pour les objets skinnés ; ignoré silencieusement sinon, comme
     // `hud` reste vide tant qu'aucun script n'y touche.
     obj.set("anim", anim.as_ref().map(|a| a.clip.as_str()).unwrap_or(""))?;
+    // `obj.visible` (lecture/écriture, mode plateformer 2D) : contrairement à
+    // `obj:destroy()`, réversible — un sol qui disparaît puis revient, un bloc qui
+    // surgit en plein saut. Valeur fournie/relue via `script_ctx` (cf. sa doc).
+    obj.set("visible", super::script_ctx::object_visible())?;
 
     // `obj:destroy()` : suppression **douce** — `visible = false`, comme
     // les monstres vaincus (`Scene::attack_at`) ou les collectibles ramassés
@@ -216,6 +220,27 @@ pub(super) fn run_script(
         emit_ref.push(name)?;
         Ok(())
     })?;
+    // `checkpoint(x, y, z)` / `teleport(x, y, z)` (mode plateformer 2D) : point de
+    // réapparition / téléportation du joueur — encodés en événements système dans
+    // la file d'`emit()`, interceptés par `AppState::apply_script_outcomes`
+    // (cf. `script_ctx::sys_event`), jamais livrés aux scripts.
+    let cp_ref = emit_tbl.clone();
+    let checkpoint = lua.create_function(move |_, (x, y, z): (f32, f32, f32)| {
+        cp_ref.push(super::script_ctx::sys_event("checkpoint", x, y, z))?;
+        Ok(())
+    })?;
+    let tp_ref = emit_tbl.clone();
+    let teleport = lua.create_function(move |_, (x, y, z): (f32, f32, f32)| {
+        tp_ref.push(super::script_ctx::sys_event("teleport", x, y, z))?;
+        Ok(())
+    })?;
+    // `hud_text(id, texte)` : remplace le contenu du widget HUD `Text` d'id `id`
+    // (vide = effacer) — même canal d'événements système, cf. `script_ctx::hud_event`.
+    let hud_ref = emit_tbl.clone();
+    let hud_text = lua.create_function(move |_, (id, text): (String, String)| {
+        hud_ref.push(super::script_ctx::hud_event(&id, &text))?;
+        Ok(())
+    })?;
     let received = lua.create_table()?;
     for name in events_in {
         received.set(name.as_str(), true)?;
@@ -313,6 +338,12 @@ pub(super) fn run_script(
     g.set("damage", damage)?;
     g.set("emit", emit)?;
     g.set("on_event", on_event)?;
+    g.set("checkpoint", checkpoint)?;
+    g.set("teleport", teleport)?;
+    g.set("hud_text", hud_text)?;
+    // Global `deaths` (lecture seule) : morts de la partie en cours — permet à un
+    // piège de varier selon les tentatives (`if deaths % 2 == 1 then … end`).
+    g.set("deaths", super::script_ctx::deaths())?;
     g.set("spawn", spawn)?;
     g.set("add_item", add_item_fn)?;
     g.set("find_tag", find_tag)?;
@@ -390,6 +421,10 @@ pub(super) fn run_script(
 
     if destroy_tbl.get::<bool>("d").unwrap_or(false) {
         *destroy_out = true;
+    }
+    // `obj.visible` relu (booléen seulement : `obj.visible = nil` est ignoré).
+    if let Ok(v) = obj.get::<bool>("visible") {
+        super::script_ctx::report_visible(v);
     }
     for name in emit_tbl.sequence_values::<String>().flatten() {
         events_out.push(name);

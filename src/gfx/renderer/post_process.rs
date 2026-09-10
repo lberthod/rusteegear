@@ -125,7 +125,13 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.tonemap_sampler),
+                    // Pixelisation (`pixel_scale > 1`) : agrandissement sans
+                    // filtrage, sinon la cible basse résolution ressortirait floue.
+                    resource: wgpu::BindingResource::Sampler(if self.pixel_scale > 1 {
+                        &self.tonemap_sampler_nearest
+                    } else {
+                        &self.tonemap_sampler
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,

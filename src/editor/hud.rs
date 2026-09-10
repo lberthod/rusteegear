@@ -8,11 +8,15 @@ use super::{HudPreview, UiActions};
 /// Valeurs de jeu consultables par un `HudBinding` — snapshot pris une fois par
 /// frame côté appelant (`AppState`), cette couche de rendu ne connaît pas `AppState`
 /// directement (cf. le reste du module, purement fonction de `area`/`scene`).
-pub(super) struct HudWidgetValues {
+pub(super) struct HudWidgetValues<'a> {
     pub health: f32,
     pub score: u32,
     pub kills: u32,
     pub wave: u32,
+    /// Morts de la partie (mode plateformer 2D, `AppState::deaths`).
+    pub deaths: u32,
+    /// Contenus de widgets `Text` posés par les scripts (`hud_text`), par id.
+    pub hud_texts: &'a std::collections::HashMap<String, String>,
 }
 
 fn hud_binding_value(binding: HudBinding, v: &HudWidgetValues) -> f32 {
@@ -22,6 +26,7 @@ fn hud_binding_value(binding: HudBinding, v: &HudWidgetValues) -> f32 {
         HudBinding::Score => v.score as f32,
         HudBinding::Kills => v.kills as f32,
         HudBinding::Wave => v.wave as f32,
+        HudBinding::Deaths => v.deaths as f32,
     }
 }
 
@@ -79,11 +84,24 @@ pub(super) fn hud_widgets(
             .movable(false)
             .show(ctx, |ui| match &widget.kind {
                 HudWidgetKind::Text { content, binding } => {
+                    // Texte posé par un script (`hud_text`) : prime sur le contenu
+                    // de la scène ; chaîne vide = widget effacé.
+                    let content = values.hud_texts.get(&widget.id).unwrap_or(content);
                     let text = match binding {
                         HudBinding::None => content.clone(),
                         b => format!("{content} {}", hud_binding_value(*b, values) as i64),
                     };
-                    ui.colored_label(egui::Color32::WHITE, text);
+                    // `size[1]` > 0 = taille de police (points) : un compteur de
+                    // morts en gros, un titre… ; 0 = taille par défaut d'egui.
+                    let rich = if widget.size[1] > 0.0 {
+                        egui::RichText::new(text)
+                            .size(widget.size[1])
+                            .strong()
+                            .color(egui::Color32::WHITE)
+                    } else {
+                        egui::RichText::new(text).color(egui::Color32::WHITE)
+                    };
+                    ui.label(rich);
                 }
                 HudWidgetKind::Image { path } => {
                     if let Some(tex) = hud_image(ctx, image_cache, path) {
