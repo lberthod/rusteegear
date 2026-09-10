@@ -86,7 +86,7 @@ pub(crate) fn world_to_pose(wx: f32, wy: f32) -> (f32, f32) {
 /// objets (cible, halo, point suivi, repères, os) le relisent le même tick — la
 /// « Séance » est le premier objet de la scène pour ça.
 pub const DIRECTOR_SCRIPT: &str = r#"
-local SMOOTH_POSE, SMOOTH_HAND = 22.0, 30.0   -- lissage (1/s) des repères caméra
+local SMOOTH_POSE, SMOOTH_HAND = 35.0, 40.0   -- lissage (1/s) des repères caméra, déjà interpolés par le moteur
 local HK = 5.0                                -- zoom de la main dessinée (m par unité image)
 local VIS_MIN = 0.5                           -- sous cette visibilité, un repère n'est pas dessiné
 

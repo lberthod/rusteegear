@@ -172,10 +172,15 @@
       });
 
       // ---------------------------------------------------------------
-      // Caméra + MediaPipe Pose Landmarker → set_pose_landmarks (33 × 4).
+      // Caméra + MediaPipe (Pose Landmarker + Hand Landmarker) → moteur.
       // Chargés à la demande (≈ 18 Mo : wasm + modèles pose « lite » et mains)
-      // depuis un CDN, jamais au chargement de la page ; l'inférence vise 30 Hz
-      // (Mouvéo : 15 Hz) et se relâche d'elle-même si la machine ne suit pas.
+      // depuis un CDN, jamais au chargement de la page. L'inférence tourne dans
+      // un **Web Worker** : sur le thread principal elle bloquait le rendu du
+      // moteur 10 à 30 ms à chaque image (saccades) ; ici le thread principal
+      // ne fait que capturer une ImageBitmap de la vidéo et recevoir les
+      // repères. Repli sur le thread principal si le worker échoue (pas de
+      // WebGL dans le worker, import CDN refusé…). Cadence visée 30 Hz
+      // (Mouvéo : 15 Hz), relâchée d'elle-même si la machine ne suit pas.
       // ---------------------------------------------------------------
       const MP_VERSION = "0.10.21";
       const MP_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
@@ -186,31 +191,32 @@
       const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
       const FINGER_COLORS = ["#ffebb8", "#c4b5fd", "#fcd34d", "#5ae673", "#5a8cff"];
       const fingerOf = (i) => i === 0 ? -1 : Math.floor((i - 1) / 4);
-      // Cadence d'inférence adaptative : 30 Hz visé (33 ms), relâché vers 15 Hz
-      // si le GPU/CPU ne suit pas (moyenne glissante du coût d'une inférence).
-      let inferenceInterval = 33;
-      let inferenceCost = 0;
+      const HAND_FLOATS = 1 + 21 * 3;
       const video = $("video");
       const overlay = $("overlay");
       const camStatus = $("camstatus");
       const camToggle = $("camtoggle");
       let stream = null;
+      let rafId = null;
+      let starting = false;
+      // Cadence adaptative : coût moyen (EMA) d'une inférence au-dessus de 26 ms → 15 Hz.
+      let inferenceInterval = 33;
+      let inferenceCost = 0;
+      let lastInference = 0;
+      // Chemin worker.
+      let worker = null;
+      let workerBusy = false;
+      // Chemin de repli (thread principal).
       let landmarker = null;
       let handLandmarker = null;
-      let lastPosePoints = null;
-      let rafId = null;
-      let lastInference = 0;
-      let starting = false;
-      const flat = new Float32Array(33 * 4);
       const none = new Float32Array(0);
-      const HAND_FLOATS = 1 + 21 * 3;
-      const handsFlat = new Float32Array(2 * HAND_FLOATS);
       // L'export wasm n'existe qu'après `init()` : avant (onglet masqué pendant
       // le téléchargement, par exemple), on ignore simplement l'envoi.
       let engineReady = false;
       function pushPose(arr) { if (engineReady) set_pose_landmarks(arr); }
       function pushHands(arr) { if (engineReady) set_hand_landmarks(arr); }
 
+      // --- Fonctions partagées avec le worker (sérialisées par toString) ---
       // Côté d'une main : le poignet du corps (repères 15/16) le plus proche du
       // poignet de la main — robuste, contrairement à la latéralité du modèle
       // qui suppose une image déjà retournée en miroir (la nôtre ne l'est pas :
@@ -225,10 +231,21 @@
         const label = handedness && handedness[0] && handedness[0].categoryName;
         return label === "Left" ? 1 : 0;
       }
-
+      // Sérialise la pose (33 × x, y, z, visibilité) — null sans corps.
+      function packPose(points) {
+        if (!points) return null;
+        const flat = new Float32Array(33 * 4);
+        for (let i = 0; i < 33; i++) {
+          const p = points[i];
+          flat[i * 4] = p.x; flat[i * 4 + 1] = p.y; flat[i * 4 + 2] = p.z; flat[i * 4 + 3] = p.visibility ?? 1;
+        }
+        return flat;
+      }
       // Sérialise jusqu'à deux mains (une par côté) : [côté, 21 × (x, y, z)].
       function packHands(result, posePts) {
-        if (!result || !result.landmarks || result.landmarks.length === 0) return none;
+        if (!result || !result.landmarks || result.landmarks.length === 0) return null;
+        const HF = 1 + 21 * 3;
+        const out = new Float32Array(2 * HF);
         let n = 0;
         const seen = new Set();
         for (let h = 0; h < result.landmarks.length && n < 2; h++) {
@@ -236,16 +253,56 @@
           const side = handSide(pts, result.handedness && result.handedness[h], posePts);
           if (seen.has(side)) continue;
           seen.add(side);
-          const base = n * HAND_FLOATS;
-          handsFlat[base] = side;
+          const base = n * HF;
+          out[base] = side;
           for (let i = 0; i < 21; i++) {
-            handsFlat[base + 1 + i * 3] = pts[i].x;
-            handsFlat[base + 2 + i * 3] = pts[i].y;
-            handsFlat[base + 3 + i * 3] = pts[i].z;
+            out[base + 1 + i * 3] = pts[i].x;
+            out[base + 2 + i * 3] = pts[i].y;
+            out[base + 3 + i * 3] = pts[i].z;
           }
           n++;
         }
-        return handsFlat.subarray(0, n * HAND_FLOATS);
+        return n ? out.slice(0, n * HF) : null;
+      }
+      // Corps du worker : charge les deux modèles puis traite chaque ImageBitmap reçue.
+      function workerMain() {
+        let pose = null, hands = null;
+        self.onmessage = async (e) => {
+          const m = e.data;
+          if (m.type === "init") {
+            try {
+              const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import(m.base + "/vision_bundle.mjs");
+              const vision = await FilesetResolver.forVisionTasks(m.base + "/wasm");
+              const make = async (Cls, opts) => {
+                try { return await Cls.createFromOptions(vision, opts("GPU")); }
+                catch (err) { return await Cls.createFromOptions(vision, opts("CPU")); }
+              };
+              pose = await make(PoseLandmarker, (delegate) => ({
+                baseOptions: { modelAssetPath: m.poseModel, delegate },
+                runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: .55, minTrackingConfidence: .55 }));
+              try {
+                hands = await make(HandLandmarker, (delegate) => ({
+                  baseOptions: { modelAssetPath: m.handModel, delegate },
+                  runningMode: "VIDEO", numHands: 2, minHandDetectionConfidence: .5, minHandPresenceConfidence: .5, minTrackingConfidence: .5 }));
+              } catch (err) { hands = null; }
+              self.postMessage({ type: "ready", hands: !!hands });
+            } catch (err) {
+              self.postMessage({ type: "error", message: String(err && err.message || err) });
+            }
+          } else if (m.type === "frame") {
+            const t0 = performance.now();
+            let points = null, hr = null;
+            try { points = pose.detectForVideo(m.bitmap, m.now).landmarks[0] || null; } catch (err) { /* dernière pose conservée côté page */ }
+            if (hands) { try { hr = hands.detectForVideo(m.bitmap, m.now); } catch (err) { /* idem */ } }
+            m.bitmap.close();
+            const poseFlat = packPose(points);
+            const handsFlat = packHands(hr, points);
+            const transfer = [];
+            if (poseFlat) transfer.push(poseFlat.buffer);
+            if (handsFlat) transfer.push(handsFlat.buffer);
+            self.postMessage({ type: "result", poseFlat, handsFlat, points, handPoints: hr ? hr.landmarks : null, cost: performance.now() - t0 }, transfer);
+          }
+        };
       }
 
       function drawOverlay(points) {
@@ -268,8 +325,8 @@
         for (const i of [15, 16, 25, 26, 27, 28]) { const p = P(points[i]); ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, Math.PI * 2); ctx.fill(); }
       }
 
-      function drawHands(result) {
-        if (!result || !result.landmarks) return;
+      function drawHands(handPoints) {
+        if (!handPoints) return;
         const ctx = overlay.getContext("2d");
         const w = overlay.width, h = overlay.height;
         const vw = video.videoWidth || w, vh = video.videoHeight || h;
@@ -277,7 +334,7 @@
         const cx = (vw * scale - w) / 2, cy = (vh * scale - h) / 2;
         const P = (p) => [p.x * vw * scale - cx, p.y * vh * scale - cy];
         ctx.lineWidth = 2; ctx.lineCap = "round";
-        for (const pts of result.landmarks) {
+        for (const pts of handPoints) {
           for (const [a, b] of HAND_LINKS) {
             const f = fingerOf(b);
             ctx.strokeStyle = f < 0 || a === 0 || fingerOf(a) !== f ? "rgba(255,255,255,.6)" : FINGER_COLORS[f];
@@ -292,42 +349,75 @@
         }
       }
 
-      function loop() {
+      // Résultat d'une inférence (worker ou thread principal) → moteur + vignette.
+      function applyResult(poseFlat, handsFlat, points, handPoints, cost) {
+        pushPose(poseFlat || none);
+        pushHands(handsFlat || none);
+        const nHands = handsFlat ? handsFlat.length / HAND_FLOATS : 0;
+        camStatus.textContent = points
+          ? (nHands ? `Corps et ${nHands === 1 ? "une main" : "deux mains"} suivis` : "Corps suivi — placez-vous entier dans le cadre")
+          : (nHands ? "Main suivie — corps hors cadre" : "Caméra active — aucun corps détecté");
+        inferenceCost = inferenceCost * 0.8 + cost * 0.2;
+        inferenceInterval = inferenceCost > 26 ? 66 : 33;
+        drawOverlay(points);
+        drawHands(handPoints);
+      }
+
+      // Boucle worker : une ImageBitmap par inférence, jamais deux en vol.
+      function workerLoop() {
+        const now = performance.now();
+        if (worker && !workerBusy && video.readyState >= 2 && now - lastInference > inferenceInterval) {
+          lastInference = now;
+          workerBusy = true;
+          createImageBitmap(video).then((bitmap) => {
+            if (!worker) { bitmap.close(); return; }
+            worker.postMessage({ type: "frame", bitmap, now }, [bitmap]);
+          }).catch(() => { workerBusy = false; });
+        }
+        rafId = requestAnimationFrame(workerLoop);
+      }
+
+      // Boucle de repli : inférence sur le thread principal.
+      function mainThreadLoop() {
         const now = performance.now();
         if (landmarker && video.readyState >= 2 && now - lastInference > inferenceInterval) {
           lastInference = now;
           const t0 = performance.now();
-          let points = null;
-          try { points = landmarker.detectForVideo(video, now).landmarks[0] || null; }
-          catch (e) { /* la dernière pose reste affichée */ }
-          let hands = null;
-          if (handLandmarker) {
-            try { hands = handLandmarker.detectForVideo(video, now); }
-            catch (e) { /* idem */ }
-          }
-          if (points) {
-            for (let i = 0; i < 33; i++) {
-              const p = points[i];
-              flat[i * 4] = p.x; flat[i * 4 + 1] = p.y; flat[i * 4 + 2] = p.z; flat[i * 4 + 3] = p.visibility ?? 1;
-            }
-            pushPose(flat);
-          } else {
-            pushPose(none);
-          }
-          lastPosePoints = points;
-          const packed = packHands(hands, points);
-          pushHands(packed);
-          const nHands = packed.length / HAND_FLOATS;
-          camStatus.textContent = points
-            ? (nHands ? `Corps et ${nHands === 1 ? "une main" : "deux mains"} suivis` : "Corps suivi — placez-vous entier dans le cadre")
-            : (nHands ? "Main suivie — corps hors cadre" : "Caméra active — aucun corps détecté");
-          // Cadence adaptative : coût moyen (EMA) au-dessus de 26 ms → 15 Hz, sinon 30 Hz.
-          inferenceCost = inferenceCost * 0.8 + (performance.now() - t0) * 0.2;
-          inferenceInterval = inferenceCost > 26 ? 66 : 33;
-          drawOverlay(points);
-          drawHands(hands);
+          let points = null, hr = null;
+          try { points = landmarker.detectForVideo(video, now).landmarks[0] || null; } catch (e) { /* la dernière pose reste affichée */ }
+          if (handLandmarker) { try { hr = handLandmarker.detectForVideo(video, now); } catch (e) { /* idem */ } }
+          applyResult(packPose(points), packHands(hr, points), points, hr ? hr.landmarks : null, performance.now() - t0);
         }
-        rafId = requestAnimationFrame(loop);
+        rafId = requestAnimationFrame(mainThreadLoop);
+      }
+
+      // Démarre le worker d'inférence ; résout `true` s'il est prêt.
+      function startWorker() {
+        return new Promise((resolve) => {
+          if (typeof Worker === "undefined" || typeof createImageBitmap === "undefined") { resolve(false); return; }
+          const src = `${handSide.toString()}\n${packPose.toString()}\n${packHands.toString()}\n${workerMain.toString()}\nworkerMain();`;
+          let w;
+          try { w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })), { type: "module" }); }
+          catch (e) { resolve(false); return; }
+          const fail = (why) => { console.warn("Worker d'inférence indisponible, repli thread principal :", why); w.terminate(); resolve(false); };
+          w.onerror = (e) => fail(e.message || e);
+          w.onmessage = (e) => {
+            const m = e.data;
+            if (m.type === "ready") {
+              worker = w;
+              w.onmessage = (ev) => {
+                const r = ev.data;
+                if (r.type !== "result") return;
+                workerBusy = false;
+                applyResult(r.poseFlat, r.handsFlat, r.points, r.handPoints, r.cost);
+              };
+              resolve(true);
+            } else if (m.type === "error") {
+              fail(m.message);
+            }
+          };
+          w.postMessage({ type: "init", base: MP_BASE, poseModel: MODEL_URL, handModel: HAND_MODEL_URL });
+        });
       }
 
       async function startCamera() {
@@ -341,30 +431,31 @@
           video.srcObject = stream;
           await video.play();
           $("pip").classList.add("on");
-          camStatus.textContent = "Chargement du suivi du mouvement (~10 Mo)…";
-          const { FilesetResolver, PoseLandmarker } = await import(`${MP_BASE}/vision_bundle.mjs`);
-          const vision = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
-          const options = (delegate) => ({
-            baseOptions: { modelAssetPath: MODEL_URL, delegate },
-            runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: .55, minTrackingConfidence: .55 });
-          try { landmarker = await PoseLandmarker.createFromOptions(vision, options("GPU")); }
-          catch (e) { console.warn("Pose Landmarker GPU refusé, repli CPU :", e); landmarker = await PoseLandmarker.createFromOptions(vision, options("CPU")); }
-          // Doigts (exercices de main) : second modèle, ~8 Mo ; facultatif — sans
-          // lui, les exercices du corps marchent quand même.
-          camStatus.textContent = "Chargement du suivi des doigts…";
-          const { HandLandmarker } = await import(`${MP_BASE}/vision_bundle.mjs`);
-          const handOptions = (delegate) => ({
-            baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
-            runningMode: "VIDEO", numHands: 2, minHandDetectionConfidence: .5, minHandPresenceConfidence: .5, minTrackingConfidence: .5 });
-          try {
-            try { handLandmarker = await HandLandmarker.createFromOptions(vision, handOptions("GPU")); }
-            catch (e) { console.warn("Hand Landmarker GPU refusé, repli CPU :", e); handLandmarker = await HandLandmarker.createFromOptions(vision, handOptions("CPU")); }
-          } catch (e) { console.warn("Suivi des doigts indisponible :", e); handLandmarker = null; }
+          camStatus.textContent = "Chargement du suivi du mouvement (~18 Mo)…";
+          lastInference = 0;
+          inferenceCost = 0;
+          if (await startWorker()) {
+            rafId = requestAnimationFrame(workerLoop);
+          } else {
+            const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import(`${MP_BASE}/vision_bundle.mjs`);
+            const vision = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
+            const options = (delegate) => ({
+              baseOptions: { modelAssetPath: MODEL_URL, delegate },
+              runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: .55, minTrackingConfidence: .55 });
+            try { landmarker = await PoseLandmarker.createFromOptions(vision, options("GPU")); }
+            catch (e) { console.warn("Pose Landmarker GPU refusé, repli CPU :", e); landmarker = await PoseLandmarker.createFromOptions(vision, options("CPU")); }
+            const handOptions = (delegate) => ({
+              baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+              runningMode: "VIDEO", numHands: 2, minHandDetectionConfidence: .5, minHandPresenceConfidence: .5, minTrackingConfidence: .5 });
+            try {
+              try { handLandmarker = await HandLandmarker.createFromOptions(vision, handOptions("GPU")); }
+              catch (e) { handLandmarker = await HandLandmarker.createFromOptions(vision, handOptions("CPU")); }
+            } catch (e) { console.warn("Suivi des doigts indisponible :", e); handLandmarker = null; }
+            rafId = requestAnimationFrame(mainThreadLoop);
+          }
           camToggle.textContent = "⏹ Couper la caméra";
           camToggle.classList.add("on");
           camStatus.textContent = "Caméra active — reculez, corps entier visible";
-          lastInference = 0;
-          rafId = requestAnimationFrame(loop);
         } catch (e) {
           console.warn("Caméra indisponible :", e);
           stopCamera();
@@ -383,20 +474,21 @@
         rafId = null;
         if (stream) stream.getTracks().forEach((t) => t.stop());
         stream = null;
+        if (worker) { worker.terminate(); worker = null; }
+        workerBusy = false;
         if (landmarker) { try { landmarker.close(); } catch (_) { /* déjà fermé */ } }
         landmarker = null;
         if (handLandmarker) { try { handLandmarker.close(); } catch (_) { /* déjà fermé */ } }
         handLandmarker = null;
-        pushHands(none);
         video.srcObject = null;
         $("pip").classList.remove("on");
         drawOverlay(null);
         pushPose(none);
+        pushHands(none);
         camToggle.textContent = "📷 Activer la caméra";
         camToggle.classList.remove("on");
         camStatus.textContent = "Sans caméra : stick tactile ou flèches";
       }
-
       camToggle.addEventListener("click", () => { if (stream) stopCamera(); else startCamera(); });
       document.addEventListener("visibilitychange", () => {
         // Onglet caché : plus d'inférence → le moteur met la séance en pause

@@ -645,46 +645,49 @@ pub(super) fn run_script_web(
     lua_try!(ensure_host_functions(lua));
     lua_try!(lua.set_global("deaths", f64::from(crate::app::script_ctx::deaths())));
     // Table `pose` (démo Rééducation) — même forme que côté mlua, cf. `scripting.rs`.
-    let pose_tbl = lua.create_table();
-    lua_try!(crate::app::script_ctx::with_pose(|p| -> LuaResult<()> {
-        set_bool(lua, &pose_tbl, "ok", p.is_ok())?;
-        for (name, idx) in crate::app::pose::NAMED {
-            let lm = p.landmarks[idx];
-            let t = lua.create_table();
-            set_num(lua, &t, "x", lm.x as f64)?;
-            set_num(lua, &t, "y", lm.y as f64)?;
-            set_num(lua, &t, "z", lm.z as f64)?;
-            set_num(lua, &t, "v", lm.visibility as f64)?;
-            set_table(lua, &pose_tbl, name, t)?;
-        }
-        Ok(())
-    }));
-    lua_try!(lua.set_global("pose", pose_tbl));
-    // Table `hand` (doigts) — même forme que côté mlua, cf. `scripting.rs`.
-    let hand_tbl = lua.create_table();
-    lua_try!(crate::app::script_ctx::with_hands(|h| -> LuaResult<()> {
-        set_bool(lua, &hand_tbl, "ok", h.is_ok())?;
-        for (name, right) in [("left", false), ("right", true)] {
-            if let Some(hand) = h.side(right) {
+    if crate::app::script_ctx::pose_wanted() {
+        let pose_tbl = lua.create_table();
+        lua_try!(crate::app::script_ctx::with_pose(|p| -> LuaResult<()> {
+            set_bool(lua, &pose_tbl, "ok", p.is_ok())?;
+            let sampled = p.sampled();
+            for (name, idx) in crate::app::pose::NAMED {
+                let lm = sampled[idx];
                 let t = lua.create_table();
-                let xs = lua.create_table();
-                let ys = lua.create_table();
-                let zs = lua.create_table();
-                for (i, lm) in hand.landmarks.iter().enumerate() {
-                    let k = (i + 1) as f64;
-                    lua.table_raw_set(&xs, Val::Num(k), Val::Num(lm[0] as f64))?;
-                    lua.table_raw_set(&ys, Val::Num(k), Val::Num(lm[1] as f64))?;
-                    lua.table_raw_set(&zs, Val::Num(k), Val::Num(lm[2] as f64))?;
-                }
-                set_table(lua, &t, "x", xs)?;
-                set_table(lua, &t, "y", ys)?;
-                set_table(lua, &t, "z", zs)?;
-                set_table(lua, &hand_tbl, name, t)?;
+                set_num(lua, &t, "x", lm.x as f64)?;
+                set_num(lua, &t, "y", lm.y as f64)?;
+                set_num(lua, &t, "z", lm.z as f64)?;
+                set_num(lua, &t, "v", lm.visibility as f64)?;
+                set_table(lua, &pose_tbl, name, t)?;
             }
-        }
-        Ok(())
-    }));
-    lua_try!(lua.set_global("hand", hand_tbl));
+            Ok(())
+        }));
+        lua_try!(lua.set_global("pose", pose_tbl));
+        // Table `hand` (doigts) — même forme que côté mlua, cf. `scripting.rs`.
+        let hand_tbl = lua.create_table();
+        lua_try!(crate::app::script_ctx::with_hands(|h| -> LuaResult<()> {
+            set_bool(lua, &hand_tbl, "ok", h.is_ok())?;
+            for (name, right) in [("left", false), ("right", true)] {
+                if let Some(hand) = h.sampled_side(right) {
+                    let t = lua.create_table();
+                    let xs = lua.create_table();
+                    let ys = lua.create_table();
+                    let zs = lua.create_table();
+                    for (i, lm) in hand.landmarks.iter().enumerate() {
+                        let k = (i + 1) as f64;
+                        lua.table_raw_set(&xs, Val::Num(k), Val::Num(lm[0] as f64))?;
+                        lua.table_raw_set(&ys, Val::Num(k), Val::Num(lm[1] as f64))?;
+                        lua.table_raw_set(&zs, Val::Num(k), Val::Num(lm[2] as f64))?;
+                    }
+                    set_table(lua, &t, "x", xs)?;
+                    set_table(lua, &t, "y", ys)?;
+                    set_table(lua, &t, "z", zs)?;
+                    set_table(lua, &hand_tbl, name, t)?;
+                }
+            }
+            Ok(())
+        }));
+        lua_try!(lua.set_global("hand", hand_tbl));
+    }
 
     let call_result = lua.call_function(func, &[]).map(|_| ());
 

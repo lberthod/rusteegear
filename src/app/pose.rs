@@ -60,22 +60,48 @@ pub struct Landmark {
 }
 
 /// Dernière pose reçue + son « âge » en pas de simulation.
+///
+/// **Interpolation** : la caméra livre ~15-30 images/s, la simulation tourne à
+/// 60 Hz. Plutôt que de sauter d'une mesure à la suivante, `sampled()` glisse
+/// linéairement de l'avant-dernière (`prev`) vers la dernière (`landmarks`) sur
+/// la durée observée entre les deux arrivées (`interval`) — mouvement continu à
+/// 60 Hz au prix d'une latence d'une image caméra.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PoseFrame {
     pub landmarks: [Landmark; LANDMARK_COUNT],
+    /// Échantillon précédent (point de départ de l'interpolation).
+    pub prev: [Landmark; LANDMARK_COUNT],
     /// Au moins une image complète a été reçue depuis le lancement.
     pub present: bool,
     /// Pas de simulation écoulés depuis la dernière image (cf. `STALE_AFTER_TICKS`).
     pub age: u32,
+    /// Pas écoulés entre les deux dernières images (durée de l'interpolation).
+    pub interval: u32,
 }
 
 impl Default for PoseFrame {
     fn default() -> Self {
         Self {
             landmarks: [Landmark::default(); LANDMARK_COUNT],
+            prev: [Landmark::default(); LANDMARK_COUNT],
             present: false,
             age: u32::MAX,
+            interval: 1,
         }
+    }
+}
+
+/// Pas maximal d'interpolation : au-delà (caméra très lente), on saute à la
+/// dernière mesure plutôt que de traîner un demi-seconde derrière.
+const MAX_INTERVAL_TICKS: u32 = 20;
+
+/// Interpole deux repères.
+fn lerp_landmark(a: Landmark, b: Landmark, t: f32) -> Landmark {
+    Landmark {
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        z: a.z + (b.z - a.z) * t,
+        visibility: a.visibility + (b.visibility - a.visibility) * t,
     }
 }
 
@@ -91,6 +117,28 @@ impl PoseFrame {
             self.age = 0;
             return;
         }
+        // Point de départ de l'interpolation : là où l'affichage en était
+        // (mesure précédente si elle était atteinte, sinon la valeur interpolée).
+        self.prev = if self.present {
+            self.sampled()
+        } else {
+            let mut fresh = [Landmark::default(); LANDMARK_COUNT];
+            let (chunks, _rest) = flat.as_chunks::<FLOATS_PER_LANDMARK>();
+            for (lm, chunk) in fresh.iter_mut().zip(chunks) {
+                *lm = Landmark {
+                    x: chunk[0],
+                    y: chunk[1],
+                    z: chunk[2],
+                    visibility: chunk[3],
+                };
+            }
+            fresh
+        };
+        self.interval = if self.present {
+            self.age.clamp(1, MAX_INTERVAL_TICKS)
+        } else {
+            1
+        };
         let (chunks, _rest) = flat.as_chunks::<FLOATS_PER_LANDMARK>();
         for (lm, chunk) in self.landmarks.iter_mut().zip(chunks) {
             *lm = Landmark {
@@ -112,6 +160,20 @@ impl PoseFrame {
     /// Pose utilisable par un script : reçue **et** fraîche.
     pub fn is_ok(&self) -> bool {
         self.present && self.age < STALE_AFTER_TICKS
+    }
+
+    /// Repères **interpolés** pour le pas courant (cf. la doc du type) : la
+    /// dernière mesure une fois `interval` pas écoulés, entre les deux avant.
+    pub fn sampled(&self) -> [Landmark; LANDMARK_COUNT] {
+        let t = (self.age as f32 / self.interval.max(1) as f32).clamp(0.0, 1.0);
+        if t >= 1.0 {
+            return self.landmarks;
+        }
+        let mut out = self.landmarks;
+        for (o, (a, b)) in out.iter_mut().zip(self.prev.iter().zip(&self.landmarks)) {
+            *o = lerp_landmark(*a, *b, t);
+        }
+        out
     }
 }
 
@@ -181,6 +243,61 @@ mod tests {
         assert_eq!(p.landmarks[0].x, 0.5, "derniers repères conservés");
     }
 
+    /// Entre deux images caméra, les repères glissent linéairement de l'ancienne
+    /// mesure vers la nouvelle sur la durée observée entre les deux arrivées.
+    #[test]
+    fn samples_interpolate_between_the_last_two_camera_frames() {
+        let mut p = PoseFrame::default();
+        let at = |x: f32| {
+            flat_with(
+                16,
+                Landmark {
+                    x,
+                    y: 0.5,
+                    z: 0.0,
+                    visibility: 1.0,
+                },
+            )
+        };
+        p.apply_flat(&at(0.0));
+        assert_eq!(
+            p.sampled()[16].x,
+            0.0,
+            "première image : aucune interpolation"
+        );
+        for _ in 0..4 {
+            p.tick();
+        }
+        p.apply_flat(&at(1.0)); // 4 pas après la première : intervalle = 4
+        assert_eq!(p.interval, 4);
+        assert!(
+            (p.sampled()[16].x - 0.0).abs() < 1e-6,
+            "à l'arrivée, l'affichage part de l'ancienne mesure"
+        );
+        p.tick();
+        assert!((p.sampled()[16].x - 0.25).abs() < 1e-6);
+        p.tick();
+        assert!((p.sampled()[16].x - 0.5).abs() < 1e-6);
+        p.tick();
+        p.tick();
+        assert!(
+            (p.sampled()[16].x - 1.0).abs() < 1e-6,
+            "intervalle écoulé : mesure atteinte"
+        );
+        p.tick();
+        assert!((p.sampled()[16].x - 1.0).abs() < 1e-6, "et on y reste");
+        // Nouvelle image avant la fin de l'interpolation : on repart d'où on était.
+        p.apply_flat(&at(2.0));
+        p.tick();
+        p.tick();
+        p.apply_flat(&at(4.0));
+        let start = p.sampled()[16].x;
+        assert!(
+            (start - 1.4).abs() < 1e-6,
+            "départ = valeur interpolée au moment de l'arrivée ({start})"
+        );
+    }
+
     #[test]
     fn named_landmarks_are_within_the_model_range_and_unique() {
         let mut seen = std::collections::HashSet::new();
@@ -223,8 +340,13 @@ pub struct Hand {
 pub struct HandFrame {
     pub left: Option<Hand>,
     pub right: Option<Hand>,
+    /// Mains de l'image précédente (départ de l'interpolation, cf. `PoseFrame`).
+    pub prev_left: Option<Hand>,
+    pub prev_right: Option<Hand>,
     /// Pas de simulation écoulés depuis la dernière image (cf. `STALE_AFTER_TICKS`).
     pub age: u32,
+    /// Pas écoulés entre les deux dernières images.
+    pub interval: u32,
 }
 
 impl Default for HandFrame {
@@ -232,9 +354,26 @@ impl Default for HandFrame {
         Self {
             left: None,
             right: None,
+            prev_left: None,
+            prev_right: None,
             age: u32::MAX,
+            interval: 1,
         }
     }
+}
+
+fn lerp_hand(a: &Hand, b: &Hand, t: f32) -> Hand {
+    let mut out = *b;
+    for (o, (pa, pb)) in out
+        .landmarks
+        .iter_mut()
+        .zip(a.landmarks.iter().zip(&b.landmarks))
+    {
+        for k in 0..3 {
+            o[k] = pa[k] + (pb[k] - pa[k]) * t;
+        }
+    }
+    out
 }
 
 impl HandFrame {
@@ -243,6 +382,20 @@ impl HandFrame {
     /// `None` (contrairement à `PoseFrame`, on ne fige pas la dernière main :
     /// une main qui sort du cadre doit disparaître, pas rester plantée).
     pub fn apply_flat(&mut self, flat: &[f32]) {
+        // Départ de l'interpolation : la main telle qu'affichée à l'instant de
+        // l'arrivée (ou rien si elle vient d'apparaître).
+        let fresh = self.age >= STALE_AFTER_TICKS;
+        self.prev_left = if fresh {
+            None
+        } else {
+            self.sampled_side(false)
+        };
+        self.prev_right = if fresh { None } else { self.sampled_side(true) };
+        self.interval = if fresh {
+            1
+        } else {
+            self.age.clamp(1, MAX_INTERVAL_TICKS)
+        };
         self.left = None;
         self.right = None;
         self.age = 0;
@@ -283,6 +436,22 @@ impl HandFrame {
             self.left.as_ref()
         }
     }
+
+    /// Main d'un côté **interpolée** pour le pas courant (cf. `PoseFrame::sampled`) ;
+    /// une main qui vient d'apparaître n'a pas de point de départ : mesure brute.
+    pub fn sampled_side(&self, right: bool) -> Option<Hand> {
+        let cur = self.side(right)?;
+        let prev = if right {
+            &self.prev_right
+        } else {
+            &self.prev_left
+        };
+        let t = (self.age as f32 / self.interval.max(1) as f32).clamp(0.0, 1.0);
+        match prev {
+            Some(p) if t < 1.0 => Some(lerp_hand(p, cur, t)),
+            _ => Some(*cur),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +481,27 @@ mod hand_tests {
         h.apply_flat(&[]);
         assert!(!h.is_ok());
         assert!(h.left.is_none() && h.right.is_none());
+    }
+
+    #[test]
+    fn hands_interpolate_between_two_frames_and_start_raw_when_they_appear() {
+        let mut h = HandFrame::default();
+        h.apply_flat(&hand_flat(1.0, 0.0));
+        assert_eq!(
+            h.sampled_side(true).unwrap().landmarks[8][0],
+            0.0,
+            "apparition : brute"
+        );
+        for _ in 0..2 {
+            h.tick();
+        }
+        h.apply_flat(&hand_flat(1.0, 1.0));
+        assert_eq!(h.interval, 2);
+        h.tick();
+        assert!((h.sampled_side(true).unwrap().landmarks[8][0] - 0.5).abs() < 1e-6);
+        h.tick();
+        assert!((h.sampled_side(true).unwrap().landmarks[8][0] - 1.0).abs() < 1e-6);
+        assert!(h.sampled_side(false).is_none());
     }
 
     #[test]

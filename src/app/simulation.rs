@@ -1924,6 +1924,9 @@ impl AppState {
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 super::script_ctx::set_object_visible(obj.visible);
+                super::script_ctx::set_pose_wanted(super::script_ctx::script_reads_pose(
+                    &obj.script,
+                ));
                 if let Err(e) = scripting_web::run_script_web(
                     &mut self.scripting.lua_web,
                     &func,
@@ -2012,6 +2015,9 @@ impl AppState {
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 super::script_ctx::set_object_visible(obj.visible);
+                super::script_ctx::set_pose_wanted(super::script_ctx::script_reads_pose(
+                    &obj.script,
+                ));
                 if let Err(e) = scripting::run_script(
                     &self.scripting.lua,
                     &func,

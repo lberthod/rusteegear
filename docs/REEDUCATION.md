@@ -65,9 +65,14 @@ hanches→épaules ramené à 0,9 m, hanches centrées à 1,35 m — donc le pat
 garde la même taille à l'écran qu'il soit à 1 m ou 3 m de la caméra (les cibles,
 relatives au corps, suivent) ; la caméra de jeu est reculée en conséquence.
 
-**Qualité du suivi** : inférence à 30 Hz (15 Hz dans Mouvéo) avec repli
-automatique à 15 Hz si la machine ne suit pas ; repères lissés côté moteur
-(constante ~45 ms) puis interpolés à chaque frame ; un repère de visibilité
+**Qualité du suivi** : inférence dans un **Web Worker** (sur le thread
+principal, elle bloquait le rendu du moteur 10 à 30 ms par image ; repli sur
+le thread principal si le worker échoue), à 30 Hz (15 Hz dans Mouvéo) avec
+repli automatique à 15 Hz si la machine ne suit pas ; côté moteur, chaque
+repère **glisse à 60 Hz de la mesure précédente vers la nouvelle** sur la durée
+observée entre deux images (`PoseFrame::sampled`, latence d'une image caméra),
+puis un lissage léger (~30 ms) ; les tables Lua `pose`/`hand` ne sont
+construites que pour les scripts qui les lisent ; un repère de visibilité
 < 0,5 (hors cadre, extrapolé) n'est pas dessiné, et ses os non plus — c'est ce
 qui faisait filer des cylindres hors de l'écran quand le patient était trop
 près de la caméra.

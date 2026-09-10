@@ -23,6 +23,10 @@ thread_local! {
     static POSE: RefCell<PoseFrame> = RefCell::new(PoseFrame::default());
     /// Dernières mains (doigts, cf. `app::pose::HandFrame`), même cycle que `POSE`.
     static HANDS: RefCell<HandFrame> = RefCell::new(HandFrame::default());
+    /// Le script courant lit-il `pose`/`hand` ? (`AppState::run_object_scripts`,
+    /// d'après sa source) — sinon les deux tables ne sont pas reconstruites pour
+    /// lui : ~70 objets du mannequin par pas n'en ont pas besoin.
+    static POSE_WANTED: Cell<bool> = const { Cell::new(true) };
     /// Directions d'os poussées par `bone(nom, dx, dy, dz)` pendant le script
     /// courant, reprises dans `SceneObject::bone_dirs` juste après.
     static BONES: RefCell<Vec<(String, glam::Vec3)>> = const { RefCell::new(Vec::new()) };
@@ -58,6 +62,23 @@ pub(crate) fn set_hands(h: &HandFrame) {
 
 pub(crate) fn with_hands<R>(f: impl FnOnce(&HandFrame) -> R) -> R {
     HANDS.with(|c| f(&c.borrow()))
+}
+
+/// Un script mentionne-t-il `pose` ou `hand` ? Posé avant chaque appel de
+/// `run_script`/`run_script_web` ; les backends sautent la construction des
+/// tables quand c'est faux (elles gardent alors la valeur du script précédent,
+/// que ce script ne lit pas).
+pub(crate) fn set_pose_wanted(wanted: bool) {
+    POSE_WANTED.with(|c| c.set(wanted));
+}
+
+pub(crate) fn pose_wanted() -> bool {
+    POSE_WANTED.with(|c| c.get())
+}
+
+/// Vrai si la source du script peut lire `pose` ou `hand`.
+pub(crate) fn script_reads_pose(src: &str) -> bool {
+    src.contains("pose") || src.contains("hand")
 }
 
 /// `bone(nom, dx, dy, dz)` côté script (les deux backends).
