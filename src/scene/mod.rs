@@ -1502,13 +1502,6 @@ pub struct Scene {
     /// Faux par défaut : aucune scène existante ne change.
     #[serde(default)]
     pub arcade_hud: bool,
-    /// **Runtime seulement, jamais sérialisé** : une page hôte (web,
-    /// `set_hud_widgets_visible(false)` — PhysioTech.ch, cf. `docs/REEDUCATION.md`)
-    /// dessine elle-même le HUD à partir des variables `save.ui_*` publiées par
-    /// les scripts ; les widgets `hud_widgets` ne sont alors plus rendus. Sans page
-    /// hôte (éditeur, desktop, APK) le drapeau reste faux et rien ne change.
-    #[serde(skip)]
-    pub hud_widgets_hidden: bool,
 }
 
 /// Réglages du mode plateformer 2D (`Scene::platformer`) : la scène reste une
