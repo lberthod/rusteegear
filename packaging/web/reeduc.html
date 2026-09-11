@@ -749,6 +749,7 @@
         hitTimes: [],
         lastVars: {},
         online: navigator.onLine,
+        sentEvents: [],                 // diagnostic : derniers événements envoyés au moteur
         installPrompt: null,
         cameraError: "",
       };
@@ -895,7 +896,7 @@
       // =====================================================================
       // 4. Pont avec le moteur
       // =====================================================================
-      function sendEvent(action) { if (engineReady) push_hud_event(action); }
+      function sendEvent(action) { S.sentEvents.push(action); if (S.sentEvents.length > 30) S.sentEvents.shift(); if (engineReady) push_hud_event(action); }
       function setVar(key, value) { if (engineReady) set_script_var(key, value); }
       function pushSettings() {
         setVar("rd_level", S.level); setVar("rd_amp", S.amp);
@@ -1094,7 +1095,7 @@
           $("ck-body").classList.toggle("done", body); $("ck-stable").classList.toggle("done", calib >= 35); $("ck-ready").classList.toggle("done", calib >= 90);
           // Caméra prête et corps vu par le moteur : on lance la séance (le
           // moteur verrouille alors le mode caméra, cf. `hud:demarrer`).
-          if (!S.started && v.ui_pose_ok > 0.5 && st === 0) { S.started = true; sendEvent("demarrer"); say("Je vous vois. Restez immobile un instant, je calibre."); }
+          if (!S.started && v.ui_pose_ok > 0.5 && (st === 0 || st === 3)) { S.started = true; sendEvent("demarrer"); say("Je vous vois. Restez immobile un instant, je calibre."); }
         }
         if (S.stage === "countdown") {
           const c = Math.round(v.ui_count || 3);
@@ -1178,6 +1179,10 @@
       // 7. Actions de séance
       // =====================================================================
       function prepareSession() {
+        // Le moteur reste sur le bilan (étape 3) après une séance : on le
+        // ramène à l'accueil avant d'en préparer une autre, sinon la calibration
+        // caméra attendrait pour rien un moteur « à l'accueil ».
+        if (lastEngineStage !== 0) sendEvent("arreter");
         S.started = false; S.round = 0; S.rounds = S.mode === "circuit" ? S.program.rounds : 1;
         S.totals = { points: 0, caught: 0, missed: 0, bombs: 0, maxcombo: 0 }; S.hitTimes = [];
         S.pain = S.painBefore; S.fatigue = 2; S.saved = false; S.cameraError = "";
@@ -1260,7 +1265,7 @@
       }
       function resetSession() {
         stopCamera(); stopVoice();
-        if (S.started || ["calibrate", "countdown", "playing", "paused", "rest"].includes(S.stage)) sendEvent("arreter");
+        if (S.started || lastEngineStage !== 0 || ["calibrate", "countdown", "playing", "paused", "rest"].includes(S.stage)) sendEvent("arreter");
         S.started = false; S.demo = false;
         S.pain = 0; S.fatigue = 2; S.saved = false; S.cameraError = "";
         S.lastVars = {};
