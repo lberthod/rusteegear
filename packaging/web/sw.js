@@ -3,7 +3,7 @@
 // (page, moteur `pkg/` ~25 Mo mis en cache à la première lecture, manifeste,
 // clips de la voix de Christophe) ; cache d'abord pour MediaPipe (wasm + modèles, CDN) — après une
 // première séance avec caméra, tout tourne hors ligne.
-const CACHE = "physiotech-v8";
+const CACHE = "physiotech-v9";
 const CORE = ["./reeduc.html", "./manifest.json", "./favicon.svg", ...["ready", "position", "calibrated", "three", "two", "one", "start", "arm_start", "good", "good_control", "mission_complete", "next_game", "reposition", "paused", "resume", "trunk", "symmetry", "slow_return"].map((c) => `./voice/christophe/${c}.mp3`)];
 const MEDIAPIPE = /(cdn\.jsdelivr\.net\/npm\/@mediapipe|storage\.googleapis\.com\/mediapipe-models)/;
 
