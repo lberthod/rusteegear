@@ -19,6 +19,11 @@ mode « player » tactile sur iPhone et Android.
 
 ### 🎮 [Essayer la démo dans le navigateur](https://lberthod.github.io/rusteegear/)
 
+🌊 **Projet dérivé : [water.loicberthod.ch](https://water.loicberthod.ch)** — la
+démo « Rivière & cascade », monde 3D multijoueur PvE/PvP hébergé sur VPS.
+Dossier de passation complet : [README-water.md](README-water.md) · dépôt miroir :
+[lberthod/water.loicberthod](https://github.com/lberthod/water.loicberthod).
+
 Aucune installation : WebGPU (Chrome/Edge récents), clavier (WASD + Espace/J/K/H),
 connectée au **même serveur multijoueur** que le desktop/APK — tout le monde qui
 ouvre ce lien atterrit dans la même partie. Doc API : [/doc/](https://lberthod.github.io/rusteegear/doc/motor3derust/).
