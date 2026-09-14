@@ -32,6 +32,7 @@ tourne ou colore réellement l'objet.
 | `obj.sx`, `obj.sy`, `obj.sz` | nombre (lecture/écriture) | Échelle. |
 | `obj.r`, `obj.g`, `obj.b` | nombre 0..1 (lecture/écriture) | Couleur de l'objet. |
 | `obj.anim` | chaîne (lecture/écriture) | Clip d'animation en cours ; `obj.anim = "run"` démarre un fondu vers ce clip. Sans effet sur un objet non animé. |
+| `obj.emissive`, `obj.opacity` | nombres (lecture/écriture) | Émission (0..8) et opacité (0..1) de l'objet, réécrites après le script comme la couleur — halos qui pulsent, spectres qui s'estompent. |
 | `obj.visible` | booléen (lecture/écriture) | Affiché **et** solide. `obj.visible = false` fait disparaître l'objet et coupe ses collisions sans reconstruire la physique (un saut en cours continue) ; `true` le fait revenir — réversible, contrairement à `obj:destroy()`. Pensé pour les pièges du mode plateformer 2D (`Scene::platformer`). |
 
 Drapeaux **lecture seule**, posés par le moteur et remis à zéro à chaque pas :
@@ -69,6 +70,19 @@ Méthode :
 | `save.set(clé, valeur)` | fonction | Écrit une variable de sauvegarde (**nombres seulement**). Partagée entre tous les objets, conservée avant erreur, embarquée dans la sauvegarde de partie. Convention : les clés `ui_*` sont publiées à la page hôte web à chaque image (`window.__rusteegear_vars`), et une page peut écrire n'importe quelle clé par l'export `set_script_var` — cf. `docs/REEDUCATION.md`, « Page hôte ». Le moteur écrit lui-même `cam_visible_width` / `cam_visible_height` (cadre visible par la caméra de jeu au niveau de sa cible, unités monde) quand une scène `arcade_hud` a une caméra de jeu. |
 | `debug.line(x1,y1,z1, x2,y2,z2, r,g,b)` | fonction | Trace un segment de débogage (couleur 0..1) visible une frame ; les appels s'accumulent. Remplace la bibliothèque `debug` standard de Lua. |
 
+`coop` (0/1), `death_player` (1/2, 0 = aucun), `deaths_p1`, `deaths_p2` : coop locale à
+deux du plateformer 2D (`Platformer2D::coop`) — mode actif, joueur mort en dernier,
+morts par joueur. Le joueur 2 est l'objet dont `Controller::player_slot` vaut 1 ;
+`teleport()` emmène les deux joueurs en coop.
+
+`death_cause` (chaîne), `death_x`, `death_y` (nombres) : cause et position de la
+dernière mort en mode plateformer 2D — nom de l'objet mortel touché, `chute`
+(sous `kill_y`) ou `vie` (santé à zéro) ; vides tant qu'on n'est pas mort.
+
+Un objet dont le `tag` vaut `conveyor:<v>` est un **tapis roulant** (plateformer
+2D) : le joueur posé dessus est emporté de `v` u/s sur X (sable qui glisse,
+tapis d'usine), en plus du déplacement de la plateforme s'il y en a un.
+
 ## Fonctions globales
 
 | Fonction | Retour | Rôle |
@@ -82,6 +96,17 @@ Méthode :
 | `overlap_sphere(x,y,z, rayon [, masque])` | nombre | Compte les volumes de collision dans la sphère ; `0` hors Play. |
 | `set_health(v)` | — | Fixe la barre de vie du HUD à `v` (0..1). |
 | `damage(v)` | — | Retire `v` à la vie (cumulatif dans la frame, borné 0..1) — `damage(999)` pour une zone mortelle. |
+| `sfx(nom)` | — | Joue un effet sonore synthétisé du moteur (`runtime::sfx`) : `jump`, `pickup`, `win`, `lose`, `hit`, `defeat`, `wave`, `ally`, `wake`. Appelé par chaque objet qui exécute le script : sur un objet à plusieurs parties, ne le déclencher que depuis le corps. |
+| `set_sky(hr, hg, hb, zr, zg, zb)` | — | Couleurs (linéaires) de l'horizon et du zénith de `Scene::sky` — un ciel par zone dans une scène unique (mode plateformer 2D). Le brouillard prend la couleur du zénith. |
+| `set_light(i, x, y, z, r, g, b, intensité, portée)` | — | Lumière ponctuelle `i` (0..7) de `Scene::point_lights`, créée si besoin ; portée 0 = éteinte. Une scène unique peut ainsi éclairer chaque zone différemment (lampe qui suit le joueur, lave qui pulse…). |
+| `set_ambient(a)` | — | Lumière ambiante de la scène (`Scene::light.ambient`, 0..2). |
+| `set_fx(bloom, brouillard, r, g, b)` | — | Intensité du bloom, densité et couleur (linéaire) du brouillard (`Scene::sky`). |
+| `gravity(s)` | — | Échelle de gravité du joueur (0,15..3), plateformer 2D ; remise à 1 à chaque mort. |
+| `wind(x)` | — | Vent : vitesse X ajoutée au joueur **en l'air** (−12..12) ; remise à 0 à chaque mort. |
+| `slow(f, s)` | — | Échelle de vitesse de course (0,2..2) pendant `s` secondes. |
+| `set_camera(h)` | — | Hauteur orthographique de la caméra de jeu (6..30), 0 = celle de la scène. |
+| `shake(f)` | — | Secousse de caméra (0..1), cumulée au maximum avec celle en cours. |
+| `restart()` | — | Rejoue le niveau (même séquence qu'une mort, cause `abandon`). |
 | `reverb(mix)` | — | Réverbération du bus SFX (0..1, transition 0,5 s) ; le dernier appel du pas l'emporte. |
 | `vibrate(ms)` | — | Demande un retour haptique — **aujourd'hui seulement journalisé**, sur toutes les cibles. |
 | `checkpoint(x, y, z)` | — | Point de réapparition du joueur après une mort en mode plateformer 2D (sinon : position de départ). Appliqué après la boucle des scripts ; le dernier appel du pas l'emporte. |

@@ -146,6 +146,15 @@ impl AppState {
                     return "aucun objet cible : sélectionnez un objet ou lancez le Play".into();
                 };
                 let pos = Vec3::new(xyz[0], xyz[1], xyz[2]);
+                // Coop en Play : les deux joueurs locaux (le second décalé), comme
+                // `teleport()` Lua — cf. `place_player`.
+                if self.playing && self.scene.platformer.is_some_and(|p| p.coop) {
+                    self.place_player(pos);
+                    return format!(
+                        "joueurs téléportés à ({:.2}, {:.2}, {:.2})",
+                        pos.x, pos.y, pos.z
+                    );
+                }
                 // Hors Play, la téléportation est une édition comme une autre :
                 // annulable et marquée modifiée (roadmap post-audit UX v2
                 // 2026-09-04, 3.5). En Play, les objets sont restaurés au Stop.
@@ -228,6 +237,20 @@ impl AppState {
             // `restart` : rejouer la manche courante (équivalent du bouton
             // « Rejouer » de l'écran de fin) — indispensable au pilotage : une
             // victoire/défaite gèle toute la simulation jusqu'à ce geste.
+            // Coop locale à deux du plateformer 2D : `coop` bascule, `coop on|off` impose.
+            "coop" => {
+                let current = self.scene.platformer.map(|p| p.coop);
+                match (current, args.first().copied()) {
+                    (None, _) => "coop : la scène n'a pas de mode plateformer 2D".into(),
+                    (Some(true), Some("on")) | (Some(false), Some("off")) => {
+                        "mode à deux : inchangé".into()
+                    }
+                    _ => {
+                        let on = self.toggle_coop();
+                        format!("mode à deux : {}", if on { "activé" } else { "désactivé" })
+                    }
+                }
+            }
             "restart" => {
                 if !self.playing {
                     "impossible : pas en Play".into()
@@ -341,6 +364,10 @@ impl AppState {
                 Some("components") => {
                     self.load_components_demo();
                     "démo composants chargée".into()
+                }
+                Some("riviere") | Some("cascade") => {
+                    self.load_riviere_demo();
+                    "démo rivière & cascade chargée".into()
                 }
                 Some("hameau") | Some("player") => {
                     self.load_embedded_player_scene();

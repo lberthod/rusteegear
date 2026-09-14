@@ -33,7 +33,7 @@ use windows::{
 
 use crate::app::GizmoMode;
 use crate::runtime::physics::PhysicsKind;
-use crate::scene::{MeshKind, Scene, Transform};
+use crate::scene::{MeshKind, Scene, Transform, WaterKind, WaterSurface};
 
 /// Lance `glbviewer` (`src/bin/glbviewer.rs`) comme processus séparé — sa
 /// propre fenêtre wgpu/egui pour parcourir/prévisualiser `assets/models/`,
@@ -340,6 +340,8 @@ struct Panels {
     script_editor: bool,
     /// Aide en jeu (F1 / bouton « ? », roadmap 5.5).
     help: bool,
+    /// Panneau « 🎮 Manettes » du mode Player (bouton 🎮 en haut à droite).
+    gamepads: bool,
     /// Menu contextuel de la vue 3D ouvert à cette position (roadmap 5.4).
     context_menu: Option<egui::Pos2>,
     /// Résumé (âge, nombre d'objets) de l'autosave proposé en restauration,
@@ -528,6 +530,8 @@ pub enum DemoKind {
     Survie,
     /// Rééducation — mobilité guidée (portage de Mouvéo).
     Reeducation,
+    /// Rivière & cascade — vitrine de rendu (eau animée, forêt, brume).
+    Riviere,
 }
 
 /// Changement de scène demandé par l'UI (roadmap post-audit UX 2026-09-04,
@@ -598,6 +602,7 @@ impl UiActions {
             (&mut self.load_escorte, DemoKind::Escorte),
             (&mut self.load_survie, DemoKind::Survie),
             (&mut self.load_reeducation, DemoKind::Reeducation),
+            (&mut self.load_riviere, DemoKind::Riviere),
         ];
         for (flag, kind) in demos {
             if std::mem::take(flag) {
@@ -706,6 +711,8 @@ pub struct UiActions {
     /// « Démo Rééducation » : cibles à atteindre avec le corps (caméra sur le
     /// web, joystick/flèches ailleurs), portage de Mouvéo.
     pub load_reeducation: bool,
+    /// « Rivière & cascade » : vitrine de rendu (shader d'eau, forêt dense, brume).
+    pub load_riviere: bool,
     /// Bouton « Rejouer » de fin de partie (relance la partie en cours).
     pub restart: bool,
     /// Inventaire d'armes (cf. `weapon_inventory_panel`) : arme choisie par le
@@ -730,6 +737,11 @@ pub struct UiActions {
     /// « Menu principal » du menu pause (roadmap post-audit UX v2 2026-09-04,
     /// 1.5) : déconnexion, partie relancée, retour à l'écran d'accueil.
     pub main_menu: bool,
+    /// Menu pause du plateformer 2D : « Jouer à deux » / « Revenir en solo »
+    /// (`AppState::toggle_coop`).
+    pub toggle_coop: bool,
+    /// Panneau 🎮 Manettes : « Échanger J1 ↔ J2 » (`AppState::gamepad_swap_requested`).
+    pub swap_gamepads: bool,
     /// Bouton tactile de saut pressé alors qu'on est vaincu (roadmap v2 1.9) :
     /// allié spectateur suivant, comme la touche de saut au clavier.
     pub cycle_spectate: bool,
@@ -1308,6 +1320,8 @@ impl Editor {
         // Marges sûres système en pixels physiques (`AppState::safe_insets_px`,
         // roadmap post-audit UX v2 2026-09-04, 5.4), `None` si inconnues.
         safe_insets_px: Option<[f32; 4]>,
+        // Manettes connectées et joueur attribué (`AppState::gamepad_hud`).
+        gamepad_hud: &crate::app::GamepadHudInfo,
     ) -> (egui::FullOutput, UiActions) {
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx
@@ -1375,6 +1389,7 @@ impl Editor {
         let settings = &mut self.settings;
         let settings_open = &mut self.panels.settings;
         let help_open = &mut self.panels.help;
+        let gamepads_open = &mut self.panels.gamepads;
         let crash_open = &mut self.panels.crash_log;
         let crash_confirm = &mut self.panels.crash_log_confirm_delete;
         let crash_log_text = &mut self.crash_log_text;
@@ -1585,8 +1600,16 @@ impl Editor {
                 if *settings_open || *help_open {
                     pause_veil(ctx, screen);
                 } else {
-                    let choice =
-                        pause_menu(ctx, area, locale, hud_scale, net_connected, restart_confirm);
+                    let coop_mode = scene.platformer.map(|p| p.coop);
+                    let choice = pause_menu(
+                        ctx,
+                        area,
+                        locale,
+                        hud_scale,
+                        net_connected,
+                        restart_confirm,
+                        coop_mode,
+                    );
                     if choice.resume {
                         *resume = true;
                     }
@@ -1599,6 +1622,9 @@ impl Editor {
                     }
                     if choice.main_menu {
                         actions.main_menu = true;
+                    }
+                    if choice.coop_toggle {
+                        actions.toggle_coop = true;
                     }
                     if choice.disconnect {
                         actions.disconnect_from_server = true;
@@ -1661,6 +1687,7 @@ impl Editor {
                     map: false,
                     help: false,
                     mute: false,
+                    pads: false,
                     rect: egui::Rect::ZERO,
                 }
             } else {
@@ -1685,6 +1712,19 @@ impl Editor {
                 if *help_open {
                     *settings_open = false;
                 }
+            }
+            if top.pads {
+                *gamepads_open = !*gamepads_open;
+            }
+            if *gamepads_open {
+                windows::gamepads_window(
+                    ctx,
+                    gamepads_open,
+                    locale,
+                    gamepad_hud,
+                    scene.platformer.is_some_and(|p| p.coop),
+                    &mut actions.swap_gamepads,
+                );
             }
             if top.mute {
                 settings.muted = !settings.muted;
@@ -2929,6 +2969,21 @@ fn inspector_panel(
                     ui.add(
                         egui::Slider::new(&mut sky.bloom_intensity, 0.0..=3.0).text("bloom"),
                     );
+                    ui.add(
+                        egui::Slider::new(&mut sky.sun_glow, 0.0..=3.0).text("halo du soleil"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut sky.fog_height_falloff, 0.0..=1.0)
+                            .text("brouillard : décroissance en altitude"),
+                    )
+                    .on_hover_text(
+                        "0 = brouillard uniforme. Au-dessus, la brume stagne sous \
+                         l'altitude de base et s'éclaircit en montant (vallée embrumée).",
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut sky.fog_height_base, -50.0..=50.0)
+                            .text("brouillard : altitude de base"),
+                    );
                     ui.weak(
                         "Halo autour des zones dont la radiance dépasse 1.0 (émissifs, \
                          spéculaire fort) ; coupé automatiquement en qualité Basse.",
@@ -3326,6 +3381,48 @@ fn inspector_panel(
                                          loin au plus près, sans projeter d'ombre.",
                                     );
                             });
+                            ui.horizontal(|ui| {
+                                let mut water_on = obj.water.is_some();
+                                if ui
+                                    .checkbox(&mut water_on, "Surface d'eau")
+                                    .on_hover_text(
+                                        "Rend l'objet comme de l'eau : vaguelettes animées, reflet \
+                                         du ciel et du soleil, écume. Fonctionne sur un plan ou un \
+                                         maillage importé ; combiner avec une opacité < 1 pour \
+                                         laisser voir le fond.",
+                                    )
+                                    .changed()
+                                {
+                                    obj.water = water_on.then(WaterSurface::default);
+                                }
+                            });
+                            if let Some(w) = obj.water.as_mut() {
+                                ui.horizontal(|ui| {
+                                    ui.label("Genre d'eau");
+                                    egui::ComboBox::from_id_salt(("water_kind", i))
+                                        .selected_text(w.kind.label())
+                                        .show_ui(ui, |ui| {
+                                            for k in WaterKind::ALL {
+                                                ui.selectable_value(&mut w.kind, k, k.label());
+                                            }
+                                        });
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Courant");
+                                    ui.add(egui::Slider::new(&mut w.flow_speed, 0.0..=10.0))
+                                        .on_hover_text("Vitesse de défilement du motif (m/s).");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Échelle");
+                                    ui.add(egui::Slider::new(&mut w.scale, 0.05..=4.0))
+                                        .on_hover_text("Finesse des vaguelettes (plus grand = plus serrées).");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Écume");
+                                    ui.add(egui::Slider::new(&mut w.foam, 0.0..=1.0))
+                                        .on_hover_text("Quantité d'écume là où le maillage l'autorise.");
+                                });
+                            }
                         });
                         ui.separator();
                         ui.collapsing("Audio", |ui| {

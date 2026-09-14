@@ -203,6 +203,17 @@ pub(super) fn menu_fichier(
                     ui.close();
                 }
                 if ui
+                    .button("🏞  Rivière & cascade (vitrine de rendu)")
+                    .on_hover_text(
+                        "Vallée boisée, rivière sinueuse et cascade : shader d'eau animé (vagues, \
+                         reflets, écume), terrain texturé, brume — se promener au joystick/WASD",
+                    )
+                    .clicked()
+                {
+                    actions.load_riviere = true;
+                    ui.close();
+                }
+                if ui
                     .button("🛒  Escorte (RoundObjective::Escorte)")
                     .on_hover_text(
                         "Convoi lent à mener d'un bout à l'autre d'un couloir, ciblé en priorité par les créatures (RoundObjective::Escorte)",

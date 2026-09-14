@@ -33,6 +33,11 @@ struct Light {
     sky_horizon: vec4<f32>,
     sky_zenith: vec4<f32>,
     fog: vec4<f32>,
+    cascade_vp: array<mat4x4<f32>, 3>,
+    cascade_splits: vec4<f32>,
+    extra: vec4<f32>,  // z = halo du soleil, y = brouillard de hauteur actif (cf. main.wgsl)
+    extra2: vec4<f32>,
+    extra3: vec4<f32>,
 };
 @group(0) @binding(1) var<uniform> light: Light;
 
@@ -67,6 +72,19 @@ fn fs_sky(in: VsOut) -> @location(0) vec4<f32> {
     // 0 = horizon, 1 = zénith. `smoothstep` plutôt qu'un `mix` linéaire sur `dir.y` brut :
     // évite une bande dure au ras de l'horizon, garde un ciel presque uniforme au zénith.
     let t = smoothstep(-0.05, 0.6, dir.y);
-    let col = mix(light.sky_horizon.rgb, light.sky_zenith.rgb, t);
+    var col = mix(light.sky_horizon.rgb, light.sky_zenith.rgb, t);
+    // Halo du soleil (`extra.z`, démo Rivière & cascade) : disque brillant (passe
+    // dans le bloom) + auréole large, dans la direction de la lumière.
+    if light.extra.z > 0.0 {
+        let s = max(dot(dir, normalize(light.dir.xyz)), 0.0);
+        let glow = pow(s, 14.0) * 0.12 + pow(s, 90.0) * 0.4 + pow(s, 1500.0) * 6.0;
+        col = col + light.color.rgb * glow * light.extra.z;
+    }
+    // Brouillard de hauteur actif : voile de brume au ras de l'horizon, pour que
+    // le lointain se fonde dans le ciel au lieu de se découper dessus.
+    if light.extra.y > 0.0 {
+        let haze = (1.0 - smoothstep(-0.02, 0.22, dir.y)) * 0.85;
+        col = mix(col, light.fog.rgb, haze);
+    }
     return vec4<f32>(col, 1.0);
 }

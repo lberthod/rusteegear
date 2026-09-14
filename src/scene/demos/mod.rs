@@ -7,8 +7,8 @@ use glam::Vec3;
 use super::{
     AiChaser, AnimationState, Archetype, AudioSource, Combat, Controller, Convoy, GameCamera,
     HudAnchor, HudBinding, HudLayout, HudWidget, HudWidgetKind, ImportedMesh, ItemKind, ItemPickup,
-    Light, MeshKind, MobileControls, PointLight, Scene, SceneObject, Sky, TapAction, Transform,
-    WEAPONS, WeaponPickup, demo_obj,
+    Light, Locomotion, MeshKind, MobileControls, PointLight, Scene, SceneObject, Sky, TapAction,
+    Transform, WEAPONS, WeaponPickup, demo_obj,
 };
 use crate::runtime::physics::PhysicsKind;
 
@@ -250,6 +250,7 @@ mod escorte;
 mod misc;
 
 pub mod reeducation;
+pub mod riviere;
 
 mod mmorpg;
 

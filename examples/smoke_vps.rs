@@ -47,6 +47,8 @@ fn main() {
                     fire: true,
                     weapon: 1,
                     heal: false,
+                    block: false,
+                    dash: false,
                 });
                 fired = true;
             }

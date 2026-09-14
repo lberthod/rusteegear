@@ -122,6 +122,12 @@ struct App {
     /// n'ouvre/ferme qu'une fois.
     gamepad_menu_was_held: bool,
     gamepad_hud_was_held: bool,
+    /// Coop (plateformer 2D à deux) : manette → joueur (0/1), attribuée à la
+    /// première pression ; état de la manette du joueur 2 (`gamepad_held`/
+    /// `gamepad_axes` restent ceux du joueur 1, et de tout le monde hors coop).
+    gamepad_slots: std::collections::HashMap<gilrs::GamepadId, u8>,
+    gamepad_held2: std::collections::HashSet<gilrs::Button>,
+    gamepad_axes2: (f32, f32),
 
     // --- hot-reload des assets de projet (Sprint 111, desktop uniquement) ---
     /// Récepteur des événements du dossier d'assets (`assets::assets_dir()`) —
@@ -474,7 +480,7 @@ impl App {
             && !s.touch_ui_active()
             // HUD arcade (`Scene::arcade_hud`, démo Rééducation) : pas de caméra à
             // la souris, le curseur reste visible pour cliquer les boutons du HUD.
-            && !s.scene.arcade_hud
+            && !(s.scene.arcade_hud && !s.scene.arcade_free_camera)
             && self.window_focused
             && !renderer.player_overlay_open();
         if want == self.cursor_grabbed {
@@ -535,9 +541,34 @@ impl App {
         let kb = self.state.keys;
         let inp = &mut self.state.input_state;
         inp.jump = keys.contains(&kb.jump) || gp.jump;
+        // Plateformer 2D : n'importe quel bouton de façade saute (A/B/X/Y d'une
+        // manette Switch, Xbox ou PlayStation — pas de mapping à apprendre).
+        if self.state.scene.platformer.is_some() {
+            use gilrs::Button::{East, North, South, West};
+            let held = &self.gamepad_held;
+            inp.jump |= held.contains(&South)
+                || held.contains(&East)
+                || held.contains(&North)
+                || held.contains(&West);
+        }
         inp.attack = keys.contains(&kb.attack) || gp.attack;
         inp.fire = keys.contains(&kb.fire) || gp.fire;
         inp.heal = keys.contains(&kb.heal) || gp.heal;
+        // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar`) : pas de
+        // pendant manette pour l'instant (`gp.block`/`gp.dash` n'existent pas),
+        // clavier seulement — cf. la limite documentée dans docs/RIVIERE_CASCADE.md.
+        inp.block = keys.contains(&kb.block);
+        inp.dash = keys.contains(&kb.dash);
+        // Kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar` —
+        // démo Rivière & cascade) : 1 = coup de mêlée, 3 = sort à distance,
+        // en plus des touches historiques J/K (qui continuent de fonctionner,
+        // pas de régression pour un joueur habitué). 2/4 utilisent déjà
+        // `kb.block`/`kb.dash` par défaut sur Digit2/Digit4 ci-dessus, rien à
+        // ajouter ici pour ces deux-là.
+        if self.state.scene.ability_bar {
+            inp.attack |= keys.contains(&KeyCode::Digit1);
+            inp.fire |= keys.contains(&KeyCode::Digit3);
+        }
         // Élévation caméra libre (Espace = monte, C = descend) — cf. `AppState::fly_cam`.
         // Pendant le vol au clic droit (`fly_look`), E monte et Q descend en plus
         // (convention Unity/Godot) ; hors vol, E/Q restent des raccourcis d'outil.
@@ -577,6 +608,26 @@ impl App {
         }
         self.gamepad_menu_was_held = gp.menu;
         self.gamepad_hud_was_held = gp.hud;
+        // Joueur 2 (coop) : sa manette seule — le clavier WASD passe par `key_move`.
+        let gp2 = app::input::resolve_gamepad_input(
+            &self.gamepad_held2,
+            self.gamepad_axes2,
+            (0.0, 0.0),
+            &bindings,
+        );
+        let inp2 = &mut self.state.input_state2;
+        inp2.jump = gp2.jump;
+        // Même règle que le joueur 1 : en plateformer 2D, n'importe quel bouton de
+        // façade saute (A sur une Switch est « East », pas « South »).
+        if self.state.scene.platformer.is_some() {
+            use gilrs::Button::{East, North, South, West};
+            let held = &self.gamepad_held2;
+            inp2.jump |= held.contains(&South)
+                || held.contains(&East)
+                || held.contains(&North)
+                || held.contains(&West);
+        }
+        inp2.gamepad_move = (gp2.move_x, gp2.move_y);
     }
 
     /// Vide les événements `gilrs` en attente (branchement/débranchement, boutons,
@@ -587,8 +638,43 @@ impl App {
         let Some(gilrs) = self.gilrs.as_mut() else {
             return;
         };
+        let coop = self.state.scene.platformer.is_some_and(|p| p.coop);
         let mut changed = false;
+        // « Échanger J1 ↔ J2 » (panneau 🎮 Manettes) : slots inversés, états
+        // tenus échangés avec eux.
+        if std::mem::take(&mut self.state.gamepad_swap_requested) {
+            for s in self.gamepad_slots.values_mut() {
+                *s = 1 - *s;
+            }
+            std::mem::swap(&mut self.gamepad_held, &mut self.gamepad_held2);
+            std::mem::swap(&mut self.gamepad_axes, &mut self.gamepad_axes2);
+            changed = true;
+        }
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
+            // Diagnostic des mappings (Switch Pro/Joy-Con sur macOS…) : `RUST_LOG=motor3derust=debug`.
+            log::debug!("manette {id:?} : {event:?}");
+            // Coop : chaque manette est attribuée à un joueur à son premier événement
+            // (connexion, bouton **ou stick** — attendre une pression de bouton
+            // laissait deux joueurs au stick tous les deux sur le joueur 1) : la
+            // première = joueur 1, la suivante = joueur 2, les autres joueur 2 aussi ;
+            // hors coop, toutes les manettes pilotent le joueur 1 (historique).
+            let slot = if !coop {
+                0
+            } else if let Some(&s) = self.gamepad_slots.get(&id) {
+                s
+            } else if matches!(event, gilrs::EventType::Disconnected) {
+                0
+            } else {
+                let s = u8::from(self.gamepad_slots.values().any(|&s| s == 0));
+                self.gamepad_slots.insert(id, s);
+                log::info!("Manette {id:?} → joueur {}", s + 1);
+                s
+            };
+            let (held, axes) = if slot == 1 {
+                (&mut self.gamepad_held2, &mut self.gamepad_axes2)
+            } else {
+                (&mut self.gamepad_held, &mut self.gamepad_axes)
+            };
             match event {
                 // Diagnostic de branchement : nom + source du mapping. Une
                 // Logitech F310/F710 a un commutateur X/D au dos — dans le
@@ -606,19 +692,26 @@ impl App {
                     );
                 }
                 gilrs::EventType::ButtonPressed(btn, _) => {
-                    self.gamepad_held.insert(btn);
+                    held.insert(btn);
                     changed = true;
+                    // Plateformer 2D : Start / + (Switch) rejoue le niveau, comme R.
+                    if matches!(btn, gilrs::Button::Start)
+                        && self.state.playing
+                        && self.state.scene.platformer.is_some()
+                    {
+                        self.state.restart_level();
+                    }
                 }
                 gilrs::EventType::ButtonReleased(btn, _) => {
-                    self.gamepad_held.remove(&btn);
+                    held.remove(&btn);
                     changed = true;
                 }
                 gilrs::EventType::AxisChanged(gilrs::Axis::LeftStickX, v, _) => {
-                    self.gamepad_axes.0 = v;
+                    axes.0 = v;
                     changed = true;
                 }
                 gilrs::EventType::AxisChanged(gilrs::Axis::LeftStickY, v, _) => {
-                    self.gamepad_axes.1 = v;
+                    axes.1 = v;
                     changed = true;
                 }
                 gilrs::EventType::AxisChanged(gilrs::Axis::RightStickX, v, _) => {
@@ -630,12 +723,30 @@ impl App {
                     changed = true;
                 }
                 gilrs::EventType::Disconnected => {
-                    self.gamepad_held.clear();
-                    self.gamepad_axes = (0.0, 0.0);
+                    held.clear();
+                    *axes = (0.0, 0.0);
                     self.gamepad_axes_right = (0.0, 0.0);
+                    self.gamepad_slots.remove(&id);
                     changed = true;
                 }
                 _ => {}
+            }
+        }
+        // Publication pour le HUD (nom + joueur), seulement quand quelque chose a bougé.
+        if changed {
+            let pads: Vec<(String, u8)> = gilrs
+                .gamepads()
+                .map(|(id, pad)| {
+                    let slot = if coop {
+                        self.gamepad_slots.get(&id).map_or(0, |s| s + 1)
+                    } else {
+                        1
+                    };
+                    (pad.name().to_string(), slot)
+                })
+                .collect();
+            if self.state.gamepad_hud.pads != pads {
+                self.state.gamepad_hud.pads = pads;
             }
         }
         if changed {
@@ -670,12 +781,17 @@ impl ApplicationHandler for App {
         if self.renderer.is_some() {
             return;
         }
-        if self.gilrs.is_none() {
+        // `RUSTEEGEAR_NO_GAMEPAD=1` : ignore les manettes (tests pilotés
+        // déterministes — une manette Bluetooth au repos peut émettre des axes).
+        if self.gilrs.is_none() && std::env::var_os("RUSTEEGEAR_NO_GAMEPAD").is_none() {
             match gilrs::Gilrs::new() {
                 Ok(g) => self.gilrs = Some(g),
                 // Pas de backend manette sur cette plateforme/config (ex. CI sans
                 // udev) : dégrade en silence, clavier/tactile restent utilisables.
-                Err(e) => log::info!("Manette indisponible ({e}) — clavier/tactile seuls."),
+                Err(e) => {
+                    log::info!("Manette indisponible ({e}) — clavier/tactile seuls.");
+                    self.state.gamepad_hud.unavailable = true;
+                }
             }
         }
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
@@ -1063,6 +1179,15 @@ impl ApplicationHandler for App {
                         KeyCode::KeyR if !cmd && !self.state.playing && !self.state.fly_look => {
                             self.state.set_gizmo_mode(GizmoMode::Scale)
                         }
+                        // Plateformer 2D en jeu : R = rejouer le niveau (même séquence
+                        // qu'une mort, comptée comme telle — Level Devil aussi).
+                        KeyCode::KeyR
+                            if !cmd
+                                && self.state.playing
+                                && self.state.scene.platformer.is_some() =>
+                        {
+                            self.state.restart_level();
+                        }
                         // Outils de navigation caméra (Main/Orbite/Loupe) : utiles en Play
                         // comme en éditeur, donc jamais gardés par `!self.state.playing`.
                         // Gardés hors mode Player (roadmap post-audit UX 2026-09-04,
@@ -1133,10 +1258,19 @@ impl ApplicationHandler for App {
                         }
                         // Sélection directe de l'arme à distance (cf.
                         // `app::fireball::RANGED_WEAPONS`) — le pendant tactile
-                        // est le bouton « Arme », qui cycle.
-                        KeyCode::Digit1 if !cmd => self.state.select_weapon(0),
-                        KeyCode::Digit2 if !cmd => self.state.select_weapon(1),
-                        KeyCode::Digit3 if !cmd => self.state.select_weapon(2),
+                        // est le bouton « Arme », qui cycle. Désactivé dans les
+                        // scènes à kit de capacités (`Scene::ability_bar`,
+                        // 14 septembre 2026) : 1/2/3 y pilotent mêlée/bouclier/
+                        // sort au lieu de changer d'arme.
+                        KeyCode::Digit1 if !cmd && !self.state.scene.ability_bar => {
+                            self.state.select_weapon(0)
+                        }
+                        KeyCode::Digit2 if !cmd && !self.state.scene.ability_bar => {
+                            self.state.select_weapon(1)
+                        }
+                        KeyCode::Digit3 if !cmd && !self.state.scene.ability_bar => {
+                            self.state.select_weapon(2)
+                        }
                         // Son coupé/rétabli (roadmap post-audit UX v2 2026-09-04,
                         // 5.5) — `M` est la carte, `0` était libre.
                         KeyCode::Digit0 if !cmd && (self.state.player || self.state.playing) => {
@@ -1247,17 +1381,30 @@ impl ApplicationHandler for App {
                         let w = held.contains(&KeyCode::KeyW);
                         let s = held.contains(&KeyCode::KeyS);
 
+                        let coop = self.state.scene.platformer.is_some_and(|p| p.coop);
+                        if coop {
+                            // Coop (plateformer 2D à deux) : flèches = joueur 1,
+                            // WASD = joueur 2 (W saute, comme Haut pour le joueur 1).
+                            let inp = &mut self.state.input_state;
+                            inp.key_move.0 = axis_from_held(arrow_left, arrow_right);
+                            inp.key_move.1 = axis_from_held(arrow_down, arrow_up);
+                            let inp2 = &mut self.state.input_state2;
+                            inp2.key_move.0 = axis_from_held(a, d);
+                            inp2.key_move.1 = axis_from_held(s, w);
+                        } else {
+                            // Flèches et WASD : même déplacement, relatif à la caméra
+                            // (cf. `camera_relative_move`) — style « action moderne » :
+                            // l'intention de déplacement est cumulée depuis les deux jeux
+                            // de touches, puis `AppState::advance_play` fait tourner le
+                            // personnage tout seul vers la direction résultante
+                            // (`rotate_towards_smooth`), sans rotation manuelle séparée.
+                            let inp = &mut self.state.input_state;
+                            inp.key_move.0 =
+                                axis_from_held(arrow_left, arrow_right) + axis_from_held(a, d);
+                            inp.key_move.1 =
+                                axis_from_held(arrow_down, arrow_up) + axis_from_held(s, w);
+                        }
                         let inp = &mut self.state.input_state;
-                        // Flèches et WASD : même déplacement, relatif à la caméra
-                        // (cf. `camera_relative_move`) — style « action moderne » :
-                        // l'intention de déplacement est cumulée depuis les deux jeux
-                        // de touches, puis `AppState::advance_play` fait tourner le
-                        // personnage tout seul vers la direction résultante
-                        // (`rotate_towards_smooth`), sans rotation manuelle séparée.
-                        inp.key_move.0 =
-                            axis_from_held(arrow_left, arrow_right) + axis_from_held(a, d);
-                        inp.key_move.1 =
-                            axis_from_held(arrow_down, arrow_up) + axis_from_held(s, w);
                         // Les flèches alimentent aussi le gyroscope simulé (objets
                         // gyro_control) — WASD n'y touche pas (comportement inchangé).
                         inp.tilt.0 = axis_from_held(arrow_left, arrow_right);
@@ -1504,6 +1651,30 @@ fn make_app(player: bool) -> App {
                     .and_then(|v| v.parse::<u32>().ok())
             });
         }
+        // `--coop` (desktop) / `window.__rusteegear_coop` (web) : coop locale à deux
+        // du plateformer 2D (`Platformer2D::coop`).
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        if std::env::args().any(|a| a == "--coop")
+            && let Some(pl) = app.state.scene.platformer.as_mut()
+        {
+            pl.coop = true;
+            // Sans `--level`, le mode à deux démarre sur son monde dédié.
+            if app.state.start_level.is_none() {
+                app.state.start_level = pl.coop_level;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if js_sys::Reflect::get(
+            &js_sys::global(),
+            &wasm_bindgen::JsValue::from_str("__rusteegear_coop"),
+        )
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+            && let Some(pl) = app.state.scene.platformer.as_mut()
+        {
+            pl.coop = true;
+        }
         #[cfg(target_arch = "wasm32")]
         {
             app.state.start_level = js_sys::Reflect::get(
@@ -1549,23 +1720,47 @@ fn make_app(player: bool) -> App {
         let requested_demo = web_requested_scene();
         #[cfg(any(target_os = "ios", target_os = "android"))]
         let requested_demo: Option<String> = None;
-        let demo_loaded = match requested_demo.as_deref() {
+        // Une démo demandée force l'écran d'accueil à rester fermé (`solo`
+        // plus bas) seulement si elle n'a structurellement rien à faire en
+        // ligne (Rééducation — un exercice guidé en solo, pas un monde
+        // partagé). La démo Rivière & cascade (14 septembre 2026) en sort :
+        // c'est désormais un monde multijoueur à part entière (salon partagé
+        // `net::protocol::RIVIERE_LOBBY`, cf. `app::multiplayer::WorldKind`),
+        // elle suit donc le même écran « Jouer en ligne / seul » que le
+        // hameau MMORPG — juste avec la vallée déjà chargée à la place du
+        // hameau embarqué.
+        let mut force_solo_demo = false;
+        match requested_demo.as_deref() {
             Some("reeduc") | Some("reeducation") => {
                 app.state.load_reeducation_demo();
+                force_solo_demo = true;
                 log::info!("Démo Rééducation jouée en mode Player.");
-                true
+            }
+            Some("riviere") | Some("cascade") | Some("water") => {
+                app.state.load_riviere_demo();
+                // Le serveur de production (`ws.loicberthod.ch`) a été
+                // redéployé le 14 septembre 2026 avec `bin/server.rs::
+                // Room::for_world` : un salon dont le code vaut `RIVIERE_LOBBY`
+                // charge désormais la vallée, pas le hameau MMORPG — même
+                // écran d'accueil « Jouer en ligne / seul » que le hameau,
+                // web compris (cf. docs/RIVIERE_CASCADE.md, section Multijoueur,
+                // vérifié bout-en-bout sur le vrai serveur avant ce déploiement).
+                log::info!(
+                    "Démo Rivière & cascade jouée en mode Player — écran d'accueil \
+                     multijoueur (salon partagé « {} »), comme le hameau MMORPG.",
+                    crate::net::protocol::RIVIERE_LOBBY
+                );
             }
             Some(other) => {
                 log::warn!("Démo inconnue « {other} » — scène embarquée à la place.");
-                false
             }
-            None => false,
-        };
-        // Jeu solo (mode plateformer 2D, `Scene::platformer`, ou démo demandée) :
+            None => {}
+        }
+        // Jeu solo (mode plateformer 2D, `Scene::platformer`, ou démo qui l'exige) :
         // pas de serveur, pas d'écran d'accueil « en ligne / seul » — la partie
         // démarre directement, sur toutes les cibles, web compris (où il n'y a pas
         // de variable d'environnement).
-        let solo = app.state.scene.platformer.is_some() || demo_loaded;
+        let solo = app.state.scene.platformer.is_some() || force_solo_demo;
         if solo {
             log::info!("Jeu solo (plateformer 2D ou démo) : écran d'accueil et serveur ignorés.");
         } else if offline {
@@ -1832,7 +2027,7 @@ fn signal_web_ready() {
 fn signal_web_state(state: &app::AppState) {
     let pos = state.player_position().unwrap_or_default();
     let text = format!(
-        "time={:.2};deaths={};paused={};playing={};x={:.2};y={:.2};won={};run_ms={};level={}",
+        "time={:.2};deaths={};paused={};playing={};x={:.2};y={:.2};won={};run_ms={};level={};cause={}",
         state.hud_timer().unwrap_or(0.0),
         state.deaths(),
         state.paused,
@@ -1841,7 +2036,8 @@ fn signal_web_state(state: &app::AppState) {
         pos.y,
         state.has_won(),
         (state.run_time() * 1000.0).round() as u64,
-        state.platformer_level().unwrap_or(0)
+        state.platformer_level().unwrap_or(0),
+        state.rage_death_cause().replace([';', '='], "_")
     );
     let _ = js_sys::Reflect::set(
         &js_sys::global(),

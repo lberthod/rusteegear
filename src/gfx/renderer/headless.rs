@@ -16,6 +16,13 @@ impl Renderer {
         self.sync_imported(&app.scene);
         self.sync_textures(&app.scene);
         app.camera.aspect = width as f32 / (height as f32).max(1.0);
+        {
+            // Réflexion planaire (eau) : même préparation que `render()`.
+            let k = self.pixel_scale.max(1);
+            let (iw, ih) = ((width / k).max(1), (height / k).max(1));
+            self.main_viewport = (0.0, 0.0, iw as f32, ih as f32);
+            self.ensure_reflection_target(&app.scene, (iw / 2).max(1), (ih / 2).max(1));
+        }
         self.write_uniforms(app);
         // Skinning GPU : cf. commentaire équivalent dans `render()`.
         self.prepare_skinned_draws(&app.scene);
@@ -114,6 +121,7 @@ impl Renderer {
         // Passes d'ombre (cascades) — le même code que `render()`, sans les
         // gizmos ni l'UI : un shader d'ombre qui dérive fait dériver les goldens.
         scene_draw_calls += self.render_shadow_pass(&mut encoder, app);
+        scene_draw_calls += self.render_reflection_pass(&mut encoder, app);
 
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
         // Dessine dans `hdr_view` ; `self.tonemap()` fait le dernier pas
@@ -173,8 +181,12 @@ impl Renderer {
             }
 
             // Objets skinnés : cf. commentaire équivalent dans `render()`.
-            scene_draw_calls +=
-                self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
+            scene_draw_calls += self.draw_skinned_objects(
+                &mut pass,
+                &app.scene,
+                &self.skinned_offsets_scratch,
+                &self.camera_bind_group,
+            );
             // Translucides en dernier, comme dans `render()`.
             scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
         }

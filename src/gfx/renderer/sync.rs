@@ -1,5 +1,164 @@
 use super::*;
 
+/// Encodage GPU du composant eau d'un objet (`[0; 4]` = pas une surface d'eau).
+fn water_uniform(obj: &crate::scene::SceneObject) -> [f32; 4] {
+    obj.water.map(|w| w.as_uniform()).unwrap_or([0.0; 4])
+}
+
+impl Renderer {
+    /// Altitude du plan de réflexion : la surface d'eau « rivière » visible la
+    /// plus proche de la cible caméra, échantillonnée au sommet le plus proche
+    /// (une rivière en pente n'a pas une altitude unique — on prend celle qui
+    /// est sous les yeux du joueur). `None` sans surface d'eau.
+    fn reflection_plane_y(&self, app: &AppState) -> Option<f32> {
+        let target = app.camera.target;
+        let mut best: Option<(f32, f32)> = None; // (distance² en xz, altitude)
+        for obj in &app.scene.objects {
+            if !obj.visible
+                || !matches!(obj.water, Some(w) if w.kind == crate::scene::WaterKind::Riviere)
+            {
+                continue;
+            }
+            let m = obj.transform.matrix();
+            let mut consider = |p: glam::Vec3| {
+                let d = (p.x - target.x).powi(2) + (p.z - target.z).powi(2);
+                if best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, p.y));
+                }
+            };
+            match obj.mesh {
+                MeshKind::Imported(i) => {
+                    if let Some(mesh) = app.scene.imported.get(i as usize) {
+                        // Un sommet sur quatre suffit (les nappes sont denses).
+                        for v in mesh.data.vertices.iter().step_by(4) {
+                            consider(m.transform_point3(glam::Vec3::from_array(v.position)));
+                        }
+                    }
+                }
+                _ => consider(obj.transform.position),
+            }
+        }
+        best.map(|(_, y)| y)
+    }
+
+    /// Crée/redimensionne la cible de réflexion planaire si la scène contient
+    /// une surface d'eau « rivière », la libère sinon.
+    pub(super) fn ensure_reflection_target(&mut self, scene: &Scene, width: u32, height: u32) {
+        let needed = scene.objects.iter().any(|o| {
+            o.visible && matches!(o.water, Some(w) if w.kind == crate::scene::WaterKind::Riviere)
+        });
+        if !needed {
+            self.reflection = None;
+            return;
+        }
+        if self
+            .reflection
+            .as_ref()
+            .is_some_and(|r| r.width == width && r.height == height)
+        {
+            return;
+        }
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let color = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("reflection_color"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let depth = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("reflection_depth"),
+            size,
+            mip_level_count: 1,
+            sample_count: self.msaa_samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let msaa_view = (self.msaa_samples > 1).then(|| {
+            self.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("reflection_color_msaa"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: self.msaa_samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: HDR_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
+        let view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        let tex_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflection_tex_bg"),
+            layout: &self.tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.tex_sampler),
+                },
+            ],
+        });
+        let uniform = |label: &str, size: usize| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: size as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let camera_buf = uniform("reflection_camera", std::mem::size_of::<CameraUniform>());
+        let light_buf = uniform("reflection_light", std::mem::size_of::<SceneUniform>());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflection_camera_bg"),
+            layout: &self.camera_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_buf.as_entire_binding(),
+                },
+            ],
+        });
+        self.reflection = Some(ReflectionTarget {
+            width,
+            height,
+            view,
+            msaa_view,
+            depth_view,
+            tex_bind_group,
+            camera_buf,
+            light_buf,
+            bind_group,
+        });
+    }
+
+    /// Fixe le temps d'animation des shaders (eau) pour un rendu headless —
+    /// `render_scene_headless` ne fait pas avancer l'horloge (goldens
+    /// déterministes) ; un aperçu (`examples/gen_riviere_preview.rs`) choisit
+    /// ainsi l'instant à capturer.
+    pub fn set_anim_time(&mut self, seconds: f32) {
+        self.anim_time = seconds;
+    }
+}
+
 impl Renderer {
     /// Transmet l'événement à l'UI. Retourne `true` s'il a été consommé par egui.
     pub fn on_ui_event(&mut self, event: &winit::event::WindowEvent) -> bool {
@@ -198,7 +357,7 @@ impl Renderer {
         let view_proj = app.camera.view_proj_shaken(shake);
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
-            eye: [eye.x, eye.y, eye.z, 1.0],
+            eye: [eye.x, eye.y, eye.z, self.anim_time],
             // `view_proj` est toujours inversible (projection perspective + vue
             // rigide, jamais dégénérée) : pas de garde-fou nécessaire ici.
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
@@ -220,6 +379,11 @@ impl Renderer {
         // pas tressauter avec le shake d'encaissement.
         let (cascade_vps, splits) = compute_cascades(&app.camera, dir, self.shadow_size);
         let light_vp = cascade_vps[0];
+        // Réflexion planaire (eau) + extensions d'atmosphère (cf. `SceneUniform::extra`).
+        let sky = &app.scene.sky;
+        let plane_y = self.reflection_plane_y(app);
+        let reflection_on = plane_y.is_some() && self.reflection.is_some();
+        let (vx, vy, vw, vh) = self.main_viewport;
         let mut points = [PointLightU {
             pos_range: [0.0; 4],
             color_int: [0.0; 4],
@@ -289,9 +453,47 @@ impl Renderer {
                 splits[2],
                 1.0 / self.shadow_size.max(1) as f32,
             ],
+            extra: [
+                sky.fog_height_base,
+                sky.fog_height_falloff.max(0.0),
+                sky.sun_glow.max(0.0),
+                plane_y.unwrap_or(0.0),
+            ],
+            extra2: [vx, vy, vw, vh],
+            extra3: [if reflection_on { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         self.queue
             .write_buffer(&self.light_buf, 0, bytemuck::bytes_of(&scene_uniform));
+        // Passe de réflexion : caméra miroir (symétrique par rapport au plan
+        // d'eau y = h — `view_proj · R`, R = réflexion sur ce plan), même uniform
+        // scène mais viewport de la cible et drapeau « rejeter sous le plan ».
+        self.reflection_active = reflection_on;
+        if let (Some(r), Some(h)) = (self.reflection.as_ref(), plane_y)
+            && reflection_on
+        {
+            let reflect = glam::Mat4::from_cols_array_2d(&[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 2.0 * h, 0.0, 1.0],
+            ]);
+            let vp_r = view_proj * reflect;
+            let eye_r = glam::Vec3::new(eye.x, 2.0 * h - eye.y, eye.z);
+            let camera_r = CameraUniform {
+                view_proj: vp_r.to_cols_array_2d(),
+                eye: [eye_r.x, eye_r.y, eye_r.z, self.anim_time],
+                inv_view_proj: vp_r.inverse().to_cols_array_2d(),
+            };
+            self.queue
+                .write_buffer(&r.camera_buf, 0, bytemuck::bytes_of(&camera_r));
+            let light_r = SceneUniform {
+                extra2: [0.0, 0.0, r.width as f32, r.height as f32],
+                extra3: [0.0, 1.0, 0.0, 0.0],
+                ..scene_uniform
+            };
+            self.queue
+                .write_buffer(&r.light_buf, 0, bytemuck::bytes_of(&light_r));
+        }
         // Une copie par cascade dont `light_vp` est la matrice de la cascade : bind
         // group 0 des passes d'ombre (cf. `Renderer::cascade_bind_groups`).
         for (buf, vp) in self.cascade_bufs.iter().zip(cascade_vps) {
@@ -364,6 +566,7 @@ impl Renderer {
                 normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
                 params: [highlight, obj.metallic, obj.roughness, obj.emissive],
                 color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
+                water: water_uniform(obj),
             });
             let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
             let radius = culling_radius_for(&app.scene, obj.mesh);
@@ -408,6 +611,7 @@ impl Renderer {
                 normal: glam::Mat4::from_mat3(normal3).to_cols_array_2d(),
                 params: [highlight, obj.metallic, obj.roughness, obj.emissive],
                 color: [obj.color[0], obj.color[1], obj.color[2], 1.0],
+                water: water_uniform(obj),
             });
             self.draw_plan_skinned.push((i, instance_index));
         }
@@ -456,6 +660,7 @@ impl Renderer {
                     obj.color[2],
                     obj.opacity.clamp(0.0, 1.0),
                 ],
+                water: water_uniform(obj),
             });
             self.draw_plan_transparent.push(TransparentDraw {
                 obj: i,

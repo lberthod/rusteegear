@@ -337,6 +337,11 @@ pub struct Controller {
     /// Le joystick/clavier (X/Z, ou X seul si `auto_run_speed > 0`) pilote l'objet.
     #[serde(default)]
     pub input: bool,
+    /// Joueur local qui pilote cet objet (plateformer 2D à deux, `Platformer2D::coop`) :
+    /// 0 = joueur 1 (flèches / première manette), 1 = joueur 2 (WASD / seconde
+    /// manette). Hors coop, un objet de slot > 0 est masqué à l'entrée en Play et ignoré.
+    #[serde(default)]
+    pub player_slot: u8,
     /// L'inclinaison (gyroscope/flèches simulées) pilote l'objet.
     #[serde(default)]
     pub gyro: bool,
@@ -421,6 +426,7 @@ impl Default for Controller {
     fn default() -> Self {
         Self {
             input: false,
+            player_slot: 0,
             gyro: false,
             move_speed: default_move_speed(),
             auto_run_speed: 0.0,
@@ -824,6 +830,14 @@ pub struct SceneObject {
     /// pleine sous une vitre serait pire que pas d'ombre).
     #[serde(default = "default_opacity")]
     pub opacity: f32,
+    /// Surface d'eau (démo « Rivière & cascade ») : `None` pour tout objet
+    /// ordinaire — rien ne change tant que ce composant n'est pas posé. Posé,
+    /// l'objet est rendu par la branche « eau » de `main.wgsl` (vagues
+    /// procédurales animées, Fresnel, reflet du ciel, éclats du soleil, écume)
+    /// à la place de l'éclairage standard — cf. `WaterSurface`. Se combine avec
+    /// `opacity < 1` (passe transparente) pour laisser voir le lit.
+    #[serde(default)]
+    pub water: Option<WaterSurface>,
     /// Zone de déclenchement : en Play, expose `obj.triggered = true` au script quand
     /// le joueur (premier objet scripté) entre dans l'AABB de cet objet.
     #[serde(default)]
@@ -1378,6 +1392,7 @@ impl Default for SceneObject {
             roughness: default_roughness(),
             emissive: 0.0,
             opacity: default_opacity(),
+            water: None,
             trigger: false,
             wind: None,
             controller: None,
@@ -1502,6 +1517,20 @@ pub struct Scene {
     /// Faux par défaut : aucune scène existante ne change.
     #[serde(default)]
     pub arcade_hud: bool,
+    /// Avec `arcade_hud` : laisse tout de même la **caméra libre** (orbite à la
+    /// souris capturée / au trackpad / au doigt, zoom à la molette ou au pincement)
+    /// au lieu de la figer sur `game_camera` — pour une scène sans HUD MMORPG mais
+    /// où l'on se promène (démo Rivière & cascade). Sans effet sans `arcade_hud`.
+    #[serde(default)]
+    pub arcade_free_camera: bool,
+    /// Kit de capacités 1 Mêlée / 2 Bouclier / 3 Sort / 4 Ruée (14 septembre
+    /// 2026, démo Rivière & cascade PvE/PvP) : les touches 1-4 pilotent ces
+    /// capacités (`AppState::PlayerInput::attack/block/fire/dash`) au lieu de
+    /// choisir l'arme à distance (comportement historique du hameau MMORPG,
+    /// touches 1/2/3 — cf. `lib.rs`). Faux par défaut : aucune scène existante
+    /// ne change.
+    #[serde(default)]
+    pub ability_bar: bool,
     /// **Runtime seulement, jamais sérialisé** : une page hôte (web,
     /// `set_hud_widgets_visible(false)` — PhysioTech.ch, cf. `docs/REEDUCATION.md`)
     /// dessine elle-même le HUD à partir des variables `save.ui_*` publiées par
@@ -1542,6 +1571,17 @@ pub struct Platformer2D {
     /// numéro de niveau courant (`AppState::platformer_level`) et au départ direct
     /// à un niveau donné (`--level=N`, `window.__rusteegear_start_level`).
     pub level_spacing: f32,
+    /// Coop locale à deux (« Ensemble ou rien », cf. ragequit/docs/COOP_ENSEMBLE_OU_RIEN.md) :
+    /// le second objet pilotable (`Controller::player_slot` = 1) est actif, la mort de
+    /// l'un relance les deux au point de contrôle, la caméra cadre les deux (dézoom
+    /// plafonné + mur souple aux bords), `teleport()` emmène les deux. Basculé par
+    /// `--coop`, `window.__rusteegear_coop` ou le menu pause.
+    #[serde(default)]
+    pub coop: bool,
+    /// Niveau (indice, × `level_spacing`) où démarre le mode à deux : le monde
+    /// « Duo » dédié. `None` = on reste où l'on est.
+    #[serde(default)]
+    pub coop_level: Option<u32>,
 }
 
 impl Default for Platformer2D {
@@ -1554,7 +1594,88 @@ impl Default for Platformer2D {
             kill_y: -8.0,
             tombstones: true,
             level_spacing: 40.0,
+            coop: false,
+            coop_level: None,
         }
+    }
+}
+
+/// Genre de surface d'eau : sélectionne la branche du shader d'eau
+/// (`main.wgsl`, `Model.water.x` = 1/2/3). Le maillage porte une couleur par
+/// sommet lue comme masques : R = écume, G = profondeur relative (rivière) ou
+/// distance au bord de la nappe (cascade).
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+pub enum WaterKind {
+    /// Plan d'eau courante ou calme : les UV sont en **mètres** (u = abscisse
+    /// le long du courant, v = position transversale) — le motif défile vers +u.
+    #[default]
+    Riviere,
+    /// Nappe tombante : u transversal, v = longueur parcourue (m) — traînées
+    /// verticales étirées, écume croissante, défilement vers +v.
+    Cascade,
+    /// Embruns / brume : un plan ou impostor (`MeshKind::Billboard`) dont
+    /// l'opacité est un nuage de bruit animé, fondu vers les bords (UV 0..1).
+    Brume,
+}
+
+impl WaterKind {
+    pub const ALL: [WaterKind; 3] = [WaterKind::Riviere, WaterKind::Cascade, WaterKind::Brume];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WaterKind::Riviere => "Rivière / lac",
+            WaterKind::Cascade => "Cascade",
+            WaterKind::Brume => "Brume / embruns",
+        }
+    }
+
+    fn as_uniform(self) -> f32 {
+        match self {
+            WaterKind::Riviere => 1.0,
+            WaterKind::Cascade => 2.0,
+            WaterKind::Brume => 3.0,
+        }
+    }
+}
+
+/// Composant « surface d'eau » (`SceneObject::water`). Les valeurs par défaut
+/// conviennent à une rivière lente ; une cascade prend typiquement
+/// `flow_speed ≈ 5`, `foam ≈ 1`.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+pub struct WaterSurface {
+    pub kind: WaterKind,
+    /// Vitesse de défilement du motif (unités UV par seconde — mètres/s pour
+    /// une rivière dont les UV sont en mètres).
+    pub flow_speed: f32,
+    /// Échelle du motif (cellules de bruit par unité UV) : plus grand = vaguelettes
+    /// plus serrées.
+    pub scale: f32,
+    /// Quantité d'écume (0 = aucune, 1 = pleine, là où le masque de sommet le permet).
+    pub foam: f32,
+}
+
+impl Default for WaterSurface {
+    fn default() -> Self {
+        Self {
+            kind: WaterKind::Riviere,
+            flow_speed: 0.8,
+            scale: 1.0,
+            foam: 0.6,
+        }
+    }
+}
+
+impl WaterSurface {
+    /// Encodage GPU (`ModelUniform::water`) : x = genre (1/2/3), y = vitesse,
+    /// z = échelle, w = écume. `[0; 4]` = pas une surface d'eau.
+    pub fn as_uniform(&self) -> [f32; 4] {
+        [
+            self.kind.as_uniform(),
+            self.flow_speed,
+            self.scale.max(0.01),
+            self.foam,
+        ]
     }
 }
 
@@ -1584,6 +1705,20 @@ pub struct Sky {
     /// scène elle-même.
     #[serde(default = "default_bloom_intensity")]
     pub bloom_intensity: f32,
+    /// Halo du soleil dans le ciel (0 = aucun, comportement historique) :
+    /// disque + voile lumineux autour de la direction de `Light::dir`, teinté
+    /// par sa couleur.
+    #[serde(default)]
+    pub sun_glow: f32,
+    /// Brouillard **de hauteur** : altitude (m) à laquelle la densité vaut
+    /// `fog_density` ; au-dessus elle décroît en `exp(-(y - base) × falloff)`,
+    /// en dessous elle épaissit (borné ×3). Une vallée embrumée, des crêtes
+    /// claires. Sans effet tant que `fog_height_falloff` vaut 0.
+    #[serde(default)]
+    pub fog_height_base: f32,
+    /// Décroissance du brouillard de hauteur par mètre (0 = brouillard uniforme).
+    #[serde(default)]
+    pub fog_height_falloff: f32,
 }
 
 fn default_bloom_intensity() -> f32 {
@@ -1598,6 +1733,9 @@ impl Default for Sky {
             fog_color: [0.07, 0.08, 0.1],
             fog_density: 0.0,
             bloom_intensity: default_bloom_intensity(),
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
         }
     }
 }

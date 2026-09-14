@@ -27,12 +27,15 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use motor3derust::app::AppState;
-use motor3derust::app::multiplayer::{Contract, NetworkInput, PlayerClass, RoundObjective};
+use motor3derust::app::multiplayer::{
+    Contract, NetworkInput, PlayerClass, RoundObjective, WorldKind,
+};
 use motor3derust::net::firebase::{
     self, AuthSession, FirebaseConfig, LeaderboardEntry, PlayerProgress,
 };
 use motor3derust::net::protocol::{
-    ClientMsg, DEFAULT_LOBBY, GameEvent, PlayerId, RoundPlayerSummary, ServerMsg, valid_join_fields,
+    ClientMsg, DEFAULT_LOBBY, GameEvent, PlayerId, RIVIERE_LOBBY, RoundPlayerSummary, ServerMsg,
+    valid_join_fields,
 };
 use motor3derust::net::server_loop::NetServer;
 
@@ -124,6 +127,14 @@ struct Lobby {
     /// qui vit déjà au niveau du salon pour la même raison — persister d'une
     /// manche à l'autre du même salon sans nouveau `Join`).
     objective: Option<RoundObjective>,
+    /// Monde de ce salon (14 septembre 2026, multijoueur Rivière) : décidé
+    /// une fois pour toutes à la **création** du salon (`Room::for_world`,
+    /// depuis le code du salon lui-même — `RIVIERE_LOBBY` ou tout autre code)
+    /// et jamais changé ensuite, contrairement à `objective` qui attend le
+    /// premier `Join` (ici pas besoin d'attendre : le code du salon suffit
+    /// dès sa création, avant même qu'un joueur ait réellement rejoint).
+    /// Réappliqué par `Room::restart`, comme `objective`.
+    world: WorldKind,
 }
 
 impl Lobby {
@@ -175,13 +186,25 @@ struct Room {
 }
 
 impl Room {
-    /// Charge une manche fraîche : la même scène que les clients (cf.
-    /// `AppState::use_embedded_scene`), gabarit local masqué avant le premier
-    /// join (`AUDIT_MMORPG.md` : sans ça, l'IA poursuit un mannequin inerte et
-    /// sa santé s'épuise pendant l'attente du premier joueur).
+    /// Charge une manche fraîche dans le hameau MMORPG (monde historique,
+    /// `WorldKind::Hameau`) — cf. `Room::for_world` pour un autre monde.
     fn new() -> Self {
+        Self::for_world(WorldKind::Hameau)
+    }
+
+    /// Comme `Room::new`, dans le monde `world` (14 septembre 2026,
+    /// multijoueur de la démo Rivière & cascade — cf. `WorldKind`) : même
+    /// squelette (gabarit local masqué avant le premier join, cf. la doc de
+    /// `Room::new`), scène choisie selon `world`. Appelé une seule fois par
+    /// salon, à sa création (`bin/server.rs::handle_message`, sur le code du
+    /// salon) — `world` est ensuite figé dans `Lobby::world` pour toute la vie
+    /// du salon, y compris ses relances (`Room::restart`).
+    fn for_world(world: WorldKind) -> Self {
         let mut app = AppState::new();
-        app.use_embedded_scene_cached();
+        match world {
+            WorldKind::Hameau => app.use_embedded_scene_cached(),
+            WorldKind::Riviere => app.load_riviere_demo(),
+        }
         app.clear_spawn_area();
         app.hide_local_player_template();
         app.playing = true;
@@ -189,7 +212,10 @@ impl Room {
         let last_score = app.score();
         Room {
             app,
-            lobby: Lobby::default(),
+            lobby: Lobby {
+                world,
+                ..Default::default()
+            },
             last_wave,
             last_score,
             started: Instant::now(),
@@ -209,7 +235,14 @@ impl Room {
     fn restart(&mut self) {
         let ids: Vec<PlayerId> = self.lobby.names.keys().copied().collect();
         self.app = AppState::new();
-        self.app.use_embedded_scene_cached();
+        // Même monde que la création du salon (`Lobby::world`, fixé une fois
+        // pour toutes par `Room::for_world`) — sans cette ligne, chaque
+        // relance retomberait sur le hameau MMORPG (défaut d'`AppState::new`),
+        // quel que soit le salon (même piège que `objective` juste en dessous).
+        match self.lobby.world {
+            WorldKind::Hameau => self.app.use_embedded_scene_cached(),
+            WorldKind::Riviere => self.app.load_riviere_demo(),
+        }
         // Zone d'apparition dégagée avant la reconstruction de la physique
         // (roadmap post-audit UX v2 2026-09-04, 0.1 bis).
         self.app.clear_spawn_area();
@@ -357,7 +390,19 @@ fn handle_message(
                 );
                 return;
             }
-            let room = rooms.entry(code.clone()).or_insert_with(Room::new);
+            // Monde décidé par le code du salon lui-même (14 septembre 2026,
+            // multijoueur Rivière) : `RIVIERE_LOBBY` charge `Room::for_world`
+            // sur `WorldKind::Riviere`, tout autre code (y compris
+            // `DEFAULT_LOBBY`) garde le hameau MMORPG habituel — seulement
+            // évalué si le salon n'existe pas encore (`or_insert_with`), un
+            // salon déjà créé garde le monde de sa création (`Lobby::world`).
+            let room = rooms.entry(code.clone()).or_insert_with(|| {
+                if code == RIVIERE_LOBBY {
+                    Room::for_world(WorldKind::Riviere)
+                } else {
+                    Room::new()
+                }
+            });
             // Mode fixé au tout premier `Join` jamais reçu par ce salon (avant
             // même qu'il ait un joueur effectivement piloté, cf.
             // `Lobby::objective`) — `objective` encore `None` est le marqueur
@@ -481,6 +526,8 @@ fn handle_message(
             fire,
             weapon,
             heal,
+            block,
+            dash,
         } => {
             let Some(room) = player_room.get(&id).and_then(|code| rooms.get_mut(code)) else {
                 return;
@@ -497,6 +544,8 @@ fn handle_message(
                     fire,
                     weapon,
                     heal,
+                    block,
+                    dash,
                 },
             );
         }
@@ -1501,6 +1550,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         });
         let (id, msg) = net
             .inbox
@@ -1596,6 +1647,68 @@ mod tests {
             saw_round_objective,
             "le client doit recevoir GameEvent::RoundObjective au Join"
         );
+    }
+
+    /// Le monde d'un salon (14 septembre 2026, multijoueur de la démo
+    /// Rivière & cascade) est décidé par son **code** dès la création
+    /// (`Room::for_world`, appelé par `handle_message` au premier `Join`
+    /// d'un code inconnu) : `RIVIERE_LOBBY` charge la vallée de
+    /// `scene::demos::riviere`, tout autre code (dont `DEFAULT_LOBBY`) garde
+    /// le hameau MMORPG habituel — vérifié bout-en-bout via le vrai chemin
+    /// `handle_message`, comme les tests `objective` voisins, pas seulement
+    /// `Room::for_world` isolée. Dépend des assets générés sur disque
+    /// (`assets/models/riviere/*.glb`, cf. `scripts/gen_riviere_cascade.py` /
+    /// `gen_riviere_vegetation.py`) — comme tout test qui charge cette démo.
+    #[test]
+    fn a_join_on_the_riviere_lobby_creates_a_room_running_the_riviere_world() {
+        let net = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let mut rooms: HashMap<String, Room> = HashMap::new();
+        let mut player_room: HashMap<PlayerId, String> = HashMap::new();
+
+        test_handle_message(
+            &mut rooms,
+            &mut player_room,
+            &net,
+            1,
+            ClientMsg::Join {
+                protocol: motor3derust::net::protocol::PROTOCOL_VERSION,
+                name: "Alice".to_string(),
+                firebase_uid: None,
+                lobby: RIVIERE_LOBBY.to_string(),
+                class: 0,
+                objective: 0,
+            },
+        );
+        let room = rooms.get(RIVIERE_LOBBY).expect("salon créé au Join");
+        assert_eq!(room.lobby.world, WorldKind::Riviere);
+        assert!(
+            room.app.scene.objects.iter().any(|o| o.water.is_some()),
+            "la scène du salon « riviere » doit être celle de la démo Rivière \
+             (au moins une surface d'eau)"
+        );
+        assert!(
+            room.app.network_player_object(1).is_some(),
+            "Alice doit avoir un objet pilotable dans ce monde"
+        );
+
+        // Un salon *sans* ce code garde le hameau habituel (comportement
+        // historique, zéro régression).
+        test_handle_message(
+            &mut rooms,
+            &mut player_room,
+            &net,
+            2,
+            ClientMsg::Join {
+                protocol: motor3derust::net::protocol::PROTOCOL_VERSION,
+                name: "Bob".to_string(),
+                firebase_uid: None,
+                lobby: DEFAULT_LOBBY.to_string(),
+                class: 0,
+                objective: 0,
+            },
+        );
+        let hameau_room = rooms.get(DEFAULT_LOBBY).expect("salon créé au Join");
+        assert_eq!(hameau_room.lobby.world, WorldKind::Hameau);
     }
 
     /// Phase C (Sprint 5, `sprint10audit.md`) : le mode d'un salon est fixé au
@@ -1761,6 +1874,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         });
         let (id, msg) = net
             .inbox

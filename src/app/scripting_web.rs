@@ -133,6 +133,17 @@ fn ensure_host_functions(lua: &mut Lua) -> LuaResult<()> {
         ("checkpoint", host_checkpoint),
         ("teleport", host_teleport),
         ("hud_text", host_hud_text),
+        ("sfx", host_sfx),
+        ("restart", host_restart),
+        ("set_light", host_set_light),
+        ("set_ambient", host_set_ambient),
+        ("set_fx", host_set_fx),
+        ("gravity", host_gravity),
+        ("wind", host_wind),
+        ("slow", host_slow),
+        ("set_camera", host_set_camera),
+        ("shake", host_shake),
+        ("set_sky", host_set_sky),
         ("bone", host_bone),
         ("spawn", host_spawn),
         ("add_item", host_add_item),
@@ -313,6 +324,95 @@ fn host_hud_text(state: &mut LuaState) -> LuaResult<u32> {
     let id = arg_str(state, 0)?;
     let text = arg_str(state, 1)?;
     let event = crate::app::script_ctx::hud_event(&id, &text);
+    ACCUM.with(|a| a.borrow_mut().events_out.push(event));
+    Ok(0)
+}
+
+fn host_sfx(state: &mut LuaState) -> LuaResult<u32> {
+    let name = arg_str(state, 0)?;
+    let event = crate::app::script_ctx::sfx_event(&name);
+    ACCUM.with(|a| a.borrow_mut().events_out.push(event));
+    Ok(0)
+}
+
+fn host_set_light(state: &mut LuaState) -> LuaResult<u32> {
+    let i = arg_f32(state, 0)?.max(0.0) as u32;
+    let mut v = [0.0f32; 8];
+    for (k, slot) in v.iter_mut().enumerate() {
+        *slot = arg_f32(state, k + 1)?;
+    }
+    ACCUM.with(|a| {
+        a.borrow_mut()
+            .events_out
+            .push(crate::app::script_ctx::light_event(i, v))
+    });
+    Ok(0)
+}
+
+fn host_set_ambient(state: &mut LuaState) -> LuaResult<u32> {
+    let a = arg_f32(state, 0)?;
+    ACCUM.with(|acc| acc.borrow_mut().events_out.push(format!("sys:ambient:{a}")));
+    Ok(0)
+}
+
+fn host_set_fx(state: &mut LuaState) -> LuaResult<u32> {
+    let mut v = [0.0f32; 5];
+    for (k, slot) in v.iter_mut().enumerate() {
+        *slot = arg_f32(state, k)?;
+    }
+    ACCUM.with(|a| {
+        a.borrow_mut().events_out.push(format!(
+            "sys:fx:{},{},{},{},{}",
+            v[0], v[1], v[2], v[3], v[4]
+        ))
+    });
+    Ok(0)
+}
+
+fn host_scalar_event(state: &mut LuaState, kind: &str, n: usize) -> LuaResult<u32> {
+    let mut vals = Vec::with_capacity(n);
+    for k in 0..n {
+        vals.push(arg_f32(state, k)?.to_string());
+    }
+    ACCUM.with(|a| {
+        a.borrow_mut()
+            .events_out
+            .push(format!("sys:{kind}:{}", vals.join(",")))
+    });
+    Ok(0)
+}
+
+fn host_gravity(state: &mut LuaState) -> LuaResult<u32> {
+    host_scalar_event(state, "gravity", 1)
+}
+
+fn host_wind(state: &mut LuaState) -> LuaResult<u32> {
+    host_scalar_event(state, "wind", 1)
+}
+
+fn host_slow(state: &mut LuaState) -> LuaResult<u32> {
+    host_scalar_event(state, "slow", 2)
+}
+
+fn host_set_camera(state: &mut LuaState) -> LuaResult<u32> {
+    host_scalar_event(state, "camera", 1)
+}
+
+fn host_shake(state: &mut LuaState) -> LuaResult<u32> {
+    host_scalar_event(state, "shake", 1)
+}
+
+fn host_restart(_state: &mut LuaState) -> LuaResult<u32> {
+    ACCUM.with(|a| a.borrow_mut().events_out.push("sys:restart".to_string()));
+    Ok(0)
+}
+
+fn host_set_sky(state: &mut LuaState) -> LuaResult<u32> {
+    let mut v = [0.0f32; 6];
+    for (i, slot) in v.iter_mut().enumerate() {
+        *slot = arg_f32(state, i)?;
+    }
+    let event = crate::app::script_ctx::sky_event([v[0], v[1], v[2]], [v[3], v[4], v[5]]);
     ACCUM.with(|a| a.borrow_mut().events_out.push(event));
     Ok(0)
 }
@@ -592,6 +692,11 @@ pub(super) fn run_script_web(
         "visible",
         crate::app::script_ctx::object_visible()
     ));
+    {
+        let (em, op) = crate::app::script_ctx::object_fx();
+        lua_try!(set_num(lua, &obj, "emissive", em as f64));
+        lua_try!(set_num(lua, &obj, "opacity", op as f64));
+    }
     // Capteurs rapier — même contrat que `scripting::run_script` (cf. sa doc).
     lua_try!(set_bool(lua, &obj, "overlapped", !overlapping.is_empty()));
     lua_try!(set_num(
@@ -644,6 +749,15 @@ pub(super) fn run_script_web(
     lua_try!(lua.set_global("save", save_api));
     lua_try!(ensure_host_functions(lua));
     lua_try!(lua.set_global("deaths", f64::from(crate::app::script_ctx::deaths())));
+    let (coop, death_player, by_slot) = crate::app::script_ctx::coop_info();
+    lua_try!(lua.set_global("coop", f64::from(u8::from(coop))));
+    lua_try!(lua.set_global("death_player", f64::from(death_player)));
+    lua_try!(lua.set_global("deaths_p1", f64::from(by_slot[0])));
+    lua_try!(lua.set_global("deaths_p2", f64::from(by_slot[1])));
+    lua_try!(lua.set_global("death_cause", crate::app::script_ctx::death_cause()));
+    let (dx, dy) = crate::app::script_ctx::death_pos();
+    lua_try!(lua.set_global("death_x", f64::from(dx)));
+    lua_try!(lua.set_global("death_y", f64::from(dy)));
     // Table `pose` (démo Rééducation) — même forme que côté mlua, cf. `scripting.rs`.
     if crate::app::script_ctx::pose_wanted() {
         let pose_tbl = lua.create_table();
@@ -718,6 +832,12 @@ pub(super) fn run_script_web(
     });
     if let Some(v) = lua_try!(get_bool_opt(lua, &obj, "visible")) {
         crate::app::script_ctx::report_visible(v);
+    }
+    if let (Ok(em), Ok(op)) = (
+        get_num(lua, &obj, "emissive"),
+        get_num(lua, &obj, "opacity"),
+    ) {
+        crate::app::script_ctx::report_fx(em as f32, op as f32);
     }
 
     t.position = Vec3::new(

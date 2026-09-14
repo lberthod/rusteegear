@@ -152,6 +152,13 @@ pub struct KeyboardBindings {
     pub pause: String,
     #[serde(default = "kb_map")]
     pub map: String,
+    /// Bouclier (14 septembre 2026, `Scene::ability_bar` — touche 2 par défaut,
+    /// alignée sur le kit de capacités 1 Mêlée/2 Bouclier/3 Sort/4 Ruée).
+    #[serde(default = "kb_block")]
+    pub block: String,
+    /// Ruée (touche 4 par défaut).
+    #[serde(default = "kb_dash")]
+    pub dash: String,
 }
 
 fn kb_jump() -> String {
@@ -172,6 +179,12 @@ fn kb_pause() -> String {
 fn kb_map() -> String {
     "KeyM".into()
 }
+fn kb_block() -> String {
+    "Digit2".into()
+}
+fn kb_dash() -> String {
+    "Digit4".into()
+}
 
 impl Default for KeyboardBindings {
     fn default() -> Self {
@@ -182,6 +195,8 @@ impl Default for KeyboardBindings {
             heal: kb_heal(),
             pause: kb_pause(),
             map: kb_map(),
+            block: kb_block(),
+            dash: kb_dash(),
         }
     }
 }

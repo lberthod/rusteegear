@@ -160,7 +160,14 @@ impl Physics {
                 }
                 let points = imported_points()?;
                 let tris: Vec<[u32; 3]> = data.indices.as_chunks::<3>().0.to_vec();
-                SharedShape::trimesh(points, tris)
+                // `FIX_INTERNAL_EDGES` (même flag que les heightfields ci-dessous) :
+                // sans lui, un `KinematicCharacterController` qui longe une arête
+                // partagée entre deux triangles du maillage peut y lire une fausse
+                // normale et se faire repousser en arrière en pleine marche — visible
+                // en jeu comme un joueur qui avance puis recule brutalement en fin de
+                // déplacement sur un terrain importé (ex. démo rivière, terrain en
+                // TriMesh).
+                SharedShape::trimesh_with_flags(points, tris, TriMeshFlags::FIX_INTERNAL_EDGES)
                     .ok()
                     .map(ColliderBuilder::new)
             };
@@ -522,6 +529,21 @@ impl Physics {
             kinematic,
             scripted,
             scripted_delta: std::collections::HashMap::new(),
+            player_delta: std::collections::HashMap::new(),
+            conveyors: scene
+                .objects
+                .iter()
+                .enumerate()
+                .filter_map(|(i, o)| {
+                    o.tag
+                        .strip_prefix("conveyor:")
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .map(|v| (i, v))
+                })
+                .collect(),
+            gravity_scale: 1.0,
+            wind_x: 0.0,
+            speed_scale: 1.0,
             collider_owner,
             sensors,
             query_cache: std::cell::RefCell::new(None),

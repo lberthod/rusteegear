@@ -19,6 +19,46 @@ fn max_chat_len_stays_in_sync_with_net_firebase() {
         "copie universelle (cf. sa doc) désynchronisée de la source"
     );
 }
+
+/// Salon multijoueur Rivière (14 septembre 2026) : un code de salon explicite
+/// est toujours respecté tel quel, quel que soit le monde ; un champ vide
+/// retombe sur le salon partagé du monde **actuellement chargé** — le hameau
+/// MMORPG pour qui n'a jamais chargé la démo Rivière (comportement historique
+/// inchangé), le salon dédié `RIVIERE_LOBBY` pour qui vient de
+/// `load_riviere_demo` (`AppState::world`, posé par ce chargeur).
+#[test]
+fn resolve_lobby_code_defaults_to_the_shared_lobby_of_the_current_world() {
+    use crate::app::multiplayer::WorldKind;
+    assert_eq!(
+        resolve_lobby_code("", WorldKind::Hameau),
+        crate::net::protocol::DEFAULT_LOBBY
+    );
+    assert_eq!(
+        resolve_lobby_code("", WorldKind::Riviere),
+        crate::net::protocol::RIVIERE_LOBBY
+    );
+    // Un code explicite l'emporte toujours, dans les deux mondes (salon privé).
+    assert_eq!(
+        resolve_lobby_code("mon-salon", WorldKind::Hameau),
+        "mon-salon"
+    );
+    assert_eq!(
+        resolve_lobby_code("mon-salon", WorldKind::Riviere),
+        "mon-salon"
+    );
+}
+
+/// `load_riviere_demo` doit poser `AppState::world` à `Riviere` — sans ça,
+/// `resolve_lobby_code_defaults_to_the_shared_lobby_of_the_current_world`
+/// documente un comportement que rien ne déclenche jamais en pratique (le
+/// vrai chargeur de démo laisserait `world` sur son défaut `Hameau`).
+#[test]
+fn loading_the_riviere_demo_switches_the_local_world_to_riviere() {
+    let mut app = AppState::new();
+    assert_eq!(app.world, crate::app::multiplayer::WorldKind::Hameau);
+    app.load_riviere_demo();
+    assert_eq!(app.world, crate::app::multiplayer::WorldKind::Riviere);
+}
 #[cfg(feature = "net_tests")]
 use crate::net::protocol::EntityDelta;
 #[cfg(feature = "net_tests")]
@@ -46,6 +86,8 @@ fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
                 fire,
                 weapon,
                 heal,
+                block,
+                dash,
             } => {
                 server_app.set_network_input(
                     id,
@@ -58,6 +100,8 @@ fn server_tick(server_app: &mut AppState, net: &NetServer, tick: u32) {
                         fire,
                         weapon,
                         heal,
+                        block,
+                        dash,
                     },
                 );
             }

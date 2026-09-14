@@ -301,7 +301,9 @@ les remplacent directement.
 MMORPG), **🎮 Jeux jouables** (Zombies, Donjon, Tour, Course infinie, Duel,
 **Rééducation** — attrape-bulles inspiré de Mouvéo, mannequin suivi par la caméra
 (corps et doigts) sur le web ou joystick ailleurs, cf. [docs/REEDUCATION.md](docs/REEDUCATION.md)),
-**🌐 Modes multijoueur** (Vagues, Survie, Boss, Escorte) et **🧰 Exemples
+**🌐 Modes multijoueur** (Vagues, Survie, Boss, Escorte, **Rivière & cascade** —
+vitrine de rendu : shader d'eau animé, forêt, brume, cf.
+[docs/RIVIERE_CASCADE.md](docs/RIVIERE_CASCADE.md)) et **🧰 Exemples
 techniques** (Contrôleur, Mobile, Gameplay/API, Composants).
 
 ---

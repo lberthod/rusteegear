@@ -48,6 +48,15 @@ fn compute_death_cause(buf: &VecDeque<(DeathCauseKind, usize)>) -> Option<DeathC
 /// passant).
 pub(super) const MAX_HEALTH: f32 = 1.0;
 
+/// Facteur multiplicatif appliqué à tout dégât entrant sur un joueur réseau
+/// dont l'`Input` du tick demande `block` (14 septembre 2026, capacité 2 du
+/// kit 1-2-3-4 — cf. `Scene::ability_bar`) : `0.25` = bouclier levé, 75 %
+/// des dégâts absorbés (contact monstre, mêlée ou sort d'un autre joueur —
+/// même règle partout, pas de bouclier « spécial PvE »/« spécial PvP »).
+/// Pas nul : un bouclier tenu en continu ne doit pas rendre invulnérable,
+/// seulement réduire le risque de rester au contact.
+pub(super) const BLOCK_DAMAGE_MULT: f32 = 0.25;
+
 /// Dégâts par seconde infligés à un joueur réseau au contact (AABB) d'un
 /// monstre `AiChaser` visible : ~6 s pour mourir de pleine vie à un seul
 /// monstre — assez lent pour laisser une vraie fenêtre de réaction (fuir,
@@ -269,12 +278,83 @@ impl AppState {
         }
     }
 
+    /// Inflige `raw_damage` au joueur réseau `id` (14 septembre 2026, extrait
+    /// du corps de `update_creature_bite` pour être réutilisé par le PvP —
+    /// coup au contact et sort d'un autre joueur, cf. `multiplayer::
+    /// update_network_attacks`/`fireball::resolve_fireball_hit`) : réduit le
+    /// dégât de `health::BLOCK_DAMAGE_MULT` si l'`Input` du tick de `id`
+    /// demande `block` (capacité 2 du kit 1-2-3-4, cf. `Scene::ability_bar`),
+    /// enregistre `cause`/`source_idx` pour le diagnostic de mort
+    /// (`DeathCause`), masque l'objet et notifie `GameEvent::PlayerDown` si ce
+    /// coup achève le joueur, sinon secoue sa caméra (si c'est nous) et joue
+    /// le son de coup encaissé. Renvoie `true` si ce coup l'a achevé.
+    pub(super) fn apply_network_damage(
+        &mut self,
+        id: PlayerId,
+        raw_damage: f32,
+        cause: DeathCauseKind,
+        source_idx: usize,
+    ) -> bool {
+        let Some(&index) = self.network.network_players.get(&id) else {
+            return false;
+        };
+        let blocking = self
+            .network
+            .network_inputs
+            .get(&id)
+            .is_some_and(|i| i.block);
+        let damage = if blocking {
+            raw_damage * BLOCK_DAMAGE_MULT
+        } else {
+            raw_damage
+        };
+        let was_alive = self
+            .network
+            .network_health
+            .get(&id)
+            .copied()
+            .unwrap_or(MAX_HEALTH)
+            > 0.0;
+        let hp = self.network.network_health.entry(id).or_insert(MAX_HEALTH);
+        *hp = (*hp - damage).max(0.0);
+        let buf = self.network.recent_damage.entry(id).or_default();
+        buf.push_back((cause, source_idx));
+        while buf.len() > DEATH_CAUSE_WINDOW {
+            buf.pop_front();
+        }
+        let just_died = was_alive && *hp <= 0.0;
+        if just_died {
+            if let Some(o) = self.scene.objects.get_mut(index) {
+                o.visible = false;
+            }
+            let death_cause = self
+                .network
+                .recent_damage
+                .remove(&id)
+                .and_then(|buf| compute_death_cause(&buf));
+            self.net_conn.pending_net_events.push(GameEvent::PlayerDown {
+                player_id: id,
+                cause: death_cause,
+            });
+            self.player_down_count += 1;
+            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
+        } else {
+            if Some(id) == self.net_conn.net_player_id {
+                self.fx.camera_shake = 1.0;
+            }
+            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+        }
+        just_died
+    }
+
     /// Dégâts de contact des créatures scriptées mordeuses (`SceneObject::bite`,
     /// ex. Créature 1/6/7 — cf. sa doc), pour chaque joueur réseau — pendant de
     /// `update_network_health` (monstres `AiChaser`) mais **générique à toute
     /// créature future** posant ce champ, pas câblée sur un nom précis. En solo,
     /// la version Lua (`creature_bite_script`, `damage()`/`hud_health`) reste seule
     /// responsable — inchangée, cette fonction ne s'exécute jamais dans ce cas.
+    /// Bouclier (14 septembre 2026, cf. `apply_network_damage`) : réduit aussi
+    /// les morsures, pas seulement le PvP — un bouclier levé protège de tout.
     /// Appelée depuis `advance_play`, au même endroit que `update_network_health`
     /// (avant `update_network_heal` : le contact de ce tick doit être à jour avant
     /// que le soin ne s'applique).
@@ -348,44 +428,7 @@ impl AppState {
                 if deterministic_roll(self.time, salt) >= bite.chance {
                     continue;
                 }
-                let was_alive = self
-                    .network
-                    .network_health
-                    .get(&id)
-                    .copied()
-                    .unwrap_or(MAX_HEALTH)
-                    > 0.0;
-                let hp = self.network.network_health.entry(id).or_insert(MAX_HEALTH);
-                *hp = (*hp - bite.damage).max(0.0);
-                let buf = self.network.recent_damage.entry(id).or_default();
-                buf.push_back((DeathCauseKind::Creature, creature_idx));
-                while buf.len() > DEATH_CAUSE_WINDOW {
-                    buf.pop_front();
-                }
-                let just_died = was_alive && *hp <= 0.0;
-                if just_died {
-                    if let Some(o) = self.scene.objects.get_mut(index) {
-                        o.visible = false;
-                    }
-                    let cause = self
-                        .network
-                        .recent_damage
-                        .remove(&id)
-                        .and_then(|buf| compute_death_cause(&buf));
-                    self.net_conn
-                        .pending_net_events
-                        .push(GameEvent::PlayerDown {
-                            player_id: id,
-                            cause,
-                        });
-                    self.player_down_count += 1;
-                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
-                } else {
-                    if Some(id) == self.net_conn.net_player_id {
-                        self.fx.camera_shake = 1.0;
-                    }
-                    crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
-                }
+                self.apply_network_damage(id, bite.damage, DeathCauseKind::Creature, creature_idx);
             }
         }
     }
@@ -747,6 +790,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         }
     }
 

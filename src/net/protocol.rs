@@ -56,13 +56,26 @@ pub type PlayerId = u32;
 /// déploiement couplé) : `ClientMsg::Ping { t }` / `ServerMsg::Pong { t }`,
 /// la mesure de latence affichée dans la pastille réseau — ajoutés en fin
 /// d'enum, comme le reste.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
 /// clients qui n'en précisent pas (cf. GAMEDESIGN_EN_LIGNE.md §3.3) s'y
 /// retrouvent donc ensemble : le serveur route par code de salon, mais rien
 /// ne change tant qu'aucune UI ne propose d'en choisir un autre.
 pub const DEFAULT_LOBBY: &str = "default";
+
+/// Salon partagé de la démo « Rivière & cascade » (14 septembre 2026,
+/// `scene::demos::riviere`) : un monde entièrement différent de celui de
+/// `DEFAULT_LOBBY` (cf. `app::multiplayer::WorldKind`), routé côté serveur
+/// par le **code de salon lui-même** — pas de nouveau champ de protocole,
+/// pas de bump de `PROTOCOL_VERSION` : un salon dont le code vaut exactement
+/// `RIVIERE_LOBBY` charge la scène Rivière (`bin/server.rs::Room::for_world`),
+/// n'importe quel autre code (y compris `DEFAULT_LOBBY`) charge le hameau
+/// MMORPG habituel, comme avant. Limite assumée : pas de salon Rivière
+/// *privé* possible avec un code arbitraire tant que ce champ n'existe pas —
+/// tous les visiteurs de la démo Rivière se retrouvent dans ce salon unique,
+/// exactement comme `DEFAULT_LOBBY` pour le hameau.
+pub const RIVIERE_LOBBY: &str = "riviere";
 
 /// Longueur maximale (caractères) d'un pseudo (`ClientMsg::Join::name`) —
 /// affiché aux autres joueurs, pas utilisé comme clé/chemin, donc plus
@@ -244,6 +257,22 @@ pub enum ClientMsg {
         /// maintenu à portée d'un allié blessé, transfère des PV au fil du temps.
         /// Résolu et validé **côté serveur** (portée, cible, débit), comme le reste.
         heal: bool,
+        /// Bouclier (14 septembre 2026, kit de capacités 1-2-3-4, touche 2 —
+        /// `PROTOCOL_VERSION` 9) : maintenu, réduit tout dégât entrant sur ce
+        /// joueur d'un facteur `app::health::BLOCK_DAMAGE_MULT` — morsure de
+        /// monstre comme coup/sort d'un autre joueur (PvP). Résolu côté serveur,
+        /// au point d'application du dégât (pas de recharge : un bouclier tenu
+        /// reste actif tant qu'il est tenu, contrairement à une attaque).
+        block: bool,
+        /// Ruée (14 septembre 2026, capacité 4) : demande une ruée vers l'avant
+        /// de `app::multiplayer::DASH_DISTANCE` m dans l'orientation courante du
+        /// joueur, validée côté serveur (temps de recharge `DASH_COOLDOWN`,
+        /// distance raccourcie si un obstacle est plus proche — cf.
+        /// `AppState::resolve_dash`). Comme `attack`/`fire`, un maintien
+        /// déclenche une nouvelle ruée à chaque recharge écoulée plutôt qu'une
+        /// seule (pas de détection de front montant côté serveur, qui ne voit
+        /// que l'état courant de l'`Input`).
+        dash: bool,
     },
     /// Déconnexion volontaire (quitte le salon proprement).
     Leave,
@@ -430,6 +459,9 @@ pub enum DeathCauseKind {
     Monster,
     /// Morsure d'une créature scriptée (`SceneObject::bite`).
     Creature,
+    /// Coup ou sort d'un **autre joueur** (14 septembre 2026, PvP du kit de
+    /// capacités 1-2-3-4 — cf. `app::health::BLOCK_DAMAGE_MULT`).
+    Player,
 }
 
 /// Résumé de la cause de mort d'un joueur réseau (Sprint 2) : type
@@ -629,6 +661,8 @@ mod tests {
             fire: true,
             weapon: 2,
             heal: true,
+            block: false,
+            dash: false,
         });
     }
 

@@ -537,6 +537,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         }
     }
 

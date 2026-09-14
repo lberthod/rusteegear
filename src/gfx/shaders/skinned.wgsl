@@ -27,6 +27,7 @@ struct Model {
     normal: mat4x4<f32>,
     params: vec4<f32>, // x = surbrillance, yzw = metallic/roughness/emissive
     color: vec4<f32>,
+    water: vec4<f32>,  // surface d'eau (cf. main.wgsl) — jamais posée sur un skinné
 };
 // Groupe 1 dédié au pipeline skinné (Sprint 136) : `models` + palette de joints
 // fusionnés dans le même bind group, pour tenir dans la limite WebGPU de 4 bind
@@ -58,6 +59,8 @@ struct VsOut {
     @location(4) uv: vec2<f32>,
     @location(5) material: vec3<f32>,
     @location(6) alpha: f32,
+    @location(7) water: vec4<f32>,
+    @location(8) vcolor: vec3<f32>,
 };
 
 // Mélange linéaire des 4 matrices influentes (« linear blend skinning », le schéma
@@ -89,13 +92,15 @@ fn vs_skinned_main(in: VsIn) -> VsOut {
     // statique (`model.normal`, déjà l'inverse-transpose du *model* — pas du skin).
     let skin_rot = mat3x3<f32>(skin[0].xyz, skin[1].xyz, skin[2].xyz);
     out.world_normal = (model.normal * vec4<f32>(skin_rot * in.normal, 0.0)).xyz;
-    out.color = in.color * model.color.rgb;
+    out.color = select(in.color * model.color.rgb, model.color.rgb, model.water.x > 0.5);
     out.highlight = model.params.x;
     out.uv = in.uv;
     out.material = model.params.yzw;
     // Les objets skinnés restent opaques (pas de passe transparente skinnée) :
     // `model.color.a` vaut 1 pour eux, cf. `write_uniforms`.
     out.alpha = model.color.a;
+    out.water = model.water;
+    out.vcolor = in.color;
     return out;
 }
 

@@ -1262,6 +1262,7 @@ impl Scene {
             },
             hud_widgets,
             arcade_hud: true,
+            arcade_free_camera: false,
             ..Default::default()
         }
     }

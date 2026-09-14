@@ -86,6 +86,9 @@ fn scene_primitives_lights() -> Scene {
         // `scene_bloom()` pour un golden dédié au bloom.
         sky: Sky {
             bloom_intensity: 0.0,
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
             ..Sky::default()
         },
         ..Default::default()
@@ -203,6 +206,9 @@ fn scene_sky_and_fog() -> Scene {
             fog_color: [0.6, 0.65, 0.75],
             fog_density: 0.35,
             bloom_intensity: 0.0,
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
         },
         ..scene_primitives_lights()
     }
@@ -261,6 +267,9 @@ fn scene_overbright_emissive() -> Scene {
         // Bloom désactivé : ce test isole le tone mapping, pas le halo de `scene_bloom()`.
         sky: Sky {
             bloom_intensity: 0.0,
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
             ..Sky::default()
         },
         ..Default::default()
@@ -298,6 +307,9 @@ fn scene_bloom() -> Scene {
     Scene {
         sky: Sky {
             bloom_intensity: 1.5,
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
             ..Sky::default()
         },
         ..scene_overbright_emissive()
@@ -439,6 +451,9 @@ fn scene_textured_ground(texture_path: &std::path::Path) -> Scene {
         },
         sky: Sky {
             bloom_intensity: 0.0,
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
             ..Sky::default()
         },
         ..Default::default()

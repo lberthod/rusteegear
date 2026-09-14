@@ -33,6 +33,10 @@ pub struct NetworkInput {
     pub weapon: u8,
     /// Soin d'un allié proche (cf. `app::health`) : résolu et validé côté serveur.
     pub heal: bool,
+    /// Bouclier (14 septembre 2026, capacité 2) : cf. `ClientMsg::Input::block`.
+    pub block: bool,
+    /// Ruée (14 septembre 2026, capacité 4) : cf. `ClientMsg::Input::dash`.
+    pub dash: bool,
 }
 
 /// Niveaux-paliers nommés (GDD §8.2 : « un palier = un déblocage nommé,
@@ -264,6 +268,26 @@ impl RoundObjective {
     }
 }
 
+/// Monde joué dans un salon (14 septembre 2026, multijoueur de la démo
+/// « Rivière & cascade ») : indépendant de `RoundObjective` (qui décide de la
+/// condition de victoire *dans* un monde) — `Hameau` est le monde MMORPG
+/// historique (`Scene::embedded_player`, seul monde qui existait avant ce
+/// jour), `Riviere` la vallée boisée de `Scene::riviere_demo` (pas de combat,
+/// `update_round` n'y a donc jamais d'effet quel que soit l'objectif choisi —
+/// cf. `Combat::wave` : aucun objet de cette scène n'en porte). Décidé côté
+/// serveur par le **code du salon** (`net::protocol::RIVIERE_LOBBY`), jamais
+/// transmis sur le fil : contrairement à `RoundObjective`/`PlayerClass`, pas
+/// de `to_u8`/`from_u8` — rien dans `ClientMsg`/`ServerMsg` n'en a besoin.
+/// Client comme serveur le déduisent de la scène chargée localement
+/// (`AppState::world`, posé par `use_embedded_scene`/`use_embedded_scene_cached`
+/// et `load_riviere_demo`), pas d'un choix explicite dans une fenêtre.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorldKind {
+    #[default]
+    Hameau,
+    Riviere,
+}
+
 /// Contrat du jour (GDD §3.4, Phase D — Sprint 9 de `sprint10audit.md`) : défi
 /// quotidien dérivé du seed du jour (`Contract::of_day`), récompensé une fois
 /// par compte et par jour (`PlayerProgress::last_contract_day`,
@@ -387,6 +411,21 @@ const NETWORK_ATTACK_RANGE: f32 = 1.2;
 /// `Controller::attack_cooldown` pour le joueur local (`app::combat`).
 const NETWORK_ATTACK_COOLDOWN: f32 = 0.4;
 
+/// Dégâts (fraction de `health::MAX_HEALTH`) d'un coup au contact porté à un
+/// **autre joueur** (14 septembre 2026, capacité 1 du kit 1-2-3-4, PvP). Même
+/// ordre de grandeur qu'une morsure de créature (`BiteAttack::damage`,
+/// 0,08-0,18 dans `scene/demos/mmorpg/creatures.rs`) pour rester cohérent
+/// avec le rythme de combat déjà en place, plutôt qu'inventer une échelle à
+/// part pour le PvP.
+const PVP_MELEE_DAMAGE: f32 = 0.15;
+
+/// Ruée (14 septembre 2026, capacité 4) : distance franchie (m) et temps de
+/// recharge (s). Bornée par un raycast (`Physics::raycast`) pour ne jamais
+/// traverser un mur/obstacle — but ludique = repositionnement rapide, pas un
+/// outil pour sortir du niveau.
+pub(super) const DASH_DISTANCE: f32 = 5.0;
+pub(super) const DASH_COOLDOWN: f32 = 1.5;
+
 /// Fenêtre (s) après laquelle un dégât porté à un monstre ne compte plus pour
 /// l'assist (GDD §8.3) si un autre joueur l'achève — borne volontairement
 /// courte : un dégât porté puis oublié pendant de longues secondes n'a plus
@@ -450,6 +489,8 @@ fn sanitize_network_input(input: NetworkInput) -> NetworkInput {
         // indexer `RANGED_WEAPONS` sans re-vérifier.
         weapon: super::fireball::clamp_weapon(input.weapon) as u8,
         heal: input.heal,
+        block: input.block,
+        dash: input.dash,
     }
 }
 
@@ -898,9 +939,116 @@ impl AppState {
                 self.credit_assists_on_kill(i, id);
                 self.credit_kill(id);
             }
+            // PvP au contact (14 septembre 2026, capacité 1 du kit 1-2-3-4) :
+            // seulement dans les scènes qui l'activent explicitement
+            // (`Scene::ability_bar`) — laisse les mondes coopératifs existants
+            // (Hameau MMORPG) inchangés, cf. la doc historique de
+            // `fireball_impact` sur ce même choix. Pas d'équipe/allié : tout
+            // autre joueur réseau à portée est une cible valide (mêlée à
+            // tous, cohérent avec l'absence de notion de camp dans le projet).
+            if self.scene.ability_bar {
+                let targets: Vec<PlayerId> = self
+                    .network
+                    .network_players
+                    .keys()
+                    .copied()
+                    .filter(|&other| other != id)
+                    .collect();
+                for other in targets {
+                    let other_alive = self
+                        .network
+                        .network_health
+                        .get(&other)
+                        .copied()
+                        .unwrap_or(1.0)
+                        > 0.0;
+                    let in_grace = self
+                        .network
+                        .network_spawn_grace
+                        .get(&other)
+                        .is_some_and(|g| *g > 0.0);
+                    if !other_alive || in_grace {
+                        continue;
+                    }
+                    let Some(other_index) = self.network.network_players.get(&other).copied()
+                    else {
+                        continue;
+                    };
+                    let Some(other_pos) =
+                        self.scene.objects.get(other_index).map(|o| o.transform.position)
+                    else {
+                        continue;
+                    };
+                    if pos.distance(other_pos) > NETWORK_ATTACK_RANGE {
+                        continue;
+                    }
+                    let died = self.apply_network_damage(
+                        other,
+                        PVP_MELEE_DAMAGE,
+                        crate::net::protocol::DeathCauseKind::Player,
+                        index,
+                    );
+                    if died {
+                        self.credit_kill(id);
+                    }
+                }
+            }
             self.network
                 .network_attack_cooldowns
                 .insert(id, NETWORK_ATTACK_COOLDOWN);
+        }
+    }
+
+    /// Résout la ruée des joueurs réseau pour ce tick (14 septembre 2026,
+    /// capacité 4 du kit 1-2-3-4) : même structure que `update_network_attacks`
+    /// (recharge décomptée serveur, pas seulement côté client) — un bond
+    /// instantané de `DASH_DISTANCE` dans la direction `aim_yaw` du joueur,
+    /// borné par un rayon physique pour ne pas traverser les murs.
+    pub fn update_network_dash(&mut self, dt: f32) {
+        for cd in self.network.network_dash_cooldowns.values_mut() {
+            *cd -= dt;
+        }
+        let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
+        for id in ids {
+            let ready = self
+                .network
+                .network_dash_cooldowns
+                .get(&id)
+                .is_none_or(|cd| *cd <= 0.0);
+            let wants_dash = self
+                .network
+                .network_inputs
+                .get(&id)
+                .is_some_and(|i| i.dash);
+            let alive = self.network.network_health.get(&id).copied().unwrap_or(1.0) > 0.0;
+            if !ready || !wants_dash || !alive {
+                continue;
+            }
+            let Some(index) = self.network.network_players.get(&id).copied() else {
+                continue;
+            };
+            let Some(pos) = self.scene.objects.get(index).map(|o| o.transform.position) else {
+                continue;
+            };
+            let yaw = self
+                .network
+                .network_inputs
+                .get(&id)
+                .map_or(0.0, |i| i.aim_yaw);
+            let forward = glam::Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+            self.network
+                .network_dash_cooldowns
+                .insert(id, DASH_COOLDOWN);
+            let mut distance = DASH_DISTANCE;
+            const DASH_RAYCAST_MASK: u32 = 1;
+            if let Some(phys) = self.physics.as_ref()
+                && let Some(hit) = phys.raycast(pos, forward, distance, DASH_RAYCAST_MASK)
+            {
+                distance = hit.distance.max(0.0);
+            }
+            if let Some(o) = self.scene.objects.get_mut(index) {
+                o.transform.position += forward * distance;
+            }
         }
     }
 
@@ -1480,6 +1628,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             },
         );
         assert_eq!(app.network_player_count(), 0);
@@ -1505,6 +1655,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             },
         );
         app.playing = true;
@@ -1707,6 +1859,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 0.0);
@@ -1727,6 +1881,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         };
         let clean = sanitize_network_input(dirty);
         assert_eq!(clean.move_x, 1.0);
@@ -1751,6 +1907,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             },
         );
         app.playing = true;
@@ -1783,6 +1941,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             })
             .aim_yaw
         };
@@ -1871,6 +2031,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             },
         );
 
@@ -1939,6 +2101,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             },
         );
 

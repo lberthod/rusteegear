@@ -15,6 +15,7 @@ impl AppState {
         self.scene = Scene::embedded_player();
         self.scene_file = None;
         self.selection = None;
+        self.world = super::multiplayer::WorldKind::Hameau;
     }
 
     /// Variante serveur de `use_embedded_scene` : clone d'un prototype gardé
@@ -27,6 +28,7 @@ impl AppState {
         self.scene = Scene::embedded_player_cached();
         self.scene_file = None;
         self.selection = None;
+        self.world = super::multiplayer::WorldKind::Hameau;
     }
 
     /// Charge la démo mobile prête à jouer (avec historique pour annuler).
@@ -305,6 +307,26 @@ impl AppState {
         self.wave = 0;
         self.is_leveled_demo = false;
         self.clear_selection();
+    }
+
+    /// Charge la vitrine de rendu « Rivière & cascade » (cf. `Scene::riviere_demo`) :
+    /// pas de combat ni d'objectif, une promenade dans une vallée boisée.
+    pub fn load_riviere_demo(&mut self) {
+        self.push_undo();
+        self.scene = Scene::riviere_demo();
+        self.scene_file = None;
+        self.async_load.imported_dirty = true;
+        self.hud_health = None;
+        self.fx.damage_flash = 0.0;
+        self.fx.camera_shake = 0.0;
+        self.fx.attack_flash = 0.0;
+        self.wave = 0;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+        // Salon multijoueur partagé dédié (`net::protocol::RIVIERE_LOBBY`,
+        // 14 septembre 2026) : un code de salon vide au `Join` y mène plutôt
+        // qu'au hameau MMORPG, cf. `app::network_client::resolve_lobby_code`.
+        self.world = super::multiplayer::WorldKind::Riviere;
     }
 
     /// Charge la scène **exemple** des composants optionnels (cf. `Scene::components_demo`) :

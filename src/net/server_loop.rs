@@ -820,6 +820,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         });
 
         let (id, msg) = server
@@ -838,6 +840,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             }
         );
     }
@@ -967,6 +971,8 @@ mod tests {
             fire: false,
             weapon: 0,
             heal: false,
+            block: false,
+            dash: false,
         };
         for _ in 0..10 {
             client.send(&input);
@@ -1181,6 +1187,8 @@ mod tests {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             });
         }
 

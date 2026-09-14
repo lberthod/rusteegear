@@ -223,6 +223,15 @@ pub fn device_rect(width: f32, height: f32, portrait: bool) -> (f32, f32, f32, f
     ((width - w) * 0.5, (height - h) * 0.5, w, h)
 }
 
+/// Manettes vues par `gilrs` pour le panneau « 🎮 Manettes » du mode Player :
+/// nom et joueur attribué (1 ou 2 ; 0 = pas encore attribué).
+#[derive(Default, Clone, PartialEq, Debug)]
+pub struct GamepadHudInfo {
+    pub pads: Vec<(String, u8)>,
+    /// Aucun backend manette (`RUSTEEGEAR_NO_GAMEPAD`, ou plateforme sans).
+    pub unavailable: bool,
+}
+
 /// État des contrôles tactiles produit par l'overlay UI et lu par les scripts Lua.
 #[derive(Default)]
 pub struct PlayerInput {
@@ -306,6 +315,15 @@ pub struct PlayerInput {
     /// tactile `Controller::weapon_button` ; les pendants clavier (1/2/3)
     /// sélectionnent directement sans passer par cet état.
     pub weapon_cycle: bool,
+    /// Bouclier clavier (14 septembre 2026, kit de capacités 1-2-3-4 de
+    /// `Scene::ability_bar`, touche 2 par défaut) maintenu enfoncé — cf.
+    /// `app::health::BLOCK_DAMAGE_MULT`. Sans effet tant que la scène n'a pas
+    /// `ability_bar` (aucune régression pour les autres démos).
+    pub block: bool,
+    /// Ruée clavier (capacité 4, touche 4 par défaut) maintenue enfoncée — cf.
+    /// `AppState::resolve_dash`. Comme `attack`/`fire`, un maintien redéclenche
+    /// une ruée à chaque recharge écoulée (pas de détection de front montant).
+    pub dash: bool,
 }
 
 impl PlayerInput {
@@ -793,6 +811,11 @@ pub struct PlayerAttackState {
     /// IA tant que le temps n'est pas écoulé (sinon la poursuite écraserait le recul dès
     /// la frame suivante).
     stagger: Vec<(usize, Vec3, f32)>,
+    /// Temps restant (s) avant la prochaine ruée possible (14 septembre 2026,
+    /// capacité 4) — cf. `combat::update_dash`. Même motif que
+    /// `attack_cooldown_remaining` : décompté chaque frame, pas seulement au
+    /// relâchement de la touche.
+    dash_cooldown_remaining: f32,
 }
 
 pub struct NetworkPlayersState {
@@ -865,6 +888,11 @@ pub struct NetworkPlayersState {
         crate::net::protocol::PlayerId,
         VecDeque<(crate::net::protocol::DeathCauseKind, usize)>,
     >,
+    /// Cooldown restant (s) de la ruée par joueur réseau (14 septembre 2026,
+    /// capacité 4 — kit 1-2-3-4) : évite un joueur réseau qui maintiendrait la
+    /// touche de ruée en continu, symétrique du cooldown d'attaque
+    /// (`network_attack_cooldowns`, non montré ici mais même motif).
+    network_dash_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
 }
 
 pub struct AsyncLoadState {
@@ -1090,6 +1118,14 @@ pub struct AppState {
     pub keys: input::ResolvedKeys,
     /// État courant des contrôles tactiles (joystick + boutons), lu par les scripts.
     pub input_state: PlayerInput,
+    /// Entrées du **joueur 2** local (coop du plateformer 2D, `Platformer2D::coop`) :
+    /// WASD au clavier, seconde manette — cf. `lib.rs` et `Controller::player_slot`.
+    pub input_state2: PlayerInput,
+    /// Manettes connectées et leur joueur (HUD « 🎮 Manettes »), publiées par
+    /// `lib.rs` (`App::poll_gamepad`) ; `gamepad_swap_requested` : « Échanger
+    /// J1 ↔ J2 » demandé par le panneau, consommé au prochain tour de boucle.
+    pub gamepad_hud: GamepadHudInfo,
+    pub gamepad_swap_requested: bool,
     /// Objets touchés par les entrées tactiles cette frame — cf. `TouchState`.
     touch: TouchState,
     /// Interpolation de la simulation à pas fixe — cf. `SimPosesState`.
@@ -1125,6 +1161,24 @@ pub struct AppState {
     pending_respawn: Option<f32>,
     /// Position de la dernière mort (tombe posée à la réapparition).
     death_pos: Option<Vec3>,
+    /// Cause de la dernière mort en mode plateformer 2D (nom de l'objet mortel,
+    /// `chute`, `vie`) — Lua `death_cause`, cf. `script_ctx::set_death_info`.
+    /// Distinct de `death_cause` (cause réseau, `net::protocol::DeathCause`).
+    rage_death_cause: String,
+    /// Position de la dernière mort, gardée après la réapparition (contrairement
+    /// à `death_pos`, consommé par la tombe) — Lua `death_x`/`death_y`.
+    rage_death_pos: Vec3,
+    /// Cause imposée pour la prochaine mort (« abandon » via `restart_level`).
+    rage_death_cause_override: Option<String>,
+    /// Morts par joueur local (coop) et joueur mort en dernier (1 ou 2, 0 = aucun) —
+    /// Lua `deaths_p1`/`deaths_p2`/`death_player`.
+    deaths_by_slot: [u32; 2],
+    death_player: u8,
+    /// Hauteur orthographique imposée par `set_camera(h)` (plateformer 2D),
+    /// `None` = celle de `GameCamera`.
+    camera_zoom: Option<f32>,
+    /// Fin (en `run_time`) du ralentissement posé par `slow(f, s)`.
+    zone_slow_until: f32,
     /// Chrono de la partie (s) en mode plateformer 2D : cumule les pas fixes depuis
     /// l'entrée en Play — contrairement à `time`, ne repart PAS de zéro à chaque
     /// mort (`restart_game`). Remis à zéro par `new_run`. Exposé au HUD web et au
@@ -1256,6 +1310,14 @@ pub struct AppState {
     /// Lobby::objective` (propagé au `Join`, cf. `multiplayer::RoundObjective`) ;
     /// n'a d'effet que si la scène a un système de manches (`wave > 0`).
     pub objective: multiplayer::RoundObjective,
+    /// Monde actuellement chargé localement (14 septembre 2026, multijoueur
+    /// Rivière) : `Hameau` par défaut (comportement historique, seul monde
+    /// qui existait avant ce jour) ; posé à `Riviere` par `load_riviere_demo`,
+    /// remis à `Hameau` par `use_embedded_scene`/`use_embedded_scene_cached`.
+    /// Décide, à connexion, dans quel salon partagé un code de salon vide
+    /// atterrit (`resolve_lobby_code`, `app::network_client`) — sans lien
+    /// avec `objective`, qui reste la condition de victoire *dans* un monde.
+    pub world: multiplayer::WorldKind,
     /// Nombre de `GameEvent::PlayerDown` survenus depuis le début de la manche
     /// courante (Phase D, Sprint 9 de `sprint10audit.md` — contrat « Nuit
     /// blanche », GDD §3.4 : « gagnez sans qu'aucun Veilleur ne tombe »).
@@ -1277,6 +1339,16 @@ pub struct AppState {
     /// Attaque de corps-à-corps du joueur local (cooldown, missile en vol,
     /// préparation, reculs encaissés) — cf. `PlayerAttackState`.
     attack: PlayerAttackState,
+    /// Clip de capacité actuellement forcé sur le joueur local (14 septembre
+    /// 2026, kit 1-2-3-4 de `Scene::ability_bar` — cf.
+    /// `AppState::apply_ability_animations`), `None` = locomotion normale.
+    /// Purement visuel (ne touche ni aux dégâts ni aux cooldowns, déjà gérés
+    /// par `update_attack`/`app::health`/`app::input`) : sert seulement à ne
+    /// remettre `AnimationState::time` à 0 qu'au **front montant** (appui),
+    /// pas à chaque tick tant que la touche reste tenue — sinon le clip
+    /// resterait figé sur sa première image (`apply_locomotion` réécrit
+    /// `clip`/`time` à chaque tick, cf. la doc de la fonction).
+    player_ability_anim: Option<&'static str>,
     /// État de simulation par joueur réseau (positions pilotées, vie, frags,
     /// classe, cooldowns...) — cf. `NetworkPlayersState`.
     network: NetworkPlayersState,
@@ -1496,6 +1568,9 @@ impl AppState {
             locale: initial_settings.locale,
             keys: input::ResolvedKeys::from_bindings(&initial_settings.keyboard),
             input_state: PlayerInput::default(),
+            input_state2: PlayerInput::default(),
+            gamepad_hud: GamepadHudInfo::default(),
+            gamepad_swap_requested: false,
             touch: TouchState {
                 tapped_obj: None,
                 touched_obj: None,
@@ -1518,6 +1593,13 @@ impl AppState {
             checkpoint: None,
             pending_respawn: None,
             death_pos: None,
+            rage_death_cause: String::new(),
+            rage_death_pos: Vec3::ZERO,
+            rage_death_cause_override: None,
+            deaths_by_slot: [0, 0],
+            death_player: 0,
+            camera_zoom: None,
+            zone_slow_until: 0.0,
             run_time: 0.0,
             camera_ahead: 0.0,
             start_level: None,
@@ -1552,6 +1634,7 @@ impl AppState {
             firebase_xp: None,
             wave: 0,
             objective: multiplayer::RoundObjective::default(),
+            world: multiplayer::WorldKind::default(),
             player_down_count: 0,
             revives_completed: 0,
             is_leveled_demo: false,
@@ -1560,7 +1643,9 @@ impl AppState {
                 attack_projectile: None,
                 attack_charge: None,
                 stagger: Vec::new(),
+                dash_cooldown_remaining: 0.0,
             },
+            player_ability_anim: None,
             network: NetworkPlayersState {
                 network_players: HashMap::new(),
                 network_inputs: HashMap::new(),
@@ -1575,6 +1660,7 @@ impl AppState {
                 network_revive: HashMap::new(),
                 bite_cooldowns: HashMap::new(),
                 recent_damage: HashMap::new(),
+                network_dash_cooldowns: HashMap::new(),
             },
             projectiles: ProjectilesState {
                 fireballs: Vec::new(),
@@ -2002,6 +2088,23 @@ impl AppState {
     }
 
     /// Morts de la partie en cours (mode plateformer 2D, cf. `deaths`).
+    /// Cause de la dernière mort (plateformer 2D), cf. `rage_death_cause`.
+    pub fn rage_death_cause(&self) -> &str {
+        &self.rage_death_cause
+    }
+
+    /// Rejouer le niveau courant (touche R / bouton tactile « Rejouer » / Lua
+    /// `restart()`) : la séquence de mort habituelle, comptée comme une mort.
+    pub fn restart_level(&mut self) {
+        if self.pending_respawn.is_some() || !self.playing {
+            return;
+        }
+        if let Some(p) = self.player_position() {
+            self.rage_death_cause_override = Some("abandon".to_string());
+            self.rage_death_start(p);
+        }
+    }
+
     pub fn deaths(&self) -> u32 {
         self.deaths
     }
@@ -2132,6 +2235,38 @@ impl AppState {
         // l'IA/les déclencheurs inactifs, pas désigner un objet au hasard.
     }
 
+    /// Tous les joueurs locaux visibles (coop du plateformer 2D), par slot croissant
+    /// — `player_index()` reste « le joueur » pour l'IA, la victoire et le réseau.
+    /// Hors coop, seul le slot 0 compte.
+    pub fn player_indices(&self) -> Vec<usize> {
+        let coop = self.scene.platformer.is_some_and(|p| p.coop);
+        let mut v: Vec<(u8, usize)> = self
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                let c = o.controller.as_ref()?;
+                (o.visible && c.input && (coop || c.player_slot == 0)).then_some((c.player_slot, i))
+            })
+            .collect();
+        v.sort_unstable();
+        v.into_iter().map(|(_, i)| i).collect()
+    }
+
+    /// Milieu des joueurs locaux visibles (coop), sinon la position du joueur.
+    pub fn players_center(&self) -> Option<Vec3> {
+        let idx = self.player_indices();
+        if idx.len() < 2 {
+            return self.player_position();
+        }
+        let sum: Vec3 = idx
+            .iter()
+            .map(|&i| self.scene.objects[i].transform.position)
+            .sum();
+        Some(sum / idx.len() as f32)
+    }
+
     /// Position du « joueur » : cf. `player_object`. `pub` depuis le pont
     /// de pilotage (`crate::pilot`, verbe `player`).
     pub fn player_position(&self) -> Option<Vec3> {
@@ -2180,7 +2315,7 @@ impl AppState {
         if self.is_locally_defeated() {
             return None;
         }
-        self.player_position()
+        self.players_center()
     }
 
     /// État live du cycle de vie du toucher pour un objet (touch_started,

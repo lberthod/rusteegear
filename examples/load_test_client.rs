@@ -105,6 +105,8 @@ fn main() {
                     fire,
                     weapon,
                     heal,
+                    block,
+                    dash,
                 } => {
                     app.set_network_input(
                         id,
@@ -117,6 +119,8 @@ fn main() {
                             fire,
                             weapon,
                             heal,
+                            block,
+                            dash,
                         },
                     );
                 }
@@ -158,6 +162,8 @@ fn main() {
                     fire: false,
                     weapon: 0,
                     heal: false,
+                    block: false,
+                    dash: false,
                 };
                 if let Ok(bytes) = protocol::encode(&input)
                     && now >= measure_from

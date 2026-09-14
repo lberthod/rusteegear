@@ -102,6 +102,9 @@ pub(super) fn run_script(
     // `obj:destroy()`, réversible — un sol qui disparaît puis revient, un bloc qui
     // surgit en plein saut. Valeur fournie/relue via `script_ctx` (cf. sa doc).
     obj.set("visible", super::script_ctx::object_visible())?;
+    let (em, op) = super::script_ctx::object_fx();
+    obj.set("emissive", em)?;
+    obj.set("opacity", op)?;
 
     // `obj:destroy()` : suppression **douce** — `visible = false`, comme
     // les monstres vaincus (`Scene::attack_at`) ou les collectibles ramassés
@@ -241,6 +244,20 @@ pub(super) fn run_script(
         hud_ref.push(super::script_ctx::hud_event(&id, &text))?;
         Ok(())
     })?;
+    // `sfx(nom)` : effet sonore synthétisé du moteur (jump, pickup, win, lose,
+    // hit, defeat, wave, ally, wake) ; `set_sky(hr, hg, hb, zr, zg, zb)` : ciel.
+    let sfx_ref = emit_tbl.clone();
+    let sfx = lua.create_function(move |_, name: String| {
+        sfx_ref.push(super::script_ctx::sfx_event(&name))?;
+        Ok(())
+    })?;
+    let sky_ref = emit_tbl.clone();
+    let set_sky = lua.create_function(
+        move |_, (hr, hg, hb, zr, zg, zb): (f32, f32, f32, f32, f32, f32)| {
+            sky_ref.push(super::script_ctx::sky_event([hr, hg, hb], [zr, zg, zb]))?;
+            Ok(())
+        },
+    )?;
     let received = lua.create_table()?;
     for name in events_in {
         received.set(name.as_str(), true)?;
@@ -331,6 +348,15 @@ pub(super) fn run_script(
     g.set("dt", dt)?;
     g.set("time", time)?;
     g.set("input", input_tbl)?;
+    // `blocking` (14 septembre 2026, capacité 2 du kit 1-2-3-4) : vrai tant
+    // que le joueur local maintient le bouclier (`PlayerInput::block`) — un
+    // script de morsure solo (cf. `scene::demos::creature_scripts::
+    // creature_bite_script`) peut le consulter avant d'appeler `damage()`
+    // pour réduire ou annuler le coup, comme `apply_network_damage` le fait
+    // déjà côté réseau (`app::health::BLOCK_DAMAGE_MULT`). Global plutôt que
+    // champ de `input` : lu par très peu de scripts, une table dédiée serait
+    // disproportionnée.
+    g.set("blocking", input.block)?;
     g.set("tilt", tilt)?;
     g.set("vibrate", vibrate)?;
     g.set("reverb", reverb_fn)?;
@@ -341,6 +367,59 @@ pub(super) fn run_script(
     g.set("checkpoint", checkpoint)?;
     g.set("teleport", teleport)?;
     g.set("hud_text", hud_text)?;
+    g.set("sfx", sfx)?;
+    let rs_ref = emit_tbl.clone();
+    let restart = lua.create_function(move |_, ()| {
+        rs_ref.push("sys:restart".to_string())?;
+        Ok(())
+    })?;
+    g.set("restart", restart)?;
+    // Lumière (plateformer 2D, une scène unique) : `set_light(i, x, y, z, r, g, b,
+    // intensité, portée)` (i < 8, portée 0 = éteinte), `set_ambient(a)`,
+    // `set_fx(bloom, brouillard, r, g, b)`.
+    let li_ref = emit_tbl.clone();
+    let set_light =
+        lua.create_function(move |_, a: (u32, f32, f32, f32, f32, f32, f32, f32, f32)| {
+            li_ref.push(super::script_ctx::light_event(
+                a.0,
+                [a.1, a.2, a.3, a.4, a.5, a.6, a.7, a.8],
+            ))?;
+            Ok(())
+        })?;
+    g.set("set_light", set_light)?;
+    let am_ref = emit_tbl.clone();
+    let set_ambient = lua.create_function(move |_, a: f32| {
+        am_ref.push(format!("sys:ambient:{a}"))?;
+        Ok(())
+    })?;
+    g.set("set_ambient", set_ambient)?;
+    let fx_ref = emit_tbl.clone();
+    let set_fx = lua.create_function(move |_, (bl, fog, r, g, b): (f32, f32, f32, f32, f32)| {
+        fx_ref.push(format!("sys:fx:{bl},{fog},{r},{g},{b}"))?;
+        Ok(())
+    })?;
+    g.set("set_fx", set_fx)?;
+    // Zones de jeu (plateformer 2D) : `gravity(s)` (échelle 0,15..3), `wind(x)`
+    // (vitesse X ajoutée en l'air), `slow(f, s)` (échelle de vitesse pendant s
+    // secondes), `set_camera(h)` (hauteur orthographique, 0 = défaut), `shake(f)`.
+    for (name, kind, n) in [
+        ("gravity", "gravity", 1usize),
+        ("wind", "wind", 1),
+        ("slow", "slow", 2),
+        ("set_camera", "camera", 1),
+        ("shake", "shake", 1),
+    ] {
+        let ev_ref = emit_tbl.clone();
+        let f = lua.create_function(move |_, args: mlua::Variadic<f32>| {
+            let vals: Vec<String> = args.iter().take(n).map(|v| v.to_string()).collect();
+            if vals.len() == n {
+                ev_ref.push(format!("sys:{kind}:{}", vals.join(",")))?;
+            }
+            Ok(())
+        })?;
+        g.set(name, f)?;
+    }
+    g.set("set_sky", set_sky)?;
     // `bone(nom, dx, dy, dz)` : impose la direction (monde) de l'os `nom` du mesh
     // skinné de cet objet — cf. `SceneObject::bone_dirs`.
     let bone = lua.create_function(|_, (name, x, y, z): (String, f32, f32, f32)| {
@@ -351,6 +430,19 @@ pub(super) fn run_script(
     // Global `deaths` (lecture seule) : morts de la partie en cours — permet à un
     // piège de varier selon les tentatives (`if deaths % 2 == 1 then … end`).
     g.set("deaths", super::script_ctx::deaths())?;
+    // Coop (plateformer 2D à deux) : `coop` (1/0), `death_player` (1/2, 0 = aucun),
+    // `deaths_p1`/`deaths_p2`.
+    let (coop, death_player, by_slot) = super::script_ctx::coop_info();
+    g.set("coop", u32::from(coop))?;
+    g.set("death_player", u32::from(death_player))?;
+    g.set("deaths_p1", by_slot[0])?;
+    g.set("deaths_p2", by_slot[1])?;
+    // Contexte de la dernière mort (`death_cause` : nom de l'objet mortel,
+    // `chute`, `vie` ; `death_x`/`death_y` : où).
+    g.set("death_cause", super::script_ctx::death_cause())?;
+    let (dx, dy) = super::script_ctx::death_pos();
+    g.set("death_x", dx)?;
+    g.set("death_y", dy)?;
     // Table `pose` (démo Rééducation, cf. `app::pose`) : `pose.ok` + un repère
     // nommé par entrée de `pose::NAMED` (`{x, y, z, v}`, coordonnées MediaPipe).
     if super::script_ctx::pose_wanted() {
@@ -477,6 +569,9 @@ pub(super) fn run_script(
     // `obj.visible` relu (booléen seulement : `obj.visible = nil` est ignoré).
     if let Ok(v) = obj.get::<bool>("visible") {
         super::script_ctx::report_visible(v);
+    }
+    if let (Ok(em), Ok(op)) = (obj.get::<f32>("emissive"), obj.get::<f32>("opacity")) {
+        super::script_ctx::report_fx(em, op);
     }
     for name in emit_tbl.sequence_values::<String>().flatten() {
         events_out.push(name);

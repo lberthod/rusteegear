@@ -37,6 +37,14 @@ pub(super) const PLAYER_CAMERA_HEIGHT_OFFSET: f32 = 1.6;
 /// sans contrôleur est mis en sommeil — plus qu'un niveau entier (40), donc les
 /// pièges du niveau courant et l'entrée du suivant restent actifs.
 pub(super) const SCRIPT_CULL_DISTANCE: f32 = 48.0;
+/// Coop (plateformer 2D à deux) : plafond du dézoom orthographique qui garde les
+/// deux joueurs dans le cadre ; au-delà, le mur souple retient le meneur.
+pub(super) const COOP_ORTHO_MAX: f32 = 17.0;
+/// Coop : écart maximal (unités monde, sur X) entre les deux joueurs — au-delà,
+/// celui qui s'éloigne est retenu (« laisse »). 18 u tiennent dans le cadre au
+/// dézoom maximal dès le 4:3 (17 × 1,33 ≈ 22,7 u de large). Indépendant de la
+/// caméra : identique en temps réel et en pas simulés (pilote).
+pub(super) const COOP_MAX_GAP: f32 = 18.0;
 /// Hauteur d'apparition du joueur au départ direct d'un niveau (même convention
 /// que les portes du jeu : juste au-dessus du sol à y = 0).
 const PLAYER_START_Y: f32 = 0.5;
@@ -334,6 +342,10 @@ fn drive_local_and_networked_players(
     scene: &crate::scene::Scene,
     network: &NetworkPlayersState,
     input_state: &super::PlayerInput,
+    input_state2: &super::PlayerInput,
+    coop: bool,
+    freeze: bool,
+    leash: Option<f32>,
     camera_yaw: f32,
     dt: f32,
 ) -> (Vec<(usize, f32)>, Vec<(usize, bool)>, bool) {
@@ -352,7 +364,52 @@ fn drive_local_and_networked_players(
     let lock_z = scene.platformer.is_some_and(|p| p.lock_z);
     let (tilt, space) = (inp.tilt, inp.jump);
     let (key_turn, key_thrust) = (inp.turn(), inp.thrust());
+    // Coop : le joueur 2 lit sa propre entrée (`input_state2`), mêmes calculs.
+    // `freeze` (séquence de mort de l'un) : les deux entrées locales sont neutres,
+    // le survivant regarde sans bouger.
+    let slot_inputs = |src: &super::PlayerInput| {
+        let joy = apply_deadzone(src.joy, JOYSTICK_DEADZONE);
+        let (rmx, rmy) = clamp_move_vector(
+            joy.0 + src.key_move.0 + src.gamepad_move.0,
+            joy.1 + src.key_move.1 + src.gamepad_move.1,
+        );
+        let (mx, my) = camera_relative_move(rmx, rmy, camera_yaw);
+        (
+            rmx,
+            rmy,
+            mx,
+            my,
+            src.jump,
+            src.tilt,
+            src.turn(),
+            src.thrust(),
+        )
+    };
+    let neutral = (0.0, 0.0, 0.0, 0.0, false, (0.0, 0.0), 0.0, 0.0);
+    let slot0 = if freeze {
+        neutral
+    } else {
+        (raw_mx, raw_my, mx, my, space, tilt, key_turn, key_thrust)
+    };
+    let slot1 = if freeze {
+        neutral
+    } else {
+        slot_inputs(input_state2)
+    };
     let mut any_jump = false;
+    // Coop : position X de chaque joueur local (slot 0, slot 1) pour la laisse.
+    let mut slot_x: [Option<f32>; 2] = [None, None];
+    if leash.is_some() {
+        for o in &scene.objects {
+            if let Some(c) = o.controller.as_ref()
+                && c.input
+                && o.visible
+                && c.player_slot < 2
+            {
+                slot_x[usize::from(c.player_slot)] = Some(o.transform.position.x);
+            }
+        }
+    }
     // Objets pilotés par un joueur réseau (cf. `multiplayer.rs`) :
     // chacun a son propre `NetworkInput`, distinct de `input_state`
     // (qui ne pilote que l'objet « joueur local », clavier/tactile/gyro de
@@ -394,6 +451,17 @@ fn drive_local_and_networked_players(
         if !ctrl.input && !ctrl.gyro {
             continue;
         }
+        // Second joueur local : seulement en coop (sinon masqué et inerte).
+        if ctrl.player_slot > 0 && !coop {
+            continue;
+        }
+        let (raw_mx, raw_my, mx, my, space, tilt, key_turn, key_thrust) =
+            if ctrl.player_slot == 1 { slot1 } else { slot0 };
+        let inp_slot = if ctrl.player_slot == 1 {
+            input_state2
+        } else {
+            input_state
+        };
         let net_input = network_by_index.get(&idx);
         let (mx, my, space) = match net_input {
             Some(n) => (n.move_x.clamp(-1.0, 1.0), n.move_y.clamp(-1.0, 1.0), n.jump),
@@ -410,7 +478,11 @@ fn drive_local_and_networked_players(
                 Some(n) => n.move_x.clamp(-1.0, 1.0),
                 None => raw_mx,
             };
-            vx += raw * ctrl.move_speed;
+            vx += raw * ctrl.move_speed * phys.speed_scale;
+            // Vent (zone scriptée) : pousse en l'air seulement.
+            if phys.wind_x != 0.0 && !phys.is_grounded(idx) {
+                vx += phys.wind_x;
+            }
         } else if ctrl.input {
             vx += mx * ctrl.move_speed;
             if ctrl.auto_run_speed > 0.0 {
@@ -438,11 +510,24 @@ fn drive_local_and_networked_players(
         // Saut : bouton tactile nommé (joueur local), ou Espace au clavier
         // (joueur local), ou demandé par l'`Input` réseau de ce joueur.
         let jump = (!ctrl.jump_button.is_empty()
-            && input_state.buttons.contains(&ctrl.jump_button))
+            && inp_slot.buttons.contains(&ctrl.jump_button))
             || (space && ctrl.input)
             // Plateformer 2D : Haut / W sautent aussi (l'axe vertical n'a pas
             // d'autre usage une fois le déplacement verrouillé sur X).
             || (lock_z && ctrl.input && net_input.is_none() && raw_my > 0.5);
+        // Laisse (coop) : le meneur ne peut pas s'éloigner de l'autre de plus de
+        // `COOP_MAX_GAP` — il peut toujours sauter sur place et revenir.
+        if let Some(gap) = leash
+            && ctrl.input
+            && net_input.is_none()
+            && ctrl.player_slot < 2
+            && let Some(ox) = slot_x[usize::from(1 - ctrl.player_slot)]
+        {
+            let x = obj.transform.position.x;
+            if (vx > 0.0 && x - ox >= gap) || (vx < 0.0 && ox - x >= gap) {
+                vx = 0.0;
+            }
+        }
         let jump_speed = (2.0 * 9.81 * ctrl.jump_height.max(0.0)).sqrt();
         any_jump |= phys.control(idx, vx, vz, jump, jump_speed, ctrl.acceleration, dt);
         if ctrl.input {
@@ -860,6 +945,8 @@ impl AppState {
     /// de scène hors objets (lumière, HUD… édités en pause) ont changé entre
     /// temps : ceux-là ne sont pas restaurés, ils restent à enregistrer.
     pub(super) fn on_play_stopped(&mut self) {
+        self.camera_zoom = None;
+        self.zone_slow_until = 0.0;
         self.scene.objects = self.play_snapshot.clone();
         // cf. AUDIT_MMORPG.md §4.2 : même raison qu'à `restart_game`.
         self.clear_network_players();
@@ -956,6 +1043,21 @@ impl AppState {
             self.checkpoint = None;
             self.pending_respawn = None;
             self.death_pos = None;
+            self.deaths_by_slot = [0, 0];
+            self.death_player = 0;
+            // Coop (plateformer 2D à deux) : le second joueur n'existe que si le
+            // mode est actif — masqué sinon, *avant* le snapshot et la physique.
+            if let Some(pl) = self.scene.platformer {
+                for o in &mut self.scene.objects {
+                    if let Some(c) = o.controller.as_ref()
+                        && c.input
+                        && c.player_slot > 0
+                    {
+                        o.visible = pl.coop;
+                    }
+                }
+                self.play_snapshot = self.scene.objects.clone();
+            }
             self.run_time = 0.0;
             self.hud_texts.clear();
             // Départ direct à un niveau (sélecteur de mondes) : point de contrôle posé
@@ -1028,7 +1130,7 @@ impl AppState {
                 self.camera.distance = gc.distance_for(self.camera.fovy, self.camera.aspect);
                 // Vue orthographique de jeu (plateformer 2D) : seulement en Play,
                 // remise à 0 (perspective) par `on_play_stopped`.
-                self.camera.ortho_height = gc.ortho_height.max(0.0);
+                self.camera.ortho_height = self.camera_zoom.unwrap_or(gc.ortho_height).max(0.0);
                 if !self.scene.camera_follow {
                     self.camera.target = Vec3::from_array(gc.target);
                 }
@@ -1204,7 +1306,9 @@ impl AppState {
             // potions, clés… rejoignent le sac au lieu d'équiper ou de scorer.
             self.update_item_pickups();
             self.update_attack(dt);
+            self.update_dash(dt);
             self.update_network_attacks(dt);
+            self.update_network_dash(dt);
             self.update_fireballs(dt);
             // Vie individualisée des joueurs réseau (contact monstre, régénération
             // hors combat) puis soin coopératif — après les dégâts de ce tick, pour
@@ -1298,6 +1402,26 @@ impl AppState {
                 self.camera.target.x += (goal.x - self.camera.target.x) * tx;
                 self.camera.target.y += (goal.y - self.camera.target.y) * ty;
                 self.camera.target.z = goal.z;
+                // Coop : dézoom pour garder les deux joueurs dans le cadre (plafond
+                // `COOP_ORTHO_MAX`, au-delà le mur souple retient le meneur), lissé.
+                if let Some(gc) = self.scene.game_camera
+                    && self.scene.platformer.is_some_and(|pl| pl.coop)
+                {
+                    let idx = self.player_indices();
+                    let base = self.camera_zoom.unwrap_or(gc.ortho_height).max(0.0);
+                    let wanted = if idx.len() >= 2 && base > 0.0 {
+                        let a = self.scene.objects[idx[0]].transform.position;
+                        let b = self.scene.objects[idx[1]].transform.position;
+                        let aspect = self.camera.aspect.max(0.1);
+                        base.max(((a.x - b.x).abs() + 10.0) / aspect)
+                            .max((a.y - b.y).abs() + 6.0)
+                            .min(COOP_ORTHO_MAX)
+                    } else {
+                        base
+                    };
+                    let tz = 1.0 - (-dt * 4.0).exp();
+                    self.camera.ortho_height += (wanted - self.camera.ortho_height) * tz;
+                }
             } else {
                 self.camera.target = self
                     .camera
@@ -1384,6 +1508,7 @@ impl AppState {
         // que chaque source d'orbite filtrée une à une.
         if self.playing
             && self.scene.arcade_hud
+            && !self.scene.arcade_free_camera
             && let Some(gc) = self.scene.game_camera
         {
             self.camera.yaw = gc.yaw;
@@ -1529,6 +1654,7 @@ impl AppState {
         // rester indépendants de l'ordre des scripts, cette boucle-ci s'exécute
         // entièrement avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
         let anim_notify_events = advance_animation_clips(&mut self.scene, dt);
+        self.apply_ability_animations();
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
         // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
         // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les
@@ -1536,9 +1662,15 @@ impl AppState {
         // doit suffire pour qu'un monstre au corps-à-corps puisse mordre. `visible`
         // exclut les ennemis vaincus (masqués par l'attaque, cf. `Scene::attack_at`) :
         // un ennemi caché ne doit plus pouvoir infliger de dégâts.
-        let triggered: std::collections::HashSet<usize> = match self.player_index() {
-            Some(pi) => {
-                let player = &self.scene.objects[pi];
+        // Coop : une zone est déclenchée par l'un **ou** l'autre des joueurs locaux.
+        let mut player_ids = self.player_indices();
+        if player_ids.is_empty() {
+            player_ids.extend(self.player_index());
+        }
+        let mut triggered: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for &pi in &player_ids {
+            let player = &self.scene.objects[pi];
+            triggered.extend(
                 self.scene
                     .objects
                     .iter()
@@ -1549,11 +1681,9 @@ impl AppState {
                             && o.visible
                             && self.scene.world_aabb_intersects(o, player)
                     })
-                    .map(|(i, _)| i)
-                    .collect()
-            }
-            None => std::collections::HashSet::new(),
-        };
+                    .map(|(i, _)| i),
+            );
+        }
         let scripts_started = crate::time_compat::Instant::now();
         let outcome = self.run_object_scripts(dt, time, &triggered, anim_notify_events);
         self.perf.sim_scripts_ms = scripts_started.elapsed().as_secs_f32() * 1000.0;
@@ -1648,11 +1778,19 @@ impl AppState {
             if scripted_first {
                 phys.resolve_scripted_moves(dt, &mut self.scene);
             }
+            let coop = self.scene.platformer.is_some_and(|p| p.coop);
+            let freeze = coop && self.pending_respawn.is_some();
+            // Laisse (coop) : écart maximal entre les deux joueurs, cf. `COOP_MAX_GAP`.
+            let leash = coop.then_some(COOP_MAX_GAP);
             let (player_facing, player_anim, any_jump) = drive_local_and_networked_players(
                 phys,
                 &self.scene,
                 &self.network,
                 &self.input_state,
+                &self.input_state2,
+                coop,
+                freeze,
+                leash,
                 self.camera.yaw,
                 dt,
             );
@@ -1718,17 +1856,15 @@ impl AppState {
             if let Some(pl) = self.scene.platformer
                 && pl.lock_z
             {
-                let player = self
-                    .scene
-                    .objects
-                    .iter()
-                    .position(|o| o.visible && o.controller.as_ref().is_some_and(|c| c.input));
-                if let Some(idx) = player
-                    && let Some(o) = self.scene.objects.get_mut(idx)
-                    && (o.transform.position.z - pl.plane_z).abs() > 1e-4
-                {
-                    o.transform.position.z = pl.plane_z;
-                    phys.set_position(idx, o.transform.position);
+                // Tous les joueurs locaux (coop compris).
+                for idx in 0..self.scene.objects.len() {
+                    let o = &mut self.scene.objects[idx];
+                    if o.controller.as_ref().is_some_and(|c| c.input)
+                        && (o.transform.position.z - pl.plane_z).abs() > 1e-4
+                    {
+                        o.transform.position.z = pl.plane_z;
+                        phys.set_position(idx, o.transform.position);
+                    }
                 }
             }
             // Les créatures en pleine visée suivent la position réellement
@@ -1781,6 +1917,63 @@ impl AppState {
                     o.transform.scale,
                 )
             }));
+    }
+
+    /// Anime le(s) joueur(s) local(aux) selon la capacité tenue (kit 1-2-3-4,
+    /// `Scene::ability_bar`, roadmap 14 septembre 2026) : purement visuel — la
+    /// mécanique (dégâts, cooldowns, réduction de dégâts du bouclier) reste
+    /// entièrement gérée par `update_attack`/`app::health`/`app::input`, cette
+    /// fonction ne fait que forcer le clip affiché par-dessus la locomotion
+    /// qu'`advance_animation_clips` vient de poser juste avant dans
+    /// `sim_step_inner`. Priorité bouclier > attaque en préparation/en vol >
+    /// sort > ruée si plusieurs touches sont tenues à la fois.
+    ///
+    /// Ne remet `AnimationState::time` à 0 qu'au **front montant** (quand
+    /// `player_ability_anim` change) : `apply_locomotion` (appelé juste avant,
+    /// à l'intérieur d'`advance_animation_clips`) réécrit `clip`/`time` à
+    /// *chaque* tick à partir de la vitesse mesurée, donc si cette fonction
+    /// réinitialisait `time` à chaque tick tant que la touche reste enfoncée,
+    /// le clip resterait figé sur sa première image au lieu de jouer — l'appui
+    /// dure presque toujours plusieurs pas de simulation (préparation d'attaque,
+    /// bouclier/ruée tenus).
+    fn apply_ability_animations(&mut self) {
+        if !self.scene.ability_bar {
+            return;
+        }
+        let blocking = self.input_state.block;
+        let attacking = self.attack.attack_charge.is_some() || self.attack.attack_projectile.is_some();
+        let casting = self.input_state.fire;
+        let dashing = self.input_state.dash;
+        let desired = if blocking {
+            Some("Block")
+        } else if attacking {
+            Some("Attack")
+        } else if casting {
+            Some("Cast")
+        } else if dashing {
+            Some("Dash")
+        } else {
+            None
+        };
+        let rising_edge = desired.is_some() && desired != self.player_ability_anim;
+        self.player_ability_anim = desired;
+        let Some(clip) = desired else { return };
+        for pi in self.player_indices() {
+            let Some(anim) = self
+                .scene
+                .objects
+                .get_mut(pi)
+                .and_then(|o| o.animation.as_mut())
+            else {
+                continue;
+            };
+            anim.clip = clip.to_string();
+            anim.prev_clip.clear();
+            anim.blend = 1.0;
+            if rising_edge {
+                anim.time = 0.0;
+            }
+        }
     }
 
     /// Exécute le script de chaque objet de la scène (natif ou wasm32 selon la
@@ -1871,6 +2064,16 @@ impl AppState {
         let mut solid_changes: Vec<(usize, bool)> = Vec::new();
         // Global Lua `deaths` (mode plateformer 2D), lu par les deux backends.
         super::script_ctx::set_deaths(self.deaths);
+        super::script_ctx::set_death_info(
+            &self.rage_death_cause,
+            self.rage_death_pos.x,
+            self.rage_death_pos.y,
+        );
+        super::script_ctx::set_coop_info(
+            self.scene.platformer.is_some_and(|p| p.coop),
+            self.death_player,
+            self.deaths_by_slot,
+        );
         // Table Lua `pose` (démo Rééducation) : vieillit d'un pas par tick fixe
         // (`pose.ok` retombe à faux sans nouvelle image, cf. `pose::STALE_AFTER_TICKS`).
         self.pose.tick();
@@ -1886,12 +2089,26 @@ impl AppState {
         // (rien à y voir ni à y déclencher) — sur le web, l'interpréteur Lua pur
         // Rust coûtait ~12 ms par frame avec les 35 pièges du jeu, d'où des
         // saccades ; avec la coupure, moins de 10 objets scriptés par pas.
-        let cull_x = self
+        // Coop : un piège dort seulement s'il est loin de **tous** les joueurs.
+        let cull_xs: Vec<f32> = self
             .scene
             .platformer
             .filter(|pl| pl.lock_z)
-            .and_then(|_| self.player_position().or(self.checkpoint))
-            .map(|p| p.x);
+            .map(|_| {
+                let idx = self.player_indices();
+                if idx.is_empty() {
+                    self.player_position()
+                        .or(self.checkpoint)
+                        .map(|p| p.x)
+                        .into_iter()
+                        .collect()
+                } else {
+                    idx.iter()
+                        .map(|&i| self.scene.objects[i].transform.position.x)
+                        .collect()
+                }
+            })
+            .unwrap_or_default();
         for (idx, obj) in self.scene.objects.iter_mut().enumerate() {
             let just_tapped = self.touch.tapped_obj == Some(idx);
             let touch_started = self.touch.touch_started_obj == Some(idx);
@@ -1916,10 +2133,12 @@ impl AppState {
             }
             // Tag `attached` : objet qui suit le joueur par script (yeux…) — jamais
             // mis en sommeil, sinon une téléportation le laisserait derrière.
-            if let Some(px) = cull_x
+            if !cull_xs.is_empty()
                 && obj.controller.is_none()
                 && obj.tag != "attached"
-                && (obj.transform.position.x - px).abs() > SCRIPT_CULL_DISTANCE
+                && cull_xs
+                    .iter()
+                    .all(|px| (obj.transform.position.x - px).abs() > SCRIPT_CULL_DISTANCE)
             {
                 continue;
             }
@@ -1981,6 +2200,7 @@ impl AppState {
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 super::script_ctx::set_object_visible(obj.visible);
+                super::script_ctx::set_object_fx(obj.emissive, obj.opacity);
                 super::script_ctx::set_pose_wanted(super::script_ctx::script_reads_pose(
                     &obj.script,
                 ));
@@ -2024,6 +2244,10 @@ impl AppState {
                 {
                     obj.visible = v;
                     solid_changes.push((idx, v));
+                }
+                if let Some((em, op)) = super::script_ctx::take_fx() {
+                    obj.emissive = em.clamp(0.0, 8.0);
+                    obj.opacity = op.clamp(0.0, 1.0);
                 }
                 // Directions d'os poussées par `bone()` : remplacent le jeu précédent
                 // (vides si le script n'en a pas poussé ce pas — jamais d'override fantôme).
@@ -2072,6 +2296,7 @@ impl AppState {
                 let mut spawns_this_obj: Vec<(String, Vec3)> = Vec::new();
                 let mut item_adds_this_obj: Vec<(crate::scene::ItemKind, u32)> = Vec::new();
                 super::script_ctx::set_object_visible(obj.visible);
+                super::script_ctx::set_object_fx(obj.emissive, obj.opacity);
                 super::script_ctx::set_pose_wanted(super::script_ctx::script_reads_pose(
                     &obj.script,
                 ));
@@ -2118,6 +2343,10 @@ impl AppState {
                     obj.visible = v;
                     solid_changes.push((idx, v));
                 }
+                if let Some((em, op)) = super::script_ctx::take_fx() {
+                    obj.emissive = em.clamp(0.0, 8.0);
+                    obj.opacity = op.clamp(0.0, 1.0);
+                }
                 // Directions d'os poussées par `bone()` : remplacent le jeu précédent
                 // (vides si le script n'en a pas poussé ce pas — jamais d'override fantôme).
                 obj.bone_dirs = super::script_ctx::take_bones().into_iter().collect();
@@ -2140,6 +2369,23 @@ impl AppState {
             health,
             solid_changes,
         }
+    }
+
+    /// Effet sonore nommé pour `sfx(nom)` côté Lua.
+    fn sfx_by_name_impl(name: &str) -> Option<crate::runtime::sfx::Sfx> {
+        use crate::runtime::sfx::Sfx;
+        Some(match name {
+            "jump" => Sfx::Jump,
+            "pickup" => Sfx::Pickup,
+            "win" => Sfx::Win,
+            "lose" => Sfx::Lose,
+            "hit" => Sfx::Hit,
+            "defeat" => Sfx::Defeat,
+            "wave" => Sfx::WaveStart,
+            "ally" => Sfx::AllyDown,
+            "wake" => Sfx::CreatureWake,
+            _ => return None,
+        })
     }
 
     /// Plafond de tombes laissées par `rage_death` (au-delà, le niveau est déjà un
@@ -2171,13 +2417,17 @@ impl AppState {
             }
             return;
         }
-        let Some(p) = self.player_position() else {
-            return;
-        };
-        let dead =
-            self.scene.deadly_at(p) || p.y < pl.kill_y || self.hud_health.is_some_and(|h| h <= 0.0);
-        if dead {
-            self.rage_death_start(p);
+        // Coop : la mort de l'un ou de l'autre déclenche la même séquence (les deux
+        // repartent au point de contrôle, cf. `rage_respawn`).
+        for idx in self.player_indices() {
+            let p = self.scene.objects[idx].transform.position;
+            let dead = self.scene.deadly_at(p)
+                || p.y < pl.kill_y
+                || self.hud_health.is_some_and(|h| h <= 0.0);
+            if dead {
+                self.rage_death_start_at(Some(idx), p);
+                return;
+            }
         }
     }
 
@@ -2186,17 +2436,50 @@ impl AppState {
     /// tourner (les débris volent, les pièges restent en place) pendant
     /// `DEATH_PAUSE_S`, puis `rage_respawn`. Sans cette pause, la mort était
     /// invisible : le joueur réapparaissait dans le même pas que sa chute.
-    fn rage_death_start(&mut self, p: Vec3) {
+    pub(super) fn rage_death_start(&mut self, p: Vec3) {
+        let idx = self.player_index();
+        self.rage_death_start_at(idx, p);
+    }
+
+    /// `rage_death_start` pour un joueur local donné (coop : celui qui vient de mourir).
+    fn rage_death_start_at(&mut self, idx: Option<usize>, p: Vec3) {
         self.deaths = self.deaths.saturating_add(1);
+        let slot = idx
+            .and_then(|i| self.scene.objects[i].controller.as_ref())
+            .map(|c| c.player_slot.min(1) as usize)
+            .unwrap_or(0);
+        self.deaths_by_slot[slot] = self.deaths_by_slot[slot].saturating_add(1);
+        self.death_player = slot as u8 + 1;
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
         self.fx.damage_flash = 1.0;
         self.fx.camera_shake = 1.0;
         self.death_pos = Some(p);
-        let color = self
-            .player_index()
+        self.rage_death_pos = p;
+        // Cause : l'objet mortel touché (son nom), sinon la chute sous `kill_y`,
+        // sinon la vie à zéro — lue par les scripts (`death_cause`) pour un
+        // message de mort qui parle de ce qui vient d'arriver.
+        self.rage_death_cause = self
+            .rage_death_cause_override
+            .take()
+            .or_else(|| {
+                self.scene
+                    .objects
+                    .iter()
+                    .filter(|o| o.deadly)
+                    .find(|o| self.scene.world_aabb_contains(o, p))
+                    .map(|o| o.name.clone())
+            })
+            .unwrap_or_else(|| {
+                if self.scene.platformer.is_some_and(|pl| p.y < pl.kill_y) {
+                    "chute".to_string()
+                } else {
+                    "vie".to_string()
+                }
+            });
+        let color = idx
             .map(|i| self.scene.objects[i].color)
             .unwrap_or([0.0, 0.0, 0.0]);
-        if let Some(i) = self.player_index() {
+        if let Some(i) = idx {
             self.scene.objects[i].visible = false;
         }
         // Débris : ajoutés en fin de tableau (indices existants intacts), effacés
@@ -2234,7 +2517,13 @@ impl AppState {
     /// (`restart_game`, qui restaure tous les pièges et efface les débris), pose
     /// la tombe, puis replace le joueur au dernier `checkpoint()` — sans bannière
     /// ni bouton, la boucle « encore une fois » ne doit jamais attendre.
-    fn rage_respawn(&mut self) {
+    pub(super) fn rage_respawn(&mut self) {
+        // Les zones (gravité, vent, ralentissement) ne survivent pas à une mort :
+        // le script de zone les reposera si l'on réapparaît dedans.
+        if let Some(phys) = self.physics.as_mut() {
+            phys.reset_zones();
+        }
+        self.zone_slow_until = 0.0;
         // `restart_game` lève la pause (pensé pour le bouton du menu pause) : une
         // mort en pas-à-pas (éditeur en pause, `step`) ne doit pas relancer le
         // temps réel — on restaure l'état de pause tel quel.
@@ -2279,17 +2568,97 @@ impl AppState {
         self.fx.camera_shake = 0.4;
     }
 
+    /// Coop locale à deux (plateformer 2D, `Platformer2D::coop`) : bascule le mode
+    /// en cours de partie — le second joueur apparaît (ou disparaît), la partie
+    /// repart au point de contrôle, les compteurs par joueur à zéro. Renvoie le
+    /// nouvel état ; `false` aussi si la scène n'a pas de mode plateformer.
+    pub fn toggle_coop(&mut self) -> bool {
+        let Some(pl) = self.scene.platformer.as_mut() else {
+            return false;
+        };
+        pl.coop = !pl.coop;
+        let coop = pl.coop;
+        for o in self
+            .play_snapshot
+            .iter_mut()
+            .chain(self.scene.objects.iter_mut())
+        {
+            if let Some(c) = o.controller.as_ref()
+                && c.input
+                && c.player_slot > 0
+            {
+                o.visible = coop;
+            }
+        }
+        if self.playing {
+            // `restart_game` lève la pause (pensé pour le bouton du menu pause) :
+            // depuis le menu pause on reste en pause (le menu affiche le nouvel
+            // état), et un pilote en pas-à-pas garde son mode.
+            let paused = self.paused;
+            self.restart_game();
+            self.paused = paused;
+            self.deaths_by_slot = [0, 0];
+            self.death_player = 0;
+            self.pending_respawn = None;
+            // Monde « Duo » dédié (`coop_level`) : on y va en activant le mode ; en
+            // le quittant depuis ce monde, retour au premier niveau.
+            if let Some(pl) = self.scene.platformer {
+                let duo_x = pl.coop_level.map(|n| n as f32 * pl.level_spacing);
+                if coop && let Some(x) = duo_x {
+                    self.checkpoint = Some(Vec3::new(x, PLAYER_START_Y, pl.plane_z));
+                } else if !coop
+                    && let Some(x) = duo_x
+                    && self.checkpoint.is_some_and(|c| c.x >= x - 1.0)
+                {
+                    self.checkpoint = Some(Vec3::new(0.0, PLAYER_START_Y, pl.plane_z));
+                }
+            }
+            if let Some(cp) = self.checkpoint {
+                self.place_player(cp);
+            }
+        }
+        coop
+    }
+
     /// Téléporte le joueur local (transform + corps physique + caméra de suivi).
     /// Sert au `checkpoint` de `rage_death` et à la fonction Lua `teleport(x, y, z)`.
-    fn place_player(&mut self, pos: Vec3) {
-        let Some(idx) = self.player_index() else {
-            return;
+    pub(super) fn place_player(&mut self, pos: Vec3) {
+        let coop = self.scene.platformer.is_some_and(|p| p.coop);
+        // Coop : les deux joueurs locaux, le second décalé de 0,6 u (ils se
+        // traversent, mais superposés on n'en verrait qu'un). Objets masqués
+        // compris : après `restart_game` le snapshot les a rendus visibles, et une
+        // porte doit emmener les deux. Jamais un joueur réseau.
+        let targets: Vec<(usize, Vec3)> = self
+            .scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                let c = o.controller.as_ref()?;
+                if !(c.input || c.gyro)
+                    || (c.player_slot > 0 && !coop)
+                    || self.network.network_players.values().any(|&n| n == i)
+                {
+                    return None;
+                }
+                Some((i, pos + Vec3::new(0.8 * f32::from(c.player_slot), 0.0, 0.0)))
+            })
+            .collect();
+        let targets = if targets.is_empty() {
+            match self.player_index() {
+                Some(idx) => vec![(idx, pos)],
+                None => return,
+            }
+        } else {
+            targets
         };
-        if let Some(o) = self.scene.objects.get_mut(idx) {
-            o.transform.position = pos;
-        }
-        if let Some(phys) = self.physics.as_mut() {
-            phys.set_position(idx, pos);
+        for &(idx, p) in &targets {
+            if let Some(o) = self.scene.objects.get_mut(idx) {
+                o.transform.position = p;
+            }
+            if let Some(phys) = self.physics.as_mut() {
+                phys.set_position(idx, p);
+            }
         }
         // Poses d'interpolation périmées : sans ça, le rendu glisserait le joueur
         // de l'ancienne position à la nouvelle pendant une frame.
@@ -2320,6 +2689,114 @@ impl AppState {
         events_out.retain(|e| match super::script_ctx::parse_hud_event(e) {
             Some((id, text)) => {
                 self.hud_texts.insert(id.to_string(), text.to_string());
+                false
+            }
+            None => true,
+        });
+        // `sfx(nom)` / `set_sky(...)` : effets sonores synthétisés et ciel de la
+        // scène pilotés par les scripts (mode plateformer 2D : un ciel par monde).
+        events_out.retain(|e| match super::script_ctx::parse_sfx_event(e) {
+            Some(name) => {
+                match AppState::sfx_by_name_impl(name) {
+                    Some(s) => crate::runtime::sfx::play(&mut self.audio, s),
+                    None => log::warn!("sfx() : effet inconnu « {name} »"),
+                }
+                false
+            }
+            None => true,
+        });
+        // Zones de jeu (plateformer 2D) : `gravity(s)`, `wind(x)`, `slow(f, s)`,
+        // `set_camera(h)`, `shake(f)`.
+        let run_time = self.run_time;
+        if let Some(phys) = self.physics.as_mut() {
+            events_out.retain(|e| {
+                if let Some(v) = super::script_ctx::parse_scalar_list(e, "gravity", 1) {
+                    phys.gravity_scale = v[0].clamp(0.15, 3.0);
+                    false
+                } else if let Some(v) = super::script_ctx::parse_scalar_list(e, "wind", 1) {
+                    phys.wind_x = v[0].clamp(-12.0, 12.0);
+                    false
+                } else if let Some(v) = super::script_ctx::parse_scalar_list(e, "slow", 2) {
+                    phys.speed_scale = v[0].clamp(0.2, 2.0);
+                    self.zone_slow_until = run_time + v[1].max(0.0);
+                    false
+                } else {
+                    true
+                }
+            });
+            if self.zone_slow_until > 0.0 && run_time >= self.zone_slow_until {
+                phys.speed_scale = 1.0;
+                self.zone_slow_until = 0.0;
+            }
+        }
+        events_out.retain(|e| {
+            if let Some(v) = super::script_ctx::parse_scalar_list(e, "camera", 1) {
+                self.camera_zoom = (v[0] > 0.0).then_some(v[0].clamp(6.0, 30.0));
+                false
+            } else if let Some(v) = super::script_ctx::parse_scalar_list(e, "shake", 1) {
+                self.fx.camera_shake = self.fx.camera_shake.max(v[0].clamp(0.0, 1.0));
+                false
+            } else {
+                true
+            }
+        });
+        // `restart()` : rejouer le niveau (bouton tactile « Rejouer »).
+        events_out.retain(|e| {
+            if e == "sys:restart" {
+                self.restart_level();
+                false
+            } else {
+                true
+            }
+        });
+        // Lumière pilotée par les scripts : `set_light` (8 lumières ponctuelles,
+        // portée 0 = éteinte), `set_ambient`, `set_fx` (bloom, brouillard).
+        events_out.retain(|e| match super::script_ctx::parse_light_event(e) {
+            Some((i, v)) if i < crate::scene::MAX_POINT_LIGHTS => {
+                let lights = &mut self.scene.point_lights;
+                while lights.len() <= i {
+                    lights.push(crate::scene::PointLight {
+                        position: [0.0; 3],
+                        color: [1.0; 3],
+                        intensity: 0.0,
+                        range: 0.0,
+                        spot_dir: [0.0, -1.0, 0.0],
+                        spot_angle: 0.0,
+                    });
+                }
+                let l = &mut lights[i];
+                l.position = [v[0], v[1], v[2]];
+                l.color = [v[3], v[4], v[5]];
+                l.intensity = v[6].max(0.0);
+                l.range = v[7].max(0.0);
+                false
+            }
+            Some(_) => false,
+            None => true,
+        });
+        events_out.retain(
+            |e| match super::script_ctx::parse_scalar_list(e, "ambient", 1) {
+                Some(v) => {
+                    self.scene.light.ambient = v[0].clamp(0.0, 2.0);
+                    false
+                }
+                None => true,
+            },
+        );
+        events_out.retain(|e| match super::script_ctx::parse_scalar_list(e, "fx", 5) {
+            Some(v) => {
+                self.scene.sky.bloom_intensity = v[0].clamp(0.0, 2.0);
+                self.scene.sky.fog_density = v[1].clamp(0.0, 1.0);
+                self.scene.sky.fog_color = [v[2], v[3], v[4]];
+                false
+            }
+            None => true,
+        });
+        events_out.retain(|e| match super::script_ctx::parse_sky_event(e) {
+            Some((horizon, zenith)) => {
+                self.scene.sky.horizon_color = horizon;
+                self.scene.sky.zenith_color = zenith;
+                self.scene.sky.fog_color = zenith;
                 false
             }
             None => true,

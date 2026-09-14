@@ -175,6 +175,7 @@ impl Renderer {
         pass: &mut wgpu::RenderPass<'p>,
         scene: &Scene,
         offsets: &[Option<u32>],
+        camera_bg: &'p wgpu::BindGroup,
     ) -> u32 {
         let mut draws = 0;
         for (&(obj_idx, instance_index), &offset) in self.draw_plan_skinned.iter().zip(offsets) {
@@ -193,7 +194,7 @@ impl Renderer {
                 .get(&obj.texture)
                 .unwrap_or(&self.textures[""]);
             pass.set_pipeline(&self.skinned_pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(0, camera_bg, &[]);
             pass.set_bind_group(1, &self.skinned_models_bind_group, &[offset]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);
             pass.set_bind_group(3, tex, &[]);
@@ -283,6 +284,7 @@ impl Renderer {
             .to_cols_array_2d(),
             params: [0.0, 0.0, 0.6, 0.0], // pas de surbrillance ; roughness 0.6, reste par défaut
             color: [1.0, 1.0, 1.0, 1.0],
+            water: [0.0; 4],
         };
         self.queue
             .write_buffer(&self.models_buf, 0, bytemuck::bytes_of(&model_uniform));

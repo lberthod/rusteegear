@@ -1131,6 +1131,8 @@ pub(super) struct PauseChoice {
     pub main_menu: bool,
     pub disconnect: bool,
     pub quit: bool,
+    /// « Jouer à deux » / « Revenir en solo » (plateformer 2D, `Platformer2D::coop`).
+    pub coop_toggle: bool,
 }
 
 /// Voile sombre de la pause, seul (roadmap post-audit UX v2 2026-09-04, 1.3) :
@@ -1164,6 +1166,7 @@ pub(super) fn pause_menu(
     scale: f32,
     online: bool,
     restart_confirm: &mut bool,
+    coop: Option<bool>,
 ) -> PauseChoice {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
@@ -1216,6 +1219,16 @@ pub(super) fn pause_menu(
             &mut choice.main_menu,
         ),
     ];
+    // Plateformer 2D : bascule de la coop locale à deux (juste après Paramètres).
+    if let Some(on) = coop {
+        entries.insert(
+            3,
+            (
+                crate::app::locale::coop_toggle_label(locale, on),
+                &mut choice.coop_toggle,
+            ),
+        );
+    }
     if online {
         entries.push((
             crate::app::locale::pause_disconnect_label(locale),
@@ -1281,6 +1294,8 @@ pub(super) struct TopButtons {
     pub map: bool,
     pub help: bool,
     pub mute: bool,
+    /// « 🎮 » : panneau des manettes (qui pilote quel joueur, échange J1 ↔ J2).
+    pub pads: bool,
     pub rect: egui::Rect,
 }
 
@@ -1312,6 +1327,7 @@ pub(super) fn mobile_top_buttons(
         map: false,
         help: false,
         mute: false,
+        pads: false,
         rect: egui::Rect::ZERO,
     };
     let sq = egui::vec2(TOUCH_TARGET, TOUCH_TARGET);
@@ -1323,9 +1339,9 @@ pub(super) fn mobile_top_buttons(
     let width = if paused {
         TOUCH_TARGET
     } else if minimal {
-        TOUCH_TARGET * 2.0 + spacing
+        TOUCH_TARGET * 3.0 + spacing * 2.0
     } else {
-        TOUCH_TARGET * 3.0 + map_w + spacing * 3.0
+        TOUCH_TARGET * 4.0 + map_w + spacing * 4.0
     };
     let order = if above_map {
         egui::Order::Tooltip
@@ -1356,6 +1372,17 @@ pub(super) fn mobile_top_buttons(
                     .clicked()
                 {
                     out.mute = true;
+                }
+                // 🎮 : manettes connectées et joueur attribué (coop) ; échange J1 ↔ J2.
+                if ui
+                    .add_sized(sq, egui::Button::new("🎮").corner_radius(8.0))
+                    .on_hover_text(match locale {
+                        crate::app::locale::Locale::Fr => "Manettes",
+                        crate::app::locale::Locale::En => "Controllers",
+                    })
+                    .clicked()
+                {
+                    out.pads = true;
                 }
                 if minimal {
                     return;

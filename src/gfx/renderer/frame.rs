@@ -78,6 +78,13 @@ impl Renderer {
             if actions.toggle_pause {
                 app.toggle_pause();
             }
+            // « Jouer à deux » / « Revenir en solo » du menu pause (plateformer 2D).
+            if actions.toggle_coop {
+                app.toggle_coop();
+            }
+            if actions.swap_gamepads {
+                app.gamepad_swap_requested = true;
+            }
             if actions.quit {
                 app.request_quit();
             }
@@ -154,6 +161,12 @@ impl Renderer {
         // reconstruire les meshes GPU importés depuis les nouvelles données.
         if app.take_imported_dirty() {
             self.imported_gpu.clear();
+            // Le cache skinné est indexé par le même index d'import : sans ce
+            // `clear`, `sync_imported` ajoutait les nouveaux meshes skinnés à la
+            // suite des anciens, et tout objet animé de la nouvelle scène
+            // dessinait le mesh de l'ancienne au même index (champignons de la
+            // grotte à la place des roseaux de la démo rivière).
+            self.imported_gpu_skinned.clear();
         }
         self.sync_objects(&app.scene);
         self.sync_imported(&app.scene);
@@ -193,6 +206,13 @@ impl Renderer {
         } else {
             0.0
         };
+        self.anim_time = self.anim_clock.elapsed().as_secs_f32();
+        // Réflexion planaire (eau) : viewport et cible connus avant les uniforms.
+        self.main_viewport = self.scaled_viewport((dx, dy, dw, dh));
+        {
+            let (iw, ih) = self.internal_size();
+            self.ensure_reflection_target(&app.scene, (iw / 2).max(1), (ih / 2).max(1));
+        }
         self.write_uniforms(app);
         // Skinning GPU : joint_buf entièrement rempli AVANT la passe (comme
         // les lignes de debug ci-dessous) — `queue.write_buffer` n'est pas ordonné avec
@@ -231,6 +251,7 @@ impl Renderer {
             encoder.write_timestamp(&prof.query_set, 1);
         }
 
+        scene_draw_calls += self.render_reflection_pass(&mut encoder, app);
         scene_draw_calls += self.render_main_pass(
             &mut encoder,
             app,
@@ -401,6 +422,7 @@ impl Renderer {
                     touch_ui,
                     roster_held,
                     app.safe_insets_px,
+                    &app.gamepad_hud,
                 );
                 if let Some(i) = actions.select_weapon {
                     app.select_weapon(i);
@@ -726,16 +748,99 @@ impl Renderer {
             let Some(mesh) = self.resolve_mesh(draw.mesh) else {
                 continue;
             };
-            let tex = self
-                .textures
-                .get(&app.scene.objects[draw.obj].texture)
-                .unwrap_or_else(|| &self.textures[""]);
+            let obj = &app.scene.objects[draw.obj];
+            // Surface d'eau : la texture de réflexion planaire prend la place de
+            // l'albédo (groupe 3) — le shader d'eau la lit en coordonnées écran.
+            let reflection = match (&self.reflection, obj.water) {
+                (Some(r), Some(_)) if self.reflection_active => Some(&r.tex_bind_group),
+                _ => None,
+            };
+            let tex = reflection.unwrap_or_else(|| {
+                self.textures
+                    .get(&obj.texture)
+                    .unwrap_or_else(|| &self.textures[""])
+            });
             pass.set_bind_group(3, tex, &[]);
             pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
             pass.set_index_buffer(mesh.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.num_indices, 0, draw.instance..draw.instance + 1);
             draws += 1;
         }
+        draws
+    }
+
+    /// Viewport exprimé dans la cible HDR, plus petite que la surface quand la
+    /// pixelisation est active (cf. `set_pixel_scale`) ; borné à la cible pour
+    /// qu'un arrondi ne fasse jamais déborder le scissor (erreur de validation wgpu).
+    pub(super) fn scaled_viewport(
+        &self,
+        (dx, dy, dw, dh): (f32, f32, f32, f32),
+    ) -> (f32, f32, f32, f32) {
+        let k = self.pixel_scale.max(1) as f32;
+        let (tw, th) = self.internal_size();
+        let (tw, th) = (tw as f32, th as f32);
+        let x = (dx / k).clamp(0.0, tw);
+        let y = (dy / k).clamp(0.0, th);
+        let w = (dw / k).clamp(1.0, (tw - x).max(1.0));
+        let h = (dh / k).clamp(1.0, (th - y).max(1.0));
+        (x, y, w, h)
+    }
+
+    /// Passe de réflexion planaire (eau, cf. `ReflectionTarget`) : ciel + opaques
+    /// statiques + skinnés redessinés depuis la caméra miroir dans la cible
+    /// demi-résolution, sans grille/gizmos/translucides. Rien si la scène n'a pas
+    /// de plan d'eau (`reflection_active`). Les fragments sous le plan d'eau
+    /// sont rejetés par le shader (`extra3.y`), pour ne pas refléter le lit.
+    pub(super) fn render_reflection_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        app: &AppState,
+    ) -> u32 {
+        let Some(r) = self.reflection.as_ref() else {
+            return 0;
+        };
+        if !self.reflection_active {
+            return 0;
+        }
+        let mut draws = 0;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("reflection_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: r.msaa_view.as_ref().unwrap_or(&r.view),
+                resolve_target: r.msaa_view.as_ref().map(|_| &r.view),
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &r.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_viewport(0.0, 0.0, r.width as f32, r.height as f32, 0.0, 1.0);
+        pass.set_pipeline(&self.sky_pipeline);
+        pass.set_bind_group(0, &r.bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &r.bind_group, &[]);
+        pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+        pass.set_bind_group(1, &self.models_bind_group, &[]);
+        draws += self.draw_static_instanced(&mut pass, app);
+        draws += self.draw_skinned_objects(
+            &mut pass,
+            &app.scene,
+            &self.skinned_offsets_scratch,
+            &r.bind_group,
+        );
         draws
     }
 
@@ -756,19 +861,7 @@ impl Renderer {
         debug_count: u32,
     ) -> u32 {
         let mut scene_draw_calls = 0;
-        // Viewport exprimé dans la cible HDR, plus petite que la surface quand la
-        // pixelisation est active (cf. `set_pixel_scale`) ; borné à la cible pour
-        // qu'un arrondi ne fasse jamais déborder le scissor (erreur de validation wgpu).
-        let (dx, dy, dw, dh) = {
-            let k = self.pixel_scale.max(1) as f32;
-            let (tw, th) = self.internal_size();
-            let (tw, th) = (tw as f32, th as f32);
-            let x = (dx / k).clamp(0.0, tw);
-            let y = (dy / k).clamp(0.0, th);
-            let w = (dw / k).clamp(1.0, (tw - x).max(1.0));
-            let h = (dh / k).clamp(1.0, (th - y).max(1.0));
-            (x, y, w, h)
-        };
+        let (dx, dy, dw, dh) = self.scaled_viewport((dx, dy, dw, dh));
         // Si le MSAA est actif (`msaa_color_view`), la passe dessine dans la cible
         // multi-échantillonnée et se résout vers `hdr_view` (`resolve_target`) —
         // sinon comportement inchangé.
@@ -845,8 +938,12 @@ impl Renderer {
 
         // Objets skinnés : un draw individuel par objet, palettes déjà
         // envoyées au GPU par `prepare_skinned_draws` avant cette passe.
-        scene_draw_calls +=
-            self.draw_skinned_objects(&mut pass, &app.scene, &self.skinned_offsets_scratch);
+        scene_draw_calls += self.draw_skinned_objects(
+            &mut pass,
+            &app.scene,
+            &self.skinned_offsets_scratch,
+            &self.camera_bind_group,
+        );
         // Translucides en dernier (mélange sur l'image complète).
         scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
         scene_draw_calls
@@ -1564,6 +1661,7 @@ fn perform_scene_switch(
             DemoKind::Escorte => app.load_escorte_demo(),
             DemoKind::Survie => app.load_survie_demo(),
             DemoKind::Reeducation => app.load_reeducation_demo(),
+            DemoKind::Riviere => app.load_riviere_demo(),
         },
     }
 }

@@ -2033,12 +2033,17 @@ fn sync_embedded_scene_hameau_from_the_demo() {
             fog_color: [0.09, 0.10, 0.16],
             fog_density: 0.02,
             bloom_intensity: 0.9,
+            sun_glow: 0.0,
+            fog_height_base: 0.0,
+            fog_height_falloff: 0.0,
         },
         version: embedded.version,
         hud_layout: embedded.hud_layout,
         hud_widgets: embedded.hud_widgets,
         platformer: embedded.platformer,
         arcade_hud: false,
+        arcade_free_camera: false,
+        ability_bar: false,
         hud_widgets_hidden: false,
     };
 

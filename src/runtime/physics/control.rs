@@ -18,6 +18,21 @@ impl Physics {
     /// (`app::simulation`) s'en sert pour router la poursuite : corps dynamique
     /// → `control()` (vitesse), corps scripté → réécriture de position (même
     /// canal que la patrouille Lua, chantier 4.1 audit 2026-07-20).
+    /// Le joueur `index` (corps kinématique) touche-t-il le sol au dernier pas ?
+    pub fn is_grounded(&self, index: usize) -> bool {
+        self.kinematic
+            .iter()
+            .find(|&&(i, _, _)| i == index)
+            .is_some_and(|&(_, _, st)| st.grounded)
+    }
+
+    /// Remet les zones de jeu (gravité, vent, vitesse) à leurs valeurs par défaut.
+    pub fn reset_zones(&mut self) {
+        self.gravity_scale = 1.0;
+        self.wind_x = 0.0;
+        self.speed_scale = 1.0;
+    }
+
     pub fn is_scripted_body(&self, index: usize) -> bool {
         self.scripted.iter().any(|&(i, _)| i == index)
     }
@@ -111,7 +126,7 @@ impl Physics {
         accel: f32,
         dt: f32,
     ) -> bool {
-        let (_, handle, state) = self.kinematic[slot];
+        let (index, handle, state) = self.kinematic[slot];
 
         let grounded = state.grounded;
         // Coyote time : encore possible pendant quelques pas après un rebord, tant
@@ -138,7 +153,7 @@ impl Physics {
             } else {
                 1.0
             };
-            state.vspeed - 9.81 * factor * dt
+            state.vspeed - 9.81 * factor * self.gravity_scale * dt
         };
 
         let (nx, nz) = if accel > 0.0 {
@@ -183,9 +198,14 @@ impl Physics {
         // `Physics::sensor_overlaps`) est immatérielle — sans ça, le contrôleur
         // cinématique la traitait comme un mur (constaté : marcheur scripté bloqué
         // au bord d'une zone, x = 1,74 au lieu de 3).
+        // `.groups(...)` : le contrôleur respecte les couches de collision de son
+        // propre collider (`SceneObject::collision_layer`/`collision_mask`) — les
+        // deux joueurs de la coop du plateformer 2D se traversent ainsi (couches 1
+        // et 2, masques croisés) au lieu de se bloquer ou de se grimper dessus.
         let filter = QueryFilter::new()
             .exclude_rigid_body(handle)
-            .exclude_sensors();
+            .exclude_sensors()
+            .groups(collider.collision_groups());
         let queries = self.broad.as_query_pipeline(
             self.narrow.query_dispatcher(),
             &self.bodies,
@@ -219,14 +239,26 @@ impl Physics {
             queries
                 .cast_ray(&ray, bottom + 0.35, true)
                 .and_then(|(h, _)| self.collider_owner.get(&h))
-                .and_then(|i| self.scripted_delta.get(i))
-                .copied()
+                .map(|i| {
+                    // Plateforme mobile, autre joueur (coop : perché sur sa tête)
+                    // et/ou tapis roulant (`conveyor:<v>`).
+                    self.scripted_delta
+                        .get(i)
+                        .or_else(|| self.player_delta.get(i))
+                        .copied()
+                        .unwrap_or(Vec3::ZERO)
+                        + Vec3::new(self.conveyors.get(i).copied().unwrap_or(0.0) * dt, 0.0, 0.0)
+                })
                 .unwrap_or(Vec3::ZERO)
         } else {
             Vec3::ZERO
         };
         let new_translation =
             translation + movement.translation + Vector::new(carry.x, carry.y, carry.z);
+        {
+            let d = new_translation - translation;
+            self.player_delta.insert(index, Vec3::new(d.x, d.y, d.z));
+        }
 
         // Vitesse horizontale dérivée du mouvement **réel** (post-collision), pas
         // de la cible commandée : un mur doit freiner le joueur visiblement au
@@ -363,10 +395,22 @@ impl Physics {
                 translation.z *= k;
             }
             let resolved = cur + translation;
-            self.scripted_delta.insert(index, resolved - cur);
+            let next_rotation = obj.transform.rotation;
+            // Un corps qui **tourne** (pont pivotant, hélice du plateformer 2D)
+            // n'emporte pas ce qui est posé dessus : on glisse ou on tombe. Seule
+            // une translation pure (plateforme mobile, ascenseur) porte.
+            let rotating = self
+                .bodies
+                .get(handle)
+                .map(|b| {
+                    let r = b.rotation();
+                    Quat::from_xyzw(r.x, r.y, r.z, r.w).angle_between(next_rotation) > 1e-3
+                })
+                .unwrap_or(false);
+            self.scripted_delta
+                .insert(index, if rotating { Vec3::ZERO } else { resolved - cur });
 
             obj.transform.position = resolved;
-            let next_rotation = obj.transform.rotation;
             if let Some(body) = self.bodies.get_mut(handle) {
                 body.set_next_kinematic_translation(resolved);
                 body.set_next_kinematic_rotation(next_rotation);

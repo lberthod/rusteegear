@@ -214,7 +214,12 @@ fn dispatch(
             // Assignation absolue (les champs absents retombent à neutre) : chaque
             // requête décrit l'état complet des entrées, comme une manette — pas
             // d'accumulation d'appuis fantômes entre deux requêtes.
-            let inp = &mut app.input_state;
+            // `player: 2` : entrées du second joueur local (coop).
+            let inp = if req.get("player").and_then(|v| v.as_u64()) == Some(2) {
+                &mut app.input_state2
+            } else {
+                &mut app.input_state
+            };
             inp.key_turn = f("turn").clamp(-1.0, 1.0);
             inp.key_thrust = f("thrust").clamp(-1.0, 1.0);
             inp.key_move = (f("mx").clamp(-1.0, 1.0), f("my").clamp(-1.0, 1.0));

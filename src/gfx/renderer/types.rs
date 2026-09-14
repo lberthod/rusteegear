@@ -32,7 +32,9 @@ impl GizmoVertex {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub(crate) struct CameraUniform {
     pub(super) view_proj: [[f32; 4]; 4],
-    /// Position de la caméra (xyz), pour le terme spéculaire. w inutilisé.
+    /// Position de la caméra (xyz), pour le terme spéculaire. w = temps
+    /// d'animation (s, `Renderer::anim_time`) lu par le shader d'eau — le seul
+    /// canal libre des uniforms existants, réutilisé plutôt que d'en ajouter un.
     pub(super) eye: [f32; 4],
     /// Inverse de `view_proj` : déplie un point NDC du plan lointain en
     /// position monde, pour reconstruire la direction de vue dans `sky.wgsl` sans
@@ -49,6 +51,10 @@ pub(crate) struct ModelUniform {
     pub(super) normal: [[f32; 4]; 4],
     pub(super) params: [f32; 4], // x = surbrillance (sélection)
     pub(super) color: [f32; 4],  // teinte (albédo) de l'objet
+    /// Surface d'eau (`scene::WaterSurface::as_uniform`) : x = genre (0 = pas
+    /// d'eau), y = vitesse, z = échelle, w = écume. Déclaré dans les trois
+    /// shaders qui lisent `Model` (main/shadow/skinned) : même layout partout.
+    pub(super) water: [f32; 4],
 }
 
 /// Une lumière ponctuelle côté GPU (std140 : deux vec4).
@@ -82,6 +88,45 @@ pub(crate) struct SceneUniform {
     pub(super) cascade_vp: [[[f32; 4]; 4]; CASCADE_COUNT],
     /// xyz = distances caméra de fin de chaque cascade, w = 1 / taille de texel.
     pub(super) cascade_splits: [f32; 4],
+    /// Extensions « vitrine » (démo Rivière & cascade), toutes neutres à 0 :
+    /// x = altitude de base du brouillard de hauteur, y = sa décroissance en
+    /// altitude (0 = brouillard uniforme, comportement historique), z = halo du
+    /// soleil dans le ciel, w = altitude du plan de réflexion planaire (eau).
+    pub(super) extra: [f32; 4],
+    /// Viewport de la passe principale dans la cible HDR (x, y, largeur, hauteur,
+    /// pixels) : convertit `@builtin(position)` en UV écran pour lire la texture
+    /// de réflexion.
+    pub(super) extra2: [f32; 4],
+    /// x = 1 si une texture de réflexion planaire est liée pour les surfaces
+    /// d'eau, y = 1 dans la passe de réflexion elle-même (les fragments sous le
+    /// plan sont rejetés — le lit ne doit pas se refléter), zw inutilisés.
+    pub(super) extra3: [f32; 4],
+}
+
+/// Cible de la passe de réflexion planaire (eau, démo Rivière & cascade) :
+/// la scène opaque est redessinée depuis la caméra **miroir** (symétrique de la
+/// caméra par rapport au plan d'eau) dans cette texture demi-résolution, que
+/// les surfaces d'eau échantillonnent ensuite à leurs propres coordonnées écran
+/// (technique classique du miroir planaire — pas de lancer de rayons). Créée à
+/// la demande (`ensure_reflection_target`) seulement quand la scène contient
+/// une surface d'eau « rivière », libérée sinon.
+pub(super) struct ReflectionTarget {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    /// Texture résolue (mono-échantillon), celle que lisent les objets eau.
+    pub(super) view: wgpu::TextureView,
+    /// Cible multi-échantillonnée quand les pipelines sont compilés en MSAA
+    /// (renderer fenêtré) : on y dessine, puis résolution vers `view` — les
+    /// pipelines exigent une cible au même nombre d'échantillons qu'eux.
+    pub(super) msaa_view: Option<wgpu::TextureView>,
+    pub(super) depth_view: wgpu::TextureView,
+    /// Groupe 3 (`tex_layout`) : la texture de réflexion à la place de l'albédo,
+    /// liée pour les objets eau de la passe transparente.
+    pub(super) tex_bind_group: wgpu::BindGroup,
+    pub(super) camera_buf: wgpu::Buffer,
+    pub(super) light_buf: wgpu::Buffer,
+    /// Groupe 0 (`camera_layout`) : caméra miroir + uniform scène de la passe.
+    pub(super) bind_group: wgpu::BindGroup,
 }
 
 /// Nombre de cascades d'ombre — fixé par la taille du tableau dans `main.wgsl`
@@ -270,6 +315,25 @@ pub struct Renderer {
     /// passe principale dessine dans ce viewport réduit ; le tone mapping remonte le
     /// tout à la taille de la surface avec `tonemap_sampler_nearest`. `1` = inactif.
     pub(super) pixel_scale: u32,
+    /// Horloge du rendu (démarrée à la création) : alimente `anim_time`, le
+    /// temps d'animation des shaders (eau) — indépendant du temps de jeu, pour
+    /// que l'eau bouge aussi dans l'éditeur hors Play.
+    pub(super) anim_clock: crate::time_compat::Instant,
+    /// Secondes écoulées écrites dans `CameraUniform::eye.w`. Figé à 0 en rendu
+    /// headless (goldens déterministes) sauf `set_anim_time`.
+    pub(super) anim_time: f32,
+    /// Layout du groupe 0 (caméra + scène), gardé pour créer le bind group de la
+    /// passe de réflexion (`ReflectionTarget::bind_group`).
+    pub(super) camera_layout: wgpu::BindGroupLayout,
+    /// Cible de réflexion planaire, `None` tant qu'aucune surface d'eau
+    /// « rivière » n'est dans la scène.
+    pub(super) reflection: Option<ReflectionTarget>,
+    /// `true` si `write_uniforms` a trouvé un plan d'eau et une cible : la passe
+    /// de réflexion est dessinée et les objets eau lisent sa texture.
+    pub(super) reflection_active: bool,
+    /// Viewport de la passe principale dans la cible HDR (x, y, w, h), posé par
+    /// `render`/`render_scene_headless` avant `write_uniforms` (→ `extra2`).
+    pub(super) main_viewport: (f32, f32, f32, f32),
     /// Cible HDR de la passe principale en mode fenêtré — redimensionnée
     /// dans `resize()`, comme `depth_view`. Les chemins headless/test créent la leur en
     /// local (taille demandée par l'appelant, indépendante de la fenêtre).

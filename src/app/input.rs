@@ -424,6 +424,11 @@ pub struct ResolvedKeys {
     pub heal: winit::keyboard::KeyCode,
     pub pause: winit::keyboard::KeyCode,
     pub map: winit::keyboard::KeyCode,
+    /// Bouclier (14 septembre 2026, `Scene::ability_bar`) — cf.
+    /// `app::settings::KeyboardBindings::block`.
+    pub block: winit::keyboard::KeyCode,
+    /// Ruée — cf. `app::settings::KeyboardBindings::dash`.
+    pub dash: winit::keyboard::KeyCode,
 }
 
 impl Default for ResolvedKeys {
@@ -444,6 +449,8 @@ impl ResolvedKeys {
             heal: or(&b.heal, KeyCode::KeyH),
             pause: or(&b.pause, KeyCode::Escape),
             map: or(&b.map, KeyCode::KeyM),
+            block: or(&b.block, KeyCode::Digit2),
+            dash: or(&b.dash, KeyCode::Digit4),
         }
     }
 

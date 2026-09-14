@@ -166,6 +166,19 @@ pub struct Physics {
     /// d'autant (`control_kinematic`), sans quoi le contrôleur cinématique le
     /// laisserait glisser sur place et la plateforme partirait sous ses pieds.
     scripted_delta: std::collections::HashMap<usize, Vec3>,
+    /// Déplacement réellement effectué au dernier pas de chaque **joueur** (index
+    /// d'objet → delta) : un joueur posé sur la tête de l'autre (coop du
+    /// plateformer 2D) est emporté comme sur une plateforme mobile.
+    player_delta: std::collections::HashMap<usize, Vec3>,
+    /// Sols qui poussent (tapis roulant, sable) : index d'objet → vitesse X
+    /// (u/s) appliquée au joueur posé dessus — objets dont le `tag` est
+    /// `conveyor:<vitesse>` (plateformer 2D).
+    conveyors: std::collections::HashMap<usize, f32>,
+    /// Zones de jeu pilotées par les scripts (plateformer 2D) : échelle de
+    /// gravité du joueur, vent (vitesse X ajoutée en l'air), échelle de vitesse.
+    pub gravity_scale: f32,
+    pub wind_x: f32,
+    pub speed_scale: f32,
     /// Collider → index d'objet, pour **tous** les colliders construits (statiques
     /// inclus, contrairement à `dynamic`/`controlled`/`kinematic` qui ne suivent que
     /// ce qui doit être recopié/piloté chaque frame) — nécessaire pour retrouver

@@ -75,6 +75,9 @@ impl NetClient {
         class: u8,
         objective: u8,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Pas de changement de signature ici (14 septembre 2026) : `block`/`dash`
+        // vivent dans `ClientMsg::Input`, envoyé à chaque tick une fois connecté
+        // (`network_input_msg`), pas dans le `Join` initial que cette fonction encode.
         // Sprint 113f : un navigateur refuse d'ouvrir un WebSocket `ws://` (non
         // chiffré) depuis une page servie en `https:` — `WebSocket::new` lève une
         // exception JS (« An insecure WebSocket connection may not be initiated

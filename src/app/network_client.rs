@@ -42,6 +42,24 @@ pub const DEFAULT_SERVER_URL: &str = "wss://ws.loicberthod.ch";
 mod types;
 pub use types::*;
 
+/// Salon à rejoindre pour un code de salon demandé (`room`, déjà `trim()`é) :
+/// `room` tel quel s'il n'est pas vide, sinon le salon partagé du monde
+/// actuellement chargé localement (`world`) — `DEFAULT_LOBBY` pour le hameau
+/// MMORPG (comportement historique), `RIVIERE_LOBBY` pour la démo Rivière &
+/// cascade (14 septembre 2026). Fonction pure (aucune I/O) : le seul endroit
+/// qui décide ce routage, factorisé hors de `connect_to_server_as` pour rester
+/// testable sans connexion réseau réelle.
+#[cfg(not(target_os = "ios"))]
+fn resolve_lobby_code(room: &str, world: crate::app::multiplayer::WorldKind) -> &str {
+    if !room.is_empty() {
+        return room;
+    }
+    match world {
+        crate::app::multiplayer::WorldKind::Hameau => crate::net::protocol::DEFAULT_LOBBY,
+        crate::app::multiplayer::WorldKind::Riviere => crate::net::protocol::RIVIERE_LOBBY,
+    }
+}
+
 #[cfg(not(target_os = "ios"))]
 impl AppState {
     /// Se connecte à `url` (ex. `"ws://127.0.0.1:7777"`) sous `name`, en
@@ -77,11 +95,15 @@ impl AppState {
     /// de partie (`room`, Sprint 20 — **distinct** du salon de chat Firebase,
     /// cf. `editor::windows::multiplayer_window`) et un mode de manche
     /// (`objective`, Sprint 21) choisis dans la fenêtre Multijoueur. `room`
-    /// vide retombe sur `protocol::DEFAULT_LOBBY` (comportement inchangé pour
-    /// qui laisse le champ vide, même repli que côté protocole,
-    /// `net/protocol.rs:52-56`). Remplace une connexion existante s'il y en
-    /// avait une. Transmet `join_credential()` au serveur (idToken vérifié
-    /// côté serveur) — `None` pour une partie anonyme.
+    /// vide retombe sur le salon partagé du **monde actuellement chargé**
+    /// (`self.world`, cf. `resolve_lobby_code`) — `protocol::DEFAULT_LOBBY`
+    /// pour le hameau MMORPG (comportement inchangé pour qui laisse le champ
+    /// vide, même repli que côté protocole, `net/protocol.rs:52-56`),
+    /// `protocol::RIVIERE_LOBBY` pour la démo Rivière (14 septembre 2026,
+    /// `load_riviere_demo` a posé `self.world` avant que ce menu s'ouvre).
+    /// Remplace une connexion existante s'il y en avait une. Transmet
+    /// `join_credential()` au serveur (idToken vérifié côté serveur) — `None`
+    /// pour une partie anonyme.
     pub fn connect_to_server_as(
         &mut self,
         url: &str,
@@ -95,11 +117,7 @@ impl AppState {
         // affichée (roadmap post-audit UX v2 2026-09-04, 2.4).
         self.welcome_error = None;
         let room = room.trim();
-        let lobby = if room.is_empty() {
-            crate::net::protocol::DEFAULT_LOBBY
-        } else {
-            room
-        };
+        let lobby = resolve_lobby_code(room, self.world);
         let cred = self.join_credential();
         match crate::net::client::NetClient::connect_to_lobby(
             url,
@@ -1202,6 +1220,12 @@ fn network_input_msg(
         // Soin coopératif (cf. `app::health`) : touche clavier (H) ou bouton
         // tactile nommé (`Controller::heal_button`) — résolu côté serveur.
         heal: inp.heal || touch_heal,
+        // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar`) : clavier
+        // seulement pour l'instant, pas de bouton tactile nommé dédié (cf. la
+        // limite documentée dans docs/RIVIERE_CASCADE.md, section Multijoueur —
+        // capacités).
+        block: inp.block,
+        dash: inp.dash,
     }
 }
 

@@ -55,6 +55,8 @@ fn main() {
                 fire: false,
                 weapon: 0,
                 heal: false,
+                block: false,
+                dash: false,
             });
             next_input = now + Duration::from_millis(100);
         }

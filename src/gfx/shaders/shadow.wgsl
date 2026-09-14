@@ -14,6 +14,7 @@ struct Model {
     normal: mat4x4<f32>,
     params: vec4<f32>,
     color: vec4<f32>,
+    water: vec4<f32>,
 };
 @group(1) @binding(0) var<storage, read> models: array<Model>;
 

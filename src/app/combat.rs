@@ -463,6 +463,48 @@ impl AppState {
         }
     }
 
+    /// Ruée du joueur local (14 septembre 2026, capacité 4 du kit 1-2-3-4,
+    /// `Scene::ability_bar`) : bond instantané de `multiplayer::DASH_DISTANCE`
+    /// dans la direction actuellement regardée par le joueur, temporisé par
+    /// `multiplayer::DASH_COOLDOWN` comme l'attaque (décompté chaque frame,
+    /// pas seulement au relâchement de la touche). Bornée par un rayon
+    /// physique (même masque que la collision caméra) pour ne jamais
+    /// traverser un mur — un obstacle plus proche que `DASH_DISTANCE`
+    /// raccourcit le bond au lieu de l'annuler.
+    pub(super) fn update_dash(&mut self, dt: f32) {
+        if self.attack.dash_cooldown_remaining > 0.0 {
+            self.attack.dash_cooldown_remaining -= dt;
+        }
+        if !self.input_state.dash || self.attack.dash_cooldown_remaining > 0.0 {
+            return;
+        }
+        let Some(index) = self.player_index() else {
+            return;
+        };
+        let Some(o) = self.scene.objects.get(index) else {
+            return;
+        };
+        let pos = o.transform.position;
+        let (yaw, _, _) = o.transform.rotation.to_euler(glam::EulerRot::YXZ);
+        let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+        self.attack.dash_cooldown_remaining = super::multiplayer::DASH_COOLDOWN;
+        let mut distance = super::multiplayer::DASH_DISTANCE;
+        // Même masque que la collision caméra (`CAMERA_COLLISION_MASK`,
+        // `app::simulation`) : le décor/les murs, pas les capteurs ni les
+        // autres joueurs (une ruée qui buterait sur un adversaire serait
+        // plus frustrante qu'utile).
+        const DASH_RAYCAST_MASK: u32 = 1;
+        if let Some(phys) = self.physics.as_ref()
+            && let Some(hit) = phys.raycast(pos, forward, distance, DASH_RAYCAST_MASK)
+        {
+            distance = hit.distance.max(0.0);
+        }
+        if let Some(o) = self.scene.objects.get_mut(index) {
+            o.transform.position += forward * distance;
+        }
+        crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
+    }
+
     /// Mise à mort par « ring out » (arène façon Smash/Tekken, cf. `Scene::brawl_demo`) :
     /// un adversaire (IA poursuivante) qui tombe dans une zone mortelle (le vide sous
     /// l'arène) est vaincu, comme un coup réussi — réutilise `deadly_at` (déjà utilisé

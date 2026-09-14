@@ -40,12 +40,29 @@ const EMBEDDED_MODELS: &[(&str, &[u8])] = &[
     ),
 ];
 
-/// Octets d'un modèle embarqué (`EMBEDDED_MODELS`), `None` si le nom est inconnu.
+/// Assets de la démo « Rivière & cascade » (`assets/models/riviere/`, ≈ 12 Mo :
+/// terrain, albédo, nappes d'eau, végétation générée) — compilés dans le
+/// `.wasm` **seulement** (`embedded://riviere/<fichier>`, cf.
+/// `scene::demos::riviere`) : en natif la démo lit le dossier sur disque, pas
+/// de raison d'alourdir le binaire de l'éditeur.
+#[cfg(target_arch = "wasm32")]
+static RIVIERE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/models/riviere");
+
+/// Octets d'un modèle embarqué (`EMBEDDED_MODELS`, ou `riviere/<fichier>` sur
+/// le web), `None` si le nom est inconnu.
 pub fn embedded_bytes(name: &str) -> Option<Vec<u8>> {
-    EMBEDDED_MODELS
+    if let Some(found) = EMBEDDED_MODELS
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, b)| b.to_vec())
+    {
+        return Some(found);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(key) = name.strip_prefix("riviere/") {
+        return RIVIERE_DIR.get_file(key).map(|f| f.contents().to_vec());
+    }
+    None
 }
 
 /// Préfixe d'une référence **stable** vers un asset de projet : un uuid

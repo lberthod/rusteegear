@@ -3096,6 +3096,114 @@ pub(super) fn script_editor_window(
         });
 }
 
+/// Panneau « 🎮 Manettes » du mode Player (bouton 🎮 en haut à droite) :
+/// manettes vues par `gilrs` et joueur attribué en coop, rappel des touches
+/// clavier, et « Échanger J1 ↔ J2 » (`UiActions::swap_gamepads`).
+pub(super) fn gamepads_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    locale: crate::app::locale::Locale,
+    info: &crate::app::GamepadHudInfo,
+    coop: bool,
+    swap: &mut bool,
+) {
+    use crate::app::locale::Locale;
+    let fr = matches!(locale, Locale::Fr);
+    let title = if fr {
+        "🎮  Manettes"
+    } else {
+        "🎮  Controllers"
+    };
+    egui::Window::new(title)
+        .id(egui::Id::new("ingame_gamepads"))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(360.0)
+        // Sous le chrono et le compteur de secrets du plateformer (HUD en haut à droite).
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 118.0))
+        .show(ctx, |ui| {
+            if info.unavailable {
+                ui.label(if fr {
+                    "Aucun backend manette sur cette plateforme."
+                } else {
+                    "No gamepad backend on this platform."
+                });
+            } else if info.pads.is_empty() {
+                ui.label(if fr {
+                    "Aucune manette détectée — appuie sur un bouton de la manette."
+                } else {
+                    "No gamepad detected — press a button on the gamepad."
+                });
+            } else {
+                for (i, (name, slot)) in info.pads.iter().enumerate() {
+                    let who = match (coop, slot) {
+                        (false, _) => {
+                            if fr {
+                                "joueur 1".to_string()
+                            } else {
+                                "player 1".to_string()
+                            }
+                        }
+                        (true, 0) => {
+                            if fr {
+                                "pas encore attribuée".to_string()
+                            } else {
+                                "not assigned yet".to_string()
+                            }
+                        }
+                        (true, s) => {
+                            if fr {
+                                format!("joueur {s}")
+                            } else {
+                                format!("player {s}")
+                            }
+                        }
+                    };
+                    // Pas de flèche « → » : glyphe absent des fontes embarquées d'egui
+                    // (rendu comme un carré) — le joueur est simplement aligné à droite.
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}. {name}", i + 1));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.strong(who);
+                        });
+                    });
+                }
+            }
+            ui.separator();
+            if coop {
+                ui.small(if fr {
+                    "Coop : la première manette active est J1, la suivante J2. \
+                     Clavier : J1 flèches + Espace, J2 WASD + W."
+                } else {
+                    "Co-op: the first active gamepad is P1, the next one P2. \
+                     Keyboard: P1 arrows + Space, P2 WASD + W."
+                });
+                if ui
+                    .add_enabled(
+                        !info.pads.is_empty(),
+                        egui::Button::new(if fr {
+                            "🔄 Échanger J1 et J2"
+                        } else {
+                            "🔄 Swap P1 and P2"
+                        }),
+                    )
+                    .clicked()
+                {
+                    *swap = true;
+                }
+            } else {
+                ui.small(if fr {
+                    "Solo : toutes les manettes pilotent le joueur. Le mode à deux se choisit \
+                     dans le menu pause (👥 Jouer à deux)."
+                } else {
+                    "Solo: every gamepad drives the player. Two-player mode is in the pause \
+                     menu (👥 Two players)."
+                });
+            }
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MinimapProjection, room_code_is_valid, skinned_dropped_status};

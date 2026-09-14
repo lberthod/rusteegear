@@ -211,6 +211,10 @@ pub fn death_cause(
         (Locale::En, DeathCauseKind::Monster, n) => format!("Surrounded — {n} monsters"),
         (Locale::En, DeathCauseKind::Creature, 1) => "Bitten by a creature".to_string(),
         (Locale::En, DeathCauseKind::Creature, n) => format!("Surrounded — {n} creatures"),
+        (Locale::Fr, DeathCauseKind::Player, 1) => "Vaincu par un autre joueur".to_string(),
+        (Locale::Fr, DeathCauseKind::Player, n) => format!("Pris à partie — {n} joueurs"),
+        (Locale::En, DeathCauseKind::Player, 1) => "Defeated by another player".to_string(),
+        (Locale::En, DeathCauseKind::Player, n) => format!("Ganged up on — {n} players"),
     }
 }
 
@@ -281,6 +285,16 @@ pub fn confirm_label(locale: Locale) -> &'static str {
     match locale {
         Locale::Fr => "Confirmer ?",
         Locale::En => "Confirm?",
+    }
+}
+
+/// Menu pause du plateformer 2D : bascule de la coop locale à deux.
+pub fn coop_toggle_label(locale: Locale, on: bool) -> &'static str {
+    match (locale, on) {
+        (Locale::Fr, false) => "👥 Jouer à deux",
+        (Locale::Fr, true) => "👤 Revenir en solo",
+        (Locale::En, false) => "👥 Two players",
+        (Locale::En, true) => "👤 Back to solo",
     }
 }
 
@@ -663,7 +677,11 @@ mod tests {
             restart_button_label(Locale::En, false)
         );
         use crate::net::protocol::DeathCauseKind;
-        for kind in [DeathCauseKind::Monster, DeathCauseKind::Creature] {
+        for kind in [
+            DeathCauseKind::Monster,
+            DeathCauseKind::Creature,
+            DeathCauseKind::Player,
+        ] {
             for n in [1, 2] {
                 assert_ne!(
                     death_cause(Locale::Fr, kind, n),

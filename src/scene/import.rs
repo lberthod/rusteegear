@@ -64,10 +64,21 @@ fn build_from(
                 .read_tex_coords(0)
                 .map(|t| t.into_f32().collect())
                 .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+            // Couleur par sommet (`COLOR_0`, optionnelle) : multipliée par la teinte
+            // du matériau, comme le prescrit la spec glTF. Aucun des packs Blender
+            // du projet n'en porte (teinte par matériau seulement) — utilisée par
+            // les nappes d'eau générées (`scripts/gen_riviere_cascade.py`), où
+            // elle sert de masque (écume, profondeur) au shader d'eau.
+            let vcolors: Option<Vec<[f32; 3]>> =
+                reader.read_colors(0).map(|c| c.into_rgb_f32().collect());
 
             let base = vertices.len() as u32;
             for (i, p) in positions.iter().enumerate() {
                 let n = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+                let color = match vcolors.as_ref().and_then(|c| c.get(i)) {
+                    Some(vc) => [vc[0] * color[0], vc[1] * color[1], vc[2] * color[2]],
+                    None => color,
+                };
                 vertices.push(Vertex {
                     position: *p,
                     normal: n,

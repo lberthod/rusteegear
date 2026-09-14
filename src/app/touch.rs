@@ -162,7 +162,7 @@ pub const PAD_BUTTON: f32 = 56.0;
 pub const PAD_GAP: f32 = 6.0;
 /// Boutons du schéma plateformer (`MobileControls::platformer`) : plus gros
 /// qu'une cellule de pavé (on les martèle les yeux sur le jeu), 76 pt ≥ 44 pt.
-pub const PLATFORMER_BUTTON: f32 = 76.0;
+pub const PLATFORMER_BUTTON: f32 = 84.0;
 pub const PLATFORMER_GAP: f32 = 12.0;
 /// Colonnes de la grille d'action : pousse en hauteur, jamais en largeur (un
 /// téléphone de largeur courante n'a pas la place pour 4 boutons en ligne à
@@ -194,22 +194,27 @@ impl TouchZones {
                     Rect::from_min_size(min + vec2(b + PLATFORMER_GAP, 0.0), Vec2::splat(b)),
                 ),
             ];
-            if !cfg.buttons.is_empty() {
-                let n = cfg.buttons.len() as f32;
-                let width = n * b + (n - 1.0) * PLATFORMER_GAP;
-                let min = pos2(area.right() - m - width, area.bottom() - m - b);
-                zones.buttons = cfg
+            // Premier bouton (le saut) : gros, en bas à droite. Les suivants
+            // (« Rejouer »…) : petits, en haut au centre — loin du pouce qui
+            // martèle le saut, un appui accidentel n'y coûte pas la partie.
+            if let Some(first) = cfg.buttons.first() {
+                let min = pos2(area.right() - m - b, area.bottom() - m - b);
+                zones
                     .buttons
-                    .iter()
-                    .enumerate()
-                    .map(|(i, name)| {
-                        let cell = Rect::from_min_size(
-                            min + vec2(i as f32 * (b + PLATFORMER_GAP), 0.0),
-                            Vec2::splat(b),
-                        );
-                        (name.clone(), cell)
-                    })
-                    .collect();
+                    .push((first.clone(), Rect::from_min_size(min, Vec2::splat(b))));
+            }
+            let small = 56.0 * hud_scale.clamp(0.75, 1.6);
+            let extra = cfg.buttons.len().saturating_sub(1) as f32;
+            if extra > 0.0 {
+                let width = extra * small + (extra - 1.0) * PLATFORMER_GAP;
+                let min = pos2(area.center().x - width / 2.0, area.top() + m * 0.5);
+                for (i, name) in cfg.buttons.iter().skip(1).enumerate() {
+                    let cell = Rect::from_min_size(
+                        min + vec2(i as f32 * (small + PLATFORMER_GAP), 0.0),
+                        Vec2::splat(small),
+                    );
+                    zones.buttons.push((name.clone(), cell));
+                }
             }
             return zones;
         }
