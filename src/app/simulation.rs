@@ -1655,7 +1655,7 @@ impl AppState {
         // rester indépendants de l'ordre des scripts, cette boucle-ci s'exécute
         // entièrement avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
         let anim_notify_events = advance_animation_clips(&mut self.scene, dt);
-        self.apply_ability_animations();
+        self.apply_ability_animations(dt);
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
         // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
         // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les
@@ -1957,16 +1957,23 @@ impl AppState {
     ///    liste des cibles. Les *autres* joueurs réseau ne sont pas couverts
     ///    ici : leur `input` (bouclier/ruée tenus) n'est connu que du serveur,
     ///    pas diffusé aux autres clients par le `Snapshot` — chantier séparé.
-    fn apply_ability_animations(&mut self) {
+    fn apply_ability_animations(&mut self, dt: f32) {
         if !self.scene.ability_bar {
             return;
         }
+        // Roulade (14 septembre 2026) : minuteur dédié, pas l'état brut de la
+        // touche — cf. `combat::update_dash`, qui l'arme sur une ruée
+        // **résolue** pour la vraie durée du clip (une ruée est un bond
+        // instantané, la touche n'a pas besoin de rester enfoncée pour que la
+        // roulade doive continuer à jouer). Décompté ici, avant le calcul de
+        // `dashing`, qu'il remplace en source de vérité pour ce clip.
+        self.attack.roll_anim_remaining = (self.attack.roll_anim_remaining - dt).max(0.0);
         let blocking = self.input_state.block;
         let attacking = self.input_state.attack
             || self.attack.attack_charge.is_some()
             || self.attack.attack_projectile.is_some();
         let casting = self.input_state.fire;
-        let dashing = self.input_state.dash;
+        let dashing = self.attack.roll_anim_remaining > 0.0;
         let desired = if blocking {
             Some("Block")
         } else if attacking {

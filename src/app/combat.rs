@@ -531,6 +531,14 @@ impl AppState {
         if let Some(phys) = self.physics.as_mut() {
             phys.set_position(index, new_pos);
         }
+        // Roulade (14 septembre 2026) : armé sur une ruée **résolue** (pas
+        // juste appuyée), pour une durée fixe qui correspond à la vraie durée
+        // du clip `Dash` dans `creature_ronde.glb` (culbute complète du
+        // corps) — cf. `simulation::apply_ability_animations`, qui décompte
+        // ce minuteur et affiche le clip tant qu'il court, indépendamment de
+        // l'état brut de la touche.
+        const ROLL_ANIM_SECONDS: f32 = 0.5;
+        self.attack.roll_anim_remaining = ROLL_ANIM_SECONDS;
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
     }
 

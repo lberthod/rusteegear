@@ -3551,7 +3551,7 @@ fn ability_animations_reach_the_local_players_network_ghost_once_connected() {
     app.scene.objects[0].visible = false;
 
     app.input_state.attack = true;
-    app.apply_ability_animations();
+    app.apply_ability_animations(1.0 / 60.0);
 
     assert_eq!(
         app.scene.objects[index]

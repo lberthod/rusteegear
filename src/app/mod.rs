@@ -816,6 +816,14 @@ pub struct PlayerAttackState {
     /// `attack_cooldown_remaining` : décompté chaque frame, pas seulement au
     /// relâchement de la touche.
     dash_cooldown_remaining: f32,
+    /// Temps restant (s) du clip `Dash` (roulade) forcé sur le joueur local
+    /// après une ruée résolue — cf. `combat::update_dash` (qui l'arme) et
+    /// `simulation::apply_ability_animations` (qui le décompte et l'affiche).
+    /// Distinct de `self.input_state.dash` (état brut de la touche) : la
+    /// ruée est un bond **instantané**, pas un mouvement soutenu — sans ce
+    /// minuteur dédié, la roulade ne jouerait que le temps où la touche est
+    /// physiquement tenue, coupée en plein milieu sur un simple appui bref.
+    roll_anim_remaining: f32,
 }
 
 pub struct NetworkPlayersState {
@@ -1644,6 +1652,7 @@ impl AppState {
                 attack_charge: None,
                 stagger: Vec::new(),
                 dash_cooldown_remaining: 0.0,
+                roll_anim_remaining: 0.0,
             },
             player_ability_anim: None,
             network: NetworkPlayersState {
