@@ -16,3 +16,10 @@ tests/golden/*.actual.png
 # Serveurs MCP locaux (ex. Blender) : outillage propre à ce poste, pas au dépôt.
 /.mcp.json
 __pycache__/
+
+# Assemblage local du site water.loicberthod.ch (index.html + favicon + pkg/) :
+# régénéré à chaque déploiement par la recette de docs/RIVIERE_CASCADE.md,
+# jamais versionné (comme /packaging/web/pkg/).
+/dist/
+# Sauvegardes automatiques de Blender (.blend1) : seul le .blend source compte.
+*.blend1
