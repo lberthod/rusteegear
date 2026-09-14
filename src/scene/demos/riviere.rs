@@ -23,12 +23,14 @@
 
 use glam::{Quat, Vec3};
 
+use super::creature_scripts::creature_bite_script;
 use super::{
-    AnimationState, Controller, GameCamera, ImportedMesh, Light, Locomotion, MeshKind,
-    MobileControls, Scene, SceneObject, Sky, demo_obj,
+    AiChaser, AnimationState, Archetype, Combat, Controller, GameCamera, ImportedMesh, ItemKind,
+    ItemPickup, Light, Locomotion, MeshKind, MobileControls, Scene, SceneObject, Sky, WeaponPickup,
+    demo_obj,
 };
 use crate::runtime::physics::{ColliderShape, PhysicsKind};
-use crate::scene::{WaterKind, WaterSurface};
+use crate::scene::{BiteAttack, WaterKind, WaterSurface};
 
 /// Côté du terrain (m) — `WORLD` du script.
 const WORLD: f32 = 150.0;
@@ -788,6 +790,133 @@ impl Scene {
             }
         }
 
+        // --- Monstres (14 septembre 2026, PvE/PvP : kit de capacités 1-2-3-4) ---
+        // Renards enragés : réutilisent le modèle de faune (`fauna_fox.glb`),
+        // teinte rouge sombre pour les distinguer d'un coup d'œil des renards
+        // décoratifs inoffensifs ci-dessus — pas de nouvel asset à produire
+        // pour un point de gameplay. Poursuite native (`AiChaser`, pas de
+        // script d'errance nécessaire, cf. sa doc) ; seule la morsure est
+        // scriptée (`creature_bite_script`), pour que le joueur **solo**
+        // (sans serveur réseau) subisse aussi des dégâts — la résolution
+        // native de `BiteAttack` (`app::health::update_creature_bite`) ne
+        // s'applique qu'aux joueurs réseau, cf. sa doc.
+        let monster_spots: [(f32, f32); 6] = [
+            (river_center(-20.0) + 7.0, -20.0),
+            (river_center(-38.0) - 7.5, -38.0),
+            (river_center(14.0) + 8.0, 14.0),
+            (river_center(32.0) - 7.0, 32.0),
+            (river_center(56.0) + 7.5, 56.0),
+            (river_center(-58.0) - 7.0, -58.0),
+        ];
+        if let Some(idx) = loader.load("riviere/fauna_fox.glb") {
+            for (i, (x, z)) in monster_spots.into_iter().enumerate() {
+                let y = terrain_height(&terrain, x, z);
+                let mut m = demo_obj(
+                    &format!("Renard enragé {}", i + 1),
+                    MeshKind::Imported(idx),
+                    Vec3::new(x, y, z),
+                );
+                m.transform = m.transform.with_scale(Vec3::splat(1.3));
+                m.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
+                m.color = [0.55, 0.12, 0.08];
+                m.tag = "monstre".into();
+                m.group = "Monstre".into();
+                m.physics = PhysicsKind::Kinematic;
+                // Détection de contact pour la morsure (cf. `creature_bite_script`),
+                // sans changer le collider (toujours solide).
+                m.trigger = true;
+                m.combat = Some(Combat {
+                    attackable: true,
+                    // `wave: 0` : pas de système de manches, actif dès le départ —
+                    // comme les créatures du hameau MMORPG (monde ouvert, pas une
+                    // arène par manches).
+                    hp: 3,
+                    ..Default::default()
+                });
+                m.ai_chaser = Some(AiChaser {
+                    speed: 2.2,
+                    archetype: Archetype::Traqueuse,
+                });
+                const BITE_COOLDOWN: f32 = 1.8;
+                const BITE_CHANCE: f32 = 0.5;
+                const BITE_DAMAGE: f32 = 0.12;
+                m.bite = Some(BiteAttack {
+                    cooldown: BITE_COOLDOWN,
+                    chance: BITE_CHANCE,
+                    damage: BITE_DAMAGE,
+                });
+                // Réapparaît après un délai plutôt que de disparaître pour de bon :
+                // même politique que les créatures du hameau MMORPG (contenu
+                // renouvelé, pas un stock fini à épuiser une fois pour toutes).
+                m.respawn_delay = 20.0;
+                let prefix = format!("renard{i}_");
+                m.script = creature_bite_script(
+                    &prefix,
+                    BITE_COOLDOWN,
+                    BITE_CHANCE,
+                    BITE_DAMAGE,
+                    17.0 + i as f32 * 5.3,
+                );
+                objects.push(m);
+            }
+        }
+
+        // --- Butin (armes de mêlée et soins à ramasser au contact) ---
+        // Réutilise les rochers/galets déjà chargés comme socle visuel du
+        // butin (pas de nouvel asset) : l'arme/l'objet est ramassé au contact
+        // du rocher qui le « porte », comme un point de butin marqué au sol.
+        let loot_weapons: [(f32, f32, usize); 3] = [
+            // Épée près du départ : première amélioration facile à trouver.
+            (river_center(20.0) - 6.0, 20.0, 1),
+            // Lance au plateau amont, plus loin, plus risqué (monstres alentour).
+            (river_center(-30.0) + 8.0, -30.0, 2),
+            // Marteau (zone) près de la cascade : la pièce la plus tardive à
+            // trouver, cohérent avec sa préparation/recharge les plus longues.
+            (6.5, POOL_Z + 8.0, 3),
+        ];
+        for (i, (x, z, weapon)) in loot_weapons.into_iter().enumerate() {
+            let Some(idx) = loader.load("riviere/galet_a.glb") else {
+                continue;
+            };
+            let y = terrain_height(&terrain, x, z) + 0.1;
+            let mut p = demo_obj(
+                &format!("Butin arme {}", i + 1),
+                MeshKind::Imported(idx),
+                Vec3::new(x, y, z),
+            );
+            p.transform = p.transform.with_scale(Vec3::splat(0.55));
+            p.color = [0.95, 0.82, 0.25];
+            p.group = "Butin".into();
+            p.weapon_pickup = Some(WeaponPickup { weapon });
+            objects.push(p);
+        }
+        let loot_items: [(f32, f32, ItemKind, u32); 4] = [
+            (river_center(6.0) + 3.0, 6.0, ItemKind::Baie, 2),
+            (river_center(-12.0) - 3.5, -12.0, ItemKind::Baie, 2),
+            (river_center(42.0) + 4.0, 42.0, ItemKind::Potion, 1),
+            (-7.0, POOL_Z + 5.0, ItemKind::Potion, 1),
+        ];
+        for (i, (x, z, kind, count)) in loot_items.into_iter().enumerate() {
+            let Some(idx) = loader.load("riviere/galet_b.glb") else {
+                continue;
+            };
+            let y = terrain_height(&terrain, x, z) + 0.08;
+            let mut p = demo_obj(
+                &format!("Butin soin {}", i + 1),
+                MeshKind::Imported(idx),
+                Vec3::new(x, y, z),
+            );
+            p.transform = p.transform.with_scale(Vec3::splat(0.4));
+            p.color = if kind == ItemKind::Potion {
+                [0.85, 0.2, 0.35]
+            } else {
+                [0.3, 0.75, 0.25]
+            };
+            p.group = "Butin".into();
+            p.item_pickup = Some(ItemPickup { kind, count });
+            objects.push(p);
+        }
+
         // Ordre de dessin ≈ du plus proche au plus lointain depuis le départ du
         // joueur (le renderer garde l'ordre de scène à l'intérieur d'un même
         // maillage) : le test de profondeur précoce rejette alors la plupart des
@@ -815,6 +944,8 @@ impl Scene {
             "Rivière",
             "Falaise",
             "Faune",
+            "Monstre",
+            "Butin",
         ]
         .into_iter()
         .map(String::from)
@@ -947,5 +1078,50 @@ mod tests {
         // plus bas que l'eau.
         assert!(terrain_height(terrain, 20.0, -60.0) > terrain_height(terrain, 20.0, 40.0) + 5.0);
         assert!(terrain_height(terrain, river_center(POOL_Z), POOL_Z) < water_level(POOL_Z) - 1.0);
+    }
+
+    /// Preuve de la demande gameplay du 14 septembre 2026 (« des monstres à
+    /// tuer », « des objets à loot ») : la démo place bien des monstres
+    /// attaquables/mordants et du butin ramassable, pas seulement de la faune
+    /// et du décor.
+    #[test]
+    fn riviere_demo_has_monsters_and_loot() {
+        let scene = Scene::riviere_demo();
+        let monsters: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.tag == "monstre")
+            .collect();
+        assert!(!monsters.is_empty(), "aucun monstre placé");
+        for m in &monsters {
+            assert!(
+                m.combat.as_ref().is_some_and(|c| c.attackable && c.hp > 0),
+                "{} n'est pas attaquable",
+                m.name
+            );
+            assert!(m.ai_chaser.is_some(), "{} n'a pas de poursuite", m.name);
+            assert!(m.bite.is_some(), "{} ne mord pas", m.name);
+            assert!(m.trigger, "{} ne détecte pas le contact", m.name);
+            assert!(
+                !m.script.is_empty(),
+                "{} n'a pas de script de morsure solo",
+                m.name
+            );
+        }
+        let weapon_loot = scene
+            .objects
+            .iter()
+            .filter(|o| o.weapon_pickup.is_some())
+            .count();
+        assert!(weapon_loot > 0, "aucune arme à ramasser");
+        let heal_loot = scene
+            .objects
+            .iter()
+            .filter(|o| {
+                o.item_pickup
+                    .is_some_and(|p| matches!(p.kind, ItemKind::Potion | ItemKind::Baie))
+            })
+            .count();
+        assert!(heal_loot > 0, "aucun objet de soin à ramasser");
     }
 }

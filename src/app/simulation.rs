@@ -1318,6 +1318,7 @@ impl AppState {
             self.update_creature_bite(dt);
             self.update_network_heal(dt);
             self.update_network_revive(dt);
+            self.update_network_item_pickups();
             // Réapparition des pièces bonus et ennemis dont le délai est écoulé.
             let now = self.time;
             self.process_respawns(now);
@@ -1941,7 +1942,8 @@ impl AppState {
             return;
         }
         let blocking = self.input_state.block;
-        let attacking = self.attack.attack_charge.is_some() || self.attack.attack_projectile.is_some();
+        let attacking =
+            self.attack.attack_charge.is_some() || self.attack.attack_projectile.is_some();
         let casting = self.input_state.fire;
         let dashing = self.input_state.dash;
         let desired = if blocking {

@@ -15,7 +15,24 @@ use super::AppState;
 
 /// Rayon (m) de ramassage autour du joueur — même ordre que les pièces (0,7)
 /// et les armes (0,9) : marcher sur l'objet suffit, pas besoin de viser.
-const PICKUP_RADIUS: f32 = 0.8;
+/// `pub(super)` : réutilisé par le pendant réseau (`health::
+/// update_network_item_pickups`), même rayon pour tous les joueurs.
+pub(super) const PICKUP_RADIUS: f32 = 0.8;
+
+/// Fraction de `health::MAX_HEALTH` rendue par un consommable de soin (14
+/// septembre 2026, boucle de butin PvE/PvP) — la Potion soigne bien plus
+/// qu'une Baie, cohérent avec `ItemKind::label` (« Potion de soin » contre un
+/// simple grignotage) ; `Cle`/`Gemme` ne soignent pas (objets de collection).
+/// Multipliée par `ItemPickup::count` : un buisson qui donne 3 baies d'un
+/// coup soigne 3 fois plus qu'une seule. `pub(super)` : réutilisée par le
+/// pendant réseau (`health::update_network_item_pickups`).
+pub(super) fn heal_fraction(kind: ItemKind) -> f32 {
+    match kind {
+        ItemKind::Potion => 0.5,
+        ItemKind::Baie => 0.15,
+        ItemKind::Cle | ItemKind::Gemme => 0.0,
+    }
+}
 
 impl AppState {
     /// Ramassage des objets d'inventaire au contact du joueur — appelée chaque
@@ -34,6 +51,19 @@ impl AppState {
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Pickup);
         for (i, item) in hit {
             self.add_item(item.kind, item.count);
+            // Soin immédiat au ramassage (14 septembre 2026, boucle de butin
+            // PvE/PvP) — en plus de rejoindre le sac : un consommable de soin
+            // trouvé au sol doit se sentir tout de suite, pas seulement une
+            // fois utilisé depuis le panneau 👜. `hud_health` reste `None`
+            // hors partie (`ensure_play_health` pas encore amorcée) : dans ce
+            // cas il n'y a pas de vie à soigner, l'objet rejoint quand même
+            // le sac ci-dessus.
+            let heal = heal_fraction(item.kind) * item.count as f32;
+            if heal > 0.0
+                && let Some(hp) = self.hud_health
+            {
+                self.hud_health = Some((hp + heal).min(super::health::MAX_HEALTH));
+            }
             log::info!(
                 "Objet trouvé : {} ×{} (sac : {} au total)",
                 item.kind.label(),

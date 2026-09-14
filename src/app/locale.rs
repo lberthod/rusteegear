@@ -43,6 +43,17 @@ pub fn kills_and_assists(locale: Locale, kills: u32, assists: u32) -> String {
     }
 }
 
+/// Même texte que `kills_and_assists`, précédé du niveau (14 septembre 2026,
+/// boucle de progression PvE/PvP) — calcul purement client (cf.
+/// `editor::hud::kills_hud`), un repère de progression lisible sans état
+/// serveur séparé à synchroniser.
+pub fn level_kills_and_assists(locale: Locale, level: u32, kills: u32, assists: u32) -> String {
+    match locale {
+        Locale::Fr => format!("Nv. {level} · 💀 Frags {kills} · 🛡 Aides {assists}"),
+        Locale::En => format!("Lv. {level} · 💀 Frags {kills} · 🛡 Assists {assists}"),
+    }
+}
+
 /// Compteur de frags d'une ligne du classement multijoueur
 /// (`multiplayer_roster_panel`).
 pub fn frags(locale: Locale, kills: u32) -> String {
@@ -427,6 +438,15 @@ pub fn play_solo_label(locale: Locale) -> &'static str {
     match locale {
         Locale::Fr => "Jouer seul",
         Locale::En => "Play solo",
+    }
+}
+
+/// Rappel du kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar`)
+/// — cf. `editor::hud::ability_bar_hint`.
+pub fn ability_bar_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "1 Mêlée · 2 Bouclier · 3 Sort · 4 Ruée",
+        Locale::En => "1 Melee · 2 Shield · 3 Spell · 4 Dash",
     }
 }
 

@@ -332,10 +332,12 @@ impl AppState {
                 .recent_damage
                 .remove(&id)
                 .and_then(|buf| compute_death_cause(&buf));
-            self.net_conn.pending_net_events.push(GameEvent::PlayerDown {
-                player_id: id,
-                cause: death_cause,
-            });
+            self.net_conn
+                .pending_net_events
+                .push(GameEvent::PlayerDown {
+                    player_id: id,
+                    cause: death_cause,
+                });
             self.player_down_count += 1;
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Lose);
         } else {
@@ -595,6 +597,46 @@ impl AppState {
                 }
                 self.network.network_revive.remove(&healer_id);
                 self.revives_completed += 1;
+            }
+        }
+    }
+
+    /// Ramassage de butin de soin par les joueurs réseau (14 septembre 2026,
+    /// boucle de butin PvE/PvP) — pendant réseau d'`AppState::update_item_pickups`
+    /// (solo) : chaque joueur connecté ramasse à sa **propre** position et
+    /// soigne sa **propre** vie (`network_health`), plutôt que la vie du seul
+    /// joueur local (`hud_health`, pensée pour un joueur unique). Les butins
+    /// d'arme (`WeaponPickup`) restent solo uniquement pour l'instant :
+    /// l'attaque réseau (`update_network_attacks`) frappe à portée fixe
+    /// (`NETWORK_ATTACK_RANGE`), pas encore par profil d'arme individuel par
+    /// joueur — chantier séparé, hors scope ici.
+    pub(super) fn update_network_item_pickups(&mut self) {
+        let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
+        for id in ids {
+            let alive = self.network.network_health.get(&id).copied().unwrap_or(1.0) > 0.0;
+            if !alive {
+                continue;
+            }
+            let Some(index) = self.network.network_players.get(&id).copied() else {
+                continue;
+            };
+            let Some(pos) = self.scene.objects.get(index).map(|o| o.transform.position) else {
+                continue;
+            };
+            let hit = self
+                .scene
+                .item_pickups_at(pos, super::inventory::PICKUP_RADIUS);
+            for (i, item) in hit {
+                let heal = super::inventory::heal_fraction(item.kind) * item.count as f32;
+                if heal > 0.0 {
+                    let max_hp = self.max_health_for(id);
+                    let hp = self.network.network_health.entry(id).or_insert(max_hp);
+                    *hp = (*hp + heal).min(max_hp);
+                }
+                let d = self.scene.objects[i].respawn_delay;
+                if d > 0.0 {
+                    self.respawn_queue.push((i, self.time + d));
+                }
             }
         }
     }

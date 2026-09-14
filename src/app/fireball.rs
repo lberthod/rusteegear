@@ -17,7 +17,7 @@
 use glam::Vec3;
 
 use super::AppState;
-use crate::net::protocol::GameEvent;
+use crate::net::protocol::{DeathCauseKind, GameEvent, PlayerId};
 use crate::runtime::physics::PhysicsKind;
 
 /// Profil d'arme à distance — l'équivalent projectile des `Weapon` de mêlée
@@ -113,6 +113,12 @@ enum Impact {
     /// Un obstacle physique (mur, tour, décor `Static`/`Dynamic`) : le projectile
     /// s'éteint sans effet — c'est ce qui rend un mur utilisable comme abri.
     Obstacle,
+    /// Un **autre joueur réseau** (14 septembre 2026, capacité 3 du kit
+    /// 1-2-3-4, PvP) : uniquement dans les scènes `Scene::ability_bar` — cf.
+    /// `resolve_pvp_ranged_hit`. Distinct de `Monster` : la vie individualisée
+    /// (`network_health`) et le décompte des frags/morts diffèrent d'un
+    /// monstre (`DeathCauseKind::Player`, pas de respawn de créature).
+    Player(PlayerId),
 }
 
 /// Borne un indice d'arme reçu du réseau (ou d'un futur code de config) à la
@@ -209,6 +215,9 @@ impl AppState {
                 Some(Impact::Monster(i)) => {
                     self.resolve_fireball_hit(i, fb.pos, RANGED_WEAPONS[fb.weapon].damage, fb.owner)
                 }
+                Some(Impact::Player(id)) => {
+                    self.resolve_pvp_ranged_hit(id, RANGED_WEAPONS[fb.weapon].damage, fb.owner)
+                }
                 Some(Impact::Obstacle) => {}
                 None => survivors.push(fb),
             }
@@ -262,7 +271,31 @@ impl AppState {
     /// les objets ni `attackable` ni physiques (fantômes réseau, pool...).
     fn fireball_impact(&self, fb: &Fireball) -> Option<Impact> {
         for (i, o) in self.scene.objects.iter().enumerate() {
-            if i == fb.owner || !o.visible || o.controller.is_some() {
+            if i == fb.owner || !o.visible {
+                continue;
+            }
+            if o.controller.is_some() {
+                // PvP (14 septembre 2026, capacité 3 du kit 1-2-3-4) :
+                // seulement dans les scènes qui l'activent explicitement
+                // (`Scene::ability_bar`), et seulement un **autre** joueur
+                // réseau vivant, hors grâce d'apparition — sinon ce
+                // `controller` reste ignoré comme avant (joueur local solo,
+                // gabarit masqué, mondes coopératifs existants inchangés).
+                if self.scene.ability_bar
+                    && let Some(id) = self.network_player_id_at(i)
+                    && self.network.network_health.get(&id).copied().unwrap_or(1.0) > 0.0
+                    && !self
+                        .network
+                        .network_spawn_grace
+                        .get(&id)
+                        .is_some_and(|g| *g > 0.0)
+                {
+                    let inflate = Vec3::splat(RANGED_WEAPONS[fb.weapon].radius);
+                    let (wmin, wmax) = self.scene.world_aabb(o);
+                    if fb.pos.cmpge(wmin - inflate).all() && fb.pos.cmple(wmax + inflate).all() {
+                        return Some(Impact::Player(id));
+                    }
+                }
                 continue;
             }
             let attackable = o.combat.as_ref().is_some_and(|c| c.attackable);
@@ -341,6 +374,27 @@ impl AppState {
             }
         } else {
             crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+        }
+    }
+
+    /// Résout un tir PvP (14 septembre 2026, capacité 3 du kit 1-2-3-4) : dégâts
+    /// sur `id` via `apply_network_damage` (bouclier de la cible pris en compte,
+    /// cf. `health::BLOCK_DAMAGE_MULT`), frag crédité au tireur si le coup achève
+    /// la cible. `damage` reste sur l'échelle PV de monstre (`RangedWeapon::
+    /// damage`) : converti en fraction de `health::MAX_HEALTH` via
+    /// `PVP_RANGED_DAMAGE_PER_HP` pour rester sur la même échelle que
+    /// `network_health`, sans dupliquer une table par arme.
+    fn resolve_pvp_ranged_hit(&mut self, id: PlayerId, damage: u32, owner: usize) {
+        const PVP_RANGED_DAMAGE_PER_HP: f32 = 0.06;
+        self.fx.attack_flash = 1.0;
+        let died = self.apply_network_damage(
+            id,
+            damage as f32 * PVP_RANGED_DAMAGE_PER_HP,
+            DeathCauseKind::Player,
+            owner,
+        );
+        if died && let Some(shooter) = self.network_player_id_at(owner) {
+            self.credit_kill(shooter);
         }
     }
 

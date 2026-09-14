@@ -974,8 +974,11 @@ impl AppState {
                     else {
                         continue;
                     };
-                    let Some(other_pos) =
-                        self.scene.objects.get(other_index).map(|o| o.transform.position)
+                    let Some(other_pos) = self
+                        .scene
+                        .objects
+                        .get(other_index)
+                        .map(|o| o.transform.position)
                     else {
                         continue;
                     };
@@ -1015,11 +1018,7 @@ impl AppState {
                 .network_dash_cooldowns
                 .get(&id)
                 .is_none_or(|cd| *cd <= 0.0);
-            let wants_dash = self
-                .network
-                .network_inputs
-                .get(&id)
-                .is_some_and(|i| i.dash);
+            let wants_dash = self.network.network_inputs.get(&id).is_some_and(|i| i.dash);
             let alive = self.network.network_health.get(&id).copied().unwrap_or(1.0) > 0.0;
             if !ready || !wants_dash || !alive {
                 continue;

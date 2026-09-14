@@ -17,12 +17,13 @@ use winit::window::Window;
 use file_dialogs::{DialogTarget, FileDialogs};
 use hierarchy::hierarchy_panel;
 use hud::{
-    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ally_down_banner, collectibles_hud,
-    crosshair, damage_vignette, defeated_banner, health_bar, hud_preview_overlays, hud_widgets,
-    item_inventory_panel, kills_hud, lose_banner, mobile_overlay, mobile_top_buttons,
-    multiplayer_roster_panel, net_event_banner, net_status_pill, palier_banner, pause_menu,
-    pause_veil, restart_button, roster_overlay, round_summary_banner, scene_has_ranged_weapon,
-    touch_feedback, wave_hud, wave_start_banner, weapon_hud, weapon_inventory_panel,
+    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ability_bar_hint, ally_down_banner,
+    collectibles_hud, crosshair, damage_vignette, defeated_banner, health_bar,
+    hud_preview_overlays, hud_widgets, item_inventory_panel, kills_hud, lose_banner,
+    mobile_overlay, mobile_top_buttons, multiplayer_roster_panel, net_event_banner,
+    net_status_pill, palier_banner, pause_menu, pause_veil, restart_button, roster_overlay,
+    round_summary_banner, scene_has_ranged_weapon, touch_feedback, wave_hud, wave_start_banner,
+    weapon_hud, weapon_inventory_panel,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -1506,6 +1507,9 @@ impl Editor {
             let mut layout = scene.hud_layout;
             if !arcade {
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
+                if scene.ability_bar {
+                    ability_bar_hint(ctx, area, locale, hud_scale);
+                }
                 weapon_hud(
                     ctx,
                     area,
@@ -2813,6 +2817,9 @@ fn play_area_and_in_game_hud(
         // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
         // la vignette de dégâts et la barre de vie, au-dessus, jamais.
         wave_hud(root.ctx(), play_rect, scene, wave, locale, hud_scale);
+        if scene.ability_bar {
+            ability_bar_hint(root.ctx(), play_rect, locale, hud_scale);
+        }
         weapon_hud(
             root.ctx(),
             play_rect,

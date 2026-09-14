@@ -744,6 +744,9 @@ pub(super) fn run_script_web(
     lua_try!(lua.set_global("dt", dt as f64));
     lua_try!(lua.set_global("time", time as f64));
     lua_try!(lua.set_global("input", input_tbl));
+    // `blocking` (14 septembre 2026, capacité 2 du kit 1-2-3-4) : cf. le
+    // pendant natif dans `app::scripting::run_script`, même doc.
+    lua_try!(lua.set_global("blocking", input.block));
     lua_try!(lua.set_global("tilt", tilt));
     lua_try!(lua.set_global("debug", debug_api));
     lua_try!(lua.set_global("save", save_api));

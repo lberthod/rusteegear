@@ -342,10 +342,16 @@ pub(super) fn kills_hud(
     // deux valeurs séparées plutôt qu'un seul total — un assist n'est pas un
     // frag (cf. `app::multiplayer::credit_assists_on_kill`), la contribution
     // en solo (jamais d'assist) reste lisible telle quelle (« 0 🤝 »).
+    // Niveau (14 septembre 2026, boucle de progression PvE/PvP) : calcul
+    // purement client, un palier tous les `KILLS_PER_LEVEL` frags — pas un
+    // système de paliers serveur séparé, juste un repère de progression
+    // affiché au même endroit que les frags qui le déterminent.
+    const KILLS_PER_LEVEL: u32 = 5;
+    let level = 1 + kills / KILLS_PER_LEVEL;
     painter.text(
         pos,
         Align2::CENTER_CENTER,
-        crate::app::locale::kills_and_assists(locale, kills, assists),
+        crate::app::locale::level_kills_and_assists(locale, level, kills, assists),
         FontId::proportional(18.0 * scale),
         Color32::from_rgb(255, 170, 130),
     );
@@ -803,6 +809,34 @@ pub(super) fn wave_hud(
         crate::app::locale::remaining(locale, remaining as u32),
         FontId::proportional(14.0 * scale),
         Color32::from_white_alpha(200),
+    );
+}
+
+/// Rappel du kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar`
+/// — démo Rivière & cascade PvE/PvP) : simple ligne de texte en bas de
+/// l'écran, sans fond ni cadre — un vrai widget de barre de capacités avec
+/// icônes/cooldowns a été délibérément écarté pour tenir le budget de cette
+/// itération (cf. la doc de `Scene::ability_bar`) ; non déplaçable
+/// (`Scene::hud_layout` n'a pas d'entrée dédiée), contrairement aux autres
+/// widgets du HUD ci-dessus.
+pub(super) fn ability_bar_hint(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    locale: crate::app::locale::Locale,
+    scale: f32,
+) {
+    use egui::{Align2, Color32, FontId};
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_ability_bar"),
+    ));
+    painter.text(
+        egui::pos2(area.center().x, area.bottom() - 14.0 * scale),
+        Align2::CENTER_CENTER,
+        crate::app::locale::ability_bar_hint(locale),
+        FontId::proportional(13.0 * scale),
+        Color32::from_white_alpha(190),
     );
 }
 
