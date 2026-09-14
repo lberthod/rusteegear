@@ -783,6 +783,53 @@ impl AppState {
         // N'implémenter l'API incrémentale que si un test de ressenti à
         // plusieurs clients le justifie un jour.
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
+        // Hauteur du sol à la nouvelle position (14 septembre 2026) : le décalage
+        // `SPAWN_RADIUS` ci-dessus ne touche que x/z, en gardant le y du gabarit —
+        // correct sur un sol plat (hameau) mais pas sur un terrain accidenté (la
+        // vallée de la démo Rivière & cascade), où la hauteur du sol varie avec
+        // x/z. Sans ce recalage, un joueur réseau spawne soit incrusté dans le
+        // relief (repoussé violemment par la physique au premier pas, vu côté
+        // client comme une téléportation à des dizaines de m/s), soit en
+        // suspension au-dessus du sol (constaté en jeu : le fantôme flotte sans
+        // jamais retomber, `KinematicCharacterController` n'ayant pas de
+        // contrôleur/gravité côté fantômes clients, cf. `ensure_remote_player`,
+        // et le serveur ne le corrige jamais puisqu'aucun input ne le fait
+        // avancer). Deux rayons vers le bas plutôt qu'une hauteur recalculée en
+        // dur : un à la position d'origine du gabarit, pour mesurer son décalage
+        // vertical habituel au-dessus du sol (pieds du modèle, demi-hauteur de
+        // la capsule…) sans le supposer, un à la nouvelle position x/z pour
+        // trouver le sol réel là-bas — la différence préserve ce décalage quel
+        // que soit le monde chargé, sans dépendre d'une constante par scène.
+        const SPAWN_GROUND_PROBE: f32 = 6.0;
+        const SPAWN_GROUND_MASK: u32 = 1;
+        if let Some(phys) = self.physics.as_ref() {
+            let origin_pos = self.scene.objects[template_index].transform.position;
+            let spawned_pos = self.scene.objects[index].transform.position;
+            let ground_below = |x: f32, z: f32| -> Option<f32> {
+                phys.raycast(
+                    glam::Vec3::new(x, origin_pos.y + SPAWN_GROUND_PROBE, z),
+                    glam::Vec3::NEG_Y,
+                    SPAWN_GROUND_PROBE * 2.0,
+                    SPAWN_GROUND_MASK,
+                )
+                .map(|hit| hit.point.y)
+            };
+            if let (Some(origin_ground), Some(spawn_ground)) = (
+                ground_below(origin_pos.x, origin_pos.z),
+                ground_below(spawned_pos.x, spawned_pos.z),
+            ) {
+                let above_ground = origin_pos.y - origin_ground;
+                self.scene.objects[index].transform.position.y = spawn_ground + above_ground;
+            }
+        }
+        // Resynchronise le corps physique du fantôme réseau avec la position
+        // corrigée ci-dessus — `Physics::build` vient de créer le corps à
+        // l'ancien y, `set_position` aligne l'un sur l'autre (même précaution
+        // que `update_network_dash` un peu plus haut dans ce fichier).
+        if let Some(phys) = self.physics.as_mut() {
+            let p = self.scene.objects[index].transform.position;
+            phys.set_position(index, p);
+        }
         Some(index)
     }
 
