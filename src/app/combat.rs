@@ -463,15 +463,50 @@ impl AppState {
         }
     }
 
+    /// Durée (s) de la roulade — glissement progressif, pas un bond instantané
+    /// (14 septembre 2026, correction « saut périlleux sur place » : la version
+    /// initiale téléportait la position d'un coup puis jouait la culbute figée
+    /// sur ce point d'arrivée, ce qui se lisait comme un flip acrobatique plutôt
+    /// qu'un glissage au sol). Correspond exactement à la durée du clip `Dash`
+    /// dans `creature_ronde.glb`.
+    const ROLL_ANIM_SECONDS: f32 = 0.5;
+
     /// Ruée du joueur local (14 septembre 2026, capacité 4 du kit 1-2-3-4,
-    /// `Scene::ability_bar`) : bond instantané de `multiplayer::DASH_DISTANCE`
-    /// dans la direction actuellement regardée par le joueur, temporisé par
-    /// `multiplayer::DASH_COOLDOWN` comme l'attaque (décompté chaque frame,
-    /// pas seulement au relâchement de la touche). Bornée par un rayon
-    /// physique (même masque que la collision caméra) pour ne jamais
+    /// `Scene::ability_bar`) : glissement de `multiplayer::DASH_DISTANCE` étalé
+    /// sur `ROLL_ANIM_SECONDS` (pas un bond instantané, cf. la doc de la
+    /// constante) dans la direction actuellement regardée par le joueur,
+    /// temporisé par `multiplayer::DASH_COOLDOWN` comme l'attaque (décompté
+    /// chaque frame, pas seulement au relâchement de la touche). Bornée par un
+    /// rayon physique (même masque que la collision caméra) pour ne jamais
     /// traverser un mur — un obstacle plus proche que `DASH_DISTANCE`
-    /// raccourcit le bond au lieu de l'annuler.
+    /// raccourcit le glissement au lieu de l'annuler.
+    ///
+    /// Deux phases distinguées par `self.attack.roll_anim_remaining` :
+    /// 1. Glissement en cours (`> 0`) : avance `roll_velocity * dt` ce tick,
+    ///    sans réévaluer l'appui — un nouvel appui pendant la roulade est
+    ///    ignoré jusqu'à ce qu'elle se termine (attendu : on ne redirige pas
+    ///    une roulade en plein vol).
+    /// 2. Repos (`== 0`) : lit `input_state.dash`/le temporisateur comme
+    ///    avant, et **arme** un nouveau glissement (vitesse + durée) au lieu
+    ///    de téléporter la position.
     pub(super) fn update_dash(&mut self, dt: f32) {
+        if self.attack.roll_anim_remaining > 0.0 {
+            // `dt.min(remaining)` : le dernier tick du glissement peut être plus
+            // court que `dt` (le minuteur s'épuise en cours de pas) — sans ce
+            // plafond, ce tick avancerait de plus que la distance restante.
+            let step = self.attack.roll_velocity * dt.min(self.attack.roll_anim_remaining);
+            self.attack.roll_anim_remaining = (self.attack.roll_anim_remaining - dt).max(0.0);
+            if let Some(index) = self.player_index()
+                && let Some(o) = self.scene.objects.get_mut(index)
+            {
+                let new_pos = o.transform.position + step;
+                o.transform.position = new_pos;
+                if let Some(phys) = self.physics.as_mut() {
+                    phys.set_position(index, new_pos);
+                }
+            }
+            return;
+        }
         if self.attack.dash_cooldown_remaining > 0.0 {
             self.attack.dash_cooldown_remaining -= dt;
         }
@@ -514,31 +549,11 @@ impl AppState {
         {
             distance = DASH_RAYCAST_SKIP + hit.distance;
         }
-        let new_pos = pos + forward * distance;
-        if let Some(o) = self.scene.objects.get_mut(index) {
-            o.transform.position = new_pos;
-        }
-        // Resynchronise le corps physique (14 septembre 2026 — même correctif
-        // que le rayon ci-dessus, découvert dans la foulée) : un joueur
-        // `PhysicsKind::Kinematic` est piloté par un `KinematicCharacterController`
-        // qui a SA PROPRE notion de la position du corps, indépendante de
-        // `transform.position` — sans ce `set_position`, le prochain pas de
-        // déplacement scripté/physique ramène le joueur pile là où le
-        // contrôleur le croyait encore, annulant le bond aussi sûrement que
-        // le bug de rayon ci-dessus (même symptôme : la ruée « ne fait
-        // rien »). Même idiome que `update_escorte` (convoi) juste plus haut
-        // dans ce fichier.
-        if let Some(phys) = self.physics.as_mut() {
-            phys.set_position(index, new_pos);
-        }
-        // Roulade (14 septembre 2026) : armé sur une ruée **résolue** (pas
-        // juste appuyée), pour une durée fixe qui correspond à la vraie durée
-        // du clip `Dash` dans `creature_ronde.glb` (culbute complète du
-        // corps) — cf. `simulation::apply_ability_animations`, qui décompte
-        // ce minuteur et affiche le clip tant qu'il court, indépendamment de
-        // l'état brut de la touche.
-        const ROLL_ANIM_SECONDS: f32 = 0.5;
-        self.attack.roll_anim_remaining = ROLL_ANIM_SECONDS;
+        // Vitesse constante qui parcourt `distance` en `ROLL_ANIM_SECONDS` :
+        // consommée tick par tick par la branche « glissement en cours »
+        // ci-dessus, en phase avec la culbute du clip `Dash`.
+        self.attack.roll_velocity = forward * (distance / Self::ROLL_ANIM_SECONDS);
+        self.attack.roll_anim_remaining = Self::ROLL_ANIM_SECONDS;
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
     }
 

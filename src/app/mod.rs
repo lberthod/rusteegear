@@ -816,14 +816,21 @@ pub struct PlayerAttackState {
     /// `attack_cooldown_remaining` : décompté chaque frame, pas seulement au
     /// relâchement de la touche.
     dash_cooldown_remaining: f32,
-    /// Temps restant (s) du clip `Dash` (roulade) forcé sur le joueur local
-    /// après une ruée résolue — cf. `combat::update_dash` (qui l'arme) et
-    /// `simulation::apply_ability_animations` (qui le décompte et l'affiche).
-    /// Distinct de `self.input_state.dash` (état brut de la touche) : la
-    /// ruée est un bond **instantané**, pas un mouvement soutenu — sans ce
-    /// minuteur dédié, la roulade ne jouerait que le temps où la touche est
-    /// physiquement tenue, coupée en plein milieu sur un simple appui bref.
+    /// Temps restant (s) du glissement de roulade en cours (14 septembre
+    /// 2026) — `> 0` : `combat::update_dash` avance la position de
+    /// `roll_velocity * dt` chaque tick au lieu de lire la touche, et
+    /// `simulation::apply_ability_animations` affiche le clip `Dash`
+    /// pendant ce temps (décompté uniquement par `update_dash`, pas par
+    /// `apply_ability_animations` — une seule source de vérité pour éviter
+    /// de consommer le minuteur deux fois plus vite).
     roll_anim_remaining: f32,
+    /// Vitesse (m/s, monde) du glissement en cours — constante sur toute la
+    /// roulade, calculée une fois au déclenchement (`multiplayer::
+    /// DASH_DISTANCE` divisé par `ROLL_ANIM_SECONDS`, direction regardée par
+    /// le joueur) pour parcourir exactement la distance prévue en une durée
+    /// fixe : un vrai glissage au sol, pas un bond instantané suivi d'une
+    /// culbute figée sur place.
+    roll_velocity: Vec3,
 }
 
 pub struct NetworkPlayersState {
@@ -1653,6 +1660,7 @@ impl AppState {
                 stagger: Vec::new(),
                 dash_cooldown_remaining: 0.0,
                 roll_anim_remaining: 0.0,
+                roll_velocity: Vec3::ZERO,
             },
             player_ability_anim: None,
             network: NetworkPlayersState {

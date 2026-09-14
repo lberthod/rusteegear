@@ -1961,13 +1961,11 @@ impl AppState {
         if !self.scene.ability_bar {
             return;
         }
+        let _ = dt; // conservé pour un usage futur (le décompte vit dans `combat::update_dash`)
         // Roulade (14 septembre 2026) : minuteur dédié, pas l'état brut de la
-        // touche — cf. `combat::update_dash`, qui l'arme sur une ruée
-        // **résolue** pour la vraie durée du clip (une ruée est un bond
-        // instantané, la touche n'a pas besoin de rester enfoncée pour que la
-        // roulade doive continuer à jouer). Décompté ici, avant le calcul de
-        // `dashing`, qu'il remplace en source de vérité pour ce clip.
-        self.attack.roll_anim_remaining = (self.attack.roll_anim_remaining - dt).max(0.0);
+        // touche — décompté par `combat::update_dash` (qui avance aussi la
+        // position pendant le glissement, une seule source de vérité pour ce
+        // minuteur), lu ici tel quel.
         let blocking = self.input_state.block;
         let attacking = self.input_state.attack
             || self.attack.attack_charge.is_some()
