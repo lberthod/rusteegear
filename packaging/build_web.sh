@@ -72,7 +72,9 @@ if [ "${PLAYER_BUILD:-0}" = "1" ]; then
     ZIP="target/export/${OUTPUT_NAME}-web.zip"
     rm -rf "$STAGE" "$ZIP"
     mkdir -p "$STAGE"
-    cp packaging/web/index.html "$STAGE/"
+    # Substitue le placeholder de commit (cf. packaging/web/index.html) dans la
+    # copie exportée — jamais dans le fichier source versionné.
+    sed "s/__RUSTEEGEAR_COMMIT__/${RUSTEEGEAR_COMMIT}/" packaging/web/index.html > "$STAGE/index.html"
     cp -R packaging/web/pkg "$STAGE/pkg"
     (cd target/export/web_stage && zip -qr "../${OUTPUT_NAME}-web.zip" "${OUTPUT_NAME}")
     rm -rf target/export/web_stage

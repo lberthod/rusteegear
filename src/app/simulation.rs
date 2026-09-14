@@ -1937,13 +1937,34 @@ impl AppState {
     /// le clip resterait figé sur sa première image au lieu de jouer — l'appui
     /// dure presque toujours plusieurs pas de simulation (préparation d'attaque,
     /// bouclier/ruée tenus).
+    ///
+    /// **Correction 14 septembre 2026** (« 1-2-3 ne font rien de visible » en
+    /// multijoueur) : deux bugs corrigés ensemble.
+    /// 1. `attacking` se basait uniquement sur `attack.attack_charge`/
+    ///    `attack_projectile`, deux états **solo** posés par `update_attack` —
+    ///    qui ne fait jamais rien une fois connecté (`player_object()` renvoie
+    ///    `None`, le gabarit local étant masqué au profit d'un fantôme
+    ///    réseau, cf. `spawn_network_player`). Résultat : la touche 1
+    ///    (mêlée) ne déclenchait jamais le clip « Attack » en ligne. On lit
+    ///    directement `input_state.attack` à la place (vrai en solo comme en
+    ///    ligne tant que la touche/le bouton est tenu — couvre aussi le cas
+    ///    solo où l'appui n'aboutit à aucune préparation, ex. rien à portée).
+    /// 2. La boucle ne visait que `player_indices()` (mêmes gabarits solo
+    ///    masqués une fois en ligne) : sans second chemin, aucune capacité ne
+    ///    s'animait jamais pour le joueur local en multijoueur, même une fois
+    ///    `attacking` corrigé. On ajoute l'objet du fantôme réseau du joueur
+    ///    local (`net_conn.net_player_id` → `network.network_players`) à la
+    ///    liste des cibles. Les *autres* joueurs réseau ne sont pas couverts
+    ///    ici : leur `input` (bouclier/ruée tenus) n'est connu que du serveur,
+    ///    pas diffusé aux autres clients par le `Snapshot` — chantier séparé.
     fn apply_ability_animations(&mut self) {
         if !self.scene.ability_bar {
             return;
         }
         let blocking = self.input_state.block;
-        let attacking =
-            self.attack.attack_charge.is_some() || self.attack.attack_projectile.is_some();
+        let attacking = self.input_state.attack
+            || self.attack.attack_charge.is_some()
+            || self.attack.attack_projectile.is_some();
         let casting = self.input_state.fire;
         let dashing = self.input_state.dash;
         let desired = if blocking {
@@ -1960,7 +1981,13 @@ impl AppState {
         let rising_edge = desired.is_some() && desired != self.player_ability_anim;
         self.player_ability_anim = desired;
         let Some(clip) = desired else { return };
-        for pi in self.player_indices() {
+        let mut targets = self.player_indices();
+        if let Some(id) = self.net_conn.net_player_id
+            && let Some(&idx) = self.network.network_players.get(&id)
+        {
+            targets.push(idx);
+        }
+        for pi in targets {
             let Some(anim) = self
                 .scene
                 .objects

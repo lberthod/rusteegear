@@ -3430,3 +3430,57 @@ fn arcade_scene_camera_cannot_be_rotated_or_zoomed() {
         assert!((app.camera.target - Vec3::from_array(gc.target)).length() < 1e-6);
     }
 }
+
+/// Preuve du correctif du 14 septembre 2026 (« les touches 1-2-3 ne font
+/// rien de visible en multijoueur ») : `apply_ability_animations` doit
+/// atteindre le fantôme réseau du joueur local, pas seulement `player_indices`
+/// (vide une fois le gabarit masqué, cf. `spawn_network_player`) — et
+/// `attacking` doit se déclencher sur l'`input` brut, pas seulement sur
+/// `attack.attack_charge`/`attack_projectile` (jamais posés en ligne, cf.
+/// `combat::update_attack`, qui ne fait rien sans `player_object()`).
+#[test]
+fn ability_animations_reach_the_local_players_network_ghost_once_connected() {
+    use crate::scene::{AnimationState, Controller, Scene, SceneObject};
+
+    let mut app = AppState::new();
+    let mut scene = Scene {
+        ability_bar: true,
+        ..Default::default()
+    };
+    let mut player = SceneObject {
+        name: "Joueur".into(),
+        ..Default::default()
+    };
+    player.controller = Some(Controller {
+        input: true,
+        ..Default::default()
+    });
+    player.animation = Some(AnimationState {
+        clip: "Idle".into(),
+        ..Default::default()
+    });
+    scene.objects.push(player);
+    app.scene = scene;
+
+    let id = 1;
+    let index = app
+        .spawn_network_player(id, multiplayer::PlayerClass::Assault)
+        .expect("gabarit trouvé");
+    app.net_conn.net_player_id = Some(id);
+    // Gabarit masqué, comme le fait le vrai flux réseau une fois connecté
+    // (`hide_local_player_template`) : `player_indices()` doit devenir vide,
+    // seul le fantôme réseau doit recevoir le clip.
+    app.scene.objects[0].visible = false;
+
+    app.input_state.attack = true;
+    app.apply_ability_animations();
+
+    assert_eq!(
+        app.scene.objects[index]
+            .animation
+            .as_ref()
+            .map(|a| a.clip.as_str()),
+        Some("Attack"),
+        "le fantôme réseau du joueur local doit recevoir le clip de capacité"
+    );
+}

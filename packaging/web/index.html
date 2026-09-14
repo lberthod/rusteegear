@@ -77,6 +77,16 @@
         <b>K</b> : tirer · <b>H</b> : se soigner · <b>1 2 3</b> : arme · <b>M</b> : carte · <b>Échap</b> : pause</p>
       <p id="keys">Aussi sur ce moteur : <a href="reeduc.html" style="color:#e8763b">🩺 Rééducation — mobilité guidée</a>
         (cibles à atteindre avec le corps, suivi caméra ou joystick)</p>
+      <!-- Commit affiché en clair (14 septembre 2026, roadmap post-incident
+           « je ne sais pas si le site a bien été redéployé ») : substitué au
+           build (`packaging/build_web.sh`, `.github/workflows/pages.yml`) par
+           le hash court de HEAD — un `cargo build` local sans substitution
+           garde le placeholder tel quel, jamais un faux commit. Volontaire :
+           visible dès le chargement de la page HTML, AVANT même que le .wasm
+           ne télécharge — sert justement à vérifier qu'un déploiement a pris
+           sans dépendre du jeu qui a pu échouer à charger.
+      -->
+      <p id="build" style="margin-top:10px;color:#4b515a;font-size:11px">Build __RUSTEEGEAR_COMMIT__</p>
     </div>
     <script type="module">
       import init from "./pkg/motor3derust.js";

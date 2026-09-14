@@ -159,7 +159,9 @@ Site statique servi par Caddy sur le VPS partagé (même patron que
 
 ```bash
 ./packaging/build_web.sh                      # wasm32 + wasm-bindgen + wasm-opt → packaging/web/pkg/
-# dist = index.html (avec `<script>` qui force `?scene=riviere`), favicon.svg, pkg/
+# dist = index.html (avec <script> qui force ?scene=riviere ET le commit
+# substitué au placeholder __RUSTEEGEAR_COMMIT__, cf. packaging/web/index.html),
+# favicon.svg, pkg/
 rsync -az --delete -e "ssh -i ~/.ssh/loicberthodvps" dist/ ubuntu@<vps>:/mnt/data/water/dist/
 ```
 
