@@ -1226,7 +1226,17 @@ impl ApplicationHandler for App {
                         KeyCode::KeyF if !cmd && !self.state.player => self.state.frame_selected(),
                         // Caméra libre (« vol libre »/noclip) de l'éditeur : voir
                         // partout sur la carte hors Play, cf. `AppState::toggle_fly_cam`.
-                        KeyCode::KeyG if !cmd && !self.state.player => self.state.toggle_fly_cam(),
+                        // …sauf pendant un Play d'une scène à kit de capacités,
+                        // où G est le jet de griffe (touche tenue, cf.
+                        // `recompute_action_buttons`) : basculer la caméra libre
+                        // à chaque coup rendrait la scène injouable en test.
+                        KeyCode::KeyG
+                            if !cmd
+                                && !self.state.player
+                                && !(self.state.playing && self.state.scene.ability_bar) =>
+                        {
+                            self.state.toggle_fly_cam()
+                        }
                         // Raccourcis d'édition : jamais en mode Player (roadmap
                         // post-audit UX v2 2026-09-04, 1.8) — depuis la pause, un
                         // joueur pouvait dupliquer ou supprimer un objet.

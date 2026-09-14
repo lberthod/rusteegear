@@ -77,6 +77,13 @@ const HEAL_RANGE: f32 = 2.5;
 /// Débit de soin (par seconde) appliqué à l'allié le plus blessé à portée.
 const HEAL_RATE_PER_S: f32 = 0.2;
 
+/// Débit du soin de soi (par seconde), scènes `Scene::ability_bar` seulement
+/// — solo (`update_self_heal`) comme en ligne (repli de `update_network_heal`
+/// sans allié blessé à portée) : ~6 s pour remonter de 0 à plein en tenant H,
+/// soit le miroir du temps de mort au contact d'un monstre
+/// (`MONSTER_CONTACT_DPS`). Trois fois la régénération passive en ligne.
+pub(super) const SELF_HEAL_RATE_PER_S: f32 = 0.16;
+
 /// Portée (m) du soin du Soutien (GDD §8.1 : « 0,5 PV/s, 4 m ») — le soin
 /// universel (`HEAL_RANGE`/`HEAL_RATE_PER_S`) reste inchangé pour tous, le
 /// Soutien le *multiplie*, il ne le remplace pas côté mécanique.
@@ -441,9 +448,11 @@ impl AppState {
     /// débit `HEAL_RATE_PER_S`. Continue (pas de recharge discrète) : le débit
     /// lui-même borne l'efficacité, pas un temporisateur.
     pub(super) fn update_network_heal(&mut self, dt: f32) {
-        if self.network.network_players.len() < 2 {
+        if self.network.network_players.len() < 2 && !self.scene.ability_bar {
             // Un soin a besoin d'un soigneur ET d'un allié : rien à faire seul
-            // (le cas de loin le plus courant hors session de test/démo).
+            // (le cas de loin le plus courant hors session de test/démo) —
+            // sauf dans les scènes à kit de capacités, où H soigne aussi
+            // soi-même (cf. le repli en fin de boucle).
             return;
         }
         let healers: Vec<(PlayerId, usize)> = self
@@ -495,12 +504,42 @@ impl AppState {
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(id, _)| id);
+            // Repli « se soigner » (14 septembre 2026 au soir, correctif « H ne
+            // fait rien » sur water.loicberthod.ch) : dans une scène à kit de
+            // capacités, sans allié blessé à portée, H soigne le soigneur
+            // lui-même — c'est ce que promet l'aide en jeu (« H : se soigner »).
+            // Le soin d'allié garde la priorité (même débit que le coopératif
+            // classique) ; le soin de soi a son propre débit, plus lent que le
+            // Soutien mais bien plus rapide que la régénération passive
+            // (`REGEN_PER_S`), pour rester un vrai choix en combat. Les mondes
+            // coopératifs historiques (Hameau) ne changent pas.
+            let (target_id, rate) = match target_id {
+                Some(id) => (Some(id), heal_rate),
+                None if self.scene.ability_bar => (Some(healer_id), SELF_HEAL_RATE_PER_S),
+                None => (None, 0.0),
+            };
             if let Some(target_id) = target_id {
                 let max_hp = self.max_health_for(target_id);
                 if let Some(hp) = self.network.network_health.get_mut(&target_id) {
-                    *hp = (*hp + heal_rate * dt).min(max_hp);
+                    *hp = (*hp + rate * dt).min(max_hp);
                 }
             }
+        }
+    }
+
+    /// Soin de soi **solo** (14 septembre 2026 au soir) : pendant que la
+    /// touche de soin est tenue dans une scène à kit de capacités, la vie
+    /// locale (`hud_health`) remonte à `SELF_HEAL_RATE_PER_S`. Hors ligne
+    /// seulement : connecté, la vie est celle du serveur (`net_local_health`,
+    /// remontée par `update_network_heal` côté serveur) et `hud_health` n'est
+    /// plus affichée. Sans effet une fois la manche perdue.
+    pub(super) fn update_self_heal(&mut self, dt: f32) {
+        if !self.scene.ability_bar || !self.input_state.heal || self.lost || self.is_online_client()
+        {
+            return;
+        }
+        if let Some(h) = self.hud_health.as_mut() {
+            *h = (*h + SELF_HEAL_RATE_PER_S * dt).min(1.0);
         }
     }
 

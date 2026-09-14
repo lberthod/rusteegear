@@ -831,6 +831,22 @@ pub struct PlayerAttackState {
     /// fixe : un vrai glissage au sol, pas un bond instantané suivi d'une
     /// culbute figée sur place.
     roll_velocity: Vec3,
+    /// Temps restant (s) d'affichage du clip `Attack` après un **appui** sur
+    /// une touche d'attaque (14 septembre 2026 au soir, correctif « J/1/G ne
+    /// font rien » sur le site déployé) : sans cible à portée, `update_attack`
+    /// ne pose ni `attack_charge` ni `attack_projectile`, et le clip ne
+    /// durait que le temps de l'appui — une pression brève (~100 ms) ne
+    /// montrait que quelques images, indiscernable d'une touche morte. Armé
+    /// sur le front montant de `input_state.attack`, décompté par
+    /// `simulation::apply_ability_animations` (seul lecteur/écrivain).
+    swing_anim_remaining: f32,
+    /// Idem pour le clip `Cast` (tir K/3 et soin H) — cf. `swing_anim_remaining`.
+    cast_anim_remaining: f32,
+    /// État de la touche d'attaque au tick précédent (détection du front
+    /// montant pour `swing_anim_remaining`).
+    attack_was_down: bool,
+    /// Idem pour tir/soin (`cast_anim_remaining`).
+    cast_was_down: bool,
 }
 
 pub struct NetworkPlayersState {
@@ -1661,6 +1677,10 @@ impl AppState {
                 dash_cooldown_remaining: 0.0,
                 roll_anim_remaining: 0.0,
                 roll_velocity: Vec3::ZERO,
+                swing_anim_remaining: 0.0,
+                cast_anim_remaining: 0.0,
+                attack_was_down: false,
+                cast_was_down: false,
             },
             player_ability_anim: None,
             network: NetworkPlayersState {

@@ -3562,3 +3562,166 @@ fn ability_animations_reach_the_local_players_network_ghost_once_connected() {
         "le fantôme réseau du joueur local doit recevoir le clip de capacité"
     );
 }
+
+/// Correctif du 14 septembre 2026 au soir (« J/K/1/3 ne font rien » sur
+/// water.loicberthod.ch) : une pression **brève** sur la touche d'attaque,
+/// sans cible à portée (donc sans `attack_charge`), doit quand même jouer le
+/// clip `Attack` pendant `ABILITY_ANIM_SECONDS` — pas seulement le temps de
+/// l'appui, sinon quelques images à peine, indiscernables d'une touche morte.
+#[test]
+fn a_brief_attack_tap_keeps_the_attack_clip_playing_for_a_while() {
+    use crate::scene::{AnimationState, Controller, Scene, SceneObject};
+
+    let mut app = AppState::new();
+    let mut scene = Scene {
+        ability_bar: true,
+        ..Default::default()
+    };
+    let mut player = SceneObject {
+        name: "Joueur".into(),
+        ..Default::default()
+    };
+    player.controller = Some(Controller {
+        input: true,
+        ..Default::default()
+    });
+    player.animation = Some(AnimationState {
+        clip: "Idle".into(),
+        ..Default::default()
+    });
+    scene.objects.push(player);
+    app.scene = scene;
+    let clip = |app: &AppState| {
+        app.scene.objects[0]
+            .animation
+            .as_ref()
+            .map(|a| a.clip.clone())
+            .unwrap_or_default()
+    };
+
+    // Un seul tick d'appui, puis relâché.
+    app.input_state.attack = true;
+    app.apply_ability_animations(1.0 / 60.0);
+    app.input_state.attack = false;
+    assert_eq!(clip(&app), "Attack");
+    for _ in 0..12 {
+        app.apply_ability_animations(1.0 / 60.0);
+        assert_eq!(clip(&app), "Attack", "le coup doit rester visible après le relâchement");
+        assert_eq!(app.player_ability_anim, Some("Attack"));
+    }
+    // Une fois le minuteur écoulé, la locomotion reprend la main.
+    for _ in 0..40 {
+        app.apply_ability_animations(1.0 / 60.0);
+    }
+    assert_eq!(app.player_ability_anim, None, "retour à la locomotion après le coup");
+
+    // Même chose pour le sort (K/3) et le soin (H) : clip `Cast`.
+    app.input_state.fire = true;
+    app.apply_ability_animations(1.0 / 60.0);
+    app.input_state.fire = false;
+    for _ in 0..12 {
+        app.apply_ability_animations(1.0 / 60.0);
+        assert_eq!(clip(&app), "Cast");
+    }
+    for _ in 0..40 {
+        app.apply_ability_animations(1.0 / 60.0);
+    }
+    app.input_state.heal = true;
+    app.apply_ability_animations(1.0 / 60.0);
+    app.input_state.heal = false;
+    for _ in 0..12 {
+        app.apply_ability_animations(1.0 / 60.0);
+        assert_eq!(clip(&app), "Cast", "le soin se lit comme une incantation");
+    }
+}
+
+/// « H : se soigner » (14 septembre 2026 au soir) : en solo, dans une scène
+/// à kit de capacités, tenir la touche de soin remonte la vie locale — avant,
+/// H n'avait aucun effet hors ligne (le soin n'existait qu'entre alliés
+/// connectés). Hors kit, rien ne change.
+#[test]
+fn holding_heal_restores_solo_health_in_an_ability_bar_scene() {
+    let mut app = AppState::new();
+    app.scene.ability_bar = true;
+    app.hud_health = Some(0.5);
+    app.input_state.heal = true;
+    app.update_self_heal(1.0);
+    let hp = app.hud_health.unwrap();
+    assert!(
+        (hp - (0.5 + crate::app::health::SELF_HEAL_RATE_PER_S)).abs() < 1e-5,
+        "vie après 1 s de soin : {hp}"
+    );
+    for _ in 0..20 {
+        app.update_self_heal(1.0);
+    }
+    assert_eq!(app.hud_health, Some(1.0), "plafonnée à la vie max");
+
+    app.hud_health = Some(0.5);
+    app.input_state.heal = false;
+    app.update_self_heal(1.0);
+    assert_eq!(app.hud_health, Some(0.5), "touche relâchée : pas de soin");
+
+    app.scene.ability_bar = false;
+    app.input_state.heal = true;
+    app.update_self_heal(1.0);
+    assert_eq!(app.hud_health, Some(0.5), "hors kit de capacités : comportement historique");
+}
+
+/// Pendant en ligne (côté serveur) : un joueur réseau **seul** dans une scène
+/// à kit de capacités se soigne lui-même en tenant H (repli de
+/// `update_network_heal`, qui sortait jusque-là dès qu'il y avait moins de
+/// deux joueurs) ; dans un monde coopératif classique, toujours rien.
+#[test]
+fn a_lone_network_player_heals_themself_with_the_ability_bar() {
+    use crate::scene::{Controller, Scene, SceneObject};
+
+    let build = |ability_bar: bool| {
+        let mut app = AppState::new();
+        let mut scene = Scene {
+            ability_bar,
+            ..Default::default()
+        };
+        let mut player = SceneObject {
+            name: "Joueur".into(),
+            ..Default::default()
+        };
+        player.controller = Some(Controller {
+            input: true,
+            ..Default::default()
+        });
+        scene.objects.push(player);
+        app.scene = scene;
+        let id = 7;
+        app.spawn_network_player(id, multiplayer::PlayerClass::Assault)
+            .expect("gabarit trouvé");
+        app.network.network_health.insert(id, 0.5);
+        app.set_network_input(
+            id,
+            multiplayer::NetworkInput {
+                move_x: 0.0,
+                move_y: 0.0,
+                aim_yaw: 0.0,
+                attack: false,
+                jump: false,
+                fire: false,
+                weapon: 0,
+                heal: true,
+                block: false,
+                dash: false,
+            },
+        );
+        (app, id)
+    };
+
+    let (mut app, id) = build(true);
+    app.update_network_heal(1.0);
+    let hp = app.network.network_health[&id];
+    assert!(
+        (hp - (0.5 + crate::app::health::SELF_HEAL_RATE_PER_S)).abs() < 1e-5,
+        "soin de soi en ligne : {hp}"
+    );
+
+    let (mut app, id) = build(false);
+    app.update_network_heal(1.0);
+    assert_eq!(app.network.network_health[&id], 0.5, "monde coopératif : inchangé");
+}

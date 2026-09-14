@@ -1317,6 +1317,7 @@ impl AppState {
             self.update_network_health(dt);
             self.update_creature_bite(dt);
             self.update_network_heal(dt);
+            self.update_self_heal(dt);
             self.update_network_revive(dt);
             self.update_network_item_pickups();
             // Réapparition des pièces bonus et ennemis dont le délai est écoulé.
@@ -1920,6 +1921,12 @@ impl AppState {
             }));
     }
 
+    /// Durée (s) minimale d'affichage des clips `Attack`/`Cast` après un
+    /// appui (cf. `PlayerAttackState::swing_anim_remaining`) — de l'ordre du
+    /// clip lui-même (`creature_ronde.glb`, ~0,5 s), assez pour être lu comme
+    /// un vrai coup, pas assez pour retarder la locomotion qui suit.
+    pub(super) const ABILITY_ANIM_SECONDS: f32 = 0.45;
+
     /// Anime le(s) joueur(s) local(aux) selon la capacité tenue (kit 1-2-3-4,
     /// `Scene::ability_bar`, roadmap 14 septembre 2026) : purement visuel — la
     /// mécanique (dégâts, cooldowns, réduction de dégâts du bouclier) reste
@@ -1961,16 +1968,34 @@ impl AppState {
         if !self.scene.ability_bar {
             return;
         }
-        let _ = dt; // conservé pour un usage futur (le décompte vit dans `combat::update_dash`)
+        // Coup/sort/soin : un **appui** (front montant) arme un minuteur
+        // dédié (`swing_anim_remaining`/`cast_anim_remaining`, cf. leur doc
+        // dans `PlayerAttackState`) pour que le clip joue en entier même sur
+        // une pression brève et sans cible à portée — avant ce correctif
+        // (14 septembre 2026 au soir), J/K/1/3 semblaient morts sur le site
+        // déployé : quelques images de clip puis retour à `Idle`.
+        let attack_down = self.input_state.attack;
+        if attack_down && !self.attack.attack_was_down {
+            self.attack.swing_anim_remaining = Self::ABILITY_ANIM_SECONDS;
+        }
+        self.attack.attack_was_down = attack_down;
+        let cast_down = self.input_state.fire || self.input_state.heal;
+        if cast_down && !self.attack.cast_was_down {
+            self.attack.cast_anim_remaining = Self::ABILITY_ANIM_SECONDS;
+        }
+        self.attack.cast_was_down = cast_down;
+        self.attack.swing_anim_remaining = (self.attack.swing_anim_remaining - dt).max(0.0);
+        self.attack.cast_anim_remaining = (self.attack.cast_anim_remaining - dt).max(0.0);
         // Roulade (14 septembre 2026) : minuteur dédié, pas l'état brut de la
         // touche — décompté par `combat::update_dash` (qui avance aussi la
         // position pendant le glissement, une seule source de vérité pour ce
         // minuteur), lu ici tel quel.
         let blocking = self.input_state.block;
-        let attacking = self.input_state.attack
+        let attacking = attack_down
+            || self.attack.swing_anim_remaining > 0.0
             || self.attack.attack_charge.is_some()
             || self.attack.attack_projectile.is_some();
-        let casting = self.input_state.fire;
+        let casting = cast_down || self.attack.cast_anim_remaining > 0.0;
         let dashing = self.attack.roll_anim_remaining > 0.0;
         let desired = if blocking {
             Some("Block")

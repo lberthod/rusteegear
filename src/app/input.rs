@@ -492,11 +492,18 @@ impl ResolvedKeys {
         code: winit::keyboard::KeyCode,
         ability_bar: bool,
     ) -> bool {
+        // `KeyG` (jet de griffe, alias tenu de `attack` comme `Digit1`) :
+        // ajouté ici le 14 septembre 2026 au soir — `recompute_action_buttons`
+        // le lisait déjà, mais sans cette entrée la touche ne rejoignait
+        // jamais `action_keys_held` (même oubli que 2/4 corrigé plus haut), donc
+        // G ne faisait rien sur le site déployé.
         self.is_held_action(code)
             || (ability_bar
                 && matches!(
                     code,
-                    winit::keyboard::KeyCode::Digit1 | winit::keyboard::KeyCode::Digit3
+                    winit::keyboard::KeyCode::Digit1
+                        | winit::keyboard::KeyCode::Digit3
+                        | winit::keyboard::KeyCode::KeyG
                 ))
     }
 }
@@ -606,6 +613,10 @@ mod key_tests {
         assert!(r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit3, true));
         assert!(!r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit1, false));
         assert!(!r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit3, false));
+        // G (jet de griffe) : même statut que 1 — tenu seulement avec le kit,
+        // sinon raccourci d'outil éditeur (`EDITOR_TOOL_KEYS`, caméra libre).
+        assert!(r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::KeyG, true));
+        assert!(!r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::KeyG, false));
         // Sans effet sur les touches déjà tenues par ailleurs (jump/attack/
         // fire/heal/block/dash) : la variante `ability_bar` ne fait
         // qu'ajouter, jamais retirer.

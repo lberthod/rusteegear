@@ -445,8 +445,8 @@ pub fn play_solo_label(locale: Locale) -> &'static str {
 /// — cf. `editor::hud::ability_bar_hint`.
 pub fn ability_bar_hint(locale: Locale) -> &'static str {
     match locale {
-        Locale::Fr => "1 Mêlée · 2 Bouclier · 3 Sort · 4 Ruée",
-        Locale::En => "1 Melee · 2 Shield · 3 Spell · 4 Dash",
+        Locale::Fr => "1/J Mêlée · 2 Bouclier · 3/K Sort · 4 Ruée · H Soin · G Griffe",
+        Locale::En => "1/J Melee · 2 Shield · 3/K Spell · 4 Dash · H Heal · G Claw",
     }
 }
 

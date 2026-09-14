@@ -73,6 +73,11 @@
         <p>Sans navigateur compatible, la version macOS se télécharge sur
           <a href="https://github.com/lberthod/rusteegear" rel="noopener">github.com/lberthod/rusteegear</a>.</p>
       </div>
+      <!-- Rivière & cascade (`?scene=riviere`, water.loicberthod.ch) : kit de
+           capacités 1-2-3-4 au lieu du choix d'arme — le script plus bas
+           remplace ce texte, sinon « 1 2 3 : arme » promettait un changement
+           d'arme qui n'existe pas dans cette scène (retour du 14 septembre
+           2026 : « les touches 1-2-3 ne fonctionnent pas »). -->
       <p id="keys"><b>WASD</b> ou flèches : se déplacer · <b>Espace</b> : sauter · <b>J</b> : attaquer ·
         <b>K</b> : tirer · <b>H</b> : se soigner · <b>1 2 3</b> : arme · <b>M</b> : carte · <b>Échap</b> : pause</p>
       <p id="keys">Aussi sur ce moteur : <a href="reeduc.html" style="color:#e8763b">🩺 Rééducation — mobilité guidée</a>
@@ -93,6 +98,12 @@
 
       const $ = (id) => document.getElementById(id);
       const canvas = $("rustee-canvas");
+      // Aide clavier adaptée à la scène (cf. le commentaire du <p id="keys">).
+      if (new URLSearchParams(location.search).get("scene") === "riviere") {
+        $("keys").innerHTML = "<b>WASD</b> ou flèches : se déplacer · <b>Espace</b> : sauter · " +
+          "<b>1</b> ou <b>J</b> : coup de mêlée · <b>2</b> : bouclier · <b>3</b> ou <b>K</b> : sort · " +
+          "<b>4</b> : roulade · <b>G</b> : griffe · <b>H</b> : se soigner · <b>M</b> : carte · <b>Échap</b> : pause";
+      }
       const boot = $("boot");
       const statusEl = $("status");
       const fill = $("fill");
