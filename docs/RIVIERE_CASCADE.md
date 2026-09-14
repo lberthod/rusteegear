@@ -100,6 +100,32 @@ des connexions déjà fermées côté client tant que le serveur ne les a pas vu
 tomber — plusieurs sondes successives depuis la même IP finissent refusées
 (« Serveur plein ») ; un joueur seul n'est pas concerné.
 
+### Jauges de vie et PvP (14 septembre 2026, fin de soirée)
+
+Demande « rajoute des points de vie / jauge de vie sur les personnages et permet
+le PvP ». Le PvP mêlée/tir existait déjà côté serveur dans cette scène (kit
+1-2-3-4), mais rien n'était visible et un duel était en pratique impossible :
+
+- **Jauges au-dessus des têtes** (`app::world_labels` → `hud::world_health_labels`,
+  projetées par la matrice caméra comme le marqueur d'allié à terre) : pseudo +
+  barre + points de vie (« 85 » sur 100) pour chaque autre joueur réseau, barre
+  rouge + « 2/3 » pour chaque monstre à moins de 45 m ; flash blanc à chaque
+  perte de vie. Le joueur local garde sa grande barre en haut de l'écran.
+- **Vie des monstres diffusée** normalisée dans `EntityDelta::health` (était
+  `None`) et recopiée dans `Combat::hp` côté client, sans changement de protocole.
+- **Portée PvP** : deux `creature_ronde` ne s'approchent pas à moins de ≈ 2,1 m
+  centre à centre (sonde en production) ; la portée de 1,2 m (`NETWORK_ATTACK_RANGE`,
+  pensée contre l'AABB d'un monstre) rendait le duel impossible →
+  `PVP_MELEE_RANGE` = 2,8 m, PvP seulement (hameau inchangé).
+- **Réapparition PvP** (`health::update_network_respawn`) : un joueur vaincu
+  dans une scène à kit revient au point de départ à pleine vie avec sa grâce
+  d'apparition après 6 s ; dans les mondes coopératifs, seule la réanimation
+  de Soutien relève un joueur, comme avant.
+
+Vérifié en production (sonde à deux clients + navigateur) : B tué en mêlée
+en ~8 s, réapparu 6 s plus tard, jauges « Joueur 6 · 30 » et « 3/3 » visibles
+au-dessus des personnages, vie des monstres présente dans chaque snapshot.
+
 ## Ce qui a été ajouté au moteur
 
 ### Composant « Surface d'eau » (`SceneObject::water`)
