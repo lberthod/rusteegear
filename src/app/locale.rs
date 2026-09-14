@@ -380,10 +380,22 @@ pub fn class_description(
         (Locale::Fr, C::Support) => {
             "Soutien : soin ×2,5, seul à réanimer — vitesse −15 %, dégâts −30 %"
         }
+        (Locale::Fr, C::Tank) => {
+            "Cendre : bouclier renforcé, PV max +60 %, dégâts à distance −20 %"
+        }
+        (Locale::Fr, C::Berserker) => {
+            "Brasier : dégâts de contact ×1,4, attaque plus rapide, bouclier inutilisable"
+        }
         (Locale::En, C::Assault) => "Assault: balanced — three ranged weapons, normal melee",
         (Locale::En, C::Scout) => "Scout: speed +25%, jump +30%, max HP −30%",
         (Locale::En, C::Support) => {
             "Support: healing ×2.5, the only one who revives — speed −15%, damage −30%"
+        }
+        (Locale::En, C::Tank) => {
+            "Tank: reinforced shield, max HP +60%, ranged damage −20%"
+        }
+        (Locale::En, C::Berserker) => {
+            "Berserker: melee damage ×1.4, faster attacks, shield unusable"
         }
     }
 }

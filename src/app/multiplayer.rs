@@ -79,6 +79,22 @@ pub enum PlayerClass {
     /// Vitesse −15 %, dégâts infligés −30 %, soin ×2,5 (portée et débit) —
     /// et seule classe autorisée à réanimer (`update_network_revive`).
     Support,
+    /// Cendre (14 septembre 2026 au soir, GDD §8.1) : le brasier mis en
+    /// veille, couvé sous sa propre cendre pour tenir toute la nuit sans
+    /// jamais s'éteindre. Vitesse −25 %, saut −15 %, PV max +60 %, dégâts à
+    /// distance −20 %, aucun bonus de mêlée — et bouclier renforcé
+    /// (`block_damage_mult` 0,10 au lieu de 0,25 pour les autres classes) :
+    /// il encaisse en tête de groupe, il ne finit pas les combats vite.
+    Tank,
+    /// Brasier (14 septembre 2026 au soir, GDD §8.1 ; rééquilibré le 15
+    /// septembre 2026 après revue adversariale, cf. `melee_damage_mult`/
+    /// `attack_cooldown_mult`) : le feu qui s'emballe, consume tout ce qu'il
+    /// touche mais se consume lui-même. Vitesse +10 %, PV max −25 %, dégâts à
+    /// distance −40 %, dégâts de contact PvP ×1,4, cadence d'attaque +18 %
+    /// (`attack_cooldown_mult` 0,85) — mais bouclier inutilisable
+    /// (`block_damage_mult` 1.0, tenir la capacité 2 ne réduit aucun dégât) :
+    /// le duelliste au contact, fragile mais dévastateur.
+    Berserker,
 }
 
 /// Teinte déterministe par joueur (kit multi-couleur, roadmap 14 septembre
@@ -128,6 +144,8 @@ impl PlayerClass {
         match v {
             1 => PlayerClass::Scout,
             2 => PlayerClass::Support,
+            3 => PlayerClass::Tank,
+            4 => PlayerClass::Berserker,
             _ => PlayerClass::Assault,
         }
     }
@@ -142,6 +160,10 @@ impl PlayerClass {
             PlayerClass::Assault => [1.0, 1.0, 1.0],
             PlayerClass::Scout => [0.72, 1.0, 0.82],
             PlayerClass::Support => [1.0, 0.88, 0.62],
+            // Cendre : gris-bleu ardoise, la braise couverte.
+            PlayerClass::Tank => [0.70, 0.76, 0.90],
+            // Brasier : rouge-orangé profond, le feu qui s'emballe.
+            PlayerClass::Berserker => [1.0, 0.42, 0.22],
         }
     }
 
@@ -154,6 +176,10 @@ impl PlayerClass {
             PlayerClass::Assault => 1.0,
             PlayerClass::Scout => 0.90,
             PlayerClass::Support => 1.08,
+            // Cendre : trapu, le plus large du roster (encaisse en tête).
+            PlayerClass::Tank => 1.15,
+            // Brasier : plus fin, tout en vitesse.
+            PlayerClass::Berserker => 0.95,
         }
     }
 
@@ -163,6 +189,8 @@ impl PlayerClass {
             PlayerClass::Assault => 1.0,
             PlayerClass::Scout => 1.25,
             PlayerClass::Support => 0.85,
+            PlayerClass::Tank => 0.75,
+            PlayerClass::Berserker => 1.10,
         }
     }
 
@@ -171,8 +199,9 @@ impl PlayerClass {
     /// déplacement, +25 %).
     fn jump_height_mult(self) -> f32 {
         match self {
-            PlayerClass::Assault | PlayerClass::Support => 1.0,
+            PlayerClass::Assault | PlayerClass::Support | PlayerClass::Berserker => 1.0,
             PlayerClass::Scout => 1.30,
+            PlayerClass::Tank => 0.85,
         }
     }
 
@@ -182,20 +211,90 @@ impl PlayerClass {
             PlayerClass::Assault => 1.0,
             PlayerClass::Scout => 0.70,
             PlayerClass::Support => 1.0,
+            PlayerClass::Tank => 1.60,
+            PlayerClass::Berserker => 0.75,
         }
     }
 
     /// Multiplicateur des dégâts infligés (armes à distance, cf.
     /// `fireball::resolve_fireball_hit`) — le Soutien tape moins fort, en
-    /// échange de son soin renforcé et de sa réanimation exclusive.
+    /// échange de son soin renforcé et de sa réanimation exclusive ; Cendre et
+    /// Brasier sont tous deux pénalisés à distance (14 septembre 2026 au
+    /// soir, GDD §8.1) pour forcer l'engagement au contact, où leur identité
+    /// respective (encaisser / cogner) se joue vraiment.
     pub(super) fn ranged_damage_mult(self) -> f32 {
         match self {
             PlayerClass::Support => 0.70,
             PlayerClass::Assault | PlayerClass::Scout => 1.0,
+            PlayerClass::Tank => 0.80,
+            PlayerClass::Berserker => 0.60,
+        }
+    }
+
+    /// Multiplicateur des dégâts de contact PvP (`PVP_MELEE_DAMAGE`, cf.
+    /// `update_network_attacks`) — seul Brasier s'en écarte : ×1,4, la
+    /// contrepartie de son bouclier inutilisable. Toutes les autres classes
+    /// gardent la valeur universelle.
+    ///
+    /// Rééquilibré le 15 septembre 2026 après revue adversariale : les
+    /// valeurs d'origine (×1,8 dégât, cadence ×0,65) donnaient un DPS effectif
+    /// ×2,77 la référence (×1,8 dégât × 1/0,65 fréquence), un massacre garanti
+    /// même contre Cendre — dont le bonus de PV (+60 %, linéaire) ne pouvait
+    /// jamais compenser un multiplicateur de DPS composé aussi élevé. Calcul
+    /// de référence (temps pour vider une cible, `PVP_MELEE_DAMAGE` = 0,15,
+    /// `NETWORK_ATTACK_COOLDOWN` = 0,4 s, `n` = nombre de coups pour atteindre
+    /// les PV de la cible, temps = (n−1) × cadence — le premier coup part
+    /// sans attente) :
+    /// - Référence (Assaut/Soutien, 1,0 PV, aucun bonus) : n=7, temps ≈ 2,4 s.
+    /// - Brasier (×1,4 / 0,85) vs Assaut/Soutien (1,0 PV) : dégât 0,21/coup,
+    ///   cadence 0,34 s, n=5, temps ≈ 1,36 s — 57 % du temps de référence,
+    ///   franchement favorable à Brasier sans être expéditif (> 50 % du
+    ///   temps de référence, pas de kill en moins de la moitié du temps).
+    /// - Brasier vs Cendre (1,6 PV, sans bloquer) : n=8, temps ≈ 2,38 s.
+    ///   Cendre (aucun bonus de mêlée) vs Brasier (0,75 PV) : n=5, temps ≈
+    ///   1,6 s — Cendre tue ~33 % plus vite : son bonus de PV redevient un
+    ///   vrai contre structurel au corps-à-corps, sans qu'un échange direct
+    ///   soit pour autant un massacre garanti (Brasier place plusieurs coups
+    ///   avant de tomber).
+    pub(super) fn melee_damage_mult(self) -> f32 {
+        match self {
+            PlayerClass::Berserker => 1.4,
+            _ => 1.0,
+        }
+    }
+
+    /// Multiplicateur du temps de recharge d'attaque (`NETWORK_ATTACK_COOLDOWN`,
+    /// cf. `update_network_attacks`) — Brasier frappe 18 % plus vite, aussi
+    /// bien en PvP qu'au corps-à-corps contre les monstres (le contact tue
+    /// déjà un monstre en un seul coup : le bonus de Brasier contre eux est
+    /// en fréquence de mise à mort, pas en dégât par coup — kill PvE en un
+    /// coup inchangé). Toutes les autres classes gardent la cadence
+    /// universelle. Voir le calcul de DPS ci-dessus (`melee_damage_mult`) :
+    /// rééquilibré le 15 septembre 2026 avec ce multiplicateur (0,65 → 0,85).
+    pub(super) fn attack_cooldown_mult(self) -> f32 {
+        match self {
+            PlayerClass::Berserker => 0.85,
+            _ => 1.0,
+        }
+    }
+
+    /// Multiplicateur de dégâts entrants appliqué en tenant le bouclier
+    /// (capacité 2, cf. `health::apply_network_damage`) — `health::
+    /// BLOCK_DAMAGE_MULT` (0,25) reste la valeur universelle ; Cendre la
+    /// pousse à 0,10 (bouclier renforcé, 14 septembre 2026 au soir, GDD §8.1)
+    /// et Brasier à 1.0 (bouclier inutilisable, la contrepartie de son ×1,8
+    /// en dégâts de contact) : tenir la capacité 2 ne réduit alors plus rien.
+    pub(super) fn block_damage_mult(self) -> f32 {
+        match self {
+            PlayerClass::Tank => 0.10,
+            PlayerClass::Berserker => 1.0,
+            _ => crate::app::health::BLOCK_DAMAGE_MULT,
         }
     }
 
     /// `true` seul le Soutien peut réanimer (GDD §8.1 : « seul à réanimer »).
+    /// Cendre et Brasier n'en gagnent pas — décision de design, pas un oubli :
+    /// la réanimation reste l'exclusivité du Soutien, tout comme avant.
     pub(super) fn can_revive(self) -> bool {
         matches!(self, PlayerClass::Support)
     }
@@ -209,6 +308,8 @@ impl PlayerClass {
             PlayerClass::Assault => 0,
             PlayerClass::Scout => 1,
             PlayerClass::Support => 2,
+            PlayerClass::Tank => 3,
+            PlayerClass::Berserker => 4,
         }
     }
 
@@ -219,14 +320,18 @@ impl PlayerClass {
             PlayerClass::Assault => "Assaut",
             PlayerClass::Scout => "Éclaireur",
             PlayerClass::Support => "Soutien",
+            PlayerClass::Tank => "Cendre",
+            PlayerClass::Berserker => "Brasier",
         }
     }
 
-    /// Les trois classes existantes, dans l'ordre affiché au sélecteur.
-    pub const ALL: [PlayerClass; 3] = [
+    /// Les cinq classes existantes, dans l'ordre affiché au sélecteur.
+    pub const ALL: [PlayerClass; 5] = [
         PlayerClass::Assault,
         PlayerClass::Scout,
         PlayerClass::Support,
+        PlayerClass::Tank,
+        PlayerClass::Berserker,
     ];
 }
 
@@ -1117,9 +1222,16 @@ impl AppState {
                     if pos.distance(other_pos) > PVP_MELEE_RANGE {
                         continue;
                     }
+                    // Brasier (14 septembre 2026 au soir, GDD §8.1 ; rééquilibré
+                    // le 15 septembre 2026, cf. `melee_damage_mult`) : dégâts de
+                    // contact PvP ×1,4, appliqués ici plutôt que côté client —
+                    // même règle d'or anti-triche que `ranged_damage_mult`.
+                    let melee_mult = self
+                        .network_player_class(id)
+                        .map_or(1.0, |c| c.melee_damage_mult());
                     let died = self.apply_network_damage(
                         other,
-                        PVP_MELEE_DAMAGE,
+                        PVP_MELEE_DAMAGE * melee_mult,
                         crate::net::protocol::DeathCauseKind::Player,
                         index,
                     );
@@ -1128,9 +1240,16 @@ impl AppState {
                     }
                 }
             }
+            // Brasier : cadence d'attaque +18 % (`attack_cooldown_mult`), utile
+            // aussi bien en PvP qu'en PvE (achève les monstres plus vite en
+            // fréquence, pas en dégât par coup — le contact les tue déjà d'un
+            // seul coup). Toute autre classe garde `NETWORK_ATTACK_COOLDOWN` tel quel.
+            let cooldown_mult = self
+                .network_player_class(id)
+                .map_or(1.0, |c| c.attack_cooldown_mult());
             self.network
                 .network_attack_cooldowns
-                .insert(id, NETWORK_ATTACK_COOLDOWN);
+                .insert(id, NETWORK_ATTACK_COOLDOWN * cooldown_mult);
         }
     }
 
@@ -1566,6 +1685,180 @@ mod tests {
         );
     }
 
+    /// GDD §8.1 (14 septembre 2026 au soir) : Cendre = vitesse −25 %, PV max
+    /// +60 % — le mur du groupe, il encaisse plus et se déplace moins vite.
+    #[test]
+    fn tank_class_is_slower_and_has_more_max_health_than_assault() {
+        let mut assault_app = app_with_zombies_demo();
+        let assault_idx = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let assault_speed = assault_app.scene.objects[assault_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        let mut tank_app = app_with_zombies_demo();
+        let tank_idx = tank_app.spawn_network_player(1, PlayerClass::Tank).unwrap();
+        let tank_speed = tank_app.scene.objects[tank_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        assert!(
+            tank_speed < assault_speed,
+            "Cendre doit être plus lent que l'Assaut : {tank_speed} >= {assault_speed}"
+        );
+        assert_eq!(
+            tank_app.network_player_health(1),
+            Some(crate::app::health::MAX_HEALTH * 1.60),
+            "Cendre doit démarrer à 160 % des PV max de base"
+        );
+    }
+
+    /// GDD §8.1 : Brasier = vitesse +10 %, PV max −25 % — rapide et fragile,
+    /// à l'opposé de Cendre.
+    #[test]
+    fn berserker_class_is_faster_and_has_less_max_health_than_assault() {
+        let mut assault_app = app_with_zombies_demo();
+        let assault_idx = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let assault_speed = assault_app.scene.objects[assault_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        let mut berserker_app = app_with_zombies_demo();
+        let berserker_idx = berserker_app
+            .spawn_network_player(1, PlayerClass::Berserker)
+            .unwrap();
+        let berserker_speed = berserker_app.scene.objects[berserker_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        assert!(
+            berserker_speed > assault_speed,
+            "Brasier doit être plus rapide que l'Assaut : {berserker_speed} <= {assault_speed}"
+        );
+        assert_eq!(
+            berserker_app.network_player_health(1),
+            Some(crate::app::health::MAX_HEALTH * 0.75),
+            "Brasier doit démarrer à 75 % des PV max de base"
+        );
+    }
+
+    /// GDD §8.1 : le bouclier renforcé de Cendre (`block_damage_mult` 0,10)
+    /// absorbe 90 % des dégâts, contre 75 % pour les autres classes — un vrai
+    /// mur, pas juste une variante du bouclier universel.
+    #[test]
+    fn tank_class_reduces_blocked_damage_far_more_than_the_universal_shield() {
+        let mut app = app_with_zombies_demo();
+        let idx1 = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        app.spawn_network_player(2, PlayerClass::Tank).unwrap();
+        app.network.network_inputs.get_mut(&2).unwrap().block = true;
+        let before = app.network_player_health(2).unwrap();
+        app.apply_network_damage(
+            2,
+            0.1,
+            crate::net::protocol::DeathCauseKind::Player,
+            idx1,
+        );
+        let lost = before - app.network_player_health(2).unwrap();
+        assert!(
+            (lost - 0.1 * 0.10).abs() < 1e-5,
+            "Cendre bouclier tenu doit absorber 90 % des dégâts, {lost} perdus au lieu de {}",
+            0.1 * 0.10
+        );
+    }
+
+    /// GDD §8.1 : le bouclier de Brasier ne réduit plus rien
+    /// (`block_damage_mult` 1.0) — la contrepartie de son ×1,4 en mêlée.
+    #[test]
+    fn berserker_class_shield_does_not_reduce_damage_at_all() {
+        let mut app = app_with_zombies_demo();
+        let idx1 = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        app.spawn_network_player(2, PlayerClass::Berserker).unwrap();
+        app.network.network_inputs.get_mut(&2).unwrap().block = true;
+        let before = app.network_player_health(2).unwrap();
+        app.apply_network_damage(
+            2,
+            0.1,
+            crate::net::protocol::DeathCauseKind::Player,
+            idx1,
+        );
+        let lost = before - app.network_player_health(2).unwrap();
+        assert!(
+            (lost - 0.1).abs() < 1e-5,
+            "Brasier bouclier tenu doit encaisser les dégâts pleins, {lost} perdus au lieu de 0.1"
+        );
+    }
+
+    /// GDD §8.1 (rééquilibré le 15 septembre 2026) : dégâts de contact PvP
+    /// ×1,4 pour Brasier, cadence d'attaque +18 % (recharge à 0,85×) — les
+    /// deux effets de `update_network_attacks`, pas seulement le
+    /// multiplicateur brut testé isolément ci-dessus.
+    #[test]
+    fn berserker_class_hits_harder_and_recharges_faster_in_pvp() {
+        let mut scene = crate::scene::Scene {
+            ability_bar: true,
+            ..Default::default()
+        };
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::ZERO)
+                .with_scale(glam::Vec3::new(40.0, 1.0, 40.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut app = AppState::new();
+        app.scene = scene;
+        app.playing = true;
+        let attacker = app
+            .spawn_network_player(1, PlayerClass::Berserker)
+            .unwrap();
+        let target = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        app.scene.objects[target].transform.position = app.scene.objects[attacker]
+            .transform
+            .position;
+        // Grâce d'apparition à zéro : sans ça, la cible fraîchement spawnée
+        // serait protégée du PvP par `SPAWN_GRACE_S` et ce test mesurerait
+        // zéro dégât au lieu du multiplicateur de Brasier (cf. `in_grace`
+        // dans `update_network_attacks`).
+        app.network.network_spawn_grace.insert(2, 0.0);
+        app.network.network_inputs.get_mut(&1).unwrap().attack = true;
+        let before = app.network_player_health(2).unwrap();
+        app.update_network_attacks(1.0 / 60.0);
+        let lost = before - app.network_player_health(2).unwrap();
+        assert!(
+            (lost - super::PVP_MELEE_DAMAGE * 1.4).abs() < 1e-5,
+            "Brasier doit infliger ×1,4 les dégâts de contact PvP, {lost} au lieu de {}",
+            super::PVP_MELEE_DAMAGE * 1.4
+        );
+        let cooldown = app.network.network_attack_cooldowns[&1];
+        assert!(
+            (cooldown - super::NETWORK_ATTACK_COOLDOWN * 0.85).abs() < 1e-5,
+            "Brasier doit recharger à 0,85× le temps universel, {cooldown} au lieu de {}",
+            super::NETWORK_ATTACK_COOLDOWN * 0.85
+        );
+    }
+
     /// `PlayerClass::from_u8` (décodage du réseau) : une valeur hors table ne
     /// doit jamais faire paniquer le serveur, elle retombe sur Assaut — même
     /// principe que `fireball::clamp_weapon` pour un indice d'arme invalide.
@@ -1574,11 +1867,24 @@ mod tests {
         assert_eq!(PlayerClass::from_u8(0), PlayerClass::Assault);
         assert_eq!(PlayerClass::from_u8(1), PlayerClass::Scout);
         assert_eq!(PlayerClass::from_u8(2), PlayerClass::Support);
+        assert_eq!(PlayerClass::from_u8(3), PlayerClass::Tank);
+        assert_eq!(PlayerClass::from_u8(4), PlayerClass::Berserker);
         assert_eq!(PlayerClass::from_u8(250), PlayerClass::Assault);
     }
 
+    /// Ajouter une classe à `PlayerClass::ALL` n'est **pas** forcé par le
+    /// compilateur (contrairement aux matches exhaustifs par variante) — ce
+    /// test échoue explicitement si une classe existe sans y figurer, au lieu
+    /// de la laisser silencieusement absente du sélecteur UI et des boucles
+    /// de test qui itèrent `ALL` (14 septembre 2026 au soir, ajout de
+    /// Cendre/Brasier).
+    #[test]
+    fn player_class_all_lists_every_known_class() {
+        assert_eq!(PlayerClass::ALL.len(), 5);
+    }
+
     /// Sprint 3 (`sprint10audit.md`) : `to_u8` doit être l'inverse exact de
-    /// `from_u8` pour les trois classes — c'est ce qui garantit que la classe
+    /// `from_u8` pour les cinq classes — c'est ce qui garantit que la classe
     /// choisie dans le sélecteur (fenêtre Multijoueur) arrive intacte côté
     /// serveur via `ClientMsg::Join::class`.
     #[test]

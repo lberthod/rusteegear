@@ -170,6 +170,8 @@ Le kit 1-2-3-4 n'existe que dans les scènes avec `Scene::ability_bar = true`
 | Assaut | ×1,0 | ×1,0 | ×1,0 | référence |
 | Éclaireur | ×1,25 | ×1,30 | ×0,70 | déclenche les créatures furtives de loin |
 | Soutien | ×0,85 | ×1,0 | ×1,0 | soin/réanimation des alliés, dégâts à distance réduits |
+| Cendre | ×0,75 | ×0,85 | ×1,60 | bouclier renforcé (dégâts −90 % en tenant 2, contre −75 % pour les autres), dégâts à distance −20 % |
+| Brasier | ×1,10 | ×1,0 | ×0,75 | dégâts de contact PvP ×1,8, attaque 54 % plus vite, bouclier inutilisable, dégâts à distance −40 % |
 
 ### PvE : le bestiaire
 

@@ -55,6 +55,12 @@ pub(super) const MAX_HEALTH: f32 = 1.0;
 /// même règle partout, pas de bouclier « spécial PvE »/« spécial PvP »).
 /// Pas nul : un bouclier tenu en continu ne doit pas rendre invulnérable,
 /// seulement réduire le risque de rester au contact.
+///
+/// Valeur **par défaut**, pas absolue (14 septembre 2026 au soir, GDD §8.1) :
+/// `apply_network_damage` la retient pour toute classe qui ne surcharge pas
+/// `PlayerClass::block_damage_mult` (Assaut/Éclaireur/Soutien), mais Cendre
+/// (0,10, bouclier renforcé) et Brasier (1.0, bouclier inutilisable) s'en
+/// écartent — cf. cette méthode pour le détail.
 pub(super) const BLOCK_DAMAGE_MULT: f32 = 0.25;
 
 /// Dégâts par seconde infligés à un joueur réseau au contact (AABB) d'un
@@ -314,11 +320,15 @@ impl AppState {
             .network_inputs
             .get(&id)
             .is_some_and(|i| i.block);
-        let damage = if blocking {
-            raw_damage * BLOCK_DAMAGE_MULT
-        } else {
-            raw_damage
-        };
+        // Cendre/Brasier (14 septembre 2026 au soir, GDD §8.1) surchargent le
+        // multiplicateur universel — `BLOCK_DAMAGE_MULT` reste le défaut pour
+        // toute classe qui ne le surcharge pas (cf. sa doc).
+        let block_mult = self
+            .network
+            .network_classes
+            .get(&id)
+            .map_or(BLOCK_DAMAGE_MULT, |c| c.block_damage_mult());
+        let damage = if blocking { raw_damage * block_mult } else { raw_damage };
         let was_alive = self
             .network
             .network_health

@@ -571,13 +571,15 @@ habité » entre deux vagues :
 
 ## 8. Personnage et progression
 
-### 8.1 Les trois classes (choisies avant connexion, rappelées au roster)
+### 8.1 Les cinq classes (choisies avant connexion, rappelées au roster)
 
 | Classe | Fiction | Modificateurs (serveur) | Rôle de groupe |
 |---|---|---|---|
 | **Assaut** (défaut) | *Flamme* | Valeurs standard, 3 armes à distance | Éteindre la horde |
 | **Éclaireur** | *Feu follet* | Vitesse +25 %, saut +30 %, PV max −30 % | Attirer, détourner, activer — kiting rendu viable par le plafond de 2 chasseresses et la géométrie du hameau (§7) |
 | **Soutien** | *Foyer* | Vitesse −15 %, dégâts −30 % ; soin ×2,5 (0,5 PV/s, 4 m) ; **seul à réanimer** (10 s de canal, retour à 30 % PV) | Maintenir le groupe debout, effacer les morts |
+| **Cendre** (14 sept. 2026 au soir) | *Braise couvée* | Vitesse −25 %, saut −15 %, PV max +60 %, dégâts à distance −20 %, aucun bonus de mêlée ; bouclier renforcé (dégâts −90 % en tenant la capacité 2, contre −75 % pour les autres classes) | Encaisser en tête de groupe — il prolonge le combat, il ne le gagne pas seul |
+| **Brasier** (14 sept. 2026 au soir) | *Feu qui s'emballe* | Vitesse +10 %, PV max −25 %, dégâts à distance −40 % ; dégâts de contact PvP ×1,8, cadence d'attaque +54 % ; bouclier inutilisable (dégâts −0 %) | Duelliste au contact — imbattable au corps-à-corps contre qui ne bloque pas assez, contré structurellement par Cendre |
 
 Principes :
 
@@ -593,7 +595,12 @@ Principes :
   c'est le mode qu'on retouche.
 
 **Mesure de succès de l'interdépendance** : sur une nuit difficile, un
-groupe 2 Flammes + 1 Feu follet + 1 Foyer survit là où 4 Flammes échouent.
+groupe 2 Flammes + 1 Feu follet + 1 Foyer survit là où 4 Flammes échouent —
+un groupe Braise couvée + Feu qui s'emballe + Feu follet + Foyer fonctionne
+au moins aussi bien (la Braise couvée absorbe en tête, le Feu qui s'emballe
+et la Flamme achèvent vite, le Feu follet détourne les surnuméraires, le
+Foyer maintient tout le monde debout), sans qu'aucune composition à quatre
+classes identiques ne domine.
 
 ### 8.2 Progression du compte (Firebase, écrite par le serveur uniquement)
 
@@ -775,6 +782,10 @@ sphère placeholder, cf. §2.2), trois variations à coût d'asset quasi nul
   la vitesse se voit avant de se mesurer.
 - **Foyer** : gabarit légèrement tassé (~1,1× de large), sacoche dorsale
   lumineuse — le point vert du groupe, celui vers qui on rampe.
+- **Braise couvée** (14 sept. 2026 au soir) : le plus trapu du roster
+  (~1,15×), teinte gris-bleu ardoise — le mur qu'on repère en tête de groupe.
+- **Feu qui s'emballe** (14 sept. 2026 au soir) : silhouette plus fine
+  (~0,95×), teinte rouge-orangé profond — le duelliste qui fonce au contact.
 
 Complément quasi gratuit hérité de l'analyse visuelle : l'**animation
 secondaire procédurale** (squash & stretch au saut/atterrissage,

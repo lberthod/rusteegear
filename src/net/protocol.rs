@@ -56,6 +56,16 @@ pub type PlayerId = u32;
 /// déploiement couplé) : `ClientMsg::Ping { t }` / `ServerMsg::Pong { t }`,
 /// la mesure de latence affichée dans la pastille réseau — ajoutés en fin
 /// d'enum, comme le reste.
+/// Toujours v9 (14 septembre 2026 au soir, GDD §8.1, **sans nouveau bump**) :
+/// `PlayerClass` gagne `Tank` (Cendre, `class: u8` = 3) et `Berserker`
+/// (Brasier, `class: u8` = 4) — purement additif sur `ClientMsg::Join::class`
+/// et `EntityDelta::class`, tous deux déjà des `u8` bruts (pas un nouveau
+/// champ, pas de variant réordonné) : le fallback de `PlayerClass::from_u8`
+/// vers Assaut pour toute valeur hors table (déjà en place, cf. sa doc)
+/// dégrade gracieusement un ancien client qui recevrait ces classes d'un
+/// serveur plus récent. `0`/`1`/`2` restent Assaut/Éclaireur/Soutien —
+/// jamais renumérotés (référencés en dur dans `Settings::player_class` local
+/// et `Lobby::classes` côté serveur).
 pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les
@@ -211,10 +221,11 @@ pub enum ClientMsg {
         lobby: String,
         /// Classe choisie (GAMEDESIGN_MMORPG.md §3.2, `PROTOCOL_VERSION` 2) :
         /// `0` = Assaut (défaut, les valeurs actuelles — zéro régression pour
-        /// qui ne choisit pas), `1` = Éclaireur, `2` = Soutien. Une valeur
-        /// hors table est traitée comme Assaut par `spawn_network_player`
-        /// (jamais rejetée : un client futur avec une classe non reconnue ne
-        /// doit pas perdre sa connexion pour ça).
+        /// qui ne choisit pas), `1` = Éclaireur, `2` = Soutien, `3` = Cendre,
+        /// `4` = Brasier (les deux derniers ajoutés en v9, sans bump — cf. sa
+        /// doc). Une valeur hors table est traitée comme Assaut par
+        /// `spawn_network_player` (jamais rejetée : un client futur avec une
+        /// classe non reconnue ne doit pas perdre sa connexion pour ça).
         class: u8,
         /// Mode de manche choisi (Phase C, `sprint10audit.md`, `PROTOCOL_VERSION`
         /// 4) : `0` = Vagues (défaut, comportement historique — zéro régression
@@ -439,12 +450,14 @@ pub struct EntityDelta {
     #[serde(default)]
     pub assists: Option<u32>,
     /// Classe du joueur réseau (`PlayerClass::to_u8`, v7 — silhouettes de
-    /// classe GDD §10.3) : chaque client teinte/gabarit-ise le fantôme selon
-    /// la classe de son propriétaire, purement visuel (aucune hitbox modifiée,
-    /// le serveur reste seul juge du gameplay). Diffusée à chaque snapshot
-    /// plutôt que dans `PlayerJoined` : un client qui rejoint en cours de
-    /// manche n'a pas reçu les `PlayerJoined` des présents. Même politique
-    /// que `kills` : `Some` pour les entités-joueur, `None` sinon.
+    /// classe GDD §10.3 ; valeurs `3`/`4` = Cendre/Brasier ajoutées en v9,
+    /// sans bump, cf. la doc de `PROTOCOL_VERSION`) : chaque client
+    /// teinte/gabarit-ise le fantôme selon la classe de son propriétaire,
+    /// purement visuel (aucune hitbox modifiée, le serveur reste seul juge
+    /// du gameplay). Diffusée à chaque snapshot plutôt que dans
+    /// `PlayerJoined` : un client qui rejoint en cours de manche n'a pas
+    /// reçu les `PlayerJoined` des présents. Même politique que `kills` :
+    /// `Some` pour les entités-joueur, `None` sinon.
     #[serde(default)]
     pub class: Option<u8>,
 }
