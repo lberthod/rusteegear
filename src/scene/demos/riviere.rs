@@ -285,6 +285,62 @@ impl Scene {
         sol.group = "Vallée".into();
         objects.push(sol);
 
+        // --- Enceinte invisible (14 septembre 2026, demande « un mur autour de
+        // la carte ») : quatre parois statiques épaisses posées sur le bord du
+        // terrain importé. Le maillage s'arrête net à ±WORLD/2 — au-delà, rien
+        // sous les pieds : un joueur qui marchait, sautait ou se ruait
+        // (`AppState::update_dash`) hors de la grille tombait dans le vide sans
+        // fin. Invisibles (`visible = false` ne retire pas le collider d'un corps
+        // **fixe**, cf. `physics::build` : seuls les kinématiques et capteurs
+        // masqués sont ignorés), assez hautes pour qu'aucun saut ni relief ne
+        // passe par-dessus, enfoncées bien sous le sol pour ne laisser aucune
+        // fente au ras des berges. La ruée les voit aussi : son rayon sonde la
+        // couche 0 (toutes les couches par défaut ici), et s'arrête à l'impact.
+        // Les longueurs débordent de deux épaisseurs pour boucher les coins.
+        {
+            let (min, max) = (terrain.aabb_min, terrain.aabb_max);
+            let thick = 2.0;
+            // Paroi centrée sur l'arête : la moitié intérieure (1 m) mord sur le
+            // dernier mètre du terrain, où `terrain_height` plaque déjà le relief
+            // sur le bord — rien d'intéressant n'y est planté (cf. les marges de
+            // plantation plus bas).
+            let cx = (min.x + max.x) * 0.5;
+            let cz = (min.z + max.z) * 0.5;
+            let cy = (min.y + max.y) * 0.5;
+            let height = (max.y - min.y) + 60.0;
+            let len_x = (max.x - min.x) + 2.0 * thick;
+            let len_z = (max.z - min.z) + 2.0 * thick;
+            let mut wall = |name: &str, pos: Vec3, scale: Vec3| {
+                let mut w = demo_obj(name, MeshKind::Cube, pos);
+                w.transform = w.transform.with_scale(scale);
+                w.physics = PhysicsKind::Static;
+                w.collider_shape = ColliderShape::Box;
+                w.visible = false;
+                w.group = "Enceinte".into();
+                objects.push(w);
+            };
+            wall(
+                "Mur Nord",
+                Vec3::new(cx, cy, min.z),
+                Vec3::new(len_x, height, thick),
+            );
+            wall(
+                "Mur Sud",
+                Vec3::new(cx, cy, max.z),
+                Vec3::new(len_x, height, thick),
+            );
+            wall(
+                "Mur Est",
+                Vec3::new(max.x, cy, cz),
+                Vec3::new(thick, height, len_z),
+            );
+            wall(
+                "Mur Ouest",
+                Vec3::new(min.x, cy, cz),
+                Vec3::new(thick, height, len_z),
+            );
+        }
+
         // --- Eau ---
         let water = |loader: &mut Loader,
                      objects: &mut Vec<SceneObject>,
@@ -1052,6 +1108,73 @@ mod tests {
             scene.objects.iter().any(|o| !o.texture.is_empty()),
             "terrain texturé"
         );
+    }
+
+    /// L'enceinte (demande du 14 septembre 2026) : quatre parois statiques,
+    /// invisibles mais **avec** collider (corps fixe), qui bordent exactement
+    /// le terrain importé — un joueur, un saut ou une ruée ne peuvent plus
+    /// sortir de la grille et tomber dans le vide. Vérifie que chaque bord du
+    /// terrain est couvert par une paroi qui le dépasse en hauteur des deux
+    /// côtés, et que rien de la scène n'est planté au-delà de l'enceinte.
+    #[test]
+    fn riviere_demo_is_fenced_by_invisible_static_walls() {
+        let scene = Scene::riviere_demo();
+        let terrain = scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Vallée")
+            .and_then(|o| match o.mesh {
+                MeshKind::Imported(i) => scene.imported.get(i as usize).cloned(),
+                _ => None,
+            })
+            .expect("terrain importé");
+        let (min, max) = (terrain.aabb_min, terrain.aabb_max);
+        let walls: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.group == "Enceinte")
+            .collect();
+        assert_eq!(walls.len(), 4, "quatre parois attendues");
+        for w in &walls {
+            assert_eq!(w.physics, PhysicsKind::Static, "{} doit être fixe", w.name);
+            assert!(!w.visible, "{} doit être invisible", w.name);
+            let (lo, hi) = scene.world_aabb(w);
+            assert!(
+                lo.y < min.y - 5.0 && hi.y > max.y + 5.0,
+                "{} ne couvre pas toute la hauteur du terrain : {lo:?}..{hi:?}",
+                w.name
+            );
+        }
+        // Chaque bord du terrain est recouvert par une paroi (l'arête est à
+        // l'intérieur de sa boîte, sur toute sa longueur, coins compris).
+        let covered = |p: Vec3| {
+            walls.iter().any(|w| {
+                let (lo, hi) = scene.world_aabb(w);
+                (lo.x..=hi.x).contains(&p.x) && (lo.z..=hi.z).contains(&p.z)
+            })
+        };
+        let mid_y = (min.y + max.y) * 0.5;
+        for t in 0..=20 {
+            let f = t as f32 / 20.0;
+            let x = min.x + (max.x - min.x) * f;
+            let z = min.z + (max.z - min.z) * f;
+            assert!(covered(Vec3::new(x, mid_y, min.z)), "bord nord ouvert en x={x}");
+            assert!(covered(Vec3::new(x, mid_y, max.z)), "bord sud ouvert en x={x}");
+            assert!(covered(Vec3::new(min.x, mid_y, z)), "bord ouest ouvert en z={z}");
+            assert!(covered(Vec3::new(max.x, mid_y, z)), "bord est ouvert en z={z}");
+        }
+        // Rien (joueur, arbres, monstres…) n'est posé hors de l'enceinte.
+        for o in &scene.objects {
+            if o.group == "Enceinte" {
+                continue;
+            }
+            let p = o.transform.position;
+            assert!(
+                p.x >= min.x && p.x <= max.x && p.z >= min.z && p.z <= max.z,
+                "{} hors de l'enceinte : {p:?}",
+                o.name
+            );
+        }
     }
 
     #[test]
