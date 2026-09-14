@@ -2030,13 +2030,15 @@ fn signal_web_ready() {
 fn signal_web_state(state: &app::AppState) {
     let pos = state.player_position().unwrap_or_default();
     let text = format!(
-        "time={:.2};deaths={};paused={};playing={};x={:.2};y={:.2};won={};run_ms={};level={};cause={}",
+        "time={:.2};deaths={};paused={};playing={};x={:.2};y={:.2};z={:.2};score={};won={};run_ms={};level={};cause={}",
         state.hud_timer().unwrap_or(0.0),
         state.deaths(),
         state.paused,
         state.playing,
         pos.x,
         pos.y,
+        pos.z,
+        state.score(),
         state.has_won(),
         (state.run_time() * 1000.0).round() as u64,
         state.platformer_level().unwrap_or(0),
