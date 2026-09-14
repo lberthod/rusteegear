@@ -457,6 +457,14 @@ const NETWORK_ATTACK_COOLDOWN: f32 = 0.4;
 /// part pour le PvP.
 const PVP_MELEE_DAMAGE: f32 = 0.15;
 
+/// Portée (m, centre à centre) du coup PvP au contact — distincte de
+/// `NETWORK_ATTACK_RANGE` (1,2 m, testée contre l'AABB d'un monstre) : deux
+/// personnages joueurs (`creature_ronde.glb`, corps kinématiques) ne peuvent
+/// pas s'approcher à moins de ≈ 2,1 m l'un de l'autre (sonde en production,
+/// 14 septembre 2026 au soir) — avec 1,2 m, un duel était physiquement
+/// impossible. 2,8 m laisse la place d'un coup porté au contact ou d'un pas.
+const PVP_MELEE_RANGE: f32 = 2.8;
+
 /// Ruée (14 septembre 2026, capacité 4) : distance franchie (m) et temps de
 /// recharge (s). Bornée par un raycast (`Physics::raycast`) pour ne jamais
 /// traverser un mur/obstacle — but ludique = repositionnement rapide, pas un
@@ -1106,7 +1114,7 @@ impl AppState {
                     else {
                         continue;
                     };
-                    if pos.distance(other_pos) > NETWORK_ATTACK_RANGE {
+                    if pos.distance(other_pos) > PVP_MELEE_RANGE {
                         continue;
                     }
                     let died = self.apply_network_damage(
@@ -2140,6 +2148,40 @@ mod tests {
         assert_eq!(h(&app), Some(0.75));
         app.scene.damage_attackable_by(0, 3);
         assert_eq!(h(&app), Some(0.0), "vaincu : diffusé à 0 (et masqué)");
+    }
+
+    /// PvP au contact : deux joueurs qui se touchent (≈ 2,1 m centre à
+    /// centre, cf. `PVP_MELEE_RANGE`) se blessent ; à 3,5 m, non.
+    #[test]
+    fn pvp_melee_reaches_a_player_standing_body_to_body_but_not_one_step_further() {
+        for (dist, expect_hit) in [(2.2_f32, true), (3.5_f32, false)] {
+            let mut app = AppState::new();
+            app.scene = crate::scene::Scene::default();
+            app.scene.ability_bar = true;
+            app.scene.objects.push(crate::scene::SceneObject {
+                name: "Héros".into(),
+                controller: Some(crate::scene::Controller {
+                    input: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            let i1 = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+            let i2 = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+            app.scene.objects[i1].transform.position = glam::Vec3::ZERO;
+            app.scene.objects[i2].transform.position = glam::Vec3::new(dist, 0.0, 0.0);
+            app.network.network_spawn_grace.insert(2, 0.0);
+            app.set_network_input(
+                1,
+                NetworkInput {
+                    attack: true,
+                    ..Default::default()
+                },
+            );
+            app.update_network_attacks(1.0 / 60.0);
+            let hp = app.network_player_health(2).unwrap();
+            assert_eq!(hp < 1.0, expect_hit, "distance {dist} m : vie de la cible {hp}");
+        }
     }
 
     #[test]
