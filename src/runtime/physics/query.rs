@@ -1,3 +1,5 @@
+use rapier3d::parry::partitioning::{Bvh, BvhBuildStrategy};
+
 use super::*;
 
 impl Physics {
@@ -125,7 +127,7 @@ impl Physics {
         }
     }
 
-    /// Broad-phase **jetable** pour les requêtes spatiales ponctuelles
+    /// BVH **jetable** pour les requêtes spatiales ponctuelles
     /// (`raycast`/`overlap_sphere`) — délibérément distincte de `self.broad`
     /// (la BVH incrémentale que `step` fait vivre d'un pas à l'autre) : la
     /// peupler nous-mêmes ici évite de perturber son état interne (compteurs de
@@ -135,22 +137,50 @@ impl Physics {
     /// dans `query_cache`** jusqu'à la prochaine mutation du monde
     /// (`invalidate_query_cache`) : toutes les sondes d'un même tick partagent
     /// une seule construction.
-    fn with_query_broad_phase<R>(&self, f: impl FnOnce(&DefaultBroadPhase) -> R) -> R {
+    ///
+    /// Construite **directement** à partir des AABB des colliders
+    /// (`Bvh::from_iter`), et non via `DefaultBroadPhase::update` comme avant
+    /// (14 septembre 2026, enceinte de la démo Rivière) : cette dernière saute
+    /// tout collider dont les drapeaux `ColliderChanges` ne réclament pas de
+    /// mise à jour — or `PhysicsPipeline::step` les efface tous en fin de pas.
+    /// Dès le deuxième tick, la BVH jetable ne contenait plus **aucun décor
+    /// fixe** (sol, murs) : la ruée traversait les parois, un rayon vers le
+    /// bas ne trouvait plus le terrain. Seuls les corps déplacés pendant le pas
+    /// (re-marqués `POSITION` en fin de pas) restaient visibles — ce qui a
+    /// masqué le bug aux tests, qui ne sondaient que des corps tombés.
+    fn with_query_bvh<R>(&self, f: impl FnOnce(&Bvh) -> R) -> R {
         let mut cache = self.query_cache.borrow_mut();
-        let broad = cache.get_or_insert_with(|| {
-            let mut broad = DefaultBroadPhase::new();
-            let handles: Vec<ColliderHandle> = self.collider_owner.keys().copied().collect();
-            broad.update(
-                &self.integration,
-                &self.colliders,
-                &self.bodies,
-                &handles,
-                &[],
-                &mut Vec::new(),
-            );
-            broad
+        let bvh = cache.get_or_insert_with(|| {
+            Bvh::from_iter(
+                BvhBuildStrategy::Binned,
+                self.colliders
+                    .iter()
+                    .filter(|(_, c)| c.is_enabled())
+                    .map(|(h, c)| (h.into_raw_parts().0 as usize, c.compute_aabb())),
+            )
         });
-        f(broad)
+        f(bvh)
+    }
+
+    /// `QueryPipeline` rapier sur la BVH jetable, même filtrage pour toutes les
+    /// requêtes : capteurs exclus (`exclude_sensors` — un rayon de « ligne de
+    /// vue » ne doit pas buter sur une zone immatérielle, cf.
+    /// `Physics::sensor_overlaps`), couches filtrées par `mask` (mêmes bits que
+    /// `collision_layer`/`collision_mask`).
+    fn query_pipeline<'a>(&'a self, bvh: &'a Bvh, mask: u32) -> QueryPipeline<'a> {
+        QueryPipeline {
+            dispatcher: self.narrow.query_dispatcher(),
+            bvh,
+            bodies: &self.bodies,
+            colliders: &self.colliders,
+            filter: QueryFilter::new()
+                .exclude_sensors()
+                .groups(InteractionGroups::new(
+                    Group::ALL,
+                    Group::from_bits_truncate(mask),
+                    InteractionTestMode::And,
+                )),
+        }
     }
 
     /// À appeler en tête de **toute** méthode qui peut déplacer un corps ou un
@@ -169,22 +199,8 @@ impl Physics {
     /// zéro (`Vec3::try_normalize`).
     pub fn raycast(&self, origin: Vec3, dir: Vec3, max_toi: f32, mask: u32) -> Option<RaycastHit> {
         let dir = dir.try_normalize()?;
-        self.with_query_broad_phase(|broad| {
-            let query = broad.as_query_pipeline(
-                self.narrow.query_dispatcher(),
-                &self.bodies,
-                &self.colliders,
-                // `exclude_sensors` : les zones de déclenchement (capteurs, cf.
-                // `Physics::sensor_overlaps`) sont invisibles aux requêtes — un rayon
-                // de « ligne de vue » ne doit pas buter sur une zone immatérielle.
-                QueryFilter::new()
-                    .exclude_sensors()
-                    .groups(InteractionGroups::new(
-                        Group::ALL,
-                        Group::from_bits_truncate(mask),
-                        InteractionTestMode::And,
-                    )),
-            );
+        self.with_query_bvh(|bvh| {
+            let query = self.query_pipeline(bvh, mask);
             let ray = Ray::new(origin, dir);
             let (handle, toi) = query.cast_ray(&ray, max_toi.max(0.0), true)?;
             Some(RaycastHit {
@@ -201,19 +217,8 @@ impl Physics {
     /// zone d'effet), sans avoir à lancer un rayon par direction possible. Même
     /// filtrage par couche que `raycast`.
     pub fn overlap_sphere(&self, center: Vec3, radius: f32, mask: u32) -> Vec<usize> {
-        self.with_query_broad_phase(|broad| {
-            let query = broad.as_query_pipeline(
-                self.narrow.query_dispatcher(),
-                &self.bodies,
-                &self.colliders,
-                QueryFilter::new()
-                    .exclude_sensors()
-                    .groups(InteractionGroups::new(
-                        Group::ALL,
-                        Group::from_bits_truncate(mask),
-                        InteractionTestMode::And,
-                    )),
-            );
+        self.with_query_bvh(|bvh| {
+            let query = self.query_pipeline(bvh, mask);
             let ball = Ball::new(radius.max(0.0));
             query
                 .intersect_shape(Pose::from_translation(center), &ball)

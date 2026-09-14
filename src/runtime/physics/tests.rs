@@ -993,7 +993,7 @@ fn raycast_hits_the_nearest_collider_and_reports_its_object_index() {
 }
 
 /// La broad-phase de requête est mémoïsée entre deux mutations
-/// (`with_query_broad_phase`/`invalidate_query_cache`) : un corps qui
+/// (`with_query_bvh`/`invalidate_query_cache`) : un corps qui
 /// **entre** dans la trajectoire du rayon pendant `step()` doit être vu par
 /// le rayon suivant — un cache jamais invalidé garderait son AABB à
 /// l'ancienne position et le rayon le raterait (faux « rien devant » pour
@@ -1029,6 +1029,41 @@ fn raycast_sees_a_body_that_fell_into_the_ray_path_despite_the_query_cache() {
         Some(2),
         "après step, la requête doit décrire le monde à jour (dist={})",
         second.distance
+    );
+}
+
+/// Régression (14 septembre 2026, enceinte de la démo Rivière — la ruée
+/// traversait les murs invisibles) : le décor **fixe** doit rester visible aux
+/// requêtes après des pas de simulation. L'ancienne BVH jetable était peuplée
+/// via `DefaultBroadPhase::update`, qui ignore tout collider dont les drapeaux
+/// `ColliderChanges` sont vides — et `step` les efface tous en fin de pas :
+/// dès le deuxième tick, sol et murs n'existaient plus pour `raycast`/
+/// `overlap_sphere` (seuls les corps déplacés, re-marqués en fin de pas,
+/// restaient trouvables — d'où le test précédent qui passait).
+#[test]
+fn raycast_and_overlap_still_see_static_colliders_after_several_steps() {
+    let mut scene = ground_and_wall_scene();
+    let mut phys = Physics::build(&scene);
+    for _ in 0..5 {
+        phys.step(1.0 / 60.0, &mut scene);
+    }
+    let ground = phys
+        .raycast(
+            Vec3::new(0.0, 5.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            100.0,
+            u32::MAX,
+        )
+        .expect("après step, le rayon vers le bas doit encore toucher le sol");
+    assert_eq!(ground.index, Some(0));
+    let wall = phys
+        .raycast(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 100.0, 1)
+        .expect("après step, le rayon vers le mur (couche 0) doit encore le toucher");
+    assert_eq!(wall.index, Some(1));
+    let near_ground = phys.overlap_sphere(Vec3::new(0.0, -0.4, 0.0), 0.5, u32::MAX);
+    assert!(
+        near_ground.contains(&0),
+        "overlap_sphere doit encore trouver le sol fixe après step : {near_ground:?}"
     );
 }
 

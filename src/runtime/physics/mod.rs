@@ -187,12 +187,12 @@ pub struct Physics {
     /// (index d'objet, collider **capteur**) des zones de déclenchement
     /// (`SceneObject::trigger`) — cf. `sensor_overlaps`.
     sensors: Vec<(usize, ColliderHandle)>,
-    /// Broad-phase de requête mémoïsée entre deux mutations du monde (cf.
-    /// `with_query_broad_phase`) : les sondes des créatures lancent jusqu'à
+    /// BVH de requête mémoïsée entre deux mutations du monde (cf.
+    /// `with_query_bvh`) : les sondes des créatures lancent jusqu'à
     /// 60 rayons par tick sur une scène dense — reconstruire la BVH jetable à
     /// chaque appel redevenait O(rayons × colliders). `RefCell` car les requêtes
     /// prennent `&self` ; `Physics` vit dans `AppState`, mono-thread.
-    query_cache: std::cell::RefCell<Option<DefaultBroadPhase>>,
+    query_cache: std::cell::RefCell<Option<rapier3d::parry::partitioning::Bvh>>,
 }
 
 impl Physics {
