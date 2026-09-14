@@ -758,7 +758,13 @@ mod tests {
         let start = app.scene.objects[0].transform.position;
         app.input_state.dash = true;
 
-        app.update_dash(1.0 / 60.0);
+        // La ruée est désormais un glissement étalé sur `ROLL_ANIM_SECONDS`
+        // (correctif « saut périlleux sur place » du 14 septembre 2026), pas
+        // un bond instantané en un seul tick : on avance assez de pas pour
+        // couvrir toute la durée du glissement avant de mesurer.
+        for _ in 0..40 {
+            app.update_dash(1.0 / 60.0);
+        }
         let moved = app.scene.objects[0].transform.position.distance(start);
         assert!(
             moved > crate::app::multiplayer::DASH_DISTANCE - 0.5,
