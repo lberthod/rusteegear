@@ -514,8 +514,22 @@ impl AppState {
         {
             distance = DASH_RAYCAST_SKIP + hit.distance;
         }
+        let new_pos = pos + forward * distance;
         if let Some(o) = self.scene.objects.get_mut(index) {
-            o.transform.position += forward * distance;
+            o.transform.position = new_pos;
+        }
+        // Resynchronise le corps physique (14 septembre 2026 — même correctif
+        // que le rayon ci-dessus, découvert dans la foulée) : un joueur
+        // `PhysicsKind::Kinematic` est piloté par un `KinematicCharacterController`
+        // qui a SA PROPRE notion de la position du corps, indépendante de
+        // `transform.position` — sans ce `set_position`, le prochain pas de
+        // déplacement scripté/physique ramène le joueur pile là où le
+        // contrôleur le croyait encore, annulant le bond aussi sûrement que
+        // le bug de rayon ci-dessus (même symptôme : la ruée « ne fait
+        // rien »). Même idiome que `update_escorte` (convoi) juste plus haut
+        // dans ce fichier.
+        if let Some(phys) = self.physics.as_mut() {
+            phys.set_position(index, new_pos);
         }
         crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
     }
@@ -717,17 +731,40 @@ mod tests {
             ..Default::default()
         };
         app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        app.playing = true;
         let start = app.scene.objects[0].transform.position;
         app.input_state.dash = true;
 
         app.update_dash(1.0 / 60.0);
-
         let moved = app.scene.objects[0].transform.position.distance(start);
         assert!(
             moved > crate::app::multiplayer::DASH_DISTANCE - 0.5,
             "la ruée devrait déplacer le joueur d'environ {} m, mesuré : {moved:.2} m \
              (rayon lancé depuis son propre collider ?)",
             crate::app::multiplayer::DASH_DISTANCE
+        );
+
+        // Second bug du même correctif (14 septembre 2026) : sans
+        // `Physics::set_position`, le `KinematicCharacterController` — qui a
+        // SA PROPRE notion de la position du corps, indépendante de
+        // `transform.position` — ramène le joueur pile où il était dès le
+        // prochain pas simulé, annulant le bond aussi sûrement que le bug de
+        // rayon ci-dessus (même symptôme observé en jeu : la ruée « ne fait
+        // rien », vérifié via `window.__rusteegear_state` sur le site
+        // déployé). Aucune entrée de déplacement ici : si la position
+        // retombe près de `start`, c'est le contrôleur qui a gagné, pas un
+        // mouvement volontaire du joueur.
+        app.input_state.dash = false;
+        for _ in 0..10 {
+            app.sim_step(1.0 / 60.0);
+        }
+        let still_moved = app.scene.objects[0].transform.position.distance(start);
+        assert!(
+            still_moved > crate::app::multiplayer::DASH_DISTANCE - 0.5,
+            "la position de la ruée doit tenir après plusieurs pas simulés, \
+             mesuré : {still_moved:.2} m (le contrôleur cinématique a-t-il \
+             ramené le joueur à sa position d'avant, faute de \
+             Physics::set_position ?)"
         );
     }
 }

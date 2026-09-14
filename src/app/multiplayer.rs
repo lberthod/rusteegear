@@ -1115,8 +1115,15 @@ impl AppState {
             {
                 distance = DASH_RAYCAST_SKIP + hit.distance;
             }
+            let new_pos = pos + forward * distance;
             if let Some(o) = self.scene.objects.get_mut(index) {
-                o.transform.position += forward * distance;
+                o.transform.position = new_pos;
+            }
+            // Resynchronise le corps physique du fantôme réseau — même
+            // correctif que `combat::update_dash` (découvert dans la foulée
+            // du bug de rayon ci-dessus, même symptôme).
+            if let Some(phys) = self.physics.as_mut() {
+                phys.set_position(index, new_pos);
             }
         }
     }
