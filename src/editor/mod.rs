@@ -18,7 +18,7 @@ use file_dialogs::{DialogTarget, FileDialogs};
 use hierarchy::hierarchy_panel;
 use hud::{
     HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ability_bar, ally_down_banner, world_health_labels,
-    collectibles_hud, crosshair, damage_vignette, defeated_banner, health_bar,
+    boss_health_bar, collectibles_hud, crosshair, damage_vignette, defeated_banner, health_bar,
     hud_preview_overlays, hud_widgets, item_inventory_panel, kills_hud, lose_banner,
     mobile_overlay, mobile_top_buttons, multiplayer_roster_panel, net_event_banner,
     net_status_pill, palier_banner, pause_menu, pause_veil, restart_button, roster_overlay,
@@ -1511,6 +1511,7 @@ impl Editor {
             if !arcade {
                 world_health_labels(ctx, area, view_proj, world_labels, hud_scale, settings.colorblind);
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
+                boss_health_bar(ctx, area, scene, hud_scale, settings.colorblind);
                 // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
                 // (cf. `hud::ability_bar`).
                 if let Some(hud) = ability.filter(|_| scene.ability_bar) {
@@ -2847,6 +2848,7 @@ fn play_area_and_in_game_hud(
         // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
         // la vignette de dégâts et la barre de vie, au-dessus, jamais.
         wave_hud(root.ctx(), play_rect, scene, wave, locale, hud_scale);
+        boss_health_bar(root.ctx(), play_rect, scene, hud_scale, settings.colorblind);
         // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
         // (cf. `hud::ability_bar`).
         if let Some(hud) = ability.filter(|_| scene.ability_bar) {

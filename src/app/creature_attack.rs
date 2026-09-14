@@ -374,7 +374,10 @@ pub(super) struct CreatureShot {
 }
 
 /// Hachage déterministe de `time` en [0, 1) — cf. la doc du module.
-fn deterministic_roll(time: f32, salt: f32) -> f32 {
+/// `pub(super)` : réutilisé par `app::boss` (attaque à distance du boss de la
+/// démo Rivière), qui suit la même doctrine de déterminisme sans dupliquer le
+/// hachage.
+pub(super) fn deterministic_roll(time: f32, salt: f32) -> f32 {
     let x = (time * salt).sin() * 43_758.547;
     x - x.floor()
 }

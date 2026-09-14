@@ -6,6 +6,7 @@ pub mod ai;
 pub mod world_labels;
 pub mod asset_ops;
 mod autosave;
+pub mod boss;
 pub mod build_config;
 mod combat;
 mod console;
@@ -1411,6 +1412,11 @@ pub struct AppState {
     /// Projectiles simulés (boules de feu, attaques à distance des
     /// créatures) — cf. `ProjectilesState`.
     projectiles: ProjectilesState,
+    /// État du boss de fin de parcours de la démo Rivière (cf. `app::boss`) :
+    /// visée/jets de son attaque à distance, séparé de `projectiles` (table
+    /// dédiée, pas une extension de `creature_attack::RANGED_CREATURE_ATTACKS`
+    /// — cf. la doc de `app::boss`).
+    boss: boss::BossState,
     /// Arme à distance équipée par le joueur local (indice dans
     /// `fireball::RANGED_WEAPONS`) : clavier 1/2/3, ou bouton tactile « Arme »
     /// qui cycle (cf. `Controller::weapon_button`). Envoyée au serveur à chaque
@@ -1739,6 +1745,7 @@ impl AppState {
                 creature_shot_pool: Vec::new(),
                 net_creature_shots: Vec::new(),
             },
+            boss: boss::BossState::default(),
             selected_weapon: 0,
             weapon_button_was_down: false,
             net_conn: NetConnectionState {

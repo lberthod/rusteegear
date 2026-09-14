@@ -28,6 +28,7 @@ impl AppState {
         // restauration (cf. `clear_fireballs`).
         self.clear_fireballs();
         self.clear_creature_shots();
+        self.clear_boss_shots();
         self.time = 0.0;
         self.sim_poses.sim_accumulator = 0.0;
         self.sim_poses.sim_prev_poses.clear();

@@ -191,10 +191,12 @@ impl Scene {
         hit
     }
 
-    /// Résout une attaque du joueur en `p` (portée `radius`) : vainc (masque) les ennemis
-    /// `attackable` encore visibles à portée. Renvoie les indices vaincus (pour score,
-    /// son, et mise en file de réapparition côté `App`, comme les bonus).
-    /// Ne vainc que **la cible la plus proche** à portée, pas toutes celles dans le
+    /// Résout une attaque du joueur en `p` (portée `radius`) : porte un coup à
+    /// l'ennemi `attackable` le plus proche encore visible à portée (cf.
+    /// `damage_attackable`, qui décompte `Combat.hp`) et ne renvoie son indice
+    /// que si ce coup l'achève — pour score, son, et mise en file de
+    /// réapparition côté `App`, comme les bonus.
+    /// Ne touche que **la cible la plus proche** à portée, pas toutes celles dans le
     /// rayon. Audit gameplay : un swing en zone (toutes les cibles à portée à la fois)
     /// laissait un groupe de monstres convergeant ensemble se faire vaincre d'un seul
     /// coup avant qu'aucun n'ait pu mordre — la taille des monstres (donc leur propre
@@ -202,13 +204,21 @@ impl Scene {
     /// arriver à portée de façon quasi synchronisée plutôt qu'échelonnée. Un coup =
     /// une cible force à revenir au corps-à-corps plusieurs fois pour vider un groupe,
     /// laissant une vraie fenêtre aux autres pendant la recharge.
+    /// Historique (15 septembre 2026) : masquait la cible d'un coup sans lire
+    /// `Combat.hp` — correct pour les ennemis à 1 PV (l'immense majorité du
+    /// bestiaire), mais résolvait aussi le corps-à-corps réseau
+    /// (`AppState::update_network_attacks`, seul appelant hors tests) : un
+    /// monstre à plusieurs PV (le Golem des berges, le boss « L'Aîné de la
+    /// Cascade ») s'y faisait vaincre en un seul coup de mêlée par n'importe
+    /// quel joueur réseau, au lieu d'encaisser ses PV comme en solo (cf.
+    /// `AppState::update_attack`, qui appelle `damage_attackable` depuis
+    /// longtemps). Route désormais par `damage_attackable` : comportement
+    /// inchangé pour les cibles à 1 PV (toujours vaincues au premier coup),
+    /// corrigé pour celles à plusieurs PV.
     pub fn attack_at(&mut self, p: Vec3, radius: f32) -> Vec<usize> {
         match self.nearest_attackable(p, radius) {
-            Some(i) => {
-                self.objects[i].visible = false;
-                vec![i]
-            }
-            None => Vec::new(),
+            Some(i) if self.damage_attackable(i) => vec![i],
+            _ => Vec::new(),
         }
     }
 

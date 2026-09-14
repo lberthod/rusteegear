@@ -952,6 +952,7 @@ impl AppState {
         self.clear_network_players();
         self.clear_fireballs();
         self.clear_creature_shots();
+        self.clear_boss_shots();
         self.physics = None;
         self.paused = false;
         self.hud_health = None;
@@ -1701,6 +1702,10 @@ impl AppState {
         // ci-dessous pour que les positions gelées soient celles réellement
         // vues par `Physics::resolve_scripted_moves`/le rendu ce tick.
         self.update_creature_ranged_attacks(dt, time);
+        // Boss de fin de parcours de la démo Rivière (cf. `app::boss`) : même
+        // ordre que l'appel ci-dessus (gèle sa position avant la physique).
+        // No-op (retour anticipé) tant que la scène courante n'a pas de boss.
+        self.update_boss(dt, time);
 
         // 2. physique (écrase les poses des corps dynamiques)
         // Cibles de poursuite pour l'IA (`AiChaser`, cf. plus bas) : en solo, le
@@ -1759,6 +1764,7 @@ impl AppState {
                 .filter(|(idx, o)| {
                     o.ai_chaser.is_some()
                         && (self.creature_is_aim_frozen(*idx)
+                            || self.boss_is_frozen(*idx)
                             || (online
                                 && o.controller.is_none()
                                 && o.combat.as_ref().is_some_and(|c| c.attackable)
@@ -1875,6 +1881,7 @@ impl AppState {
             // Les créatures en pleine visée suivent la position réellement
             // atteinte (bousculades comprises), cf. `refresh_frozen_anchors`.
             self.refresh_frozen_anchors();
+            self.refresh_boss_frozen_anchor();
             // Cf. la note plus haut : appliqué après `step` pour ne jamais passer par
             // le corps rigide, qui écraserait sinon (et déstabiliserait) cette valeur.
             for (idx, yaw) in player_facing {

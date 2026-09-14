@@ -967,6 +967,81 @@ pub(super) fn world_health_labels(
     }
 }
 
+/// Barre de vie du boss « L'Aîné de la Cascade » (démo Rivière & cascade),
+/// centrée en haut de l'écran façon boss de raid — même bandeau top-center
+/// que `wave_hud`, mais retrouve le boss **par nom** (`app::boss::BOSS_NAME`)
+/// plutôt que par `Combat::wave` : Rivière n'a pas de système de manches
+/// (`wave: 0` partout, cf. la doc de `Combat::wave`), `wave_hud` y resterait
+/// toujours invisible. Affichée seulement tant que l'objet existe dans la
+/// scène **et** reste visible (masquée le reste du temps, y compris pendant
+/// son délai de réapparition). Lit `Combat::hp/max_hp`, déjà répliqué à tous
+/// les clients réseau via `EntityDelta::health` (cf. sa doc) : aucune donnée
+/// protocole supplémentaire n'est nécessaire pour cette barre. Le libellé de
+/// phase (« Veille »/« Courroux »/« Dernier sursaut ») est calculé côté
+/// client à partir de ce même ratio déjà synchronisé (`app::boss::
+/// phase_for_ratio`), pas un nouveau champ réseau non plus.
+pub(super) fn boss_health_bar(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    scene: &Scene,
+    scale: f32,
+    colorblind: bool,
+) {
+    use egui::{Align2, Color32, FontId, Stroke};
+    let scale = clamp_hud_scale(scale);
+    let Some(boss) = scene
+        .objects
+        .iter()
+        .find(|o| o.name == crate::app::boss::BOSS_NAME && o.visible)
+    else {
+        return;
+    };
+    let Some(c) = boss.combat.as_ref() else {
+        return;
+    };
+    let ratio = (if c.max_hp > 0 {
+        c.hp as f32 / c.max_hp as f32
+    } else {
+        1.0
+    })
+    .clamp(0.0, 1.0);
+    let phase_label = crate::app::boss::phase_for_ratio(ratio).label();
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_boss"),
+    ));
+    let w = 340.0 * scale;
+    let h = 15.0 * scale;
+    let bar = egui::Rect::from_center_size(
+        egui::pos2(area.center().x, area.top() + 30.0 * scale),
+        egui::vec2(w, h),
+    );
+    painter.text(
+        egui::pos2(bar.center().x, bar.top() - 11.0 * scale),
+        Align2::CENTER_CENTER,
+        &boss.name,
+        FontId::proportional(15.0 * scale),
+        Color32::from_white_alpha(235),
+    );
+    painter.rect_filled(bar.expand(2.0 * scale), 4.0 * scale, Color32::from_black_alpha(170));
+    let filled = egui::Rect::from_min_size(bar.min, egui::vec2(w * ratio, h));
+    painter.rect_filled(filled, 3.0 * scale, health_color(ratio, colorblind));
+    painter.rect(
+        bar,
+        3.0 * scale,
+        Color32::TRANSPARENT,
+        Stroke::new(1.5_f32, Color32::from_white_alpha(140)),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        egui::pos2(bar.center().x, bar.bottom() + 9.0 * scale),
+        Align2::CENTER_CENTER,
+        phase_label,
+        FontId::proportional(11.0 * scale),
+        Color32::from_white_alpha(205),
+    );
+}
+
 /// Borne `Settings::hud_scale` à une plage sûre (au cas où un `settings.json`
 /// écrit à la main ou par une future version sort de la plage `0.6..=2.0` du
 /// curseur des Paramètres) : les fonctions de dessin du HUD ci-dessous

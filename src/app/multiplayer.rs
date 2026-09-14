@@ -2714,6 +2714,64 @@ mod tests {
         );
     }
 
+    /// Non-régression (15 septembre 2026) : `update_network_attacks` résolvait
+    /// le corps-à-corps réseau via `Scene::attack_at`, qui masquait la cible
+    /// d'un coup sans jamais lire/décrémenter `Combat::hp` — un monstre à
+    /// plusieurs PV (le Golem des berges, 6 PV ; le boss « L'Aîné de la
+    /// Cascade », 60 PV) tombait donc en un seul coup de mêlée réseau, alors
+    /// que le même monstre encaisse bien ses PV un par un en solo (cf.
+    /// `AppState::update_attack`/`damage_attackable`). Preuve ici avec une
+    /// cible à 3 PV : un coup de mêlée réseau ne doit l'entamer que d'un
+    /// point, pas la vaincre — il en faut trois pour l'achever.
+    #[test]
+    fn network_melee_needs_several_hits_on_a_multi_hp_target_not_just_one() {
+        let mut app = AppState::new();
+        app.scene = scene_with_player_and_two_targets_in_range();
+        for o in app.scene.objects.iter_mut() {
+            if let Some(combat) = o.combat.as_mut() {
+                combat.hp = 3;
+            }
+        }
+        let player_index = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let player_pos = app.scene.objects[player_index].transform.position;
+        let target_index = app
+            .scene
+            .objects
+            .iter()
+            .position(|o| o.combat.is_some())
+            .expect("cible attackable absente");
+        app.scene.objects[target_index].transform.position = player_pos;
+        app.set_network_input(
+            1,
+            NetworkInput {
+                attack: true,
+                ..Default::default()
+            },
+        );
+
+        // Premier coup : entame la cible sans l'achever.
+        app.update_network_attacks(1.0 / 60.0);
+        assert!(
+            app.scene.objects[target_index].visible,
+            "une cible à 3 PV ne doit pas tomber en un seul coup de mêlée réseau"
+        );
+        assert_eq!(app.scene.objects[target_index].combat.as_ref().unwrap().hp, 2);
+
+        // Recharge écoulée : deuxième coup, entame encore.
+        app.network.network_attack_cooldowns.insert(1, 0.0);
+        app.update_network_attacks(1.0 / 60.0);
+        assert!(app.scene.objects[target_index].visible);
+        assert_eq!(app.scene.objects[target_index].combat.as_ref().unwrap().hp, 1);
+
+        // Troisième coup : achève enfin la cible.
+        app.network.network_attack_cooldowns.insert(1, 0.0);
+        app.update_network_attacks(1.0 / 60.0);
+        assert!(
+            !app.scene.objects[target_index].visible,
+            "le troisième coup doit achever une cible à 3 PV"
+        );
+    }
+
     /// Brique de progression pour un futur MMORPG (GAMEDESIGN_EN_LIGNE.md) : un
     /// monstre vaincu au contact crédite le tireur d'un frag individualisé,
     /// diffusé à tous via `EntityDelta::kills` (pas seulement au joueur

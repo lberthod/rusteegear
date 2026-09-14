@@ -1142,6 +1142,120 @@ impl Scene {
             objects.push(m);
         }
 
+        // --- Boss (15 septembre 2026, évènement de fin de parcours) ---
+        // « L'Aîné de la Cascade » : un dragon ancien retranché sur le plateau
+        // amont, près de la chute — le seul monstre de la démo à réutiliser
+        // `monster_dragon_evolved.glb` (inemployé ailleurs ici, donc
+        // immédiatement reconnaissable dans le bestiaire). Nom, tag et groupe
+        // dédiés (PAS "monstre"/"Monstre") : il ne doit pas se compter parmi
+        // les 9 emplacements du roster ordinaire ci-dessus (cf.
+        // `riviere_demo_monsters_are_varied_species` et consorts) — un
+        // évènement de fin de parcours, pas un monstre de plus dans la
+        // rotation. Phases (vitesse/attaque à distance selon le ratio de PV)
+        // dans `app::boss`, PAS `RoundObjective::Boss` (un mode de salon
+        // Hameau câblé sur les manches — `Combat::wave`, sans rapport avec ce
+        // monde ouvert où `wave` vaut 0 partout, cf. la doc de `Combat::wave`
+        // et celle du module `app::boss`). Le nom ci-dessous doit rester
+        // identique à `app::boss::BOSS_NAME` — verrouillé par
+        // `riviere_demo_boss_names_match_app_boss_module` ci-dessous (`scene`
+        // ne dépend pas de `app`, d'où la chaîne recopiée plutôt qu'une
+        // constante partagée, même convention que `creature_attack::
+        // RANGED_CREATURE_ATTACKS` qui repère ses créatures par nom recopié
+        // depuis `scene::demos::mmorpg`).
+        //
+        // Position hors du chenal comme le reste du roster (`channel_dist >=
+        // 1.3`, cf. `riviere_demo_monsters_never_spawn_in_or_too_close_to_the_water`,
+        // reprise pour le boss par
+        // `riviere_demo_boss_is_placed_on_dry_ground_away_from_the_channel`) :
+        // le plateau au bord du chenal, pas en son centre. Au point le plus
+        // haut et le plus reculé de la vallée en U (plateau amont, très en
+        // amont du Renard enragé 2, le monstre le plus reculé du roster
+        // ordinaire, z=-58) — cohérent avec le statut d'évènement de fin de
+        // parcours.
+        //
+        // (20.0, -40.0) — poste initial — n'était qu'à 6.9 m du Golem des
+        // berges (x≈16.6, z=-46), tous deux `Archetype::Colosse` (portée
+        // d'éveil 9 m chacun, cf. `CHASER_DETECT_RANGE`) : très en-dessous
+        // des 18 m (9 m + 9 m) requis pour ne jamais recouvrir leurs portées
+        // d'éveil — double-pull garanti dès qu'on réveillait l'un des deux,
+        // alors que ce même fichier applique scrupuleusement cette règle à
+        // toutes les autres paires du roster (cf. les docs ci-dessus, par
+        // exemple sur la Grenouille ou le Champignon mordeur). Relecture du
+        // 15 septembre 2026 : déplacé à (20.0, -70.0), toujours sur la même
+        // berge est (même signe d'offset que l'ancien poste), à 24.2 m du
+        // Golem (marge de 6.2 m au-delà du minimum requis) et à 29.2 m du
+        // Renard enragé 2 — le monstre le plus proche restant, marge
+        // confortable au-delà du minimum sur toutes les paires, dans le même
+        // esprit que le reste du fichier.
+        const BOSS_NAME: &str = "L'Aîné de la Cascade";
+        const BOSS_LOOT_NAME: &str = "Arc de l'Aînée";
+        let boss_x = 20.0;
+        let boss_z = -70.0;
+        let boss_y = terrain_height(&terrain, boss_x, boss_z);
+        if let Some(idx) = loader.load("monster_dragon_evolved.glb") {
+            let mut boss = demo_obj(
+                BOSS_NAME,
+                MeshKind::Imported(idx),
+                Vec3::new(boss_x, boss_y, boss_z),
+            );
+            boss.transform = boss.transform.with_scale(Vec3::splat(2.4));
+            boss.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
+            boss.tag = "boss".into();
+            boss.group = "Boss".into();
+            boss.physics = PhysicsKind::Kinematic;
+            // Détection de contact pour la morsure (cf. `creature_bite_script`,
+            // même dispositif que le reste du roster ci-dessus).
+            boss.trigger = true;
+            boss.combat = Some(Combat {
+                attackable: true,
+                // `wave: 0` : pas de système de manches, comme tout le reste
+                // de cette démo — cf. la doc du bloc plus haut.
+                hp: 60,
+                ..Default::default()
+            });
+            // Vitesse/archétype d'authoring : réécrits chaque tick par
+            // `app::boss::update_boss` selon la phase (ratio de PV) — ces
+            // valeurs ne comptent que tant que le boss n'a pas encore encaissé
+            // de dégât (avant le premier appel).
+            boss.ai_chaser = Some(AiChaser {
+                speed: 1.6,
+                archetype: Archetype::Colosse,
+            });
+            boss.bite = Some(BiteAttack {
+                cooldown: 2.0,
+                chance: 0.55,
+                damage: 0.28,
+            });
+            // Ne réapparaît que très rarement (pas de mécanisme probabiliste
+            // dédié dans ce moteur, cf. `Combat`/`respawn_delay` : seulement 0
+            // = jamais, ou une durée fixe) : 10 minutes plutôt qu'un farm
+            // trivial, cohérent avec un évènement de fin de parcours.
+            boss.respawn_delay = 600.0;
+            boss.script = creature_bite_script("boss_", 2.0, 0.55, 0.28, 137.0);
+            objects.push(boss);
+
+            // Butin garanti à la mort (cf. `app::boss::update_boss_loot`) :
+            // posé dès la construction, masqué — sa visibilité est ensuite
+            // dérivée de celle du boss à chaque pas fixe, pas ramassable tant
+            // que le boss est en vie. Arc (`WEAPONS[4]`), seule arme jamais
+            // posée en butin ailleurs dans cette démo (les trois butins
+            // d'arme ci-dessous couvrent Épée/Lance/Marteau) — distincte,
+            // cohérent avec un butin de boss exclusif.
+            if let Some(lidx) = loader.load("riviere/galet_a.glb") {
+                let mut loot = demo_obj(
+                    BOSS_LOOT_NAME,
+                    MeshKind::Imported(lidx),
+                    Vec3::new(boss_x + 1.6, boss_y + 0.1, boss_z + 1.2),
+                );
+                loot.transform = loot.transform.with_scale(Vec3::splat(0.55));
+                loot.color = [0.85, 0.75, 0.35];
+                loot.group = "Butin".into();
+                loot.visible = false;
+                loot.weapon_pickup = Some(WeaponPickup { weapon: 4 });
+                objects.push(loot);
+            }
+        }
+
         // --- Butin (armes de mêlée et soins à ramasser au contact) ---
         // Réutilise les rochers/galets déjà chargés comme socle visuel du
         // butin (pas de nouvel asset) : l'arme/l'objet est ramassé au contact
@@ -1226,6 +1340,7 @@ impl Scene {
             "Falaise",
             "Faune",
             "Monstre",
+            "Boss",
             "Butin",
         ]
         .into_iter()
@@ -1441,6 +1556,122 @@ mod tests {
                 water_level(p.z)
             );
         }
+    }
+
+    /// Non-régression (relecture du 15 septembre 2026) : le boss doit rester
+    /// hors de la portée d'éveil combinée de tout autre monstre du roster,
+    /// comme le reste de ce fichier l'applique scrupuleusement à chaque paire
+    /// (cf. les commentaires de `monster_roster` ci-dessus). Portées d'éveil
+    /// dupliquées ici en constantes littérales — mêmes valeurs que
+    /// `app::simulation::CHASER_DETECT_RANGE`/`FURTIVE_DETECT_RANGE` (privées,
+    /// `scene` ne dépend pas de `app`), déjà dupliquées telles quelles dans
+    /// les commentaires de `monster_roster`. Le boss est `Archetype::Colosse`
+    /// (portée `CHASER_DETECT_RANGE`, comme le Golem) : un poste à moins de
+    /// 18 m (9 m + 9 m) du Golem des berges rendrait un double-pull
+    /// quasi garanti dès qu'on réveille l'un des deux.
+    #[test]
+    fn riviere_demo_boss_stays_out_of_every_monsters_combined_aggro_range() {
+        const CHASER_DETECT_RANGE: f32 = 9.0;
+        const FURTIVE_DETECT_RANGE: f32 = 5.0;
+        let scene = Scene::riviere_demo();
+        let boss = scene
+            .objects
+            .iter()
+            .find(|o| o.group == "Boss")
+            .expect("le boss doit être présent dans la démo Rivière");
+        let boss_pos = boss.transform.position;
+        let boss_range = CHASER_DETECT_RANGE; // Colosse.
+        for m in scene.objects.iter().filter(|o| o.tag == "monstre") {
+            let range = if m.ai_chaser.as_ref().unwrap().archetype == Archetype::Furtive {
+                FURTIVE_DETECT_RANGE
+            } else {
+                CHASER_DETECT_RANGE
+            };
+            let required = boss_range + range;
+            let dist = boss_pos.distance(m.transform.position);
+            assert!(
+                dist > required,
+                "{} : {dist:.1} m du boss, en-dessous du minimum requis {required:.1} m (double-pull possible)",
+                m.name
+            );
+        }
+    }
+
+    /// Même garde-fou que ci-dessus, pour le boss et son butin garanti : posés
+    /// hors du chenal, sur la terre ferme du plateau (pas confondus avec le
+    /// groupe "Monstre" — ils ont leurs propres groupes "Boss"/"Butin", cf.
+    /// leur doc dans `riviere_demo`).
+    #[test]
+    fn riviere_demo_boss_is_placed_on_dry_ground_away_from_the_channel() {
+        let scene = Scene::riviere_demo();
+        let boss = scene
+            .objects
+            .iter()
+            .find(|o| o.group == "Boss")
+            .expect("le boss doit être présent dans la démo Rivière");
+        let p = boss.transform.position;
+        assert!(
+            channel_dist(p.x, p.z) >= 1.3 && p.y >= water_level(p.z) + 0.25,
+            "{} planté dans l'eau ou trop près du lit : {p:?}",
+            boss.name
+        );
+        let loot = scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Arc de l'Aînée")
+            .expect("le butin du boss doit être présent dans la démo Rivière");
+        let lp = loot.transform.position;
+        assert!(
+            channel_dist(lp.x, lp.z) >= 1.3 && lp.y >= water_level(lp.z) + 0.25,
+            "{} planté dans l'eau ou trop près du lit : {lp:?}",
+            loot.name
+        );
+    }
+
+    /// Le boss est un évènement de fin de parcours, pas un monstre de plus :
+    /// il ne doit JAMAIS se compter parmi les 9 emplacements du roster
+    /// ordinaire (groupe "Monstre"/tag "monstre") vérifiés par
+    /// `riviere_demo_monsters_are_varied_species` et consorts — sans quoi ces
+    /// comptages fixes casseraient silencieusement.
+    #[test]
+    fn riviere_demo_boss_is_not_counted_among_the_ordinary_monster_roster() {
+        let scene = Scene::riviere_demo();
+        assert!(
+            scene.objects.iter().any(|o| o.group == "Boss"),
+            "le boss doit exister dans son propre groupe"
+        );
+        assert!(
+            scene.objects.iter().filter(|o| o.tag == "monstre").count() == 9,
+            "le roster ordinaire doit rester à 9, le boss ne doit pas y être tagué"
+        );
+        assert!(
+            scene.objects.iter().filter(|o| o.group == "Monstre").count() == 9
+        );
+    }
+
+    /// Verrou de cohérence des chaînes (cf. la doc du bloc « Boss » de
+    /// `riviere_demo`) : `scene` ne dépend pas de `app`, les noms du boss et
+    /// de son butin sont donc recopiés en toutes lettres à deux endroits
+    /// (`riviere_demo` et `app::boss`) plutôt que par une constante partagée
+    /// — ce test les garde synchronisés (toute divergence casse `app::boss`,
+    /// qui retrouve le boss par nom dans la scène).
+    #[test]
+    fn riviere_demo_boss_names_match_app_boss_module() {
+        let scene = Scene::riviere_demo();
+        assert!(
+            scene
+                .objects
+                .iter()
+                .any(|o| o.name == crate::app::boss::BOSS_NAME),
+            "aucun objet nommé `app::boss::BOSS_NAME` dans la démo Rivière"
+        );
+        assert!(
+            scene
+                .objects
+                .iter()
+                .any(|o| o.name == crate::app::boss::BOSS_LOOT_NAME),
+            "aucun objet nommé `app::boss::BOSS_LOOT_NAME` dans la démo Rivière"
+        );
     }
 
     #[test]
