@@ -454,9 +454,50 @@ impl ResolvedKeys {
         }
     }
 
-    /// La touche est-elle l'une des actions tenues (saut/attaque/tir/soin) ?
+    /// La touche est-elle l'une des actions tenues (saut/attaque/tir/soin/
+    /// bouclier/ruée) ?
+    ///
+    /// **Correction 14 septembre 2026** (« 1-2-3-4 ne font rien ») :
+    /// `block`/`dash` avaient été ajoutés à `ResolvedKeys` (kit de capacités
+    /// 1-2-3-4, `Scene::ability_bar`) sans jamais être ajoutés ICI — la seule
+    /// porte d'entrée qui décide si une touche rejoint `App::action_keys_held`
+    /// (cf. `lib.rs`, le `match` du `WindowEvent::KeyboardInput`). Sans ça,
+    /// `Digit2`/`Digit4` (leurs bindings par défaut) n'entraient jamais dans
+    /// l'ensemble tenu : `recompute_action_buttons` ne tournait donc jamais à
+    /// leur pression, et `inp.block`/`inp.dash` restaient `false` en
+    /// permanence quoi que fasse `recompute_action_buttons` lui-même (déjà
+    /// correct, mais jamais invoqué).
     pub fn is_held_action(&self, code: winit::keyboard::KeyCode) -> bool {
-        code == self.jump || code == self.attack || code == self.fire || code == self.heal
+        code == self.jump
+            || code == self.attack
+            || code == self.fire
+            || code == self.heal
+            || code == self.block
+            || code == self.dash
+    }
+
+    /// Idem, plus `Digit1`/`Digit3` quand la scène a `Scene::ability_bar` (kit
+    /// 1-2-3-4) : ces deux touches n'ont pas de binding dédié dans
+    /// `KeyboardBindings` (1 = mêlée, alias tenu de `attack` ; 3 = sort, alias
+    /// tenu de `fire` — cf. `lib.rs::recompute_action_buttons`) — `2`/`4`
+    /// passent déjà par `is_held_action` ci-dessus (ce sont littéralement
+    /// `block`/`dash` par défaut). Hors `ability_bar`, `Digit1`/`Digit3`
+    /// restent l'ancien raccourci ponctuel de sélection d'arme (`lib.rs`,
+    /// une action au keydown, pas une touche tenue) : ne pas les compter ici
+    /// éviterait de perturber ce chemin historique inutilement — en réalité
+    /// les deux mécanismes peuvent cohabiter sans conflit, mais seule la
+    /// scène concernée (`ability_bar`) doit changer de comportement.
+    pub fn is_held_action_with_ability_bar(
+        &self,
+        code: winit::keyboard::KeyCode,
+        ability_bar: bool,
+    ) -> bool {
+        self.is_held_action(code)
+            || (ability_bar
+                && matches!(
+                    code,
+                    winit::keyboard::KeyCode::Digit1 | winit::keyboard::KeyCode::Digit3
+                ))
     }
 }
 
@@ -536,5 +577,38 @@ mod key_tests {
         assert_eq!(r.fire, winit::keyboard::KeyCode::KeyF);
         assert!(r.is_held_action(winit::keyboard::KeyCode::KeyF));
         assert!(!r.is_held_action(winit::keyboard::KeyCode::KeyK));
+    }
+
+    /// Preuve du correctif du 14 septembre 2026 (« 1-2-3-4 ne font rien ») :
+    /// `is_held_action` avait été laissé inchangé à l'ajout de `block`/`dash`
+    /// sur `ResolvedKeys` — sans `Digit2`/`Digit4` (leurs bindings par
+    /// défaut) reconnus ici, `lib.rs` ne les ajoutait jamais à
+    /// `action_keys_held` et `recompute_action_buttons` ne tournait jamais à
+    /// leur pression, quoi que fasse cette fonction elle-même par ailleurs.
+    #[test]
+    fn is_held_action_recognizes_the_default_block_and_dash_bindings() {
+        let r = ResolvedKeys::from_bindings(&crate::app::settings::KeyboardBindings::default());
+        assert!(
+            r.is_held_action(winit::keyboard::KeyCode::Digit2),
+            "bouclier"
+        );
+        assert!(r.is_held_action(winit::keyboard::KeyCode::Digit4), "ruée");
+    }
+
+    /// `Digit1`/`Digit3` (mêlée/sort du kit 1-2-3-4) n'ont pas de binding
+    /// dédié — ils ne comptent comme touche tenue que dans une scène
+    /// `Scene::ability_bar`, jamais sinon (où ils restent l'ancien raccourci
+    /// ponctuel de sélection d'arme, cf. `lib.rs`).
+    #[test]
+    fn digit_1_and_3_are_held_actions_only_with_the_ability_bar() {
+        let r = ResolvedKeys::from_bindings(&crate::app::settings::KeyboardBindings::default());
+        assert!(r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit1, true));
+        assert!(r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit3, true));
+        assert!(!r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit1, false));
+        assert!(!r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::Digit3, false));
+        // Sans effet sur les touches déjà tenues par ailleurs (jump/attack/
+        // fire/heal/block/dash) : la variante `ability_bar` ne fait
+        // qu'ajouter, jamais retirer.
+        assert!(r.is_held_action_with_ability_bar(winit::keyboard::KeyCode::KeyK, false));
     }
 }

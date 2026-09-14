@@ -533,7 +533,7 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::app::multiplayer::PlayerClass;
-    use crate::scene::{Combat, Controller, MeshKind, Scene, SceneObject};
+    use crate::scene::{Combat, Controller, MeshKind, Scene, SceneObject, Transform};
 
     /// Gabarit pilotable (requis par `AppState::spawn_network_player`) + 2 manches de
     /// 2 monstres chacune, pour observer `wave_window` sans dépendre d'une démo réelle.
@@ -617,6 +617,87 @@ mod tests {
         assert!(
             squad_visible > solo_visible,
             "la difficulté doit scaler par le nombre de joueurs actifs"
+        );
+    }
+
+    /// Preuve bout en bout de ce que la touche 1 (mêlée du kit 1-2-3-4, cf.
+    /// `lib.rs::recompute_action_buttons`) doit produire : `input_state.attack`
+    /// tenu doit vaincre un monstre à portée, comme la touche J historique.
+    #[test]
+    fn holding_attack_defeats_a_target_in_range() {
+        let mut joueur = SceneObject {
+            name: "Joueur".into(),
+            mesh: MeshKind::Cube,
+            controller: Some(Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut monstre = SceneObject {
+            name: "Monstre".into(),
+            mesh: MeshKind::Sphere,
+            transform: Transform::from_pos(Vec3::new(0.0, 0.0, 1.0)),
+            combat: Some(Combat {
+                attackable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        monstre.color = [1.0; 3];
+        let mut app = AppState::new();
+        app.scene = Scene {
+            objects: vec![joueur, monstre],
+            ability_bar: true,
+            ..Default::default()
+        };
+        app.playing = true;
+        app.input_state.attack = true;
+
+        // Préparation par défaut 0,25 s : 1 s de pas fixes laisse largement
+        // le temps de résoudre le coup.
+        for _ in 0..60 {
+            app.update_attack(1.0 / 60.0);
+        }
+
+        assert!(
+            !app.scene.objects[1].visible,
+            "le monstre à portée doit être vaincu, input_state.attack tenu"
+        );
+    }
+
+    /// Preuve bout en bout de ce que la touche 4 (ruée du kit 1-2-3-4) doit
+    /// produire : `input_state.dash` tenu doit déplacer le joueur d'environ
+    /// `multiplayer::DASH_DISTANCE` (aucun obstacle ici, rien à raboter).
+    #[test]
+    fn holding_dash_moves_the_player_forward() {
+        let mut joueur = SceneObject {
+            name: "Joueur".into(),
+            mesh: MeshKind::Cube,
+            controller: Some(Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut app = AppState::new();
+        app.scene = Scene {
+            objects: vec![joueur],
+            ability_bar: true,
+            ..Default::default()
+        };
+        let start = app.scene.objects[0].transform.position;
+        app.input_state.dash = true;
+
+        app.update_dash(1.0 / 60.0);
+
+        let moved = app.scene.objects[0].transform.position.distance(start);
+        assert!(
+            moved > crate::app::multiplayer::DASH_DISTANCE - 0.5,
+            "la ruée devrait déplacer le joueur d'environ {} m, mesuré : {moved:.2} m",
+            crate::app::multiplayer::DASH_DISTANCE
         );
     }
 }

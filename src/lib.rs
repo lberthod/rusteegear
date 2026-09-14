@@ -1349,7 +1349,10 @@ impl ApplicationHandler for App {
                     // E/Q : élévation de la caméra en vol au clic droit (`fly_look`,
                     // convention Unity) — tenues dans le même ensemble, lues par
                     // `recompute_action_buttons` seulement pendant le vol.
-                    let is_action_key = self.state.keys.is_held_action(code)
+                    let is_action_key = self
+                        .state
+                        .keys
+                        .is_held_action_with_ability_bar(code, self.state.scene.ability_bar)
                         || matches!(
                             code,
                             KeyCode::Space | KeyCode::KeyC | KeyCode::KeyE | KeyCode::KeyQ

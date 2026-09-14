@@ -1338,6 +1338,84 @@ fn creature_1_bites_the_player_sometimes_not_on_every_contact_tick() {
     );
 }
 
+/// Dégâts cumulés (somme des chutes de vie détectées) sur 20 s de contact
+/// continu avec la Créature 1 (démo MMORPG), `input_state.block` valant
+/// `blocking` tout du long — même isolation que
+/// `creature_1_bites_the_player_sometimes_not_on_every_contact_tick`.
+/// Cumulé plutôt que la vie finale seule : la régénération passive solo
+/// efface une morsure isolée en ~1 s (observé : 0,98 → 1,0 en 60 pas), donc
+/// la vie finale après 20 s ne dit presque rien de ce que chaque morsure a
+/// réellement coûté — seule la somme des chutes capture l'effet du bouclier.
+fn total_bite_damage_over_20s_of_creature_1_contact(blocking: bool) -> f32 {
+    let mut app = AppState::new();
+    app.scene = crate::scene::Scene::mmorpg_demo();
+    let creature_idx = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.name == "Créature")
+        .expect("la démo MMORPG doit contenir une « Créature »");
+    let player_idx = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.name == "Joueur")
+        .expect("la démo MMORPG doit contenir un « Joueur »");
+    for obj in app.scene.objects.iter_mut() {
+        if obj.name.starts_with("Créature ") {
+            obj.visible = false;
+        }
+    }
+    let start = app.scene.objects[creature_idx].transform.position;
+    app.scene.objects[player_idx].transform.position = start;
+    app.hud_health = Some(1.0);
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+    app.physics
+        .as_mut()
+        .unwrap()
+        .set_position(player_idx, start);
+    app.input_state.block = blocking;
+
+    let dt = 1.0 / 60.0;
+    let mut total_damage = 0.0f32;
+    let mut prev_health = app.hud_health.unwrap();
+    for _ in 0..(20 * 60) {
+        app.sim_step(dt);
+        let health = app
+            .hud_health
+            .expect("damage() doit faire apparaître la vie du HUD");
+        if health < prev_health - 1e-4 {
+            total_damage += prev_health - health;
+        }
+        prev_health = health;
+        let pos = app.scene.objects[creature_idx].transform.position;
+        app.physics.as_mut().unwrap().set_position(player_idx, pos);
+        app.scene.objects[player_idx].transform.position = pos;
+    }
+    total_damage
+}
+
+/// Preuve du correctif du 14 septembre 2026 (bouclier exposé côté Lua
+/// — `blocking`, `app::scripting::run_script` — mais jamais réellement lu par
+/// `creature_bite_script`, resté silencieux tant qu'on ne le vérifiait pas
+/// bout en bout) : tenir 2 (bouclier) pendant 20 s de contact continu avec la
+/// Créature 1 doit cumuler nettement moins de dégâts que sans, même
+/// réduction que le pendant réseau (`health::BLOCK_DAMAGE_MULT`, ×0,25).
+#[test]
+fn holding_block_reduces_solo_bite_damage_from_creature_1() {
+    let blocking_damage = total_bite_damage_over_20s_of_creature_1_contact(true);
+    let unblocked_damage = total_bite_damage_over_20s_of_creature_1_contact(false);
+    assert!(
+        blocking_damage > 0.0,
+        "aucune morsure détectée bouclier tenu — le contact/la boucle de test a un problème"
+    );
+    assert!(
+        unblocked_damage > blocking_damage * 3.0,
+        "dégâts cumulés bouclier tenu : {blocking_damage:.3} ; sans bouclier : \
+         {unblocked_damage:.3} — le bouclier (×0,25) devrait nettement réduire les dégâts"
+    );
+}
+
 /// Contre-épreuve de portée : le contact seul ne suffit pas à mordre — sans
 /// contact (joueur loin), la vie ne doit jamais baisser malgré 20 s de
 /// simulation (aucune tolérance de flakiness possible ici, contrairement au

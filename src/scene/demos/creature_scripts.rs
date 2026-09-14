@@ -42,13 +42,24 @@ pub(super) fn creature_bite_script(
     local BITE_CHANCE = {chance}
     local BITE_DAMAGE = {damage}
 
+    -- Bouclier (14 septembre 2026, capacité 2 du kit 1-2-3-4, `blocking`
+    -- global exposé par `app::scripting::run_script`) : même réduction que
+    -- le pendant réseau (`app::health::BLOCK_DAMAGE_MULT`, 0,25) — dupliquée
+    -- ici en dur faute de pouvoir partager une constante Rust avec ce
+    -- template Lua généré au build de la scène.
+    local BLOCK_DAMAGE_MULT = 0.25
+
     local bite_cd = (save.get("{prefix}bite_cd") or 0.0) - dt
     if obj.triggered and bite_cd <= 0.0 then
         bite_cd = BITE_COOLDOWN
         local roll = math.sin(time * {salt}) * 43758.5453
         roll = roll - math.floor(roll)
         if roll < BITE_CHANCE then
-            damage(BITE_DAMAGE)
+            local dmg = BITE_DAMAGE
+            if blocking then
+                dmg = dmg * BLOCK_DAMAGE_MULT
+            end
+            damage(dmg)
         end
     end
     save.set("{prefix}bite_cd", bite_cd)
