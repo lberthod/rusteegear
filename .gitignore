@@ -13,4 +13,6 @@ tests/golden/*.actual.png
 # Config locale des sessions Claude Code (permissions, worktrees d'agents
 # concurrents) : jamais partagée, propre à chaque poste/session.
 /.claude/
+# Serveurs MCP locaux (ex. Blender) : outillage propre à ce poste, pas au dépôt.
+/.mcp.json
 __pycache__/
