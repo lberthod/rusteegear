@@ -81,6 +81,44 @@ pub enum PlayerClass {
     Support,
 }
 
+/// Teinte déterministe par joueur (kit multi-couleur, roadmap 14 septembre
+/// 2026 — cf. `assets/models/riviere/creature_ronde.glb`, matériaux
+/// désaturés vers des gris clairs justement pour porter n'importe quelle
+/// teinte uniforme sans dénaturer les yeux/l'ombrage). Dérivée du seul
+/// `PlayerId` attribué par le serveur : tout le monde calcule la même
+/// couleur pour un même id, sans coordination ni champ réseau
+/// supplémentaire. Purement visuel, comme `PlayerClass::silhouette_tint`
+/// (jamais calculé côté serveur, cf. `AppState::apply_class_silhouette`).
+pub(crate) fn player_hue_tint(id: PlayerId) -> [f32; 3] {
+    // Conjugué du nombre d'or, en tours : deux ids consécutifs (1, 2, 3...)
+    // tombent sur des teintes très éloignées l'une de l'autre au lieu d'un
+    // dégradé progressif qui rendrait deux joueurs voisins à peine
+    // distinguables (même technique que le remplissage de teintes de
+    // Godot/Blender).
+    const GOLDEN_RATIO_CONJUGATE: f32 = 0.618_034;
+    let hue = ((id as f32) * GOLDEN_RATIO_CONJUGATE).fract() * 360.0;
+    // Saturation modérée, pleine valeur : des couleurs franches mais pas
+    // criardes sur une silhouette presque blanche (contraste doux entre
+    // joueurs sans virer au fluo).
+    hsv_to_rgb(hue, 0.55, 1.0)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let c = v * s;
+    let hp = (h / 60.0).rem_euclid(6.0);
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r1 + m, g1 + m, b1 + m]
+}
+
 impl PlayerClass {
     /// Traduit l'octet reçu du réseau — une valeur hors table retombe sur
     /// Assaut (même principe que `fireball::clamp_weapon` : un client
@@ -515,6 +553,7 @@ impl AppState {
     /// couleur) mémorisée à la première application (`silhouette_base`), au
     /// lieu de composer les facteurs à chaque appel.
     pub(crate) fn apply_class_silhouette(&mut self, index: usize, class: PlayerClass) {
+        let hue = self.player_hue_for_index(index);
         let Some(obj) = self.scene.objects.get_mut(index) else {
             return;
         };
@@ -525,10 +564,30 @@ impl AppState {
         obj.transform.scale = base_scale * class.silhouette_scale();
         let tint = class.silhouette_tint();
         obj.color = [
-            base_color[0] * tint[0],
-            base_color[1] * tint[1],
-            base_color[2] * tint[2],
+            base_color[0] * tint[0] * hue[0],
+            base_color[1] * tint[1] * hue[1],
+            base_color[2] * tint[2] * hue[2],
         ];
+    }
+
+    /// Teinte perso du joueur possédant l'objet `index` (kit multi-couleur,
+    /// 14 septembre 2026) : `[1.0; 3]` (neutre) si `index` n'appartient à
+    /// aucun `PlayerId` connu (solo, ou avant que le serveur n'ait attribué
+    /// le sien — cf. `ServerMsg::Welcome`, qui réapplique la silhouette une
+    /// fois l'id connu). Composée avec `PlayerClass::silhouette_tint` dans
+    /// `apply_class_silhouette`, pas une teinte séparée : deux joueurs de la
+    /// même classe restent identifiables l'un de l'autre.
+    fn player_hue_for_index(&self, index: usize) -> [f32; 3] {
+        let id = if Some(index) == self.player_index() {
+            self.net_conn.net_player_id
+        } else {
+            self.network
+                .network_players
+                .iter()
+                .find(|&(_, &i)| i == index)
+                .map(|(&id, _)| id)
+        };
+        id.map(player_hue_tint).unwrap_or([1.0, 1.0, 1.0])
     }
 
     /// Dégage la zone d'apparition (roadmap post-audit UX v2 2026-09-04,

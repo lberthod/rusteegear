@@ -839,6 +839,20 @@ impl AppState {
                 // été retiré à la fermeture de l'ancienne socket), le compteur
                 // de tentatives repart de zéro pour la prochaine coupure.
                 self.net_conn.net_reconnect = None;
+                // Teinte perso (kit multi-couleur, 14 septembre 2026) : au moment
+                // de la connexion (`self.apply_class_silhouette` un peu plus haut
+                // dans ce fichier), le `PlayerId` n'est pas encore connu — le
+                // serveur ne l'attribue qu'ici. Réapplique donc la silhouette
+                // maintenant que `net_player_id` est posé, pour la classe choisie
+                // au `Join` (mémorisée dans `net_last_connect`).
+                if let Some(pi) = self.player_index()
+                    && let Some(&(_, _, _, class_u8, _)) = self.net_conn.net_last_connect.as_ref()
+                {
+                    self.apply_class_silhouette(
+                        pi,
+                        crate::app::multiplayer::PlayerClass::from_u8(class_u8),
+                    );
+                }
             }
             ServerMsg::PlayerJoined { player_id, name } => {
                 if Some(player_id) != self.net_conn.net_player_id {
