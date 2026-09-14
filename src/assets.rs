@@ -73,6 +73,13 @@ const EMBEDDED_MODELS: &[(&str, &[u8])] = &[
         "monster_orc.glb",
         include_bytes!("../assets/models/monster_orc.glb"),
     ),
+    // Boss « L'Aîné de la Cascade » (14 septembre 2026, `app::boss` /
+    // `scene::demos::riviere`) : même raison que les entrées ci-dessus,
+    // inemployé ailleurs sous `assets/models/riviere/`.
+    (
+        "monster_dragon_evolved.glb",
+        include_bytes!("../assets/models/monster_dragon_evolved.glb"),
+    ),
 ];
 
 /// Assets de la démo « Rivière & cascade » (`assets/models/riviere/`, ≈ 12 Mo :
@@ -898,6 +905,7 @@ mod tests {
             "monster_pink_blob.glb",
             "monster_mushnub.glb",
             "monster_orc.glb",
+            "monster_dragon_evolved.glb",
         ] {
             let bytes = read_bytes(&format!("embedded://{name}"))
                 .unwrap_or_else(|| panic!("modèle embarqué manquant : {name}"));
