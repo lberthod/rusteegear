@@ -892,6 +892,81 @@ pub(super) fn ability_bar(
     }
 }
 
+/// Jauges de vie au-dessus des personnages (14 septembre 2026 au soir, cf.
+/// `app::world_labels`) : pour chaque étiquette, projette son ancre monde
+/// dans `area` avec `view_proj` (même convention que le marqueur d'allié à
+/// terre, `offscreen_edge_position`) et dessine pseudo (joueurs), barre et
+/// points de vie ; un flash blanc couvre la barre juste après une perte de vie.
+/// Les ancres derrière la caméra ou hors de l'écran sont ignorées.
+pub(super) fn world_health_labels(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    view_proj: glam::Mat4,
+    labels: &[crate::app::world_labels::WorldLabel],
+    scale: f32,
+    colorblind: bool,
+) {
+    use crate::app::world_labels::LabelKind;
+    use egui::{Align2, Color32, FontId, Stroke};
+    if labels.is_empty() {
+        return;
+    }
+    let scale = clamp_hud_scale(scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_world_health"),
+    ));
+    for l in labels {
+        let clip = view_proj * l.anchor.extend(1.0);
+        if clip.w <= 1e-4 {
+            continue;
+        }
+        let ndc = egui::vec2(clip.x / clip.w, clip.y / clip.w);
+        if ndc.x.abs() > 1.05 || ndc.y.abs() > 1.05 {
+            continue;
+        }
+        let p = egui::pos2(
+            area.left() + (ndc.x + 1.0) * 0.5 * area.width(),
+            area.top() + (1.0 - ndc.y) * 0.5 * area.height(),
+        );
+        let (w, h, fill) = match l.kind {
+            LabelKind::Player => (56.0 * scale, 7.0 * scale, health_color(l.health, colorblind)),
+            LabelKind::Monster => (40.0 * scale, 6.0 * scale, Color32::from_rgb(220, 70, 60)),
+        };
+        let bar = egui::Rect::from_center_size(p, egui::vec2(w, h));
+        painter.rect_filled(bar.expand(1.5 * scale), 3.0 * scale, Color32::from_black_alpha(150));
+        let filled = egui::Rect::from_min_size(bar.min, egui::vec2(w * l.health.clamp(0.0, 1.0), h));
+        painter.rect_filled(filled, 2.0 * scale, fill);
+        if l.hit_flash > 0.0 {
+            let a = (l.hit_flash / 0.4).clamp(0.0, 1.0);
+            painter.rect_filled(bar, 2.0 * scale, Color32::from_white_alpha((200.0 * a) as u8));
+        }
+        painter.rect(
+            bar,
+            2.0 * scale,
+            Color32::TRANSPARENT,
+            Stroke::new(1.0_f32, Color32::from_white_alpha(120)),
+            egui::StrokeKind::Outside,
+        );
+        painter.text(
+            egui::pos2(bar.right() + 4.0 * scale, p.y),
+            Align2::LEFT_CENTER,
+            &l.hp_text,
+            FontId::proportional(10.0 * scale),
+            Color32::from_white_alpha(230),
+        );
+        if !l.name.is_empty() {
+            painter.text(
+                egui::pos2(p.x, bar.top() - 3.0 * scale),
+                Align2::CENTER_BOTTOM,
+                &l.name,
+                FontId::proportional(12.0 * scale),
+                Color32::from_white_alpha(240),
+            );
+        }
+    }
+}
+
 /// Borne `Settings::hud_scale` à une plage sûre (au cas où un `settings.json`
 /// écrit à la main ou par une future version sort de la plage `0.6..=2.0` du
 /// curseur des Paramètres) : les fonctions de dessin du HUD ci-dessous

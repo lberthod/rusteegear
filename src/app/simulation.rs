@@ -1319,6 +1319,7 @@ impl AppState {
             self.update_network_heal(dt);
             self.update_self_heal(dt);
             self.update_network_revive(dt);
+            self.update_network_respawn(dt);
             self.update_network_item_pickups();
             // Réapparition des pièces bonus et ennemis dont le délai est écoulé.
             let now = self.time;
@@ -1658,6 +1659,7 @@ impl AppState {
         let anim_notify_events = advance_animation_clips(&mut self.scene, dt);
         self.apply_ability_animations(dt);
         self.update_network_ability_animations(dt);
+        self.update_label_hit_flashes(dt);
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
         // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
         // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les

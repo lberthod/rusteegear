@@ -3,6 +3,7 @@
 
 pub mod ability_hud;
 pub mod ai;
+pub mod world_labels;
 pub mod asset_ops;
 mod autosave;
 pub mod build_config;
@@ -931,6 +932,11 @@ pub struct NetworkPlayersState {
     /// — sans quoi les **autres** joueurs ne voyaient jamais un coup ou un sort
     /// (seul Walk/Idle était diffusé), cf. `multiplayer::update_network_ability_animations`.
     network_ability_anims: HashMap<crate::net::protocol::PlayerId, multiplayer::NetAbilityAnim>,
+    /// Réapparition PvP (14 septembre 2026 au soir, `Scene::ability_bar`) :
+    /// temps restant (s) avant qu'un joueur réseau vaincu réapparaisse au point
+    /// de départ (cf. `health::update_network_respawn`) — sans elle, un joueur
+    /// tué en duel restait à terre jusqu'à une réanimation de Soutien.
+    network_respawn_timers: HashMap<crate::net::protocol::PlayerId, f32>,
 }
 
 pub struct AsyncLoadState {
@@ -1394,6 +1400,11 @@ pub struct AppState {
     /// restait figé sur sa première image, invisible, et le `Snapshot` ne
     /// diffusait jamais que Walk/Idle). Vidé au début de chaque tick.
     ability_anim_locked: Vec<usize>,
+    /// Flash de dégât restant (s) par objet étiqueté d'une jauge de vie (cf.
+    /// `world_labels::update_label_hit_flashes`).
+    label_hit_flash: HashMap<usize, f32>,
+    /// Vie vue au tick précédent par objet étiqueté (détection des pertes).
+    label_last_health: HashMap<usize, f32>,
     /// État de simulation par joueur réseau (positions pilotées, vie, frags,
     /// classe, cooldowns...) — cf. `NetworkPlayersState`.
     network: NetworkPlayersState,
@@ -1698,6 +1709,8 @@ impl AppState {
             },
             player_ability_anim: None,
             ability_anim_locked: Vec::new(),
+            label_hit_flash: HashMap::new(),
+            label_last_health: HashMap::new(),
             network: NetworkPlayersState {
                 network_players: HashMap::new(),
                 network_inputs: HashMap::new(),
@@ -1714,6 +1727,7 @@ impl AppState {
                 recent_damage: HashMap::new(),
                 network_dash_cooldowns: HashMap::new(),
                 network_ability_anims: HashMap::new(),
+                network_respawn_timers: HashMap::new(),
             },
             projectiles: ProjectilesState {
                 fireballs: Vec::new(),

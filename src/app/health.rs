@@ -142,6 +142,10 @@ fn deterministic_roll(time: f32, salt: f32) -> f32 {
 /// et `AppState::play_grace` (roadmap post-audit UX v2 2026-09-04, 0.1 bis).
 pub const SPAWN_GRACE_S: f32 = 5.0;
 
+/// Délai (s) avant qu'un joueur vaincu en PvP réapparaisse (cf.
+/// `AppState::update_network_respawn`).
+pub const PVP_RESPAWN_S: f32 = 6.0;
+
 impl AppState {
     /// Vie du joueur solo amorcée dès qu'une partie tourne avec un objet
     /// pilotable (roadmap post-audit UX v2 2026-09-04, 1.2). Avant, `hud_health`
@@ -649,6 +653,89 @@ impl AppState {
     /// l'attaque réseau (`update_network_attacks`) frappe à portée fixe
     /// (`NETWORK_ATTACK_RANGE`), pas encore par profil d'arme individuel par
     /// joueur — chantier séparé, hors scope ici.
+    /// Réapparition automatique d'un joueur réseau vaincu (14 septembre 2026
+    /// au soir, PvP du kit 1-2-3-4, `Scene::ability_bar` uniquement) : après
+    /// `PVP_RESPAWN_S` à terre, il revient au point de départ à pleine vie avec
+    /// sa grâce d'apparition — dans les mondes coopératifs (hameau), la
+    /// réanimation par un Soutien (`update_network_revive`) reste la seule
+    /// voie, inchangée. Un joueur réanimé entre-temps (vie > 0) annule son
+    /// minuteur.
+    pub(super) fn update_network_respawn(&mut self, dt: f32) {
+        if !self.scene.ability_bar {
+            return;
+        }
+        let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
+        for id in ids {
+            let alive = self
+                .network
+                .network_health
+                .get(&id)
+                .copied()
+                .unwrap_or(MAX_HEALTH)
+                > 0.0;
+            if alive {
+                self.network.network_respawn_timers.remove(&id);
+                continue;
+            }
+            let t = self
+                .network
+                .network_respawn_timers
+                .entry(id)
+                .or_insert(PVP_RESPAWN_S);
+            *t -= dt;
+            if *t > 0.0 {
+                continue;
+            }
+            self.network.network_respawn_timers.remove(&id);
+            let Some(&index) = self.network.network_players.get(&id) else {
+                continue;
+            };
+            let max_hp = self.max_health_for(id);
+            self.network.network_health.insert(id, max_hp);
+            self.network.network_spawn_grace.insert(id, SPAWN_GRACE_S);
+            self.network.recent_damage.remove(&id);
+            // Point de départ : le gabarit du joueur local (masqué côté
+            // serveur), décalé comme à l'arrivée (`spawn_network_player`) et
+            // reposé au sol par le même sondage.
+            let template = self
+                .scene
+                .objects
+                .iter()
+                .position(|o| o.controller.as_ref().is_some_and(|c| c.input));
+            if let Some(ti) = template {
+                let origin = self.scene.objects[ti].transform.position;
+                const SPAWN_RADIUS: f32 = 3.0;
+                let angle = (id % 8) as f32 * std::f32::consts::TAU / 8.0;
+                let mut pos = origin
+                    + glam::Vec3::new(angle.cos() * SPAWN_RADIUS, 0.0, angle.sin() * SPAWN_RADIUS);
+                if let Some(phys) = self.physics.as_ref() {
+                    const PROBE: f32 = 6.0;
+                    let ground = |x: f32, z: f32| {
+                        phys.raycast(
+                            glam::Vec3::new(x, origin.y + PROBE, z),
+                            glam::Vec3::NEG_Y,
+                            PROBE * 2.0,
+                            1,
+                        )
+                        .map(|hit| hit.point.y)
+                    };
+                    if let (Some(g0), Some(g1)) = (ground(origin.x, origin.z), ground(pos.x, pos.z)) {
+                        pos.y = g1 + (origin.y - g0);
+                    }
+                }
+                if let Some(o) = self.scene.objects.get_mut(index) {
+                    o.transform.position = pos;
+                }
+                if let Some(phys) = self.physics.as_mut() {
+                    phys.set_position(index, pos);
+                }
+            }
+            if let Some(o) = self.scene.objects.get_mut(index) {
+                o.visible = true;
+            }
+        }
+    }
+
     pub(super) fn update_network_item_pickups(&mut self) {
         let ids: Vec<PlayerId> = self.network.network_players.keys().copied().collect();
         for id in ids {
@@ -844,6 +931,40 @@ mod tests {
             });
         }
         scene
+    }
+
+    /// PvP (14 septembre 2026 au soir) : un joueur tué en duel réapparaît
+    /// après `PVP_RESPAWN_S` dans une scène à kit — jamais dans un monde
+    /// coopératif, où seule la réanimation de Soutien le relève.
+    #[test]
+    fn a_player_killed_in_pvp_respawns_after_the_delay_only_in_ability_scenes() {
+        for ability in [true, false] {
+            let mut app = app_with(scene_with_optional_monster(false));
+            app.scene.ability_bar = ability;
+            let idx1 = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+            let idx2 = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+            app.scene.objects[idx2].transform.position = Vec3::new(20.0, 1.0, 20.0);
+            app.apply_network_damage(2, 10.0, DeathCauseKind::Player, idx1);
+            assert_eq!(app.network_player_health(2), Some(0.0));
+            assert!(!app.scene.objects[idx2].visible, "vaincu : masqué");
+            let dt = 1.0 / 60.0;
+            for _ in 0..((super::PVP_RESPAWN_S / dt) as usize + 5) {
+                app.update_network_respawn(dt);
+            }
+            if ability {
+                assert_eq!(app.network_player_health(2), Some(MAX_HEALTH), "revenu à pleine vie");
+                assert!(app.scene.objects[idx2].visible, "de nouveau visible");
+                let p = app.scene.objects[idx2].transform.position;
+                assert!(
+                    p.distance(Vec3::new(0.0, 1.0, 0.0)) < 4.0,
+                    "réapparu près du point de départ, pas là où il est tombé : {p:?}"
+                );
+                assert!(app.network.network_spawn_grace[&2] > 0.0, "grâce d'apparition relancée");
+            } else {
+                assert_eq!(app.network_player_health(2), Some(0.0), "coop : reste à terre");
+                assert!(!app.scene.objects[idx2].visible);
+            }
+        }
     }
 
     fn app_with(scene: Scene) -> AppState {

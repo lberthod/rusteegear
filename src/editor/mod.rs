@@ -17,7 +17,7 @@ use winit::window::Window;
 use file_dialogs::{DialogTarget, FileDialogs};
 use hierarchy::hierarchy_panel;
 use hud::{
-    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ability_bar, ally_down_banner,
+    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ability_bar, ally_down_banner, world_health_labels,
     collectibles_hud, crosshair, damage_vignette, defeated_banner, health_bar,
     hud_preview_overlays, hud_widgets, item_inventory_panel, kills_hud, lose_banner,
     mobile_overlay, mobile_top_buttons, multiplayer_roster_panel, net_event_banner,
@@ -1293,6 +1293,8 @@ impl Editor {
         net_hud: crate::app::network_client::NetHudInfo,
         weapon_label: &str,
         ability: Option<crate::app::ability_hud::AbilityHud>,
+        view_proj: glam::Mat4,
+        world_labels: &[crate::app::world_labels::WorldLabel],
         defeated: bool,
         death_cause: Option<crate::net::protocol::DeathCause>,
         kills: u32,
@@ -1507,6 +1509,7 @@ impl Editor {
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
             let mut layout = scene.hud_layout;
             if !arcade {
+                world_health_labels(ctx, area, view_proj, world_labels, hud_scale, settings.colorblind);
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
                 // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
                 // (cf. `hud::ability_bar`).
@@ -1850,6 +1853,8 @@ impl Editor {
         online_players: &[String],
         weapon_label: &str,
         ability: Option<crate::app::ability_hud::AbilityHud>,
+        view_proj: glam::Mat4,
+        world_labels: &[crate::app::world_labels::WorldLabel],
         defeated: bool,
         death_cause: Option<crate::net::protocol::DeathCause>,
         kills: u32,
@@ -2019,6 +2024,8 @@ impl Editor {
                 online_players,
                 weapon_label,
                 ability,
+                view_proj,
+                world_labels,
                 defeated,
                 death_cause,
                 kills,
@@ -2251,6 +2258,8 @@ fn build_ui(
     online_players: &[String],
     weapon_label: &str,
         ability: Option<crate::app::ability_hud::AbilityHud>,
+        view_proj: glam::Mat4,
+        world_labels: &[crate::app::world_labels::WorldLabel],
     defeated: bool,
     death_cause: Option<crate::net::protocol::DeathCause>,
     kills: u32,
@@ -2647,6 +2656,8 @@ fn build_ui(
         locale,
         weapon_label,
         ability,
+        view_proj,
+        world_labels,
         kills,
         assists,
         roster,
@@ -2767,6 +2778,8 @@ fn play_area_and_in_game_hud(
     locale: crate::app::locale::Locale,
     weapon_label: &str,
         ability: Option<crate::app::ability_hud::AbilityHud>,
+        view_proj: glam::Mat4,
+        world_labels: &[crate::app::world_labels::WorldLabel],
     kills: u32,
     assists: u32,
     roster: &[RosterEntry],
@@ -2820,6 +2833,14 @@ fn play_area_and_in_game_hud(
         health_bar(root.ctx(), play_rect, h, hud_scale, settings.colorblind);
     }
     if *playing && !panels.hud_hidden {
+        world_health_labels(
+            root.ctx(),
+            play_rect,
+            view_proj,
+            world_labels,
+            hud_scale,
+            settings.colorblind,
+        );
         // Décalages persistés (Scene::hud_layout) : pas de glisser pendant une
         // partie en cours (`draggable: false`) — le repositionnement se fait via
         // 👁 Aperçu HUD › 🖐 Repositionner, en Édition, ci-dessous. Le bloc

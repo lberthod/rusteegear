@@ -926,6 +926,18 @@ impl AppState {
                                 self.net_conn.net_visibility_dirty = true;
                             }
                             o.visible = e.visible;
+                            // Vie diffusée normalisée (jauges au-dessus des
+                            // têtes, cf. `world_labels`) : réécrite dans
+                            // `Combat::hp` — le serveur est autoritaire sur les
+                            // dégâts, cette copie locale ne sert qu'à l'affichage.
+                            if let Some(h) = e.health
+                                && let Some(c) = o.combat.as_mut()
+                            {
+                                if c.max_hp == 0 {
+                                    c.max_hp = c.hp.max(1);
+                                }
+                                c.hp = (h.clamp(0.0, 1.0) * c.max_hp as f32).round() as u32;
+                            }
                             // Animation répliquée : même mécanisme que
                             // pour les fantômes de joueurs, cf. `poll_network`.
                             if !e.anim_clip.is_empty()

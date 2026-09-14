@@ -402,8 +402,10 @@ pub struct EntityDelta {
     /// `Some` uniquement pour les entités qui portent une vie : les joueurs
     /// réseau (0..1, cf. `app::health`, GAMEDESIGN_EN_LIGNE.md §3.1 — vie
     /// individualisée par joueur, plus le champ scalaire unique d'avant) et les
-    /// monstres synchronisés (`Combat::hp`, non normalisé). Absent (`None`,
-    /// pas sérialisé à 0 par défaut) pour un décor sans vie.
+    /// monstres synchronisés (`Combat::hp / max_hp`, **normalisé 0..1** depuis
+    /// le 14 septembre 2026 au soir — jauges au-dessus des têtes, cf.
+    /// `app::world_labels`). Absent (`None`, pas sérialisé à 0 par défaut) pour
+    /// un décor sans vie.
     pub health: Option<f32>,
     /// Animation répliquée : nom du clip actuellement joué côté serveur
     /// (vide = objet non skinné ou pose de liaison, cf. `AnimationState::clip`).

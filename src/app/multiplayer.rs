@@ -867,6 +867,8 @@ impl AppState {
         self.network.network_classes.remove(&id);
         self.network.network_max_health.remove(&id);
         self.network.network_revive.remove(&id);
+        self.network.network_respawn_timers.remove(&id);
+        self.network.network_ability_anims.remove(&id);
         // Reconstruction complète documentée et acceptée — cf. le commentaire
         // du site jumeau dans `spawn_network_player`.
         self.physics = Some(crate::runtime::physics::Physics::build(&self.scene));
@@ -1326,13 +1328,20 @@ impl AppState {
                 continue;
             }
             let (yaw, _, _) = o.transform.rotation.to_euler(glam::EulerRot::YXZ);
+            // Vie du monstre, **normalisée** 0..1 (14 septembre 2026 au soir,
+            // jauges au-dessus des têtes) : `max_hp` n'est capturé qu'au
+            // premier coup (cf. `Combat::max_hp`), avant ça `hp` est le maximum.
+            let health = o.combat.as_ref().map(|c| {
+                let max = if c.max_hp > 0 { c.max_hp } else { c.hp.max(1) };
+                (c.hp as f32 / max as f32).clamp(0.0, 1.0)
+            });
             entities.push(EntityDelta {
                 index: index as u32,
                 player_id: None,
                 position: o.transform.position.to_array(),
                 yaw,
                 visible: o.visible,
-                health: None,
+                health,
                 kills: None,
                 assists: None,
                 class: None,
@@ -2108,6 +2117,29 @@ mod tests {
         assert_eq!(t.current, None);
         let snap = app.network_snapshot(1);
         assert!(snap.entities.iter().any(|e| e.player_id == Some(7)));
+    }
+
+    /// Jauges au-dessus des têtes (14 septembre 2026 au soir) : la vie des
+    /// monstres part normalisée dans le `Snapshot`, avant comme après un coup.
+    #[test]
+    fn the_snapshot_carries_normalized_monster_health() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::default();
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Monstre".into(),
+            combat: Some(crate::scene::Combat {
+                attackable: true,
+                hp: 4,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let h = |app: &AppState| app.network_snapshot(0).entities[0].health;
+        assert_eq!(h(&app), Some(1.0), "jamais touché : plein");
+        app.scene.damage_attackable_by(0, 1);
+        assert_eq!(h(&app), Some(0.75));
+        app.scene.damage_attackable_by(0, 3);
+        assert_eq!(h(&app), Some(0.0), "vaincu : diffusé à 0 (et masqué)");
     }
 
     #[test]
