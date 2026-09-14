@@ -568,6 +568,14 @@ impl App {
         if self.state.scene.ability_bar {
             inp.attack |= keys.contains(&KeyCode::Digit1);
             inp.fire |= keys.contains(&KeyCode::Digit3);
+            // G = jet de griffe (14 septembre 2026) : même action que l'attaque
+            // (`update_attack`, mêlée/à distance selon `Controller::attack_range`) —
+            // pas un nouveau système, juste un second déclencheur clavier. Les
+            // griffes du personnage (`creature_ronde.glb`) sont déjà visibles en
+            // permanence sur les mains et jouent déjà le clip `Attack` via
+            // `AppState::apply_ability_animations` dès que `attack_charge`/
+            // `attack_projectile` est actif, quelle que soit la touche d'origine.
+            inp.attack |= keys.contains(&KeyCode::KeyG);
         }
         // Élévation caméra libre (Espace = monte, C = descend) — cf. `AppState::fly_cam`.
         // Pendant le vol au clic droit (`fly_look`), E monte et Q descend en plus
