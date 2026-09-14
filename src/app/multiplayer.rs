@@ -1099,10 +1099,21 @@ impl AppState {
                 .insert(id, DASH_COOLDOWN);
             let mut distance = DASH_DISTANCE;
             const DASH_RAYCAST_MASK: u32 = 1;
+            // Même correctif que `combat::update_dash` (14 septembre 2026) :
+            // décale l'origine du rayon hors du collider du joueur lui-même,
+            // sinon `cast_ray(solid: true)` le touche à distance ≈ 0 et la
+            // ruée réseau se résout en un bond invisible.
+            const DASH_RAYCAST_SKIP: f32 = 0.4;
+            let ray_origin = pos + forward * DASH_RAYCAST_SKIP;
             if let Some(phys) = self.physics.as_ref()
-                && let Some(hit) = phys.raycast(pos, forward, distance, DASH_RAYCAST_MASK)
+                && let Some(hit) = phys.raycast(
+                    ray_origin,
+                    forward,
+                    (distance - DASH_RAYCAST_SKIP).max(0.0),
+                    DASH_RAYCAST_MASK,
+                )
             {
-                distance = hit.distance.max(0.0);
+                distance = DASH_RAYCAST_SKIP + hit.distance;
             }
             if let Some(o) = self.scene.objects.get_mut(index) {
                 o.transform.position += forward * distance;

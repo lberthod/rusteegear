@@ -494,10 +494,25 @@ impl AppState {
         // autres joueurs (une ruée qui buterait sur un adversaire serait
         // plus frustrante qu'utile).
         const DASH_RAYCAST_MASK: u32 = 1;
+        // Décalage de l'origine du rayon (14 septembre 2026 — correctif « la
+        // ruée ne déplace jamais le joueur ») : sans lui, le rayon part
+        // **depuis l'intérieur** du collider capsule du joueur lui-même (sa
+        // propre couche par défaut inclut le bit 0, comme `CAMERA_COLLISION_
+        // MASK`) — `cast_ray(..., solid: true)` renvoie alors un impact
+        // immédiat à distance ≈ 0 sur SON PROPRE corps, et la ruée se
+        // résolvait en un bond de quelques millimètres, indiscernable d'un
+        // no-op. Même idiome que `update_camera_collision` (`SKIP`).
+        const DASH_RAYCAST_SKIP: f32 = 0.4;
+        let ray_origin = pos + forward * DASH_RAYCAST_SKIP;
         if let Some(phys) = self.physics.as_ref()
-            && let Some(hit) = phys.raycast(pos, forward, distance, DASH_RAYCAST_MASK)
+            && let Some(hit) = phys.raycast(
+                ray_origin,
+                forward,
+                (distance - DASH_RAYCAST_SKIP).max(0.0),
+                DASH_RAYCAST_MASK,
+            )
         {
-            distance = hit.distance.max(0.0);
+            distance = DASH_RAYCAST_SKIP + hit.distance;
         }
         if let Some(o) = self.scene.objects.get_mut(index) {
             o.transform.position += forward * distance;
@@ -670,15 +685,28 @@ mod tests {
     /// Preuve bout en bout de ce que la touche 4 (ruée du kit 1-2-3-4) doit
     /// produire : `input_state.dash` tenu doit déplacer le joueur d'environ
     /// `multiplayer::DASH_DISTANCE` (aucun obstacle ici, rien à raboter).
+    ///
+    /// **Un monde physique réel est construit exprès** (14 septembre 2026,
+    /// correctif « la ruée ne fait rien ») : un premier jet de ce test sans
+    /// `Physics::build` ne testait pas du tout le chemin bogué — sans monde
+    /// physique, `update_dash` saute le rayon entièrement et applique la
+    /// distance pleine sans jamais la mesurer. Le vrai bug (rayon lancé
+    /// depuis l'intérieur du propre collider du joueur, `cast_ray(solid:
+    /// true)` le touchant à distance ≈ 0) n'apparaît qu'avec un collider
+    /// joueur réel — d'où le `Controller`/`PhysicsKind::Kinematic`/
+    /// `ColliderShape::Capsule` ci-dessous, calqués sur le gabarit réel de
+    /// `scene::demos::riviere`.
     #[test]
     fn holding_dash_moves_the_player_forward() {
         let mut joueur = SceneObject {
             name: "Joueur".into(),
-            mesh: MeshKind::Cube,
+            mesh: MeshKind::Capsule,
             controller: Some(Controller {
                 input: true,
                 ..Default::default()
             }),
+            physics: crate::runtime::physics::PhysicsKind::Kinematic,
+            collider_shape: crate::runtime::physics::ColliderShape::Capsule,
             ..Default::default()
         };
         joueur.color = [1.0; 3];
@@ -688,6 +716,7 @@ mod tests {
             ability_bar: true,
             ..Default::default()
         };
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
         let start = app.scene.objects[0].transform.position;
         app.input_state.dash = true;
 
@@ -696,7 +725,8 @@ mod tests {
         let moved = app.scene.objects[0].transform.position.distance(start);
         assert!(
             moved > crate::app::multiplayer::DASH_DISTANCE - 0.5,
-            "la ruée devrait déplacer le joueur d'environ {} m, mesuré : {moved:.2} m",
+            "la ruée devrait déplacer le joueur d'environ {} m, mesuré : {moved:.2} m \
+             (rayon lancé depuis son propre collider ?)",
             crate::app::multiplayer::DASH_DISTANCE
         );
     }
