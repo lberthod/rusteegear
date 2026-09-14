@@ -1387,6 +1387,13 @@ pub struct AppState {
     /// resterait figé sur sa première image (`apply_locomotion` réécrit
     /// `clip`/`time` à chaque tick, cf. la doc de la fonction).
     player_ability_anim: Option<&'static str>,
+    /// Objets dont le clip de capacité (Block/Attack/Cast/Dash) a été posé **ce
+    /// tick** par `apply_ability_animations`/`update_network_ability_animations`
+    /// : l'élection Walk/Idle de fin de `sim_step` les saute — sinon elle
+    /// écrasait le clip chaque tick (`set_clip` remettait `time` à 0 : le coup
+    /// restait figé sur sa première image, invisible, et le `Snapshot` ne
+    /// diffusait jamais que Walk/Idle). Vidé au début de chaque tick.
+    ability_anim_locked: Vec<usize>,
     /// État de simulation par joueur réseau (positions pilotées, vie, frags,
     /// classe, cooldowns...) — cf. `NetworkPlayersState`.
     network: NetworkPlayersState,
@@ -1690,6 +1697,7 @@ impl AppState {
                 cast_was_down: false,
             },
             player_ability_anim: None,
+            ability_anim_locked: Vec::new(),
             network: NetworkPlayersState {
                 network_players: HashMap::new(),
                 network_inputs: HashMap::new(),

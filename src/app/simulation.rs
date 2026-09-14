@@ -1881,6 +1881,11 @@ impl AppState {
                 }
             }
             for (idx, moving) in player_anim {
+                // Clip de capacité posé ce tick : il joue en entier, cf.
+                // `ability_anim_locked`.
+                if self.ability_anim_locked.contains(&idx) {
+                    continue;
+                }
                 if let Some(anim) = self
                     .scene
                     .objects
@@ -1966,6 +1971,7 @@ impl AppState {
     ///    ici : leur `input` (bouclier/ruée tenus) n'est connu que du serveur,
     ///    pas diffusé aux autres clients par le `Snapshot` — chantier séparé.
     fn apply_ability_animations(&mut self, dt: f32) {
+        self.ability_anim_locked.clear();
         if !self.scene.ability_bar {
             return;
         }
@@ -2033,6 +2039,7 @@ impl AppState {
             if rising_edge {
                 anim.time = 0.0;
             }
+            self.ability_anim_locked.push(pi);
         }
     }
 

@@ -1189,6 +1189,7 @@ impl AppState {
                 if rising_edge {
                     anim.time = 0.0;
                 }
+                self.ability_anim_locked.push(index);
             }
         }
     }
@@ -2080,16 +2081,26 @@ mod tests {
             ..Default::default()
         };
         app.set_network_input(7, input);
-        app.update_network_ability_animations(1.0 / 60.0);
+        app.playing = true;
+        // Pas de simulation complets : l'élection Walk/Idle de fin de tick ne
+        // doit pas écraser le clip de capacité (cf. `ability_anim_locked`).
+        app.sim_step(1.0 / 60.0);
         assert_eq!(clip(&app), "Attack", "appui : le clip Attack part");
+        let anim_time = app.scene.objects[idx].animation.as_ref().unwrap().time;
         // Touche relâchée dès le tick suivant : le clip continue le temps du
-        // minuteur, puis s'arrête de lui-même.
+        // minuteur (et avance, pas figé sur sa première image), puis s'arrête.
         app.set_network_input(7, NetworkInput::default());
-        app.update_network_ability_animations(1.0 / 60.0);
+        app.sim_step(1.0 / 60.0);
+        app.sim_step(1.0 / 60.0);
         assert_eq!(clip(&app), "Attack", "relâché : le clip joue encore");
+        assert!(
+            app.scene.objects[idx].animation.as_ref().unwrap().time > anim_time,
+            "le clip doit avancer d'un tick à l'autre"
+        );
         for _ in 0..40 {
-            app.update_network_ability_animations(1.0 / 60.0);
+            app.sim_step(1.0 / 60.0);
         }
+        assert_eq!(clip(&app), "Idle", "minuteur écoulé : Walk/Idle reprend la main");
         // Une fois le minuteur écoulé, la fonction ne touche plus au clip
         // (Walk/Idle reprennent la main dans `sim_step`).
         let t = app.network.network_ability_anims[&7];
