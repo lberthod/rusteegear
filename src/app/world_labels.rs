@@ -25,7 +25,8 @@ pub enum LabelKind {
 pub struct WorldLabel {
     /// Point monde au-dessus de la tête (haut de l'AABB + marge).
     pub anchor: Vec3,
-    /// Pseudo (joueurs) ou vide (monstres).
+    /// Pseudo (joueurs) ou nom de type sans son suffixe d'instance (monstres,
+    /// cf. `type_name` — « Renard enragé 1 » s'affiche « Renard enragé »).
     pub name: String,
     /// Vie 0..1.
     pub health: f32,
@@ -34,6 +35,28 @@ pub struct WorldLabel {
     pub kind: LabelKind,
     /// Temps restant (s) du flash de dégât, 0 = aucun.
     pub hit_flash: f32,
+}
+
+/// Nom de **type** affiché au-dessus d'un monstre (bestiaire varié, 14
+/// septembre 2026 au soir) : `o.name` retire son suffixe final « espace +
+/// chiffres » quand il en a un (ex. « Renard enragé 1 » → « Renard enragé »),
+/// sinon renvoyé tel quel (ex. « Champignon mordeur », une espèce à instance
+/// unique dans `Scene::riviere_demo`, n'a pas de suffixe à retirer). `o.name`
+/// lui-même reste unique par **instance** (essentiel : `console.rs`,
+/// `demos.rs`, `app::creature_attack` font tous des lookups exacts sur
+/// `o.name`) — cette fonction n'affecte que l'affichage, jamais la donnée de
+/// scène. Générique à toute démo (hameau MMORPG compris), pas spécifique à
+/// Rivière.
+fn type_name(full: &str) -> &str {
+    let Some(pos) = full.rfind(' ') else {
+        return full;
+    };
+    let suffix = &full[pos + 1..];
+    if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) {
+        &full[..pos]
+    } else {
+        full
+    }
 }
 
 /// Distance (m) au-delà de laquelle les jauges ne sont plus dessinées
@@ -78,7 +101,12 @@ impl AppState {
         }
         let max = if c.max_hp > 0 { c.max_hp } else { c.hp.max(1) };
         let h = (c.hp as f32 / max as f32).clamp(0.0, 1.0);
-        Some((h, format!("{}/{}", c.hp, max), LabelKind::Monster, String::new()))
+        Some((
+            h,
+            format!("{}/{}", c.hp, max),
+            LabelKind::Monster,
+            type_name(&o.name).to_string(),
+        ))
     }
 
     /// Jauges à dessiner cette frame (cf. la doc du module).
@@ -137,8 +165,23 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::super::AppState;
-    use super::LabelKind;
+    use super::{LabelKind, type_name};
     use crate::scene::{Combat, MeshKind, Scene, SceneObject, Transform};
+
+    /// Bestiaire varié (14 septembre 2026 au soir) : le HUD affiche un nom
+    /// de **type** au-dessus des monstres, dérivé de `SceneObject::name` en
+    /// retirant son éventuel suffixe d'instance — jamais en le renommant en
+    /// interne (`o.name` doit rester unique par instance, cf. la doc de
+    /// `type_name`).
+    #[test]
+    fn type_name_strips_only_a_trailing_numeric_suffix() {
+        assert_eq!(type_name("Renard enragé 1"), "Renard enragé");
+        assert_eq!(type_name("Créature 26"), "Créature");
+        assert_eq!(type_name("Champignon mordeur"), "Champignon mordeur");
+        assert_eq!(type_name("Blob des sous-bois (vert)"), "Blob des sous-bois (vert)");
+        assert_eq!(type_name("Créature"), "Créature");
+        assert_eq!(type_name(""), "");
+    }
 
     fn scene_with_monster(hp: u32) -> Scene {
         let mut scene = Scene::default();

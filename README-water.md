@@ -110,7 +110,11 @@ objets, 34 modèles importés. Groupes d'objets :
   rendues par `shade_water` dans `main.wgsl`, avec une passe de réflexion planaire.
 - **Forêt / végétation / Faune** : épicéas, hêtres, bouleaux, herbes, fougères,
   rochers, renards décoratifs — générés par script (voir § assets).
-- **Monstre** : 6 « Renards enragés » (`fauna_fox.glb` teinté rouge).
+- **Monstre** : bestiaire varié de 9 monstres / 8 espèces (`MonsterSpot`,
+  `Scene::riviere_demo`) — Renard enragé ×2 (`fauna_fox.glb` teinté rouge),
+  Maraudeur/orc, Grenouille des berges, Fantôme de la brume, Golem des
+  berges (Colosse, le plus robuste), Blob des sous-bois vert et rose
+  (Meute), Champignon mordeur.
 - **Butin** : 3 armes de mêlée posées sur des galets (Épée près du départ,
   Lance au plateau amont, Marteau près de la cascade) ; baies ×2 et potions ×2.
 - **Enceinte** : 4 murs invisibles autour de la vallée (corps fixes, collider
@@ -167,13 +171,18 @@ Le kit 1-2-3-4 n'existe que dans les scènes avec `Scene::ability_bar = true`
 | Éclaireur | ×1,25 | ×1,30 | ×0,70 | déclenche les créatures furtives de loin |
 | Soutien | ×0,85 | ×1,0 | ×1,0 | soin/réanimation des alliés, dégâts à distance réduits |
 
-### PvE : les renards enragés
+### PvE : le bestiaire
 
-- 3 PV, tués par la mêlée (1 coup = 1 PV sauf armes plus lourdes) ou les tirs
+- 2 à 6 PV selon l'espèce (`MonsterSpot::hp`, `scene/demos/riviere.rs`),
+  tués par la mêlée (1 coup = 1 PV sauf armes plus lourdes) ou les tirs
   (Boule de feu 1, Éclair 1, Boulet 3).
-- Poursuite native (`AiChaser`, vitesse 2,2, détection 9 m en réseau), morsure
-  scriptée en Lua (`creature_bite_script`) : 0,12 PV, recharge 1,8 s, 50 % de
-  chance ; contact monstre : 0,16 PV/s.
+- Poursuite native (`AiChaser`), tempérament par archétype
+  (`Archetype::Traqueuse`/`Meute`/`Colosse`/`Furtive`, GDD_MMORPG.md §5.4) :
+  le Golem (Colosse) encaisse le plus et frappe le plus fort mais reste le
+  plus lent, les Blobs (Meute) et la Grenouille/le Fantôme (Furtive,
+  éveil tardif) sont les plus fragiles. Morsure scriptée en Lua
+  (`creature_bite_script`), tempérament propre à chaque espèce (cooldown/
+  chance/dégâts, cf. `MonsterSpot::bite`) ; contact monstre : 0,16 PV/s.
 - Réapparition 20 s après la mort, à leur poste d'origine.
 - Frags et assists individualisés (`network_kills`/`network_assists`, diffusés
   dans le snapshot, visibles dans le roster).

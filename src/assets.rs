@@ -38,6 +38,41 @@ const EMBEDDED_MODELS: &[(&str, &[u8])] = &[
         "monster_ninja_b.glb",
         include_bytes!("../assets/models/monster_ninja_b.glb"),
     ),
+    // Bestiaire varié de la démo Rivière (14 septembre 2026 au soir,
+    // `scene::demos::riviere` : `MonsterSpot::file`) : ces fichiers vivent au
+    // niveau racine de `assets/models/`, pas sous `assets/models/riviere/`
+    // (`RIVIERE_DIR`, wasm32 seulement) — sans cette entrée, `embedded_bytes`
+    // ne les résoudrait pas sur la cible web (le natif lit déjà le disque
+    // directement, cf. `riviere::asset_path`). `riviere/fauna_fox.glb` (le
+    // renard) reste résolu via `RIVIERE_DIR`, inchangé.
+    (
+        "monster_frog.glb",
+        include_bytes!("../assets/models/monster_frog.glb"),
+    ),
+    (
+        "monster_ghost.glb",
+        include_bytes!("../assets/models/monster_ghost.glb"),
+    ),
+    (
+        "monster_goleling.glb",
+        include_bytes!("../assets/models/monster_goleling.glb"),
+    ),
+    (
+        "monster_green_blob.glb",
+        include_bytes!("../assets/models/monster_green_blob.glb"),
+    ),
+    (
+        "monster_pink_blob.glb",
+        include_bytes!("../assets/models/monster_pink_blob.glb"),
+    ),
+    (
+        "monster_mushnub.glb",
+        include_bytes!("../assets/models/monster_mushnub.glb"),
+    ),
+    (
+        "monster_orc.glb",
+        include_bytes!("../assets/models/monster_orc.glb"),
+    ),
 ];
 
 /// Assets de la démo « Rivière & cascade » (`assets/models/riviere/`, ≈ 12 Mo :
@@ -850,14 +885,28 @@ mod tests {
 
     #[test]
     fn embedded_model_is_a_real_glb_not_an_lfs_pointer() {
-        // Sans `git lfs pull`, le fichier inclus serait un pointeur texte : le
-        // modèle embarqué doit commencer par la signature binaire glTF.
-        let bytes = read_bytes("embedded://monster_ninja_b.glb").expect("modèle embarqué");
-        assert_eq!(
-            &bytes[..4],
-            b"glTF",
-            "assets/models/monster_ninja_b.glb n'est pas un GLB (LFS non tiré ?)"
-        );
+        // Sans `git lfs pull`, le fichier inclus serait un pointeur texte : chaque
+        // modèle embarqué doit commencer par la signature binaire glTF — y compris
+        // le bestiaire varié de la démo Rivière (14 septembre 2026 au soir), ajouté
+        // au même titre que `monster_ninja_b.glb`.
+        for name in [
+            "monster_ninja_b.glb",
+            "monster_frog.glb",
+            "monster_ghost.glb",
+            "monster_goleling.glb",
+            "monster_green_blob.glb",
+            "monster_pink_blob.glb",
+            "monster_mushnub.glb",
+            "monster_orc.glb",
+        ] {
+            let bytes = read_bytes(&format!("embedded://{name}"))
+                .unwrap_or_else(|| panic!("modèle embarqué manquant : {name}"));
+            assert_eq!(
+                &bytes[..4],
+                b"glTF",
+                "assets/models/{name} n'est pas un GLB (LFS non tiré ?)"
+            );
+        }
         assert!(read_bytes("embedded://inconnu.glb").is_none());
     }
 

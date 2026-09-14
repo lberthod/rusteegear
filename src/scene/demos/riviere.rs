@@ -189,6 +189,33 @@ const fn sp(file: &'static str, lo: f32, hi: f32, solid: bool) -> Species {
     }
 }
 
+/// Un emplacement de monstre : espèce (mesh + tempérament de poursuite/
+/// morsure) et poste fixe — cf. la doc du bloc « Monstres » plus bas pour le
+/// contexte. Pas de `const fn` possible pour tout le tableau (`x` dépend de
+/// `river_center`, une fonction ordinaire) : `monster_roster` reste un
+/// tableau local construit à chaque appel de `riviere_demo`, comme l'était
+/// `monster_spots` avant cette variation d'espèces.
+struct MonsterSpot {
+    /// Nom affiché (HUD, éditeur) — sert aussi de base au préfixe `save` Lua
+    /// unique par instance (cf. la boucle de construction).
+    species: &'static str,
+    file: &'static str,
+    x: f32,
+    z: f32,
+    scale: f32,
+    /// Teinte multiplicative (`SceneObject::color`) : `Some(...)` seulement
+    /// pour le renard (le distingue d'un coup d'œil du renard décoratif
+    /// inoffensif de la faune ci-dessus) — les autres espèces gardent leurs
+    /// couleurs de modèle d'origine (`None` ⇒ blanc neutre, cf. `demo_obj`).
+    tint: Option<[f32; 3]>,
+    hp: u32,
+    speed: f32,
+    archetype: Archetype,
+    /// (cooldown, chance, dégâts) de la morsure — cf. `BiteAttack` et
+    /// `creature_bite_script`.
+    bite: (f32, f32, f32),
+}
+
 /// Arbres des versants et du plateau (pondérations cumulées, tirage sur `r`).
 /// Modèles générés par `scripts/gen_riviere_vegetation.py` (épicéa = 10 m,
 /// hêtre = 9 m à l'échelle 1). `near` : premier plan (au bord de la rivière,
@@ -846,75 +873,273 @@ impl Scene {
             }
         }
 
-        // --- Monstres (14 septembre 2026, PvE/PvP : kit de capacités 1-2-3-4) ---
-        // Renards enragés : réutilisent le modèle de faune (`fauna_fox.glb`),
-        // teinte rouge sombre pour les distinguer d'un coup d'œil des renards
-        // décoratifs inoffensifs ci-dessus — pas de nouvel asset à produire
-        // pour un point de gameplay. Poursuite native (`AiChaser`, pas de
-        // script d'errance nécessaire, cf. sa doc) ; seule la morsure est
-        // scriptée (`creature_bite_script`), pour que le joueur **solo**
-        // (sans serveur réseau) subisse aussi des dégâts — la résolution
-        // native de `BiteAttack` (`app::health::update_creature_bite`) ne
-        // s'applique qu'aux joueurs réseau, cf. sa doc.
-        let monster_spots: [(f32, f32); 6] = [
-            (river_center(-20.0) + 7.0, -20.0),
-            (river_center(-38.0) - 7.5, -38.0),
-            (river_center(14.0) + 8.0, 14.0),
-            (river_center(32.0) - 7.0, 32.0),
-            (river_center(56.0) + 7.5, 56.0),
-            (river_center(-58.0) - 7.0, -58.0),
+        // --- Monstres (14 septembre 2026, PvE/PvP : kit de capacités 1-2-3-4 ;
+        // bestiaire varié depuis le 14 septembre 2026 au soir) ---
+        // Huit espèces plutôt que six clones du même renard : table
+        // data-driven sur le patron de `MMORPG_CREATURES`
+        // (`scene/demos/mmorpg/creatures.rs`) — une boucle unique construit
+        // chaque `SceneObject` à partir d'une entrée `MonsterSpot`, au lieu
+        // d'un bloc dédié par espèce. `x`/`z` ne sont pas `const` (calculés
+        // via `river_center`, pas une fonction `const fn`) : ce tableau est
+        // construit au premier appel de `riviere_demo`, pas figé à la
+        // compilation comme `MMORPG_CREATURES`.
+        //
+        // Cinq des six postes historiques sont conservés tels quels (spots
+        // #1/#2/#4/#5/#6 ci-dessous, mêmes coordonnées qu'avant cette
+        // variation) ; le spot #3 (lisière est, peu caractéristique) cède la
+        // place à quatre nouveaux postes pensés pour chaque nouvelle espèce
+        // (berge peu profonde pour la grenouille, brume du bassin pour le
+        // fantôme, plateau rocheux amont pour le golem, amas de champignons
+        // du sous-bois pour le mordeur) — 9 monstres au total, comme les 6
+        // d'origine. Échelles reprises telles quelles de la démo MMORPG
+        // (`scene/demos/mmorpg/decor_data.rs`, table `MONSTER_DECOR`) où ces
+        // mêmes fichiers sont déjà posés et calibrés visuellement : pas de
+        // nouveau réglage à l'aveugle.
+        //
+        // Poursuite native (`AiChaser`, pas de script d'errance nécessaire,
+        // cf. sa doc) ; seule la morsure est scriptée
+        // (`creature_bite_script`), pour que le joueur **solo** (sans
+        // serveur réseau) subisse aussi des dégâts — la résolution native de
+        // `BiteAttack` (`app::health::update_creature_bite`) ne s'applique
+        // qu'aux joueurs réseau, cf. sa doc. PV/vitesse/tempérament de
+        // morsure varient par espèce (`Archetype::hp_multiplier` n'est PAS
+        // appliqué automatiquement, cf. `scene/mod.rs` — chaque `hp` est
+        // fixé en dur ci-dessous, même règle que `MMORPG_CREATURES`) : le
+        // Golem encaisse le plus et frappe le plus fort mais reste le plus
+        // lent (`Archetype::Colosse`, facile à semer), les Blobs et la
+        // Grenouille sont les plus fragiles.
+        let monster_roster: [MonsterSpot; 9] = [
+            MonsterSpot {
+                species: "Renard enragé 1",
+                file: "riviere/fauna_fox.glb",
+                x: river_center(-20.0) + 7.0,
+                z: -20.0,
+                scale: 1.3,
+                tint: Some([0.55, 0.12, 0.08]),
+                hp: 3,
+                speed: 2.2,
+                archetype: Archetype::Traqueuse,
+                bite: (1.8, 0.5, 0.12),
+            },
+            MonsterSpot {
+                species: "Maraudeur (orc)",
+                file: "monster_orc.glb",
+                x: river_center(-38.0) - 7.5,
+                z: -38.0,
+                scale: 0.9,
+                tint: None,
+                hp: 4,
+                speed: 2.4,
+                archetype: Archetype::Traqueuse,
+                bite: (1.5, 0.55, 0.15),
+            },
+            MonsterSpot {
+                species: "Grenouille des berges",
+                file: "monster_frog.glb",
+                // Berge peu profonde près du départ, jamais dans le lit
+                // (même contrainte `channel_dist`/`water_level` que la
+                // végétation, cf. `riviere_demo_plants_nothing_in_the_water`,
+                // reprise pour les monstres par
+                // `riviere_demo_monsters_never_spawn_in_or_too_close_to_the_water`).
+                // Décalée de z=-8 à z=-5 (relecture du 15 septembre 2026) :
+                // à -8, à seulement 12.0 m du Renard enragé 1 (poste
+                // historique, z=-20), elle tombait dans la zone de
+                // recouvrement de leurs portées d'éveil (9 m Traqueuse +
+                // 5 m Furtive = 14 m de marge minimale requise, cf.
+                // `CHASER_DETECT_RANGE`/`FURTIVE_DETECT_RANGE` dans
+                // `app::simulation`) — double-pull quasi garanti dès qu'on
+                // réveillait l'un des deux. À -5, la distance passe à 15.0 m.
+                x: river_center(-5.0) + 7.0,
+                z: -5.0,
+                scale: 0.9,
+                tint: None,
+                hp: 2,
+                // Vitesse EFFECTIVE = `speed * archetype.speed_multiplier()`
+                // (`app::simulation::sim_step`, ×1.5 pour `Furtive`) — PAS la
+                // vitesse finale en jeu (bug de relecture du 15 septembre
+                // 2026 : l'ancienne valeur 1.6 était en fait déjà une
+                // vitesse-cible, donnant un effectif de 2.4, aussi rapide que
+                // le Maraudeur/orc — cassait l'intention « la Grenouille est
+                // le maillon faible du roster »). 1.1 × 1.5 = 1.65 effectif :
+                // la plus lente du roster mobile (Colosse mis à part, déjà
+                // volontairement le plus lent par son propre multiplicateur
+                // ×0.65, cf. le Golem ci-dessous). Même patron que le
+                // Squelette `Furtive` de `scene/demos/roguelike.rs`
+                // (speed=2.4, volontairement sous le Gobelin `Traqueuse` à
+                // 3.2) et les créatures `Furtive` de
+                // `scene/demos/mmorpg/creatures.rs` (chase_speed=2.8 contre
+                // 3.0-3.4) : la vitesse de base saisie ici tient déjà compte
+                // du ×1.5, ce n'est jamais la vitesse finale voulue.
+                speed: 1.1,
+                archetype: Archetype::Furtive,
+                bite: (1.5, 0.45, 0.08),
+            },
+            MonsterSpot {
+                species: "Fantôme de la brume",
+                file: "monster_ghost.glb",
+                // Nappe de brume basse en aval du bassin (même famille de
+                // décor que les nappes `riviere/shore_low_fog.glb`/
+                // `riviere/siege_low_mist.glb` posées le long de la rivière,
+                // dont une exactement à x=river_center(12)+8, z=12, cf. la
+                // boucle plus haut) — plutôt qu'au centre du bassin de
+                // réception lui-même (relecture du 15 septembre 2026) : à
+                // x=9.0/z=POOL_Z, il n'était qu'à 4.5 m du Renard enragé 1
+                // (poste historique, x≈9.1/z=-20) — très en-dessous des 14 m
+                // (9 m Traqueuse + 5 m Furtive) requis pour ne jamais
+                // recouvrir sa portée d'éveil (double-pull garanti dès
+                // qu'on réveillait l'un des deux). À x≈-5.0/z=12, la
+                // distance passe à environ 35 m du Renard 1 (et reste ≥ 20 m
+                // de tout autre monstre du roster, marge confortable au-delà
+                // du minimum 14 m).
+                x: river_center(12.0) - 7.0,
+                z: 12.0,
+                scale: 0.75,
+                tint: None,
+                hp: 2,
+                // Même bug de vitesse effective que la Grenouille ci-dessus
+                // (2.0 était déjà lu comme vitesse-cible, donnant un
+                // effectif de 3.0 — plus rapide que TOUT le reste du
+                // roster, y compris le Renard à 2.2 et l'Orc à 2.4). 1.4 ×
+                // 1.5 = 2.1 effectif : furtif mais pas le monstre le plus
+                // rapide de la démo.
+                speed: 1.4,
+                archetype: Archetype::Furtive,
+                bite: (1.6, 0.5, 0.1),
+            },
+            MonsterSpot {
+                species: "Golem des berges",
+                file: "monster_goleling.glb",
+                // Plateau amont rocheux, entre les postes #2 et #6 (renard
+                // amont / renard aval) — sur la berge opposée (est plutôt
+                // qu'ouest) et bien plus loin du centre du chenal que les
+                // deux renards (relecture du 15 septembre 2026) : à l'ancien
+                // poste (même berge, offset -8), il n'était qu'à 8.0 m de
+                // l'Orc et 12.2 m du Renard enragé 2 — bien en-dessous des
+                // 18 m (9 m + 9 m, deux `Traqueuse`/`Colosse`) requis. À
+                // offset +18 (berge est), il reste à ~25 m des deux (marge
+                // de sécurité `channel_dist`/`water_level` vérifiée aussi,
+                // cf. `riviere_demo_monsters_never_spawn_in_or_too_close_to_the_water`
+                // — la rive amont est presque plane, un offset trop faible
+                // au-dessus du chenal y retombe sous le niveau d'eau du
+                // plateau).
+                x: river_center(-46.0) + 18.0,
+                z: -46.0,
+                scale: 0.9,
+                tint: None,
+                hp: 6,
+                speed: 1.2,
+                archetype: Archetype::Colosse,
+                bite: (2.5, 0.6, 0.22),
+            },
+            MonsterSpot {
+                species: "Blob des sous-bois (vert)",
+                file: "monster_green_blob.glb",
+                x: river_center(32.0) - 7.0,
+                z: 32.0,
+                scale: 1.3,
+                tint: None,
+                hp: 2,
+                speed: 1.6,
+                archetype: Archetype::Meute,
+                bite: (1.4, 0.5, 0.09),
+            },
+            MonsterSpot {
+                species: "Blob des sous-bois (rose)",
+                file: "monster_pink_blob.glb",
+                x: river_center(56.0) + 7.5,
+                z: 56.0,
+                scale: 1.3,
+                tint: None,
+                hp: 2,
+                speed: 1.6,
+                archetype: Archetype::Meute,
+                bite: (1.4, 0.5, 0.09),
+            },
+            MonsterSpot {
+                species: "Champignon mordeur",
+                file: "monster_mushnub.glb",
+                // Sous-bois, près d'un amas de champignons déjà planté
+                // (`riviere/nature_mushrooms.glb`) — décalé de z=45 à
+                // z=36.5, plus loin dans le sous-bois (offset +12 plutôt que
+                // +7.5), relecture du 15 septembre 2026 : à l'ancien poste,
+                // il n'était qu'à 11.0 m du Blob rose (z=56) — bien
+                // en-dessous des 18 m (9 m + 9 m, deux `Traqueuse`/`Meute`)
+                // requis. Au nouveau poste, ~20 m des deux Blobs.
+                x: river_center(36.5) + 12.0,
+                z: 36.5,
+                scale: 1.0,
+                tint: None,
+                hp: 2,
+                speed: 1.4,
+                archetype: Archetype::Traqueuse,
+                bite: (1.7, 0.5, 0.1),
+            },
+            MonsterSpot {
+                species: "Renard enragé 2",
+                file: "riviere/fauna_fox.glb",
+                x: river_center(-58.0) - 7.0,
+                z: -58.0,
+                scale: 1.3,
+                tint: Some([0.55, 0.12, 0.08]),
+                hp: 3,
+                speed: 2.2,
+                archetype: Archetype::Traqueuse,
+                bite: (1.8, 0.5, 0.12),
+            },
         ];
-        if let Some(idx) = loader.load("riviere/fauna_fox.glb") {
-            for (i, (x, z)) in monster_spots.into_iter().enumerate() {
-                let y = terrain_height(&terrain, x, z);
-                let mut m = demo_obj(
-                    &format!("Renard enragé {}", i + 1),
-                    MeshKind::Imported(idx),
-                    Vec3::new(x, y, z),
-                );
-                m.transform = m.transform.with_scale(Vec3::splat(1.3));
-                m.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
-                m.color = [0.55, 0.12, 0.08];
-                m.tag = "monstre".into();
-                m.group = "Monstre".into();
-                m.physics = PhysicsKind::Kinematic;
-                // Détection de contact pour la morsure (cf. `creature_bite_script`),
-                // sans changer le collider (toujours solide).
-                m.trigger = true;
-                m.combat = Some(Combat {
-                    attackable: true,
-                    // `wave: 0` : pas de système de manches, actif dès le départ —
-                    // comme les créatures du hameau MMORPG (monde ouvert, pas une
-                    // arène par manches).
-                    hp: 3,
-                    ..Default::default()
-                });
-                m.ai_chaser = Some(AiChaser {
-                    speed: 2.2,
-                    archetype: Archetype::Traqueuse,
-                });
-                const BITE_COOLDOWN: f32 = 1.8;
-                const BITE_CHANCE: f32 = 0.5;
-                const BITE_DAMAGE: f32 = 0.12;
-                m.bite = Some(BiteAttack {
-                    cooldown: BITE_COOLDOWN,
-                    chance: BITE_CHANCE,
-                    damage: BITE_DAMAGE,
-                });
-                // Réapparaît après un délai plutôt que de disparaître pour de bon :
-                // même politique que les créatures du hameau MMORPG (contenu
-                // renouvelé, pas un stock fini à épuiser une fois pour toutes).
-                m.respawn_delay = 20.0;
-                let prefix = format!("renard{i}_");
-                m.script = creature_bite_script(
-                    &prefix,
-                    BITE_COOLDOWN,
-                    BITE_CHANCE,
-                    BITE_DAMAGE,
-                    17.0 + i as f32 * 5.3,
-                );
-                objects.push(m);
+        for (i, spot) in monster_roster.into_iter().enumerate() {
+            let Some(idx) = loader.load(spot.file) else {
+                continue;
+            };
+            let y = terrain_height(&terrain, spot.x, spot.z);
+            let mut m = demo_obj(spot.species, MeshKind::Imported(idx), Vec3::new(spot.x, y, spot.z));
+            m.transform = m.transform.with_scale(Vec3::splat(spot.scale));
+            m.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
+            if let Some(tint) = spot.tint {
+                m.color = tint;
             }
+            m.tag = "monstre".into();
+            m.group = "Monstre".into();
+            m.physics = PhysicsKind::Kinematic;
+            // Détection de contact pour la morsure (cf. `creature_bite_script`),
+            // sans changer le collider (toujours solide).
+            m.trigger = true;
+            m.combat = Some(Combat {
+                attackable: true,
+                // `wave: 0` : pas de système de manches, actif dès le départ —
+                // comme les créatures du hameau MMORPG (monde ouvert, pas une
+                // arène par manches).
+                hp: spot.hp,
+                ..Default::default()
+            });
+            m.ai_chaser = Some(AiChaser {
+                speed: spot.speed,
+                archetype: spot.archetype,
+            });
+            let (bite_cooldown, bite_chance, bite_damage) = spot.bite;
+            m.bite = Some(BiteAttack {
+                cooldown: bite_cooldown,
+                chance: bite_chance,
+                damage: bite_damage,
+            });
+            // Réapparaît après un délai plutôt que de disparaître pour de bon :
+            // même politique que les créatures du hameau MMORPG (contenu
+            // renouvelé, pas un stock fini à épuiser une fois pour toutes).
+            m.respawn_delay = 20.0;
+            // Préfixe unique par **instance** (index global dans le roster),
+            // pas par espèce : deux monstres de même espèce (les deux
+            // renards, les deux blobs) ne doivent jamais partager leur
+            // namespace `save` (cooldown de morsure notamment), sans quoi
+            // l'un écraserait l'état de l'autre.
+            let prefix = format!("m{i}_");
+            m.script = creature_bite_script(
+                &prefix,
+                bite_cooldown,
+                bite_chance,
+                bite_damage,
+                17.0 + i as f32 * 5.3,
+            );
+            objects.push(m);
         }
 
         // --- Butin (armes de mêlée et soins à ramasser au contact) ---
@@ -1193,6 +1418,31 @@ mod tests {
         }
     }
 
+    /// Même garde-fou que `riviere_demo_plants_nothing_in_the_water`, pour
+    /// le groupe "Monstre" (relecture du 15 septembre 2026 : rien
+    /// n'empêchait jusqu'ici un monstre du roster d'être planté dans le lit
+    /// de la rivière — ça ne cassait rien par hasard, la marge de hauteur du
+    /// terrain suffisait à chaque poste actuel, mais rien ne le garantissait
+    /// pour un futur ajout/déplacement). Réutilise les mêmes fonctions
+    /// utilitaires (`channel_dist`, `water_level`) et le même seuil de
+    /// sécurité (`channel_dist >= 1.3`) que la végétation.
+    #[test]
+    fn riviere_demo_monsters_never_spawn_in_or_too_close_to_the_water() {
+        let scene = Scene::riviere_demo();
+        let monsters: Vec<&SceneObject> = scene.objects.iter().filter(|o| o.group == "Monstre").collect();
+        assert_eq!(monsters.len(), 9, "9 monstres attendus dans le groupe \"Monstre\"");
+        for m in &monsters {
+            let p = m.transform.position;
+            assert!(
+                channel_dist(p.x, p.z) >= 1.3 && p.y >= water_level(p.z) + 0.25,
+                "{} planté dans l'eau ou trop près du lit : {p:?} (channel_dist={}, water_level={})",
+                m.name,
+                channel_dist(p.x, p.z),
+                water_level(p.z)
+            );
+        }
+    }
+
     #[test]
     fn terrain_height_is_bilinear_on_the_imported_grid() {
         let scene = Scene::riviere_demo();
@@ -1246,5 +1496,139 @@ mod tests {
             })
             .count();
         assert!(heal_loot > 0, "aucun objet de soin à ramasser");
+    }
+
+    /// Garde-fou contre une régression silencieuse vers un seul mesh :
+    /// bestiaire varié (14 septembre 2026 au soir) plutôt que six clones du
+    /// même renard, cf. la doc du bloc « Monstres » de `riviere_demo`.
+    #[test]
+    fn riviere_demo_monsters_are_varied_species() {
+        let scene = Scene::riviere_demo();
+        let monsters: Vec<&SceneObject> = scene.objects.iter().filter(|o| o.tag == "monstre").collect();
+        assert_eq!(monsters.len(), 9, "9 monstres attendus (8 espèces, le renard ×2)");
+        let species: std::collections::HashSet<String> = monsters
+            .iter()
+            .filter_map(|m| match m.mesh {
+                MeshKind::Imported(idx) => scene.imported.get(idx as usize).map(|im| im.path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            species.len(),
+            8,
+            "8 meshes distincts attendus (seul le renard est dupliqué) : {species:?}"
+        );
+    }
+
+    /// Règles d'authoring du roster (sur le modèle de
+    /// `mmorpg_demo_waves_follow_the_gdd_authoring_rules`) : PV et vitesse
+    /// dans des bornes raisonnables, un Colosse encaisse strictement plus
+    /// qu'une Traqueuse moyenne, et chaque monstre garde un préfixe (donc un
+    /// script Lua) unique — deux instances de même espèce (les deux renards,
+    /// les deux blobs) ne doivent jamais partager leur namespace `save`.
+    #[test]
+    fn riviere_demo_monster_roster_follows_authoring_rules() {
+        let scene = Scene::riviere_demo();
+        let monsters: Vec<&SceneObject> = scene.objects.iter().filter(|o| o.tag == "monstre").collect();
+        for m in &monsters {
+            let hp = m.combat.as_ref().unwrap().hp;
+            assert!((1..=6).contains(&hp), "{} : PV hors bornes [1,6] : {hp}", m.name);
+            let speed = m.ai_chaser.as_ref().unwrap().speed;
+            assert!(
+                speed > 0.0 && speed <= 3.0,
+                "{} : vitesse de poursuite hors bornes : {speed}",
+                m.name
+            );
+        }
+        let colosse_hp: Vec<u32> = monsters
+            .iter()
+            .filter(|m| m.ai_chaser.as_ref().unwrap().archetype == Archetype::Colosse)
+            .map(|m| m.combat.as_ref().unwrap().hp)
+            .collect();
+        assert!(!colosse_hp.is_empty(), "au moins un Colosse attendu (le golem)");
+        let traqueuse_hps: Vec<u32> = monsters
+            .iter()
+            .filter(|m| m.ai_chaser.as_ref().unwrap().archetype == Archetype::Traqueuse)
+            .map(|m| m.combat.as_ref().unwrap().hp)
+            .collect();
+        let traqueuse_avg = traqueuse_hps.iter().sum::<u32>() as f32 / traqueuse_hps.len() as f32;
+        for hp in colosse_hp {
+            assert!(
+                hp as f32 > traqueuse_avg,
+                "un Colosse ({hp} PV) doit encaisser plus qu'une Traqueuse moyenne ({traqueuse_avg})"
+            );
+        }
+        let scripts: Vec<&str> = monsters.iter().map(|m| m.script.as_str()).collect();
+        let unique: std::collections::HashSet<&str> = scripts.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            scripts.len(),
+            "deux monstres partagent le même script (préfixe `save` en collision)"
+        );
+    }
+
+    /// Non-régression par espèce (bestiaire varié, 14 septembre 2026 au
+    /// soir) : chaque espèce apparaît avec le bon mesh, ses PV d'authoring,
+    /// peut être blessée sans mourir avant son dernier PV puis vaincue
+    /// (masquée) au dernier coup, et reste éligible au respawn
+    /// (`respawn_delay > 0`). La restauration effective des PV **au**
+    /// respawn (la file `AppState::respawn_queue`/`process_respawns`) est
+    /// déjà couverte génériquement par
+    /// `a_respawning_enemy_comes_back_with_its_original_hp`
+    /// (`app::simulation_tests`), pas dupliquée ici par espèce.
+    #[test]
+    fn riviere_demo_each_species_spawns_takes_damage_and_dies() {
+        let mut scene = Scene::riviere_demo();
+        let expectations: [(&str, &str, u32); 8] = [
+            ("Renard enragé 1", "fauna_fox.glb", 3),
+            ("Maraudeur (orc)", "monster_orc.glb", 4),
+            ("Grenouille des berges", "monster_frog.glb", 2),
+            ("Fantôme de la brume", "monster_ghost.glb", 2),
+            ("Golem des berges", "monster_goleling.glb", 6),
+            ("Blob des sous-bois (vert)", "monster_green_blob.glb", 2),
+            ("Blob des sous-bois (rose)", "monster_pink_blob.glb", 2),
+            ("Champignon mordeur", "monster_mushnub.glb", 2),
+        ];
+        for (name, file_substr, hp) in expectations {
+            let i = scene
+                .objects
+                .iter()
+                .position(|o| o.name == name)
+                .unwrap_or_else(|| panic!("espèce absente du roster : {name}"));
+            assert_eq!(scene.objects[i].tag, "monstre", "{name} doit être tagué monstre");
+            let mesh_path = match scene.objects[i].mesh {
+                MeshKind::Imported(idx) => scene.imported[idx as usize].path.clone(),
+                _ => panic!("{name} : mesh non importé"),
+            };
+            assert!(
+                mesh_path.contains(file_substr),
+                "{name} : mesh inattendu ({mesh_path}, attendu {file_substr})"
+            );
+            assert!(scene.objects[i].visible, "{name} doit apparaître visible");
+            assert_eq!(
+                scene.objects[i].combat.as_ref().unwrap().hp,
+                hp,
+                "{name} : PV d'authoring inattendus"
+            );
+            assert!(
+                scene.objects[i].respawn_delay > 0.0,
+                "{name} doit être éligible au respawn"
+            );
+            if hp > 1 {
+                assert!(
+                    !scene.damage_attackable_by(i, hp - 1),
+                    "{name} : ne doit pas mourir avant son dernier PV"
+                );
+                assert!(
+                    scene.objects[i].visible,
+                    "{name} doit rester visible tant qu'il a des PV"
+                );
+            }
+            assert!(
+                scene.damage_attackable_by(i, 1),
+                "{name} : le dernier coup doit l'achever"
+            );
+            assert!(!scene.objects[i].visible, "{name} vaincu doit être masqué");
+        }
     }
 }
